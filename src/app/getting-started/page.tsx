@@ -10,7 +10,7 @@ import { READINESS_COLOR, READINESS_LABEL, isReady, type ReadinessItem, type Rea
 import { loadReadiness } from "@/lib/onboarding/readiness.server";
 import { runInOrganization } from "@/lib/tenancy/scope";
 
-export const metadata: Metadata = { title: brandTitle("Getting started") };
+export const metadata: Metadata = { title: { absolute: brandTitle("Getting started") } };
 
 // Reads this organization's saved state on every visit.
 export const dynamic = "force-dynamic";

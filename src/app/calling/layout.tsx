@@ -2,6 +2,10 @@ import type { Metadata } from "next";
 import { RequiresPlatform } from "@/components/settings/RequiresPlatform";
 import { docsPageUrl } from "@/lib/support";
 import { brandTitle } from "@/lib/brand";
+import { isReleased } from "@/lib/release";
+
+// Without calling in this release the section holds only the WhatsApp chats.
+const SECTION = isReleased("calling") ? "WhatsApp Calling" : "WhatsApp";
 
 /**
  * WhatsApp Calling pages share the LinkedIn section's padded, scrolling
@@ -10,8 +14,8 @@ import { brandTitle } from "@/lib/brand";
  */
 export const metadata: Metadata = {
   title: {
-    default: brandTitle("WhatsApp Calling"),
-    template: brandTitle("%s", "WhatsApp Calling"),
+    default: brandTitle(SECTION),
+    template: brandTitle("%s", SECTION),
   },
   description: "Call leads over WhatsApp and follow up",
 };

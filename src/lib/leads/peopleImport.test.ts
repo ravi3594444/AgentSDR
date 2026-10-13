@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ImportRow } from "./importRows";
-import { parseImportRows } from "./importRows";
+import { customFieldKey, parseImportRows } from "./importRows";
 import { planPeopleImport } from "./peopleImport";
 
 const row = (rowNumber: number, fields: Partial<ImportRow>): ImportRow => ({ rowNumber, ...fields });
@@ -44,5 +44,19 @@ describe("planPeopleImport", () => {
     const plan = planPeopleImport(rows, "IN");
     expect(plan.phoneOnly.map((entry) => entry.phone)).toEqual(["+919876543210"]);
     expect(plan.failed.map((entry) => entry.row)).toEqual([4]);
+  });
+});
+
+describe("custom columns on the People import", () => {
+  test("unmapped columns become camelCased custom fields, accents folded and values kept as typed", () => {
+    const rows = parseImportRows(csv("Email,Full Name,Favourite Café,Zip,2024 Revenue\na@x.test,José Müller,Açaí,00123,\n"));
+    expect(rows[0]!.fullName).toBe("José Müller");
+    expect(rows[0]!.customFields).toEqual({ favouriteCafe: "Açaí", zip: "00123" });
+  });
+
+  test("customFieldKey", () => {
+    expect(customFieldKey("Job Level")).toBe("jobLevel");
+    expect(customFieldKey("2024 Revenue")).toBe("field2024Revenue");
+    expect(customFieldKey("!!!")).toBe("");
   });
 });

@@ -14,6 +14,7 @@
  * `credentials.ts`.
  */
 
+import { isReleased } from "@/lib/release";
 import { docsPageUrl } from "@/lib/support";
 import { BRAND } from "@/lib/brand";
 
@@ -101,8 +102,10 @@ export const PLATFORM_INTEGRATIONS: readonly PlatformIntegration[] = [
   {
     key: "unipile",
     name: "Unipile",
-    description: "Connects LinkedIn and WhatsApp accounts for sending, inbox sync and calling.",
-    enables: ["LinkedIn accounts and campaigns", "WhatsApp messaging and calling"],
+    description: isReleased("calling")
+      ? "Connects LinkedIn and WhatsApp accounts for sending, inbox sync and calling."
+      : "Connects LinkedIn and WhatsApp accounts for sending and inbox sync.",
+    enables: ["LinkedIn accounts and campaigns", isReleased("calling") ? "WhatsApp messaging and calling" : "WhatsApp messaging"],
     websiteUrl: "https://www.unipile.com",
     iconUrl: "/Integrations - Icon/unipile.png",
     guideUrl: docsPageUrl("integrations/unipile"),

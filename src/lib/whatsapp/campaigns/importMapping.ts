@@ -94,10 +94,12 @@ export function importMappingError(mapping: unknown, headers: string[]): string 
   return null;
 }
 
-/** "Job Title" → "jobTitle", "e-mail_2" → "email2"; "" when nothing usable remains. */
+/** "Job Title" → "jobTitle", "e-mail_2" → "email2", "Café" → "cafe"; "" when nothing usable remains. */
 export function headerToCustomKey(header: string): string {
   const words = header
     .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^A-Za-z0-9]+/g, " ")
     .split(" ")
     .filter(Boolean);

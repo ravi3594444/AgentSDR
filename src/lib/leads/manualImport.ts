@@ -51,7 +51,7 @@ export function normalizeManualPersonInput(input: ManualPersonInput, phoneCountr
 }
 
 /** Person-only manual import. It intentionally never writes any CRM table. */
-export async function upsertManualPerson(input: ManualPersonInput) {
+export async function upsertManualPerson(input: ManualPersonInput, customFields?: Record<string, string>) {
   const normalized = normalizeManualPersonInput(input, await organizationPhoneCountry());
   return withLeadTransaction(async (tx) => {
     const existing = await tx.select({ id: people.id }).from(people).where(and(inOrg(people), or(
@@ -70,7 +70,7 @@ export async function upsertManualPerson(input: ManualPersonInput) {
         name: normalized.companyName,
         domain: normalized.companyDomain,
       } : null,
-      raw: normalized.notes ? { notes: normalized.notes } : undefined,
+      raw: customFields || normalized.notes ? { ...customFields, ...(normalized.notes ? { notes: normalized.notes } : {}) } : undefined,
       source: "manual-people-import",
     });
     return { personId: person.id, created: existing.length === 0 };

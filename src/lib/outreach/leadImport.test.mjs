@@ -198,3 +198,9 @@ describe("text cells (leading zeros, duplicate headers, row numbers)", () => {
     expect(rows[0].customFields).toEqual({ email: "old@x.com" });
   });
 });
+
+test("an accented header keeps its letters in the merge-field key", () => {
+  const bytes = new TextEncoder().encode("Email,Favourite Café\na@x.test,Açaí\n");
+  const { rows } = parseRows(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+  expect(rows[0].customFields).toEqual({ favouriteCafe: "Açaí" });
+});

@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { findOrCreateContactPerson, resolveImportRow } from "@/lib/calls/campaigns";
 import { inOrg } from "@/lib/tenancy/scope";
 import type { ImportRow } from "./importRows";
@@ -17,7 +17,7 @@ export async function importPhoneOnlyPerson(row: ImportRow, phone: string): Prom
   if (!resolved.ok) throw new Error(resolved.message);
   return withLeadTransaction(async (tx) => {
     const [existing] = await tx.select({ id: people.id }).from(people).where(and(inOrg(people), eq(people.phone, phone))).limit(1);
-    await findOrCreateContactPerson(
+    const person = await findOrCreateContactPerson(
       tx,
       {
         fullName: resolved.fullName,
@@ -30,6 +30,13 @@ export async function importPhoneOnlyPerson(row: ImportRow, phone: string): Prom
       },
       "people-import",
     );
+    // Unmapped columns are kept on raw, as for the other rows (merged over earlier values).
+    if (row.customFields && Object.keys(row.customFields).length) {
+      await tx
+        .update(people)
+        .set({ raw: sql`coalesce(${people.raw}, '{}'::jsonb) || ${JSON.stringify(row.customFields)}::jsonb`, updatedAt: new Date() })
+        .where(and(inOrg(people), eq(people.id, person.id)));
+    }
     return { created: !existing };
   });
 }

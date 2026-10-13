@@ -50,7 +50,7 @@ async function importPeople(req: NextRequest) {
   const failed = [...plan.failed];
   for (const row of plan.identified) {
     try {
-      const result = await upsertManualPerson(row);
+      const result = await upsertManualPerson(row, row.customFields);
       if (result.created) created += 1;
       else updated += 1;
     } catch (error) {

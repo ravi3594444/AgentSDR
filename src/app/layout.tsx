@@ -22,7 +22,8 @@ const fontSerif = Instrument_Serif({
 });
 
 export const metadata: Metadata = {
-  title: BRAND.name,
+  // Pages name themselves ("Leads"); the brand follows, as in the section layouts.
+  title: { default: BRAND.name, template: `%s · ${BRAND.name}` },
   applicationName: BRAND.name,
   // A private workspace behind sign-in: keep every page out of search.
   robots: { index: false, follow: false },

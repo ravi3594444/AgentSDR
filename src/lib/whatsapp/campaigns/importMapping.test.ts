@@ -58,6 +58,9 @@ describe("importMappingError", () => {
 });
 
 describe("headerToCustomKey", () => {
+  test("folds accents instead of dropping the letter", () => {
+    expect(headerToCustomKey("Favourite Café")).toBe("favouriteCafe");
+  });
   test("camelCases headers", () => {
     expect(headerToCustomKey("Job Title")).toBe("jobTitle");
     expect(headerToCustomKey("  e-mail_2 ")).toBe("eMail2");

@@ -167,7 +167,14 @@ export default function CrmRecordClient({ recordId, variant = "page" }: { record
       // A list under the pop-up holding this record re-reads its row.
       announceRecordChanged(recordId);
       await load();
-    } catch (cause) { setError(errorMessage(cause)); }
+    } catch (cause) {
+      // A failed action can still change the record (a refused send marks the
+      // draft failed), so re-read it, then show why it failed.
+      const message = errorMessage(cause);
+      announceRecordChanged(recordId);
+      await load();
+      setError(message);
+    }
   };
 
   // Only the first load blanks the page; a reload after an action keeps the

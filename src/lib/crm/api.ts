@@ -1,6 +1,7 @@
 import { isPlatformNotConnectedError } from "@/lib/platform/credentials";
 import { crmConfigurationErrorResponse, CrmConfigurationValidationError } from "./categories";
 import { InvalidCrmTransitionError, StaleCrmContextError } from "./stateMachine";
+import { DefiniteCrmSendError } from "./send";
 
 export function crmOperationErrorResponse(error: unknown): Response {
   if (error instanceof StaleCrmContextError) {
@@ -14,6 +15,10 @@ export function crmOperationErrorResponse(error: unknown): Response {
   }
   if (isPlatformNotConnectedError(error)) {
     return Response.json({ error: error.message, code: "PLATFORM_NOT_CONNECTED" }, { status: 409 });
+  }
+  // The provider was never reached, or refused outright: nothing was sent, and the reason is the person's to fix.
+  if (error instanceof DefiniteCrmSendError) {
+    return Response.json({ error: `Not sent: ${error.message}`, code: "SEND_REFUSED" }, { status: 409 });
   }
   return crmConfigurationErrorResponse(error);
 }

@@ -39,9 +39,13 @@ function cell(value: unknown): string | null {
   return s ? s : null;
 }
 
-/** "Job Title" -> "jobTitle", so an unrecognized CSV column becomes usable as {{jobTitle}} in a sequence. */
+/**
+ * "Job Title" -> "jobTitle", so an unrecognized CSV column becomes usable as {{jobTitle}} in a sequence.
+ * Accents are folded first ("Favourite Café" -> "favouriteCafe"), so the letter is kept rather than
+ * splitting the word.
+ */
 function toCamelCaseKey(header: string): string {
-  const words = header.trim().split(/[^a-zA-Z0-9_]+/).filter(Boolean);
+  const words = header.trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "").split(/[^a-zA-Z0-9_]+/).filter(Boolean);
   const key = words
     .map((w, i) => (i === 0 ? w.toLowerCase() : w[0].toUpperCase() + w.slice(1).toLowerCase()))
     .join("");

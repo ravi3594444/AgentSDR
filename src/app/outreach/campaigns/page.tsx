@@ -5,6 +5,8 @@ import { runInOrganization } from "@/lib/tenancy/scope";
 
 export const dynamic = "force-dynamic";
 
+export const metadata = { title: "Email campaigns" };
+
 export default async function OutreachCampaignsPage() {
   const ctx = await requirePageOrgContext();
   const campaigns = await runInOrganization(ctx.organizationId, () => listCampaignsWithStats());

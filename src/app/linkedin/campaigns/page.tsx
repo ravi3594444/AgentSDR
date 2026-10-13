@@ -6,6 +6,8 @@ import { campaignAccounts, campaigns as campaignsTable, leads, linkedInAccounts 
 import { CampaignsClient, type CampaignRow } from "@/components/linkedin/CampaignsClient";
 import { statusCountsByCampaignIds } from "@/lib/linkedin/campaignLeadStats";
 
+export const metadata = { title: "Campaigns" };
+
 export const dynamic = "force-dynamic";
 
 export default async function CampaignsPage() {
