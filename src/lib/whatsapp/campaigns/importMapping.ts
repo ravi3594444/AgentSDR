@@ -1,6 +1,5 @@
-import * as XLSX from "xlsx";
-import { normalizePhone } from "@/lib/calls/phone";
-import { readSpreadsheet } from "@/lib/spreadsheet/read";
+import { checkPhone } from "@/lib/calls/phone";
+import { readTextSheet } from "@/lib/spreadsheet/read";
 import type { ManualPersonInput } from "@/lib/leads/manualImport";
 import { WHATSAPP_CAMPAIGN_IMPORT_FIELDS, type WhatsappCampaignImportField } from "./contract";
 
@@ -40,27 +39,22 @@ const HEADER_ALIASES: Record<WhatsappCampaignImportField, string[]> = {
   linkedinUrl: ["linkedin", "linkedinurl", "linkedinprofile", "linkedinprofileurl", "profileurl"],
 };
 
-/** Reads the first worksheet of a CSV/XLSX file. Throws a readable Error. */
+/**
+ * Reads the first worksheet of a CSV/XLSX file as text, so phone numbers keep
+ * their leading zeros ("09876543210" must reach the normalizer intact).
+ * Throws a readable Error.
+ */
 export function parseImportSheet(buffer: ArrayBuffer): ImportSheet {
-  let workbook: XLSX.WorkBook;
-  try {
-    workbook = readSpreadsheet(buffer);
-  } catch {
-    throw new Error("Unable to read the file. Upload a CSV or XLSX.");
-  }
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  if (!sheet) throw new Error("The file has no worksheet");
-  const values = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, blankrows: true, defval: "", raw: false });
-  const headerRow = values[0];
-  if (!headerRow || !headerRow.some((cell) => String(cell ?? "").trim())) throw new Error("The worksheet is empty");
-  const headers = headerRow.map((cell) => String(cell ?? "").trim());
+  const sheet = readTextSheet(buffer);
+  const headers = sheet.headers.map((cell) => cell.trim());
+  if (!headers.some(Boolean)) throw new Error("The worksheet is empty");
   const rows: string[][] = [];
   const rowNumbers: number[] = [];
-  for (let index = 1; index < values.length; index += 1) {
-    const cells = headers.map((_, column) => String(values[index]?.[column] ?? "").trim());
+  for (const row of sheet.rows) {
+    const cells = headers.map((_, column) => (row.cells[column] ?? "").trim());
     if (!cells.some(Boolean)) continue;
     rows.push(cells);
-    rowNumbers.push(index + 1);
+    rowNumbers.push(row.rowNumber);
   }
   return { headers, rows, rowNumbers };
 }
@@ -162,13 +156,15 @@ export function mapImportRow(
 
 /**
  * A phone cell as E.164, using the organization's default country for bare
- * local numbers. A long all-digit value ("919876543210", what a spreadsheet
- * keeps once the + is stripped) is retried as international.
+ * local numbers (see checkPhone for the rules and the reasons it gives).
  */
 export function normalizeCampaignPhone(input: string, defaultCountry: string | undefined): string | null {
-  const direct = normalizePhone(input, defaultCountry);
-  if (direct) return direct;
-  const digits = input.trim();
-  if (/^\d{10,15}$/.test(digits)) return normalizePhone(`+${digits}`, defaultCountry);
-  return null;
+  const checked = checkPhone(input, defaultCountry);
+  return checked.ok ? checked.e164 : null;
+}
+
+/** Why a phone cell could not be used, for the import report. */
+export function campaignPhoneProblem(input: string | null | undefined, defaultCountry: string | undefined): string {
+  const checked = checkPhone(input, defaultCountry);
+  return checked.ok ? "" : checked.reason;
 }

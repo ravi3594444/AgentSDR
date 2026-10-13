@@ -39,3 +39,43 @@ export function normalizePhone(
 export function whatsappDigits(e164: string): string {
   return digitsOnly(e164);
 }
+
+export type PhoneCheck = { ok: true; e164: string } | { ok: false; reason: string };
+
+/**
+ * normalizePhone with a reason when it fails, for import reports: a person
+ * fixing a spreadsheet needs to know whether a number is missing its country
+ * code, wrong for the default country, or not a number at all.
+ *
+ * A bare number (no "+" or "00") is read against `defaultCountry`, the
+ * organization's Default phone country. One long enough to already carry a
+ * country code (11-15 digits, what a spreadsheet leaves after stripping the
+ * "+") is tried as international too. A shorter bare number is never
+ * guessed into a country: "4155552671" without a default could be read as
+ * Swiss (+41) as easily as American, so it is refused with that explanation.
+ */
+export function checkPhone(input: string | null | undefined, defaultCountry: string | undefined): PhoneCheck {
+  const raw = (input ?? "").trim();
+  if (!raw) return { ok: false, reason: "no phone number" };
+  const digits = digitsOnly(raw);
+  if (!digits) return { ok: false, reason: `“${raw}” is not a phone number` };
+  if (digits.length < 6) return { ok: false, reason: `“${raw}” is too short to be a phone number` };
+  if (digits.length > 15) return { ok: false, reason: `“${raw}” is too long to be a phone number` };
+  const country = asCountryCode(defaultCountry);
+  const direct = normalizePhone(raw, country);
+  if (direct) return { ok: true, e164: direct };
+
+  const explicitInternational = raw.startsWith("+") || raw.startsWith("00");
+  if (explicitInternational) {
+    const viaPlus = raw.startsWith("00") ? normalizePhone(`+${digits.slice(2)}`, country) : null;
+    if (viaPlus) return { ok: true, e164: viaPlus };
+    return { ok: false, reason: `“${raw}” is not a valid phone number` };
+  }
+  if (digits.length >= 11) {
+    const international = normalizePhone(`+${digits}`, country);
+    if (international) return { ok: true, e164: international };
+  }
+  return country
+    ? { ok: false, reason: `“${raw}” is not a valid ${country} number; check it, or write it with its country code (+…)` }
+    : { ok: false, reason: `“${raw}” has no country code and no Default phone country is set (Settings → Organization); write it as +<country code>…` };
+}

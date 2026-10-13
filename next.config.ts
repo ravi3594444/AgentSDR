@@ -9,6 +9,15 @@ const nextConfig: NextConfig = {
   // folder otherwise fight over .next's lock.
   distDir: process.env.NEXT_DIST_DIR || ".next",
 
+  experimental: {
+    // Next buffers a request body for the proxy (src/proxy.ts) and silently
+    // TRUNCATES it past this size (default 10 MB), so a larger upload reached
+    // its route as a broken multipart body. Set just above the largest route
+    // limit (Tables imports, 25 MB) so each route enforces its own limit with
+    // a readable message (src/lib/spreadsheet/read.ts).
+    proxyClientMaxBodySize: "26mb",
+  },
+
   // package.json's version, inlined into client code for the Help menu's bug-report link.
   env: { NEXT_PUBLIC_APP_VERSION: pkg.version },
 

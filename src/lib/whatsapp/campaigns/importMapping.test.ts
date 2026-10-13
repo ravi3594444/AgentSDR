@@ -4,6 +4,7 @@ import {
   headerToCustomKey,
   importMappingError,
   mapImportRow,
+  campaignPhoneProblem,
   normalizeCampaignPhone,
   parseImportSheet,
   suggestWhatsappMapping,
@@ -96,6 +97,14 @@ describe("normalizeCampaignPhone", () => {
   test("rejects junk", () => {
     expect(normalizeCampaignPhone("call me", "US")).toBeNull();
     expect(normalizeCampaignPhone("", "US")).toBeNull();
+  });
+  test("keeps the leading trunk zero of a local number from a CSV", () => {
+    const sheet = parseImportSheet(csvBuffer("Phone\n09876543210\n"));
+    expect(normalizeCampaignPhone(sheet.rows[0]![0]!, "IN")).toBe("+919876543210");
+  });
+  test("explains a refused number for the import report", () => {
+    expect(campaignPhoneProblem("+919876543210", "IN")).toBe("");
+    expect(campaignPhoneProblem("(415) 555-2671", undefined)).toContain("no Default phone country is set");
   });
 });
 

@@ -25,6 +25,11 @@ describe("resolveImportRow", () => {
     expect(result).toEqual({ ok: false, message: "row 7: no valid phone number" });
   });
 
+  test("an explainer turns the failure into the reason the number was refused", () => {
+    const result = resolveImportRow({ phone: "12" }, 9, normalize, (input) => `“${input}” is too short to be a phone number`);
+    expect(result).toEqual({ ok: false, message: "row 9: “12” is too short to be a phone number" });
+  });
+
   test("accepts a row with a valid phone and no name at all", () => {
     const result = resolveImportRow({ phone: "9876543210" }, 3, normalize);
     expect(result).toEqual({

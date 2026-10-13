@@ -68,3 +68,71 @@ export function readSpreadsheet(input: ArrayBuffer | Uint8Array, options: Spread
   if (!workbook.SheetNames.length) throw new SpreadsheetReadError("The file has no worksheet");
   return workbook;
 }
+
+/** One data row of a sheet read as text, with its row number as the spreadsheet shows it. */
+export type TextRow = { cells: string[]; rowNumber: number };
+
+/**
+ * A cell as the person typed it. Text cells are taken verbatim, so a phone
+ * number or zip code keeps its leading zeros. A number cell uses its display
+ * text only when it has an explicit number format ("00000" keeps 00123);
+ * under General, SheetJS would display 919876543210 as "9.19877E+11", so the
+ * raw value is written out in full instead.
+ */
+export function cellText(cell: XLSX.CellObject | undefined): string {
+  if (!cell) return "";
+  switch (cell.t) {
+    case "s":
+      return String(cell.v ?? "").trim();
+    case "n": {
+      if (cell.z && cell.z !== "General" && typeof cell.w === "string") return cell.w.trim();
+      return typeof cell.v === "number" && Number.isFinite(cell.v) ? String(cell.v) : String(cell.w ?? "").trim();
+    }
+    case "b":
+      return cell.v ? "TRUE" : "FALSE";
+    case "e":
+    case "z":
+      return "";
+    default:
+      return String(cell.w ?? cell.v ?? "").trim();
+  }
+}
+
+/**
+ * Header names made unique the way SheetJS's sheet_to_json does it ("Email",
+ * "Email_1"), so a file with a repeated column can still be mapped by name.
+ */
+export function uniqueHeaders(headers: string[]): string[] {
+  const seen = new Map<string, number>();
+  return headers.map((header) => {
+    const count = seen.get(header) ?? 0;
+    seen.set(header, count + 1);
+    return count ? `${header}_${count}` : header;
+  });
+}
+
+/**
+ * The first worksheet as text: the first non-blank row is the header, blank
+ * rows are skipped, and every row keeps its file row number for error
+ * messages. CSV/TSV values are not parsed at all (no number or date
+ * inference), which is what an importer of names, emails and phone numbers
+ * wants; Tables, which infers column types, keeps using readSpreadsheet.
+ * Throws SpreadsheetReadError for an unreadable or empty file.
+ */
+export function readTextSheet(input: ArrayBuffer | Uint8Array): { headers: string[]; rows: TextRow[] } {
+  // cellNF keeps each cell's number format, which cellText needs to tell "00123" from 123.
+  const workbook = readSpreadsheet(input, { raw: true, cellNF: true });
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  if (!sheet?.["!ref"]) throw new SpreadsheetReadError("The worksheet is empty");
+  const range = XLSX.utils.decode_range(sheet["!ref"]);
+  const lines: TextRow[] = [];
+  for (let r = range.s.r; r <= range.e.r; r += 1) {
+    const cells: string[] = [];
+    for (let c = range.s.c; c <= range.e.c; c += 1) cells.push(cellText(sheet[XLSX.utils.encode_cell({ r, c })]));
+    while (cells.length && !cells[cells.length - 1]) cells.pop();
+    if (cells.length) lines.push({ cells, rowNumber: r + 1 });
+  }
+  if (!lines.length) throw new SpreadsheetReadError("The worksheet is empty");
+  const [header, ...rows] = lines;
+  return { headers: header.cells, rows };
+}

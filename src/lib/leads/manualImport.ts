@@ -3,7 +3,7 @@ import { people } from "./schema";
 import { normalizeEmail, normalizeLinkedinSlug } from "./identity";
 import { inOrg } from "@/lib/tenancy/scope";
 import { upsertPerson, withLeadTransaction } from "./records";
-import { normalizePhone } from "@/lib/calls/phone";
+import { checkPhone } from "@/lib/calls/phone";
 import { organizationPhoneCountry } from "@/lib/calls/phone.server";
 
 export type ManualPersonInput = {
@@ -21,6 +21,11 @@ export type ManualPersonInput = {
 };
 
 const clean = (value: string | null | undefined) => value?.trim() || null;
+/** The same rules (and the same outcome) as the import report's checkPhone. */
+const phoneOrNull = (input: string, country?: string) => {
+  const checked = checkPhone(input, country);
+  return checked.ok ? checked.e164 : null;
+};
 
 /** `phoneCountry`: assumed for a number typed without a + (the organization's default phone country). */
 export function normalizeManualPersonInput(input: ManualPersonInput, phoneCountry?: string) {
@@ -41,7 +46,7 @@ export function normalizeManualPersonInput(input: ManualPersonInput, phoneCountr
     notes: clean(input.notes),
     // A malformed phone number shouldn't fail the whole row — it's less
     // load-bearing than an email or LinkedIn identity, so it's just dropped.
-    phone: input.phone ? normalizePhone(input.phone, phoneCountry) : null,
+    phone: input.phone ? phoneOrNull(input.phone, phoneCountry) : null,
   };
 }
 

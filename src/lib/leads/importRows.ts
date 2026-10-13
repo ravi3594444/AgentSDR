@@ -1,5 +1,4 @@
-import * as XLSX from "xlsx";
-import { readSpreadsheet } from "@/lib/spreadsheet/read";
+import { readTextSheet } from "@/lib/spreadsheet/read";
 import type { ManualPersonInput } from "./manualImport";
 
 /**
@@ -24,27 +23,22 @@ export type ImportRow = ManualPersonInput & {
 
 const normalizedHeader = (value: unknown) => String(value ?? "").trim().toLowerCase().replace(/[^a-z0-9]/g, "");
 const cell = (value: unknown) => String(value ?? "").trim() || null;
-const isBlank = (row: unknown[]) => row.every((value) => !cell(value));
 
-/** Throws a readable Error (SpreadsheetReadError for an unreadable file). */
+/**
+ * Throws a readable Error (SpreadsheetReadError for an unreadable file).
+ * Cells are read as text (readTextSheet), so a phone number such as
+ * 09876543210 keeps its leading zero for the normalizer, and row numbers
+ * count the header and any blank lines, as the spreadsheet shows them.
+ */
 export function parseImportRows(buffer: ArrayBuffer): ImportRow[] {
-  const workbook = readSpreadsheet(buffer);
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  if (!sheet) throw new Error("The file has no worksheet");
-  // Blank rows are kept (and skipped below) so each row's position in the
-  // file is known; the range may start below row 1 in an .xlsx.
-  const firstRow = sheet["!ref"] ? XLSX.utils.decode_range(sheet["!ref"]).s.r : 0;
-  const values = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, blankrows: true });
-  const lines = values
-    .map((row, index) => ({ row, rowNumber: firstRow + index + 1 }))
-    .filter(({ row }) => !isBlank(row));
-  if (!lines.length) throw new Error("The worksheet is empty");
-  const headers = lines[0].row.map(normalizedHeader);
-  const at = (row: unknown[], names: string[]) => {
+  const sheet = readTextSheet(buffer);
+  const headers = sheet.headers.map(normalizedHeader);
+  const at = (row: string[], names: string[]) => {
     const index = headers.findIndex((header) => names.includes(header));
     return index < 0 ? null : cell(row[index]);
   };
-  return lines.slice(1).map(({ row, rowNumber }) => ({
+  const lines = sheet.rows.map(({ cells, rowNumber }) => ({ row: cells, rowNumber }));
+  return lines.map(({ row, rowNumber }) => ({
     email: at(row, ["email", "emailaddress"]),
     linkedinUrl: at(row, ["linkedin", "linkedinurl", "linkedinprofile"]),
     fullName: at(row, ["name", "fullname"]),

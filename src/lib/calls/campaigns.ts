@@ -227,9 +227,14 @@ export function resolveImportRow(
   row: ManualPersonInput,
   rowNumber: number,
   normalize: (input: string) => string | null = normalizePhone,
+  /** Why a phone was refused (e.g. checkPhone's reason); the generic message otherwise. */
+  explain?: (input: string | null | undefined) => string,
 ): ResolvedImportRow {
   const phone = row.phone ? normalize(row.phone) : null;
-  if (!phone) return { ok: false, message: `row ${rowNumber}: no valid phone number` };
+  if (!phone) {
+    const reason = explain?.(row.phone);
+    return { ok: false, message: `row ${rowNumber}: ${reason || "no valid phone number"}` };
+  }
   const fullName = row.fullName ?? ([row.firstName, row.lastName].filter(Boolean).join(" ") || null);
   return {
     ok: true,

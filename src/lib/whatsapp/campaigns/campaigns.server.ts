@@ -44,6 +44,7 @@ import {
 import {
   importMappingError,
   mapImportRow,
+  campaignPhoneProblem,
   normalizeCampaignPhone,
   parseImportSheet,
   suggestWhatsappMapping,
@@ -560,7 +561,7 @@ export async function importWhatsappCampaignLeads(
   for (let index = 0; index < sheet.rows.length; index += 1) {
     const rowNumber = sheet.rowNumbers[index]!;
     const { person, customFields } = mapImportRow(sheet.rows[index]!, sheet.headers, mapping);
-    const resolved = resolveImportRow(person, rowNumber, normalize);
+    const resolved = resolveImportRow(person, rowNumber, normalize, (input) => campaignPhoneProblem(input, country));
     if (!resolved.ok) {
       skip(resolved.message);
       continue;

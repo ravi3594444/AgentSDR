@@ -1,4 +1,3 @@
-import * as XLSX from "xlsx";
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { importRuns, people } from "@/lib/leads/schema";
@@ -7,7 +6,7 @@ import { normalizeEmail } from "@/lib/leads/identity";
 import { outreachCampaigns, outreachLeads, suppressionList } from "./schema";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { leadsInOrg } from "./orgScope";
-import { readSpreadsheet, SpreadsheetReadError } from "@/lib/spreadsheet/read";
+import { readTextSheet, SpreadsheetReadError, uniqueHeaders, type TextRow } from "@/lib/spreadsheet/read";
 
 export const MAX_IMPORT_ROWS = 5000;
 
@@ -50,20 +49,35 @@ function toCamelCaseKey(header: string): string {
 }
 
 /**
+ * The first worksheet as text with its header row: names, emails, phone
+ * numbers and custom columns keep exactly what the person typed (leading
+ * zeros included), and every row its file row number. Repeated headers are
+ * suffixed the way SheetJS does it ("Email", "Email_1"); blank headers stay
+ * blank and are never mapped or turned into custom fields.
+ */
+function readEmailSheet(buffer: ArrayBuffer): { headers: string[]; rows: TextRow[] } {
+  const sheet = readTextSheet(buffer);
+  const trimmed = sheet.headers.map((header) => header.trim());
+  const named = uniqueHeaders(trimmed.filter(Boolean));
+  let next = 0;
+  return { headers: trimmed.map((header) => (header ? named[next++]! : "")), rows: sheet.rows };
+}
+
+/**
  * Reads the sheet's first row as headers, tolerant of column order/casing. Accepts .csv and .xlsx alike;
  * readSpreadsheet decodes UTF-8 text, so an accented name or em-dash survives. Throws SpreadsheetReadError
  * for an unreadable file.
  */
 export function parseRows(buffer: ArrayBuffer): { rows: ParsedRow[]; error: string | null } {
-  const workbook = readSpreadsheet(buffer);
-  const sheetName = workbook.SheetNames[0];
-  if (!sheetName) return { rows: [], error: "File has no sheets" };
+  let sheet: { headers: string[]; rows: TextRow[] };
+  try {
+    sheet = readEmailSheet(buffer);
+  } catch (error) {
+    if (error instanceof SpreadsheetReadError && error.message === "The worksheet is empty") return { rows: [], error: "Sheet is empty" };
+    throw error;
+  }
 
-  const sheet = workbook.Sheets[sheetName];
-  const raw = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, blankrows: false });
-  if (raw.length === 0) return { rows: [], error: "Sheet is empty" };
-
-  const rawHeaders = raw[0].map((h) => String(h ?? "").trim());
+  const rawHeaders = sheet.headers;
   const headers = rawHeaders.map(normalizeHeader);
   const emailCol = headers.findIndex((h) => h === "email");
   if (emailCol === -1) return { rows: [], error: 'Missing required "Email" column' };
@@ -92,7 +106,7 @@ export function parseRows(buffer: ArrayBuffer): { rows: ParsedRow[]; error: stri
   });
 
   const rows: ParsedRow[] = [];
-  for (const line of raw.slice(1)) {
+  for (const { cells: line, rowNumber } of sheet.rows) {
     const email = cell(line[emailCol])?.toLowerCase() ?? "";
 
     let firstName = firstNameCol >= 0 ? cell(line[firstNameCol]) : null;
@@ -121,6 +135,7 @@ export function parseRows(buffer: ArrayBuffer): { rows: ParsedRow[]; error: stri
       companyLinkedinUrl: companyLinkedinCol >= 0 ? cell(line[companyLinkedinCol]) : null,
       title: titleCol >= 0 ? cell(line[titleCol]) : null,
       customFields,
+      rowNumber,
     });
   }
 
@@ -129,15 +144,18 @@ export function parseRows(buffer: ArrayBuffer): { rows: ParsedRow[]; error: stri
 
 /** Throws SpreadsheetReadError for an unreadable file. */
 export function spreadsheetPreview(buffer: ArrayBuffer): { headers: string[]; rows: string[][]; totalRows: number } {
-  const workbook = readSpreadsheet(buffer);
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  if (!sheet) return { headers: [], rows: [], totalRows: 0 };
-  const matrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, blankrows: false });
-  const headers = (matrix[0] ?? []).map((value) => String(value ?? "").trim());
+  let sheet: { headers: string[]; rows: TextRow[] };
+  try {
+    sheet = readEmailSheet(buffer);
+  } catch (error) {
+    if (error instanceof SpreadsheetReadError && error.message === "The worksheet is empty") return { headers: [], rows: [], totalRows: 0 };
+    throw error;
+  }
+  const { headers } = sheet;
   return {
     headers,
-    rows: matrix.slice(1, 6).map((row) => headers.map((_, index) => String(row[index] ?? ""))),
-    totalRows: Math.max(0, matrix.length - 1),
+    rows: sheet.rows.slice(0, 5).map((row) => headers.map((_, index) => row.cells[index] ?? "")),
+    totalRows: sheet.rows.length,
   };
 }
 
@@ -159,29 +177,27 @@ export function suggestedEmailMapping(headers: string[]): EmailCsvMapping {
   })) as EmailCsvMapping;
 }
 
-/** sheet_to_json marks each object row with its 0-based position in the sheet (non-enumerable). */
-function sheetRowNumber(row: Record<string, unknown>): number | undefined {
-  const index = (row as { __rowNum__?: unknown }).__rowNum__;
-  return typeof index === "number" ? index + 1 : undefined;
-}
-
 export function parseRowsWithMapping(buffer: ArrayBuffer, mapping: EmailCsvMapping): { rows: ParsedRow[]; error: string | null } {
   if (!mapping.email) return { rows: [], error: "Map the required Email column" };
-  const workbook = readSpreadsheet(buffer);
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  if (!sheet) return { rows: [], error: "File has no sheets" };
-  const preview = spreadsheetPreview(buffer);
+  let sheet: { headers: string[]; rows: TextRow[] };
+  try {
+    sheet = readEmailSheet(buffer);
+  } catch (error) {
+    if (error instanceof SpreadsheetReadError && error.message === "The worksheet is empty") return { rows: [], error: "Sheet is empty" };
+    throw error;
+  }
+  const { headers } = sheet;
   const selectedHeaders = Object.values(mapping).filter((header): header is string => !!header);
   if (new Set(selectedHeaders).size !== selectedHeaders.length) return { rows: [], error: "Each CSV column can map to only one destination field" };
-  if (selectedHeaders.some((header) => !preview.headers.includes(header))) return { rows: [], error: "The mapping references a column that is not in this file" };
-  const records = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
-  const mappedHeaders = new Set(Object.values(mapping).filter(Boolean));
-  const value = (row: Record<string, unknown>, field: keyof EmailCsvMapping) => cell(mapping[field] ? row[mapping[field]!] : null);
-  const rows = records.map((row) => {
-    let firstName = value(row, "firstName");
-    let lastName = value(row, "lastName");
+  if (selectedHeaders.some((header) => !headers.includes(header))) return { rows: [], error: "The mapping references a column that is not in this file" };
+  const mappedHeaders = new Set(selectedHeaders);
+  const rows = sheet.rows.map(({ cells, rowNumber }) => {
+    const row = new Map(headers.map((header, index) => [header, cells[index] ?? ""] as const));
+    const value = (field: keyof EmailCsvMapping) => cell(mapping[field] ? row.get(mapping[field]!) : null);
+    let firstName = value("firstName");
+    let lastName = value("lastName");
     if (!firstName && !lastName) {
-      const fullName = value(row, "fullName");
+      const fullName = value("fullName");
       if (fullName) {
         const parts = fullName.split(/\s+/);
         firstName = parts[0] ?? null;
@@ -189,23 +205,23 @@ export function parseRowsWithMapping(buffer: ArrayBuffer, mapping: EmailCsvMappi
       }
     }
     const customFields: Record<string, string> = {};
-    for (const [header, rawValue] of Object.entries(row)) {
-      if (mappedHeaders.has(header)) continue;
-      const parsed = cell(rawValue);
+    headers.forEach((header, index) => {
+      if (!header || mappedHeaders.has(header)) return;
+      const parsed = cell(cells[index]);
       const key = toCamelCaseKey(header);
       if (parsed && key && !(key in customFields)) customFields[key] = parsed;
-    }
+    });
     return {
-      email: value(row, "email")?.toLowerCase() ?? "",
-      linkedinUrl: value(row, "linkedinUrl"),
+      email: value("email")?.toLowerCase() ?? "",
+      linkedinUrl: value("linkedinUrl"),
       firstName,
       lastName,
-      company: value(row, "companyName"),
-      domain: value(row, "companyDomain"),
-      companyLinkedinUrl: value(row, "companyLinkedinUrl"),
-      title: value(row, "title"),
+      company: value("companyName"),
+      domain: value("companyDomain"),
+      companyLinkedinUrl: value("companyLinkedinUrl"),
+      title: value("title"),
       customFields,
-      rowNumber: sheetRowNumber(row),
+      rowNumber,
     };
   });
   return { rows, error: null };

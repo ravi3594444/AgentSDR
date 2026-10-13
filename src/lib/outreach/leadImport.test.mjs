@@ -172,3 +172,29 @@ describe("Email campaign identity reuse", () => {
     expect(result.failed).toHaveLength(1);
   });
 });
+
+describe("text cells (leading zeros, duplicate headers, row numbers)", () => {
+  const csv = (text) => {
+    const bytes = new TextEncoder().encode(text);
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  };
+
+  test("custom columns keep leading zeros and rows carry their file row number", () => {
+    const { rows, error } = parseRows(csv("Email,Phone,Zip\na@x.com,09876543210,00123\n\nb@x.com,,\n"));
+    expect(error).toBeNull();
+    expect(rows.map((row) => [row.email, row.customFields, row.rowNumber])).toEqual([
+      ["a@x.com", { phone: "09876543210", zip: "00123" }, 2],
+      ["b@x.com", {}, 4],
+    ]);
+  });
+
+  test("a repeated column can be previewed and mapped by its suffixed name", () => {
+    const buffer = csv("Email,Email,Name\nold@x.com,new@x.com,Ada Lovelace\n");
+    const preview = spreadsheetPreview(buffer);
+    expect(preview.headers).toEqual(["Email", "Email_1", "Name"]);
+    const { rows, error } = parseRowsWithMapping(buffer, { email: "Email_1", fullName: "Name" });
+    expect(error).toBeNull();
+    expect(rows[0]).toMatchObject({ email: "new@x.com", firstName: "Ada", lastName: "Lovelace", rowNumber: 2 });
+    expect(rows[0].customFields).toEqual({ email: "old@x.com" });
+  });
+});
