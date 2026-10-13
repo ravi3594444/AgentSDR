@@ -222,6 +222,13 @@ const runFollowUpStage = async (account: LinkedInAccount, stage: FollowUpStage):
       continue;
     }
 
+    // The batch was selected before the first send; a reply or a pause since
+    // then must stop this lead before anything is claimed or sent.
+    if (!(await stillDueForStage(lead.id, stage.fromStatus))) {
+      console.log(`[sendFollowUps] ${stage.label}: ${lead.linkedinUrl} replied or its campaign was paused — skipped`);
+      continue;
+    }
+
     // The partial unique index on automated message types makes this insert
     // the delivery claim. A second worker cannot send the same stage.
     const [messageClaim] = await db.insert(messages).values({
@@ -244,7 +251,7 @@ const runFollowUpStage = async (account: LinkedInAccount, stage: FollowUpStage):
       await db.update(leadsTable).set({
         status: isExhausted ? "COMPLETED" : stage.toStatus,
         [stage.sentAtField]: new Date(),
-      }).where(and(inOrg(leadsTable), eq(leadsTable.id, lead.id)));
+      }).where(and(inOrg(leadsTable), eq(leadsTable.id, lead.id), eq(leadsTable.status, stage.fromStatus)));
       continue;
     }
 
@@ -270,11 +277,14 @@ const runFollowUpStage = async (account: LinkedInAccount, stage: FollowUpStage):
 
     // Keep the claim if persistence fails after provider success. On the next
     // run it prevents a duplicate send and the conflict path above advances.
+    // Conditional on the stage it was sent from: a reply that arrived during
+    // the send has set REPLIED, and that must not be overwritten (it is what
+    // keeps the remaining follow-ups from sending).
     await db.transaction(async (tx) => {
       await tx.update(leadsTable).set({
         status: isExhausted ? "COMPLETED" : stage.toStatus,
         [stage.sentAtField]: new Date(),
-      }).where(and(inOrg(leadsTable), eq(leadsTable.id, lead.id)));
+      }).where(and(inOrg(leadsTable), eq(leadsTable.id, lead.id), eq(leadsTable.status, stage.fromStatus)));
       await tx.update(messages).set({ linkedinMessageId }).where(and(inOrg(messages), eq(messages.id, messageClaim.id)));
       if (lead.inviteRetryCount > 0) await tx.update(leadsTable).set({ inviteRetryCount: 0 }).where(and(inOrg(leadsTable), eq(leadsTable.id, lead.id)));
     });
@@ -282,6 +292,17 @@ const runFollowUpStage = async (account: LinkedInAccount, stage: FollowUpStage):
     console.log(`[sendFollowUps] ${stage.label} sent to ${lead.linkedinUrl}${isExhausted ? " — sequence complete" : ""}`);
   }
 };
+
+/** The lead is still at this stage and its campaign is still running. */
+async function stillDueForStage(leadId: string, fromStatus: LeadStatus): Promise<boolean> {
+  const [row] = await db
+    .select({ id: leadsTable.id })
+    .from(leadsTable)
+    .innerJoin(campaigns, eq(leadsTable.campaignId, campaigns.id))
+    .where(and(inOrg(leadsTable), eq(leadsTable.id, leadId), eq(leadsTable.status, fromStatus), eq(campaigns.status, "ACTIVE")))
+    .limit(1);
+  return Boolean(row);
+}
 
 export const sendFollowUps = async (account: LinkedInAccount): Promise<void> => {
   if (!(await isPlatformConnected("unipile"))) {

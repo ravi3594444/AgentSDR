@@ -8,6 +8,7 @@ import * as Button from "@/components/alignui/button";
 import * as Modal from "@/components/alignui/modal";
 import * as Select from "@/components/alignui/select";
 import { WHATSAPP_CAMPAIGN_IMPORT_FIELDS } from "@/lib/whatsapp/campaigns/contract";
+import { spreadsheetUploadProblem, SPREADSHEET_UPLOAD_MAX_BYTES } from "@/lib/spreadsheet/upload";
 
 type Channel = "email" | "linkedin" | "whatsapp";
 
@@ -76,12 +77,20 @@ export default function CampaignCsvMappingDialog({ file, endpoint, channel, onCl
   const fieldIdPrefix = useId();
   const [preview, setPreview] = useState<Preview | null>(null);
   const [mapping, setMapping] = useState<Record<string, string>>({});
-  const [busy, setBusy] = useState(true);
+  // The routes check the same; checking first spares uploading a file they would refuse.
+  const uploadProblem = useMemo(
+    () => spreadsheetUploadProblem(file, channel === "whatsapp" ? 2 * SPREADSHEET_UPLOAD_MAX_BYTES : SPREADSHEET_UPLOAD_MAX_BYTES),
+    [channel, file],
+  );
+  const [busyState, setBusy] = useState(true);
+  const busy = busyState && !uploadProblem;
   const [operation, setOperation] = useState<Operation>("preview");
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const [error, setError] = useState<string | null>(null);
+  const [errorState, setError] = useState<string | null>(null);
+  const error = errorState ?? uploadProblem;
 
   useEffect(() => {
+    if (uploadProblem) return;
     let cancelled = false;
     const form = new FormData();
     form.append("file", file);
@@ -106,7 +115,7 @@ export default function CampaignCsvMappingDialog({ file, endpoint, channel, onCl
     return () => {
       cancelled = true;
     };
-  }, [endpoint, file]);
+  }, [endpoint, file, uploadProblem]);
 
   useEffect(() => {
     if (operation !== "import") return;

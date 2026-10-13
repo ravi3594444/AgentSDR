@@ -19,6 +19,11 @@ import {
   linkedinSequenceError,
   normalizeLinkedinSequence,
 } from "@/lib/linkedin/campaignSequence";
+import { isPlatformConnected } from "@/lib/platform/credentials";
+import type { LeadStatus } from "@/lib/linkedin/schema";
+
+/** Leads the engine can still act on: everything not replied, completed, failed or cancelled. */
+const WORKABLE_LEAD_STATUSES: LeadStatus[] = ["PENDING", "REQUEST_SENT", "CONNECTED", "ACCEPT_MESSAGE_SENT", "FOLLOW_UP_1_SENT", "FOLLOW_UP_2_SENT"];
 
 const ACCOUNT_SELECT = {
   id: linkedInAccounts.id,
@@ -211,6 +216,25 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       }
 
       if (status === "ACTIVE") {
+        // Server-side launch rules (the wizard checks the same to disable its
+        // button): Unipile connected, a valid sequence, connected senders and
+        // a lead the engine can still work.
+        if (!(await isPlatformConnected("unipile"))) {
+          return NextResponse.json(
+            { ok: false, error: "Connect Unipile in Settings → LinkedIn → Connection before launching" },
+            { status: 409 },
+          );
+        }
+        const effectiveSequenceError = linkedinSequenceError(normalizeLinkedinSequence({
+          invitationMessage: invitationMessage ?? existingCampaign.invitationMessage,
+          acceptanceMessage: acceptanceMessage ?? existingCampaign.acceptanceMessage,
+          followUp1Message: followUp1Message ?? existingCampaign.followUp1Message,
+          followUp2Message: followUp2Message ?? existingCampaign.followUp2Message,
+          followUp3Message: followUp3Message ?? existingCampaign.followUp3Message,
+        }));
+        if (effectiveSequenceError) {
+          return NextResponse.json({ ok: false, error: effectiveSequenceError }, { status: 400 });
+        }
         const effectiveAccountIds = ids ?? (
           await db
             .select({ id: campaignAccounts.linkedinAccountId })
@@ -239,7 +263,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
                 eq(linkedInAccounts.status, "CONNECTED"),
               ),
             ),
-          db.select({ value: count() }).from(leads).where(and(inOrg(leads), eq(leads.campaignId, id))),
+          db.select({ value: count() }).from(leads).where(and(inOrg(leads), eq(leads.campaignId, id), inArray(leads.status, WORKABLE_LEAD_STATUSES))),
         ]);
 
         if (connectedSenders.length !== effectiveAccountIds.length) {
@@ -250,7 +274,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         }
         if (Number(campaignLeads[0]?.value ?? 0) === 0) {
           return NextResponse.json(
-            { ok: false, error: "Add at least one lead before launching" },
+            { ok: false, error: "Add at least one lead that has not replied, completed or failed before launching" },
             { status: 400 },
           );
         }

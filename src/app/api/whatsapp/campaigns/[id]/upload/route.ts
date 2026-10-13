@@ -4,6 +4,7 @@ import { requireCrmMutationContext } from "@/lib/crm/http";
 import { runInOrganization } from "@/lib/tenancy/scope";
 import { whatsappApiErrorResponse } from "@/lib/whatsapp/errors";
 import { importWhatsappCampaignLeads, previewWhatsappCampaignUpload } from "@/lib/whatsapp/campaigns/campaigns.server";
+import { spreadsheetUploadProblem } from "@/lib/spreadsheet/upload";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -25,7 +26,8 @@ export async function POST(request: NextRequest, { params }: Params) {
     }
     const file = form.get("file");
     if (!(file instanceof File)) throw new CrmConfigurationValidationError("No file provided");
-    if (file.size > MAX_FILE_BYTES) throw new CrmConfigurationValidationError("The file is too large (max 20 MB)");
+    const problem = spreadsheetUploadProblem(file, MAX_FILE_BYTES);
+    if (problem) throw new CrmConfigurationValidationError(problem);
     const buffer = await file.arrayBuffer();
 
     if (form.get("mode") === "preview") {

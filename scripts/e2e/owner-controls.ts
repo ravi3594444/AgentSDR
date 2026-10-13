@@ -113,19 +113,59 @@ const owner = await signIn(OWNER_EMAIL, OWNER_PASSWORD);
   const [person] = await sql<{ full_name: string }[]>`select full_name from people where email = ${`owner-controls+${stamp}@example.test`}`;
   check("owner: accented names survive a UTF-8 CSV", person?.full_name === "José Müller", person?.full_name);
   await sql`delete from people where email = ${`owner-controls+${stamp}@example.test`}`;
+
+  // A phone-only row is a WhatsApp contact; an unusable number is reported by row.
+  const phone = `+1415555${String(stamp % 10000).padStart(4, "0")}`;
+  const phoneForm = new FormData();
+  phoneForm.append("file", new File([`Name,Phone\nPhone Only,${phone}\nBad Number,12\n`], "phones.csv", { type: "text/csv" }));
+  const phones = await call("POST", "/api/leads/people/import", owner, phoneForm);
+  const phonesBody = phones.ok ? ((await phones.json()) as { phoneOnly: number; failed: { row: number; error: string }[] }) : null;
+  const phoneRow = phonesBody?.phoneOnly === 1 ? await sql`select id from people where phone = ${phone}` : [];
+  check(
+    "owner: a phone-only row is imported as a contact and a bad number is explained by row",
+    phonesBody?.phoneOnly === 1 && phoneRow.length === 1 && phonesBody.failed[0]?.row === 3 && /too short/.test(phonesBody.failed[0]?.error ?? ""),
+    phones.ok ? JSON.stringify(phonesBody) : await status(phones),
+  );
+  await sql`delete from people where phone = ${phone}`;
+
+  const pdfForm = new FormData();
+  pdfForm.append("file", new File(["%PDF-1.4"], "deck.pdf", { type: "application/pdf" }));
+  const pdf = await call("POST", "/api/leads/people/import", owner, pdfForm);
+  const pdfBody = (await pdf.json().catch(() => ({}))) as { error?: string };
+  check("owner: a non-spreadsheet upload is refused with a sentence", pdf.status === 400 && /not a spreadsheet/.test(pdfBody.error ?? ""), `${pdf.status} ${pdfBody.error}`);
 }
 
-// Email campaign: create, start, pause, resume, refuse a bogus status, delete.
+// Email campaign: create, refuse a launch that could not send, validate the
+// sequence on save, pause, refuse a bogus status, delete. (Launching for real
+// needs Google Workspace; scripts/e2e/campaign-engines.ts covers the engine.)
 {
   const created = await call("POST", "/api/outreach/campaigns", owner, { name: `Owner controls ${Date.now()}` });
   const campaignId = created.ok ? ((await created.json()) as { campaign: { id: string; status: string } }).campaign.id : null;
   check("owner: can create an email campaign", created.status === 201 && Boolean(campaignId), created.ok ? "" : await status(created));
   if (campaignId) {
-    for (const next of ["active", "paused", "active", "paused"] as const) {
-      const res = await call("PATCH", `/api/outreach/campaigns/${campaignId}`, owner, { status: next });
-      const body = res.ok ? ((await res.json()) as { campaign: { status: string } }) : null;
-      check(`owner: campaign → ${next}`, body?.campaign.status === next, res.ok ? "" : await status(res));
-    }
+    const launch = await call("PATCH", `/api/outreach/campaigns/${campaignId}`, owner, { status: "active" });
+    const launchBody = (await launch.json().catch(() => ({}))) as { problems?: string[] };
+    check(
+      "owner: launching an empty campaign is refused with every reason",
+      launch.status === 409 && (launchBody.problems?.length ?? 0) >= 3,
+      `${launch.status} ${JSON.stringify(launchBody)}`,
+    );
+    const emptyBody = await call("PATCH", `/api/outreach/campaigns/${campaignId}`, owner, {
+      sequence: [{ stepNumber: 1, subject: "Hi", body: "Hello", waitDays: 0 }, { stepNumber: 2, subject: "", body: "  ", waitDays: 3 }],
+    });
+    check("owner: a sequence with an empty email is refused on save", emptyBody.status === 400, `${emptyBody.status}`);
+    const saved = await call("PATCH", `/api/outreach/campaigns/${campaignId}`, owner, {
+      sequence: [{ stepNumber: 7, subject: "Hi {{firstName}}", body: "Hello", waitDays: 4 }, { stepNumber: 7, subject: "", body: "Bump", waitDays: 3 }],
+    });
+    const savedBody = saved.ok ? ((await saved.json()) as { campaign: { sequence: { stepNumber: number; waitDays: number }[] } }) : null;
+    check(
+      "owner: a saved sequence is renumbered 1..n with no wait before the first email",
+      JSON.stringify(savedBody?.campaign.sequence.map((s) => [s.stepNumber, s.waitDays])) === "[[1,0],[2,3]]",
+      JSON.stringify(savedBody?.campaign.sequence),
+    );
+    const paused = await call("PATCH", `/api/outreach/campaigns/${campaignId}`, owner, { status: "paused" });
+    const pausedBody = paused.ok ? ((await paused.json()) as { campaign: { status: string } }) : null;
+    check("owner: campaign → paused", pausedBody?.campaign.status === "paused", paused.ok ? "" : await status(paused));
     const bogus = await call("PATCH", `/api/outreach/campaigns/${campaignId}`, owner, { status: "launched" });
     check("owner: an unknown campaign status is refused", bogus.status === 400, `${bogus.status}`);
     const deleted = await call("DELETE", `/api/outreach/campaigns/${campaignId}`, owner);

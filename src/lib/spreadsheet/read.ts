@@ -136,3 +136,16 @@ export function readTextSheet(input: ArrayBuffer | Uint8Array): { headers: strin
   const [header, ...rows] = lines;
   return { headers: header.cells, rows };
 }
+
+/**
+ * readTextSheet as one object per row, keyed by header (repeats suffixed as
+ * uniqueHeaders does, blank headers as "__EMPTY", "__EMPTY_1" like
+ * sheet_to_json), every key present: a drop-in for
+ * `sheet_to_json(sheet, { defval: "" })` that keeps cells as typed text.
+ */
+export function readTextRecords(input: ArrayBuffer | Uint8Array): { headers: string[]; records: Record<string, string>[] } {
+  const sheet = readTextSheet(input);
+  const headers = uniqueHeaders(sheet.headers.map((header) => header.trim() || "__EMPTY"));
+  const records = sheet.rows.map((row) => Object.fromEntries(headers.map((header, index) => [header, row.cells[index] ?? ""])));
+  return { headers, records };
+}

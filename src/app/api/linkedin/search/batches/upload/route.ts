@@ -2,17 +2,21 @@ import { NextRequest, NextResponse } from "next/server";
 import { withLinkedinOrg } from "@/lib/linkedin/organizations.server";
 import { createSearchBatch, parseSearchSheet, startSearchBatchRun } from "@/lib/linkedin/searchBatches";
 import { SpreadsheetReadError } from "@/lib/spreadsheet/read";
+import { spreadsheetUploadProblem, SPREADSHEET_UPLOAD_MAX_BYTES, UNREADABLE_UPLOAD_MESSAGE } from "@/lib/spreadsheet/upload";
 
 const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every((s) => typeof s === "string");
 
 export async function POST(req: NextRequest) {
   return withLinkedinOrg(req, async () => {
     try {
-      const formData = await req.formData();
-      const file = formData.get("file") as File | null;
-      if (!file) {
+      const formData = await req.formData().catch(() => null);
+      if (!formData) return NextResponse.json({ ok: false, error: UNREADABLE_UPLOAD_MESSAGE }, { status: 400 });
+      const file = formData.get("file");
+      if (!(file instanceof File)) {
         return NextResponse.json({ ok: false, error: "No file provided" }, { status: 400 });
       }
+      const problem = spreadsheetUploadProblem(file);
+      if (problem) return NextResponse.json({ ok: false, error: problem }, { status: file.size > SPREADSHEET_UPLOAD_MAX_BYTES ? 413 : 400 });
       const name = formData.get("name");
       if (typeof name !== "string" || !name.trim()) {
         return NextResponse.json({ ok: false, error: "name is required" }, { status: 400 });

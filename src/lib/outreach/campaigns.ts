@@ -6,6 +6,8 @@ import { outreachCampaigns, outreachLeads, outreachEmails, mailboxes } from "./s
 import type { SequenceStep, CampaignStatus, OutreachLeadStatus } from "./schema";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { leadsInOrg, orgLeadIds } from "./orgScope";
+import { isPlatformConnected } from "@/lib/platform/credentials";
+import type { EmailLaunchFacts } from "./launch";
 
 export async function listCampaigns() {
   const rows = await db.select().from(outreachCampaigns).where(inOrg(outreachCampaigns)).orderBy(desc(outreachCampaigns.createdAt));
@@ -141,6 +143,34 @@ export async function updateCampaignName(id: string, name: string) {
     .update(outreachCampaigns)
     .set({ name: name.trim(), updatedAt: new Date() })
     .where(and(inOrg(outreachCampaigns), eq(outreachCampaigns.id, id)));
+}
+
+/** Lead statuses that can still receive a step. */
+const SENDABLE_LEAD_STATUSES: OutreachLeadStatus[] = ["pending", "initial_sent", "in_follow_up"];
+
+/** What emailLaunchProblems needs to know about this campaign, read now. */
+export async function emailLaunchFacts(campaign: { id: string; sequence: unknown }): Promise<EmailLaunchFacts> {
+  const [[mailboxCount], [leadCount], googleConnected] = await Promise.all([
+    db.select({ n: count() }).from(mailboxes).where(and(inOrg(mailboxes), eq(mailboxes.status, "connected"))),
+    db
+      .select({ n: count() })
+      .from(outreachLeads)
+      .innerJoin(people, eq(outreachLeads.personId, people.id))
+      .where(and(
+        leadsInOrg(),
+        inOrg(people),
+        eq(outreachLeads.campaignId, campaign.id),
+        inArray(outreachLeads.sequenceStatus, SENDABLE_LEAD_STATUSES),
+        isNotNull(people.email),
+      )),
+    isPlatformConnected("google"),
+  ]);
+  return {
+    sequence: campaign.sequence,
+    googleConnected,
+    connectedMailboxes: Number(mailboxCount?.n ?? 0),
+    usableLeads: Number(leadCount?.n ?? 0),
+  };
 }
 
 export async function setCampaignStatus(id: string, status: CampaignStatus) {

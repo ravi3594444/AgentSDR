@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { importLeadsForCampaign, spreadsheetPreview, suggestedEmailMapping, type EmailCsvMapping } from "@/lib/outreach/leadImport";
 import { withOrgContext, authContextErrorResponse } from "@/lib/auth/context";
 import { SpreadsheetReadError } from "@/lib/spreadsheet/read";
+import { spreadsheetUploadProblem, SPREADSHEET_UPLOAD_MAX_BYTES, UNREADABLE_UPLOAD_MESSAGE } from "@/lib/spreadsheet/upload";
 
 // POST /api/outreach/campaigns/[id]/leads/import — multipart form upload, field name "file".
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -9,10 +10,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return await withOrgContext(req, async () => {
       const { id } = await params;
       const form = await req.formData().catch(() => null);
-      const file = form?.get("file");
+      if (!form) return NextResponse.json({ error: UNREADABLE_UPLOAD_MESSAGE }, { status: 400 });
+      const file = form.get("file");
       if (!file || !(file instanceof File)) {
         return NextResponse.json({ error: "file is required" }, { status: 400 });
       }
+      const problem = spreadsheetUploadProblem(file);
+      if (problem) return NextResponse.json({ error: problem }, { status: file.size > SPREADSHEET_UPLOAD_MAX_BYTES ? 413 : 400 });
 
       const buffer = await file.arrayBuffer();
       if (form?.get("mode") === "preview") {

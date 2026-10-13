@@ -111,9 +111,10 @@ function RowActions({ campaign }: { campaign: Campaign }) {
     });
     setBusy(false);
     if (!res.ok) {
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
       await dialogs.alert({
         title: `Could not ${status === "paused" ? "pause" : "resume"} the campaign`,
-        description: "Something went wrong. Please try again.",
+        description: data.error ?? "Something went wrong. Please try again.",
         variant: "error",
       });
       return;

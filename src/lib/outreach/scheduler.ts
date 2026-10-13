@@ -10,16 +10,17 @@
  * it until the next daily build. Meant to be invoked repeatedly by an
  * external cron via /api/outreach/tick.
  */
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { companies, people } from "@/lib/leads/schema";
 import { personVariables } from "@/lib/leads/variables";
 import { mailboxes, outreachLeads, outreachEmails, outreachCampaigns, outreachMailboxQueue } from "./schema";
-import type { SequenceStep } from "./schema";
+import type { OutreachLeadStatus, SequenceStep } from "./schema";
 import { sendEmail } from "./gmail";
 import { isPlatformConnected } from "@/lib/platform/credentials";
 import { isSuppressed } from "./suppression";
 import { isWithinWorkingHours } from "./workingHours";
+import { leadAfterSend, mailboxAtDailyLimit } from "./sendRules";
 import { channelRules } from "@/lib/channels/rules.server";
 import { pickInRange } from "@/lib/channels/rules";
 import { fillTemplate, renderEmail, unsubscribePostUrl } from "./render";
@@ -41,6 +42,7 @@ type TickResult = {
   skippedThrottle: number;
   skippedOutsideHours: number;
   skippedAlreadyClaimed: number;
+  skippedDailyLimit: number;
   failed: number;
 };
 
@@ -64,6 +66,7 @@ export async function runSchedulerTick(options: { send?: SendFunction; now?: Dat
     skippedThrottle: 0,
     skippedOutsideHours: 0,
     skippedAlreadyClaimed: 0,
+    skippedDailyLimit: 0,
     failed: 0,
   };
   if (isMigrationControlPaused("emailOutbound")) {
@@ -124,6 +127,13 @@ async function tickOrganization(result: TickResult, now: Date, send: SendFunctio
       result.skippedOutsideHours += 1;
       continue;
     }
+    // The queue is sized to the daily allowance when it is built, but a
+    // rebuild (a launch or resume mid-day) and a send that lowered the limit
+    // since must not push a mailbox past it.
+    if (mailboxAtDailyLimit(mailbox, now)) {
+      result.skippedDailyLimit += 1;
+      continue;
+    }
 
     // Claim and remove one row atomically. SELECT-then-DELETE allowed two
     // scheduler instances to read and send the same recipient.
@@ -162,6 +172,8 @@ async function tickOrganization(result: TickResult, now: Date, send: SendFunctio
     await sendNextStep(lead, campaign, mailbox, now, result, send);
   }
 }
+
+const IN_SEQUENCE: OutreachLeadStatus[] = ["pending", "initial_sent", "in_follow_up"];
 
 async function sendNextStep(
   lead: typeof outreachLeads.$inferSelect & { email: string; variables: Record<string, string> },
@@ -290,7 +302,7 @@ async function sendNextStep(
     });
 
     const nextStep = campaign.sequence[lead.currentStep + 1];
-    const nextSendAt = nextStep ? new Date(now.getTime() + nextStep.waitDays * 24 * 60 * 60 * 1000) : null;
+    const after = leadAfterSend(lead, campaign.sequence.length, nextStep ? nextStep.waitDays : null, now);
 
     await db
       .update(outreachEmails)
@@ -303,20 +315,22 @@ async function sendNextStep(
       })
       .where(eq(outreachEmails.id, emailRow.id));
 
-    await db
+    const advanced = await db
       .update(outreachLeads)
-      .set({
-        mailboxId: mailbox.id,
-        currentStep: lead.currentStep + 1,
-        sequenceStatus: nextStep ? (lead.currentStep === 0 ? "initial_sent" : "in_follow_up") : "sequence_completed",
-        nextSendAt,
-        updatedAt: now,
-      })
-      .where(and(leadsInOrg(), eq(outreachLeads.id, lead.id)));
+      .set({ mailboxId: mailbox.id, ...after, updatedAt: now })
+      .where(and(leadsInOrg(), eq(outreachLeads.id, lead.id), inArray(outreachLeads.sequenceStatus, IN_SEQUENCE)))
+      .returning({ id: outreachLeads.id });
+    if (!advanced.length) {
+      // Stopped while sending (reply, bounce, unsubscribe): keep that status.
+      await db
+        .update(outreachLeads)
+        .set({ mailboxId: mailbox.id, currentStep: after.currentStep, nextSendAt: null, updatedAt: now })
+        .where(and(leadsInOrg(), eq(outreachLeads.id, lead.id)));
+    }
 
     await db
       .update(mailboxes)
-      .set({ todayEmailsSent: mailbox.todayEmailsSent + 1, nextEmailTime: await randomNextSendDelay() })
+      .set({ todayEmailsSent: sql`${mailboxes.todayEmailsSent} + 1`, nextEmailTime: await randomNextSendDelay() })
       .where(and(inOrg(mailboxes), eq(mailboxes.id, mailbox.id)));
 
     result.sent += 1;

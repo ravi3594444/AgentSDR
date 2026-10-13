@@ -8,6 +8,7 @@ import { organizationPhoneCountry } from "@/lib/calls/phone.server";
 import { findOrCreateContactPerson, resolveImportRow } from "@/lib/calls/campaigns";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { WhatsappApiError } from "../errors";
+import { isPlatformConnected } from "@/lib/platform/credentials";
 import { chatInOrg, visibleChat } from "../messages";
 import {
   whatsappAccounts,
@@ -22,6 +23,7 @@ import {
   WHATSAPP_CAMPAIGN_IMPORT_FIELDS,
   WHATSAPP_CAMPAIGN_LEAD_STATUSES,
   WHATSAPP_CAMPAIGN_MAX_IMPORT_ROWS,
+  WHATSAPP_CAMPAIGN_OPEN_LEAD_STATUSES,
   whatsappCampaignStepsError,
   type AddWhatsappCampaignPeopleResponse,
   type CreateWhatsappCampaignRequest,
@@ -271,6 +273,10 @@ export async function updateWhatsappCampaign(campaignId: string, input: UpdateWh
     const resultingStatus: WhatsappCampaignStatus = input.status ?? existing.status;
     const touched = input.status !== undefined || accountIds !== undefined || steps !== undefined;
     if (resultingStatus === "active" && touched) {
+      // Server-side launch rules; the wizard checks the same to disable its button.
+      if (!(await isPlatformConnected("unipile"))) {
+        throw new WhatsappApiError(409, "Connect Unipile in Settings → WhatsApp → Integrations before launching");
+      }
       const finalSteps = steps ?? existing.steps;
       if (!finalSteps.some((step) => step.body.trim())) throw new WhatsappApiError(400, "Write a first message before launching");
       const [connected] = await tx
@@ -279,8 +285,11 @@ export async function updateWhatsappCampaign(campaignId: string, input: UpdateWh
         .innerJoin(whatsappAccounts, eq(whatsappCampaignAccounts.accountId, whatsappAccounts.id))
         .where(and(inOrg(whatsappAccounts), eq(whatsappCampaignAccounts.campaignId, campaignId), eq(whatsappAccounts.status, "connected")));
       if (!connected?.n) throw new WhatsappApiError(400, "Assign at least one connected WhatsApp number before launching");
-      const [leadCount] = await tx.select({ n: count() }).from(whatsappCampaignLeads).where(eq(whatsappCampaignLeads.campaignId, campaignId));
-      if (!leadCount?.n) throw new WhatsappApiError(400, "Add at least one lead before launching");
+      const [leadCount] = await tx
+        .select({ n: count() })
+        .from(whatsappCampaignLeads)
+        .where(and(eq(whatsappCampaignLeads.campaignId, campaignId), inArray(whatsappCampaignLeads.status, [...WHATSAPP_CAMPAIGN_OPEN_LEAD_STATUSES])));
+      if (!leadCount?.n) throw new WhatsappApiError(400, "Add at least one lead that has not replied, completed or failed before launching");
     }
   });
   return getWhatsappCampaignDetail(campaignId);

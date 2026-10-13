@@ -243,7 +243,13 @@ async function processLead(
         openLead(picked.id),
         eq(whatsappCampaignLeads.currentStep, stepIndex),
         lte(whatsappCampaignLeads.nextSendAt, now),
-        inArray(whatsappCampaignLeads.campaignId, tx.select({ id: whatsappCampaigns.id }).from(whatsappCampaigns).where(inOrg(whatsappCampaigns))),
+        // Re-checked under the lock: a campaign paused or archived after this
+        // tick picked the lead must not send it.
+        inArray(
+          whatsappCampaignLeads.campaignId,
+          tx.select({ id: whatsappCampaigns.id }).from(whatsappCampaigns)
+            .where(and(inOrg(whatsappCampaigns), eq(whatsappCampaigns.status, "active"), isNull(whatsappCampaigns.archivedAt))),
+        ),
       ))
       .for("update", { skipLocked: true });
     if (!locked) return { kind: "lost" as const };
@@ -356,28 +362,33 @@ async function processLead(
     return "continue";
   }
 
+  let response: Awaited<ReturnType<SendFunction>>;
   try {
-    const response = await send({ personId: picked.personId, accountId: account.id, text });
-    const sentAt = new Date();
-    await db
-      .update(whatsappCampaignSends)
-      .set({ status: "sent", whatsappMessageId: response.message.id, sentAt })
-      .where(eq(whatsappCampaignSends.id, claimId));
-    const plan = planAfterSend(steps, stepIndex, sentAt);
-    await updateOpenLead(picked.id, {
-      currentStep: stepIndex + 1,
-      accountId: account.id,
-      lastSentAt: sentAt,
-      attempts: 0,
-      lastError: null,
-      status: plan.status,
-      nextSendAt: plan.nextSendAt,
-    }, now);
-    result.sent += 1;
-    return "sent";
+    response = await send({ personId: picked.personId, accountId: account.id, text });
   } catch (error) {
     return handleSendFailure(error, picked, claimId, now, result);
   }
+  // Recording runs outside the try: once Unipile accepted the message, a
+  // failed write here must not be read as a failed send (that deleted the
+  // claim and retried the lead, a duplicate message). It throws instead,
+  // the claim stays "sending", and the next tick fails the lead as uncertain.
+  const sentAt = new Date();
+  await db
+    .update(whatsappCampaignSends)
+    .set({ status: "sent", whatsappMessageId: response.message.id, sentAt })
+    .where(eq(whatsappCampaignSends.id, claimId));
+  const plan = planAfterSend(steps, stepIndex, sentAt);
+  await updateOpenLead(picked.id, {
+    currentStep: stepIndex + 1,
+    accountId: account.id,
+    lastSentAt: sentAt,
+    attempts: 0,
+    lastError: null,
+    status: plan.status,
+    nextSendAt: plan.nextSendAt,
+  }, now);
+  result.sent += 1;
+  return "sent";
 }
 
 async function handleSendFailure(
