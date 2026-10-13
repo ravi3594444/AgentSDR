@@ -49,12 +49,12 @@ export default async function GettingStartedPage() {
           items={channels}
         />
         <Section className="lg:col-span-12" title="AI" description="Optional for sending; it sorts replies and drafts answers for your review." items={pick("ai")} />
-        <Section className="lg:col-span-12" title="Outreach" items={pick("leads", "campaigns", "replies")} />
+        <Section className="lg:col-span-12" title="Outreach" items={pick("leads", "campaigns", "replySync", "replies")} />
       </div>
       <p className="mt-4 max-w-3xl text-paragraph-xs text-text-sub-600">
         Connected means the saved credentials passed a live check when they were saved and an account is linked. It does not prove
-        that a message was delivered or a reply received: a controlled test send to yourself, and its reply showing up in Action
-        required, is that proof.
+        that a message was delivered or a reply received. Incoming replies is that proof: it turns done only once a real reply has
+        arrived in this workspace on each connected channel.
       </p>
     </PageContainer>
   );

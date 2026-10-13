@@ -13,13 +13,14 @@ import { CALL_POLL_INTERVAL_MS, CALL_POLL_TIMEOUT_MS } from "./polling";
 import { useRefreshOnReturn } from "@/components/calling/useRefreshOnReturn";
 import { listCalls } from "@/lib/calls/client";
 import { cn } from "@/utils/cn";
+import { isReleased } from "@/lib/release";
 import type { CallSummary } from "@/lib/calls/contract";
 import { LiveCallStrip } from "@/components/calls/LiveCallStrip";
 import { RecordingPlayer } from "./RecordingPlayer";
 import { CallSessionBadge } from "./CallSessionBadge";
 import { BRAND } from "@/lib/brand";
 
-export function CallsCard({ personId, refreshKey }: { personId: string; refreshKey?: number }) {
+function CallsCardInner({ personId, refreshKey }: { personId: string; refreshKey?: number }) {
   const [calls, setCalls] = useState<CallSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -118,4 +119,9 @@ function CallRow({ call }: { call: CallSummary }) {
       )}
     </div>
   );
+}
+
+/** Nothing while calling is not part of this release (src/lib/release.ts). */
+export function CallsCard(props: Parameters<typeof CallsCardInner>[0]) {
+  return isReleased("calling") ? <CallsCardInner {...props} /> : null;
 }

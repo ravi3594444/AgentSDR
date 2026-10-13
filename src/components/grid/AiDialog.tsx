@@ -1,5 +1,6 @@
 "use client";
 
+import { isReleased } from "@/lib/release";
 import type { Dispatch, SetStateAction } from "react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
@@ -299,7 +300,7 @@ export default function AiDialog({
         const useCases: AiUseCase[] = [];
         // AI/ML API has no web plugin and its image endpoint is not wired: content only.
         if (modalities.includes("text")) useCases.push(...(nextProviderKey === "openrouter" ? ["content", "web-research"] as AiUseCase[] : ["content"] as AiUseCase[]));
-        if (modalities.includes("image") && nextProviderKey === "openrouter") useCases.push("image-generation");
+        if (modalities.includes("image") && nextProviderKey === "openrouter" && isReleased("imageGeneration")) useCases.push("image-generation");
         return {
           provider,
           upstreamProvider: model.provider,

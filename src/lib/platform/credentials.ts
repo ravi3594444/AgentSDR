@@ -14,6 +14,7 @@ import {
   getPlatformIntegration,
   type PlatformCredentials,
   type PlatformKey,
+  type GmailWatchRegistration,
   type PlatformStatus,
   type UnipileWebhookRegistration,
 } from "./catalog";
@@ -59,6 +60,8 @@ type PlatformConfig = {
   verifiedAt: string;
   /** Unipile only: the last webhook registration (unipileWebhooks.ts). */
   webhooks?: UnipileWebhookRegistration;
+  /** Google only: the last Gmail watch registration (outreach/mailboxWatch.ts). */
+  gmailWatch?: GmailWatchRegistration;
 };
 
 export class PlatformNotConnectedError extends Error {
@@ -129,6 +132,7 @@ export async function listPlatformStatus(): Promise<PlatformStatus[]> {
       secretsSet: config?.secretsSet ?? [],
       verifiedAt: config?.verifiedAt ?? null,
       webhooks: config?.webhooks ?? null,
+      gmailWatch: config?.gmailWatch ?? null,
     };
   });
 }
@@ -225,6 +229,20 @@ async function storeWebhookRegistration(registration: UnipileWebhookRegistration
       .where(and(inOrg(gridProviders), eq(gridProviders.id, row.id)));
   }
   return registration;
+}
+
+/** Record a Gmail watch registration on the Google integration's row, for Settings and Getting Started. */
+export async function storeGmailWatchRegistration(registration: GmailWatchRegistration): Promise<void> {
+  const [row] = await db
+    .select({ id: gridProviders.id, config: gridProviders.config })
+    .from(gridProviders)
+    .where(and(inOrg(gridProviders), eq(gridProviders.key, rowKey("google"))))
+    .limit(1);
+  if (!row) return;
+  await db
+    .update(gridProviders)
+    .set({ config: { ...row.config, gmailWatch: registration }, updatedAt: new Date() })
+    .where(and(inOrg(gridProviders), eq(gridProviders.id, row.id)));
 }
 
 /** Register Unipile's webhooks again (Settings → LinkedIn → Connection → Register again). */

@@ -298,6 +298,24 @@ export type PlatformStatus = {
   verifiedAt: string | null;
   /** Unipile only: the outcome of registering its webhooks. */
   webhooks?: UnipileWebhookRegistration | null;
+  /** Google only: the last Gmail push-notification (watch) registration. */
+  gmailWatch?: GmailWatchRegistration | null;
+};
+
+/**
+ * The last time AgentSDR asked Gmail to push new mail for an organization's
+ * connected mailboxes (Pub/Sub watch), and how it went. Replies are only
+ * picked up while this is registered; it is renewed daily and whenever a
+ * mailbox connects or the Google settings are saved.
+ */
+export type GmailWatchRegistration = {
+  /** registered: every mailbox. partial: some failed. failed: none. skipped: no topic or no mailbox. */
+  status: "registered" | "partial" | "failed" | "skipped";
+  at: string;
+  registered: number;
+  attempted: number;
+  /** Why it was skipped or what failed, in words for the settings page. */
+  message?: string;
 };
 
 /** What happened when AgentSDR registered Unipile's webhooks for an organization. */

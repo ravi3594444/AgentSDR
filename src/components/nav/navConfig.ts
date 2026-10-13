@@ -33,6 +33,7 @@ import {
 import { HUE } from "@/components/analytics/theme";
 import { APP_VERSION, bugReportUrl, SUPPORT_LINKS } from "@/lib/support";
 import { SETTINGS_HOME, SETTINGS_NAV } from "@/components/settings/settingsNav";
+import { isReleased } from "@/lib/release";
 
 /**
  * The app's navigation, shared by the sidebar and the ⌘K palette.
@@ -81,6 +82,9 @@ export type NavSection = { label?: string; entries: NavEntry[] };
 
 const link = (href: string, label: string, icon: RemixiconComponentType, extra: Partial<NavLink> = {}): NavLink => ({ kind: "link", href, label, icon, ...extra });
 
+/** Entries only for features this release offers (src/lib/release.ts). */
+const when = <T,>(released: boolean, ...entries: T[]): T[] => (released ? entries : []);
+
 export const NAV_SECTIONS: NavSection[] = [
   {
     entries: [
@@ -112,7 +116,7 @@ export const NAV_SECTIONS: NavSection[] = [
         children: [
           link("/linkedin/campaigns", "Campaigns", RiMegaphoneLine),
           link("/linkedin/messages", "Messages", RiChat3Line),
-          link("/linkedin/search", "Search", RiSearchLine),
+          ...when(isReleased("linkedinSearch"), link("/linkedin/search", "Search", RiSearchLine)),
         ],
       },
       {
@@ -122,8 +126,8 @@ export const NAV_SECTIONS: NavSection[] = [
         icon: RiWhatsappFill,
         color: HUE.green,
         children: [
-          link("/whatsapp/campaigns", "Message campaigns", RiChatSmile2Line, { match: ["/whatsapp/"] }),
-          link("/calling/campaigns", "Call campaigns", RiPhoneLine, { match: ["/calling/"] }),
+          link("/whatsapp/campaigns", isReleased("calling") ? "Message campaigns" : "Campaigns", RiChatSmile2Line, { match: ["/whatsapp/"] }),
+          ...when(isReleased("calling"), link("/calling/campaigns", "Call campaigns", RiPhoneLine, { match: ["/calling/"] })),
           link("/calling/messages", "Messages", RiChat3Line, { badge: "whatsappUnread" }),
         ],
       },
@@ -136,11 +140,11 @@ export const NAV_SECTIONS: NavSection[] = [
       link("/crm/sequences", "Sequences", RiTimeLine),
     ],
   },
-  {
+  ...when<NavSection>(isReleased("tables") || isReleased("prospecting"), {
     label: "Data",
     entries: [
-      link("/tables", "Tables", RiGridLine),
-      {
+      ...when<NavEntry>(isReleased("tables"), link("/tables", "Tables", RiGridLine)),
+      ...when<NavEntry>(isReleased("prospecting"), {
         kind: "group",
         id: "prospecting",
         label: "Prospecting",
@@ -149,9 +153,9 @@ export const NAV_SECTIONS: NavSection[] = [
           link("/domains", "All domains", RiGlobalLine),
           link("/campaigns", "Qualification campaigns", RiFilter3Line),
         ],
-      },
+      }),
     ],
-  },
+  }),
 ];
 
 export const NAV_FOOTER: NavEntry[] = [

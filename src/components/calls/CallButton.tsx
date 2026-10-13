@@ -12,12 +12,13 @@ import type { DocsPage } from "@/lib/support";
 import { RECORDER_SETUP_PATH } from "@/lib/calls/recorderRelease";
 import { abandonCall, isRecorderInstalled, isRecorderOutdated, recorderVersion, sendToRecorder, startCall } from "@/lib/calls/client";
 import { cn } from "@/utils/cn";
+import { isReleased } from "@/lib/release";
 import { errorMessage } from "@/components/crm/crm-utils";
 import { FormError, TextField } from "./fields";
 
 type Phase = "idle" | "starting" | "opening";
 
-export function CallButton({ personId, crmRecordId, campaignContactId, phone, onCallStarted, numberMenu = true }: {
+function CallButtonInner({ personId, crmRecordId, campaignContactId, phone, onCallStarted, numberMenu = true }: {
   personId: string;
   crmRecordId?: string | null;
   /** The Calling-section contact this call is placed from, when there is one. */
@@ -235,4 +236,9 @@ export function CallButton({ personId, crmRecordId, campaignContactId, phone, on
       </Modal.Root>
     </>
   );
+}
+
+/** Nothing while calling is not part of this release (src/lib/release.ts). */
+export function CallButton(props: Parameters<typeof CallButtonInner>[0]) {
+  return isReleased("calling") ? <CallButtonInner {...props} /> : null;
 }

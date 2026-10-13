@@ -6,6 +6,7 @@ import {
   emailReadiness,
   linkedinReadiness,
   repliesReadiness,
+  replySyncReadiness,
   whatsappReadiness,
   workspaceReadiness,
   type ReadinessFacts,
@@ -16,12 +17,12 @@ function fresh(overrides: Partial<ReadinessFacts> = {}): ReadinessFacts {
   return {
     workspace: { organizationName: "Acme", roleLabel: "Owner", members: 1, pendingInvitations: 0, authEmailConfigured: false },
     canManage: true,
-    google: { connected: false, verifiedAt: null, replySyncTopicSet: false },
+    google: { connected: false, verifiedAt: null, replySyncTopicSet: false, gmailWatch: null },
     mailboxes: { connected: 0, connecting: 0, failed: 0, disabled: 0 },
     unipile: { connected: false, verifiedAt: null, webhooks: null },
     linkedinAccounts: { connected: 0, disconnected: 0 },
     whatsappAccounts: { connected: 0, notConnected: 0 },
-    ai: { provider: null, connectionSaved: false, connectionVerified: false, providers: 0, defaultModel: null, defaultModelEnabled: false, routingConfirmed: false },
+    ai: { provider: null, connectionSaved: false, connectionVerified: false, providers: 0, defaultModel: null, defaultModelEnabled: false, routingConfirmed: false, researchModel: null },
     people: 0,
     campaigns: {
       email: { active: 0, paused: 0, draft: 0, completed: 0 },
@@ -29,11 +30,21 @@ function fresh(overrides: Partial<ReadinessFacts> = {}): ReadinessFacts {
       whatsapp: { active: 0, paused: 0 },
     },
     replies: { actionRequired: 0, draftsAwaitingReview: 0 },
+    traffic: {
+      email: { lastSentAt: null, lastReplyAt: null },
+      linkedin: { lastSentAt: null, lastReplyAt: null },
+      whatsapp: { lastSentAt: null, lastReplyAt: null },
+    },
     ...overrides,
   };
 }
 
-const googleOn = { connected: true, verifiedAt: "2026-10-13T08:00:00.000Z", replySyncTopicSet: true };
+const googleOn = {
+  connected: true,
+  verifiedAt: "2026-10-13T08:00:00.000Z",
+  replySyncTopicSet: true,
+  gmailWatch: { status: "registered" as const, at: "2026-10-13T08:01:00.000Z", registered: 1, attempted: 1 },
+};
 const unipileOn = { connected: true, verifiedAt: "2026-10-13T08:00:00.000Z", webhooks: { status: "registered" as const } };
 
 describe("a fresh workspace", () => {
@@ -47,6 +58,7 @@ describe("a fresh workspace", () => {
       ai: "not_configured",
       leads: "to_do",
       campaigns: "to_do",
+      replySync: "not_configured",
       replies: "clear",
     });
   });
@@ -153,8 +165,9 @@ describe("AI readiness follows the runtime gate", () => {
         defaultModel: { provider: "anthropic", modelId: "anthropic/claude-sonnet" },
         defaultModelEnabled: true,
         routingConfirmed: true,
+        researchModel: null,
         ...patch,
-      },
+      } as ReadinessFacts["ai"],
     }));
 
   test("each missing step is named, in the order it is fixed", () => {
@@ -183,15 +196,17 @@ describe("AI readiness with AI/ML API", () => {
         defaultModel: { provider: "aimlapi", modelId: "openai/gpt-4o-mini" },
         defaultModelEnabled: true,
         routingConfirmed: false,
+        researchModel: null,
         ...patch,
-      },
+      } as ReadinessFacts["ai"],
     }));
 
   test("is ready without any BYOK routing confirmation", () => {
     const item = aiml({});
     expect(item.status).toBe("connected");
     expect(item.summary).toBe("Ready: openai/gpt-4o-mini through AI/ML API.");
-    expect(item.details.join(" ")).toContain("Call transcription");
+    expect(item.details.join(" ")).toContain("Web research about companies is off");
+    expect(aiml({ researchModel: "perplexity/sonar" }).details.join(" ")).toContain("Web research about companies uses perplexity/sonar");
   });
 
   test("names AI/ML API's own steps, never OpenRouter's", () => {
@@ -236,5 +251,41 @@ describe("roles", () => {
     expect(emailReadiness(fresh({ canManage: false })).next).toContain("Only an owner or admin");
     expect(aiReadiness(fresh({ canManage: false })).next).toContain("Only an owner or admin");
     expect(emailReadiness(fresh()).next).not.toContain("Only an owner or admin");
+  });
+});
+
+describe("Gmail watch and incoming replies", () => {
+  const emailReady = { google: googleOn, mailboxes: { connected: 1, connecting: 0, failed: 0, disabled: 0 } };
+
+  test("a topic alone is not enough: the watch must have been registered", () => {
+    expect(emailReadiness(fresh({ ...emailReady, google: { ...googleOn, gmailWatch: null } })).status).toBe("not_verified");
+    expect(emailReadiness(fresh(emailReady)).status).toBe("connected");
+  });
+
+  test("a failed or partial watch needs attention and says why", () => {
+    const failed = emailReadiness(fresh({ ...emailReady, google: { ...googleOn, gmailWatch: { status: "failed", at: "2026-10-13T08:01:00.000Z", registered: 0, attempted: 1, message: "sales@x.com: topic not found" } } }));
+    expect(failed.status).toBe("needs_attention");
+    expect(failed.details.join(" ")).toContain("topic not found");
+    const partial = emailReadiness(fresh({ ...emailReady, google: { ...googleOn, gmailWatch: { status: "partial", at: "2026-10-13T08:01:00.000Z", registered: 1, attempted: 2 } } }));
+    expect(partial.summary).toContain("1 of 2");
+  });
+
+  test("a connected channel is proven only by a reply that actually arrived", () => {
+    const facts = fresh({ ...emailReady, unipile: unipileOn, linkedinAccounts: { connected: 1, disconnected: 0 } });
+    const channels = { email: emailReadiness(facts), linkedin: linkedinReadiness(facts), whatsapp: whatsappReadiness(facts) };
+    const unproven = replySyncReadiness(facts, channels);
+    expect(unproven.status).toBe("to_do");
+    expect(unproven.summary).toBe("Not proven yet on Email, LinkedIn: no reply has arrived there.");
+
+    const proven = replySyncReadiness({
+      ...facts,
+      traffic: {
+        email: { lastSentAt: "2026-10-12T09:00:00.000Z", lastReplyAt: "2026-10-12T10:00:00.000Z" },
+        linkedin: { lastSentAt: null, lastReplyAt: "2026-10-12T11:00:00.000Z" },
+        whatsapp: { lastSentAt: null, lastReplyAt: null },
+      },
+    }, channels);
+    expect(proven.status).toBe("done");
+    expect(proven.details).toEqual(["Email: last reply received 2026-10-12.", "LinkedIn: last reply received 2026-10-12."]);
   });
 });

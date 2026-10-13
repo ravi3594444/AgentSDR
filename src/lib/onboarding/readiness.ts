@@ -43,7 +43,7 @@ export const READINESS_COLOR: Record<ReadinessStatus, "gray" | "orange" | "red" 
 /** A step counts toward progress when nothing is left to do on it. */
 export const isReady = (status: ReadinessStatus) => status === "connected" || status === "done" || status === "clear";
 
-export type ReadinessKey = "workspace" | "email" | "linkedin" | "whatsapp" | "ai" | "leads" | "campaigns" | "replies";
+export type ReadinessKey = "workspace" | "email" | "linkedin" | "whatsapp" | "ai" | "leads" | "campaigns" | "replySync" | "replies";
 
 export type ReadinessItem = {
   key: ReadinessKey;
@@ -65,6 +65,14 @@ export type PlatformFacts = { connected: boolean; verifiedAt: string | null };
 /** Unipile webhook registration as stored on save (catalog.ts UnipileWebhookRegistration). */
 export type WebhookFacts = { status: "registered" | "skipped" | "failed"; message?: string } | null;
 
+/** The last Gmail watch registration (catalog.ts GmailWatchRegistration). */
+export type GmailWatchFacts = { status: "registered" | "partial" | "failed" | "skipped"; at: string; registered: number; attempted: number; message?: string } | null;
+
+export type ReplyChannel = "email" | "linkedin" | "whatsapp";
+
+/** What actually went out and came back on a channel: the evidence "connected" cannot give. */
+export type TrafficFacts = { lastSentAt: string | null; lastReplyAt: string | null };
+
 export type ReadinessFacts = {
   workspace: {
     organizationName: string;
@@ -76,7 +84,7 @@ export type ReadinessFacts = {
   };
   /** May this person change integrations and AI settings (owner or admin)? */
   canManage: boolean;
-  google: PlatformFacts & { replySyncTopicSet: boolean };
+  google: PlatformFacts & { replySyncTopicSet: boolean; gmailWatch: GmailWatchFacts };
   mailboxes: { connected: number; connecting: number; failed: number; disabled: number };
   unipile: PlatformFacts & { webhooks: WebhookFacts };
   linkedinAccounts: { connected: number; disconnected: number };
@@ -92,6 +100,8 @@ export type ReadinessFacts = {
     defaultModelEnabled: boolean;
     /** OpenRouter only: BYOK-only routing confirmed. AI/ML API has no such step. */
     routingConfirmed: boolean;
+    /** The web research model, when one is chosen (AI/ML API only). */
+    researchModel: string | null;
   };
   people: number;
   campaigns: {
@@ -100,11 +110,14 @@ export type ReadinessFacts = {
     whatsapp: { active: number; paused: number };
   };
   replies: { actionRequired: number; draftsAwaitingReview: number };
+  traffic: Record<ReplyChannel, TrafficFacts>;
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString("en-US")} ${n === 1 ? one : many}`;
+
+const day = (iso: string) => iso.slice(0, 10);
 
 const verifiedLine = (verifiedAt: string | null) => {
   if (!verifiedAt) return null;
@@ -162,6 +175,7 @@ export function emailReadiness(facts: ReadinessFacts): ReadinessItem {
     verifiedLine(google.verifiedAt),
     `Mailboxes: ${mailboxes.connected} connected${mailboxes.connecting ? ` · ${mailboxes.connecting} connecting` : ""}${mailboxes.failed ? ` · ${mailboxes.failed} failed` : ""}${mailboxes.disabled ? ` · ${mailboxes.disabled} disabled` : ""}.`,
     google.replySyncTopicSet ? "Reply sync: a Gmail Pub/Sub topic is set." : "Reply sync: no Gmail Pub/Sub topic is set.",
+    gmailWatchLine(google.gmailWatch),
   ].filter((line): line is string => Boolean(line));
   if (mailboxes.failed > 0) {
     return {
@@ -190,13 +204,49 @@ export function emailReadiness(facts: ReadinessFacts): ReadinessItem {
       next: forRole("Create a Gmail Pub/Sub topic and add it on the Email connection page.", canManage),
     };
   }
+  const watch = google.gmailWatch;
+  if (!watch || watch.status === "skipped") {
+    return {
+      ...base,
+      status: "not_verified",
+      summary: "Reply sync is configured, but Gmail has not been asked to watch the mailboxes yet.",
+      details,
+      next: forRole("Save the Email connection again (or reconnect a mailbox): that registers the watch now instead of at the next daily rollover.", canManage),
+    };
+  }
+  if (watch.status !== "registered") {
+    return {
+      ...base,
+      status: "needs_attention",
+      summary: watch.status === "failed"
+        ? "Gmail refused to watch the mailboxes, so replies are not picked up."
+        : `Gmail watches ${watch.registered} of ${watch.attempted} mailboxes; replies to the others are not picked up.`,
+      details,
+      next: forRole("Check that the Gmail Pub/Sub topic exists and that gmail-api-push@system.gserviceaccount.com may publish to it, then save the Email connection again.", canManage),
+    };
+  }
   return {
     ...base,
     status: "connected",
-    summary: `${plural(mailboxes.connected, "mailbox", "mailboxes")} connected, with reply sync configured.`,
+    summary: `${plural(mailboxes.connected, "mailbox", "mailboxes")} connected, with Gmail watching for replies.`,
     details,
     next: null,
   };
+}
+
+function gmailWatchLine(watch: GmailWatchFacts): string | null {
+  if (!watch) return "Gmail watch: never registered.";
+  const when = day(watch.at);
+  switch (watch.status) {
+    case "registered":
+      return `Gmail watch: ${plural(watch.registered, "mailbox", "mailboxes")} registered on ${when}.`;
+    case "partial":
+      return `Gmail watch on ${when}: ${watch.registered} of ${watch.attempted} registered. ${watch.message ?? ""}`.trim();
+    case "failed":
+      return `Gmail watch failed on ${when}: ${watch.message ?? "no mailbox registered"}.`;
+    case "skipped":
+      return `Gmail watch skipped on ${when}: ${watch.message ?? "nothing to watch"}`;
+  }
 }
 
 /**
@@ -375,7 +425,11 @@ export function aiReadiness(facts: ReadinessFacts): ReadinessItem {
       : `Ready: ${ai.defaultModel.modelId} through ${ai.defaultModel.provider}.`,
     details: [
       "AI drafts wait in Action required for your review; none is sent without your approval.",
-      ...(aiml ? ["Call transcription, web-research and image AI columns need an OpenRouter connection."] : []),
+      ai.researchModel
+        ? `Web research about companies uses ${ai.researchModel}.`
+        : aiml
+          ? "Web research about companies is off: choose a research model (step 4) to use it."
+          : "Web research about companies needs an AI/ML API connection in this release.",
     ],
     next: null,
   };
@@ -454,6 +508,44 @@ export function repliesReadiness(facts: ReadinessFacts): ReadinessItem {
   };
 }
 
+const CHANNEL_LABEL: Record<ReplyChannel, string> = { email: "Email", linkedin: "LinkedIn", whatsapp: "WhatsApp" };
+
+/**
+ * Whether replies have actually arrived. "Connected" says the settings are
+ * right; only a real reply landing in this workspace proves the whole path
+ * (provider → webhook or Gmail push → CRM). Listed for the channels that are
+ * connected; to do until each has received at least one.
+ */
+export function replySyncReadiness(facts: ReadinessFacts, channels: Record<ReplyChannel, ReadinessItem>): ReadinessItem {
+  const base = { key: "replySync" as const, title: "Incoming replies", links: [{ href: "/crm/actions", label: "Action required" }] };
+  const connected = (Object.keys(CHANNEL_LABEL) as ReplyChannel[]).filter((channel) => channels[channel].status === "connected");
+  if (!connected.length) {
+    return {
+      ...base,
+      status: "not_configured",
+      summary: "No channel is fully connected yet, so no reply can arrive.",
+      details: ["Each connected channel shows here with the last reply this workspace actually received on it."],
+      next: null,
+    };
+  }
+  const details = connected.map((channel) => {
+    const traffic = facts.traffic[channel];
+    if (traffic.lastReplyAt) return `${CHANNEL_LABEL[channel]}: last reply received ${day(traffic.lastReplyAt)}.`;
+    return `${CHANNEL_LABEL[channel]}: no reply received yet${traffic.lastSentAt ? ` (last message sent ${day(traffic.lastSentAt)})` : " and nothing sent yet"}.`;
+  });
+  const unproven = connected.filter((channel) => !facts.traffic[channel].lastReplyAt);
+  if (!unproven.length) {
+    return { ...base, status: "done", summary: "A real reply has arrived on every connected channel.", details, next: null };
+  }
+  return {
+    ...base,
+    status: "to_do",
+    summary: `Not proven yet on ${unproven.map((channel) => CHANNEL_LABEL[channel]).join(", ")}: no reply has arrived there.`,
+    details,
+    next: "Send a test message to an address or number you control, reply to it, and check that it appears in Action required and stops that person's follow-ups.",
+  };
+}
+
 /** Every step, in the order a new owner takes them. */
 export function buildReadiness(facts: ReadinessFacts): ReadinessItem[] {
   const email = emailReadiness(facts);
@@ -467,6 +559,7 @@ export function buildReadiness(facts: ReadinessFacts): ReadinessItem[] {
     aiReadiness(facts),
     leadsReadiness(facts),
     campaignsReadiness(facts, { email, linkedin, whatsapp }),
+    replySyncReadiness(facts, { email, linkedin, whatsapp }),
     repliesReadiness(facts),
   ];
 }

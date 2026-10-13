@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authContextErrorResponse, requirePermission, withOrgContext } from "@/lib/auth/context";
 import { isPlatformKey } from "@/lib/platform/catalog";
-import { disconnectPlatformIntegration, savePlatformIntegration } from "@/lib/platform/credentials";
+import { disconnectPlatformIntegration, listPlatformStatus, savePlatformIntegration } from "@/lib/platform/credentials";
+import { registerOrganizationWatchesNow } from "@/lib/outreach/mailboxWatch";
 
 // Behind the session cookie like every /api route not listed in proxy.ts PUBLIC.
 // Responses carry PlatformStatus only — never a secret value.
@@ -21,7 +22,12 @@ export async function PUT(req: NextRequest, { params }: Ctx) {
   try {
     return await withOrgContext(req, async (ctx) => {
       requirePermission(ctx, { integrations: ["manage"] });
-      return NextResponse.json(await savePlatformIntegration(key, body as Record<string, unknown>));
+      const saved = await savePlatformIntegration(key, body as Record<string, unknown>);
+      if (key !== "google") return NextResponse.json(saved);
+      // A new or changed Pub/Sub topic takes effect now rather than at the next daily rollover.
+      await registerOrganizationWatchesNow(ctx.organizationId);
+      const status = (await listPlatformStatus()).find((platform) => platform.key === "google");
+      return NextResponse.json(status ?? saved);
     });
   } catch (error) {
     const denied = authContextErrorResponse(error);

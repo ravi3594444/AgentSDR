@@ -13,7 +13,7 @@ import { Frame, FramePanel } from "@/components/analytics/kit/Frame";
 import { DocsLink } from "@/components/page/DocsLink";
 import { useDialogs } from "@/components/DialogProvider";
 import { Callout, Field } from "@/components/settings/SettingsKit";
-import { PLATFORM_INTEGRATIONS, type PlatformIntegration, type PlatformKey, type PlatformStatus, type SetupStep, type UnipileWebhookRegistration } from "@/lib/platform/catalog";
+import { PLATFORM_INTEGRATIONS, type PlatformIntegration, type PlatformKey, type PlatformStatus, type SetupStep, type UnipileWebhookRegistration, type GmailWatchRegistration } from "@/lib/platform/catalog";
 import { cn } from "@/utils/cn";
 import { BRAND } from "@/lib/brand";
 
@@ -163,6 +163,7 @@ function PlatformCard({
         )}
 
         {connected && integration.key === "unipile" && <UnipileWebhooks registration={status?.webhooks ?? null} />}
+        {connected && integration.key === "google" && <GmailWatchStatus registration={status?.gmailWatch ?? null} />}
       </FramePanel>
     </Frame>
   );
@@ -175,6 +176,35 @@ type WebhookSetup = { endpoints: { key: string; label: string; url: string }[] |
  * worked, a way to run it again, and, on request, the URLs and the secret
  * for registering them by hand.
  */
+/**
+ * Whether Gmail is watching the connected mailboxes for replies (Pub/Sub push).
+ * Registered when the connection is saved, when a mailbox connects and daily;
+ * without it, replies do not stop follow-ups.
+ */
+function GmailWatchStatus({ registration }: { registration: GmailWatchRegistration | null }) {
+  const when = registration ? new Date(registration.at).toLocaleString() : null;
+  const tone = !registration || registration.status === "skipped" ? "gray" : registration.status === "registered" ? "green" : "red";
+  const label = !registration
+    ? "Reply sync: never registered"
+    : registration.status === "registered"
+      ? `Reply sync: Gmail watching ${registration.registered} mailbox${registration.registered === 1 ? "" : "es"}`
+      : registration.status === "partial"
+        ? `Reply sync: ${registration.registered} of ${registration.attempted} mailboxes watched`
+        : registration.status === "failed"
+          ? "Reply sync: Gmail refused the watch"
+          : "Reply sync: not registered";
+  return (
+    <div className="mt-4 rounded-xl border border-stroke-soft-200 px-3.5 py-3 text-paragraph-xs text-text-sub-600">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge.Root size="small" variant="lighter" color={tone}>{label}</Badge.Root>
+        {when && <span className="text-text-soft-400">{when}</span>}
+      </div>
+      {registration?.message && <p className="mt-2">{registration.message}</p>}
+      {!registration && <p className="mt-2">Set a Gmail Pub/Sub topic above and save; the watch is registered then, when a mailbox connects, and renewed daily.</p>}
+    </div>
+  );
+}
+
 function UnipileWebhooks({ registration }: { registration: UnipileWebhookRegistration | null }) {
   const router = useRouter();
   const [, startTransition] = useTransition();

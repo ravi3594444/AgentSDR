@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, count, eq, gt, isNull } from "drizzle-orm";
+import { and, count, eq, gt, inArray, isNotNull, isNull, max, ne } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { can, type OrgContext } from "@/lib/auth/context";
 import { ROLE_LABELS } from "@/lib/auth/permissions";
@@ -8,13 +8,52 @@ import { invitations, members } from "@/lib/auth/schema";
 import { getByokSettings } from "@/lib/ai/byok";
 import { getAiConnection } from "@/lib/ai/connections";
 import { people } from "@/lib/leads/schema";
-import { campaigns as linkedinCampaigns, linkedInAccounts } from "@/lib/linkedin/schema";
+import { campaigns as linkedinCampaigns, linkedInAccounts, messages as linkedinMessages } from "@/lib/linkedin/schema";
+import { crmConversationMessages, crmConversations } from "@/lib/crm/schema";
+import { orgLeadIds } from "@/lib/outreach/orgScope";
+import { chatInOrg } from "@/lib/whatsapp/messages";
 import { loadNavBadges } from "@/lib/nav/badges.server";
-import { mailboxes, outreachCampaigns } from "@/lib/outreach/schema";
+import { mailboxes, outreachCampaigns, outreachEmails } from "@/lib/outreach/schema";
 import { listPlatformStatus } from "@/lib/platform/credentials";
 import { inOrg } from "@/lib/tenancy/scope";
-import { whatsappAccounts, whatsappCampaigns } from "@/lib/whatsapp/schema";
-import { buildReadiness, type ReadinessFacts, type ReadinessItem } from "./readiness";
+import { whatsappAccounts, whatsappCampaigns, whatsappChats, whatsappMessages } from "@/lib/whatsapp/schema";
+import { buildReadiness, type ReadinessFacts, type ReadinessItem, type ReplyChannel, type TrafficFacts } from "./readiness";
+
+const iso = (value: Date | string | null | undefined) => (value ? new Date(value).toISOString() : null);
+
+/**
+ * The last message sent and the last reply received per channel. Replies are
+ * the CRM's inbound conversation messages (every channel's inbound path ends
+ * there); sends are each channel's own store, since cold campaign messages
+ * reach the CRM only once someone answers.
+ */
+async function loadTraffic(): Promise<Record<ReplyChannel, TrafficFacts>> {
+  const replies = await db
+    .select({ channel: crmConversationMessages.channel, at: max(crmConversationMessages.sentAt) })
+    .from(crmConversationMessages)
+    .innerJoin(crmConversations, eq(crmConversations.id, crmConversationMessages.conversationId))
+    .where(and(inOrg(crmConversations), eq(crmConversationMessages.direction, "inbound")))
+    .groupBy(crmConversationMessages.channel);
+  const lastReply = (channel: ReplyChannel) => iso(replies.find((row) => row.channel === channel)?.at);
+  const [email] = await db
+    .select({ at: max(outreachEmails.sentAt) })
+    .from(outreachEmails)
+    .where(and(inArray(outreachEmails.leadId, orgLeadIds()), eq(outreachEmails.status, "sent")));
+  const [linkedin] = await db
+    .select({ at: max(linkedinMessages.createdAt) })
+    .from(linkedinMessages)
+    .where(and(inOrg(linkedinMessages), isNotNull(linkedinMessages.linkedinMessageId), ne(linkedinMessages.type, "RECEIVED")));
+  const [whatsapp] = await db
+    .select({ at: max(whatsappMessages.sentAt) })
+    .from(whatsappMessages)
+    .innerJoin(whatsappChats, eq(whatsappChats.id, whatsappMessages.chatId))
+    .where(and(chatInOrg(), eq(whatsappMessages.direction, "outbound")));
+  return {
+    email: { lastSentAt: iso(email?.at), lastReplyAt: lastReply("email") },
+    linkedin: { lastSentAt: iso(linkedin?.at), lastReplyAt: lastReply("linkedin") },
+    whatsapp: { lastSentAt: iso(whatsapp?.at), lastReplyAt: lastReply("whatsapp") },
+  };
+}
 
 /** Status → count, from a grouped count query. */
 function tally<S extends string>(rows: { status: S; n: number }[]): Partial<Record<S, number>> {
@@ -63,6 +102,7 @@ export async function loadReadinessFacts(ctx: OrgContext): Promise<ReadinessFact
     .where(and(inOrg(whatsappCampaigns), isNull(whatsappCampaigns.archivedAt)))
     .groupBy(whatsappCampaigns.status);
   const badges = await loadNavBadges();
+  const traffic = await loadTraffic();
   // members and invitations are auth tables (not organization-scoped by inOrg): filter by the context's organization.
   const [{ n: memberCount }] = await db.select({ n: count() }).from(members).where(eq(members.organizationId, ctx.organizationId));
   const [{ n: pendingInvitations }] = await db
@@ -98,6 +138,7 @@ export async function loadReadinessFacts(ctx: OrgContext): Promise<ReadinessFact
       connected: Boolean(google?.connected),
       verifiedAt: google?.verifiedAt ?? null,
       replySyncTopicSet: Boolean(google?.values.gmailWatchTopic?.trim()),
+      gmailWatch: google?.gmailWatch ?? null,
     },
     mailboxes: {
       connected: mailboxCounts.connected ?? 0,
@@ -122,6 +163,7 @@ export async function loadReadinessFacts(ctx: OrgContext): Promise<ReadinessFact
         defaultModel && byok.providers.includes(defaultModel.provider) && byok.modelsByProvider[defaultModel.provider]?.includes(defaultModel.modelId),
       ),
       routingConfirmed: byok.byokOnlyConfirmed,
+      researchModel: byok.researchModel?.modelId ?? null,
     },
     people: Number(peopleCount),
     campaigns: {
@@ -135,6 +177,7 @@ export async function loadReadinessFacts(ctx: OrgContext): Promise<ReadinessFact
       whatsapp: { active: whatsappCampaignCounts.active ?? 0, paused: whatsappCampaignCounts.paused ?? 0 },
     },
     replies: { actionRequired: badges.actionRequired, draftsAwaitingReview: badges.draftsAwaitingReview },
+    traffic,
   };
 }
 

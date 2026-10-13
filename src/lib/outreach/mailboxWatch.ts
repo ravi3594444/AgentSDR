@@ -4,7 +4,8 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { mailboxes } from "@/lib/outreach/schema";
 import { registerWatch } from "@/lib/outreach/gmail";
-import { getPlatformCredentials } from "@/lib/platform/credentials";
+import { getPlatformCredentials, storeGmailWatchRegistration } from "@/lib/platform/credentials";
+import { watchRegistration } from "./watchRegistration";
 import { inOrg, runInOrganization } from "@/lib/tenancy/scope";
 
 export type MailboxWatchResult = {
@@ -45,8 +46,10 @@ export async function renewMailboxWatches(options: { organizationIds?: string[] 
       const topic = google.gmailWatchTopic;
       if (!topic) {
         skipped.push({ organizationId, reason: "gmail_watch_topic_not_configured" });
+        await storeGmailWatchRegistration(watchRegistration([], "No Gmail Pub/Sub topic is set, so replies are not picked up."));
         return;
       }
+      const organizationResults: MailboxWatchResult["results"] = [];
       for (const mailbox of organizationMailboxes) {
         const result = await registerWatch(mailbox.emailAddress, topic);
         if (result.ok) {
@@ -54,13 +57,29 @@ export async function renewMailboxWatches(options: { organizationIds?: string[] 
             .update(mailboxes)
             .set({ lastHistoryId: result.historyId ?? mailbox.lastHistoryId })
             .where(and(inOrg(mailboxes), eq(mailboxes.id, mailbox.id)));
-          results.push({ emailAddress: mailbox.emailAddress, ok: true });
+          organizationResults.push({ emailAddress: mailbox.emailAddress, ok: true });
         } else {
-          results.push({ emailAddress: mailbox.emailAddress, ok: false, error: result.error });
+          organizationResults.push({ emailAddress: mailbox.emailAddress, ok: false, error: result.error });
         }
       }
+      results.push(...organizationResults);
+      await storeGmailWatchRegistration(watchRegistration(organizationResults));
     });
   }
 
   return { results, skipped };
+}
+
+/**
+ * Registers the watches of the organization in scope now, instead of at the
+ * next daily rollover: right after a mailbox connects or Google's settings
+ * are saved, so replies are picked up from the first send. Never throws; the
+ * outcome is stored on the Google integration either way.
+ */
+export async function registerOrganizationWatchesNow(organizationId: string): Promise<void> {
+  try {
+    await renewMailboxWatches({ organizationIds: [organizationId] });
+  } catch (error) {
+    console.error(`[outreach/watch] registering watches for organization ${organizationId} failed:`, error);
+  }
 }
