@@ -143,6 +143,7 @@ export function emailReadiness(facts: ReadinessFacts): ReadinessItem {
   const links = [
     { href: "/settings/email-connection", label: "Email connection" },
     { href: "/settings/email-accounts", label: "Mailboxes" },
+    { href: "/settings/email-rules", label: "Sending rules" },
   ];
   const base = { key: "email" as const, title: "Email (Google Workspace)", links };
   if (!google.connected) {
@@ -195,15 +196,18 @@ export function emailReadiness(facts: ReadinessFacts): ReadinessItem {
   };
 }
 
-/** The Unipile part shared by LinkedIn and WhatsApp: null when it is not the blocker. */
-function unipileBlocker(facts: ReadinessFacts, channel: string): Omit<ReadinessItem, "key" | "title" | "links"> | null {
+/**
+ * The Unipile part shared by LinkedIn and WhatsApp: null when it is not the
+ * blocker. `connectionPage` names the page as that channel's settings call it.
+ */
+function unipileBlocker(facts: ReadinessFacts, channel: string, connectionPage: string): Omit<ReadinessItem, "key" | "title" | "links"> | null {
   const { unipile, canManage } = facts;
   if (!unipile.connected) {
     return {
       status: "not_configured",
       summary: "Unipile is not connected.",
       details: [`${channel} runs through your own Unipile workspace (API key and DSN).`],
-      next: forRole(`Connect Unipile on the ${channel} connection page.`, canManage),
+      next: forRole(`Connect Unipile on the ${connectionPage} page.`, canManage),
     };
   }
   if (unipile.webhooks?.status === "failed") {
@@ -211,7 +215,7 @@ function unipileBlocker(facts: ReadinessFacts, channel: string): Omit<ReadinessI
       status: "needs_attention",
       summary: "Unipile webhooks failed to register, so replies and status changes do not arrive.",
       details: [unipile.webhooks.message, verifiedLine(unipile.verifiedAt)].filter((line): line is string => Boolean(line)),
-      next: forRole(`Register the webhooks again on the ${channel} connection page.`, canManage),
+      next: forRole(`Register the webhooks again on the ${connectionPage} page.`, canManage),
     };
   }
   return null;
@@ -236,9 +240,10 @@ export function linkedinReadiness(facts: ReadinessFacts): ReadinessItem {
   const links = [
     { href: "/settings/linkedin-connection", label: "LinkedIn connection" },
     { href: "/settings/linkedin-accounts", label: "LinkedIn accounts" },
+    { href: "/settings/linkedin-rules", label: "Sending rules" },
   ];
   const base = { key: "linkedin" as const, title: "LinkedIn", links };
-  const blocker = unipileBlocker(facts, "LinkedIn");
+  const blocker = unipileBlocker(facts, "LinkedIn", "LinkedIn connection");
   if (blocker) return { ...base, ...blocker };
   const { linkedinAccounts: accounts, canManage } = facts;
   const caveat = webhookCaveat(facts);
@@ -273,11 +278,12 @@ export function linkedinReadiness(facts: ReadinessFacts): ReadinessItem {
 
 export function whatsappReadiness(facts: ReadinessFacts): ReadinessItem {
   const links = [
-    { href: "/settings/whatsapp-connection", label: "WhatsApp connection" },
-    { href: "/settings/whatsapp-accounts", label: "WhatsApp accounts" },
+    { href: "/settings/whatsapp-connection", label: "WhatsApp integrations" },
+    { href: "/settings/whatsapp-accounts", label: "WhatsApp numbers" },
+    { href: "/settings/whatsapp-rules", label: "Sending rules" },
   ];
   const base = { key: "whatsapp" as const, title: "WhatsApp", links };
-  const blocker = unipileBlocker(facts, "WhatsApp");
+  const blocker = unipileBlocker(facts, "WhatsApp", "WhatsApp integrations");
   if (blocker) return { ...base, ...blocker };
   const { whatsappAccounts: accounts, canManage } = facts;
   const caveat = webhookCaveat(facts);
@@ -293,7 +299,7 @@ export function whatsappReadiness(facts: ReadinessFacts): ReadinessItem {
       status: "needs_attention",
       summary: `${plural(accounts.notConnected, "WhatsApp number")} not connected.`,
       details,
-      next: "Relink the number in the Unipile dashboard, then press Sync from Unipile on WhatsApp accounts.",
+      next: "Relink the number in the Unipile dashboard, then press Sync from Unipile on WhatsApp numbers.",
     };
   }
   if (accounts.connected === 0) {
@@ -302,7 +308,7 @@ export function whatsappReadiness(facts: ReadinessFacts): ReadinessItem {
       status: "not_verified",
       summary: "Unipile is connected, but no WhatsApp number is synced.",
       details,
-      next: forRole("Link the number in the Unipile dashboard (scan its QR code there), then press Sync from Unipile on WhatsApp accounts.", canManage),
+      next: forRole("Link the number in the Unipile dashboard (scan its QR code there), then press Sync from Unipile on WhatsApp numbers.", canManage),
     };
   }
   if (caveat) {
