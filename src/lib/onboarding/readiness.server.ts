@@ -113,8 +113,9 @@ export async function loadReadinessFacts(ctx: OrgContext): Promise<ReadinessFact
     linkedinAccounts: { connected: linkedinCounts.CONNECTED ?? 0, disconnected: linkedinCounts.DISCONNECTED ?? 0 },
     whatsappAccounts: { connected: whatsappConnected, notConnected: whatsappTotal - whatsappConnected },
     ai: {
+      provider: aiConnection?.providerKey === "openrouter" || aiConnection?.providerKey === "aimlapi" ? aiConnection.providerKey : null,
       connectionSaved: Boolean(aiConnection),
-      connectionVerified: Boolean(aiConnection?.verified && aiConnection.providerKey === "openrouter"),
+      connectionVerified: Boolean(aiConnection?.verified && (aiConnection.providerKey === "openrouter" || aiConnection.providerKey === "aimlapi")),
       providers: byok.providers.length,
       defaultModel,
       defaultModelEnabled: Boolean(

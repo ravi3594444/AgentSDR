@@ -1,5 +1,6 @@
 import { getAiConnection, getAiCredentials } from "@/lib/ai/connections";
 import { getByokSettings } from "@/lib/ai/byok";
+import { RUNTIME_PROVIDERS, isRuntimeProvider } from "@/lib/ai/runtimePlan";
 import { getAiModel, getAiProvider, promptColumnKeys } from "@/lib/ai/catalog";
 import { getAiRunner } from "@/lib/ai/server/registry";
 import type { AiRunner } from "@/lib/ai/server/types";
@@ -55,8 +56,8 @@ export const aiRunner: ColumnRunner<AiConfig> = {
   },
 
   async prepare(config): Promise<AiSession> {
-    if (config.providerKey !== "openrouter") {
-      throw new PermanentRunError("Re-save this legacy AI column with an OpenRouter BYOK provider and model");
+    if (!isRuntimeProvider(config.providerKey)) {
+      throw new PermanentRunError("Re-save this legacy AI column with a model from AI Settings");
     }
     const provider = getAiProvider(config.providerKey);
     const model = getAiModel(config.providerKey, config.modelKey, config.useCase);
@@ -72,8 +73,13 @@ export const aiRunner: ColumnRunner<AiConfig> = {
 
     const settings = await getByokSettings();
     const connection = settings.connectionId ? await getAiConnection(settings.connectionId) : null;
-    if (!connection || !connection.verified || connection.providerKey !== config.providerKey) {
+    if (!connection || !connection.verified) {
       throw new PermanentRunError(`Connect a verified ${provider.name} account`);
+    }
+    if (connection.providerKey !== config.providerKey) {
+      // AI Settings switched provider since the column was saved.
+      const active = isRuntimeProvider(connection.providerKey) ? RUNTIME_PROVIDERS[connection.providerKey] : connection.providerKey;
+      throw new PermanentRunError(`This column uses ${provider.name}, but AI Settings now uses ${active}. Re-save the column with a ${active} model.`);
     }
     const credentials = await getAiCredentials(connection.id);
     if (!credentials?.apiKey) {

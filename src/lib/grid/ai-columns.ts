@@ -4,6 +4,8 @@ import { getAiModel } from "@/lib/ai/catalog";
 import { getByokSettings } from "@/lib/ai/byok";
 import { getAiConnection, getAiCredentials } from "@/lib/ai/connections";
 import { listOpenRouterByokCatalog } from "@/lib/ai/server/openrouter";
+import { listAimlModels } from "@/lib/ai/server/aimlapi";
+import { AIML_PROVIDER_KEY, AIML_PROVIDER_NAME } from "@/lib/ai/aimlapi-types";
 import { gridColumns, type GridColumn } from "./schema";
 import { inOrgTables, tableInOrganization } from "./scope";
 import { assertNoCycle, listColumns, uniqueColumnKey, uniqueColumnName, validateColumnConfig } from "./columns";
@@ -66,6 +68,21 @@ async function assertUsable(input: AiColumnInput) {
       description: liveModel.description ?? model.description,
       producesImages: requiredModality === "image",
     };
+  }
+  if (input.providerKey === AIML_PROVIDER_KEY) {
+    if (input.useCase !== "content") {
+      throw new Error(`${AIML_PROVIDER_NAME} models can create or modify content only; web research and images need an OpenRouter connection`);
+    }
+    const settings = await getByokSettings();
+    if (settings.connectionId !== input.connectionId) {
+      throw new Error(`This AI column must use the ${AIML_PROVIDER_NAME} connection selected in AI Settings`);
+    }
+    if (!settings.modelsByProvider[AIML_PROVIDER_KEY]?.includes(input.modelKey)) {
+      throw new Error("Select a model enabled in AI Settings");
+    }
+    const liveModel = (await listAimlModels()).find((candidate) => candidate.id === input.modelKey);
+    if (!liveModel) throw new Error(`That model is no longer offered with structured output by ${AIML_PROVIDER_NAME}`);
+    return { ...model, name: liveModel.name, description: liveModel.description ?? model.description };
   }
   return model;
 }

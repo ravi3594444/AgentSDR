@@ -3,9 +3,11 @@ import { PermanentRunError, RetryableRunError, aiProviderLabel } from "@/lib/gri
 import { isTransientOpenRouterError } from "./openrouter-errors";
 import { openRouterTokenLimit, strictImageProviderRouting } from "../openrouter-types";
 import { generateOpenRouterImage } from "./openrouter";
-import { getOpenRouterRuntime } from "./runtime";
-import { completeStructuredWithOpenRouter } from "./structuredCompletion";
+import { getAiRuntime } from "./runtime";
+import { completeStructured } from "./structuredCompletion";
 import type { AiRunner } from "./types";
+import { AIML_PROVIDER_KEY, AIML_PROVIDER_NAME } from "../aimlapi-types";
+import type { AiProviderKey } from "../runtimePlan";
 
 /**
  * OpenRouter answers an upstream failure with a generic message ("Provider
@@ -57,61 +59,75 @@ function webPlugins(config: { useCase: string }, modelId: string) {
   return [modelId.startsWith("google/") ? { id: "web", engine: "exa" } : { id: "web" }];
 }
 
-export const runOpenRouter: AiRunner = async ({ config, model, prompt, schema, examples, timeoutMs, signal }) => {
-  let auditRequest: unknown;
-  try {
-    if (!config.upstreamProvider) throw new PermanentRunError("Re-save this AI column with an OpenRouter provider");
-    if (schema) {
-      const system = ["You are filling in one row of a spreadsheet.", ...examples.map((example) => `Example input:\n${example.input}\nExpected response:\n${example.response}`)].join("\n\n");
-      const result = await completeStructuredWithOpenRouter({
-        requestedModel: { provider: config.upstreamProvider, modelId: model.modelId },
-        timeoutMs,
-        systemPrompt: system,
-        userPrompt: prompt,
-        maxOutputTokens: config.maxTokens ?? model.maxOutputTokens ?? 16000,
-        jsonSchema: schema,
-        schemaName: "fill_row",
-        plugins: webPlugins(config, model.modelId),
-        onRequest: (request) => { auditRequest = request; },
-        signal,
-      });
-      auditRequest = result.request;
-      return { value: JSON.parse(result.text), usage: result.usage, raw: result.response, request: result.request };
+/**
+ * The text runner for one provider's AI columns. Both providers go through
+ * getAiRuntime, so the column runs on the connection AI Settings selected;
+ * a column saved for the other provider is refused in runners/ai.ts first.
+ */
+function chatRunner(providerKey: AiProviderKey): AiRunner {
+  return async ({ config, model, prompt, schema, examples, timeoutMs, signal }) => {
+    let auditRequest: unknown;
+    const upstream = providerKey === AIML_PROVIDER_KEY ? AIML_PROVIDER_KEY : config.upstreamProvider;
+    try {
+      if (!upstream) throw new PermanentRunError("Re-save this AI column with an OpenRouter provider");
+      if (providerKey === AIML_PROVIDER_KEY && config.useCase !== "content") {
+        throw new PermanentRunError(`${AIML_PROVIDER_NAME} columns can create or modify content only; web research and images need an OpenRouter connection`);
+      }
+      const requestedModel = { provider: upstream, modelId: model.modelId };
+      if (schema) {
+        const system = ["You are filling in one row of a spreadsheet.", ...examples.map((example) => `Example input:\n${example.input}\nExpected response:\n${example.response}`)].join("\n\n");
+        const result = await completeStructured({
+          requestedModel,
+          timeoutMs,
+          systemPrompt: system,
+          userPrompt: prompt,
+          maxOutputTokens: config.maxTokens ?? model.maxOutputTokens ?? 16000,
+          jsonSchema: schema,
+          schemaName: "fill_row",
+          plugins: webPlugins(config, model.modelId),
+          onRequest: (request) => { auditRequest = request; },
+          signal,
+        });
+        auditRequest = result.request;
+        return { value: JSON.parse(result.text), usage: result.usage, raw: result.response, request: result.request };
+      }
+      const runtime = await getAiRuntime(requestedModel, timeoutMs);
+      const system = ["You are filling in one row of a spreadsheet.", "Respond with the answer only — no preamble.", ...examples.map((example) => `Example input:\n${example.input}\nExpected response:\n${example.response}`)].join("\n\n");
+      const tokenLimit = openRouterTokenLimit(model.modelId, config.maxTokens ?? model.maxOutputTokens ?? 16000);
+      const plugins = runtime.supportsPlugins ? webPlugins(config, model.modelId) : undefined;
+      const request = { model: model.modelId, messages: [{ role: "system", content: system }, { role: "user", content: prompt }], ...tokenLimit, ...runtime.routing, ...(plugins ? { plugins } : {}) };
+      auditRequest = request;
+      const response = await runtime.client.chat.completions.create(request as never, { signal });
+      const text = response.choices[0]?.message.content?.trim() ?? "";
+      return { value: text, usage: { inputTokens: response.usage?.prompt_tokens, outputTokens: response.usage?.completion_tokens }, raw: response, request };
+    } catch (error) {
+      if (error instanceof PermanentRunError && error.audit) throw error;
+      const response = auditError(error);
+      const audit = {
+        provider: aiProviderLabel(providerKey, upstream, model.key),
+        request: auditRequest,
+        response,
+      };
+      // A rate limit, a 5xx or a timeout is the provider's moment, not the
+      // user's config — let the queue back off and retry it.
+      if (isTransientOpenRouterError(error)) throw new RetryableRunError(response.error, audit);
+      throw new PermanentRunError(response.error, audit);
     }
-    const { client, provider } = await getOpenRouterRuntime(
-      { provider: config.upstreamProvider, modelId: model.modelId },
-      timeoutMs,
-    );
-    const system = ["You are filling in one row of a spreadsheet.", "Respond with the answer only — no preamble.", ...examples.map((example) => `Example input:\n${example.input}\nExpected response:\n${example.response}`)].join("\n\n");
-    const tokenLimit = openRouterTokenLimit(model.modelId, config.maxTokens ?? model.maxOutputTokens ?? 16000);
-    const request = { model: model.modelId, messages: [{ role: "system", content: system }, { role: "user", content: prompt }], ...tokenLimit, provider, ...(webPlugins(config, model.modelId) ? { plugins: webPlugins(config, model.modelId) } : {}) };
-    auditRequest = request;
-    const response = await client.chat.completions.create(request as never, { signal });
-    const text = response.choices[0]?.message.content?.trim() ?? "";
-    return { value: text, usage: { inputTokens: response.usage?.prompt_tokens, outputTokens: response.usage?.completion_tokens }, raw: response, request };
-  } catch (error) {
-    if (error instanceof PermanentRunError && error.audit) throw error;
-    const response = auditError(error);
-    const audit = {
-      provider: aiProviderLabel("openrouter", config.upstreamProvider, model.key),
-      request: auditRequest,
-      response,
-    };
-    // A rate limit, a 5xx or a timeout is the provider's moment, not the
-    // user's config — let the queue back off and retry it.
-    if (isTransientOpenRouterError(error)) throw new RetryableRunError(response.error, audit);
-    throw new PermanentRunError(response.error, audit);
-  }
-};
+  };
+}
+
+export const runOpenRouter: AiRunner = chatRunner("openrouter");
+export const runAimlApi: AiRunner = chatRunner(AIML_PROVIDER_KEY);
 
 export const runOpenRouterImage: AiRunner = async ({ config, model, prompt, timeoutMs, signal }) => {
   let auditRequest: unknown;
   try {
     if (!config.upstreamProvider) throw new PermanentRunError("Re-save this AI column with an OpenRouter provider");
-    const { apiKey } = await getOpenRouterRuntime(
+    const { apiKey, providerKey } = await getAiRuntime(
       { provider: config.upstreamProvider, modelId: model.modelId },
       timeoutMs,
     );
+    if (providerKey !== "openrouter") throw new PermanentRunError("Image columns need an OpenRouter connection in AI Settings");
     const provider = strictImageProviderRouting(config.upstreamProvider);
     const request = { model: model.modelId, prompt, n: 1, provider };
     auditRequest = request;

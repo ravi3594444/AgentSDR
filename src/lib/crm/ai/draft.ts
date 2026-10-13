@@ -1,7 +1,7 @@
 import "server-only";
 
 import type { OpenRouterModelSelection } from "@/lib/ai/openrouter-types";
-import { completeStructuredWithOpenRouter } from "@/lib/ai/server/structuredCompletion";
+import { completeStructured } from "@/lib/ai/server/structuredCompletion";
 import { crmChannelLabel } from "../channels";
 import type { CrmChannel } from "../schema";
 import { withAiInstructions } from "./instructions";
@@ -468,7 +468,7 @@ export function sanitizeProviderMetadata(value: unknown, depth = 0): unknown {
 }
 
 export const completeDraftWithOpenRouter: DraftCompletion = async (input) => {
-  return completeStructuredWithOpenRouter({
+  return completeStructured({
     requestedModel: input.requestedModel,
     timeoutMs: input.timeoutMs,
     systemPrompt: input.systemPrompt,

@@ -21,7 +21,7 @@ function fresh(overrides: Partial<ReadinessFacts> = {}): ReadinessFacts {
     unipile: { connected: false, verifiedAt: null, webhooks: null },
     linkedinAccounts: { connected: 0, disconnected: 0 },
     whatsappAccounts: { connected: 0, notConnected: 0 },
-    ai: { connectionSaved: false, connectionVerified: false, providers: 0, defaultModel: null, defaultModelEnabled: false, routingConfirmed: false },
+    ai: { provider: null, connectionSaved: false, connectionVerified: false, providers: 0, defaultModel: null, defaultModelEnabled: false, routingConfirmed: false },
     people: 0,
     campaigns: {
       email: { active: 0, paused: 0, draft: 0, completed: 0 },
@@ -146,6 +146,7 @@ describe("AI readiness follows the runtime gate", () => {
   const ai = (patch: Partial<ReadinessFacts["ai"]>) =>
     aiReadiness(fresh({
       ai: {
+        provider: "openrouter",
         connectionSaved: true,
         connectionVerified: true,
         providers: 1,
@@ -157,7 +158,7 @@ describe("AI readiness follows the runtime gate", () => {
     }));
 
   test("each missing step is named, in the order it is fixed", () => {
-    expect(ai({ connectionSaved: false }).summary).toBe("OpenRouter is not connected.");
+    expect(ai({ provider: null, connectionSaved: false }).summary).toBe("No AI provider is connected.");
     expect(ai({ connectionVerified: false }).status).toBe("needs_attention");
     expect(ai({ providers: 0 }).summary).toContain("no BYOK provider");
     expect(ai({ defaultModelEnabled: false }).summary).toContain("default model");
@@ -168,6 +169,38 @@ describe("AI readiness follows the runtime gate", () => {
     const item = ai({});
     expect(item.status).toBe("connected");
     expect(item.summary).toBe("Ready: anthropic/claude-sonnet through anthropic.");
+  });
+});
+
+describe("AI readiness with AI/ML API", () => {
+  const aiml = (patch: Partial<ReadinessFacts["ai"]>) =>
+    aiReadiness(fresh({
+      ai: {
+        provider: "aimlapi",
+        connectionSaved: true,
+        connectionVerified: true,
+        providers: 1,
+        defaultModel: { provider: "aimlapi", modelId: "openai/gpt-4o-mini" },
+        defaultModelEnabled: true,
+        routingConfirmed: false,
+        ...patch,
+      },
+    }));
+
+  test("is ready without any BYOK routing confirmation", () => {
+    const item = aiml({});
+    expect(item.status).toBe("connected");
+    expect(item.summary).toBe("Ready: openai/gpt-4o-mini through AI/ML API.");
+    expect(item.details.join(" ")).toContain("Call transcription");
+  });
+
+  test("names AI/ML API's own steps, never OpenRouter's", () => {
+    expect(aiml({ connectionVerified: false }).summary).toBe("The saved AI/ML API key did not pass verification.");
+    expect(aiml({ providers: 0 }).summary).toBe("AI/ML API is connected, but no model is selected.");
+    expect(aiml({ defaultModelEnabled: false }).summary).toBe("AI/ML API is connected, but no usable default model is chosen.");
+    for (const item of [aiml({ connectionVerified: false }), aiml({ providers: 0 }), aiml({ defaultModel: null })]) {
+      expect(`${item.summary} ${item.next}`).not.toMatch(/BYOK|management key|routing/);
+    }
   });
 });
 

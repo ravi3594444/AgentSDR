@@ -1,7 +1,8 @@
 import "server-only";
 
 import { AI_PROVIDERS } from "../catalog";
-import { runOpenRouter, runOpenRouterImage } from "./openrouter-runner";
+import { runAimlApi, runOpenRouter, runOpenRouterImage } from "./openrouter-runner";
+import { AIML_PROVIDER_KEY } from "../aimlapi-types";
 import type { AiRunner } from "./types";
 
 /**
@@ -12,6 +13,7 @@ import type { AiRunner } from "./types";
  */
 const RUNNERS: Record<string, { text?: AiRunner; image?: AiRunner }> = {
   openrouter: { text: runOpenRouter, image: runOpenRouterImage },
+  [AIML_PROVIDER_KEY]: { text: runAimlApi },
 };
 
 // Fails at startup rather than on a user's first run, the same guard

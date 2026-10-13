@@ -1,6 +1,8 @@
 import "server-only";
 
 import { listOpenRouterByokCredentials, verifyOpenRouterInferenceKey } from "./openrouter";
+import { verifyAimlApiKey } from "./aimlapi";
+import { AIML_PROVIDER_KEY } from "../aimlapi-types";
 import { getAiProvider } from "../catalog";
 
 /**
@@ -31,6 +33,11 @@ export async function verifyAiCredentials(
       if (!byokCredentials.some((credential) => !credential.disabled && !credential.is_fallback)) {
         throw new Error("No active prioritized BYOK credentials were found in this OpenRouter workspace");
       }
+      return;
+    }
+    if (providerKey === AIML_PROVIDER_KEY) {
+      // One key, nothing else: no management key, BYOK list or routing to check.
+      await verifyAimlApiKey(apiKey);
       return;
     }
     throw new Error(`No verifier is registered for ${provider.name}`);

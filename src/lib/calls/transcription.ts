@@ -4,7 +4,7 @@ import { and, eq, lt, ne, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { companies, people } from "@/lib/leads/schema";
 import { getByokSettings } from "@/lib/ai/byok";
-import { getOpenRouterRuntime } from "@/lib/ai/server/runtime";
+import { getAiRuntime } from "@/lib/ai/server/runtime";
 import type { CallTranscript } from "./contract";
 import { callSessions } from "./schema";
 import { getRecordingBytes } from "./storage";
@@ -186,7 +186,14 @@ export async function transcribeAudio(input: {
   const base64 = Buffer.from(input.audio).toString("base64");
   const format = audioFormatFor(input.contentType);
 
-  const runtime = await getOpenRouterRuntime({ provider, modelId: model }, TRANSCRIPTION_TIMEOUT_MS);
+  const runtime = await getAiRuntime({ provider, modelId: model }, TRANSCRIPTION_TIMEOUT_MS);
+  // Audio input (`input_audio` in a chat message, plus a strict transcript
+  // schema) has only been checked through OpenRouter. AI/ML API serves audio
+  // through other models and endpoints; until those are checked, transcription
+  // refuses rather than sending a recording somewhere it may be mishandled.
+  if (runtime.providerKey !== "openrouter") {
+    throw new Error("Call transcription needs an OpenRouter connection in Settings → AI provider; it is not available with AI/ML API yet");
+  }
   const response = await runtime.client.chat.completions.create(
     {
       model,
@@ -204,7 +211,7 @@ export async function transcribeAudio(input: {
         },
       ],
       response_format: { type: "json_schema", json_schema: { name: "call_transcript", strict: true, schema: TRANSCRIPT_JSON_SCHEMA } },
-      provider: runtime.provider,
+      ...runtime.routing,
       temperature: 0,
     } as never,
     {},

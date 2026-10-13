@@ -82,12 +82,15 @@ export type ReadinessFacts = {
   linkedinAccounts: { connected: number; disconnected: number };
   whatsappAccounts: { connected: number; notConnected: number };
   ai: {
+    /** The provider of the connection AI Settings selected, if any. */
+    provider: "openrouter" | "aimlapi" | null;
     connectionSaved: boolean;
     connectionVerified: boolean;
     providers: number;
     defaultModel: { provider: string; modelId: string } | null;
     /** The default model's provider is enabled and the model is in its list. */
     defaultModelEnabled: boolean;
+    /** OpenRouter only: BYOK-only routing confirmed. AI/ML API has no such step. */
     routingConfirmed: boolean;
   };
   people: number;
@@ -317,7 +320,11 @@ export function whatsappReadiness(facts: ReadinessFacts): ReadinessItem {
   return { ...base, status: "connected", summary: `${plural(accounts.connected, "WhatsApp number")} synced, with webhooks registered.`, details, next: null };
 }
 
-/** Mirrors the gate every model call passes (src/lib/ai/server/runtime.ts), in the order a person fixes it. */
+/**
+ * Mirrors the gate every model call passes (src/lib/ai/runtimePlan.ts), in the
+ * order a person fixes it. OpenRouter needs BYOK providers and a routing
+ * confirmation; AI/ML API needs only its key, selected models and a default.
+ */
 export function aiReadiness(facts: ReadinessFacts): ReadinessItem {
   const { ai, canManage } = facts;
   const base = {
@@ -325,18 +332,36 @@ export function aiReadiness(facts: ReadinessFacts): ReadinessItem {
     title: "AI drafting and reply sorting",
     links: [{ href: "/settings/ai", label: "AI provider" }],
   };
+  const aiml = ai.provider === "aimlapi";
+  const name = aiml ? "AI/ML API" : "OpenRouter";
   const notReady = (summary: string, next: string, status: ReadinessStatus = "not_configured"): ReadinessItem => ({
     ...base,
     status,
     summary,
-    details: ["Uses your own OpenRouter account with your own provider keys (BYOK). Replies are sorted and drafts written; drafts wait for your review."],
+    details: [
+      aiml
+        ? "Uses your AI/ML API key and the structured-output models you chose. Replies are sorted and drafts written; drafts wait for your review."
+        : ai.connectionSaved
+          ? "Uses your own OpenRouter account with your own provider keys (BYOK). Replies are sorted and drafts written; drafts wait for your review."
+          : "Connect OpenRouter (your own provider keys, BYOK) or AI/ML API (one key, many models). Replies are then sorted and drafts written; drafts wait for your review.",
+    ],
     next: forRole(next, canManage),
   });
-  if (!ai.connectionSaved) return notReady("OpenRouter is not connected.", "Add your OpenRouter inference key and management key under Settings → AI provider.");
-  if (!ai.connectionVerified) return notReady("The saved OpenRouter keys did not pass verification.", "Enter both OpenRouter keys again under Settings → AI provider.", "needs_attention");
-  if (ai.providers === 0) return notReady("OpenRouter is connected, but no BYOK provider is enabled.", "Enable a provider whose key you added in OpenRouter's BYOK settings.");
-  if (!ai.defaultModel || !ai.defaultModelEnabled) return notReady("OpenRouter is connected, but no usable default model is chosen.", "Choose a default model from an enabled provider.");
-  if (!ai.routingConfirmed) {
+  if (!ai.connectionSaved) return notReady("No AI provider is connected.", "Connect OpenRouter or AI/ML API under Settings → AI provider.");
+  if (!ai.connectionVerified) {
+    return aiml
+      ? notReady("The saved AI/ML API key did not pass verification.", "Enter the AI/ML API key again under Settings → AI provider.", "needs_attention")
+      : notReady("The saved OpenRouter keys did not pass verification.", "Enter both OpenRouter keys again under Settings → AI provider.", "needs_attention");
+  }
+  if (ai.providers === 0) {
+    return aiml
+      ? notReady("AI/ML API is connected, but no model is selected.", "Select at least one structured-output model under Settings → AI provider.")
+      : notReady("OpenRouter is connected, but no BYOK provider is enabled.", "Enable a provider whose key you added in OpenRouter's BYOK settings.");
+  }
+  if (!ai.defaultModel || !ai.defaultModelEnabled) {
+    return notReady(`${name} is connected, but no usable default model is chosen.`, aiml ? "Choose a default model from the ones you selected." : "Choose a default model from an enabled provider.");
+  }
+  if (!aiml && !ai.routingConfirmed) {
     return notReady(
       "OpenRouter is connected, but BYOK-only routing is not confirmed, so AI calls are blocked.",
       "In OpenRouter, set each enabled provider to never use shared capacity, then tick the confirmation under Settings → AI provider.",
@@ -345,8 +370,13 @@ export function aiReadiness(facts: ReadinessFacts): ReadinessItem {
   return {
     ...base,
     status: "connected",
-    summary: `Ready: ${ai.defaultModel.modelId} through ${ai.defaultModel.provider}.`,
-    details: ["AI drafts wait in Action required for your review; none is sent without your approval."],
+    summary: aiml
+      ? `Ready: ${ai.defaultModel.modelId} through AI/ML API.`
+      : `Ready: ${ai.defaultModel.modelId} through ${ai.defaultModel.provider}.`,
+    details: [
+      "AI drafts wait in Action required for your review; none is sent without your approval.",
+      ...(aiml ? ["Call transcription, web-research and image AI columns need an OpenRouter connection."] : []),
+    ],
     next: null,
   };
 }

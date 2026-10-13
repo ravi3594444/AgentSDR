@@ -175,6 +175,8 @@ const privileged: { label: string; method: string; path: string; body?: unknown;
     body: { providers: ["openai"], modelsByProvider: { openai: ["openai/gpt-test"] } },
     ownerProbe: true,
   },
+  // The key is rejected by AI/ML API's own check, so the owner's probe stores nothing.
+  { label: "add an AI/ML API key", method: "POST", path: "/api/grid/ai/providers/aimlapi/connections", body: { credentials: { apiKey: "invalid-test-key" } }, ownerProbe: true },
   { label: "disconnect the Unipile integration", method: "DELETE", path: "/api/settings/integrations/unipile", ownerProbe: false },
   { label: "re-register Unipile webhooks", method: "POST", path: "/api/settings/integrations/unipile/webhooks", ownerProbe: false },
 ];

@@ -153,6 +153,8 @@ export default function AiDialog({
   const [modelKey, setModelKeyRaw] = useState(saved?.modelKey ?? "");
   const [upstreamProvider, setUpstreamProviderRaw] = useState(saved?.upstreamProvider ?? "");
   const [connectionId, setConnectionIdRaw] = useState(saved?.connectionId ?? "");
+  /** The provider AI Settings selected (OpenRouter or AI/ML API); its models fill the picker. */
+  const [activeProviderKey, setActiveProviderKey] = useState("openrouter");
   const [prompt, setPromptRaw] = useState(saved?.prompt ?? "");
   const [outputFormat, setOutputFormatRaw] = useState<"fields" | "json_schema">(
     saved?.outputFormat ?? "fields",
@@ -273,7 +275,7 @@ export default function AiDialog({
   const provider = getAiProvider(providerKey);
   const selectedChoice = choices.find((choice) => choice.model.key === modelKey && choice.upstreamProvider === upstreamProvider);
   const model = selectedChoice?.model
-    ?? (providerKey === "openrouter" ? null : getAiModel(providerKey, modelKey, useCase));
+    ?? (providerKey === "openrouter" || providerKey === activeProviderKey ? null : getAiModel(providerKey, modelKey, useCase));
 
   // Once per open: the use case only filters the list, which happens here.
   // The loading flag is raised while rendering the open transition (not in the effect).
@@ -285,15 +287,19 @@ export default function AiDialog({
   useEffect(() => {
     if (!open) return;
     void fetch("/api/ai/openrouter/models").then(async (response) => {
-      const body = await response.json() as { error?: string; models?: Array<{ id: string; name: string; description?: string; provider: string; providerName: string; outputModalities?: string[] }>; settings?: { connectionId?: string | null; defaultModel?: { provider: string; modelId: string } | null } };
-      if (!response.ok) return setError(body.error ?? "Could not load configured OpenRouter models");
-      const provider = getAiProvider("openrouter");
+      const body = await response.json() as { error?: string; providerKey?: string | null; models?: Array<{ id: string; name: string; description?: string; provider: string; providerName: string; outputModalities?: string[] }>; settings?: { connectionId?: string | null; defaultModel?: { provider: string; modelId: string } | null } };
+      if (!response.ok) return setError(body.error ?? "Could not load the models enabled in AI Settings");
+      // The models come from whichever provider AI Settings selected.
+      const nextProviderKey = body.providerKey ?? "openrouter";
+      const provider = getAiProvider(nextProviderKey);
       if (!provider) return;
+      setActiveProviderKey(nextProviderKey);
       const next = (body.models ?? []).map((model) => {
         const modalities = model.outputModalities ?? ["text"];
         const useCases: AiUseCase[] = [];
-        if (modalities.includes("text")) useCases.push("content", "web-research");
-        if (modalities.includes("image")) useCases.push("image-generation");
+        // AI/ML API has no web plugin and its image endpoint is not wired: content only.
+        if (modalities.includes("text")) useCases.push(...(nextProviderKey === "openrouter" ? ["content", "web-research"] as AiUseCase[] : ["content"] as AiUseCase[]));
+        if (modalities.includes("image") && nextProviderKey === "openrouter") useCases.push("image-generation");
         return {
           provider,
           upstreamProvider: model.provider,
@@ -302,7 +308,7 @@ export default function AiDialog({
             key: model.id,
             modelId: model.id,
             name: model.name,
-            description: model.description ?? "OpenRouter model",
+            description: model.description ?? `${provider.name} model`,
             useCases,
             creditsPerRun: 0,
           },
@@ -323,7 +329,7 @@ export default function AiDialog({
       choice.model.key === defaultModel.modelId
       && choice.upstreamProvider === defaultModel.provider
       && choice.model.useCases.includes(useCase))) {
-    setProviderKey("openrouter");
+    setProviderKey(activeProviderKey);
     setModelKey(defaultModel.modelId);
     setUpstreamProvider(defaultModel.provider);
   }
@@ -583,7 +589,7 @@ export default function AiDialog({
 
           {provider && !connectionId && (
             <div className="rounded-xl border border-amber-200 dark:border-amber-500/30 bg-amber-50 dark:bg-amber-500/10 p-4 text-[13px] text-amber-900 dark:text-amber-400">
-              OpenRouter is not configured. Connect it and choose allowed BYOK models in <Link className="font-semibold underline" href="/settings/ai">AI Settings</Link>.{" "}
+              No AI provider is configured. Connect OpenRouter or AI/ML API and choose models in <Link className="font-semibold underline" href="/settings/ai">AI Settings</Link>.{" "}
               <DocsLink page="integrations/openrouter#set-it-up" appearance="inline" className="ml-1 text-current underline" />
             </div>
           )}

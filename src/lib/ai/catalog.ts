@@ -1,5 +1,7 @@
 import type { AiUseCase } from "@/lib/grid/types";
 import { OPENROUTER_PROVIDER } from "./providers/openrouter";
+import { AIMLAPI_PROVIDER } from "./providers/aimlapi";
+import { AIML_PROVIDER_KEY } from "./aimlapi-types";
 import type { AiModelDefinition, AiProviderDefinition } from "./types";
 
 export * from "./types";
@@ -11,6 +13,7 @@ export * from "./types";
  */
 export const AI_PROVIDERS: AiProviderDefinition[] = [
   OPENROUTER_PROVIDER,
+  AIMLAPI_PROVIDER,
 ];
 
 export function getAiProvider(key: string): AiProviderDefinition | null {
@@ -34,6 +37,19 @@ export function getAiModel(
       useCases: image ? ["image-generation"] : ["content", "web-research"],
       creditsPerRun: 0,
       producesImages: image,
+    };
+  }
+  // AI/ML API model IDs come from its live catalog too. They are offered for
+  // content only: web research needs OpenRouter's web plugin, and image
+  // generation is a different AI/ML endpoint this app does not call.
+  if (providerKey === AIML_PROVIDER_KEY && modelKey.trim()) {
+    return {
+      key: modelKey,
+      name: modelKey,
+      description: "AI/ML API model",
+      modelId: modelKey,
+      useCases: ["content"],
+      creditsPerRun: 0,
     };
   }
   return getAiProvider(providerKey)?.models.find((model) => model.key === modelKey) ?? null;

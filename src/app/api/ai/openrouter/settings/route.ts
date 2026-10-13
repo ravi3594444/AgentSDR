@@ -3,6 +3,8 @@ import { getByokSettings, saveByokSettings } from "@/lib/ai/byok";
 import { normalizeByokSettings } from "@/lib/ai/openrouter-types";
 import { getAiConnection, getAiCredentials } from "@/lib/ai/connections";
 import { listOpenRouterByokCatalog } from "@/lib/ai/server/openrouter";
+import { listAimlModels } from "@/lib/ai/server/aimlapi";
+import { AIML_PROVIDER_KEY, AIML_PROVIDER_NAME } from "@/lib/ai/aimlapi-types";
 import { authContextErrorResponse, requirePermission, withOrgContext } from "@/lib/auth/context";
 
 export async function GET(request: NextRequest) {
@@ -25,6 +27,11 @@ export async function PUT(req: NextRequest) {
         return NextResponse.json({ error: "Invalid settings" }, { status: 400 });
       }
       const settings = normalizeByokSettings(body);
+      // AI/ML API: one key and its catalog; none of OpenRouter's BYOK rules below apply.
+      const selected = settings.connectionId ? await getAiConnection(settings.connectionId) : null;
+      if (selected?.providerKey === AIML_PROVIDER_KEY) {
+        return await saveAimlSettings(settings, selected.verified);
+      }
       if (settings.providers.length && !settings.connectionId) {
         return NextResponse.json({ error: "Connect OpenRouter before selecting providers" }, { status: 400 });
       }
@@ -79,4 +86,39 @@ export async function PUT(req: NextRequest) {
     if (response) return response;
     throw error;
   }
+}
+
+/**
+ * AI/ML API settings: the selected models must still be structured-output
+ * chat models in its live catalog, and one of them is the default. There is
+ * no management key, BYOK provider list or shared-capacity confirmation.
+ * Transcription stays off: audio has not been checked against AI/ML API.
+ */
+async function saveAimlSettings(settings: ReturnType<typeof normalizeByokSettings>, verified: boolean) {
+  if (!verified) return NextResponse.json({ error: `Reconnect ${AIML_PROVIDER_NAME} before saving` }, { status: 400 });
+  if (settings.providers.some((provider) => provider !== AIML_PROVIDER_KEY)) {
+    return NextResponse.json({ error: `Only ${AIML_PROVIDER_NAME} models can be selected for this connection` }, { status: 400 });
+  }
+  if (settings.transcriptionModel) {
+    return NextResponse.json({ error: `Call transcription is not available with ${AIML_PROVIDER_NAME} yet; leave it off` }, { status: 400 });
+  }
+  const models = settings.modelsByProvider[AIML_PROVIDER_KEY] ?? [];
+  if (settings.providers.length && !models.length) {
+    return NextResponse.json({ error: "Select at least one model" }, { status: 400 });
+  }
+  if (models.length) {
+    let available: Set<string>;
+    try {
+      available = new Set((await listAimlModels()).map((model) => model.id));
+    } catch (error) {
+      return NextResponse.json({ error: error instanceof Error ? error.message : `Could not load the ${AIML_PROVIDER_NAME} model list` }, { status: 502 });
+    }
+    const missing = models.filter((model) => !available.has(model));
+    if (missing.length) {
+      return NextResponse.json({ error: `Not offered with structured output by ${AIML_PROVIDER_NAME}: ${missing.slice(0, 5).join(", ")}` }, { status: 400 });
+    }
+    if (!settings.defaultModel) return NextResponse.json({ error: "Choose a default model" }, { status: 400 });
+  }
+  // Routing confirmation is an OpenRouter concept; never carry a stale one over.
+  return NextResponse.json(await saveByokSettings({ ...settings, byokOnlyConfirmed: false }));
 }

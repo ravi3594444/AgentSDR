@@ -270,7 +270,7 @@ function ProviderModelPicker({
 }
 
 /** A numbered setup step: the number turns into a tick once the step is done. */
-function StepFrame({
+export function StepFrame({
   step,
   done,
   title,
@@ -310,9 +310,9 @@ function StepFrame({
   );
 }
 
-const linkClass = "inline-flex items-center gap-1 rounded text-label-xs text-text-sub-600 underline decoration-stroke-sub-300 underline-offset-2 outline-none transition hover:text-text-strong-950 hover:decoration-text-strong-950 focus-visible:ring-2 focus-visible:ring-primary-base";
+export const linkClass = "inline-flex items-center gap-1 rounded text-label-xs text-text-sub-600 underline decoration-stroke-sub-300 underline-offset-2 outline-none transition hover:text-text-strong-950 hover:decoration-text-strong-950 focus-visible:ring-2 focus-visible:ring-primary-base";
 
-export default function ByokSettingsClient() {
+export default function ByokSettingsClient({ onSaved }: { onSaved?: () => void } = {}) {
   const [settings, setSettings] = useState<Settings>(EMPTY_SETTINGS);
   const [catalog, setCatalog] = useState<Provider[]>([]);
   const [connections, setConnections] = useState<Connection[]>([]);
@@ -344,9 +344,15 @@ export default function ByokSettingsClient() {
       fetch("/api/grid/ai/providers/openrouter/connections").then((response) => readJson<{ connections?: Connection[] }>(response)),
     ]).then(async ([saved, accountData]) => {
       if (cancelled) return;
-      const normalized = normalizeSettings(saved);
+      const accounts = accountData.connections ?? [];
+      // Saved settings that point at another provider's connection (AI/ML API)
+      // are not this panel's: start OpenRouter's setup from empty.
+      const savedSettings = normalizeSettings(saved);
+      const normalized = savedSettings.connectionId && !accounts.some((account) => account.id === savedSettings.connectionId)
+        ? EMPTY_SETTINGS
+        : savedSettings;
       setSettings(normalized);
-      setConnections(accountData.connections ?? []);
+      setConnections(accounts);
       if (normalized.connectionId) {
         const response = await fetch(`/api/ai/openrouter/models?all=1&connectionId=${encodeURIComponent(normalized.connectionId)}`);
         const models = await readJson<CatalogResponse>(response);
@@ -532,7 +538,8 @@ export default function ByokSettingsClient() {
       });
       const saved = await readJson<Settings>(response);
       setSettings(normalizeSettings(saved));
-      setSuccess("AI settings saved.");
+      setSuccess("AI settings saved. Every AI feature now uses OpenRouter.");
+      onSaved?.();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not save AI settings.");
     } finally {

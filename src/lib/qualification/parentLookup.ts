@@ -1,7 +1,7 @@
 import type OpenAI from "openai";
 import { OPENROUTER_BASE_URL } from "@/lib/ai/server/openrouter";
-import { getOpenRouterRuntime } from "@/lib/ai/server/runtime";
-import { completeStructuredWithOpenRouter } from "@/lib/ai/server/structuredCompletion";
+import { getAiRuntime } from "@/lib/ai/server/runtime";
+import { completeStructured } from "@/lib/ai/server/structuredCompletion";
 import type { QualificationDebugTrace } from "./types";
 
 const SYSTEM_PROMPT = "Identify the parent company domain for this e-commerce store. Use web search to research ownership, parent company, brand operator, and official company references before deciding. If it is independently owned or uncertain, return null. Submit the answer by calling the report_parent_domain function.";
@@ -14,10 +14,10 @@ export async function resolveParentDomainWithDebug(domain: string): Promise<{ pa
   const startedAt = new Date().toISOString();
   let request = { provider: "openrouter" as const, endpoint: OPENROUTER_BASE_URL, model: "not-configured", instructions: SYSTEM_PROMPT, input: domain, maxOutputTokens: 2000, tool: "report_parent_domain", tools: [{ type: "web_search" as const }] };
   try {
-    const runtime = await getOpenRouterRuntime();
+    const runtime = await getAiRuntime();
     request = { ...request, model: runtime.selection.modelId };
     // OpenRouter's official `web` plugin grounds any compatible Chat Completions model.
-    const result = await completeStructuredWithOpenRouter({
+    const result = await completeStructured({
       timeoutMs: 60_000,
       systemPrompt: SYSTEM_PROMPT,
       userPrompt: domain,

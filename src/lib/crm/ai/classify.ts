@@ -1,6 +1,6 @@
 import "server-only";
 
-import { completeStructuredWithOpenRouter } from "@/lib/ai/server/structuredCompletion";
+import { completeStructured } from "@/lib/ai/server/structuredCompletion";
 import { buildClassificationContext } from "../context";
 import { classificationApplicationDecision } from "../stateMachine";
 import { withAiInstructions } from "./instructions";
@@ -220,7 +220,7 @@ export function validateClassifierOutput(
 export const completeClassificationWithOpenRouter: ClassificationCompletion = async (
   input: ClassificationCompletionInput,
 ): Promise<ClassificationCompletionResult> => {
-  return completeStructuredWithOpenRouter({
+  return completeStructured({
     requestedModel: input.requestedModel,
     timeoutMs: input.timeoutMs,
     systemPrompt: input.systemPrompt,

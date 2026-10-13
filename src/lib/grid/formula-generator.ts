@@ -2,7 +2,7 @@ import "server-only";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { inOrg } from "@/lib/tenancy/scope";
-import { completeStructuredWithOpenRouter } from "@/lib/ai/server/structuredCompletion";
+import { completeStructured } from "@/lib/ai/server/structuredCompletion";
 import { gridColumns, gridRows, gridTables } from "./schema";
 import { inOrgTables } from "./scope";
 import { effectiveColumnType } from "./value-types";
@@ -60,9 +60,9 @@ async function askModel(
   currentExpression: string | undefined,
   feedback: string | undefined,
 ): Promise<{ formula: string; explanation: string }> {
-  let result: Awaited<ReturnType<typeof completeStructuredWithOpenRouter>>;
+  let result: Awaited<ReturnType<typeof completeStructured>>;
   try {
-    result = await completeStructuredWithOpenRouter({
+    result = await completeStructured({
       timeoutMs: 30_000,
       systemPrompt: LANGUAGE_RULES,
       userPrompt: `Workbook schema:\n${JSON.stringify(schema)}\n\nUser request:\n${request}${currentExpression ? `\n\nCurrent formula to improve:\n${currentExpression}` : ""}${feedback ? `\n\n${feedback}` : ""}`,
