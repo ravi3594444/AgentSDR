@@ -12,6 +12,10 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // The call-recorder extension's build output (bun run build:recorder),
+    // gitignored like .next: lint its sources, not the bundles.
+    "extensions/*/dist/**",
+    "extensions/*/release/**",
   ]),
   {
     // scripts/*.js are the historical CommonJS migrations, run with plain
