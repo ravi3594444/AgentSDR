@@ -2,10 +2,25 @@
 
 How to run this build, connect its providers and check it works. Scope: the
 owner's own copy of AgentSDR ([ravi3594444/AgentSDR](https://github.com/ravi3594444/AgentSDR)),
-Session 1 of [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md). The upstream
-guides in `docs/` still apply; this page says what is specific to this build
-and in which order to do things. Progress and evidence are in
+the messaging release (Sessions 1–3 of [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)).
+The upstream guides in `docs/` still apply; this page says what is specific
+to this build and in which order to do things. Progress and evidence are in
 [SESSION_STATUS.md](SESSION_STATUS.md).
+
+**Status: implemented, pending live verification.** Everything below the
+live checks (§6) has been verified on a local copy; no real message has
+been sent or received yet.
+
+## What this release includes
+
+- **In:** Leads import (CSV/XLSX, phone-only WhatsApp contacts), company web
+  research, email / LinkedIn / WhatsApp campaigns with server-enforced
+  launch rules and sending rules, reply sync, AI classification and drafts
+  that always wait for your approval, Action required and the CRM.
+- **Hidden for this release** (`src/lib/release.ts`; code and data kept):
+  WhatsApp calling, call recordings and the recorder extension, image AI
+  columns, LinkedIn lead search, Tables and Prospecting. Do not set up
+  Cloudflare R2, Deepgram, Twilio, AssemblyAI or Bland for this release.
 
 Never paste secrets into this repository, this file or a chat. They go in the
 server's `.env` (or `.env.local` from source) or in the app's own settings,
@@ -13,7 +28,7 @@ which store them encrypted.
 
 ## 0. Get the code onto `main`
 
-Session 1 was developed on the branch `claude/new-session-g5hljn`, not on
+This release was developed on the branch `claude/new-session-g5hljn`, not on
 `main`. `CLAUDE.md` says every push to `main` triggers a deployment, so merge
 the branch into `main` when you are ready for that (on GitHub: open a pull
 request from the branch and merge it, or merge locally and push).
@@ -58,6 +73,11 @@ Rules that matter:
 - **Do not set `DEMO_MODE`** on this database, and do not seed demo data into it.
 - **To rebuild after pulling changes:** run the same `up -d --build` command.
   `bun run db:setup` is for empty databases only and is never an upgrade.
+- **Upgrading a database created before this release:** run the web
+  research migration once (a fresh database already has it):
+  `docker compose -f docker-compose.yml -f docker-compose.build.yml exec app agentsdr-entrypoint bun scripts/create-lead-research.ts`
+  (from source: `bun scripts/create-lead-research.ts`). Until then, Research
+  says exactly this.
 
 ### Going live (public HTTPS address)
 
@@ -109,13 +129,13 @@ delivered.
 
 | Step | Where | What you need | Guide |
 | --- | --- | --- | --- |
-| Email | Settings → Email → Connection, then Mailboxes | Google Workspace service account with domain-wide delegation. For replies to stop follow-ups you also need a **Gmail Pub/Sub topic** (saved on the same card) and a push subscription to `https://your-domain/api/outreach/webhooks/gmail-watch`. Personal Gmail is not supported in this release. | `docs/integrations/google-workspace.mdx`, `docs/integrations/gmail-reply-sync.mdx` |
+| Email | Settings → Email → Connection, then Mailboxes | Google Workspace service account with domain-wide delegation. For replies to stop follow-ups you also need a **Gmail Pub/Sub topic** (saved on the same card; `gmail-api-push@system.gserviceaccount.com` must be allowed to publish to it) and a push subscription to `https://your-domain/api/outreach/webhooks/gmail-watch`. The card then shows **Reply sync: Gmail watching N mailboxes**; the watch registers when you save and when a mailbox connects, and renews daily. Give each mailbox a **display name**: replies and AI drafts are signed with it. Personal Gmail is not supported. | `docs/integrations/google-workspace.mdx`, `docs/integrations/gmail-reply-sync.mdx` |
 | LinkedIn | Settings → LinkedIn → Connection, then Accounts | A Unipile workspace (API key and DSN). LinkedIn profiles link through Unipile's hosted sign-in. | `docs/integrations/unipile.mdx` |
-| WhatsApp | Settings → WhatsApp → Integrations, then Numbers | The same Unipile connection. Link the number **in the Unipile dashboard** (scan the QR code there), then press **Sync from Unipile**. New numbers start no new chats for 24 h. | `docs/whatsapp/accounts.mdx` |
-| AI | Settings → AI provider | Pick **one** provider for the whole workspace. **AI/ML API**: one key (aimlapi.com → Keys), then select structured-output models and a default; no management key, BYOK or routing step. **OpenRouter**: an inference key and a management key, at least one BYOK provider, a default model and the shared-capacity confirmation. Drafts always wait for your review either way. With AI/ML API, call transcription, web-research and image AI columns stay unavailable (they need OpenRouter). | `src/lib/ai/README.md`, `docs/workspace/ai-provider.mdx`, `docs/integrations/openrouter.mdx` |
+| WhatsApp | Settings → WhatsApp → Integrations, then Numbers | The same Unipile connection (no R2 in this release). Link the number **in the Unipile dashboard** (scan the QR code there), then press **Sync from Unipile**. New numbers start no new chats for 24 h. | `docs/whatsapp/accounts.mdx` |
+| AI | Settings → AI provider | Pick **one** provider for the whole workspace. **AI/ML API** (verified in this release): one key (aimlapi.com → Keys), then select structured-output models and a default; no management key, BYOK or routing step. For **company web research**, also tick **Perplexity Sonar** in step 2 and choose it as the research model in step 4, with a daily run limit (default 25). **OpenRouter**: an inference key and a management key, at least one BYOK provider, a default model and the shared-capacity confirmation; research stays off with it in this release. Drafts always wait for your review either way. | `src/lib/ai/README.md`, `docs/workspace/ai-provider.mdx`, `docs/integrations/openrouter.mdx` |
 | Sending rules | Settings → Email / LinkedIn / WhatsApp → Sending rules | Owner or admin only. | `docs/workspace/sending-rules.mdx` |
-| Phone default | Settings → Organization (General) → Default phone country | Set it if your lists have local numbers without `+`. Without it those numbers are dropped on import, not rejected. | `docs/workspace/organizations.mdx` |
-| Recordings (optional) | Settings → WhatsApp → Integrations | Cloudflare R2 and the Call Recorder extension. | `docs/integrations/cloudflare-r2.mdx` |
+| Phone default | Settings → Organization (General) → Default phone country | Set it if your lists have local numbers without `+` (for example `09876543210`). Without it, imports report those rows with the reason instead of guessing a country. | `docs/workspace/organizations.mdx` |
+| Knowledge and instructions | Settings → AI → Knowledge, Instructions | Your company description, offer and scheduling details: drafts may only state what is there or in the conversation. | `docs/crm/` |
 
 **AI/ML API key hygiene.** The key is checked with AI/ML API and stored
 encrypted for your organization only; it is never shown again in the app.
@@ -123,8 +143,8 @@ A key that has been pasted into a chat, ticket or document should be rotated
 in the AI/ML API dashboard and re-entered under Settings → AI provider.
 
 To check AI end to end after setup (it spends a little real usage and never
-sends anything), with the app running against a local copy of the database:
-`ORGANIZATION_ID=<id> bun run --conditions=react-server scripts/e2e/ai-live-crm.ts`.
+sends anything), against a local copy of the database:
+`ORGANIZATION_ID=<id> AI_LIVE_INLINE_WORKER=1 bun run --conditions=react-server scripts/e2e/ai-live-crm.ts`.
 
 After you save Unipile, its dashboard lists two webhooks named
 **22nd X AI · …**. Upstream docs call them "AgentSDR · …"; only the label
@@ -155,10 +175,12 @@ in `src/components/brand/font.ts`.
 AgentSDR (MIT). The Call Recorder Chrome extension is still named "AgentSDR Call
 Recorder".
 
-## 5. Manual checks for the owner (pending)
+## 5. Manual owner checks
 
-These need a person and a browser. `AGENTS.md` asks agents not to run browser
-automation unless you request it. Record the results in `SESSION_STATUS.md`.
+Session 3 ran all nine in a browser on a local copy (results in
+SESSION_STATUS.md: 1–4, 7 (review and edit) and 8–9 pass; 5, 6 and the
+send in 7 are blocked on credentials). Repeat them on your own server once
+a channel is connected, and record the results in `SESSION_STATUS.md`.
 
 1. Create or sign in to the owner workspace, and check the branding on sign-in,
    setup, the sidebar (expanded and collapsed), the mobile header, the browser
@@ -178,7 +200,37 @@ automation unless you request it. Record the results in `SESSION_STATUS.md`.
 9. Check Getting started, Leads import and the campaign pages at phone width
    (about 390 px).
 
-## 6. Re-running the automated checks
+## 6. Live verification, per channel
+
+Do this on the deployed server (public HTTPS), with **test recipients you
+control**, never a prospect list. Use a campaign of one test lead and a
+sequence of at least two steps with a short wait, so a follow-up is due.
+
+For each connected channel (email, LinkedIn, WhatsApp):
+
+1. **Delivery:** launch the campaign; confirm the first message arrives at
+   the test recipient.
+2. **Reply sync:** reply from the test recipient. Within about a minute it
+   must appear in **Action required** of *this* workspace, and Getting
+   started → Incoming replies must list the channel's last reply.
+3. **Follow-ups stop:** the lead shows Replied / reply received, and the
+   second step never sends (check again after its wait has passed).
+4. **AI:** the reply is classified and a draft waits for review. Check that
+   it is signed with your name (mailbox display name, LinkedIn or WhatsApp
+   account name) and claims nothing you have not done.
+5. **Approved response:** edit the draft if needed, then Approve & send;
+   confirm the test recipient receives it.
+6. **CRM:** the record shows both messages in its conversation and the
+   stage the classification set.
+7. **Pause / resume / restart:** pause a running campaign and confirm
+   nothing sends; resume; restart the app container
+   (`docker compose -f docker-compose.yml -f docker-compose.build.yml restart app`)
+   and confirm campaigns, settings, leads and the conversation are intact.
+
+A simulated webhook, a mocked provider or a successful API submission is
+not proof; only the message arriving, and the real reply arriving back, is.
+
+## 7. Re-running the automated checks
 
 ```bash
 bun install --frozen-lockfile
@@ -189,9 +241,17 @@ bun run db:check
 # Owner vs member permissions and the owner workflow (server running, any AUTH_SIGNUP):
 INITIAL_OWNER_EMAIL=… INITIAL_OWNER_PASSWORD=… BASE_URL=http://localhost:3000 \
   bun run scripts/e2e/owner-controls.ts
-# Tenant isolation: start `AUTH_SIGNUP=open bun run dev -- -p 3100` first. Under
-# `bun run start` Better Auth's production rate limiter answers its rapid
-# sign-ins with 429.
-INITIAL_OWNER_EMAIL=… INITIAL_OWNER_PASSWORD=… BASE_URL=http://localhost:3100 \
+# Tenant isolation: start the dev server with its own auth URL first, e.g.
+#   AUTH_SIGNUP=open BETTER_AUTH_URL=http://localhost:3100 NEXT_PUBLIC_APP_URL=http://localhost:3100 \
+#     bun run dev -- -p 3100
+# Under `bun run start` Better Auth's production rate limiter answers its rapid
+# sign-ins with 429; with the wrong BETTER_AUTH_URL sign-in fails "Invalid origin".
+INITIAL_OWNER_EMAIL=… INITIAL_OWNER_PASSWORD=… BASE_URL=http://localhost:3100 BETTER_AUTH_URL=http://localhost:3100 \
   bun run --conditions=react-server scripts/e2e/tenancy-isolation.ts
+# Campaign engines (email and WhatsApp) on a throwaway organization, with a
+# recording sender instead of Gmail/Unipile; sends nothing. No server needed:
+bun run --conditions=react-server scripts/e2e/campaign-engines.ts
+# Real AI calls (a little AI/ML usage; never sends). The worker can run in-process:
+ORGANIZATION_ID=<id> AI_LIVE_INLINE_WORKER=1 bun run --conditions=react-server scripts/e2e/ai-live-crm.ts
+ORGANIZATION_ID=<id> bun run --conditions=react-server scripts/e2e/research-live.ts
 ```

@@ -1,28 +1,163 @@
+# Session status
+
+Last updated 2026-10-13. Run steps are in [OWNER_SETUP.md](OWNER_SETUP.md);
+the plan is [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
+
+## Where things stand
+
+- **Branch:** `claude/new-session-g5hljn`, pushed; head `27cf8dc` plus the
+  commit that updates these two documents. `main` is untouched.
+- **Readiness: implemented, pending live verification. Not owner-usable
+  yet.** The whole messaging workflow is built and checked locally, but no
+  real message has been sent or received on any channel. The release is
+  owner-usable only once the live checks in OWNER_SETUP §6 pass; they need
+  the credentials, server and test recipients listed under "Blockers".
+- **Nothing was sent to anyone.** Every send in this session went to a
+  recording stand-in, or was refused because no provider was connected.
+
+## Session 3: the complete messaging workflow
+
+Asked for: imports through campaigns, scheduled sends, replies stopping
+follow-ups, AI classification and reviewable drafts, approved sending, CRM
+history and stage; plus web research for imported companies, a usable and
+simplified interface, live verification and this handoff. Calling, image
+generation, automatic AI sending, billing, the central admin panel and
+scraping stayed out.
+
+### Implemented (commits)
+
+| Commit | What |
+| --- | --- |
+| `8531f38` | **Imports.** Every lead importer reads cells as text (`readTextSheet`): leading zeros survive (`09876543210`, zip `00123`), XLSX numbers are no longer `9.19877E+11`, and every error carries its real file row. `checkPhone` normalizes with the organization's Default phone country and says why a number is unusable (no country code, invalid for the country, too short or long). People import accepts phone-only rows as WhatsApp contacts; a bad phone on an identified row is a warning instead of a silent drop. Upload checks (empty, over 10 MB, not a spreadsheet) with a sentence, client-side too; the proxy body limit is raised to 26 MB so no route is truncated silently. |
+| `f5f9e32` | **Campaign launch rules on the server and send races.** Email launch/resume is refused (409, every reason listed) unless Google Workspace and a mailbox are connected, the sequence is complete, and a lead can still receive it; sequences are validated and renumbered on save, and activating rebuilds the day's queue so a mid-day launch starts today within the remaining allowance. LinkedIn: Unipile connected and a valid sequence; WhatsApp: Unipile connected; only workable leads count. Engines: the email tick respects the daily limit and no longer overwrites a reply that lands mid-send; LinkedIn follow-ups re-check the lead and campaign before each claim and cannot overwrite REPLIED; WhatsApp claims re-check that the campaign is active. **Bug found and fixed:** a failed database write after a successful WhatsApp send was treated as a failed send, deleting the claim and retrying (a duplicate message). Size limits on every lead upload route. |
+| `97b9a97` | **AI drafts.** The prompt carries the real sender (mailbox display name and signature, LinkedIn profile, WhatsApp number, organization) and `completedActions` (messages sent, stage moves recorded). A draft that claims a booked meeting, a sent invitation or document, or an attachment without that record, leaves a placeholder such as `[Your Name]`, or talks about its own prompt or limits is rejected and retried with the reason; one that still fails is stored as failed with the reason, never offered for review. CRM email replies carry the mailbox display name. |
+| `b1e99a0` | **Web research** (Leads → Companies → row menu → Research company): see below. |
+| `0d136b6` | **Release scope and reply-sync readiness.** `src/lib/release.ts` hides calling (call campaigns, Call buttons, call history, recorder extension, R2 recordings), image AI columns, LinkedIn lead search, Tables and Prospecting from navigation, settings and buttons; code and data stay. Gmail watch registration is stored and shown on the Email connection card, and now registers when a mailbox connects or Google settings are saved (it used to wait for the next daily rollover, so a new setup missed replies until the next day). Getting Started: Email is "Connected" only once Gmail is watching; a new **Incoming replies** step stays "To do" until a real reply has arrived on each connected channel. |
+| `86c1886` | **Found during the browser owner checks:** People import dropped custom columns (now kept on the person, as merge fields); `Favourite Café` became `{{favouriteCaf}}` (accents now folded); Approve & send with no provider showed "CRM configuration request failed" and left the draft looking ready (now a 409 "Not sent: <reason>" and the record re-reads); consistent page titles. |
+| `07d77b8` | A refused send reads "The reply was not sent"; research answers are shown as plain text. |
+| `27cf8dc` | The Docker image ships `scripts/create-lead-research.ts` for upgrading installs. |
+
+### Web research
+
+- **What it is:** a question about one company already in Leads (overview,
+  website, parent company, or your own question), answered from public web
+  pages by a search model, saved with the source URLs and cost
+  (`lead_research`). **It is not lead discovery and not social-media
+  scraping**; the modal and settings say so.
+- **Provider format, checked live and against AI/ML API's per-model
+  schemas (13 Oct 2026):** chat completions with
+  `web_search_options: { search_context_size }`. Sources come back as
+  Perplexity's top-level `citations` / `search_results`, or as
+  `url_citation` annotations. 240 catalog models carry the `web_search`
+  tag; of three probed, `perplexity/sonar` returned 9–10 real sources,
+  `google/gemini-flash-latest` returned an empty answer, and
+  `openai/gpt-5.4-mini` answered "according to web search results" with no
+  sources at all.
+- **No fabricated citations:** only provider-returned URLs count; URLs in
+  the answer text are ignored. An answer, or a "not found", without any
+  source is stored as **failed**, never as a finding.
+- **Bounds:** one call per run, one retry only for 429/5xx (never after a
+  timeout), 60 s deadline, 800 output tokens, low search context, and a
+  per-organization daily limit (default 25, failed runs count).
+- **Settings:** Settings → AI provider → step 4. The research model is
+  separate from the default model and must be an enabled AI/ML model marked
+  Web search. OpenRouter connections keep research off in this release.
+- **Upgrade:** a fresh database gets the table from `db/schema.sql`; an
+  existing one runs `bun scripts/create-lead-research.ts` once.
+
+### Checks run (all on a disposable local PostgreSQL 16)
+
+| Check | Result |
+| --- | --- |
+| `bunx tsc --noEmit` | pass |
+| `bun run lint` | 0 errors; the 6 baseline warnings, all in untouched LinkedIn files |
+| `npm test` | **892 pass / 110 files** (was 819 / 103); new tests for every fix above |
+| `bun run build` | pass (≈2.7 min), three times through the session |
+| `bun run db:check` | pass (`lead_research` classified scoped) |
+| `scripts/e2e/owner-controls.ts` against `bun run start` | **36/36 pass**, including launch refusal with every reason, sequence validation, phone-only import, refusal of a PDF upload, and member 403s |
+| `scripts/e2e/tenancy-isolation.ts` against `bun run dev` | **pass:** 102 reads, 25 writes, 61 pages as a second organization, 0 failures, 0 items to review (covers the new research routes) |
+| `scripts/e2e/campaign-engines.ts` (new) | **all 25 checks pass** (17 email, 8 WhatsApp). Email: daily allowance, send gap, mid-day rebuild grants nothing extra, daily limit, reply via the real CRM ingestion stops the follow-up, a reply landing mid-send is kept, pause/resume, an existing claim is never re-sent, 4 sends recorded. WhatsApp: launch refused without Unipile, one first message per number per tick, pause/resume, a reply stops the enrollment, an existing claim advances instead of re-sending. Sends went to a recording stand-in, not a provider |
+| `scripts/e2e/ai-live-crm.ts` with `AI_LIVE_INLINE_WORKER=1` | **pass**, real AI/ML calls through the app's CRM worker (`google/gemini-3.5-flash-lite`): two replies asking for an invite and pricing were classified `interested` and drafted. One draft is signed "Asha Rao" from the mailbox, one has no name and no placeholder, neither claims anything was sent, nothing was sent. The first run exposed a draft leaking "completedActions" to the prospect; the prompt and a leak check were fixed and the rerun was clean |
+| `scripts/e2e/research-live.ts` (new) | **pass**, real AI/ML calls: Sonar answered the parent-company question about stripe.com with 10 sources ($0.0068); the no-source model was refused and nothing was saved as a finding |
+| Docker build override | The fork's image built from the repository (≈3 min) and contains `lead_research` in its schema and the Research UI. The rebuild after `27cf8dc` (one added `COPY` line) was blocked by Docker Hub's anonymous pull limit (429); the migration was run inside the built image instead and reported `lead_research present`. Sandbox note as before: the build used a scratch Dockerfile that only adds this sandbox's proxy CA |
+| Browser sweep (Playwright, Chromium) at 1440 px and 390 px | 13 pages × 2 widths: all 200, **no horizontal overflow**, consistent titles, simplified navigation. The only console errors are Google favicon 404s for the fake test domains |
+
+### The nine owner checks (OWNER_SETUP §5), run in a browser
+
+Browser checks were authorized for this task. They ran against the local
+production build, signed in as the test owner of a disposable workspace.
+
+| # | Check | Result |
+| --- | --- | --- |
+| 1 | Branding | **Pass.** Sign-in, sidebar (expanded and collapsed), mobile header and menu, light and dark: "22nd X AI Outreach", tile favicon (`/icon.svg`) and Apple icon. Your own visual sign-off on your server is still worth doing |
+| 2 | Getting started matches reality | **Pass.** Channels Not configured (true: no credentials), AI ready via AI/ML API, Incoming replies Not configured |
+| 3 | CSV and XLSX import | **Pass after fixes.** CSV: 2 created, the in-file duplicate updated the same person, failures at file rows 6 and 7 (the blank line counted), accents intact, phone-only row created; same file again: 0 created, 3 updated. XLSX: leading-zero phone kept as typed, `919876543210` normalized, zips `00123`/`04567`. Custom columns were being dropped; fixed and rechecked |
+| 4 | Draft email campaign, merge fields, rules | **Pass, with a local stand-in Google row** (email pages require a connected Google Workspace; the stand-in could not authenticate and was removed). Name → spreadsheet upload with column mapping → sequence → review: Launch disabled, and the server refused launch with "Connect at least one sending mailbox". Preview rendered `{{firstName}}`, `{{jobTitle}}`, `{{company}}`, `{{zip}}` = `00123`; `{{favouriteCafe}}` was empty because of the accent bug, fixed. Sending rules: 30 a day, 18–24 min gaps, Mon–Fri 09:00–18:00 IST |
+| 5 | Real send to yourself | **Blocked:** no channel credentials and no designated test recipients |
+| 6 | Reply in Action required, follow-ups stop | **Blocked live.** Shown locally only with a recording stand-in and real CRM ingestion (`campaign-engines.ts`), which is not proof of delivery or reply sync |
+| 7 | Review, edit and send an AI draft | **Review and edit pass** on a real AI/ML draft; Save works. **Send** was refused visibly ("The reply was not sent — Google Workspace is not connected") with the attempt recorded as failed; after the fix the page says so clearly. A real send is blocked on credentials |
+| 8 | Restart and persistence | **Pass** (local production server, not a container): after a stop, rebuild and start, the session, 17 people, 3 email campaigns, the failed draft, the research rows, AI settings and sending rules were all unchanged |
+| 9 | Phone width (390 px) | **Pass:** Getting started, Leads, import modal, research modal, campaigns, Action required, CRM record, Settings: no horizontal overflow |
+
+### Live channel evidence
+
+**None.** No send or receive was attempted on any provider. For every
+channel, these remain not run: delivery, a real reply in the right
+workspace, follow-ups stopping, AI classification and a reviewable draft
+for that reply, sending an approved response, CRM history and stage, and
+pause/resume with persistence after a restart.
+
+| Channel | Needs | State |
+| --- | --- | --- |
+| Email | Google Workspace service account + mailbox + Gmail Pub/Sub topic and push subscription; public HTTPS | Not configured |
+| LinkedIn | Unipile DSN and key, a linked test account, a second profile you control; public HTTPS | Not configured |
+| WhatsApp | Unipile, a linked test number, a second number you control; public HTTPS | Not configured |
+| AI | AI/ML API key (stored) | Working: classification, drafts and research verified live |
+
+### Blockers, and exactly what resolves them
+
+1. **No server or public HTTPS address.** Provide a VM with SSH access and
+   a domain; then follow OWNER_SETUP §1 (Docker with the build override)
+   and §1 "Going live".
+2. **No channel credentials.** Google Workspace (service-account JSON with
+   domain-wide delegation, the sending mailbox, a Pub/Sub topic); Unipile
+   (DSN and API key, a LinkedIn account and a WhatsApp number linked).
+3. **No designated test recipients.** An inbox, a second LinkedIn profile
+   and a second WhatsApp number that you control. Nothing is sent to
+   anyone else.
+4. **Resend** (optional): `RESEND_API_KEY` and `AUTH_EMAIL_FROM`, before
+   inviting anyone.
+5. **Rotate the AI/ML API key** that was pasted into a chat, and enter the
+   new one under Settings → AI provider.
+
+Then run OWNER_SETUP §6 for each channel and record the results here.
+
+### Known limitations of this session's work
+
+- **Draft checks are pattern-based.** They catch the common false claims
+  ("I've booked…", "I sent the invite", "please find attached") and
+  placeholders in English. An unusual phrasing can slip through, so review
+  stays mandatory, and an ordinary sentence can occasionally be rejected and
+  retried.
+- **The daily research limit** is checked before the call, so two
+  simultaneous runs at the limit can both proceed (at most one over).
+- **Gmail reply sync proof.** The stored watch result proves Gmail accepted
+  the watch, not that pushes reach the server. "Incoming replies" turns done
+  only on a real reply.
+- **Email campaign pages need Google Workspace connected** even to draft
+  (the existing `RequiresPlatform` convention); LinkedIn and WhatsApp pages
+  need Unipile.
+- **Hidden, not removed:** calling pages, Tables and Prospecting still
+  answer at their URLs; WhatsApp analytics can still list call campaigns
+  that already exist.
+- **LinkedIn "sent today"** still counts from the server's midnight, not the
+  organization's.
+- **CRM record pages** have the generic tab title.
+
+Session 1's own checks, evidence and defect list follow, unchanged except
+where this session fixed something.
+
 # Session 1 status
-
-Last updated 2026-10-13. The format follows section 5 of
-[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md). The run steps are in
-[OWNER_SETUP.md](OWNER_SETUP.md).
-
-## Summary
-
-- **Repository:** origin `https://github.com/ravi3594444/AgentSDR`, with
-  `upstream` set to `https://github.com/Kandid-ai/AgentSDR.git` (a local
-  remote only).
-- **Branch:** `claude/new-session-g5hljn`. `main` is untouched; see
-  OWNER_SETUP §0.
-- **Baseline:** `bdbf5efd2017347181f5bf549b54d89c1ae6e5f5` (v0.3.1). It is the
-  same commit the PRD reviewed.
-- **Final commit:** see the branch head; the session's commits are listed
-  under "Commits".
-- **Readiness:** **Build-ready / Pending live verification.** No provider
-  credentials (Google Workspace, Unipile, OpenRouter, Resend) or public HTTPS
-  address were available. No real send or receive has happened, so this is
-  not "Owner-usable" yet.
-- **Toolchain used:** Bun 1.4.2 (`packageManager` pins 1.3.14; the frozen
-  install was clean with both, and the Docker image used 1.4.3), Node
-  22.22.0, PostgreSQL 16.15 for source runs and 18 (the Compose image) for
-  Docker.
 
 ## Completed PRD requirements
 
@@ -134,8 +269,8 @@ owner's machine.
 
 ## Manual owner checks
 
-All nine checks in OWNER_SETUP §5 are **pending**. No browser or UI
-automation was run (AGENTS.md).
+Pending at the end of Session 1 (no browser automation was run then).
+Session 3 ran them; see "The nine owner checks" above.
 
 ## Live channel evidence
 
@@ -167,16 +302,13 @@ docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 
 ## Known issues not fixed (deliberately left for later)
 
-- **CSV numbers are inferred.** A CSV value like `007` or `09876543210`
-  loses its leading zero. Local phone numbers without `+` are only kept when
-  the organization's Default phone country is set.
+- ~~**CSV numbers are inferred.**~~ Fixed in Session 3 (`8531f38`): cells
+  are read as text, and an unusable phone is reported with the reason.
 - **Duplicate rows in one file.** For a person repeated within one People
   import, the last non-empty value wins.
-- **Launch is guarded only in the UI.** The email-campaign checks (connected
-  mailbox, steps, leads) run in the UI; the API accepts `status: active`
-  without them.
-- **No explicit file-size limit** on the People, Calling, LinkedIn and
-  email-campaign uploads. WhatsApp (20 MB) and Tables (25 MB) have one.
+- ~~**Launch is guarded only in the UI.**~~ Fixed in Session 3 (`f5f9e32`).
+- ~~**No explicit file-size limit**~~ on the lead uploads. Fixed in Session 3
+  (`8531f38`, `f5f9e32`).
 - **Upstream names left in place:**
   - The Call Recorder extension is still named and drawn as AgentSDR.
   - The demo-only copy says "Self-host AgentSDR".
@@ -223,8 +355,10 @@ What was built (design notes in `src/lib/ai/README.md`):
   They are revalidated on save, and a default is required.
 - **Refused clearly with AI/ML**, rather than half-working:
   - call transcription (your separate compatibility check is still to do);
-  - web-research and image AI columns, and the qualification parent lookup
-    (all need OpenRouter's web plugin or image endpoint).
+  - web-research and image AI columns in Tables, and the qualification
+    parent lookup (all need OpenRouter's web plugin or image endpoint).
+    Company web research in Leads uses AI/ML's search models since
+    Session 3.
 - **Getting Started** shows "Ready: <model> through AI/ML API" with no BYOK
   or routing step.
 
@@ -275,12 +409,9 @@ Evidence (local disposable database, production build, real AI/ML calls):
 
 Open points:
 
-- **Draft wording.** With both models, the draft promised actions not taken
-  ("I've scheduled…", "I have sent over the calendar invite") and once left
-  `[Your Name]`. The draft prompt and sender details come from Settings →
-  Instructions and Knowledge, not from the provider. Drafts always wait for
-  review, but this is worth tightening (prompt rules, or filling in sender
-  details) before relying on them.
+- ~~**Draft wording.**~~ Drafts promised actions not taken and once left
+  `[Your Name]`. Fixed in Session 3 (`97b9a97`): sender details are filled
+  in and ungrounded claims, placeholders and prompt leaks are rejected.
 - **Call transcription with AI/ML API:** not attempted, as requested. It is
   refused in code and in the settings save until checked.
 - **The test key was pasted into a chat:** rotate it in the AI/ML API
