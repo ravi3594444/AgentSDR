@@ -39,6 +39,11 @@ function hostOf(url: string) {
   }
 }
 
+/** Search models answer in light Markdown; show it as plain text ([n] markers stay, they point at the sources). */
+function plainAnswer(answer: string) {
+  return answer.replace(/\*\*(.+?)\*\*/g, "$1").replace(/__(.+?)__/g, "$1").replace(/^#{1,6}\s+/gm, "");
+}
+
 function ResearchEntry({ entry }: { entry: Research }) {
   const badge = STATUS_BADGE[entry.status];
   return (
@@ -51,7 +56,7 @@ function ResearchEntry({ entry }: { entry: Research }) {
         </span>
       </div>
       <p className="mt-2 text-paragraph-xs text-text-soft-400">{entry.question}</p>
-      {entry.answer && <p className="mt-2 whitespace-pre-wrap text-paragraph-sm text-text-strong-950">{entry.answer}</p>}
+      {entry.answer && <p className="mt-2 whitespace-pre-wrap text-paragraph-sm text-text-strong-950">{plainAnswer(entry.answer)}</p>}
       {entry.status === "not_found" && <p className="mt-2 text-paragraph-sm text-text-sub-600">The search results did not answer this question.</p>}
       {entry.error && <p role="alert" className="mt-2 text-paragraph-sm text-error-base">{entry.error}</p>}
       {entry.sources.length > 0 && (

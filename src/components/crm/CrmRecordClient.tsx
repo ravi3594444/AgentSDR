@@ -258,6 +258,7 @@ export default function CrmRecordClient({ recordId, variant = "page" }: { record
             conversations={conversations}
             citations={citations}
             uncertainAttempt={uncertainAttempt}
+            sendRefused={sendAttempts.some((attempt) => attempt.draftId === draft.id && attempt.status === "failed")}
             lastMessage={lastMessage}
             onAction={mutate}
             stage={<ClassificationSelect record={data} categories={categories} onAction={mutate} />}
@@ -517,7 +518,7 @@ function ConversationPanel({ conversations, messages, name, avatarUrl }: { conve
   );
 }
 
-function ReplyComposer({ record, draft, conversations, citations, uncertainAttempt, lastMessage, onAction, stage, activity, stageNotice }: {
+function ReplyComposer({ record, draft, conversations, citations, uncertainAttempt, sendRefused = false, lastMessage, onAction, stage, activity, stageNotice }: {
   record: Data;
   /** Their newest message, quoted above the reply when the thread is not beside it. */
   lastMessage?: Data;
@@ -531,6 +532,8 @@ function ReplyComposer({ record, draft, conversations, citations, uncertainAttem
   conversations: Data[];
   citations: Data[];
   uncertainAttempt?: Data;
+  /** The current draft's send was refused: it failed at sending, not at writing. */
+  sendRefused?: boolean;
   onAction: (path: string, body?: Data, method?: string, success?: string) => Promise<void>;
 }) {
   const draftConversationId = text(draft.conversationId);
@@ -592,7 +595,12 @@ function ReplyComposer({ record, draft, conversations, citations, uncertainAttem
       <FramePanel className="flex min-h-0 flex-col overflow-hidden p-0 sm:p-0">
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 sm:p-5">
         {Boolean(record.dnc) && <InlineWarning tone="danger" title="Sending is blocked" detail="This person is marked as Do Not Contact. Clear that status before replying." />}
-        {editingCurrentDraft && draft.status === "failed" && <InlineWarning tone="danger" title="The draft could not be written" detail={text(draft.error, "Regenerate it, or write the reply yourself.")} />}
+        {editingCurrentDraft && draft.status === "failed" && (
+          // A draft fails either while being written or when its send was refused; say which.
+          sendRefused
+            ? <InlineWarning tone="danger" title="The reply was not sent" detail={text(draft.error, "Fix the problem, then send it again or write a new reply.")} />
+            : <InlineWarning tone="danger" title="The draft could not be written" detail={text(draft.error, "Regenerate it, or write the reply yourself.")} />
+        )}
         {stale && editingCurrentDraft && <InlineWarning tone="warning" title="This draft may be out of date" detail="A newer reply changed the conversation. Regenerate or carefully review before sending." />}
         {!conversations.length && <InlineWarning tone="warning" title="No reply channel available" detail="Email or LinkedIn must be connected before a reply can be sent." />}
 
