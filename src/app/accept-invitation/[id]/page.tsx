@@ -6,6 +6,7 @@ import { AuthShell } from "@/components/auth/AuthShell";
 import { ErrorCallout, SecondaryButton, linkClass } from "@/components/auth/fields";
 import { Spinner } from "@/components/auth/fields";
 import Link from "next/link";
+import { BRAND } from "@/lib/brand";
 
 type Invitation = {
   id: string;
@@ -92,7 +93,7 @@ export default function AcceptInvitationPage({ params }: { params: Promise<{ id:
     return (
       <AuthShell title="Invitation declined" subtitle="You won't be added to this organization.">
         <Link href="/" className={linkClass}>
-          Go to AgentSDR
+          Go to {BRAND.name}
         </Link>
       </AuthShell>
     );

@@ -4,6 +4,7 @@ import { PermanentRunError } from "@/lib/grid/runners/types";
 import type { CellResult, PendingCellResult } from "@/lib/grid/types";
 import { asRecord, errorMessage, mapConfiguredOutputs, parseJson, truncate } from "../server/helpers";
 import type { IntegrationActionContext, IntegrationActionHandlers } from "../server/types";
+import { BRAND } from "@/lib/brand";
 
 const API_BASE = "https://app.fullenrich.com/api/v2";
 
@@ -32,7 +33,7 @@ async function executeFullEnrich(
       {
         method: "POST",
         body: JSON.stringify({
-          name: `AgentSDR ${action.name}`,
+          name: `${BRAND.shortName} ${action.name}`,
           data: [{ linkedin_url: inputs.linkedinUrl, enrich_fields: [enrichField] }],
         }),
       },

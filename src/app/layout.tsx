@@ -8,6 +8,7 @@ import { brandDisplay } from "@/components/brand/font";
 import { THEME_INIT_SCRIPT, ThemeProvider } from "@/components/theme/ThemeProvider";
 import { isDemoMode } from "@/lib/demo/mode";
 import "./globals.css";
+import { BRAND } from "@/lib/brand";
 
 const fontSans = FontSans({
   subsets: ["latin"],
@@ -21,11 +22,12 @@ const fontSerif = Instrument_Serif({
 });
 
 export const metadata: Metadata = {
-  title: "AgentSDR",
+  title: BRAND.name,
+  applicationName: BRAND.name,
   // A private workspace behind sign-in: keep every page out of search.
   robots: { index: false, follow: false },
-  description: "Outreach, qualification and CRM for GTM teams",
-  // The favicon is src/app/icon.svg and apple-icon.png (Next's file convention):
+  description: BRAND.description,
+  // The favicon is src/app/icon.svg and apple-icon.tsx (Next's file convention):
   // the brand tile, which reads on light and dark tabs alike.
 };
 

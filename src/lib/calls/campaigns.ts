@@ -49,6 +49,7 @@ import { nextContactCallState, stateOf } from "./contactCallStatus";
 import { crmStageForPeople } from "./leadStage";
 import { syncCallFollowUpSafely } from "./crmFollowUp";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
+import { BRAND } from "@/lib/brand";
 
 /**
  * call_campaign_contacts has no organization column: it belongs to its
@@ -793,7 +794,7 @@ export async function updateCampaignContactPerson(
         .from(people)
         .where(and(inOrg(people), sql`lower(${people.email}) = ${email}`, ne(people.id, personRow.id)))
         .limit(1);
-      if (conflict) throw new CallApiError(409, "Another person in AgentSDR already has this email");
+      if (conflict) throw new CallApiError(409, `Another person in ${BRAND.shortName} already has this email`);
     }
 
     // The company path records.ts's own callers use: link/create it via

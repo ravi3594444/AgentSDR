@@ -22,8 +22,8 @@ export function AuthShell({
     <div className="flex min-h-screen bg-[#0b0b0d] text-zinc-100 scheme-dark">
       <main className="flex flex-1 items-center justify-center px-4 py-12 sm:px-6">
         <div className="w-full max-w-100">
-          <div className="group mb-7 flex justify-center">
-            <AppIcon className="size-12" walk="bounce" walkOn="hover" />
+          <div className="mb-7 flex justify-center">
+            <AppIcon className="size-12" />
           </div>
           <h1 className="text-center text-[26px] font-semibold leading-tight tracking-[-0.02em] text-white">{title}</h1>
           {subtitle && <p className="mt-2 text-center text-sm text-zinc-400">{subtitle}</p>}

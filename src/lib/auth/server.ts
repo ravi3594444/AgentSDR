@@ -11,6 +11,7 @@ import { authEmail, sendAuthEmail } from "./email";
 import { ac, roles } from "./permissions";
 import { authSchema, members } from "./schema";
 import { mayCreateAccount, mayCreateOrganization } from "./signup";
+import { BRAND } from "@/lib/brand";
 
 /**
  * The Better Auth instance: email + password (verified), Google when
@@ -40,7 +41,7 @@ async function initialOrganizationId(userId: string): Promise<string | null> {
 }
 
 export const auth = betterAuth({
-  appName: "AgentSDR",
+  appName: BRAND.name,
   baseURL,
   secret: process.env.BETTER_AUTH_SECRET,
   trustedOrigins: baseURL ? [baseURL] : [],
@@ -60,8 +61,8 @@ export const auth = betterAuth({
       void sendAuthEmail(
         authEmail({
           to: user.email,
-          subject: "Reset your AgentSDR password",
-          intro: "Someone asked to reset the password for this AgentSDR account.",
+          subject: `Reset your ${BRAND.name} password`,
+          intro: `Someone asked to reset the password for this ${BRAND.name} account.`,
           action: "Choose a new password",
           url,
         }),
@@ -76,8 +77,8 @@ export const auth = betterAuth({
       void sendAuthEmail(
         authEmail({
           to: user.email,
-          subject: "Confirm your email for AgentSDR",
-          intro: `Welcome to AgentSDR, ${user.name}. Confirm this is your email address to finish creating your account.`,
+          subject: `Confirm your email for ${BRAND.name}`,
+          intro: `Welcome to ${BRAND.name}, ${user.name}. Confirm this is your email address to finish creating your account.`,
           action: "Confirm email",
           url,
         }),
@@ -116,7 +117,7 @@ export const auth = betterAuth({
         before: async (user) => {
           if (!(await mayCreateAccount(user.email))) {
             throw new APIError("FORBIDDEN", {
-              message: "Sign-up on this AgentSDR instance is by invitation only. Ask an admin to invite you.",
+              message: `Sign-up on this ${BRAND.name} workspace is by invitation only. Ask an admin to invite you.`,
             });
           }
         },
@@ -146,8 +147,8 @@ export const auth = betterAuth({
         void sendAuthEmail(
           authEmail({
             to: email,
-            subject: `${inviter.user.name} invited you to ${organization.name} on AgentSDR`,
-            intro: `${inviter.user.name} (${inviter.user.email}) invited you to join ${organization.name} on AgentSDR.`,
+            subject: `${inviter.user.name} invited you to ${organization.name} on ${BRAND.name}`,
+            intro: `${inviter.user.name} (${inviter.user.email}) invited you to join ${organization.name} on ${BRAND.name}.`,
             action: "Accept invitation",
             url: `${baseURL}/accept-invitation/${id}`,
             outro: "This invitation expires in 7 days. If you weren't expecting it, you can ignore this email.",

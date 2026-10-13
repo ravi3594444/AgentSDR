@@ -11,6 +11,7 @@ import { Avatar } from "@/components/calling/callingShared";
 import { CompanyNameField } from "@/components/calling/CompanyNameField";
 import { updateCampaignContactPerson, uploadContactPhoto } from "@/lib/calls/client";
 import { MAX_PHOTO_BYTES, type CampaignContact } from "@/lib/calls/contract";
+import { BRAND } from "@/lib/brand";
 
 const PHOTO_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
 
@@ -147,7 +148,7 @@ export function EditContactModal({
       <Modal.Content>
         <Modal.Header icon={RiPencilLine}>
           <Modal.Title>Edit contact</Modal.Title>
-          <Modal.Description>Edits the People record — shared everywhere this person appears in AgentSDR.</Modal.Description>
+          <Modal.Description>Edits the People record — shared everywhere this person appears in {BRAND.shortName}.</Modal.Description>
         </Modal.Header>
         <Modal.Body className="space-y-3">
           {error && <FormError>{error}</FormError>}

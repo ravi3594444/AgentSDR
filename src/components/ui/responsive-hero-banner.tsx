@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { ArrowDown, ArrowRight, ArrowUpRight, Menu, X } from "lucide-react";
 import Link from "next/link";
+import { BRAND } from "@/lib/brand";
 
 interface NavLink {
   label: string;
@@ -82,7 +83,7 @@ export default function ResponsiveHeroBanner({
 
       <header className="relative z-20 border-b border-white/12">
         <div className="mx-auto flex h-[72px] max-w-7xl items-center justify-between px-6">
-          <Link href="/" className="inline-flex items-center" aria-label="AgentSDR home">
+          <Link href="/" className="inline-flex items-center" aria-label={`${BRAND.name} home`}>
             <span
               aria-hidden="true"
               className="h-9 w-[138px] bg-contain bg-left bg-no-repeat"

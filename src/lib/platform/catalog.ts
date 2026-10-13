@@ -15,6 +15,7 @@
  */
 
 import { docsPageUrl } from "@/lib/support";
+import { BRAND } from "@/lib/brand";
 
 export type PlatformKey = "unipile" | "google" | "r2";
 
@@ -110,7 +111,7 @@ export const PLATFORM_INTEGRATIONS: readonly PlatformIntegration[] = [
       "Sign in to the Unipile dashboard at dashboard.unipile.com.",
       "Copy your DSN — the API address shown at the top of the dashboard.",
       "Under Access tokens, generate a token and copy it. It is shown only once.",
-      "Save. AgentSDR registers the webhooks it needs in your Unipile workspace itself, with a secret it generates.",
+      `Save. ${BRAND.shortName} registers the webhooks it needs in your Unipile workspace itself, with a secret it generates.`,
     ],
     fields: [
       {
@@ -133,7 +134,7 @@ export const PLATFORM_INTEGRATIONS: readonly PlatformIntegration[] = [
       {
         key: "notifySecret",
         label: "Webhook secret",
-        help: "Leave empty: AgentSDR generates one and registers the webhooks with it. Fill it in only to keep a secret you already use.",
+        help: `Leave empty: ${BRAND.shortName} generates one and registers the webhooks with it. Fill it in only to keep a secret you already use.`,
         inputType: "password",
         required: false,
         secret: true,

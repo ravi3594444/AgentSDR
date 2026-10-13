@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
 import { SettingsShell } from "@/components/settings/SettingsShell";
+import { brandTitle } from "@/lib/brand";
 
 export const metadata: Metadata = {
   title: {
-    default: "Settings · AgentSDR",
-    template: "%s · Settings · AgentSDR",
+    default: brandTitle("Settings"),
+    template: brandTitle("%s", "Settings"),
   },
 };
 

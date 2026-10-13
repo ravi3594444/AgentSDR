@@ -15,6 +15,7 @@ import {
   RECORDER_SELF_UPDATE_VERSION,
 } from "@/lib/calls/recorderRelease";
 import { errorMessage } from "@/components/crm/crm-utils";
+import { BRAND } from "@/lib/brand";
 
 type Installed = { state: "checking" } | { state: "missing" } | { state: "installed"; version: string | null };
 
@@ -79,7 +80,7 @@ export function RecorderExtensionCard() {
                 )}
               </div>
               <p className="mt-1 text-paragraph-sm text-text-sub-600">
-                Places WhatsApp calls from AgentSDR and records them. Chrome only, loaded unpacked.
+                Places WhatsApp calls from {BRAND.shortName} and records them. Chrome only, loaded unpacked.
               </p>
               <p className="mt-1 text-paragraph-xs text-text-soft-400">Latest version: {LATEST_RECORDER_VERSION}</p>
             </div>

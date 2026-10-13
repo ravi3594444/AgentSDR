@@ -18,6 +18,7 @@ import { DocsLink } from "@/components/page/DocsLink";
 import { PageHeader } from "@/components/page/PageHeader";
 import { EMPTY_LINKEDIN_SEQUENCE, type LinkedinCampaignSequence } from "@/lib/linkedin/campaignSequence";
 import { cn } from "@/utils/cn";
+import { BRAND } from "@/lib/brand";
 
 type Account = { id: string; username: string; name: string | null; profilePictureUrl: string | null };
 
@@ -207,7 +208,7 @@ export function LinkedInCampaignWizard({ accounts }: { accounts: Account[] }) {
                         >
                           <span className="text-label-sm text-text-strong-950">{value === "REGULAR" ? "Regular" : "Personal"}</span>
                           <span className="mt-1 block text-paragraph-xs text-text-sub-600">
-                            {value === "REGULAR" ? "Visible in Messages and shared with AgentSDR." : "Kept out of the shared Messages workspace."}
+                            {value === "REGULAR" ? `Visible in Messages and shared with ${BRAND.shortName}.` : "Kept out of the shared Messages workspace."}
                           </span>
                         </button>
                       ))}

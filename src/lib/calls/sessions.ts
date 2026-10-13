@@ -38,6 +38,7 @@ import { createRecorderToken, recorderTokenMatches } from "./token";
 import { transcribeCall } from "./transcription";
 import { authContextErrorResponse } from "@/lib/auth/context";
 import { currentOrganizationId, inOrg, runInOrganization } from "@/lib/tenancy/scope";
+import { BRAND } from "@/lib/brand";
 
 type CallSessionRow = typeof callSessions.$inferSelect;
 
@@ -306,7 +307,7 @@ export async function cancelCall(callId: string): Promise<CallDetail> {
   const now = new Date();
   const [updated] = await db
     .update(callSessions)
-    .set({ status: "no_recording", error: "Cancelled from AgentSDR before it connected", endedAt: now, updatedAt: now })
+    .set({ status: "no_recording", error: `Cancelled from ${BRAND.shortName} before it connected`, endedAt: now, updatedAt: now })
     .where(and(inOrg(callSessions), eq(callSessions.id, callId), eq(callSessions.status, "pending")))
     .returning();
   if (updated) {

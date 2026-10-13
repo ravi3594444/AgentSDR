@@ -2,6 +2,7 @@ import "server-only";
 
 import { publicAppUrl } from "@/lib/http/publicAppUrl";
 import type { PlatformCredentials, UnipileWebhookRegistration } from "./catalog";
+import { BRAND } from "@/lib/brand";
 
 /**
  * The webhooks AgentSDR needs from Unipile, registered in the organization's
@@ -161,7 +162,7 @@ export async function registerUnipileWebhooks(
           source: hook.source,
           events: hook.events,
           request_url: endpoints.find((endpoint) => endpoint.key === hook.key)!.url,
-          name: `AgentSDR · ${hook.label}`,
+          name: `${BRAND.shortName} · ${hook.label}`,
           format: "json",
           enabled: true,
           headers: [

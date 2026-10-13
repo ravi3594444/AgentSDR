@@ -79,6 +79,8 @@ export function proxy(request: NextRequest) {
     PUBLIC.some((p) => pathname.startsWith(p)) ||
     pathname.startsWith("/_next") ||
     pathname.startsWith("/favicon") ||
+    // The Apple touch icon is generated (src/app/apple-icon.tsx), so it has no file extension.
+    pathname.startsWith("/apple-icon") ||
     /\.(?:png|jpe?g|gif|svg|webp|ico)$/i.test(pathname);
 
   if (isPublic) return NextResponse.next();
@@ -113,6 +115,6 @@ export function proxy(request: NextRequest) {
 export const config = {
   // Skip auth for Next assets, favicons, and other static files in /public
   matcher: [
-    "/((?!_next/static|_next/image|favicon|linkbird|.*\\.(?:png|jpe?g|gif|svg|webp|ico)$).*)",
+    "/((?!_next/static|_next/image|favicon|apple-icon|.*\\.(?:png|jpe?g|gif|svg|webp|ico)$).*)",
   ],
 };

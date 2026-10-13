@@ -24,6 +24,7 @@ import { Callout, Field } from "@/components/settings/SettingsKit";
 import { OPENROUTER_ICON_URL } from "@/lib/platform/catalog";
 import { FormSkeleton } from "@/components/settings/SettingsSkeletons";
 import { cn } from "@/utils/cn";
+import { BRAND } from "@/lib/brand";
 
 type Connection = {
   id: string;
@@ -754,14 +755,14 @@ export default function ByokSettingsClient() {
         step={4}
         done={stepsDone[3]}
         title="Shared capacity"
-        description="AgentSDR only sends requests on your own provider keys."
+        description={`${BRAND.shortName} only sends requests on your own provider keys.`}
       >
         <label className={cn("flex cursor-pointer items-start gap-3 rounded-xl p-3.5 ring-1 ring-inset transition", settings.byokOnlyConfirmed ? "ring-stroke-soft-200" : "bg-warning-lighter ring-warning-light")}>
           <Checkbox.Root className="mt-0.5" checked={settings.byokOnlyConfirmed} onCheckedChange={(checked) => updateSettings({ byokOnlyConfirmed: checked === true })} />
           <span className="min-w-0">
             <span className="block text-label-sm text-text-strong-950">Never use shared capacity</span>
             <span className="mt-1 block text-paragraph-xs text-text-sub-600">
-              In every enabled provider&apos;s OpenRouter BYOK settings, set Shared capacity fallback to <strong className="font-medium text-text-strong-950">Never use shared capacity on this provider</strong>. OpenRouter does not expose this setting through its public API, so this confirmation is required before AgentSDR will send requests.
+              In every enabled provider&apos;s OpenRouter BYOK settings, set Shared capacity fallback to <strong className="font-medium text-text-strong-950">Never use shared capacity on this provider</strong>. OpenRouter does not expose this setting through its public API, so this confirmation is required before {BRAND.shortName} will send requests.
             </span>
             <a href={BYOK_URL} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()} className={cn(linkClass, "mt-2")}>
               Review OpenRouter BYOK settings<RiExternalLinkLine className="size-3.5" aria-hidden="true" />

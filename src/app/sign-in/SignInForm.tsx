@@ -6,20 +6,24 @@ import { authClient } from "@/lib/auth/client";
 import { AuthShell } from "@/components/auth/AuthShell";
 import { ErrorCallout, Field, InfoCallout, SecondaryButton, SubmitButton, linkClass, quietLinkClass } from "@/components/auth/fields";
 import { GoogleButton, OrDivider } from "@/components/auth/GoogleButton";
+import { BRAND } from "@/lib/brand";
 
-const ACCESS_REQUEST_TO = "pulkit@kandid.ai";
-
-/** A mailto asking for an account on AgentSDR Managed, carrying the email typed into the form when there is one. */
-function accessRequestHref(email: string) {
+/**
+ * A mailto asking whoever runs this workspace for an invitation, carrying the
+ * email typed into the form when there is one. Null when BRAND names no
+ * address: the hint is then shown without a link.
+ */
+function accessRequestHref(email: string): string | null {
+  if (!BRAND.accessRequestEmail) return null;
   const body = [
-    "Hi Pulkit,",
+    "Hi,",
     "",
-    "I'd like to use AgentSDR Managed rather than self-host it. Could you send me an invite?",
+    `Could you invite me to ${BRAND.name}?`,
     "",
     `Work email: ${email.trim()}`,
   ].join("\n");
-  const subject = "I need access to AgentSDR Managed";
-  return `mailto:${ACCESS_REQUEST_TO}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  const subject = `Access to ${BRAND.name}`;
+  return `mailto:${BRAND.accessRequestEmail}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 
 export function SignInForm({
@@ -67,10 +71,11 @@ export function SignInForm({
   }
 
   const q = from ? `?from=${encodeURIComponent(from)}` : "";
+  const requestHref = accessRequestHref(email);
 
   return (
     <AuthShell
-      title="Sign in to AgentSDR"
+      title={`Sign in to ${BRAND.name}`}
       footer={
         signupAvailable ? (
           <>
@@ -82,9 +87,13 @@ export function SignInForm({
         ) : (
           <>
             Need access?{" "}
-            <a href={accessRequestHref(email)} className={linkClass}>
-              Ask your admin for an invite
-            </a>
+            {requestHref ? (
+              <a href={requestHref} className={linkClass}>
+                Ask your admin for an invite
+              </a>
+            ) : (
+              "Ask your admin for an invite."
+            )}
           </>
         )
       }

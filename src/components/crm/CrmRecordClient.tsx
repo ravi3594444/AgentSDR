@@ -59,6 +59,7 @@ import { takeRecordWorkspace } from "./recordPrefetch";
 import { announceRecordChanged } from "./recordEvents";
 import { setUnsavedReply } from "./recordQueue";
 import { ChannelAvatar } from "./CrmActionsClient";
+import { BRAND } from "@/lib/brand";
 
 type Data = Record<string, unknown>;
 type Channel = "email" | "linkedin" | "whatsapp";
@@ -67,7 +68,7 @@ type TimelineFilter = "all" | Channel;
 const eventLabels: Record<string, string> = {
   "record.created": "CRM record created",
   "reply.received": "Reply received",
-  "message.recorded": "Message sent outside AgentSDR",
+  "message.recorded": `Message sent outside ${BRAND.shortName}`,
   "workflow.state_changed": "Workflow updated",
   "classification.proposed": "AI classification proposed",
   "classification.auto_applied": "Classification applied",

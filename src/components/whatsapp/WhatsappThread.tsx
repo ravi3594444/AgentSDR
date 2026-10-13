@@ -6,6 +6,7 @@ import { ChatComposer } from "@/components/inbox/shell/Conversation";
 import { ChannelTag } from "@/components/inbox/shell/InboxShell";
 import type { WhatsappMessage } from "@/lib/whatsapp/contract";
 import { cn } from "@/utils/cn";
+import { BRAND } from "@/lib/brand";
 
 function dayKey(iso: string): string {
   const date = new Date(iso);
@@ -33,7 +34,7 @@ function dayLabel(iso: string): string {
 
 const ORIGIN_LABEL = {
   lead: "",
-  agentsdr: "Sent from AgentSDR",
+  agentsdr: `Sent from ${BRAND.shortName}`,
   phone: "Sent from phone",
 } as const;
 

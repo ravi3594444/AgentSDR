@@ -1,12 +1,13 @@
 import type { Metadata } from "next";
 import { RequiresPlatform } from "@/components/settings/RequiresPlatform";
 import { docsPageUrl } from "@/lib/support";
+import { brandTitle } from "@/lib/brand";
 
 /** WhatsApp message campaigns share the padded, scrolling surface of the calling pages. */
 export const metadata: Metadata = {
   title: {
-    default: "WhatsApp · AgentSDR",
-    template: "%s · WhatsApp · AgentSDR",
+    default: brandTitle("WhatsApp"),
+    template: brandTitle("%s", "WhatsApp"),
   },
   description: "Message leads over WhatsApp and follow up",
 };

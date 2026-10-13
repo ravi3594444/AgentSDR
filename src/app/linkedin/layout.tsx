@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { RequiresPlatform } from "@/components/settings/RequiresPlatform";
+import { brandTitle } from "@/lib/brand";
 
 /**
  * LinkedIn pages share their own padded, scrolling content surface. The global
@@ -7,8 +8,8 @@ import { RequiresPlatform } from "@/components/settings/RequiresPlatform";
  */
 export const metadata: Metadata = {
   title: {
-    default: "LinkedIn · AgentSDR",
-    template: "%s · LinkedIn · AgentSDR",
+    default: brandTitle("LinkedIn"),
+    template: brandTitle("%s", "LinkedIn"),
   },
   description: "LinkedIn outreach automation",
 };

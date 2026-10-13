@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getMailbox } from "@/lib/outreach/mailboxes";
 import { sendEmail } from "@/lib/outreach/gmail";
 import { withOrgContext, authContextErrorResponse } from "@/lib/auth/context";
+import { BRAND } from "@/lib/brand";
 
 // POST /api/outreach/mailboxes/[id]/send-test — { to } — sends a one-off
 // test email from this mailbox so a user can confirm sending actually works
@@ -27,8 +28,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         const result = await sendEmail({
           from: mailbox.emailAddress,
           to: [body.to],
-          subject: "AgentSDR test email",
-          text: `This is a test email from ${mailbox.emailAddress}, sent via AgentSDR to confirm the mailbox is working.`,
+          subject: `${BRAND.shortName} test email`,
+          text: `This is a test email from ${mailbox.emailAddress}, sent via ${BRAND.shortName} to confirm the mailbox is working.`,
         });
         return NextResponse.json({ ok: true, result });
       } catch (err) {

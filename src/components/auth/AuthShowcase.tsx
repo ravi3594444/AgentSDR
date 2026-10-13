@@ -10,6 +10,7 @@ import {
 } from "@remixicon/react";
 import { AppIcon } from "@/components/brand/Logo";
 import { cn } from "@/utils/cn";
+import { BRAND } from "@/lib/brand";
 
 /**
  * The panel beside the auth forms: a photograph, and over it a slice of
@@ -77,7 +78,7 @@ export function AuthShowcase({ className }: { className?: string }) {
       <div className="absolute inset-y-0 left-[8%] right-0 flex flex-col justify-center gap-6 py-10">
         <div className={cn(glass, "flex items-center gap-2.5 self-start rounded-full py-1.5 pl-1.5 pr-3 text-[13px]")}>
           <AppIcon small className="size-6" />
-          <span className="font-medium">AgentSDR sorted 24 replies overnight</span>
+          <span className="font-medium">{BRAND.shortName} sorted 24 replies overnight</span>
           <RiArrowRightSLine className="size-4 text-white/60" />
         </div>
 

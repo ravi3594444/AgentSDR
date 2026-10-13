@@ -45,6 +45,7 @@ import { type WhatsappAccountStatus, type WhatsappAccountSummary } from "@/lib/w
 import { AccountLimitDialog } from "@/components/settings/AccountLimitDialog";
 import { numberRule } from "@/lib/channels/rules";
 import { cn } from "@/utils/cn";
+import { BRAND } from "@/lib/brand";
 
 const STATUS_LABEL: Record<WhatsappAccountStatus, string> = {
   connected: "Connected",
@@ -159,7 +160,7 @@ export function WhatsappAccountsClient({ rules }: { rules: WhatsappNumberRules }
   return (
     <SettingsPage
       title="WhatsApp accounts"
-      description="The numbers AgentSDR messages from, linked in Unipile. Calls are placed from web.whatsapp.com by the recorder extension."
+      description={`The numbers ${BRAND.shortName} messages from, linked in Unipile. Calls are placed from web.whatsapp.com by the recorder extension.`}
       actions={syncAction}
     >
       <div className="space-y-5">

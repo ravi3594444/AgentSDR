@@ -8,6 +8,7 @@ import { JobsClient } from "@/components/linkedin/JobsClient";
 import { ListPagination } from "@/components/linkedin/ListPagination";
 import { clampPage, pageSlice, parsePageParam } from "@/lib/linkedin/pagination";
 import { jobLogSummaryByRunIds } from "@/lib/linkedin/jobLogSummary";
+import { BRAND } from "@/lib/brand";
 
 export const dynamic = "force-dynamic";
 
@@ -21,7 +22,7 @@ export default async function JobsPage({ searchParams }: Props) {
   if (!(await isPlatformOperator(ctx))) {
     return (
       <div className="space-y-6">
-        <PageHeader title="Jobs" description="System job runs are visible only to the team running this AgentSDR instance." />
+        <PageHeader title="Jobs" description={`System job runs are visible only to the team running this ${BRAND.name} instance.`} />
       </div>
     );
   }

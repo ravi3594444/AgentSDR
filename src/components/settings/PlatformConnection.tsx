@@ -15,6 +15,7 @@ import { useDialogs } from "@/components/DialogProvider";
 import { Callout, Field } from "@/components/settings/SettingsKit";
 import { PLATFORM_INTEGRATIONS, type PlatformIntegration, type PlatformKey, type PlatformStatus, type SetupStep, type UnipileWebhookRegistration } from "@/lib/platform/catalog";
 import { cn } from "@/utils/cn";
+import { BRAND } from "@/lib/brand";
 
 /**
  * One platform integration as its channel's Connection section shows it
@@ -241,10 +242,10 @@ function UnipileWebhooks({ registration }: { registration: UnipileWebhookRegistr
           </div>
           <p className="mt-1 text-paragraph-xs text-text-sub-600">
             {current?.status === "registered"
-              ? `AgentSDR registered them in your Unipile workspace on ${formatVerified(current.at)}, so replies, accepted invitations and WhatsApp messages arrive here.`
+              ? `${BRAND.shortName} registered them in your Unipile workspace on ${formatVerified(current.at)}, so replies, accepted invitations and WhatsApp messages arrive here.`
               : current?.message
                 ? current.message
-                : "AgentSDR registers them in your Unipile workspace, so replies, accepted invitations and WhatsApp messages arrive here."}
+                : `${BRAND.shortName} registers them in your Unipile workspace, so replies, accepted invitations and WhatsApp messages arrive here.`}
           </p>
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-2">

@@ -10,6 +10,7 @@ import { Logo } from "@/components/brand/Logo";
 import Sidebar from "@/components/Sidebar";
 import { SessionGate } from "@/components/auth/SessionGate";
 import { DemoBanner } from "@/components/demo/DemoProvider";
+import { BRAND } from "@/lib/brand";
 
 const CHROMELESS_ROUTES = [
   "/login",
@@ -57,8 +58,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       </div>
 
       <header className="flex h-12 shrink-0 items-center justify-between border-b border-stroke-soft-200 bg-bg-white-0 px-4 md:hidden">
-        <Link href="/analytics" aria-label="AgentSDR home">
-          <Logo className="text-text-strong-950" iconClassName="size-6" textClassName="text-[17px]" />
+        <Link href="/analytics" aria-label={`${BRAND.name} home`}>
+          <Logo className="text-text-strong-950" iconClassName="size-7" textClassName="text-[15px]" />
         </Link>
         <button
           type="button"

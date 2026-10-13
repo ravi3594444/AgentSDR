@@ -17,6 +17,7 @@ import type { CallSummary } from "@/lib/calls/contract";
 import { LiveCallStrip } from "@/components/calls/LiveCallStrip";
 import { RecordingPlayer } from "./RecordingPlayer";
 import { CallSessionBadge } from "./CallSessionBadge";
+import { BRAND } from "@/lib/brand";
 
 export function CallsCard({ personId, refreshKey }: { personId: string; refreshKey?: number }) {
   const [calls, setCalls] = useState<CallSummary[]>([]);
@@ -69,7 +70,7 @@ export function CallsCard({ personId, refreshKey }: { personId: string; refreshK
     <div className="space-y-3">
       <LiveCallStrip callId={mostRecentCallId} serverStatus={sorted[0]?.status ?? null} onCancelled={() => void load()} />
       <Frame>
-        <FrameHeader title="Calls" description={sorted.length ? `${sorted.length} WhatsApp call${sorted.length === 1 ? "" : "s"}, newest first` : "WhatsApp calls placed from AgentSDR"} />
+        <FrameHeader title="Calls" description={sorted.length ? `${sorted.length} WhatsApp call${sorted.length === 1 ? "" : "s"}, newest first` : `WhatsApp calls placed from ${BRAND.shortName}`} />
         <FramePanel aria-busy={refreshing || undefined} className={cn("p-0 transition-opacity sm:p-0", refreshing && "opacity-60")}>
           {loading ? (
             <div aria-busy="true" aria-label="Loading calls" className="divide-y divide-stroke-soft-200">

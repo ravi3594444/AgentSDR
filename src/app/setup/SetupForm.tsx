@@ -4,6 +4,7 @@ import { useState, type FormEvent } from "react";
 import { AuthShell } from "@/components/auth/AuthShell";
 import { ErrorCallout, Field, SubmitButton } from "@/components/auth/fields";
 import { MIN_PASSWORD_LENGTH, validateSetupInput } from "@/lib/auth/setupInput";
+import { BRAND } from "@/lib/brand";
 
 export function SetupForm() {
   const [name, setName] = useState("");
@@ -42,7 +43,7 @@ export function SetupForm() {
   }
 
   return (
-    <AuthShell title="Set up AgentSDR" subtitle="Create the first admin account and organization for this instance.">
+    <AuthShell title={`Set up ${BRAND.name}`} subtitle="Create the first admin account and organization for this instance.">
       <form onSubmit={submit} className="flex flex-col gap-4">
         <Field label="Your name" type="text" autoComplete="name" required value={name} onChange={(e) => setName(e.target.value)} />
         <Field label="Organization name" type="text" autoComplete="organization" required value={organizationName} onChange={(e) => setOrganizationName(e.target.value)} />

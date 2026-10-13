@@ -8,6 +8,7 @@ import { runInOrganization } from "@/lib/tenancy/scope";
 import { roles, type OrgRole } from "./permissions";
 import { members, organizations } from "./schema";
 import { auth } from "./server";
+import { BRAND } from "@/lib/brand";
 
 /**
  * Who is asking, and for which organization — the one gate every request
@@ -196,6 +197,6 @@ async function operatorOrganizationId(): Promise<string | null> {
 
 export async function requirePlatformOperator(ctx: Pick<OrgContext, "organizationId" | "roles">): Promise<void> {
   if (!(await isPlatformOperator(ctx))) {
-    throw new AuthContextError("Only the team running this AgentSDR instance can see system job logs", 403, "FORBIDDEN");
+    throw new AuthContextError(`Only the team running this ${BRAND.name} instance can see system job logs`, 403, "FORBIDDEN");
   }
 }

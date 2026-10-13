@@ -6,6 +6,7 @@ import { authClient } from "@/lib/auth/client";
 import { AuthShell } from "@/components/auth/AuthShell";
 import { ErrorCallout, Field, InfoCallout, SecondaryButton, SubmitButton, linkClass } from "@/components/auth/fields";
 import { GoogleButton, OrDivider } from "@/components/auth/GoogleButton";
+import { BRAND } from "@/lib/brand";
 
 export function SignUpForm({ googleEnabled, from, inviteOnly = false }: { googleEnabled: boolean; from: string | null; inviteOnly?: boolean }) {
   const target = from || "/analytics";
@@ -81,10 +82,10 @@ export function SignUpForm({ googleEnabled, from, inviteOnly = false }: { google
   }
 
   return (
-    <AuthShell title="Create your AgentSDR account" footer={footer}>
+    <AuthShell title={`Create your ${BRAND.name} account`} footer={footer}>
       {inviteOnly && (
         <div className="mb-5">
-          <InfoCallout>This AgentSDR instance is invite-only. Sign up with the email address your invitation was sent to.</InfoCallout>
+          <InfoCallout>This {BRAND.name} workspace is invite-only. Sign up with the email address your invitation was sent to.</InfoCallout>
         </div>
       )}
       <form onSubmit={submit} className="flex flex-col gap-5">

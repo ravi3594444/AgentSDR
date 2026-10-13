@@ -33,6 +33,7 @@ import { activeHref, NAV_FOOTER, NAV_SECTIONS, type NavBadges, type NavEntry, ty
 import { APP_VERSION, bugReportUrl, SUPPORT_LINKS } from "@/lib/support";
 import { useDemoMode } from "@/components/demo/DemoProvider";
 import { cn } from "@/utils/cn";
+import { BRAND } from "@/lib/brand";
 
 /**
  * The app sidebar, in the ReUI shape: brand + collapse at the top, a
@@ -331,8 +332,8 @@ export default function Sidebar({ mobile = false, onClose }: { mobile?: boolean;
         {/* Brand + collapse */}
         <div className={cn("flex h-14 shrink-0 items-center", collapsed ? "justify-center" : "justify-between pl-4 pr-2.5")}>
           {!collapsed && (
-            <Link href="/analytics" aria-label="AgentSDR home" className="group rounded-md outline-none focus-visible:ring-2 focus-visible:ring-primary-base">
-              <Logo className="text-text-strong-950" walk="step" walkOn="hover" />
+            <Link href="/analytics" aria-label={`${BRAND.name} home`} className="group rounded-md outline-none focus-visible:ring-2 focus-visible:ring-primary-base">
+              <Logo className="text-text-strong-950" />
             </Link>
           )}
           <div className={cn("flex items-center", collapsed && "hidden")}>
@@ -351,10 +352,10 @@ export default function Sidebar({ mobile = false, onClose }: { mobile?: boolean;
           </RailTip>
           )}
           </div>
-          {/* Collapsed, the brand stays as Shade's icon, linking home. */}
+          {/* Collapsed, the brand stays as its app tile, linking home. */}
           {collapsed && (
-            <Link href="/analytics" aria-label="AgentSDR home" className="group rounded-md outline-none focus-visible:ring-2 focus-visible:ring-primary-base">
-              <AppIcon small className="size-7" walk="step" walkOn="hover" />
+            <Link href="/analytics" aria-label={`${BRAND.name} home`} className="group rounded-md outline-none focus-visible:ring-2 focus-visible:ring-primary-base">
+              <AppIcon small className="size-7" />
             </Link>
           )}
         </div>

@@ -5,6 +5,7 @@ import { Frame, FrameFooter, FrameHeader, FramePanel } from "@/components/analyt
 import { useTheme } from "@/components/theme/ThemeProvider";
 import { ThemeSwitch } from "@/components/theme/ThemeSwitch";
 import { FieldRow } from "./SettingsKit";
+import { BRAND } from "@/lib/brand";
 
 const SHOWING = {
   light: { label: "Light", icon: RiSunLine },
@@ -18,7 +19,7 @@ export default function AppearanceSettings() {
 
   return (
     <Frame>
-      <FrameHeader title="Theme" description="How AgentSDR looks on this browser." />
+      <FrameHeader title="Theme" description={`How ${BRAND.shortName} looks on this browser.`} />
       <FramePanel>
         <FieldRow
           label="Colour theme"

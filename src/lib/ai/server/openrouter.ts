@@ -7,6 +7,7 @@ import {
   type OpenRouterModelSummary,
   type OpenRouterProviderModels,
 } from "../openrouter-types";
+import { BRAND } from "@/lib/brand";
 
 export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 
@@ -20,7 +21,7 @@ export function createOpenRouterClient(apiKey: string, timeout = 30_000) {
     maxRetries: 0,
     defaultHeaders: {
       "HTTP-Referer": process.env.OPENROUTER_SITE_URL ?? "http://localhost:3000",
-      "X-Title": "AgentSDR",
+      "X-Title": BRAND.name,
     },
   });
 }
@@ -212,7 +213,7 @@ export async function generateOpenRouterImage(input: {
       Authorization: `Bearer ${input.apiKey.trim()}`,
       "Content-Type": "application/json",
       "HTTP-Referer": process.env.OPENROUTER_SITE_URL ?? "http://localhost:3000",
-      "X-Title": "AgentSDR",
+      "X-Title": BRAND.name,
     },
     body: JSON.stringify({
       model: input.model,

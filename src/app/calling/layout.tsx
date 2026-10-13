@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { RequiresPlatform } from "@/components/settings/RequiresPlatform";
 import { docsPageUrl } from "@/lib/support";
+import { brandTitle } from "@/lib/brand";
 
 /**
  * WhatsApp Calling pages share the LinkedIn section's padded, scrolling
@@ -9,8 +10,8 @@ import { docsPageUrl } from "@/lib/support";
  */
 export const metadata: Metadata = {
   title: {
-    default: "WhatsApp Calling · AgentSDR",
-    template: "%s · WhatsApp Calling · AgentSDR",
+    default: brandTitle("WhatsApp Calling"),
+    template: brandTitle("%s", "WhatsApp Calling"),
   },
   description: "Call leads over WhatsApp and follow up",
 };

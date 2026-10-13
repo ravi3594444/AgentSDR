@@ -62,6 +62,7 @@ import {
   sendWhatsapp,
 } from "@/lib/whatsapp/client";
 import type { WhatsappAccountSummary, WhatsappChatSummary, WhatsappMessage } from "@/lib/whatsapp/contract";
+import { BRAND } from "@/lib/brand";
 
 function chatTitle(chat: WhatsappChatSummary): string {
   return chat.person?.fullName || chat.name || chat.phone || "Unknown number";
@@ -252,7 +253,7 @@ export function WhatsappMessagesClient({ initialChatId = null }: { initialChatId
         facts={[
           ...(selectedAccount ? [{ label: "Number", value: accountLabel(selectedAccount), title: selectedAccount.phone ?? undefined }] : []),
           ...(selected.lastMessageAt ? [{ label: "Last message", value: rowTime(new Date(selected.lastMessageAt)), title: fullTime(new Date(selected.lastMessageAt)) }] : []),
-          ...(!person ? [{ label: "In AgentSDR", value: "Not yet — add the number to People" }] : []),
+          ...(!person ? [{ label: `In ${BRAND.shortName}`, value: "Not yet — add the number to People" }] : []),
         ]}
       />
     </DetailsPanel>
@@ -392,7 +393,7 @@ export function WhatsappMessagesClient({ initialChatId = null }: { initialChatId
                   meta={
                     !chat.person || account ? (
                       <>
-                        {!chat.person && <RowBadge dot={false}>Not in AgentSDR</RowBadge>}
+                        {!chat.person && <RowBadge dot={false}>Not in {BRAND.shortName}</RowBadge>}
                         {account && <RowMeta icon={RiSmartphoneLine}>{accountLabel(account)}</RowMeta>}
                       </>
                     ) : undefined
@@ -434,7 +435,7 @@ export function WhatsappMessagesClient({ initialChatId = null }: { initialChatId
                     <RowBadge dot={false}>Not in CRM</RowBadge>
                   )
                 ) : (
-                  <RowBadge dot={false}>Not in AgentSDR</RowBadge>
+                  <RowBadge dot={false}>Not in {BRAND.shortName}</RowBadge>
                 )
               }
               channel="whatsapp"

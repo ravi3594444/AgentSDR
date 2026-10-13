@@ -11,6 +11,7 @@ import { WhatsappSendRefusedError } from "./errors";
 import { chatInOrg, isPendingChatId, matchPersonByPhone } from "./messages";
 import { whatsappChats } from "./schema";
 import { performWhatsappSend } from "./send";
+import { BRAND } from "@/lib/brand";
 
 /**
  * Sending a CRM draft over WhatsApp (src/lib/crm/send.ts's whatsapp branch).
@@ -48,7 +49,7 @@ export type DeliverWhatsappResult = {
 export async function deliverWhatsappFromCrm(input: DeliverWhatsappInput): Promise<DeliverWhatsappResult> {
   const account = await findWhatsappAccountByUnipileId(input.unipileAccountId);
   if (!account) {
-    throw new WhatsappSendRefusedError("The conversation's WhatsApp number is not linked to AgentSDR any more", 409);
+    throw new WhatsappSendRefusedError(`The conversation's WhatsApp number is not linked to ${BRAND.shortName} any more`, 409);
   }
 
   const [chat] = input.unipileChatId

@@ -17,6 +17,7 @@ import { StatusDotBadge } from "../kit/StatusDotBadge";
 import { seriesTotal, TimeSeriesChart, TimeSeriesTable, type SeriesKeys } from "../kit/TimeSeriesChart";
 import { CHANNEL_META, formatCompact, formatDuration, formatPercent, MUTED, STATUS } from "../theme";
 import type { ViewProps } from "./types";
+import { BRAND } from "@/lib/brand";
 
 /**
  * WhatsApp: two areas. Calls (KPI strip, calls chart, outcomes, campaigns) and
@@ -50,15 +51,15 @@ const OUTCOMES: Record<WhatsappCallOutcome, { label: string; color: string; icon
 };
 
 const HINTS = {
-  calls: "WhatsApp calls placed from AgentSDR in this period, whatever the outcome.",
+  calls: `WhatsApp calls placed from ${BRAND.shortName} in this period, whatever the outcome.`,
   connected: "Calls the lead picked up.",
   connectRate: "Connected calls divided by calls placed.",
   talk: "Total time on connected calls.",
   avg: "Talk time divided by connected calls.",
-  sent: "Outbound messages: sent by AgentSDR, or typed on the phone or in WhatsApp Web.",
+  sent: `Outbound messages: sent by ${BRAND.shortName}, or typed on the phone or in WhatsApp Web.`,
   received: "Inbound messages from leads.",
   replyRate: "Of chats where you sent a message in this period, the share that got a later reply from the lead.",
-  newChats: "Chats AgentSDR started in this period (the first message was sent from AgentSDR).",
+  newChats: `Chats ${BRAND.shortName} started in this period (the first message was sent from ${BRAND.shortName}).`,
 };
 
 const vsPrevious = (m: { previous: number | null }, format: (n: number) => string = formatCompact) => (m.previous === null ? undefined : `vs ${format(m.previous)} previous period`);
@@ -83,7 +84,7 @@ export function WhatsappView({ data, loading }: ViewProps<"whatsapp">) {
 
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-12 lg:gap-5">
-      <SectionHeading title="Calls" description="Voice calls placed from AgentSDR and recorded in WhatsApp Web." />
+      <SectionHeading title="Calls" description={`Voice calls placed from ${BRAND.shortName} and recorded in WhatsApp Web.`} />
       <KpiStrip className="lg:col-span-12" columns={5}>
         <KpiCell icon={RiPhoneLine} label="Calls placed" value={formatCompact(kpis.calls.value)} metric={kpis.calls} hint={HINTS.calls} context={vsPrevious(kpis.calls)} spark={placedSpark} />
         <KpiCell icon={RiPhoneFill} label="Connected" value={formatCompact(kpis.connected.value)} metric={kpis.connected} hint={HINTS.connected} context={vsPrevious(kpis.connected)} spark={connectedSpark} />
