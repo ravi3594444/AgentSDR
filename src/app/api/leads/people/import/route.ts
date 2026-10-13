@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { upsertManualPerson, type ManualPersonInput } from "@/lib/leads/manualImport";
-import { parseImportRows } from "@/lib/leads/importRows";
+import { upsertManualPerson } from "@/lib/leads/manualImport";
+import { parseImportRows, type ImportRow } from "@/lib/leads/importRows";
 import { authContextErrorResponse, withOrgContext } from "@/lib/auth/context";
 
 export const dynamic = "force-dynamic";
@@ -9,7 +9,7 @@ const MAX_ROWS = 5000;
 // The People import needs an Email or LinkedIn URL to identify a row; the
 // Calling contacts import (src/app/api/calling/campaigns/[id]/contacts/import)
 // shares parseImportRows but filters on phone instead — see that module.
-function parseRows(buffer: ArrayBuffer): ManualPersonInput[] {
+function parseRows(buffer: ArrayBuffer): ImportRow[] {
   return parseImportRows(buffer).filter((row) => row.email || row.linkedinUrl);
 }
 
@@ -27,7 +27,7 @@ async function importPeople(req: NextRequest) {
   const form = await req.formData().catch(() => null);
   const file = form?.get("file");
   if (!(file instanceof File)) return NextResponse.json({ error: "file is required" }, { status: 400 });
-  let rows: ManualPersonInput[];
+  let rows: ImportRow[];
   try {
     rows = parseRows(await file.arrayBuffer());
   } catch (error) {
@@ -47,7 +47,7 @@ async function importPeople(req: NextRequest) {
       else updated += 1;
     } catch (error) {
       failed.push({
-        row: index + 2,
+        row: row.rowNumber,
         identity: row.email ?? row.linkedinUrl ?? "unknown",
         error: error instanceof Error ? error.message : String(error),
       });

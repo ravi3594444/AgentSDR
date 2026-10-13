@@ -11,6 +11,11 @@ function workbookBuffer(rows: unknown[][]): ArrayBuffer {
   return new Uint8Array(buffer).buffer;
 }
 
+function csvBuffer(text: string): ArrayBuffer {
+  const bytes = new TextEncoder().encode(text);
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+}
+
 describe("parseImportRows", () => {
   test("matches headers case- and punctuation-insensitively and returns every row unfiltered", () => {
     const rows = parseImportRows(workbookBuffer([
@@ -30,6 +35,7 @@ describe("parseImportRows", () => {
       companyDomain: null,
       notes: null,
       phone: "+91 98765 43210",
+      rowNumber: 2,
     });
     // Not filtered by the shared parser — a row with no email/linkedin still
     // comes back, because the Calling import only needs a phone number.
@@ -58,5 +64,21 @@ describe("parseImportRows", () => {
 
   test("throws on an empty worksheet", () => {
     assert.throws(() => parseImportRows(workbookBuffer([])), /empty/);
+  });
+
+  test("reads a UTF-8 CSV (no byte-order mark) without mangling names", () => {
+    const rows = parseImportRows(csvBuffer("Email,Full Name,Company\njose@example.com,José Müller,Zürich AG\n"));
+    assert.equal(rows[0].fullName, "José Müller");
+    assert.equal(rows[0].companyName, "Zürich AG");
+  });
+
+  test("reports each row's position in the file, counting blank lines", () => {
+    const rows = parseImportRows(csvBuffer("Email\n\na@example.com\n\n\nb@example.com\n"));
+    assert.deepEqual(rows.map((row) => [row.email, row.rowNumber]), [["a@example.com", 3], ["b@example.com", 6]]);
+  });
+
+  test("an unreadable file is a readable error", () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]);
+    assert.throws(() => parseImportRows(png.buffer), /Could not read that file/);
   });
 });

@@ -1,4 +1,5 @@
 import * as XLSX from "xlsx";
+import { readSpreadsheet, SpreadsheetReadError } from "@/lib/spreadsheet/read";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { gridColumns, gridRows } from "./schema";
@@ -38,20 +39,20 @@ function cell(value: unknown): string {
 /**
  * Reads the first row as headers. Accepts .csv, .tsv, .txt and .xlsx alike.
  *
- * The codepage is pinned to UTF-8 for the same reason as
- * outreach/leadImport.ts: without it xlsx guesses a single-byte codepage for
- * plain-text input, so a UTF-8 .csv containing an em-dash, curly quote or
- * accented name imports as mojibake. Real .xlsx carries its own encoding and
- * ignores the hint.
+ * readSpreadsheet decodes UTF-8 text itself: without that, xlsx guesses a
+ * single-byte codepage for plain-text input, so a UTF-8 .csv containing an
+ * em-dash, curly quote or accented name imports as mojibake. Real .xlsx
+ * carries its own encoding.
  */
 export function parseSpreadsheet(buffer: ArrayBuffer, sheetName?: string): ParseResult {
   let workbook: XLSX.WorkBook;
   try {
-    // cellDates matters as much as the codepage: without it xlsx converts any
+    // cellDates matters as much as the encoding: without it xlsx converts any
     // date-looking cell — in CSV as well as .xlsx — into an Excel serial
     // number, so "2024-03-01" arrives as 45352 and infers as a number column.
-    workbook = XLSX.read(buffer, { type: "buffer", codepage: 65001, cellDates: true });
-  } catch {
+    workbook = readSpreadsheet(buffer, { cellDates: true });
+  } catch (error) {
+    if (error instanceof SpreadsheetReadError) return { ok: false, error: error.message };
     return { ok: false, error: "Could not read that file — is it a valid CSV or Excel file?" };
   }
 

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { importLeadsForCampaign, spreadsheetPreview, suggestedEmailMapping, type EmailCsvMapping } from "@/lib/outreach/leadImport";
 import { withOrgContext, authContextErrorResponse } from "@/lib/auth/context";
+import { SpreadsheetReadError } from "@/lib/spreadsheet/read";
 
 // POST /api/outreach/campaigns/[id]/leads/import — multipart form upload, field name "file".
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -15,7 +16,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
       const buffer = await file.arrayBuffer();
       if (form?.get("mode") === "preview") {
-        const preview = spreadsheetPreview(buffer);
+        let preview: ReturnType<typeof spreadsheetPreview>;
+        try {
+          preview = spreadsheetPreview(buffer);
+        } catch (error) {
+          if (error instanceof SpreadsheetReadError) return NextResponse.json({ error: error.message }, { status: 400 });
+          throw error;
+        }
         return NextResponse.json({ ...preview, suggestedMapping: suggestedEmailMapping(preview.headers) });
       }
       let mapping: EmailCsvMapping | undefined;

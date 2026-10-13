@@ -2,6 +2,8 @@
 FROM oven/bun:1-alpine AS deps
 WORKDIR /app
 COPY package.json bun.lock ./
+# SheetJS (xlsx) is installed from this vendored tarball, not the npm registry; see vendor/README.md.
+COPY vendor ./vendor
 RUN bun install --frozen-lockfile
 
 # Stage 2: Build the Next.js app

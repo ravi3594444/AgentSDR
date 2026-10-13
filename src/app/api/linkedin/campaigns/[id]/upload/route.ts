@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withLinkedinOrg } from "@/lib/linkedin/organizations.server";
 import * as XLSX from "xlsx";
+import { readSpreadsheet, SpreadsheetReadError } from "@/lib/spreadsheet/read";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { inOrg } from "@/lib/tenancy/scope";
@@ -29,8 +30,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         return NextResponse.json({ ok: false, error: "No file provided" }, { status: 400 });
       }
 
-      const buffer = Buffer.from(await file.arrayBuffer());
-      const workbook = XLSX.read(buffer, { type: "buffer" });
+      let workbook: XLSX.WorkBook;
+      try {
+        workbook = readSpreadsheet(await file.arrayBuffer());
+      } catch (error) {
+        if (error instanceof SpreadsheetReadError) return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
+        throw error;
+      }
       const sheet = workbook.Sheets[workbook.SheetNames[0]];
       const rows: Record<string, string>[] = XLSX.utils.sheet_to_json(sheet, { defval: "" });
 

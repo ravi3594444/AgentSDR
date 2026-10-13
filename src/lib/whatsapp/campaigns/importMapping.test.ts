@@ -116,4 +116,8 @@ describe("parseImportSheet", () => {
   test("an empty file is an error", () => {
     expect(() => parseImportSheet(csvBuffer(""))).toThrow();
   });
+  test("keeps non-ASCII names from a UTF-8 CSV", () => {
+    const sheet = parseImportSheet(csvBuffer("Phone,Name\n+919876543210,राम शर्मा\n+5511987654321,João\n"));
+    expect(sheet.rows).toEqual([["+919876543210", "राम शर्मा"], ["+5511987654321", "João"]]);
+  });
 });

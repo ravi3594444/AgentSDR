@@ -13,6 +13,7 @@
 *.mp3 binary
 *.wav binary
 *.mp4 binary
+*.tgz binary
 
 # Generated files: collapse in diffs, excluded from language stats.
 bun.lock linguist-generated=true -diff

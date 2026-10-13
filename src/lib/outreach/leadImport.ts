@@ -7,6 +7,7 @@ import { normalizeEmail } from "@/lib/leads/identity";
 import { outreachCampaigns, outreachLeads, suppressionList } from "./schema";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { leadsInOrg } from "./orgScope";
+import { readSpreadsheet, SpreadsheetReadError } from "@/lib/spreadsheet/read";
 
 export const MAX_IMPORT_ROWS = 5000;
 
@@ -20,6 +21,8 @@ export type ParsedRow = {
   companyLinkedinUrl: string | null;
   title: string | null;
   customFields: Record<string, string>;
+  /** 1-based row in the file, when known; failures report it. */
+  rowNumber?: number;
 };
 
 export type EmailCsvMapping = Partial<Record<
@@ -46,13 +49,13 @@ function toCamelCaseKey(header: string): string {
   return /^\d/.test(key) ? `field${key}` : key;
 }
 
-/** Reads the sheet's first row as headers, tolerant of column order/casing. Accepts .csv and .xlsx alike. */
+/**
+ * Reads the sheet's first row as headers, tolerant of column order/casing. Accepts .csv and .xlsx alike;
+ * readSpreadsheet decodes UTF-8 text, so an accented name or em-dash survives. Throws SpreadsheetReadError
+ * for an unreadable file.
+ */
 export function parseRows(buffer: ArrayBuffer): { rows: ParsedRow[]; error: string | null } {
-  // codepage 65001 = UTF-8. Without it xlsx guesses a single-byte codepage for
-  // plain-text input, so a UTF-8 .csv/.txt containing an em-dash, curly quote
-  // or accented name imports mojibake ("—" becomes "â"). Ignored for real
-  // .xlsx, which carries its own encoding.
-  const workbook = XLSX.read(buffer, { type: "buffer", codepage: 65001 });
+  const workbook = readSpreadsheet(buffer);
   const sheetName = workbook.SheetNames[0];
   if (!sheetName) return { rows: [], error: "File has no sheets" };
 
@@ -124,8 +127,9 @@ export function parseRows(buffer: ArrayBuffer): { rows: ParsedRow[]; error: stri
   return { rows, error: null };
 }
 
+/** Throws SpreadsheetReadError for an unreadable file. */
 export function spreadsheetPreview(buffer: ArrayBuffer): { headers: string[]; rows: string[][]; totalRows: number } {
-  const workbook = XLSX.read(buffer, { type: "buffer", codepage: 65001 });
+  const workbook = readSpreadsheet(buffer);
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
   if (!sheet) return { headers: [], rows: [], totalRows: 0 };
   const matrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, blankrows: false });
@@ -155,9 +159,15 @@ export function suggestedEmailMapping(headers: string[]): EmailCsvMapping {
   })) as EmailCsvMapping;
 }
 
+/** sheet_to_json marks each object row with its 0-based position in the sheet (non-enumerable). */
+function sheetRowNumber(row: Record<string, unknown>): number | undefined {
+  const index = (row as { __rowNum__?: unknown }).__rowNum__;
+  return typeof index === "number" ? index + 1 : undefined;
+}
+
 export function parseRowsWithMapping(buffer: ArrayBuffer, mapping: EmailCsvMapping): { rows: ParsedRow[]; error: string | null } {
   if (!mapping.email) return { rows: [], error: "Map the required Email column" };
-  const workbook = XLSX.read(buffer, { type: "buffer", codepage: 65001 });
+  const workbook = readSpreadsheet(buffer);
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
   if (!sheet) return { rows: [], error: "File has no sheets" };
   const preview = spreadsheetPreview(buffer);
@@ -195,6 +205,7 @@ export function parseRowsWithMapping(buffer: ArrayBuffer, mapping: EmailCsvMappi
       companyLinkedinUrl: value(row, "companyLinkedinUrl"),
       title: value(row, "title"),
       customFields,
+      rowNumber: sheetRowNumber(row),
     };
   });
   return { rows, error: null };
@@ -222,7 +233,7 @@ export function planEmailCampaignImport(
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    const rowNum = i + 2;
+    const rowNum = row.rowNumber ?? i + 2;
     if (!normalizeEmail(row.email)) {
       failed.push({ row: rowNum, email: row.email, error: row.email ? "invalid email" : "missing email" });
       continue;
@@ -255,7 +266,14 @@ export async function importLeadsForCampaign(
   buffer: ArrayBuffer,
   options: { filename?: string | null; mapping?: EmailCsvMapping } = {},
 ): Promise<ImportResult | { error: string }> {
-  const { rows, error } = options.mapping ? parseRowsWithMapping(buffer, options.mapping) : parseRows(buffer);
+  let parsed: { rows: ParsedRow[]; error: string | null };
+  try {
+    parsed = options.mapping ? parseRowsWithMapping(buffer, options.mapping) : parseRows(buffer);
+  } catch (readError) {
+    if (readError instanceof SpreadsheetReadError) return { error: readError.message };
+    throw readError;
+  }
+  const { rows, error } = parsed;
   if (error) return { error };
   if (rows.length === 0) return { error: "No rows with an Email column were found" };
   if (rows.length > MAX_IMPORT_ROWS) return { error: `Too many rows (max ${MAX_IMPORT_ROWS} per import)` };

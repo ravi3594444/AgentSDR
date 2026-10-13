@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withLinkedinOrg } from "@/lib/linkedin/organizations.server";
 import { createSearchBatch, parseSearchSheet, startSearchBatchRun } from "@/lib/linkedin/searchBatches";
+import { SpreadsheetReadError } from "@/lib/spreadsheet/read";
 
 const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every((s) => typeof s === "string");
 
@@ -35,8 +36,14 @@ export async function POST(req: NextRequest) {
       // Opt-in, like the JSON create route: an upload queues the URLs, Run starts them.
       const run = formData.get("run") === "true";
 
-      const buffer = Buffer.from(await file.arrayBuffer());
-      const { rows, skipped } = parseSearchSheet(buffer);
+      let parsed: ReturnType<typeof parseSearchSheet>;
+      try {
+        parsed = parseSearchSheet(await file.arrayBuffer());
+      } catch (error) {
+        if (error instanceof SpreadsheetReadError) return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
+        throw error;
+      }
+      const { rows, skipped } = parsed;
       if (rows.length === 0) {
         return NextResponse.json({ ok: false, error: "No valid rows with a Search URL found" }, { status: 400 });
       }

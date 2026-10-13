@@ -14,6 +14,11 @@ function workbookBuffer(rows) {
   return XLSX.write(workbook, { type: "array", bookType: "xlsx" });
 }
 
+function csvBuffer(text) {
+  const bytes = new TextEncoder().encode(text);
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+}
+
 describe("Email campaign lead mapping", () => {
   test("maps canonical identity fields and preserves unknown merge fields", () => {
     const result = parseRows(workbookBuffer([{
@@ -98,6 +103,22 @@ describe("Email campaign lead mapping", () => {
       companyLinkedinUrl: "Company LinkedIn",
       title: "Role",
     });
+  });
+
+  test("a UTF-8 CSV keeps accented merge fields and failures point at their row in the file", () => {
+    const csv = "Email,First Name,City\nana@example.com,Ana,São Paulo\n\nnot-an-email,Bo,Malmö\n";
+    const result = parseRowsWithMapping(csvBuffer(csv), { email: "Email", firstName: "First Name" });
+    expect(result.error).toBeNull();
+    expect(result.rows[0]).toMatchObject({ email: "ana@example.com", firstName: "Ana", customFields: { city: "São Paulo" }, rowNumber: 2 });
+    expect(result.rows[1].customFields).toEqual({ city: "Malmö" });
+    const plan = planEmailCampaignImport(result.rows, new Set(), new Set());
+    expect(plan.failed).toEqual([{ row: 4, email: "not-an-email", error: "invalid email" }]);
+  });
+
+  test("an unreadable upload is a readable error", () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]).buffer;
+    expect(() => spreadsheetPreview(png)).toThrow("Could not read that file");
+    expect(() => parseRowsWithMapping(png, { email: "Email" })).toThrow("Could not read that file");
   });
 
   test("rejects assigning one source column to two canonical fields", () => {

@@ -18,7 +18,7 @@ import {
   normalizeEmail,
   normalizeLinkedinSlug,
 } from "@/lib/leads/identity";
-import { parseImportRows } from "@/lib/leads/importRows";
+import { parseImportRows, type ImportRow } from "@/lib/leads/importRows";
 import type { ManualPersonInput } from "@/lib/leads/manualImport";
 import {
   type AddCampaignContactRequest,
@@ -661,7 +661,7 @@ export async function addCampaignContact(campaignId: string, input: AddCampaignC
 
 export async function importCampaignContacts(campaignId: string, buffer: ArrayBuffer): Promise<ImportCampaignContactsResponse> {
   await assertCampaignExists(campaignId);
-  let rows: ManualPersonInput[];
+  let rows: ImportRow[];
   try {
     rows = parseImportRows(buffer);
   } catch (error) {
@@ -674,8 +674,7 @@ export async function importCampaignContacts(campaignId: string, buffer: ArrayBu
   const skipped: string[] = [];
 
   for (let index = 0; index < rows.length; index += 1) {
-    // +2: the file's 1-based row numbers, plus the header row.
-    const resolved = resolveImportRow(rows[index], index + 2);
+    const resolved = resolveImportRow(rows[index], rows[index].rowNumber);
     if (!resolved.ok) {
       skipped.push(resolved.message);
       continue;

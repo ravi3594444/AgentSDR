@@ -8,6 +8,7 @@
  */
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import * as XLSX from "xlsx";
+import { readSpreadsheet } from "@/lib/spreadsheet/read";
 import { db } from "@/lib/db";
 import { runSearchQueue } from "@/jobs/runSearchQueue";
 import { withJobTracking } from "@/lib/linkedin/jobTracker";
@@ -269,10 +270,11 @@ const SHEET_HEADER_MAP: Record<string, "url" | "companyName"> = {
 
 /**
  * Parses the "Company Name + Search URL" sheet (xlsx/xls/csv). Rows without a URL
- * are counted in `skipped` rather than failing the upload.
+ * are counted in `skipped` rather than failing the upload. Throws SpreadsheetReadError
+ * for an unreadable file.
  */
-export function parseSearchSheet(buffer: Buffer): { rows: SearchUrlInput[]; skipped: number } {
-  const workbook = XLSX.read(buffer, { type: "buffer" });
+export function parseSearchSheet(buffer: ArrayBuffer | Uint8Array): { rows: SearchUrlInput[]; skipped: number } {
+  const workbook = readSpreadsheet(buffer);
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
   const raw: Record<string, string>[] = sheet ? XLSX.utils.sheet_to_json(sheet, { defval: "" }) : [];
 

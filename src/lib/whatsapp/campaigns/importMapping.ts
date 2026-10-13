@@ -1,5 +1,6 @@
 import * as XLSX from "xlsx";
 import { normalizePhone } from "@/lib/calls/phone";
+import { readSpreadsheet } from "@/lib/spreadsheet/read";
 import type { ManualPersonInput } from "@/lib/leads/manualImport";
 import { WHATSAPP_CAMPAIGN_IMPORT_FIELDS, type WhatsappCampaignImportField } from "./contract";
 
@@ -43,7 +44,7 @@ const HEADER_ALIASES: Record<WhatsappCampaignImportField, string[]> = {
 export function parseImportSheet(buffer: ArrayBuffer): ImportSheet {
   let workbook: XLSX.WorkBook;
   try {
-    workbook = XLSX.read(buffer, { type: "buffer" });
+    workbook = readSpreadsheet(buffer);
   } catch {
     throw new Error("Unable to read the file. Upload a CSV or XLSX.");
   }
