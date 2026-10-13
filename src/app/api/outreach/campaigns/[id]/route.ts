@@ -71,6 +71,8 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
   try {
     return await withOrgContext(_req, async () => {
       const { id } = await params;
+      // Another organization's campaign is not found, not "deleted".
+      if (!(await getCampaign(id))) return NextResponse.json({ error: "not found" }, { status: 404 });
       await deleteCampaign(id);
       return NextResponse.json({ ok: true });
     });

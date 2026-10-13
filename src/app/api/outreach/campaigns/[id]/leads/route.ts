@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getCampaignLeads, getCampaignLeadsPage } from "@/lib/outreach/campaigns";
+import { getCampaign, getCampaignLeads, getCampaignLeadsPage } from "@/lib/outreach/campaigns";
 import { withOrgContext, authContextErrorResponse } from "@/lib/auth/context";
 
 // GET /api/outreach/campaigns/[id]/leads
@@ -9,6 +9,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   try {
     return await withOrgContext(req, async () => {
       const { id } = await params;
+      if (!(await getCampaign(id))) return NextResponse.json({ error: "not found" }, { status: 404 });
       const { searchParams } = new URL(req.url);
 
       if (!searchParams.has("page")) {
