@@ -34,8 +34,9 @@ export function SetupForm() {
         setError(data.error || "Something went wrong. Please try again.");
         return setLoading(false);
       }
-      // If the account was made but the automatic sign-in failed, sign in by hand.
-      window.location.assign(data.signedIn ? "/analytics" : "/sign-in");
+      // A new install starts on Getting Started. If the account was made but
+      // the automatic sign-in failed, sign in by hand.
+      window.location.assign(data.signedIn ? "/getting-started" : "/sign-in?from=%2Fgetting-started");
     } catch {
       setError("Could not reach the server. Please try again.");
       setLoading(false);

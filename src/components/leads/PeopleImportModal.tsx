@@ -11,6 +11,8 @@ type ImportResult = {
   created: number;
   updated: number;
   failed: Array<{ row: number; identity: string; error: string }>;
+  /** Rows with neither an Email nor a LinkedIn URL, left out. */
+  skippedNoIdentity?: number;
 };
 
 export function PeopleImportModal({ onClose, onImported }: { onClose: () => void; onImported: () => void }) {
@@ -53,6 +55,7 @@ export function PeopleImportModal({ onClose, onImported }: { onClose: () => void
           {result && (
             <div className="mt-4 rounded-xl bg-bg-weak-50 p-3 text-paragraph-sm text-text-sub-600">
               <p>{result.total} processed · {result.created} created · {result.updated} updated · {result.failed.length} failed</p>
+              {!!result.skippedNoIdentity && <p className="mt-1">{result.skippedNoIdentity} row{result.skippedNoIdentity === 1 ? "" : "s"} skipped: no Email or LinkedIn URL.</p>}
               {result.failed.length > 0 && <ul className="mt-2 max-h-32 overflow-auto text-paragraph-xs text-error-base">{result.failed.map((failure) => <li key={`${failure.row}:${failure.identity}`}>Row {failure.row} ({failure.identity}): {failure.error}</li>)}</ul>}
             </div>
           )}

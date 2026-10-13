@@ -9,8 +9,11 @@ const MAX_ROWS = 5000;
 // The People import needs an Email or LinkedIn URL to identify a row; the
 // Calling contacts import (src/app/api/calling/campaigns/[id]/contacts/import)
 // shares parseImportRows but filters on phone instead — see that module.
-function parseRows(buffer: ArrayBuffer): ImportRow[] {
-  return parseImportRows(buffer).filter((row) => row.email || row.linkedinUrl);
+// Rows without either are counted, so a shorter import is never silent.
+function parseRows(buffer: ArrayBuffer): { rows: ImportRow[]; skippedNoIdentity: number } {
+  const all = parseImportRows(buffer);
+  const rows = all.filter((row) => row.email || row.linkedinUrl);
+  return { rows, skippedNoIdentity: all.length - rows.length };
 }
 
 export async function POST(req: NextRequest) {
@@ -28,8 +31,9 @@ async function importPeople(req: NextRequest) {
   const file = form?.get("file");
   if (!(file instanceof File)) return NextResponse.json({ error: "file is required" }, { status: 400 });
   let rows: ImportRow[];
+  let skippedNoIdentity: number;
   try {
-    rows = parseRows(await file.arrayBuffer());
+    ({ rows, skippedNoIdentity } = parseRows(await file.arrayBuffer()));
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to parse file" }, { status: 400 });
   }
@@ -53,5 +57,5 @@ async function importPeople(req: NextRequest) {
       });
     }
   }
-  return NextResponse.json({ total: rows.length, created, updated, failed });
+  return NextResponse.json({ total: rows.length, created, updated, failed, skippedNoIdentity });
 }

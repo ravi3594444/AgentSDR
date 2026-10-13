@@ -10,6 +10,7 @@ import {
   RiHistoryLine,
   RiInboxLine,
   RiLinkM,
+  RiListCheck3,
   RiMegaphoneLine,
   RiChatSmile2Line,
   RiPhoneLine,
@@ -165,6 +166,8 @@ export const NAV_FOOTER: NavEntry[] = [
       link("/linkedin/webhooks", "LinkedIn webhooks", RiWebhookLine),
     ],
   },
+  // Pinned beside Settings rather than at the top, so finished setup never pushes campaign and inbox work down.
+  link("/getting-started", "Getting started", RiListCheck3),
   link(SETTINGS_HOME, "Settings", RiSettings3Line, { match: ["/settings"], badge: "accountsNeedingAttention", badgeStyle: "dot" }),
 ];
 
