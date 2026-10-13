@@ -195,6 +195,97 @@ docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 - `fe9fc9c` Getting Started: use the settings' own page names; link Sending rules
 - the documentation commit that adds `docs/product/`
 
+## Follow-up: AI/ML API as a second AI provider
+
+Requested after Session 1: add AI/ML API to AI Settings with encrypted
+per-organization credentials, adapt the runtime, verification and model
+selection, drop OpenRouter's management-key/BYOK/routing requirements for
+AI/ML connections, teach Getting Started about it, and test reply
+classification and drafting with a structured-output model.
+
+What was built (design notes in `src/lib/ai/README.md`):
+
+- **One active provider per organization**, chosen in Settings → AI
+  provider (OpenRouter or AI/ML API). The OpenRouter panel is unchanged; the
+  AI/ML panel is key → models → default.
+- **Credentials:** an AI/ML connection is the existing encrypted
+  `grid_providers` / `grid_provider_credentials` pair, organization-scoped,
+  holding only `apiKey`. It is verified with `GET /v1/key` (free; 401 on a bad
+  key). The public model list cannot verify a key.
+- **Runtime:** `getAiRuntime` (was `getOpenRouterRuntime`) applies a pure
+  gate, `runtimePlan.ts`. OpenRouter keeps strict provider routing, the
+  BYOK-only confirmation and function-call answers. AI/ML needs no
+  confirmation and answers through strict `response_format: json_schema`;
+  strict mode is dropped only for a user-written column schema that strict
+  mode would reject.
+- **Model selection:** only AI/ML chat models tagged `structured_output` in
+  its live catalog are offered (319 of 932 catalog entries on 13 Oct 2026).
+  They are revalidated on save, and a default is required.
+- **Refused clearly with AI/ML**, rather than half-working:
+  - call transcription (your separate compatibility check is still to do);
+  - web-research and image AI columns, and the qualification parent lookup
+    (all need OpenRouter's web plugin or image endpoint).
+- **Getting Started** shows "Ready: <model> through AI/ML API" with no BYOK
+  or routing step.
+
+Evidence (local disposable database, production build, real AI/ML calls):
+
+- **Probes against AI/ML:** strict JSON schema with the real CRM classifier
+  and draft schemas succeeded on these three models:
+  - `openai/gpt-4o-mini`
+  - `google/gemini-3.5-flash-lite`
+  - `anthropic/claude-haiku-latest`
+
+  `mistralai/mistral-small-2603` returned 429 "rate-limited upstream"; the
+  retry loop treats that as transient.
+- **API checks:**
+  - A bad key gets a 400 ("AI/ML API rejected this key"), and an
+    OpenRouter-only credential field gets a 400.
+  - The real key verified and was stored encrypted; the plaintext key
+    appears in no database row.
+- **Settings save rules:** each of these got a 400:
+  - transcription switched on;
+  - a model without structured output;
+  - an OpenRouter provider slug on an AI/ML connection;
+  - no default model.
+
+  A valid save stored `byokOnlyConfirmed: false`.
+- **Live CRM pipeline** (`scripts/e2e/ai-live-crm.ts`): an inbound reply
+  went through the running server's CRM worker. It was classified
+  `interested` (0.95, auto-applied) and a draft was written that waits for
+  review, with no send attempt. This passed with both
+  `openai/gpt-4o-mini` and `google/gemini-3.5-flash-lite`. The stored
+  request shows strict JSON schema with no tools or routing.
+- **Tables AI column through the real runner:** a content cell completed; a
+  web-research cell was refused up front.
+- **Permissions** (`scripts/e2e/owner-controls.ts`): all checks pass. A
+  member gets 403 on adding an AI/ML key and on changing AI settings; the
+  owner's probes reach input validation.
+- **Repository checks:** typecheck passes, lint shows the 6 baseline
+  warnings, tests are 819 pass / 103 files, and `bun run build` passes.
+- **Isolation** (`tenancy-isolation.ts`): no failures, with organization A's
+  AI/ML connection among the fingerprints. Its 96 "review" items were
+  HTTP 500 pages from the dev server, whose Turbopack-generated CSS was
+  corrupted in this sandbox (`globals.css:3840`, garbage bytes); the source
+  file is unchanged and the production build compiles it. Replayed as
+  organization B against the production server, those 96 requests returned
+  no 5xx and nothing of A's. Probed directly as B, A's AI/ML connection id
+  gives a 409 when reading its catalog, a refused save (nothing stored)
+  when set in AI settings, and a 404 on delete.
+
+Open points:
+
+- **Draft wording.** With both models, the draft promised actions not taken
+  ("I've scheduled…", "I have sent over the calendar invite") and once left
+  `[Your Name]`. The draft prompt and sender details come from Settings →
+  Instructions and Knowledge, not from the provider. Drafts always wait for
+  review, but this is worth tightening (prompt rules, or filling in sender
+  details) before relying on them.
+- **Call transcription with AI/ML API:** not attempted, as requested. It is
+  refused in code and in the settings save until checked.
+- **The test key was pasted into a chat:** rotate it in the AI/ML API
+  dashboard and re-enter it.
+
 ## Session 2: deliberately deferred
 
 None of this entered Session 1:

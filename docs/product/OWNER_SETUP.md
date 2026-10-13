@@ -112,10 +112,19 @@ delivered.
 | Email | Settings → Email → Connection, then Mailboxes | Google Workspace service account with domain-wide delegation. For replies to stop follow-ups you also need a **Gmail Pub/Sub topic** (saved on the same card) and a push subscription to `https://your-domain/api/outreach/webhooks/gmail-watch`. Personal Gmail is not supported in this release. | `docs/integrations/google-workspace.mdx`, `docs/integrations/gmail-reply-sync.mdx` |
 | LinkedIn | Settings → LinkedIn → Connection, then Accounts | A Unipile workspace (API key and DSN). LinkedIn profiles link through Unipile's hosted sign-in. | `docs/integrations/unipile.mdx` |
 | WhatsApp | Settings → WhatsApp → Integrations, then Numbers | The same Unipile connection. Link the number **in the Unipile dashboard** (scan the QR code there), then press **Sync from Unipile**. New numbers start no new chats for 24 h. | `docs/whatsapp/accounts.mdx` |
-| AI | Settings → AI provider | An OpenRouter inference key and management key, at least one BYOK provider, a default model, and the shared-capacity confirmation. Drafts always wait for your review. | `docs/workspace/ai-provider.mdx`, `docs/integrations/openrouter.mdx` |
+| AI | Settings → AI provider | Pick **one** provider for the whole workspace. **AI/ML API**: one key (aimlapi.com → Keys), then select structured-output models and a default; no management key, BYOK or routing step. **OpenRouter**: an inference key and a management key, at least one BYOK provider, a default model and the shared-capacity confirmation. Drafts always wait for your review either way. With AI/ML API, call transcription, web-research and image AI columns stay unavailable (they need OpenRouter). | `src/lib/ai/README.md`, `docs/workspace/ai-provider.mdx`, `docs/integrations/openrouter.mdx` |
 | Sending rules | Settings → Email / LinkedIn / WhatsApp → Sending rules | Owner or admin only. | `docs/workspace/sending-rules.mdx` |
 | Phone default | Settings → Organization (General) → Default phone country | Set it if your lists have local numbers without `+`. Without it those numbers are dropped on import, not rejected. | `docs/workspace/organizations.mdx` |
 | Recordings (optional) | Settings → WhatsApp → Integrations | Cloudflare R2 and the Call Recorder extension. | `docs/integrations/cloudflare-r2.mdx` |
+
+**AI/ML API key hygiene.** The key is checked with AI/ML API and stored
+encrypted for your organization only; it is never shown again in the app.
+A key that has been pasted into a chat, ticket or document should be rotated
+in the AI/ML API dashboard and re-entered under Settings → AI provider.
+
+To check AI end to end after setup (it spends a little real usage and never
+sends anything), with the app running against a local copy of the database:
+`ORGANIZATION_ID=<id> bun run --conditions=react-server scripts/e2e/ai-live-crm.ts`.
 
 After you save Unipile, its dashboard lists two webhooks named
 **22nd X AI · …**. Upstream docs call them "AgentSDR · …"; only the label
