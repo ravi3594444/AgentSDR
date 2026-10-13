@@ -308,6 +308,8 @@ async function seedProviders(ctx: DemoContext): Promise<{ apollo: string; openro
       modelsByProvider: { anthropic: [AI_MODEL, "anthropic/claude-haiku-4.5"], google: ["google/gemini-2.5-flash"] },
       defaultModel: { provider: "anthropic", modelId: AI_MODEL },
       transcriptionModel: { provider: "google", modelId: "google/gemini-2.5-flash" },
+      researchModel: null,
+      researchDailyLimit: 25,
       byokOnlyConfirmed: true,
     });
   }

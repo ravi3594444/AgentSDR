@@ -23,6 +23,8 @@ type Settings = {
   providers: string[];
   modelsByProvider: Record<string, string[]>;
   defaultModel: Selection | null;
+  researchModel?: Selection | null;
+  researchDailyLimit?: number;
 };
 
 async function readJson<T>(response: Response): Promise<T> {
@@ -49,6 +51,8 @@ export default function AimlSettingsClient({ onSaved }: { onSaved?: () => void }
   const [connectionId, setConnectionId] = useState<string | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [defaultModel, setDefaultModel] = useState<string>("");
+  const [researchModel, setResearchModel] = useState<string>("");
+  const [researchDailyLimit, setResearchDailyLimit] = useState<number>(25);
   const [catalog, setCatalog] = useState<Model[]>([]);
   const [activeHere, setActiveHere] = useState(false);
   const [search, setSearch] = useState("");
@@ -87,7 +91,9 @@ export default function AimlSettingsClient({ onSaved }: { onSaved?: () => void }
       if (ours) {
         setSelected(saved.modelsByProvider?.[AIML_PROVIDER_KEY] ?? []);
         setDefaultModel(saved.defaultModel?.provider === AIML_PROVIDER_KEY ? saved.defaultModel.modelId : "");
+        setResearchModel(saved.researchModel?.provider === AIML_PROVIDER_KEY ? saved.researchModel.modelId : "");
       }
+      if (typeof saved.researchDailyLimit === "number") setResearchDailyLimit(saved.researchDailyLimit);
       if (id) await loadCatalog(id);
     }).catch((cause) => {
       if (!cancelled) setError(cause instanceof Error ? cause.message : "Could not load AI settings.");
@@ -105,6 +111,8 @@ export default function AimlSettingsClient({ onSaved }: { onSaved?: () => void }
       && (!query || `${model.name} ${model.id} ${model.developer ?? ""}`.toLowerCase().includes(query)));
   }, [catalog, onlySelected, search, selected]);
   const selectedAvailable = selected.filter((id) => byId.has(id));
+  // Research needs a model AI/ML marks as searching the web; it must also be one of the selected models.
+  const searchCapable = selectedAvailable.filter((id) => byId.get(id)?.capabilities?.includes("web_search"));
   const missing = selected.filter((id) => !byId.has(id));
 
   function toggle(modelId: string) {
@@ -172,6 +180,8 @@ export default function AimlSettingsClient({ onSaved }: { onSaved?: () => void }
           modelsByProvider: { [AIML_PROVIDER_KEY]: selectedAvailable },
           defaultModel: { provider: AIML_PROVIDER_KEY, modelId: defaultModel },
           transcriptionModel: null,
+          researchModel: researchModel && searchCapable.includes(researchModel) ? { provider: AIML_PROVIDER_KEY, modelId: researchModel } : null,
+          researchDailyLimit,
           byokOnlyConfirmed: false,
         }),
       }));
@@ -349,8 +359,51 @@ export default function AimlSettingsClient({ onSaved }: { onSaved?: () => void }
           </Select.Root>
         </Field>
         <Callout tone="info" className="mt-4 max-w-2xl">
-          With {AIML_PROVIDER_NAME}, call transcription stays off (it has not been checked with {AIML_PROVIDER_NAME}&apos;s audio models yet), and web-research or image AI columns need OpenRouter. Drafts always wait for your review.
+          With {AIML_PROVIDER_NAME}, call transcription stays off (it has not been checked with {AIML_PROVIDER_NAME}&apos;s audio models yet), and web-research or image AI columns in Tables need OpenRouter. Drafts always wait for your review.
         </Callout>
+      </StepFrame>
+
+      <StepFrame
+        step={4}
+        done={Boolean(researchModel && searchCapable.includes(researchModel))}
+        title="Web research (optional)"
+        description="Leads → Companies → Research answers a question about one company from public web pages and saves the answer with its source links. It does not find new leads or read social media."
+      >
+        <div className="grid max-w-2xl gap-4 sm:grid-cols-[minmax(0,1fr)_10rem]">
+          <Field
+            label="Research model"
+            description={searchCapable.length
+              ? "Only selected models marked Web search are listed. An answer that comes back without sources is refused, never saved."
+              : "Select a model marked Web search in step 2 first. Perplexity Sonar was checked to return its sources."}
+          >
+            <Select.Root size="small" value={researchModel || "off"} onValueChange={(value) => { setResearchModel(value === "off" ? "" : value); setSuccess(null); }} disabled={!searchCapable.length}>
+              <Select.Trigger aria-label="Research model">
+                <Select.Value placeholder="Off" />
+              </Select.Trigger>
+              <Select.Content>
+                <Select.Item value="off">Off</Select.Item>
+                {searchCapable.map((id) => (
+                  <Select.Item key={id} value={id}>{byId.get(id)?.name ?? id}</Select.Item>
+                ))}
+              </Select.Content>
+            </Select.Root>
+          </Field>
+          <Field label="Runs per day" description="Failed runs count too.">
+            <Input.Root size="small">
+              <Input.Wrapper>
+                <Input.Input
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  max={500}
+                  aria-label="Research runs per day"
+                  value={researchDailyLimit}
+                  onChange={(event) => { setResearchDailyLimit(Math.min(500, Math.max(1, Number(event.target.value) || 1))); setSuccess(null); }}
+                />
+              </Input.Wrapper>
+            </Input.Root>
+          </Field>
+        </div>
       </StepFrame>
 
       <div className="sticky bottom-0 z-10 -mx-4 -mb-5 flex flex-wrap items-center justify-between gap-3 border-t border-stroke-soft-200 bg-bg-white-0/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:-mb-6 sm:px-6 lg:-mx-8 lg:-mb-7 lg:px-8">

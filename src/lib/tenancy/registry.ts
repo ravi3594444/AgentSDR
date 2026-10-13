@@ -30,6 +30,7 @@ export const SCOPED_TABLES: readonly ScopedTable[] = [
   snake("companies"),
   snake("entity_columns"),
   snake("import_runs"),
+  snake("lead_research"),
   // Prospecting / qualification
   snake("campaigns"),
   snake("targeted_domains"),

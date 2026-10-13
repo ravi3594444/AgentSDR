@@ -2,7 +2,7 @@ import "server-only";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { gridProviders } from "@/lib/grid/schema";
-import { normalizeByokSettings, type ByokSettings } from "./openrouter-types";
+import { normalizeByokSettings, RESEARCH_DAILY_LIMIT_DEFAULT, type ByokSettings } from "./openrouter-types";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 
 const KEY = "openrouter-byok-settings";
@@ -12,6 +12,8 @@ const empty: ByokSettings = {
   modelsByProvider: {},
   defaultModel: null,
   transcriptionModel: null,
+  researchModel: null,
+  researchDailyLimit: RESEARCH_DAILY_LIMIT_DEFAULT,
   byokOnlyConfirmed: false,
 };
 

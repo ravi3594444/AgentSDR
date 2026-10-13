@@ -79,7 +79,8 @@ export async function PUT(req: NextRequest) {
       if (settings.providers.length && !settings.defaultModel) {
         return NextResponse.json({ error: "Choose a default model" }, { status: 400 });
       }
-      return NextResponse.json(await saveByokSettings(settings));
+      // Web research runs through AI/ML API's search models only in this release.
+      return NextResponse.json(await saveByokSettings({ ...settings, researchModel: null }));
     });
   } catch (error) {
     const response = authContextErrorResponse(error);
@@ -107,17 +108,24 @@ async function saveAimlSettings(settings: ReturnType<typeof normalizeByokSetting
     return NextResponse.json({ error: "Select at least one model" }, { status: 400 });
   }
   if (models.length) {
-    let available: Set<string>;
+    let catalog: Awaited<ReturnType<typeof listAimlModels>>;
     try {
-      available = new Set((await listAimlModels()).map((model) => model.id));
+      catalog = await listAimlModels();
     } catch (error) {
       return NextResponse.json({ error: error instanceof Error ? error.message : `Could not load the ${AIML_PROVIDER_NAME} model list` }, { status: 502 });
     }
+    const available = new Set(catalog.map((model) => model.id));
     const missing = models.filter((model) => !available.has(model));
     if (missing.length) {
       return NextResponse.json({ error: `Not offered with structured output by ${AIML_PROVIDER_NAME}: ${missing.slice(0, 5).join(", ")}` }, { status: 400 });
     }
     if (!settings.defaultModel) return NextResponse.json({ error: "Choose a default model" }, { status: 400 });
+    if (settings.researchModel) {
+      const research = catalog.find((model) => model.id === settings.researchModel?.modelId);
+      if (!research?.capabilities.includes("web_search")) {
+        return NextResponse.json({ error: `${settings.researchModel.modelId} does not search the web on ${AIML_PROVIDER_NAME}; choose a model marked Web search for research` }, { status: 400 });
+      }
+    }
   }
   // Routing confirmation is an OpenRouter concept; never carry a stale one over.
   return NextResponse.json(await saveByokSettings({ ...settings, byokOnlyConfirmed: false }));

@@ -94,6 +94,7 @@ const OWNED_TABLES = [
   "grid_rows",
   "grid_tables",
   "grid_workbooks",
+  "lead_research",
   "outreach_campaigns",
   "outreach_emails",
   "outreach_leads",

@@ -2158,6 +2158,29 @@ CREATE TABLE public.invitations (
 );
 
 --
+-- Name: lead_research; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.lead_research (
+    organization_id uuid NOT NULL,
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    company_id uuid NOT NULL,
+    kind text NOT NULL,
+    question text NOT NULL,
+    status text NOT NULL,
+    answer text,
+    sources jsonb DEFAULT '[]'::jsonb NOT NULL,
+    provider text,
+    model text,
+    cost_usd numeric(12,6),
+    error text,
+    created_by uuid,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT lead_research_kind_chk CHECK ((kind = ANY (ARRAY['company'::text, 'website'::text, 'parent'::text, 'question'::text]))),
+    CONSTRAINT lead_research_status_chk CHECK ((status = ANY (ARRAY['succeeded'::text, 'not_found'::text, 'failed'::text])))
+);
+
+--
 -- Name: members; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3233,6 +3256,13 @@ ALTER TABLE ONLY public.invitations
     ADD CONSTRAINT invitations_pkey PRIMARY KEY (id);
 
 --
+-- Name: lead_research lead_research_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lead_research
+    ADD CONSTRAINT lead_research_pkey PRIMARY KEY (id);
+
+--
 -- Name: members members_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4305,6 +4335,18 @@ CREATE INDEX invitations_organization_id_idx ON public.invitations USING btree (
 --
 
 CREATE INDEX lead_person_idx ON public."Lead" USING btree ("personId");
+
+--
+-- Name: lead_research_company_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX lead_research_company_idx ON public.lead_research USING btree (company_id, created_at);
+
+--
+-- Name: lead_research_organization_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX lead_research_organization_idx ON public.lead_research USING btree (organization_id, created_at);
 
 --
 -- Name: members_organization_id_idx; Type: INDEX; Schema: public; Owner: -
@@ -5515,6 +5557,20 @@ ALTER TABLE ONLY public.invitations
 
 ALTER TABLE ONLY public.invitations
     ADD CONSTRAINT invitations_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id) ON DELETE CASCADE;
+
+--
+-- Name: lead_research lead_research_company_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lead_research
+    ADD CONSTRAINT lead_research_company_id_fkey FOREIGN KEY (company_id) REFERENCES public.companies(id) ON DELETE CASCADE;
+
+--
+-- Name: lead_research lead_research_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lead_research
+    ADD CONSTRAINT lead_research_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
 
 --
 -- Name: members members_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -

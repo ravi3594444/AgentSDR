@@ -31,8 +31,20 @@ describe("OpenRouter BYOK settings", () => {
       },
       defaultModel: { provider: "openai", modelId: "openai/gpt-5" },
       transcriptionModel: { provider: "anthropic", modelId: "anthropic/claude-sonnet-4" },
+      researchModel: null,
+      researchDailyLimit: 25,
       byokOnlyConfirmed: true,
     });
+  });
+
+  test("keeps a research model only from the allowlist, and bounds the daily limit", () => {
+    const base = { providers: ["aimlapi"], modelsByProvider: { aimlapi: ["perplexity/sonar"] } };
+    expect(normalizeByokSettings({ ...base, researchModel: { provider: "aimlapi", modelId: "perplexity/sonar" } }).researchModel)
+      .toEqual({ provider: "aimlapi", modelId: "perplexity/sonar" });
+    expect(normalizeByokSettings({ ...base, researchModel: { provider: "aimlapi", modelId: "perplexity/sonar-pro" } }).researchModel).toBeNull();
+    expect(normalizeByokSettings({ ...base, researchDailyLimit: 0 }).researchDailyLimit).toBe(1);
+    expect(normalizeByokSettings({ ...base, researchDailyLimit: 10_000 }).researchDailyLimit).toBe(500);
+    expect(normalizeByokSettings({ ...base, researchDailyLimit: "50" }).researchDailyLimit).toBe(25);
   });
 
   test("drops a transcription model outside the allowlist, and defaults it to null", () => {

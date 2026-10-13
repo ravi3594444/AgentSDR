@@ -9,6 +9,8 @@ const aimlSettings: ByokSettings = {
   modelsByProvider: { aimlapi: ["openai/gpt-4o-mini", "google/gemini-3.5-flash-lite"] },
   defaultModel: { provider: "aimlapi", modelId: "openai/gpt-4o-mini" },
   transcriptionModel: null,
+  researchModel: null,
+  researchDailyLimit: 25,
   byokOnlyConfirmed: false,
 };
 
@@ -18,6 +20,8 @@ const openRouterSettings: ByokSettings = {
   modelsByProvider: { anthropic: ["anthropic/claude-sonnet"] },
   defaultModel: { provider: "anthropic", modelId: "anthropic/claude-sonnet" },
   transcriptionModel: null,
+  researchModel: null,
+  researchDailyLimit: 25,
   byokOnlyConfirmed: true,
 };
 

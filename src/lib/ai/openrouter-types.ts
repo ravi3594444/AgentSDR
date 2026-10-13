@@ -35,6 +35,15 @@ export type ByokSettings = {
   /** Model used to transcribe call recordings; must accept audio input. Null = transcription off. */
   transcriptionModel: OpenRouterModelSelection | null;
   /**
+   * Model used for web research about imported companies (src/lib/research/);
+   * must search the web and return its sources. Null = research off. Kept
+   * apart from defaultModel: a search model costs more per call and is no
+   * better at drafting.
+   */
+  researchModel: OpenRouterModelSelection | null;
+  /** Most research runs per organization per day (UTC), failed ones included. */
+  researchDailyLimit: number;
+  /**
    * OpenRouter only exposes this setting in its workspace UI. We require the
    * operator to confirm it before any inference call can run.
    */
@@ -58,6 +67,9 @@ function normalizeSelection(value: unknown): OpenRouterModelSelection | null {
   return provider && modelId ? { provider, modelId } : null;
 }
 
+export const RESEARCH_DAILY_LIMIT_DEFAULT = 25;
+export const RESEARCH_DAILY_LIMIT_MAX = 500;
+
 export function normalizeByokSettings(value: unknown): ByokSettings {
   const raw = value && typeof value === "object" ? value as Record<string, unknown> : {};
   const providers = strings(raw.providers, 100);
@@ -75,6 +87,10 @@ export function normalizeByokSettings(value: unknown): ByokSettings {
 
   const defaultModel = normalizeSelection(raw.defaultModel);
   const transcriptionModel = normalizeSelection(raw.transcriptionModel);
+  const researchModel = normalizeSelection(raw.researchModel);
+  const researchDailyLimit = typeof raw.researchDailyLimit === "number" && Number.isFinite(raw.researchDailyLimit)
+    ? Math.min(RESEARCH_DAILY_LIMIT_MAX, Math.max(1, Math.floor(raw.researchDailyLimit)))
+    : RESEARCH_DAILY_LIMIT_DEFAULT;
   return {
     connectionId: typeof raw.connectionId === "string" && raw.connectionId.trim() ? raw.connectionId.trim() : null,
     providers,
@@ -85,6 +101,10 @@ export function normalizeByokSettings(value: unknown): ByokSettings {
     transcriptionModel: transcriptionModel && modelsByProvider[transcriptionModel.provider]?.includes(transcriptionModel.modelId)
       ? transcriptionModel
       : null,
+    researchModel: researchModel && modelsByProvider[researchModel.provider]?.includes(researchModel.modelId)
+      ? researchModel
+      : null,
+    researchDailyLimit,
     byokOnlyConfirmed: raw.byokOnlyConfirmed === true,
   };
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { RiExternalLinkLine, RiFileCopyLine, RiGlobalLine, RiLinkedinBoxFill, RiMore2Line, RiTeamLine } from "@remixicon/react";
+import { RiExternalLinkLine, RiFileCopyLine, RiGlobalLine, RiLinkedinBoxFill, RiMore2Line, RiSearchEyeLine, RiTeamLine } from "@remixicon/react";
 import * as Button from "@/components/alignui/button";
 import * as Dropdown from "@/components/alignui/dropdown";
 import * as Table from "@/components/alignui/table";
@@ -27,7 +27,7 @@ function SkeletonRow({ index }: { index: number }) {
   );
 }
 
-function CompanyTableRow({ row, onOpen }: { row: CompanyRow; onOpen: (row: CompanyRow) => void }) {
+function CompanyTableRow({ row, onOpen, onResearch }: { row: CompanyRow; onOpen: (row: CompanyRow) => void; onResearch?: (row: CompanyRow) => void }) {
   const { company, peopleCount, campaigns } = row;
   const name = company.name || company.domain;
   const linkedin = company.linkedinUrl ? linkedInCompanyHref(company.linkedinUrl) : null;
@@ -63,6 +63,7 @@ function CompanyTableRow({ row, onOpen }: { row: CompanyRow; onOpen: (row: Compa
             </Dropdown.Trigger>
             <Dropdown.Content>
               <Dropdown.Item onSelect={open}><Dropdown.ItemIcon as={RiTeamLine} />Show people</Dropdown.Item>
+              {onResearch && <Dropdown.Item onSelect={() => onResearch(row)}><Dropdown.ItemIcon as={RiSearchEyeLine} />Research company</Dropdown.Item>}
               <Dropdown.Item onSelect={() => window.open(`https://${company.domain}`, "_blank", "noopener,noreferrer")}><Dropdown.ItemIcon as={RiExternalLinkLine} />Open website</Dropdown.Item>
               {linkedin && <Dropdown.Item onSelect={() => window.open(linkedin, "_blank", "noopener,noreferrer")}><Dropdown.ItemIcon as={RiLinkedinBoxFill} />Open LinkedIn page</Dropdown.Item>}
               <Dropdown.Item onSelect={() => void navigator.clipboard?.writeText(company.domain)}><Dropdown.ItemIcon as={RiFileCopyLine} />Copy domain</Dropdown.Item>
@@ -74,7 +75,7 @@ function CompanyTableRow({ row, onOpen }: { row: CompanyRow; onOpen: (row: Compa
   );
 }
 
-export function CompaniesTable({ rows, sort, direction, onSort, loading, onOpen }: {
+export function CompaniesTable({ rows, sort, direction, onSort, loading, onOpen, onResearch }: {
   rows: CompanyRow[] | null;
   sort: string;
   direction: Direction;
@@ -82,6 +83,8 @@ export function CompaniesTable({ rows, sort, direction, onSort, loading, onOpen 
   loading: boolean;
   /** A row click: the People tab, searched to this company. */
   onOpen: (row: CompanyRow) => void;
+  /** The row menu's "Research company": web research about it. */
+  onResearch?: (row: CompanyRow) => void;
 }) {
   const head = { activeSort: sort, direction, onSort };
   return (
@@ -98,7 +101,7 @@ export function CompaniesTable({ rows, sort, direction, onSort, loading, onOpen 
           </tr>
         </Table.Header>
         <Table.Body spacing={4} className={cn("transition-opacity", loading && rows && "opacity-60")} aria-busy={loading}>
-          {rows === null ? Array.from({ length: 10 }, (_, index) => <SkeletonRow key={index} index={index} />) : rows.map((row) => <CompanyTableRow key={row.company.id} row={row} onOpen={onOpen} />)}
+          {rows === null ? Array.from({ length: 10 }, (_, index) => <SkeletonRow key={index} index={index} />) : rows.map((row) => <CompanyTableRow key={row.company.id} row={row} onOpen={onOpen} onResearch={onResearch} />)}
         </Table.Body>
       </Table.Root>
     </Tooltip.Provider>

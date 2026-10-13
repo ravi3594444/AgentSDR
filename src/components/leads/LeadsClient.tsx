@@ -18,6 +18,7 @@ import { cn } from "@/utils/cn";
 import { CompaniesTable } from "./CompaniesTable";
 import { LeadsFilterPopover, type Subcategory } from "./LeadsFilterPopover";
 import { PeopleImportModal } from "./PeopleImportModal";
+import { CompanyResearchModal } from "./CompanyResearchModal";
 import { PeopleTable } from "./PeopleTable";
 import { activeFilterCount, EMPTY_FILTERS, PAGE_SIZE, SORTS, type CompanyRow, type Direction, type LeadsTab, type PeopleFilters, type PersonRow } from "./leadTypes";
 
@@ -70,6 +71,7 @@ export default function LeadsClient({ initialTab, initialRows, initialTotal }: P
   const [error, setError] = useState("");
   const [reloadToken, setReloadToken] = useState(0);
   const [showImport, setShowImport] = useState(false);
+  const [researching, setResearching] = useState<CompanyRow | null>(null);
   const [subcategories, setSubcategories] = useState<Subcategory[]>([]);
   const skipUrl = useRef<string | null>(requestUrl(initialTab, initialTab === "people" ? freshPeople() : freshCompanies()));
 
@@ -151,7 +153,7 @@ export default function LeadsClient({ initialTab, initialRows, initialTotal }: P
 
   const table = isPeople
     ? <PeopleTable rows={error ? [] : peopleData?.rows ?? null} sort={state.sort} direction={state.direction} onSort={onSort} loading={loading} />
-    : <CompaniesTable rows={error ? [] : companiesData?.rows ?? null} sort={state.sort} direction={state.direction} onSort={onSort} loading={loading} onOpen={openCompany} />;
+    : <CompaniesTable rows={error ? [] : companiesData?.rows ?? null} sort={state.sort} direction={state.direction} onSort={onSort} loading={loading} onOpen={openCompany} onResearch={setResearching} />;
 
   const tabs = [
     { value: "people" as const, label: "People", icon: RiUserLine },
@@ -245,6 +247,7 @@ export default function LeadsClient({ initialTab, initialRows, initialTotal }: P
             </nav>
           )}
         </Frame>
+        {researching && <CompanyResearchModal row={researching} onClose={() => setResearching(null)} />}
         {showImport && <PeopleImportModal onClose={() => setShowImport(false)} onImported={() => { setPeopleState(freshPeople()); refetch(); }} />}
       </PageContainer>
     </main>
