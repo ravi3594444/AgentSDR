@@ -5,6 +5,7 @@ import { people } from "@/lib/leads/schema";
 import { connections as linkedinConnections, messages as linkedinMessages } from "@/lib/linkedin/schema";
 import { isPlatformConnected, isPlatformNotConnectedError } from "@/lib/platform/credentials";
 import { sendEmail } from "@/lib/outreach/gmail";
+import { mailboxes } from "@/lib/outreach/schema";
 import { sendMessage as sendLinkedInMessage } from "@/services/unipile.service";
 import {
   deliverWhatsappFromCrm,
@@ -152,8 +153,16 @@ export const sendThroughCrmProvider: CrmSendAdapter = async (input) => {
     if (!(await isPlatformConnected("google"))) throw new DefiniteCrmSendError("Google Workspace is not connected — connect it in Settings → Email → Connection");
     if (!input.recipientEmail) throw new DefiniteCrmSendError("The Person has no Email address");
     if (!input.subject) throw new DefiniteCrmSendError("Email subject is required");
+    // The mailbox's display name, as campaign sends use it: without it the
+    // reply arrives from a bare address while the draft is signed by name.
+    const [mailbox] = await db
+      .select({ displayName: mailboxes.displayName })
+      .from(mailboxes)
+      .where(and(inOrg(mailboxes), eq(mailboxes.emailAddress, input.accountRef)))
+      .limit(1);
     const result = await sendEmail({
       from: input.accountRef,
+      fromName: mailbox?.displayName ?? undefined,
       to: [input.recipientEmail],
       cc: input.ccEmails?.length ? input.ccEmails : undefined,
       bcc: input.bccEmails?.length ? input.bccEmails : undefined,

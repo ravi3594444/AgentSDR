@@ -7,6 +7,7 @@ import { generateCrmDraft, type DraftCompletion, type DraftRevisionRequest, type
 import { loadCallContextMessages } from "./callHistory";
 import { appendCrmEvent } from "./events";
 import { retrieveKnowledge } from "./knowledge";
+import { resolveDraftSender } from "./draftSender";
 import { isPersonDoNotContact } from "./policies";
 import {
   CrmConflictError,
@@ -92,6 +93,12 @@ async function loadDraftSubject(
 
   const retrieved = await retrieveKnowledge(tx, knowledge);
   const stageMove = await currentStageMoveInTransaction(tx, record);
+  const [conversation] = await tx
+    .select({ channel: crmConversations.channel, accountRef: crmConversations.accountRef })
+    .from(crmConversations)
+    .where(and(inOrg(crmConversations), eq(crmConversations.id, conversationId)))
+    .limit(1);
+  const sender = conversation ? await resolveDraftSender(tx, conversation) : null;
   const [settings] = await tx
     .select({ draftInstructions: crmSettings.draftInstructions })
     .from(crmSettings)
@@ -139,6 +146,7 @@ async function loadDraftSubject(
         : classification?.reasoning?.trim() || "Human-approved CRM classification",
     },
     stageChange: stageMove,
+    sender,
     instructions: formatAiInstructions(settings?.draftInstructions),
     mergeVariables: {
       first_name: profile.person.firstName,

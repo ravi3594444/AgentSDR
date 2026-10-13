@@ -197,6 +197,17 @@ export async function completeStructured(
   }
   const maxAttempts = Math.max(1, Math.floor(input.maxAttempts ?? DEFAULT_MAX_ATTEMPTS));
   let outputTokens = input.maxOutputTokens;
+  // When `accept` rejects an answer, the next attempt is told why and shown
+  // what it wrote; repeating the identical request mostly repeats the answer.
+  let rejected: { text: string; reason: string } | null = null;
+  const userContent = () => rejected
+    ? [
+        input.userPrompt,
+        `Your previous answer was rejected: ${rejected.reason}`,
+        `The rejected answer was:\n${rejected.text.slice(0, 4_000)}`,
+        "Answer again, fixing exactly that.",
+      ].join("\n\n")
+    : input.userPrompt;
 
   function buildRequest() {
     const base = {
@@ -209,7 +220,7 @@ export async function completeStructured(
         ...base,
         messages: [
           { role: "system" as const, content: jsonSchemaSystemPrompt(input.systemPrompt, input.schemaName, input.schemaDescription) },
-          { role: "user" as const, content: input.userPrompt },
+          { role: "user" as const, content: userContent() },
         ],
         response_format: {
           type: "json_schema" as const,
@@ -221,7 +232,7 @@ export async function completeStructured(
       ...base,
       messages: [
         { role: "system" as const, content: toolCallSystemPrompt(input.systemPrompt, input.schemaName) },
-        { role: "user" as const, content: input.userPrompt },
+        { role: "user" as const, content: userContent() },
       ],
       ...(input.plugins?.length ? { plugins: input.plugins } : {}),
       tools: [{
@@ -304,7 +315,9 @@ export async function completeStructured(
     try {
       input.accept?.(text);
     } catch (error) {
-      throw new RejectedAttemptError(error instanceof Error ? error.message : String(error));
+      const reason = error instanceof Error ? error.message : String(error);
+      rejected = { text, reason };
+      throw new RejectedAttemptError(reason);
     }
     return {
       text,

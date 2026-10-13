@@ -73,8 +73,15 @@ describe("completeStructured", () => {
     const accept = (text: string) => {
       if (JSON.parse(text).category !== "a") throw new Error("category z is not in the taxonomy");
     };
-    const result = await completeStructured({ ...input, accept }, { runtime, sleep: noSleep });
+    const first = scripted([{ toolArgs: '{"category":"z"}' }, { toolArgs: '{"category":"a"}' }]);
+    const result = await completeStructured({ ...input, accept }, { runtime: first.runtime, sleep: noSleep });
     assert.equal(result.attempts, 2);
+    // The retry is told why the first answer was rejected, and shown it.
+    const userMessage = (request: unknown) => ((request as { messages: Array<{ role: string; content: string }> }).messages.find((m) => m.role === "user")!.content);
+    assert.equal(userMessage(first.requests[0]), "Hello");
+    assert.match(userMessage(first.requests[1]), /^Hello\n\nYour previous answer was rejected: category z is not in the taxonomy/);
+    assert.match(userMessage(first.requests[1]), /\{"category":"z"\}/);
+    void runtime;
 
     const exhausted = scripted([{ toolArgs: '{"category":"z"}' }, { toolArgs: '{"category":"z"}' }]);
     await assert.rejects(
