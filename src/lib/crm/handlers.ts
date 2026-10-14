@@ -1,4 +1,5 @@
 import { and, asc, eq } from "drizzle-orm";
+import { handleAutoSendJob } from "./autopilot.server";
 import { messageParticipants } from "./participants";
 import { formatAiInstructions } from "./ai/instructions";
 import { db } from "@/lib/db";
@@ -381,5 +382,6 @@ export function registerDefaultCrmJobHandlers(): void {
     classification: handleClassificationJob,
     initialDraft: handleInitialDraftJob,
     dueFollowupDraft: handleDueFollowupDraftJob,
+    autoSend: handleAutoSendJob,
   });
 }

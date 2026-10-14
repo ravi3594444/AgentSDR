@@ -31,6 +31,14 @@ export const SCOPED_TABLES: readonly ScopedTable[] = [
   snake("entity_columns"),
   snake("import_runs"),
   snake("lead_research"),
+  // The owner's assistant
+  snake("assistant_threads"),
+  snake("assistant_messages"),
+  snake("assistant_profiles"),
+  snake("lead_audiences"),
+  snake("lead_audience_members"),
+  snake("assistant_jobs"),
+  snake("outreach_runs"),
   // Prospecting / qualification
   snake("campaigns"),
   snake("targeted_domains"),

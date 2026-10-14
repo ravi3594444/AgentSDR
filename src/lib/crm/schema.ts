@@ -122,7 +122,11 @@ export const crmSubcategories = pgTable(
 /**
  * Per-pipeline classifier policy.
  *
- * `human_send_only` is still fixed on — the CRM drafts, a person sends.
+ * `human_send_only` on (the default): the CRM drafts, a person sends. Off
+ * only when the owner turns on the assistant's reply autopilot, which then
+ * sends drafts for ordinary replies under the rules in src/lib/crm/autopilot.ts
+ * and leaves everything else for a person (scripts/create-assistant-tables.ts
+ * replaced the CHECK that pinned it on).
  * `customer_requires_review` used to be pinned TRUE the same way; it is a
  * plain setting now (see scripts/relax-crm-classification-review.ts) because
  * an AI-applied category is only ever an input to a draft, and holding
@@ -158,7 +162,6 @@ export const crmSettings = pgTable(
       "crm_settings_confidence_chk",
       sql`${table.autoApplyConfidence} >= 0 AND ${table.autoApplyConfidence} <= 1`,
     ),
-    check("crm_settings_human_send_only_chk", sql`${table.humanSendOnly} IS TRUE`),
     check(
       "crm_settings_instructions_shape_chk",
       sql`(${table.draftInstructions} IS NULL OR (jsonb_typeof(${table.draftInstructions}) = 'array' AND length(${table.draftInstructions}::text) <= 60000)) AND (${table.classificationInstructions} IS NULL OR (jsonb_typeof(${table.classificationInstructions}) = 'array' AND length(${table.classificationInstructions}::text) <= 60000))`,
@@ -1046,10 +1049,14 @@ export const crmDraftKnowledgeCitations = pgTable(
   ],
 );
 
-export type CrmJobKind = "classification" | "initial_draft" | "due_followup_draft";
+export type CrmJobKind = "classification" | "initial_draft" | "due_followup_draft" | "auto_send";
 export type CrmJobStatus = "queued" | "running" | "succeeded" | "failed";
 
-/** Durable AI-only work queue. No job kind has permission to send. */
+/**
+ * Durable AI work queue. Only `auto_send` sends, and only a draft the reply
+ * autopilot qualified (src/lib/crm/autopilot.ts), through the same sendDraft
+ * a person's Approve & send uses.
+ */
 export const crmJobs = pgTable(
   "crm_jobs",
   {
@@ -1059,7 +1066,7 @@ export const crmJobs = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     kind: text("kind").notNull().$type<CrmJobKind>(),
     status: text("status").notNull().default("queued").$type<CrmJobStatus>(),
-    entityType: text("entity_type").notNull().$type<"message" | "classification" | "sequence_step_run">(),
+    entityType: text("entity_type").notNull().$type<"message" | "classification" | "sequence_step_run" | "draft">(),
     entityId: uuid("entity_id").notNull(),
     idempotencyKey: text("idempotency_key").notNull(),
     payload: jsonb("payload").notNull().$type<Record<string, unknown>>().default({}),
@@ -1082,14 +1089,15 @@ export const crmJobs = pgTable(
     unique("crm_jobs_entity_uq").on(table.kind, table.entityType, table.entityId),
     index("crm_jobs_claim_idx").on(table.status, table.runAfter, table.priority),
     index("crm_jobs_stale_claim_idx").on(table.status, table.lockedAt),
-    check("crm_jobs_kind_chk", sql`${table.kind} IN ('classification', 'initial_draft', 'due_followup_draft')`),
+    check("crm_jobs_kind_chk", sql`${table.kind} IN ('classification', 'initial_draft', 'due_followup_draft', 'auto_send')`),
     check("crm_jobs_status_chk", sql`${table.status} IN ('queued', 'running', 'succeeded', 'failed')`),
-    check("crm_jobs_entity_type_chk", sql`${table.entityType} IN ('message', 'classification', 'sequence_step_run')`),
+    check("crm_jobs_entity_type_chk", sql`${table.entityType} IN ('message', 'classification', 'sequence_step_run', 'draft')`),
     check(
       "crm_jobs_kind_entity_chk",
       sql`(${table.kind} = 'classification' AND ${table.entityType} = 'message')
         OR (${table.kind} = 'initial_draft' AND ${table.entityType} = 'classification')
-        OR (${table.kind} = 'due_followup_draft' AND ${table.entityType} = 'sequence_step_run')`,
+        OR (${table.kind} = 'due_followup_draft' AND ${table.entityType} = 'sequence_step_run')
+        OR (${table.kind} = 'auto_send' AND ${table.entityType} = 'draft')`,
     ),
     check("crm_jobs_idempotency_chk", sql`length(btrim(${table.idempotencyKey})) > 0`),
     check("crm_jobs_attempts_chk", sql`${table.attempts} >= 0 AND ${table.maxAttempts} > 0 AND ${table.attempts} <= ${table.maxAttempts}`),

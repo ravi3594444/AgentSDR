@@ -24,6 +24,9 @@ export * from "./whatsapp/schema";
 // Web research about imported companies (src/lib/research/).
 export * from "./research/schema";
 
+// The owner's assistant: chat, business profile, audiences, jobs, outreach runs (src/lib/assistant/).
+export * from "./assistant/schema";
+
 // Sending rules per organization and channel (src/lib/channels/rules.ts).
 export * from "./channels/schema";
 

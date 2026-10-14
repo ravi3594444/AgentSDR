@@ -1,9 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { upsertManualPerson } from "@/lib/leads/manualImport";
 import { parseImportRows, type ImportRow } from "@/lib/leads/importRows";
-import { planPeopleImport } from "@/lib/leads/peopleImport";
-import { importPhoneOnlyPerson } from "@/lib/leads/peopleImport.server";
-import { organizationPhoneCountry } from "@/lib/calls/phone.server";
+import { importPeopleRows } from "@/lib/leads/peopleImport.server";
 import { authContextErrorResponse, withOrgContext } from "@/lib/auth/context";
 import { SPREADSHEET_UPLOAD_MAX_BYTES, spreadsheetUploadProblem, UNREADABLE_UPLOAD_MESSAGE } from "@/lib/spreadsheet/upload";
 
@@ -38,42 +35,19 @@ async function importPeople(req: NextRequest) {
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to parse file" }, { status: 400 });
   }
-  const plan = planPeopleImport(rows, await organizationPhoneCountry());
-  const total = plan.identified.length + plan.phoneOnly.length;
-  if (!total && !plan.failed.length) {
+  const identifiable = rows.filter((row) => row.email || row.linkedinUrl || row.phone).length;
+  if (identifiable > MAX_ROWS) return NextResponse.json({ error: `Too many rows (max ${MAX_ROWS})` }, { status: 400 });
+  const result = await importPeopleRows(rows);
+  if (!result.created && !result.updated && !result.failed.length) {
     return NextResponse.json({ error: "No rows with an Email, LinkedIn URL or phone number were found" }, { status: 400 });
   }
-  if (total > MAX_ROWS) return NextResponse.json({ error: `Too many rows (max ${MAX_ROWS})` }, { status: 400 });
-
-  let created = 0;
-  let updated = 0;
-  const failed = [...plan.failed];
-  for (const row of plan.identified) {
-    try {
-      const result = await upsertManualPerson(row, row.customFields);
-      if (result.created) created += 1;
-      else updated += 1;
-    } catch (error) {
-      failed.push({ row: row.rowNumber, identity: row.email ?? row.linkedinUrl ?? "unknown", error: error instanceof Error ? error.message : String(error) });
-    }
-  }
-  for (const { row, phone } of plan.phoneOnly) {
-    try {
-      const result = await importPhoneOnlyPerson(row, phone);
-      if (result.created) created += 1;
-      else updated += 1;
-    } catch (error) {
-      failed.push({ row: row.rowNumber, identity: phone, error: error instanceof Error ? error.message : String(error) });
-    }
-  }
-  failed.sort((a, b) => a.row - b.row);
   return NextResponse.json({
-    total: total + plan.failed.length,
-    created,
-    updated,
-    phoneOnly: plan.phoneOnly.length,
-    failed,
-    warnings: plan.warnings,
-    skippedNoIdentity: plan.skippedNoIdentity,
+    total: result.total,
+    created: result.created,
+    updated: result.updated,
+    phoneOnly: result.phoneOnly,
+    failed: result.failed,
+    warnings: result.warnings,
+    skippedNoIdentity: result.skippedNoIdentity,
   });
 }

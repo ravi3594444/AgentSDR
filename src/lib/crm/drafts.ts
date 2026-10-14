@@ -1,4 +1,5 @@
 import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
+import { enqueueAutopilotInTransaction } from "./autopilot.server";
 import { messageParticipants } from "./participants";
 import { formatAiInstructions } from "./ai/instructions";
 import { db } from "@/lib/db";
@@ -341,6 +342,9 @@ async function finishGeneratedDraft(
       },
       contextVersion: record.contextVersion,
     });
+    // With the owner's reply autopilot on, an ordinary reply is sent without
+    // waiting for a person (src/lib/crm/autopilot.ts decides at send time).
+    await enqueueAutopilotInTransaction(tx, { draftId: draft.id, pipelineId: record.pipelineId, revision: updated.revision });
     return updated;
   });
 }

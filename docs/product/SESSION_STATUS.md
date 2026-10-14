@@ -6,7 +6,7 @@ the plan is [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
 ## Where things stand
 
 - **Branch:** `claude/new-session-g5hljn`, pushed. `main` is untouched.
-  The latest work is email through Unipile (below).
+  The latest work is the owner's assistant (Session 4, below).
 - **Readiness: implemented, pending live verification. Not owner-usable
   yet.** The whole messaging workflow is built and checked locally, but no
   real message has been sent or received on any channel. The release is
@@ -14,6 +14,62 @@ the plan is [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
   the credentials, server and test recipients listed under "Blockers".
 - **Nothing was sent to anyone.** Every send in this session went to a
   recording stand-in, or was refused because no provider was connected.
+
+## Session 4: the owner's assistant (AI lead hunting and outreach)
+
+Asked for: an owner chat that performs real actions (business information,
+documents, contact lists, lead search, outreach, launch, pause, report),
+lead discovery without CSV from a self-hosted open-source source, automatic
+personalized outreach on the existing campaign engines after one approval,
+and routine replies handled automatically. The request message was cut off
+after "Keep campaigns and"; the rest is still to come.
+
+**State: implemented and checked locally; not verified live.** No message
+was sent to anyone. The scraper, Unipile and the businesses' websites were
+stand-ins; AI calls were real (AI/ML API, a few cents).
+
+### What was built
+
+| Part | Where | What it does |
+| --- | --- | --- |
+| Chat agent | `src/lib/assistant/agent*.ts`, `tools.server.ts`, `/assistant`, `/api/assistant/*` | The model answers with a message and tools to run (strict JSON schema). Tools: check_setup, save_business_info, search_knowledge, find_leads, lead_search_status, list/describe_audiences, prepare_outreach, list_runs, report, pause/resume_outreach, turn_off_autopilot. Each runs an existing service and is stored as a card with its real result. A message sent with tools is shown after they run and dropped if one fails; a reply claiming an action without a successful tool is rejected and retried; a question to the owner ends the turn. Starting outreach is not a tool. |
+| Memory | `assistant_profiles`, CRM knowledge | Business profile (offer, customers, places, sender, preferences) saved from the chat and mirrored into a knowledge document that every AI draft reads. |
+| Documents | `documents.server.ts` | PDF (unpdf), DOCX (mammoth), TXT/MD into knowledge; clear errors for scans (no OCR), passwords, `.doc`, over 10 MB. |
+| Lists | `ingest.server.ts`, `importPeopleRows` | CSV/XLSX through the existing People import, into a lead list with the channels each lead can be reached on, or the reason it cannot. |
+| Lead search | `src/lib/discovery/`, `docker-compose.discovery.yml` | Google Maps via self-hosted gosom/google-maps-scraper, then each business's own website (SSRF-guarded, 1.5 MB / 10 s / 3 redirects / 3 contact pages). Contacts keep their source page; MX check; E.164 phones; dedupe; closed and unreachable businesses kept as "left out" with the reason. A background job with stages, resumed after restarts. |
+| Outreach | `outreach.server.ts`, `writer.server.ts`, `messages.ts` | A plan per lead list: channel per lead from what is connected and preferred, sequences written once per channel from the profile and knowledge (checked for placeholders, unknown merge fields, false claims, channel limits; signed with the sender's name), one opening line per lead from its public facts, samples, limits, duration and AI cost. Start (owner only) personalizes in batches and creates and activates the existing email / WhatsApp / LinkedIn campaigns under their own launch rules. |
+| Reply autopilot | `src/lib/crm/autopilot*.ts`, `crm_jobs` kind `auto_send` | Off by default; owners/admins turn it on. Ten minutes after a draft is ready, sends it for confidently classified interested / not-interested replies; holds everything else for a person, with the reason recorded. 3 per conversation, 40 per day, production only, idempotent per draft revision. |
+| Migration | `scripts/create-assistant-tables.ts` | 7 tables (registered as scoped, in `OWNED_TABLES` and `db/schema.sql`); `crm_jobs` checks allow `auto_send`; drops the CHECK that pinned `human_send_only` on. |
+
+### Checks run
+
+| Check | Result |
+| --- | --- |
+| `npx tsc --noEmit`, `npx eslint .` | pass (0 errors; 6 earlier warnings) |
+| `npm test` | pass (34 new tests: contacts, Maps CSV, messages and sign-off, agent parsing and claim guard, profile, channels, autopilot policy, PDF/DOCX/TXT extraction) |
+| `bun run db:check`, scope `--contract` | pass |
+| `scripts/e2e/assistant.ts` without AI | pass: tools, documents, list import with a bad row, SSRF refusal, search of 7 listings → 3 contactable (2 email, 1 phone), 3 left out with reasons, 1 duplicate, failed and empty searches, outreach refused without AI |
+| `scripts/e2e/assistant.ts` with real AI | pass: the agent saved the owner's details (tool call), started a search marked "contact afterwards", the plan was prepared when it finished and waited for Start; samples signed and without unfilled fields; Start wrote a valid line per lead and activated the email campaign; an inbound reply was classified and drafted by the CRM worker and the autopilot held it (non-production), then sent it through the stand-in Unipile once with the guard lifted, and not again |
+| Browser (Chromium, desktop and 390 px) | the full chat flow: list import with its error row, saved info, search progress, plan card with samples; no page errors, no horizontal scroll. It found five defects, all fixed: unsigned sample emails, raw ids/JSON in tool cards, the post-search plan left to the model, the owner's message shown twice while working, "1 rows" / "$0.00" |
+| `tenancy-isolation.ts` against `bun run dev` | pass: 103 reads, 32 writes, 62 pages as a second organization (the assistant routes and page included), 0 failures, 0 to review |
+| `campaign-engines.ts`, `unipile-email.ts` | pass (25 and 23 checks) |
+| `bun run build` | pass |
+
+### Known limitations
+
+- **Google Maps scraping is against Google's Terms of Service** and may be
+  blocked; it only finds businesses with a public listing.
+- **Model compliance varies.** With Gemini 3.5 Flash Lite the assistant
+  sometimes offers outreach the owner did not ask for, or checks a search's
+  progress needlessly. The guards in code (no false claims, no starting,
+  plans prepared by the server after a "find and contact" search) do not
+  depend on that.
+- **The claim guard is English-pattern based**, like the draft checks.
+- **LinkedIn lead search** (the existing Unipile search, hidden in this
+  release) is not wired into the assistant; LinkedIn reaches only leads with
+  a profile URL from a list or a company page found on a website.
+- **Not verified live:** the real scraper against Google, real websites,
+  real sends and the autopilot on a production server.
 
 ## Session 3: the complete messaging workflow
 

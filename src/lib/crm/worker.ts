@@ -73,11 +73,14 @@ export function registerCrmJobHandlers(input: {
   classification?: CrmJobHandler;
   initialDraft?: CrmJobHandler;
   dueFollowupDraft?: CrmJobHandler;
+  /** The reply autopilot (autopilot.server.ts): the one job kind that sends. */
+  autoSend?: CrmJobHandler;
 }): () => void {
   const unregister = [
     input.classification && registerCrmJobHandler("classification", input.classification),
     input.initialDraft && registerCrmJobHandler("initial_draft", input.initialDraft),
     input.dueFollowupDraft && registerCrmJobHandler("due_followup_draft", input.dueFollowupDraft),
+    input.autoSend && registerCrmJobHandler("auto_send", input.autoSend),
   ].filter((value): value is () => void => Boolean(value));
   return () => unregister.forEach((remove) => remove());
 }
@@ -151,7 +154,10 @@ async function drain(): Promise<void> {
   }
 }
 
-/** Starts one HMR-safe in-process worker loop. It never performs message sends. */
+/**
+ * Starts one HMR-safe in-process worker loop. The only job that sends is
+ * auto_send, which exists only while the owner's reply autopilot is on.
+ */
 export function startCrmWorker(): void {
   if (started && workerGlobal[WORKER_STATE_KEY]?.owner === workerOwner) return;
   started = true;

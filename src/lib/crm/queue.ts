@@ -15,6 +15,7 @@ const ENTITY_TYPE_BY_KIND: Readonly<Record<CrmJobKind, CrmJobEntityType>> = {
   classification: "message",
   initial_draft: "classification",
   due_followup_draft: "sequence_step_run",
+  auto_send: "draft",
 };
 
 export class CrmJobClaimLostError extends Error {

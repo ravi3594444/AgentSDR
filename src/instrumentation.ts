@@ -41,10 +41,20 @@ export async function register() {
   startGridWorker();
 
   // CRM only claims durable AI classification/drafting jobs for registered
-  // handlers. It has no sending job kind, and SKIP LOCKED keeps this safe when
+  // handlers, plus the reply autopilot's auto_send jobs, which send only when
+  // an organization turned the autopilot on and only in production
+  // (src/lib/crm/autopilot.server.ts). SKIP LOCKED keeps this safe when
   // multiple app instances overlap during a deployment.
   const { registerDefaultCrmJobHandlers } = await import("./lib/crm/handlers");
   registerDefaultCrmJobHandlers();
   const { startCrmWorker } = await import("./lib/crm/worker");
   startCrmWorker();
+
+  // The owner's assistant: lead searches and the start of approved outreach,
+  // claimed with SKIP LOCKED and resumed by stage after a restart. It sends
+  // nothing itself; the campaign engines above do, under their own rules.
+  const { registerAssistantJobs } = await import("./lib/assistant/register.server");
+  registerAssistantJobs();
+  const { startAssistantWorker } = await import("./lib/assistant/worker");
+  startAssistantWorker();
 }

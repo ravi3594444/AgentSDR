@@ -1,0 +1,576 @@
+/**
+ * The owner's assistant, end to end against the local database: the real
+ * tools, background worker, lead discovery, imports, outreach launch and the
+ * reply autopilot, with every outside service replaced by an in-process
+ * stand-in (nothing leaves the machine except, optionally, AI calls):
+ *
+ * - the Google Maps scraper (gosom/google-maps-scraper web API) answers from
+ *   a fixture CSV at GMAPS_SCRAPER_URL;
+ * - the businesses' websites are fixture pages (a fetch stand-in);
+ * - Unipile (email sending) is a recording fake host.
+ *
+ *   bun run --conditions=react-server scripts/e2e/assistant.ts
+ *   AI_SOURCE_ORGANIZATION_ID=<org with AI Settings> bun run --conditions=react-server scripts/e2e/assistant.ts
+ *
+ * Without AI_SOURCE_ORGANIZATION_ID it checks everything that needs no
+ * model: discovery and its exclusions, list and document ingestion, the
+ * tools' argument checks, and that outreach refuses to plan without AI.
+ * With it, the fresh organization gets a copy of that organization's AI
+ * Settings (the encrypted credential row is copied as is, never decrypted
+ * here) and the script also runs the chat agent (it must save what the
+ * owner says, start a search, and propose outreach after the search, but
+ * never start it), the owner's Start (personalized lines, campaigns
+ * launched), and an inbound reply through the CRM worker to the autopilot.
+ * That spends a little real model usage.
+ *
+ * It creates its own organization ("Assistant check …") and leaves it behind
+ * with its campaigns paused, its mailbox disabled, the autopilot off and its
+ * fake Unipile connection removed. Lead and mailbox addresses are on .test
+ * domains. Refuses a non-local DATABASE_URL.
+ */
+import { and, eq, inArray, sql } from "drizzle-orm";
+import { strToU8, zipSync } from "fflate";
+
+if (!/@(localhost|127\.0\.0\.1)[:/]/.test(process.env.DATABASE_URL ?? "")) {
+  console.error("Refusing to run: DATABASE_URL must point at a local, disposable database.");
+  process.exit(2);
+}
+
+const SCRAPER = "http://gmaps-check.invalid";
+const UNIPILE = "https://unipile-assistant-check.invalid";
+process.env.GMAPS_SCRAPER_URL = SCRAPER;
+process.env.DISCOVERY_DNS_CHECK = "off";
+const stamp = Date.now();
+
+// ------------------------------------------------------------ fixtures
+function csvRow(values: (string | number)[]): string {
+  return values.map((value) => `"${String(value).replace(/"/g, "\"\"")}"`).join(",");
+}
+const MAPS_HEADER = "input_id,link,title,category,address,website,phone,review_count,review_rating,place_id,cid,status,complete_address,emails";
+const pune = JSON.stringify({ city: "Pune", country: "IN" });
+const site = (slug: string) => `https://${slug}-${stamp}.test/`;
+const MAPS_CSV = [
+  MAPS_HEADER,
+  // Website with a contact page (email there) and a listed phone → email.
+  csvRow(["1", `https://maps.google.com/?cid=${stamp}1`, "Lotus Dental Care", "Dentist", "FC Road, Pune", site("lotus"), "020 2553 1234", 210, 4.7, `pl-${stamp}-1`, `${stamp}1`, "", pune, ""]),
+  // No website, listed mobile → WhatsApp only.
+  csvRow(["1", `https://maps.google.com/?cid=${stamp}2`, "Bright Smile Clinic", "Dental clinic", "Baner, Pune", "", "+91 98220 12345", 54, 4.4, `pl-${stamp}-2`, `${stamp}2`, "", pune, ""]),
+  // Closed.
+  csvRow(["1", `https://maps.google.com/?cid=${stamp}3`, "Old Town Dentistry", "Dentist", "Camp, Pune", site("oldtown"), "020 2611 0000", 12, 3.9, `pl-${stamp}-3`, `${stamp}3`, "Permanently closed", pune, ""]),
+  // Nothing to contact.
+  csvRow(["1", `https://maps.google.com/?cid=${stamp}4`, "Quiet Dental Studio", "Dentist", "Kothrud, Pune", "", "", 3, 5, `pl-${stamp}-4`, `${stamp}4`, "", pune, ""]),
+  // Second branch sharing the first one's website and address → duplicate.
+  csvRow(["1", `https://maps.google.com/?cid=${stamp}5`, "Lotus Dental Care — Aundh", "Dentist", "Aundh, Pune", site("lotus"), "", 80, 4.6, `pl-${stamp}-5`, `${stamp}5`, "", pune, ""]),
+  // Website that errors, no phone → excluded with the website's error.
+  csvRow(["1", `https://maps.google.com/?cid=${stamp}6`, "Pearl Dental", "Dentist", "Viman Nagar, Pune", site("pearl"), "", 40, 4.2, `pl-${stamp}-6`, `${stamp}6`, "", pune, ""]),
+  // "Website" is a Facebook page (not its own site); the scraper read an email → email (Gmail).
+  csvRow(["1", `https://maps.google.com/?cid=${stamp}7`, "Sunrise Orthodontics", "Orthodontist", "Wakad, Pune", "https://www.facebook.com/sunrise-ortho", "", 66, 4.8, `pl-${stamp}-7`, `${stamp}7`, "", pune, `sunrise.ortho.${stamp}@gmail.test`]),
+].join("\n");
+
+const PAGES: Record<string, { status: number; html: string }> = {
+  [site("lotus")]: { status: 200, html: `<html><body><h1>Lotus Dental Care</h1><a href="/contact">Contact us</a><a href="https://www.linkedin.com/company/lotus-dental-${stamp}">LinkedIn</a><script>var t="tracker@sentry.io"</script></body></html>` },
+  [`${site("lotus")}contact`]: { status: 200, html: `<p>Appointments: <a href="mailto:hello@lotus-${stamp}.test">hello@lotus-${stamp}.test</a></p><p>Clinic manager: priya [at] lotus-${stamp} [dot] test</p><a href="tel:+912025531234">Call</a>` },
+  [site("pearl")]: { status: 503, html: "unavailable" },
+};
+const websiteFetch = (async (input: RequestInfo | URL) => {
+  const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+  const page = PAGES[url];
+  if (!page) return new Response("not found", { status: 404, headers: { "content-type": "text/html" } });
+  return new Response(page.html, { status: page.status, headers: { "content-type": "text/html; charset=utf-8" } });
+}) as typeof fetch;
+
+// ------------------------------------------------------------ fake scraper + Unipile
+type ScraperJob = { keywords: string[]; polls: number; body: Record<string, unknown> };
+const scraperJobs = new Map<string, ScraperJob>();
+const unipileSends: Record<string, string>[] = [];
+const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+
+const realFetch = globalThis.fetch;
+globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+  const method = (init?.method ?? "GET").toUpperCase();
+  if (url.origin === SCRAPER) {
+    if (method === "POST" && url.pathname === "/api/v1/jobs") {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const id = `job-${scraperJobs.size + 1}-${stamp}`;
+      scraperJobs.set(id, { keywords: body.keywords as string[], polls: 0, body });
+      return json(201, { id });
+    }
+    const match = url.pathname.match(/^\/api\/v1\/jobs\/([^/]+)(\/download)?$/);
+    const job = match ? scraperJobs.get(match[1]!) : undefined;
+    if (!job) return json(404, { code: 404, message: "job not found" });
+    const phrase = job.keywords.join(" ");
+    if (match![2]) return new Response(/unicorn/.test(phrase) ? MAPS_HEADER : MAPS_CSV, { status: 200, headers: { "content-type": "text/csv" } });
+    job.polls += 1;
+    const status = /blocked/.test(phrase) ? "failed" : job.polls < 2 ? "working" : "ok";
+    return json(200, { ID: match![1], Name: "x", Date: new Date().toISOString(), Status: status, Data: job.body });
+  }
+  if (url.origin === UNIPILE) {
+    const path = url.pathname.replace(/^\/api\/v1/, "");
+    if (method === "POST" && path === "/emails") {
+      const form: Record<string, string> = {};
+      if (init?.body instanceof FormData) for (const [key, value] of init.body.entries()) form[key] = String(value);
+      unipileSends.push(form);
+      return json(201, { object: "EmailSent", tracking_id: `trk-${stamp}-${unipileSends.length}`, provider_id: `prov-${stamp}-${unipileSends.length}` });
+    }
+    if (method === "GET" && path.startsWith("/emails/")) return json(404, { title: "Not found", status: 404, type: "errors/resource_not_found" });
+    if (method === "GET" && path.startsWith("/accounts")) return json(200, { object: "AccountList", items: [], cursor: null });
+    if (path.startsWith("/webhooks")) return method === "POST" ? json(201, { object: "WebhookCreated", webhook_id: "wh" }) : json(200, { items: [] });
+    return json(404, { title: `No fake for ${method} ${path}`, status: 404 });
+  }
+  return realFetch(input, init);
+}) as typeof fetch;
+
+// ------------------------------------------------------------ app modules
+const { db } = await import("@/lib/db");
+const { organizations } = await import("@/lib/auth/schema");
+const { people } = await import("@/lib/leads/schema");
+const { gridProviderCredentials, gridProviders } = await import("@/lib/grid/schema");
+const { encryptIntegrationCredentials } = await import("@/lib/integrations/credentials");
+const { mailboxes, outreachCampaigns, outreachLeads, outreachMailboxQueue } = await import("@/lib/outreach/schema");
+const { whatsappAccounts, whatsappCampaigns, whatsappCampaignLeads } = await import("@/lib/whatsapp/schema");
+const { crmDrafts, crmEvents, crmJobs, crmKnowledgeDocuments: knowledgeDocuments, crmSendAttempts } = await import("@/lib/crm/schema");
+const { runInOrganization, currentOrganizationId } = await import("@/lib/tenancy/scope");
+const { assistantJobs, assistantMessages, assistantProfiles, leadAudienceMembers, outreachRuns } = await import("@/lib/assistant/schema");
+const { runTool } = await import("@/lib/assistant/tools.server");
+const { runOneAssistantStep } = await import("@/lib/assistant/worker");
+const { registerAssistantJobs } = await import("@/lib/assistant/register.server");
+const { createThread, listMessages, threadBusy } = await import("@/lib/assistant/threads.server");
+const { ingestAttachment } = await import("@/lib/assistant/ingest.server");
+const { summarizeAudience } = await import("@/lib/assistant/audiences.server");
+const { runAgentTurn } = await import("@/lib/assistant/agent.server");
+const { startOutreachRun, getRun } = await import("@/lib/assistant/outreach.server");
+const { personalLineProblem } = await import("@/lib/assistant/messages");
+const { setDiscoveryPageOptions } = await import("@/lib/discovery/discovery.server");
+const { fetchPublicPage } = await import("@/lib/discovery/websiteContacts.server");
+const { isAutopilotOn, runAutopilotForDraft, setAutopilot } = await import("@/lib/crm/autopilot.server");
+const { ingestInboundReply } = await import("@/lib/crm/conversations");
+const { registerDefaultCrmJobHandlers } = await import("@/lib/crm/handlers");
+const { drainOnce } = await import("@/lib/crm/worker");
+
+setDiscoveryPageOptions({ allowPrivate: true, fetchImpl: websiteFetch });
+registerAssistantJobs();
+
+let failures = 0;
+function check(label: string, ok: boolean, detail = "") {
+  console.log(`${ok ? "PASS" : "FAIL"}  ${label}${detail ? ` — ${detail}` : ""}`);
+  if (!ok) failures++;
+}
+
+/** Runs the assistant worker until the job is finished, skipping its polling waits. */
+async function finishJob(jobId: string, maxSteps = 40) {
+  for (let step = 0; step < maxSteps; step += 1) {
+    await db.update(assistantJobs).set({ runAfter: new Date(Date.now() - 1_000) }).where(and(eq(assistantJobs.id, jobId), eq(assistantJobs.status, "queued")));
+    const [job] = await db.select().from(assistantJobs).where(eq(assistantJobs.id, jobId));
+    if (!job || job.status === "succeeded" || job.status === "failed") return job ?? null;
+    await runOneAssistantStep();
+  }
+  const [job] = await db.select().from(assistantJobs).where(eq(assistantJobs.id, jobId));
+  return job ?? null;
+}
+
+async function waitUntil(label: string, ms: number, test: () => Promise<boolean>): Promise<boolean> {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (await test()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+  console.log(`…gave up waiting for ${label}`);
+  return false;
+}
+
+const [org] = await db.insert(organizations).values({ name: `Assistant check ${stamp}`, slug: `assistant-check-${stamp}` }).returning();
+console.log(`Organization ${org!.name} (${org!.id})`);
+
+// ------------------------------------------------------------ AI settings (optional)
+const aiSource = process.env.AI_SOURCE_ORGANIZATION_ID?.trim() || null;
+let aiReady = false;
+if (aiSource) {
+  const sourceRows = await db.select().from(gridProviders).where(eq(gridProviders.organizationId, aiSource));
+  const settings = sourceRows.find((row) => row.key === "openrouter-byok-settings");
+  const connectionId = (settings?.config as { connectionId?: string } | null)?.connectionId;
+  const connection = sourceRows.find((row) => row.id === connectionId);
+  const [credential] = connection ? await db.select().from(gridProviderCredentials).where(eq(gridProviderCredentials.providerId, connection.id)) : [];
+  if (!settings || !connection || !credential) {
+    console.error(`AI_SOURCE_ORGANIZATION_ID ${aiSource} has no saved AI Settings with a connection.`);
+    process.exit(1);
+  }
+  const [copy] = await db.insert(gridProviders).values({
+    organizationId: org!.id,
+    key: connection.key.replace(/[0-9a-f-]{36}$/, crypto.randomUUID()),
+    name: connection.name,
+    config: connection.config,
+    enabled: connection.enabled,
+  }).returning();
+  await db.insert(gridProviderCredentials).values({ providerId: copy!.id, encryptedPayload: credential.encryptedPayload });
+  await db.insert(gridProviders).values({
+    organizationId: org!.id,
+    key: settings.key,
+    name: settings.name,
+    config: { ...(settings.config as Record<string, unknown>), connectionId: copy!.id },
+    enabled: true,
+  });
+  aiReady = true;
+  console.log(`AI Settings copied from organization ${aiSource}.`);
+} else {
+  console.log("No AI_SOURCE_ORGANIZATION_ID: the model-backed steps are skipped.");
+}
+
+const mailboxAddress = `owner-${stamp}@mail.assistant-check.test`;
+const unipileAccount = `assistant-check-${stamp}`;
+
+await runInOrganization(org!.id, async () => {
+  const orgId = currentOrganizationId();
+  const owner = null;
+
+  // Sending accounts: a fake Unipile connection, an email inbox linked in it, a WhatsApp number.
+  const [unipile] = await db.insert(gridProviders).values({ organizationId: orgId, key: "platform-unipile", name: "Unipile (assistant check)" }).returning();
+  await db.insert(gridProviderCredentials).values({ providerId: unipile!.id, encryptedPayload: encryptIntegrationCredentials({ baseUrl: UNIPILE, apiKey: "assistant-check", notifySecret: "assistant-check" }) });
+  const ALL_DAY = { enabled: true, from: "00:00", to: "23:59" };
+  const [mailbox] = await db.insert(mailboxes).values({
+    organizationId: orgId,
+    emailAddress: mailboxAddress,
+    provider: "unipile",
+    unipileAccountId: unipileAccount,
+    displayName: "Ravi from Bright Path",
+    status: "connected",
+    workingHours: { timezone: "UTC", days: { monday: ALL_DAY, tuesday: ALL_DAY, wednesday: ALL_DAY, thursday: ALL_DAY, friday: ALL_DAY, saturday: ALL_DAY, sunday: ALL_DAY } },
+  }).returning();
+  const [whatsapp] = await db.insert(whatsappAccounts).values({
+    organizationId: orgId,
+    unipileAccountId: `wa-${unipileAccount}`,
+    name: "Bright Path (check)",
+    phone: "+919999900000",
+    status: "connected",
+    connectedAt: new Date(Date.now() - 3 * 86_400_000),
+  }).returning();
+
+  const thread = await createThread(owner);
+  const context = { threadId: thread.id, userId: owner };
+
+  try {
+    // ------------------------------------------------------------ setup and profile tools
+    const setup = await runTool("check_setup", {}, context);
+    check("check_setup reports email and WhatsApp ready, lead search ready, and what the profile lacks",
+      setup.ok && /email: ready/.test(setup.summary) && /whatsapp: ready/.test(setup.summary) && /Google Maps ready/.test(setup.summary) && /who your customers are/.test(setup.summary),
+      setup.summary);
+
+    const badSave = await runTool("save_business_info", { language: "English", favouriteColour: "blue" }, context);
+    check("save_business_info refuses bad values and unknown fields, and says which", !badSave.ok && /language/.test(badSave.summary) && /favouriteColour/.test(badSave.summary), badSave.summary);
+    const saved = await runTool("save_business_info", { targetCustomers: "independent dental clinics", locations: "Pune, India" }, context);
+    const [profileRow] = await db.select().from(assistantProfiles).where(eq(assistantProfiles.organizationId, orgId));
+    check("save_business_info stores the profile for the organization", saved.ok && profileRow?.profile.targetCustomers === "independent dental clinics", saved.summary);
+    const [profileDoc] = profileRow?.knowledgeDocumentId
+      ? await db.select().from(knowledgeDocuments).where(eq(knowledgeDocuments.id, profileRow.knowledgeDocumentId))
+      : [];
+    check("the profile is mirrored into a knowledge document drafts read", profileDoc?.organizationId === orgId && profileDoc.alwaysInclude === true);
+
+    // ------------------------------------------------------------ documents
+    const pdf = tinyPdf(`Bright Path Dental Supplies: autoclaves serviced within 48 hours, Pune ${stamp}`);
+    const document = await ingestAttachment({ name: "service-brochure.pdf", size: pdf.byteLength, bytes: pdf }, context);
+    check("a PDF becomes a knowledge document", document.ok && document.kind === "document", JSON.stringify(document));
+    const docx = tinyDocx(["Price list", `Chair maintenance plan from 2,499 INR a month (${stamp})`]);
+    const word = await ingestAttachment({ name: "price list.docx", size: docx.byteLength, bytes: docx }, context);
+    check("a Word document becomes a knowledge document", word.ok && word.kind === "document");
+    const found = await runTool("search_knowledge", { query: "chair maintenance plan price" }, context);
+    check("search_knowledge finds the uploaded text", found.ok && found.summary.includes("2,499"), found.summary.slice(0, 200));
+    const scan = tinyPdf("");
+    const scanned = await ingestAttachment({ name: "scan.pdf", size: scan.byteLength, bytes: scan }, context);
+    check("a PDF without text is refused with the reason (no OCR)", !scanned.ok && "error" in scanned && /OCR/.test(scanned.error), "error" in scanned ? scanned.error : "");
+    const unknown = await ingestAttachment({ name: "photo.png", size: 3, bytes: new Uint8Array([1, 2, 3]) }, context);
+    check("an unsupported file is refused", !unknown.ok);
+
+    // ------------------------------------------------------------ contact list
+    const list = [
+      "Email,First Name,Last Name,Company,Phone,Job Title",
+      `meera-${stamp}@clinic-a.test,Meera,Joshi,Clinic A,,Owner`,
+      `not-an-email,Bad,Row,Clinic B,,`,
+      `,Sameer,Kulkarni,Clinic C,+91 98230 55555,Dentist`,
+      `MEERA-${stamp}@clinic-a.test,Meera,Joshi,Clinic A,,Owner`,
+    ].join("\n");
+    const imported = await ingestAttachment({ name: "my contacts.csv", size: list.length, bytes: strToU8(list) }, context);
+    check("a CSV list is imported into an audience", imported.ok && imported.kind === "contacts", JSON.stringify(imported).slice(0, 400));
+    if (imported.ok && imported.kind === "contacts") {
+      check("the import reports the bad row instead of dropping it silently", imported.imported.failed + imported.imported.skippedNoIdentity >= 1, JSON.stringify(imported.imported));
+      check("the list's audience has the email lead and the phone-only lead, each with its channel",
+        imported.audience?.eligible === 2 && imported.audience.byChannel.email === 1 && imported.audience.byChannel.whatsapp === 1,
+        JSON.stringify(imported.audience?.byChannel));
+    }
+    const emptyList = "Name,Company\nNobody,Nowhere";
+    const refused = await ingestAttachment({ name: "names.csv", size: emptyList.length, bytes: strToU8(emptyList) }, context);
+    check("a list with no email, phone or LinkedIn says why nothing was imported", !refused.ok && "error" in refused && /Nothing could be imported/.test(refused.error), "error" in refused ? refused.error : "");
+
+    // ------------------------------------------------------------ discovery
+    const ssrf = await fetchPublicPage("http://127.0.0.1:9/").then(() => "fetched", (error: Error) => error.message);
+    check("website reading refuses private addresses", /not a public website/.test(ssrf), ssrf);
+
+    const badSearch = await runTool("find_leads", { what: "dental clinics" }, context);
+    check("find_leads needs a place", !badSearch.ok && /where/.test(badSearch.summary), badSearch.summary);
+    delete process.env.GMAPS_SCRAPER_URL;
+    const unavailable = await runTool("find_leads", { what: "dental clinics", where: "Pune" }, context);
+    process.env.GMAPS_SCRAPER_URL = SCRAPER;
+    check("without the scraper, find_leads says lead search is not set up", !unavailable.ok && /GMAPS_SCRAPER_URL/.test(unavailable.summary), unavailable.summary);
+
+    const search = await runTool("find_leads", { what: "dental clinics", where: "Pune, India", maxResults: 20 }, context);
+    const searchData = search.data as { jobId: string; audienceId: string } | undefined;
+    check("find_leads starts a background search", search.ok && Boolean(searchData?.jobId), search.summary);
+    const job = searchData ? await finishJob(searchData.jobId) : null;
+    const scraperJob = [...scraperJobs.values()].at(-1);
+    check("the scraper is asked for the phrase, in the profile's language, with website emails on",
+      scraperJob?.keywords[0] === "dental clinics in Pune, India" && scraperJob.body.email === true && scraperJob.body.lang === "en" && Number(scraperJob.body.max_time) >= 300,
+      JSON.stringify(scraperJob?.body));
+    check("the search job finishes", job?.status === "succeeded", `${job?.status} ${job?.error ?? ""}`);
+    const result = (job?.result ?? {}) as Record<string, number>;
+    check("7 listings → 3 contactable (2 email, 1 phone only), 3 left out, 1 duplicate",
+      result.found === 7 && result.eligible === 3 && result.withEmail === 2 && result.withPhoneOnly === 1 && result.excluded === 3 && result.duplicates === 1,
+      JSON.stringify(result));
+
+    const members = searchData ? await db.select().from(leadAudienceMembers).where(eq(leadAudienceMembers.audienceId, searchData.audienceId)) : [];
+    const memberPeople = members.filter((m) => m.personId).length
+      ? await db.select().from(people).where(inArray(people.id, members.flatMap((m) => (m.personId ? [m.personId] : []))))
+      : [];
+    const lotus = memberPeople.find((p) => (p.raw as Record<string, unknown>)?.businessName === "Lotus Dental Care");
+    check("Lotus: the email published on its contact page, not a guessed one, with the listing phone",
+      lotus?.email === `hello@lotus-${stamp}.test` && lotus.phone === "+912025531234", `${lotus?.email} ${lotus?.phone}`);
+    const lotusMember = members.find((m) => m.personId === lotus?.id);
+    const lotusEmailEvidence = lotusMember?.evidence.find((e) => e.kind === "email" && e.value === lotus?.email);
+    check("its evidence links the contact page the email came from, and the Maps listing",
+      lotusEmailEvidence?.sourceUrl === `${site("lotus")}contact` && lotusMember?.sourceUrl === `https://maps.google.com/?cid=${stamp}1`,
+      JSON.stringify(lotusMember?.evidence));
+    check("the obfuscated second address was read too, and nothing from scripts",
+      Boolean(lotusMember?.evidence.some((e) => e.value === `priya@lotus-${stamp}.test`)) && !JSON.stringify(lotusMember?.evidence).includes("sentry"));
+    const bright = memberPeople.find((p) => (p.raw as Record<string, unknown>)?.businessName === "Bright Smile Clinic");
+    check("Bright Smile: phone-only lead, E.164, WhatsApp channel", bright?.email === null && bright.phone === "+919822012345" && Boolean(members.find((m) => m.personId === bright.id)?.channels.includes("whatsapp")));
+    const reasons = members.filter((m) => m.status === "excluded").map((m) => `${m.name}: ${m.reason}`);
+    check("left-out businesses carry their reason", reasons.length === 3
+      && reasons.some((r) => r.startsWith("Old Town Dentistry: listed on Google Maps as permanently closed"))
+      && reasons.some((r) => r.startsWith("Quiet Dental Studio: no email or phone on its Google Maps listing, and no website"))
+      && reasons.some((r) => r.startsWith("Pearl Dental:") && r.includes("503")), reasons.join(" | "));
+    const sunrise = memberPeople.find((p) => (p.raw as Record<string, unknown>)?.businessName === "Sunrise Orthodontics");
+    check("a Facebook page is not treated as the business's website; the scraper's email is kept", sunrise?.email === `sunrise.ortho.${stamp}@gmail.test` && !(sunrise.raw as Record<string, unknown>).website);
+    const events = await listMessages(thread.id);
+    check("the finished search is announced in the chat with the real counts",
+      events.some((m) => m.role === "event" && m.content.includes("7 businesses found on Google Maps, 3 can be contacted")),
+      events.filter((m) => m.role === "event").map((m) => m.content).join(" | "));
+
+    const again = await runTool("find_leads", { what: "dental clinics", where: "Pune, India", maxResults: 20 }, context);
+    const againJob = await finishJob((again.data as { jobId: string }).jobId);
+    const againAudience = await summarizeAudience((again.data as { audienceId: string }).audienceId);
+    const peopleCount = await db.select({ n: sql<number>`count(*)::int` }).from(people).where(eq(people.organizationId, orgId));
+    check("searching again reuses the same People (no duplicates across searches)",
+      againJob?.status === "succeeded" && againAudience?.eligible === 3 && Number(peopleCount[0]?.n) === 3 + 2,
+      `${againAudience?.eligible} eligible, ${peopleCount[0]?.n} people`);
+
+    const blocked = await runTool("find_leads", { what: "blocked clinics", where: "Pune" }, context);
+    const blockedJob = await finishJob((blocked.data as { jobId: string }).jobId);
+    check("a search the scraper fails is reported as failed, with the likely reason", blockedJob?.status === "failed" && /blocked/i.test(blockedJob.error ?? ""), blockedJob?.error ?? "");
+    const empty = await runTool("find_leads", { what: "unicorn breeders", where: "Pune" }, context);
+    const emptyJob = await finishJob((empty.data as { jobId: string }).jobId);
+    check("an empty search says Maps only covers listed businesses", emptyJob?.status === "succeeded" && /only covers businesses with a public Maps listing/.test(String((emptyJob.result as Record<string, unknown>)?.note)), String((emptyJob?.result as Record<string, unknown>)?.note));
+
+    // ------------------------------------------------------------ outreach without AI / without profile
+    const early = await runTool("prepare_outreach", { audienceId: searchData!.audienceId }, context);
+    check("outreach needs the business name, offer and sender first", !early.ok && /business name/.test(early.summary), early.summary);
+    await runTool("save_business_info", { businessName: "Bright Path Dental Supplies", offer: "Same-week servicing for dental chairs and autoclaves, with a monthly maintenance plan", senderName: "Ravi" }, context);
+    if (!aiReady) {
+      const noAi = await runTool("prepare_outreach", { audienceId: searchData!.audienceId }, context);
+      const runs = await db.select().from(outreachRuns).where(eq(outreachRuns.organizationId, orgId));
+      check("without AI, prepare_outreach fails with the reason and plans nothing", !noAi.ok && runs.length === 0, noAi.summary);
+      check("the autopilot is off by default", !(await isAutopilotOn()));
+      return;
+    }
+
+    // ------------------------------------------------------------ the chat agent
+    await db.update(assistantProfiles).set({ profile: {} }).where(eq(assistantProfiles.organizationId, orgId));
+    const chat = await createThread(owner);
+    await runAgentTurn({
+      threadId: chat.id,
+      userId: owner,
+      text: "Hi. I run Bright Path Dental Supplies in Pune. We service dental chairs and autoclaves within the same week and sell a monthly maintenance plan. Our customers are independent dental clinics in Pune. Sign messages as Ravi, founder. Prefer email.",
+    });
+    let turn = await listMessages(chat.id);
+    const saveCall = turn.find((m) => m.role === "tool" && m.tool === "save_business_info");
+    const [afterChat] = await db.select().from(assistantProfiles).where(eq(assistantProfiles.organizationId, orgId));
+    check("the agent saves what the owner said (a real tool call)", saveCall?.status === "ok" && Boolean(afterChat?.profile.businessName && afterChat.profile.offer && afterChat.profile.senderName),
+      `${saveCall?.status} ${JSON.stringify(afterChat?.profile)}`);
+    console.log(`      assistant: ${turn.filter((m) => m.role === "assistant").map((m) => m.content).join(" / ").slice(0, 400)}`);
+
+    await runAgentTurn({ threadId: chat.id, userId: owner, text: "Find dental clinics in Pune and contact them by email." });
+    turn = await listMessages(chat.id);
+    const findCall = turn.find((m) => m.role === "tool" && m.tool === "find_leads");
+    check("asked to find and contact leads, the agent starts a search", findCall?.status === "ok", findCall?.content ?? turn.map((m) => `${m.role}:${m.content}`).join(" / ").slice(0, 400));
+    if (findCall?.toolInput?.contactAfter !== true) console.log("NOTE  the agent did not mark the search to be contacted afterwards; the model then decides after the search");
+    const chatJobId = (findCall?.toolResult as { data?: { jobId?: string } } | null)?.data?.jobId;
+    if (chatJobId) {
+      await finishJob(chatJobId);
+      // The finished search wakes the agent (not awaited by the worker); wait for that turn.
+      await waitUntil("the agent's turn after the search", 240_000, async () => {
+        const messages = await listMessages(chat.id);
+        const eventIndex = messages.findIndex((m) => m.role === "event" && m.content.includes("can be contacted"));
+        return eventIndex >= 0 && messages.slice(eventIndex + 1).some((m) => m.role === "assistant" || m.role === "tool") && !(await threadBusy(chat.id));
+      });
+    }
+    turn = await listMessages(chat.id);
+    const searchEvent = turn.findIndex((m) => m.role === "event" && m.content.includes("can be contacted"));
+    // The prompt asks it to offer, not prepare, unasked outreach; models do not always comply. A proposal sends nothing, so this is reported, not failed.
+    if (turn.slice(0, turn.findIndex((m) => m.tool === "find_leads")).some((m) => m.tool === "prepare_outreach")) {
+      console.log("NOTE  the agent prepared a plan before the owner asked for outreach (nothing is sent without Start)");
+    }
+    const prepareCall = searchEvent >= 0 ? turn.slice(searchEvent).find((m) => m.role === "tool" && m.tool === "prepare_outreach" && m.status === "ok") : undefined;
+    console.log(`      assistant: ${turn.filter((m) => m.role === "assistant").slice(-2).map((m) => m.content).join(" / ").slice(0, 500)}`);
+    check("after the search, the agent proposes outreach on its own", Boolean(prepareCall), turn.filter((m) => m.role === "tool").map((m) => `${m.tool}:${m.status}:${m.content.slice(0, 120)}`).join(" | "));
+    const runId = (prepareCall?.toolResult as { data?: { runId?: string } } | null)?.data?.runId;
+    const proposed = runId ? await getRun(runId) : null;
+    check("the agent cannot start it: the run waits for the owner", proposed?.status === "proposed");
+    const assistantText = turn.filter((m) => m.role === "assistant").map((m) => m.content).join("\n");
+    check("the agent never says outreach is live before the owner starts it", !/\b(?:is|are) (?:now )?(?:live|running|launched)\b/i.test(assistantText));
+    if (!proposed) return;
+
+    const plan = proposed.plan;
+    check("the plan writes an email sequence with a subject and the per-lead line", Boolean(plan.sequences.email?.[0]?.subject) && JSON.stringify(plan.sequences).includes(`{{${plan.personalizationKey}}}`), JSON.stringify(plan.sequences.email?.[0]).slice(0, 300));
+    check("the plan shows real samples and the AI cost estimate", plan.samples.length > 0 && plan.samples[0]!.messages.length > 0 && plan.estimate.aiCalls > 0, JSON.stringify(plan.estimate));
+    const sampleText = plan.samples.flatMap((s) => s.messages.map((m) => `${m.subject ?? ""} ${m.body}`)).join("\n");
+    check("samples have no unfilled merge fields", !/\{\{/.test(sampleText), sampleText.slice(0, 300));
+    const emailSamples = plan.samples.filter((sample) => sample.channel === "email").flatMap((sample) => sample.messages);
+    check("every sample email is signed by the sender", emailSamples.length > 0 && emailSamples.every((message) => /\bRavi\b/.test(message.body.slice(-200))), emailSamples.map((m) => m.body.slice(-60)).join(" | "));
+    console.log(`      sample: ${plan.samples[0]?.messages[0]?.subject} | ${plan.samples[0]?.messages[0]?.body.replace(/\s+/g, " ").slice(0, 400)}`);
+
+    // ------------------------------------------------------------ the owner presses Start
+    const started = await startOutreachRun(proposed.id, owner, { autopilot: true });
+    const startJob = await finishJob(started.jobId, 20);
+    check("Start personalizes and launches", startJob?.status === "succeeded", `${startJob?.status} ${startJob?.error ?? ""}`);
+    const running = await getRun(proposed.id);
+    check("the run is running with its campaigns", running?.status === "running" && Boolean(running.campaigns.email), JSON.stringify(running?.campaigns));
+    const emailCampaign = running?.campaigns.email
+      ? (await db.select().from(outreachCampaigns).where(eq(outreachCampaigns.id, running.campaigns.email)))[0]
+      : null;
+    const emailLeads = emailCampaign ? await db.select().from(outreachLeads).where(eq(outreachLeads.campaignId, emailCampaign.id)) : [];
+    check("the email campaign is active with every email lead", emailCampaign?.status === "active" && emailLeads.length === plan.assignments.filter((a) => a.channel === "email").length, `${emailCampaign?.status} ${emailLeads.length}`);
+    const lines = (await db.select({ raw: people.raw }).from(people).where(inArray(people.id, plan.assignments.map((a) => a.personId))))
+      .map((row) => String((row.raw as Record<string, unknown>)[plan.personalizationKey] ?? ""));
+    check("each lead got a personal line that passes the checks", lines.length === plan.assignments.length && lines.every((line) => personalLineProblem(line) === null), lines.join(" | ").slice(0, 400));
+    if (running?.campaigns.whatsapp) {
+      const [waCampaign] = await db.select().from(whatsappCampaigns).where(eq(whatsappCampaigns.id, running.campaigns.whatsapp));
+      const waLeads = await db.select().from(whatsappCampaignLeads).where(eq(whatsappCampaignLeads.campaignId, running.campaigns.whatsapp));
+      check("the WhatsApp campaign is active with the phone-only leads", waCampaign?.status === "active" && waLeads.length > 0);
+    }
+    check("Start with autopilot turns the reply autopilot on", await isAutopilotOn());
+    check("nothing was sent by starting (sending is the engines' tick)", unipileSends.length === 0);
+
+    // ------------------------------------------------------------ a reply, the CRM worker and the autopilot
+    const replier = lotus ?? memberPeople.find((p) => p.email);
+    registerDefaultCrmJobHandlers();
+    const inbound = await ingestInboundReply({
+      personId: replier!.id,
+      channel: "email",
+      accountRef: mailboxAddress,
+      providerThreadId: `assistant-check-thread-${stamp}`,
+      idempotencyKey: `assistant-check-inbound-${stamp}`,
+      providerMessageId: `assistant-check-provider-${stamp}`,
+      subject: `Re: ${plan.samples[0]?.messages[0]?.subject ?? "Dental chair servicing"}`,
+      bodyText: "Hi Ravi, thanks for writing. We have two chairs and one autoclave. How does the monthly maintenance plan work?",
+      sentAt: new Date(),
+    });
+    let decided = false;
+    let delayChecked = false;
+    for (let round = 0; round < 40 && !decided; round += 1) {
+      // The autopilot waits AUTOPILOT_LIMITS.delayMinutes after a draft; check that, then skip the wait.
+      const waiting = await db.select().from(crmJobs).where(and(eq(crmJobs.organizationId, orgId), eq(crmJobs.kind, "auto_send"), eq(crmJobs.status, "queued")));
+      if (waiting.length && !delayChecked) {
+        delayChecked = true;
+        check("the autopilot waits about 10 minutes before answering", waiting[0]!.runAfter.getTime() - Date.now() > 9 * 60_000, waiting[0]!.runAfter.toISOString());
+        await db.update(crmJobs).set({ runAfter: new Date(Date.now() - 1_000) }).where(inArray(crmJobs.id, waiting.map((job) => job.id)));
+      }
+      await drainOnce();
+      const drafts = await db.select().from(crmDrafts).where(eq(crmDrafts.crmRecordId, inbound.record.id));
+      const attempts = drafts.length ? await db.select().from(crmSendAttempts).where(inArray(crmSendAttempts.draftId, drafts.map((d) => d.id))) : [];
+      const held = await db.select().from(crmEvents).where(and(eq(crmEvents.crmRecordId, inbound.record.id), eq(crmEvents.eventType, "autopilot.held")));
+      decided = attempts.length > 0 || held.length > 0 || drafts.some((d) => d.status === "failed");
+      if (!decided) await new Promise((resolve) => setTimeout(resolve, 1_500));
+    }
+    const drafts = await db.select().from(crmDrafts).where(eq(crmDrafts.crmRecordId, inbound.record.id));
+    const attempts = drafts.length ? await db.select().from(crmSendAttempts).where(inArray(crmSendAttempts.draftId, drafts.map((d) => d.id))) : [];
+    const held = await db.select().from(crmEvents).where(and(eq(crmEvents.crmRecordId, inbound.record.id), eq(crmEvents.eventType, "autopilot.held")));
+    check("the CRM worker drafted a reply and the autopilot decided on it", drafts.length > 0 && (attempts.length > 0 || held.length > 0), `drafts ${drafts.map((d) => d.status).join(",")}, attempts ${attempts.length}, held ${held.length}`);
+    if (held.length) {
+      console.log(`      autopilot held it: ${JSON.stringify(held[0]!.meta)}`);
+      // Outside production nothing is sent; check the hold is the production guard or a policy reason.
+    } else if (attempts.length) {
+      // Only possible with AUTOPILOT_ALLOW_NON_PRODUCTION=true.
+      check("an automatic send goes through the mailbox's provider with the autopilot's key", attempts[0]!.idempotencyKey.startsWith("autopilot:") && unipileSends.length === 1, attempts[0]!.idempotencyKey);
+    }
+    const draft = drafts.find((d) => d.status === "awaiting_review");
+    if (draft) {
+      const outcome = await runAutopilotForDraft(draft.id, { allowNonProduction: false });
+      check("a development server never auto-sends (production guard)", !outcome.sent, outcome.reason ?? "");
+      const sentBefore = unipileSends.length;
+      const forced = await runAutopilotForDraft(draft.id, { allowNonProduction: true });
+      console.log(`      autopilot decision with the guard lifted: ${forced.sent ? "sent" : `held — ${forced.reason}`}`);
+      if (forced.sent) {
+        const sent = unipileSends.at(-1);
+        check("the automatic reply went to the lead through Unipile, from the run's mailbox", unipileSends.length === sentBefore + 1 && JSON.parse(sent?.to ?? "[]")[0]?.identifier === replier!.email && sent?.account_id === unipileAccount, JSON.stringify(sent).slice(0, 300));
+        const [attempt] = await db.select().from(crmSendAttempts).where(eq(crmSendAttempts.draftId, draft.id));
+        check("it is recorded as the autopilot's send, once per draft revision", attempt?.idempotencyKey === `autopilot:${draft.id}:${draft.revision}`);
+        const second = await runAutopilotForDraft(draft.id, { allowNonProduction: true });
+        check("running it again sends nothing more", !second.sent && unipileSends.length === sentBefore + 1, second.reason ?? "");
+      }
+    }
+
+    // ------------------------------------------------------------ report and pause
+    const report = await runTool("report", { runId: proposed.id }, context);
+    check("report reads the run's real counts", report.ok && /email: \d+ contacted/.test(report.summary), report.summary);
+    const paused = await runTool("pause_outreach", { runId: proposed.id }, context);
+    const [pausedCampaign] = await db.select().from(outreachCampaigns).where(eq(outreachCampaigns.id, running!.campaigns.email!));
+    check("pause_outreach pauses the campaigns", paused.ok && pausedCampaign?.status === "paused" && (await getRun(proposed.id))?.status === "paused", paused.summary);
+    const off = await runTool("turn_off_autopilot", {}, context);
+    check("turn_off_autopilot turns it off", off.ok && !(await isAutopilotOn()));
+  } finally {
+    // Leave nothing that could send: campaigns paused, mailbox disabled, number disconnected, fake Unipile removed.
+    await db.update(outreachCampaigns).set({ status: "paused" }).where(and(eq(outreachCampaigns.organizationId, orgId), eq(outreachCampaigns.status, "active")));
+    await db.update(whatsappCampaigns).set({ status: "paused" }).where(and(eq(whatsappCampaigns.organizationId, orgId), eq(whatsappCampaigns.status, "active")));
+    await db.update(mailboxes).set({ status: "disabled" }).where(eq(mailboxes.id, mailbox!.id));
+    // The other e2e scripts refuse to tick while any organization has queued email.
+    await db.delete(outreachMailboxQueue).where(eq(outreachMailboxQueue.mailboxId, mailbox!.id));
+    await db.update(whatsappAccounts).set({ status: "disconnected" }).where(eq(whatsappAccounts.id, whatsapp!.id));
+    await setAutopilot(false).catch(() => undefined);
+    await db.delete(gridProviderCredentials).where(eq(gridProviderCredentials.providerId, unipile!.id));
+    await db.delete(gridProviders).where(eq(gridProviders.id, unipile!.id));
+  }
+});
+
+const strayMessages = await db.select({ n: sql<number>`count(*)::int` }).from(assistantMessages).where(and(eq(assistantMessages.organizationId, org!.id), eq(assistantMessages.status, "running")));
+check("no tool call was left running", Number(strayMessages[0]?.n ?? 0) === 0);
+
+console.log(failures ? `\n${failures} check(s) failed.` : "\nAssistant checks passed.");
+process.exit(failures ? 1 : 0);
+
+// ------------------------------------------------------------ file fixtures
+function tinyPdf(text: string): Uint8Array {
+  const stream = `BT /F1 12 Tf 72 720 Td (${text}) Tj ET`;
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+  ];
+  let body = "%PDF-1.4\n";
+  const offsets: number[] = [];
+  objects.forEach((object, index) => {
+    offsets.push(body.length);
+    body += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  });
+  const xref = body.length;
+  body += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map((offset) => `${String(offset).padStart(10, "0")} 00000 n \n`).join("")}`;
+  body += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return new TextEncoder().encode(body);
+}
+
+function tinyDocx(paragraphs: string[]): Uint8Array {
+  const document = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${paragraphs.map((p) => `<w:p><w:r><w:t>${p}</w:t></w:r></w:p>`).join("")}</w:body></w:document>`;
+  return zipSync({
+    "[Content_Types].xml": strToU8(`<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`),
+    "_rels/.rels": strToU8(`<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`),
+    "word/document.xml": strToU8(document),
+  });
+}

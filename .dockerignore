@@ -29,5 +29,6 @@ scripts
 !scripts/create-scheduled-job-runs.ts
 !scripts/create-lead-research.ts
 !scripts/add-mailbox-provider.ts
+!scripts/create-assistant-tables.ts
 
 README.md

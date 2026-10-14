@@ -1,4 +1,5 @@
 import {
+  RiRobot2Line,
   RiBarChartBoxLine,
   RiBookOpenLine,
   RiBugLine,
@@ -88,6 +89,7 @@ const when = <T,>(released: boolean, ...entries: T[]): T[] => (released ? entrie
 export const NAV_SECTIONS: NavSection[] = [
   {
     entries: [
+      link("/assistant", "Assistant", RiRobot2Line),
       link("/analytics", "Analytics", RiBarChartBoxLine),
       link("/crm/actions", "Action required", RiTodoLine, { badge: "actionRequired" }),
       link("/leads", "Leads", RiUserSearchLine, { match: ["/crm/records"] }),

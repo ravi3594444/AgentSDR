@@ -39,13 +39,14 @@ COPY --from=builder /app/public ./public
 # Fresh-install schema and its setup script (`bun scripts/db/setup.ts
 # --if-empty`, run by the entrypoint before the app starts), and the
 # migrations an existing install runs in the container when upgrading (the
-# scheduler's, web research's). All use Bun's built-in PostgreSQL client, so
+# scheduler's, web research's, the assistant's). All use Bun's built-in PostgreSQL client, so
 # they need no packages.
 COPY --from=builder --chown=nextjs:nodejs /app/db ./db
 COPY --from=builder --chown=nextjs:nodejs /app/scripts/db/setup.ts ./scripts/db/setup.ts
 COPY --from=builder --chown=nextjs:nodejs /app/scripts/create-scheduled-job-runs.ts ./scripts/create-scheduled-job-runs.ts
 COPY --from=builder --chown=nextjs:nodejs /app/scripts/create-lead-research.ts ./scripts/create-lead-research.ts
 COPY --from=builder --chown=nextjs:nodejs /app/scripts/add-mailbox-provider.ts ./scripts/add-mailbox-provider.ts
+COPY --from=builder --chown=nextjs:nodejs /app/scripts/create-assistant-tables.ts ./scripts/create-assistant-tables.ts
 
 # Entrypoint: maps APP_URL, builds DATABASE_URL for the bundled database,
 # refuses placeholder secrets on a public address and creates the schema in an

@@ -1,4 +1,5 @@
 import { and, asc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
+import { AUTOPILOT_ACTOR } from "./autopilot";
 import { db } from "@/lib/db";
 import { inboxContacts, inboxMessages } from "@/lib/inbox/schema";
 import { people } from "@/lib/leads/schema";
@@ -134,6 +135,11 @@ export function sentRecipients(request: Pick<CrmSendAdapterInput, "recipientEmai
 }
 
 export type CrmSendAdapter = (input: CrmSendAdapterInput) => Promise<NormalizedCrmSendResult>;
+
+/** The reply autopilot sends as the AI; every other send is a signed-in person's. */
+function sendActorType(actorRef: string | null | undefined): "ai" | "authenticated_operator" {
+  return actorRef === AUTOPILOT_ACTOR ? "ai" : "authenticated_operator";
+}
 
 export class DefiniteCrmSendError extends Error {
   constructor(message: string) {
@@ -380,7 +386,7 @@ async function prepareSend(tx: CrmTransaction, input: {
   await tx.update(crmDrafts).set({ status: "sending", updatedAt: new Date() }).where(eq(crmDrafts.id, draft.id));
   await appendCrmEvent(tx, {
     personId: record.personId, crmRecordId: record.id, pipelineId: record.pipelineId,
-    eventType: "message.sending", actorType: "authenticated_operator", actorRef: input.actorRef,
+    eventType: "message.sending", actorType: sendActorType(input.actorRef), actorRef: input.actorRef,
     toData: { draftId: draft.id, sendAttemptId: attempt.id },
     meta: { idempotencyKey: input.idempotencyKey, requestId: input.requestId },
     contextVersion: record.contextVersion,
@@ -583,7 +589,7 @@ async function finishSuccessfulSend(
       ));
     await appendCrmEvent(tx, {
       personId: record.personId, crmRecordId: record.id, pipelineId: record.pipelineId,
-      eventType: "message.sent", actorType: "authenticated_operator", actorRef,
+      eventType: "message.sent", actorType: sendActorType(actorRef), actorRef,
       fromData: { draftId: draft.id },
       toData: { messageId: message.id, sendAttemptId: attempt.id, workflowState, nextActionAt },
       meta: {
@@ -627,7 +633,7 @@ async function finishFailedSend(prepared: PreparedSend, error: unknown, definite
     await appendCrmEvent(tx, {
       personId: record.personId, crmRecordId: record.id, pipelineId: record.pipelineId,
       eventType: definite ? "message.failed" : "message.delivery_uncertain",
-      actorType: "authenticated_operator", actorRef,
+      actorType: sendActorType(actorRef), actorRef,
       toData: { draftId: draft.id, sendAttemptId: attempt.id, status: attemptStatus },
       meta: { error: message }, contextVersion: record.contextVersion,
     });

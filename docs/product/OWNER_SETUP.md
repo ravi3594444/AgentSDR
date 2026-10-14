@@ -16,7 +16,14 @@ been sent or received yet.
 - **In:** Leads import (CSV/XLSX, phone-only WhatsApp contacts), company web
   research, email / LinkedIn / WhatsApp campaigns with server-enforced
   launch rules and sending rules, reply sync, AI classification and drafts
-  that always wait for your approval, Action required and the CRM.
+  that wait for your approval (unless you turn on the reply autopilot, §3b),
+  Action required and the CRM.
+- **The assistant** (the first page, `/assistant`): you tell it about your
+  business in a chat, attach documents (PDF, Word, text) and contact lists
+  (CSV, Excel), and ask it to "find suitable leads and contact them" or "use
+  this list and run outreach". It searches, imports, writes the messages and
+  shows a plan; **nothing is sent until you press Start on that plan**. See
+  §3b.
 - **Email without a domain:** email can send through Google Workspace *or*
   through an inbox linked in Unipile (a personal Gmail, Outlook, iCloud or
   IMAP account). Each mailbox uses its own; see §3.
@@ -92,7 +99,14 @@ Rules that matter:
   and the same with `scripts/add-mailbox-provider.ts` (from source:
   `bun scripts/create-lead-research.ts` and `bun scripts/add-mailbox-provider.ts`).
   Until the first runs, Research says so; until the second runs, the email
-  pages fail to load.
+  pages fail to load. The assistant needs a third one,
+  `scripts/create-assistant-tables.ts` (same command); until it runs, the
+  assistant page fails to load.
+- **Lead search (optional):** add `-f docker-compose.discovery.yml` to every
+  compose command (or put
+  `COMPOSE_FILE=docker-compose.yml:docker-compose.build.yml:docker-compose.discovery.yml`
+  in `.env` and drop the `-f` flags). It starts the Google Maps scraper next
+  to the app. Read §3b first.
 
 ### Going live (public HTTPS address)
 
@@ -154,7 +168,7 @@ delivered.
 | Email, option B: **Google Workspace** (your own domain) | Settings → Email → Connection, then Mailboxes → Add mailbox | Google Workspace service account with domain-wide delegation. For replies to stop follow-ups you also need a **Gmail Pub/Sub topic** (saved on the same card; `gmail-api-push@system.gserviceaccount.com` must be allowed to publish to it) and a push subscription to `https://your-domain/api/outreach/webhooks/gmail-watch`. The card then shows **Reply sync: Gmail watching N mailboxes**; the watch registers when you save and when a mailbox connects, and renews daily. Give each mailbox a **display name**: replies and AI drafts are signed with it. A personal Gmail cannot be used this way (domain-wide delegation needs a Workspace domain); use option A for it. | `docs/integrations/google-workspace.mdx`, `docs/integrations/gmail-reply-sync.mdx` |
 | LinkedIn | Settings → LinkedIn → Connection, then Accounts | A Unipile workspace (API key and DSN). LinkedIn profiles link through Unipile's hosted sign-in. | `docs/integrations/unipile.mdx` |
 | WhatsApp | Settings → WhatsApp → Integrations, then Numbers | The same Unipile connection (no R2 in this release). Link the number **in the Unipile dashboard** (scan the QR code there), then press **Sync from Unipile**. New numbers start no new chats for 24 h. | `docs/whatsapp/accounts.mdx` |
-| AI | Settings → AI provider | Pick **one** provider for the whole workspace. **AI/ML API** (verified in this release): one key (aimlapi.com → Keys), then select structured-output models and a default; no management key, BYOK or routing step. For **company web research**, also tick **Perplexity Sonar** in step 2 and choose it as the research model in step 4, with a daily run limit (default 25). **OpenRouter**: an inference key and a management key, at least one BYOK provider, a default model and the shared-capacity confirmation; research stays off with it in this release. Drafts always wait for your review either way. | `src/lib/ai/README.md`, `docs/workspace/ai-provider.mdx`, `docs/integrations/openrouter.mdx` |
+| AI | Settings → AI provider | Pick **one** provider for the whole workspace. **AI/ML API** (verified in this release): one key (aimlapi.com → Keys), then select structured-output models and a default; no management key, BYOK or routing step. For **company web research**, also tick **Perplexity Sonar** in step 2 and choose it as the research model in step 4, with a daily run limit (default 25). **OpenRouter**: an inference key and a management key, at least one BYOK provider, a default model and the shared-capacity confirmation; research stays off with it in this release. Drafts wait for your review either way, unless the reply autopilot (§3b) is on. | `src/lib/ai/README.md`, `docs/workspace/ai-provider.mdx`, `docs/integrations/openrouter.mdx` |
 | Sending rules | Settings → Email / LinkedIn / WhatsApp → Sending rules | Owner or admin only. | `docs/workspace/sending-rules.mdx` |
 | Phone default | Settings → Organization (General) → Default phone country | Set it if your lists have local numbers without `+` (for example `09876543210`). Without it, imports report those rows with the reason instead of guessing a country. | `docs/workspace/organizations.mdx` |
 | Knowledge and instructions | Settings → AI → Knowledge, Instructions | Your company description, offer and scheduling details: drafts may only state what is there or in the conversation. | `docs/crm/` |
@@ -203,6 +217,74 @@ LinkedIn connection page).
 imports and campaign drafts) before starting it, then use the trial to verify
 the LinkedIn/WhatsApp accounts you actually plan to run. After the trial,
 connected-channel access needs a paid Unipile subscription.
+
+## 3b. The assistant, lead search and the reply autopilot
+
+**What the owner does:** connect the sending accounts and AI once (§3),
+then use the Assistant page. Tell it what the business sells, to whom,
+where, and who signs the messages; attach brochures or price lists; then
+either ask it to find leads and contact them, or attach a contact list and
+ask it to run outreach. It answers with a **plan card**: the leads, the
+channel each gets, three sample messages per channel with real lead
+details filled in, the daily limits, how long it takes and the AI cost.
+**Start outreach** on that card is the only thing that sends. After that,
+campaigns run on the normal engines (sending hours, daily limits, Do Not
+Contact, unsubscribe) and the assistant reports, pauses and resumes them on
+request.
+
+**Everything it says it did is a recorded tool call.** Each action appears as
+a card in the chat with its real result; a reply that claims something was
+done without a successful tool is rejected and rewritten. Starting outreach
+is not something the AI can do at all.
+
+**Lead search (Google Maps).** It runs a self-hosted copy of
+[gosom/google-maps-scraper](https://github.com/gosom/google-maps-scraper)
+(MIT licence, `docker-compose.discovery.yml`) and then reads each business's
+own website (home page plus up to three contact/about pages) for the email
+addresses, phone numbers and LinkedIn pages it publishes. Every contact is
+stored with the page it came from; nothing is guessed (no `info@domain`
+patterns). Emails are checked for format and that their domain receives
+mail; phones are normalized with the listing's country. Duplicates are
+merged. Businesses without a usable contact stay in the list as "left out",
+with the reason.
+
+Read this before turning it on:
+
+- **Scraping Google Maps is against Google's Terms of Service**, and Google
+  can rate-limit or block the server's IP address. When that happens the
+  search fails and the chat says so; uploaded lists keep working.
+- **It finds businesses that have a public Maps listing**, not private
+  individuals, and not every potential customer. If the customers are
+  people (not businesses), or businesses that are not on Maps, upload a list
+  instead.
+- **It costs no fees**, but the scraper runs a headless browser: budget
+  about 1 GB of memory (the e2-standard-2 VM has enough). A search of 50
+  businesses takes roughly 3–10 minutes.
+- Without the overlay, `GMAPS_SCRAPER_URL` is empty and the assistant says
+  that lead search is not set up.
+
+**Lists.** CSV and Excel go through the same People import as Leads →
+Import (same column handling, same errors). Leads with no usable contact on
+any connected channel are reported with the reason (for example "reachable
+only by WhatsApp, which is not used in this run").
+
+**The reply autopilot** (off by default; owners and admins turn it on, on
+the plan card or in the page header). When on, an ordinary reply that the AI
+classified with confidence (interested or not interested) is answered with
+the AI draft without waiting for review, 10 minutes after the draft is
+ready (answer or edit it yourself in that window and the autopilot stands
+down). Anything else stays in Action
+required for a person: uncertain classifications, out-of-office, wrong
+person, customers, meetings, trial users, Do Not Contact, unsubscribed or
+bounced addresses. Limits: 3 automatic replies per conversation (then a
+person takes over) and 40 per organization per day. It sends only from a
+production server. Every automatic send and every hold is recorded on the
+CRM record with its reason. Turn it off in the page header or by telling the
+assistant.
+
+**AI cost.** Writing a plan is two model calls; each lead's opening line
+costs one call per ten leads. The plan card shows the estimate before you
+press Start.
 
 ## 4. Brand settings
 
@@ -305,6 +387,11 @@ bun run --conditions=react-server scripts/e2e/campaign-engines.ts
 # fake host; sends nothing): sync, campaign send and follow-up threading, the
 # email webhook's gate, a reply stopping follow-ups, a CRM reply. No server needed:
 bun run --conditions=react-server scripts/e2e/unipile-email.ts
+# The assistant, against stand-ins for the Google Maps scraper, the businesses'
+# websites and Unipile (nothing leaves the machine but AI calls). Stop any
+# running server first: its worker would claim the script's jobs. Without
+# AI_SOURCE_ORGANIZATION_ID the model-backed steps are skipped:
+AI_SOURCE_ORGANIZATION_ID=<org with AI Settings> bun run --conditions=react-server scripts/e2e/assistant.ts
 # Real AI calls (a little AI/ML usage; never sends). The worker can run in-process:
 ORGANIZATION_ID=<id> AI_LIVE_INLINE_WORKER=1 bun run --conditions=react-server scripts/e2e/ai-live-crm.ts
 ORGANIZATION_ID=<id> bun run --conditions=react-server scripts/e2e/research-live.ts
