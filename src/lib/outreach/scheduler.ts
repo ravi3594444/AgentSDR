@@ -16,8 +16,9 @@ import { companies, people } from "@/lib/leads/schema";
 import { personVariables } from "@/lib/leads/variables";
 import { mailboxes, outreachLeads, outreachEmails, outreachCampaigns, outreachMailboxQueue } from "./schema";
 import type { OutreachLeadStatus, SequenceStep } from "./schema";
-import { sendEmail } from "./gmail";
-import { isPlatformConnected } from "@/lib/platform/credentials";
+import type { SendEmailParams, SendEmailResult } from "./gmail";
+import { mailboxProviderConnected, sendFromMailbox, type SendingMailbox } from "./mailboxProviders";
+import type { MailboxProvider } from "./schema";
 import { isSuppressed } from "./suppression";
 import { isWithinWorkingHours } from "./workingHours";
 import { leadAfterSend, mailboxAtDailyLimit } from "./sendRules";
@@ -56,7 +57,7 @@ type TickResult = {
  * daily. If a mailbox's queue is empty, this is a no-op for it until the
  * next daily build.
  */
-type SendFunction = typeof sendEmail;
+type SendFunction = (params: SendEmailParams, mailbox: SendingMailbox) => Promise<SendEmailResult>;
 
 export async function runSchedulerTick(options: { send?: SendFunction; now?: Date } = {}): Promise<TickResult> {
   const result: TickResult = {
@@ -74,12 +75,12 @@ export async function runSchedulerTick(options: { send?: SendFunction; now?: Dat
     return result;
   }
   const now = options.now ?? new Date();
-  const send = options.send ?? sendEmail;
+  const send: SendFunction = options.send ?? ((params, mailbox) => sendFromMailbox(mailbox, params));
 
   // One global loop, one scope per organization: the queue rows are grouped by
   // the organization their mailbox belongs to, and each organization's portion
-  // runs in its own scope so the Google check and every query below act for
-  // that organization only.
+  // runs in its own scope so the provider checks and every query below act
+  // for that organization only.
   const queuedOrganizations = await db
     .selectDistinct({ organizationId: mailboxes.organizationId })
     .from(outreachMailboxQueue)
@@ -96,12 +97,20 @@ export async function runSchedulerTick(options: { send?: SendFunction; now?: Dat
 }
 
 async function tickOrganization(result: TickResult, now: Date, send: SendFunction, injectedSender: boolean) {
-  // An injected sender (tests) bypasses Gmail entirely, so only the real one needs credentials.
-  // Google is connected per organization: one without it is skipped, not the whole tick.
-  if (!injectedSender && !(await isPlatformConnected("google"))) {
-    console.log(`[outreach/scheduler] Google Workspace is not connected for organization ${currentOrganizationId()}; skipped`);
-    return;
-  }
+  // Each mailbox sends through its own provider (Google Workspace or
+  // Unipile), connected per organization: a mailbox whose provider is not
+  // connected is skipped, not the organization or the tick. An injected
+  // sender (tests) bypasses both, so only the real one needs credentials.
+  const providerConnected = new Map<MailboxProvider, boolean>();
+  const canSend = async (provider: MailboxProvider) => {
+    if (injectedSender) return true;
+    if (!providerConnected.has(provider)) {
+      const connected = await mailboxProviderConnected(provider);
+      if (!connected) console.log(`[outreach/scheduler] ${provider} is not connected for organization ${currentOrganizationId()}; its mailboxes are skipped`);
+      providerConnected.set(provider, connected);
+    }
+    return providerConnected.get(provider)!;
+  };
 
   const queuedMailboxIds = await db
     .selectDistinct({ mailboxId: outreachMailboxQueue.mailboxId })
@@ -118,6 +127,7 @@ async function tickOrganization(result: TickResult, now: Date, send: SendFunctio
   for (const { mailboxId } of queuedMailboxIds) {
     const [mailbox] = await db.select().from(mailboxes).where(and(inOrg(mailboxes), eq(mailboxes.id, mailboxId))).limit(1);
     if (!mailbox || mailbox.status !== "connected") continue;
+    if (!(await canSend(mailbox.provider))) continue;
 
     if (mailbox.nextEmailTime && mailbox.nextEmailTime > now) {
       result.skippedThrottle += 1;
@@ -223,6 +233,7 @@ async function sendNextStep(
   let inReplyTo: string | undefined;
   let references: string[] | undefined;
   let gmailThreadId: string | undefined;
+  let providerReplyTo: string | undefined;
 
   if (!subject.trim()) {
     for (let i = pastSentEmails.length - 1; i >= 0; i--) {
@@ -230,6 +241,8 @@ async function sendNextStep(
         inReplyTo = pastSentEmails[i].messageId ?? undefined;
         references = pastSentEmails.map((e) => e.messageId ?? "").filter(Boolean);
         gmailThreadId = pastSentEmails[i].threadId ?? undefined;
+        // A Unipile mailbox threads by the earlier email's provider id instead.
+        providerReplyTo = pastSentEmails[i].gmailMessageId ?? undefined;
         // "Re:" matches what a human reply looks like, and this genuinely is
         // one — step 1 really was delivered and the In-Reply-To/References
         // headers below back it up. Only faking "Re:" on a FIRST contact is a
@@ -298,8 +311,9 @@ async function sendNextStep(
       inReplyTo,
       references,
       threadId: gmailThreadId,
+      providerReplyTo,
       unsubscribeUrl: unsubscribePostUrl(lead.email),
-    });
+    }, mailbox);
 
     const nextStep = campaign.sequence[lead.currentStep + 1];
     const after = leadAfterSend(lead, campaign.sequence.length, nextStep ? nextStep.waitDays : null, now);

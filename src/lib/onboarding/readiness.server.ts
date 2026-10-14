@@ -74,6 +74,10 @@ export async function loadReadinessFacts(ctx: OrgContext): Promise<ReadinessFact
   // page is opened rarely, so it should not hold several connections at once.
   const platforms = await listPlatformStatus();
   const mailboxRows = await db.select({ status: mailboxes.status, n: count() }).from(mailboxes).where(inOrg(mailboxes)).groupBy(mailboxes.status);
+  const [{ n: unipileMailboxes }] = await db
+    .select({ n: count() })
+    .from(mailboxes)
+    .where(and(inOrg(mailboxes), eq(mailboxes.status, "connected"), eq(mailboxes.provider, "unipile")));
   const linkedinRows = await db
     .select({ status: linkedInAccounts.status, n: count() })
     .from(linkedInAccounts)
@@ -145,11 +149,13 @@ export async function loadReadinessFacts(ctx: OrgContext): Promise<ReadinessFact
       connecting: mailboxCounts.connecting ?? 0,
       failed: mailboxCounts.failed ?? 0,
       disabled: mailboxCounts.disabled ?? 0,
+      unipileConnected: Number(unipileMailboxes),
     },
     unipile: {
       connected: Boolean(unipile?.connected),
       verifiedAt: unipile?.verifiedAt ?? null,
       webhooks: unipile?.webhooks ? { status: unipile.webhooks.status, message: unipile.webhooks.message } : null,
+      emailWebhook: Boolean(unipile?.webhooks?.items?.some((item) => item.key === "unipile-email")),
     },
     linkedinAccounts: { connected: linkedinCounts.CONNECTED ?? 0, disconnected: linkedinCounts.DISCONNECTED ?? 0 },
     whatsappAccounts: { connected: whatsappConnected, notConnected: whatsappTotal - whatsappConnected },

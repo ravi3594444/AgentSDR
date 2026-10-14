@@ -42,6 +42,15 @@ export const UNIPILE_WEBHOOKS = [
     source: "messaging",
     events: ["message_received", "message_read", "message_delivered"],
   },
+  {
+    // Email inboxes linked in Unipile and used as sending mailboxes: a new
+    // email in one is filed like a Gmail reply (Master Inbox, CRM).
+    key: "unipile-email",
+    label: "Email replies",
+    path: "/api/webhooks/unipile-email",
+    source: "email",
+    events: ["mail_received"],
+  },
 ] as const;
 
 /**

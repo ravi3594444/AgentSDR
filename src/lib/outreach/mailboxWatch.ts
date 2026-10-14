@@ -24,7 +24,8 @@ export type MailboxWatchResult = {
  * organization, so one without it is skipped rather than failing the run.
  */
 export async function renewMailboxWatches(options: { organizationIds?: string[] } = {}): Promise<MailboxWatchResult> {
-  const connected = await db.select().from(mailboxes).where(eq(mailboxes.status, "connected"));
+  // Gmail push is Google Workspace's; a Unipile mailbox's replies arrive by Unipile's email webhook.
+  const connected = await db.select().from(mailboxes).where(and(eq(mailboxes.status, "connected"), eq(mailboxes.provider, "google")));
   const wanted = options.organizationIds ? new Set(options.organizationIds) : null;
   const byOrganization = new Map<string, (typeof connected)[number][]>();
   for (const mailbox of connected) {

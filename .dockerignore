@@ -28,5 +28,6 @@ scripts
 !scripts/db/setup.ts
 !scripts/create-scheduled-job-runs.ts
 !scripts/create-lead-research.ts
+!scripts/add-mailbox-provider.ts
 
 README.md

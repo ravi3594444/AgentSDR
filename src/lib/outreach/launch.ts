@@ -1,4 +1,4 @@
-import type { SequenceStep } from "./schema";
+import type { MailboxProvider, SequenceStep } from "./schema";
 
 /**
  * What an email campaign must have before it may send, checked on the
@@ -41,17 +41,29 @@ export function parseSequence(value: unknown): { ok: true; sequence: SequenceSte
 
 export type EmailLaunchFacts = {
   sequence: unknown;
+  /** Connected mailboxes, by what sends for them. */
+  connectedMailboxes: Record<MailboxProvider, number>;
   googleConnected: boolean;
-  connectedMailboxes: number;
+  unipileConnected: boolean;
   /** Enrolled leads that can still receive a step: not replied, bounced, suppressed or finished, and with an email. */
   usableLeads: number;
 };
 
-/** Every reason the campaign cannot go active, in the order a person would fix them; empty when it can. */
+/**
+ * Every reason the campaign cannot go active, in the order a person would fix
+ * them; empty when it can. It needs one connected mailbox whose provider is
+ * connected too: a Google Workspace address, or an inbox linked in Unipile.
+ */
 export function emailLaunchProblems(facts: EmailLaunchFacts): string[] {
   const problems: string[] = [];
-  if (!facts.googleConnected) problems.push("Connect Google Workspace in Settings → Email → Connection.");
-  if (facts.connectedMailboxes === 0) problems.push("Connect at least one sending mailbox in Settings → Email → Mailboxes.");
+  const { google, unipile } = facts.connectedMailboxes;
+  const sending = (facts.googleConnected ? google : 0) + (facts.unipileConnected ? unipile : 0);
+  if (google + unipile === 0) {
+    problems.push("Connect at least one sending mailbox in Settings → Email → Mailboxes: a Google Workspace address, or an inbox linked in Unipile.");
+  } else if (sending === 0) {
+    if (google > 0) problems.push("Connect Google Workspace in Settings → Email → Connection.");
+    if (unipile > 0) problems.push("Connect Unipile in Settings → LinkedIn → Connection.");
+  }
   const sequence = parseSequence(facts.sequence);
   if (!sequence.ok) problems.push(sequence.error);
   if (facts.usableLeads === 0) problems.push("Add leads with an email address that have not replied, bounced or unsubscribed.");

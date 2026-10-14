@@ -5,6 +5,7 @@ import { testMailboxConnection } from "./gmail";
 import { channelRules } from "@/lib/channels/rules.server";
 import { mailboxHoursFromWeekly } from "./workingHours";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
+import { retestUnipileMailbox } from "./mailboxProviders";
 
 export async function listMailboxes() {
   return db.select().from(mailboxes).where(inOrg(mailboxes)).orderBy(mailboxes.createdAt);
@@ -40,6 +41,9 @@ export async function connectMailbox(input: {
     .from(mailboxes)
     .where(and(inOrg(mailboxes), eq(mailboxes.emailAddress, emailAddress)))
     .limit(1);
+  if (existing?.provider === "unipile") {
+    return { ok: false, error: `${emailAddress} sends through Unipile; delete that mailbox first to send through Google Workspace` };
+  }
   if (!existing) {
     // A Gmail mailbox belongs to exactly one organization (email_address is
     // globally unique), so one already connected elsewhere cannot be added.
@@ -96,10 +100,18 @@ export async function connectMailbox(input: {
   return { ok: false, error: test.error };
 }
 
-/** Re-runs the connection test for an already-added mailbox. Leaves its signature untouched. */
+/**
+ * Re-runs the connection test for an already-added mailbox: Gmail impersonation
+ * for a Google Workspace mailbox, the linked account's status for a Unipile
+ * one. Leaves its signature untouched.
+ */
 export async function retestMailbox(id: string): Promise<ConnectMailboxResult> {
   const mailbox = await getMailbox(id);
   if (!mailbox) return { ok: false, error: "mailbox not found" };
+  if (mailbox.provider === "unipile") {
+    const result = await retestUnipileMailbox(mailbox);
+    return result.ok ? { ok: true, mailboxId: mailbox.id, status: "connected" } : result;
+  }
   return connectMailbox({ emailAddress: mailbox.emailAddress, displayName: mailbox.displayName });
 }
 

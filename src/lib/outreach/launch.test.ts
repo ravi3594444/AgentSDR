@@ -3,7 +3,13 @@ import { emailLaunchProblems, MAX_SEQUENCE_STEPS, parseSequence } from "./launch
 import { leadAfterSend, mailboxAtDailyLimit } from "./sendRules";
 
 const step = (subject: string, body: string, waitDays = 3) => ({ stepNumber: 9, subject, body, waitDays });
-const ready = { sequence: [step("Hi {{firstName}}", "Hello", 0)], googleConnected: true, connectedMailboxes: 1, usableLeads: 1 };
+const ready = {
+  sequence: [step("Hi {{firstName}}", "Hello", 0)],
+  googleConnected: true,
+  unipileConnected: false,
+  connectedMailboxes: { google: 1, unipile: 0 },
+  usableLeads: 1,
+};
 
 describe("parseSequence", () => {
   test("renumbers steps 1..n and forces the first wait to 0", () => {
@@ -35,16 +41,37 @@ describe("emailLaunchProblems", () => {
   });
 
   test("lists every missing requirement, not only the first", () => {
-    expect(emailLaunchProblems({ sequence: [], googleConnected: false, connectedMailboxes: 0, usableLeads: 0 })).toEqual([
-      "Connect Google Workspace in Settings → Email → Connection.",
-      "Connect at least one sending mailbox in Settings → Email → Mailboxes.",
+    expect(emailLaunchProblems({
+      sequence: [],
+      googleConnected: false,
+      unipileConnected: false,
+      connectedMailboxes: { google: 0, unipile: 0 },
+      usableLeads: 0,
+    })).toEqual([
+      "Connect at least one sending mailbox in Settings → Email → Mailboxes: a Google Workspace address, or an inbox linked in Unipile.",
       "Add at least one email to the sequence.",
       "Add leads with an email address that have not replied, bounced or unsubscribed.",
     ]);
   });
 
   test("a disconnected Google Workspace blocks a resume even with everything else in place", () => {
-    expect(emailLaunchProblems({ ...ready, googleConnected: false })).toHaveLength(1);
+    expect(emailLaunchProblems({ ...ready, googleConnected: false })).toEqual([
+      "Connect Google Workspace in Settings → Email → Connection.",
+    ]);
+  });
+
+  test("a Unipile inbox sends without Google Workspace", () => {
+    expect(emailLaunchProblems({ ...ready, googleConnected: false, unipileConnected: true, connectedMailboxes: { google: 0, unipile: 1 } })).toEqual([]);
+  });
+
+  test("a Unipile inbox needs Unipile connected", () => {
+    expect(emailLaunchProblems({ ...ready, googleConnected: false, connectedMailboxes: { google: 0, unipile: 2 } })).toEqual([
+      "Connect Unipile in Settings → LinkedIn → Connection.",
+    ]);
+  });
+
+  test("one provider that can send is enough when the other is disconnected", () => {
+    expect(emailLaunchProblems({ ...ready, googleConnected: false, unipileConnected: true, connectedMailboxes: { google: 3, unipile: 1 } })).toEqual([]);
   });
 });
 

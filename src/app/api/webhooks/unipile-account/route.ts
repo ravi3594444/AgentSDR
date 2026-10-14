@@ -4,12 +4,13 @@ import { runInOrganization } from "@/lib/tenancy/scope";
 import { organizationIdForNotifySecret, safeEqual, unipileNotifySecret } from "@/lib/linkedin/organizations.server";
 import { serializeError } from "@/lib/linkedin/serializeError";
 import { syncWhatsappAccounts } from "@/lib/whatsapp/accounts";
+import { syncUnipileMailboxes } from "@/lib/outreach/mailboxProviders";
 
 // POST /api/webhooks/unipile-account?secret=... — the `notify_url` of a hosted
 // auth link. Unipile POSTs { status, account_id, name } once the user finishes
 // the wizard: CREATION_SUCCESS for a new account, RECONNECTED for a repaired one.
-// The account may be LinkedIn or WhatsApp, so both sync — each on its own, so
-// one failing does not keep the other from running.
+// The account may be LinkedIn, WhatsApp or an email inbox, so all three sync —
+// each on its own, so one failing does not keep the others from running.
 //
 // Public (see proxy.ts) because Unipile calls it without our session cookie,
 // so it carries a shared-secret check: the notify secret stored with the Unipile
@@ -66,6 +67,11 @@ async function handle(req: NextRequest) {
       await syncWhatsappAccounts();
     } catch (err) {
       errors.push(`WhatsApp: ${serializeError(err)}`);
+    }
+    try {
+      await syncUnipileMailboxes();
+    } catch (err) {
+      errors.push(`Email: ${serializeError(err)}`);
     }
     if (errors.length) {
       console.error(`[unipile-account] ${errors.join(" | ")}`);

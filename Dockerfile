@@ -45,6 +45,7 @@ COPY --from=builder --chown=nextjs:nodejs /app/db ./db
 COPY --from=builder --chown=nextjs:nodejs /app/scripts/db/setup.ts ./scripts/db/setup.ts
 COPY --from=builder --chown=nextjs:nodejs /app/scripts/create-scheduled-job-runs.ts ./scripts/create-scheduled-job-runs.ts
 COPY --from=builder --chown=nextjs:nodejs /app/scripts/create-lead-research.ts ./scripts/create-lead-research.ts
+COPY --from=builder --chown=nextjs:nodejs /app/scripts/add-mailbox-provider.ts ./scripts/add-mailbox-provider.ts
 
 # Entrypoint: maps APP_URL, builds DATABASE_URL for the bundled database,
 # refuses placeholder secrets on a public address and creates the schema in an

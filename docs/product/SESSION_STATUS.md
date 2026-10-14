@@ -1,12 +1,12 @@
 # Session status
 
-Last updated 2026-10-13. Run steps are in [OWNER_SETUP.md](OWNER_SETUP.md);
+Last updated 2026-10-14. Run steps are in [OWNER_SETUP.md](OWNER_SETUP.md);
 the plan is [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
 
 ## Where things stand
 
-- **Branch:** `claude/new-session-g5hljn`, pushed; head `27cf8dc` plus the
-  commit that updates these two documents. `main` is untouched.
+- **Branch:** `claude/new-session-g5hljn`, pushed. `main` is untouched.
+  The latest work is email through Unipile (below).
 - **Readiness: implemented, pending live verification. Not owner-usable
   yet.** The whole messaging workflow is built and checked locally, but no
   real message has been sent or received on any channel. The release is
@@ -36,6 +36,79 @@ scraping stayed out.
 | `86c1886` | **Found during the browser owner checks:** People import dropped custom columns (now kept on the person, as merge fields); `Favourite Café` became `{{favouriteCaf}}` (accents now folded); Approve & send with no provider showed "CRM configuration request failed" and left the draft looking ready (now a 409 "Not sent: <reason>" and the record re-reads); consistent page titles. |
 | `07d77b8` | A refused send reads "The reply was not sent"; research answers are shown as plain text. |
 | `27cf8dc` | The Docker image ships `scripts/create-lead-research.ts` for upgrading installs. |
+
+### Follow-up: email through Unipile (no domain needed)
+
+Asked for after the owner reported having no domain: let the Gmail account
+linked in Unipile be a sending mailbox. Google Workspace stays the other
+option; each mailbox uses its own.
+
+- **Mailboxes:** `outreach_mailboxes.provider` (`google` | `unipile`) and
+  `unipile_account_id` (unique across organizations, a provider identity);
+  migration `scripts/add-mailbox-provider.ts`, also shipped in the Docker
+  image. **Email → Accounts → Sync from Unipile** makes every email inbox
+  linked in the organization's Unipile workspace (Gmail OAuth, Outlook,
+  iCloud, Exchange, IMAP) a mailbox, refreshes status (Unipile's
+  `CREDENTIALS`/`PERMISSIONS`/`STOPPED` become "failed" with the reason),
+  marks inboxes no longer linked as failed (never deleted), and refuses an
+  address another organization holds. A new account linked through hosted
+  auth syncs the same way. "Test again" re-reads the account from Unipile.
+- **Sending** (`src/lib/outreach/mailboxProviders.ts`): one dispatcher used
+  by the campaign tick, CRM replies and the test send.
+  `POST /api/v1/emails` with the account, recipients, subject and HTML body
+  (signature and unsubscribe link included). The scheduler checks each
+  mailbox's own provider, so a Unipile-only workspace sends and one without
+  Google is no longer skipped as a whole. Follow-ups with a blank subject
+  and CRM replies go as `reply_to` the earlier email; a 4xx on that target
+  resends without it (nothing was sent on a 4xx). Provider ids are stored
+  prefixed with the account (`gmail_message_id` is unique across all
+  mailboxes; an IMAP provider's ids need not be).
+- **Replies:** a third Unipile webhook, `/api/webhooks/unipile-email`
+  (`mail_received`), public in `proxy.ts` and held to the same gate as the
+  messaging webhook (`org=` + secret, account must be this organization's
+  mailbox). It records the delivery in the webhook ledger, answers 200, then
+  files the email through the same `ingestGmailReply` as Gmail: bounces,
+  Master Inbox, CRM, and the lead's follow-ups stop. A delivery without its
+  body is read in full from Unipile. Sync registers the webhook if the
+  organization's registration predates it.
+- **Launch rules and readiness:** launch needs one connected mailbox whose
+  provider is connected (either one). The email pages unlock with Google or
+  Unipile. Getting started: Email is "Connected" for Unipile once a
+  Unipile mailbox exists and the email webhook is registered (no Gmail
+  topic needed). The Email connection page shows both options.
+
+Checks: `tsc` pass; lint 0 errors (6 baseline warnings); **915 tests pass /
+111 files** (new: mappers, stored ids, reply target, launch and readiness
+rules, webhook registration); `db:check` pass; `campaign-engines.ts` 25/25;
+the new `scripts/e2e/unipile-email.ts` **22/22** against a stand-in Unipile
+API (global `fetch` intercepted for a fake host, nothing sent): sync of four
+accounts, campaign send through the real dispatcher with the unsubscribe
+link, follow-up as `reply_to` the first, the webhook refusing a wrong
+secret and dropping a foreign account and non-`mail_received` events, a
+reply stopping the follow-ups through the real CRM ingestion, no duplicate
+on redelivery, a body-less delivery fetched in full, a CRM reply as
+`reply_to` the lead's email, and the 404 fallback. That run found one real
+issue (provider ids colliding on the global unique index), fixed above.
+A review pass added two more: a refused Unipile send is now reported as
+"Unipile refused the email (HTTP 4xx): reason" and counts as not sent
+(the SDK's error had an empty message and hid the status), and Sync only
+re-registers webhooks for owners and admins. `bun run build` passes.
+
+Browser (production build, Chromium, 1440 px and 390 px, the test owner's
+workspace, no horizontal overflow anywhere): with no email provider, the
+campaign and Email accounts pages show "Connect Google Workspace or Unipile
+to use this" with both buttons; with a stand-in Unipile connection and one
+Unipile mailbox, Email accounts shows **Sync from Unipile** and the mailbox
+"via Unipile", the campaigns page opens, Getting started shows Email
+Connected, and Sync against the unreachable stand-in host shows "Could not
+sync from Unipile: … fetch failed". The stand-ins were removed afterwards.
+
+**Not verified live.** This sandbox cannot reach the owner's Unipile DSN
+(port 17056 is refused by its egress proxy), so no real Unipile call was
+made. Unverified until the first live run (OWNER_SETUP §6): that Unipile
+accepts these exact requests, the `provider_id` it returns, the webhook
+payload's field names, and its error body's `status` (the 4xx fallback reads
+it).
 
 ### Web research
 
@@ -109,7 +182,8 @@ pause/resume with persistence after a restart.
 
 | Channel | Needs | State |
 | --- | --- | --- |
-| Email | Google Workspace service account + mailbox + Gmail Pub/Sub topic and push subscription; public HTTPS | Not configured |
+| Email (Unipile) | The Unipile connection, the Gmail inbox linked in Unipile synced as a mailbox, the email webhook registered; public HTTPS; a test inbox you control | Built and checked against a stand-in; not run live |
+| Email (Google Workspace) | Service account with domain-wide delegation (needs a Workspace domain, which the owner does not have) + mailbox + Gmail Pub/Sub topic and push subscription; public HTTPS | Not configured |
 | LinkedIn | Unipile DSN and key, a linked test account, a second profile you control; public HTTPS | Not configured |
 | WhatsApp | Unipile, a linked test number, a second number you control; public HTTPS | Not configured |
 | AI | AI/ML API key (stored) | Working: classification, drafts and research verified live |
@@ -119,9 +193,15 @@ pause/resume with persistence after a restart.
 1. **No server or public HTTPS address.** Provide a VM with SSH access and
    a domain; then follow OWNER_SETUP §1 (Docker with the build override)
    and §1 "Going live".
-2. **No channel credentials.** Google Workspace (service-account JSON with
-   domain-wide delegation, the sending mailbox, a Pub/Sub topic); Unipile
-   (DSN and API key, a LinkedIn account and a WhatsApp number linked).
+2. **Channel credentials.** The owner has a Unipile workspace with a
+   Gmail inbox, a LinkedIn account and a WhatsApp number linked; the key
+   was shared in a chat, so **rotate it** and enter the new one only in the
+   app. It could not be used from this sandbox (port 17056 unreachable).
+   A Google service account was also shared; its token check passed, but
+   without a Workspace domain it cannot send (domain-wide delegation), and
+   the Pub/Sub API is off in its project. Use email through Unipile, and
+   **rotate that service-account key** too (delete it in Google Cloud →
+   IAM → Service accounts → Keys).
 3. **No designated test recipients.** An inbox, a second LinkedIn profile
    and a second WhatsApp number that you control. Nothing is sent to
    anyone else.
@@ -144,9 +224,14 @@ Then run OWNER_SETUP §6 for each channel and record the results here.
 - **Gmail reply sync proof.** The stored watch result proves Gmail accepted
   the watch, not that pushes reach the server. "Incoming replies" turns done
   only on a real reply.
-- **Email campaign pages need Google Workspace connected** even to draft
-  (the existing `RequiresPlatform` convention); LinkedIn and WhatsApp pages
-  need Unipile.
+- **Email pages need Google Workspace or Unipile connected** even to
+  draft (the existing `RequiresPlatform` convention); LinkedIn and WhatsApp
+  pages need Unipile.
+- **Email through Unipile:** no `List-Unsubscribe` header (link in the body
+  only); the sender name comes from the inbox, not the app's display name;
+  a personal Gmail has Google's own daily limits and suspension risk; Getting
+  started judges a mixed setup (Google and Unipile mailboxes) by the Google
+  rules only.
 - **Hidden, not removed:** calling pages, Tables and Prospecting still
   answer at their URLs; WhatsApp analytics can still list call campaigns
   that already exist.

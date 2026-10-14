@@ -31,6 +31,7 @@ export async function syncMailboxInbox(mailboxId: string, options: SyncMailboxOp
   }
   const [mailbox] = await db.select().from(mailboxes).where(and(inOrg(mailboxes), eq(mailboxes.id, mailboxId))).limit(1);
   if (!mailbox || mailbox.status !== "connected") return { synced: 0 };
+  if (mailbox.provider !== "google") return { synced: 0 }; // Unipile mailboxes are fed by its email webhook
   if (!mailbox.lastHistoryId) return { synced: 0 }; // nothing to diff against yet
 
   let syncResult;

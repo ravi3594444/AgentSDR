@@ -72,6 +72,7 @@ describe("unipileWebhookEndpoints", () => {
     expect(endpoints.map((e) => e.url)).toEqual([
       `${ORIGIN}/api/webhooks/connection-accepted?org=${ORG}`,
       `${ORIGIN}/api/webhooks/unipile-message?org=${ORG}`,
+      `${ORIGIN}/api/webhooks/unipile-email?org=${ORG}`,
     ]);
   });
   test("none without a public origin", () => {
@@ -82,17 +83,17 @@ describe("unipileWebhookEndpoints", () => {
 });
 
 describe("registerUnipileWebhooks", () => {
-  test("replaces ours and hand-made ones, keeps everyone else's, creates both", async () => {
+  test("replaces ours and hand-made ones, keeps everyone else's, creates all three", async () => {
     const result = await registerUnipileWebhooks(ORG, credentials);
     expect(result.status).toBe("registered");
-    expect(result.items?.map((i) => i.key)).toEqual(["connection-accepted", "unipile-message"]);
+    expect(result.items?.map((i) => i.key)).toEqual(["connection-accepted", "unipile-message", "unipile-email"]);
     expect(result.items?.every((i) => i.id.startsWith("new-"))).toBe(true);
 
     const deleted = calls.filter((c) => c.method === "DELETE").map((c) => c.url.split("/webhooks/")[1]);
     expect(deleted.sort()).toEqual(["manual", "ours-old"]);
 
     const created = calls.filter((c) => c.method === "POST");
-    expect(created).toHaveLength(2);
+    expect(created).toHaveLength(3);
     for (const call of created) {
       expect(call.url).toBe(`${credentials.baseUrl}/api/v1/webhooks`);
       expect(call.headers["X-API-KEY"]).toBe("key-123");
@@ -105,6 +106,7 @@ describe("registerUnipileWebhooks", () => {
     const bySource = Object.fromEntries(created.map((c) => [String(c.body?.request_url).split("/api/webhooks/")[1].split("?")[0], c.body]));
     expect(bySource["connection-accepted"]).toMatchObject({ source: "users", events: ["new_relation"] });
     expect(bySource["unipile-message"]).toMatchObject({ source: "messaging", events: ["message_received", "message_read", "message_delivered"] });
+    expect(bySource["unipile-email"]).toMatchObject({ source: "email", events: ["mail_received"] });
   });
 
   test("the secret never goes into a URL", async () => {

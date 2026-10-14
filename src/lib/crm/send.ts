@@ -3,9 +3,10 @@ import { db } from "@/lib/db";
 import { inboxContacts, inboxMessages } from "@/lib/inbox/schema";
 import { people } from "@/lib/leads/schema";
 import { connections as linkedinConnections, messages as linkedinMessages } from "@/lib/linkedin/schema";
-import { isPlatformConnected, isPlatformNotConnectedError } from "@/lib/platform/credentials";
-import { sendEmail } from "@/lib/outreach/gmail";
+import { isPlatformNotConnectedError } from "@/lib/platform/credentials";
+import { mailboxProviderConnected, sendFromMailbox } from "@/lib/outreach/mailboxProviders";
 import { mailboxes } from "@/lib/outreach/schema";
+import { unipileReplyTarget } from "@/lib/outreach/unipileMail";
 import { sendMessage as sendLinkedInMessage } from "@/services/unipile.service";
 import {
   deliverWhatsappFromCrm,
@@ -69,6 +70,8 @@ export type CrmSendAdapterInput = {
   bccEmails?: string[];
   /** Email only: the conversation's RFC Message-ID chain (oldest first), ending with inReplyTo. */
   references?: string[];
+  /** Email through a Unipile mailbox only: the earlier email Unipile sends this as a reply to. */
+  providerReplyTo?: string | null;
 };
 
 const RFC_MESSAGE_ID = /^<[^<>\s@]+@[^<>\s@]+>$/;
@@ -150,17 +153,28 @@ function providerErrorIsDefinite(error: unknown): boolean {
 
 export const sendThroughCrmProvider: CrmSendAdapter = async (input) => {
   if (input.channel === "email") {
-    if (!(await isPlatformConnected("google"))) throw new DefiniteCrmSendError("Google Workspace is not connected — connect it in Settings → Email → Connection");
     if (!input.recipientEmail) throw new DefiniteCrmSendError("The Person has no Email address");
     if (!input.subject) throw new DefiniteCrmSendError("Email subject is required");
-    // The mailbox's display name, as campaign sends use it: without it the
-    // reply arrives from a bare address while the draft is signed by name.
+    // The conversation's mailbox decides the provider; its display name is
+    // used as campaign sends use it: without it the reply arrives from a bare
+    // address while the draft is signed by name.
     const [mailbox] = await db
-      .select({ displayName: mailboxes.displayName })
+      .select({
+        provider: mailboxes.provider,
+        emailAddress: mailboxes.emailAddress,
+        unipileAccountId: mailboxes.unipileAccountId,
+        displayName: mailboxes.displayName,
+      })
       .from(mailboxes)
       .where(and(inOrg(mailboxes), eq(mailboxes.emailAddress, input.accountRef)))
       .limit(1);
-    const result = await sendEmail({
+    const provider = mailbox?.provider ?? "google";
+    if (!(await mailboxProviderConnected(provider))) {
+      throw new DefiniteCrmSendError(provider === "unipile"
+        ? "Unipile is not connected — connect it in Settings → LinkedIn → Connection"
+        : "Google Workspace is not connected — connect it in Settings → Email → Connection");
+    }
+    const result = await sendFromMailbox(mailbox ?? { provider, emailAddress: input.accountRef, unipileAccountId: null }, {
       from: input.accountRef,
       fromName: mailbox?.displayName ?? undefined,
       to: [input.recipientEmail],
@@ -172,11 +186,13 @@ export const sendThroughCrmProvider: CrmSendAdapter = async (input) => {
       inReplyTo: input.inReplyTo ?? undefined,
       references: input.references?.length ? input.references : input.inReplyTo ? [input.inReplyTo] : undefined,
       threadId: input.providerThreadId ?? undefined,
+      providerReplyTo: input.providerReplyTo ?? undefined,
     });
     return {
-      provider: "gmail",
+      provider: provider === "unipile" ? "unipile" : "gmail",
       providerMessageId: result.id,
-      providerThreadId: result.threadId,
+      // Unipile reports no thread on send; the conversation keeps the one it has.
+      providerThreadId: result.threadId ?? (provider === "unipile" ? input.providerThreadId : null),
       rfcMessageId: result.messageId,
       response: result,
     };
@@ -336,9 +352,16 @@ async function prepareSend(tx: CrmTransaction, input: {
     bodyText,
     bodyHtml: draft.editedBodyHtml ?? draft.aiBodyHtml,
     inReplyTo: thread.inReplyTo,
-    ...(draft.channel === "email" ? { ccEmails: extras.cc, bccEmails: extras.bcc, references: thread.references } : {}),
+    ...(draft.channel === "email"
+      ? { ccEmails: extras.cc, bccEmails: extras.bcc, references: thread.references, providerReplyTo: unipileReplyTarget(history) }
+      : {}),
   };
-  const provider = crmChannelSendProvider(draft.channel);
+  // An email conversation's mailbox may send through Unipile rather than Gmail.
+  const [mailbox] = draft.channel === "email"
+    ? await tx.select({ provider: mailboxes.provider }).from(mailboxes)
+      .where(and(inOrg(mailboxes), eq(mailboxes.emailAddress, conversation.accountRef))).limit(1)
+    : [];
+  const provider = mailbox?.provider === "unipile" ? "unipile" : crmChannelSendProvider(draft.channel);
   const [attempt] = existingAttempt
     ? await tx.update(crmSendAttempts).set({
         status: "sending", requestId: input.requestId, provider, accountRef: conversation.accountRef,

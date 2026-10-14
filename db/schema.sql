@@ -2294,7 +2294,10 @@ CREATE TABLE public.outreach_mailboxes (
     created_at timestamp with time zone DEFAULT now(),
     updated_at timestamp with time zone DEFAULT now(),
     working_hours jsonb DEFAULT '{"days": {"friday": {"to": "18:00", "from": "09:00", "enabled": true}, "monday": {"to": "18:00", "from": "09:00", "enabled": true}, "sunday": {"to": "18:00", "from": "09:00", "enabled": false}, "tuesday": {"to": "18:00", "from": "09:00", "enabled": true}, "saturday": {"to": "18:00", "from": "09:00", "enabled": false}, "thursday": {"to": "18:00", "from": "09:00", "enabled": true}, "wednesday": {"to": "18:00", "from": "09:00", "enabled": true}}, "timezone": "America/New_York"}'::jsonb NOT NULL,
-    organization_id uuid NOT NULL
+    organization_id uuid NOT NULL,
+    provider text DEFAULT 'google'::text NOT NULL,
+    unipile_account_id text,
+    CONSTRAINT outreach_mailboxes_provider_chk CHECK ((provider = ANY (ARRAY['google'::text, 'unipile'::text])))
 );
 
 --
@@ -4395,6 +4398,12 @@ CREATE UNIQUE INDEX outreach_mailbox_queue_lead_uq ON public.outreach_mailbox_qu
 --
 
 CREATE INDEX outreach_mailboxes_organization_idx ON public.outreach_mailboxes USING btree (organization_id);
+
+--
+-- Name: outreach_mailboxes_unipile_account_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX outreach_mailboxes_unipile_account_uq ON public.outreach_mailboxes USING btree (unipile_account_id) WHERE (unipile_account_id IS NOT NULL);
 
 --
 -- Name: outreach_suppression_list_organization_idx; Type: INDEX; Schema: public; Owner: -

@@ -78,8 +78,8 @@ await runInOrganization(org!.id, async () => {
 
   const before = emailLaunchProblems(await emailLaunchFacts({ id: campaign.id, sequence: parsed.sequence }));
   check(
-    "email launch is refused without Google Workspace and a connected mailbox",
-    before.length === 2 && before.some((p) => p.includes("Google")) && before.some((p) => p.includes("mailbox")),
+    "email launch is refused without a connected mailbox",
+    before.length === 1 && before[0]!.includes("sending mailbox"),
     JSON.stringify(before),
   );
 

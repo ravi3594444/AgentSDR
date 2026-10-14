@@ -17,6 +17,9 @@ been sent or received yet.
   research, email / LinkedIn / WhatsApp campaigns with server-enforced
   launch rules and sending rules, reply sync, AI classification and drafts
   that always wait for your approval, Action required and the CRM.
+- **Email without a domain:** email can send through Google Workspace *or*
+  through an inbox linked in Unipile (a personal Gmail, Outlook, iCloud or
+  IMAP account). Each mailbox uses its own; see §3.
 - **Hidden for this release** (`src/lib/release.ts`; code and data kept):
   WhatsApp calling, call recordings and the recorder extension, image AI
   columns, LinkedIn lead search, Tables and Prospecting. Do not set up
@@ -41,6 +44,15 @@ none of this build's changes. Always add the build override.
 Prerequisites: a Linux VM with Docker and Compose. A planning estimate for a
 starter server is 2 vCPU, 8 GB RAM and 60 GB SSD. That is not a published
 minimum, and no GPU is needed.
+
+**Memory is set by the build, not by running the app.** `bun run build`
+peaked at about 6.4 GB of total memory when measured in this project's
+sandbox (the running server was a few hundred MB). On Google Cloud that
+means **e2-standard-2** (2 vCPU, 8 GB). An **e2-medium** (2 vCPU, 4 GB)
+will likely run out of memory building the image; use it only with 4–8 GB
+of swap, or build the image elsewhere and pull it. Reserve a static
+external IP so a DNS name (DuckDNS works) keeps pointing at the VM, and
+open ports 80 and 443 for the reverse proxy in "Going live".
 
 ```bash
 git clone https://github.com/ravi3594444/AgentSDR.git 22nd-x-ai-outreach
@@ -73,11 +85,14 @@ Rules that matter:
 - **Do not set `DEMO_MODE`** on this database, and do not seed demo data into it.
 - **To rebuild after pulling changes:** run the same `up -d --build` command.
   `bun run db:setup` is for empty databases only and is never an upgrade.
-- **Upgrading a database created before this release:** run the web
-  research migration once (a fresh database already has it):
+- **Upgrading a database created before this release:** run these two
+  migrations once (a fresh database already has both; each is safe to run
+  again):
   `docker compose -f docker-compose.yml -f docker-compose.build.yml exec app agentsdr-entrypoint bun scripts/create-lead-research.ts`
-  (from source: `bun scripts/create-lead-research.ts`). Until then, Research
-  says exactly this.
+  and the same with `scripts/add-mailbox-provider.ts` (from source:
+  `bun scripts/create-lead-research.ts` and `bun scripts/add-mailbox-provider.ts`).
+  Until the first runs, Research says so; until the second runs, the email
+  pages fail to load.
 
 ### Going live (public HTTPS address)
 
@@ -91,6 +106,12 @@ Unipile webhooks and Gmail push notifications cannot reach `localhost`.
 4. In the app, open **Settings → LinkedIn → Connection** and **save the
    Unipile connection again**. Webhook registration is skipped on a local
    address, and saving at the public address registers them.
+
+With DuckDNS: create the subdomain, point it at the VM's static IP, and use
+Caddy as the reverse proxy; a two-line `Caddyfile`
+(`yourname.duckdns.org {` / `reverse_proxy localhost:3000` / `}`) gets and
+renews the Let's Encrypt certificate itself. `APP_URL` is then
+`https://yourname.duckdns.org`.
 
 Details: `docs/self-hosting/production.mdx`.
 
@@ -129,7 +150,8 @@ delivered.
 
 | Step | Where | What you need | Guide |
 | --- | --- | --- | --- |
-| Email | Settings → Email → Connection, then Mailboxes | Google Workspace service account with domain-wide delegation. For replies to stop follow-ups you also need a **Gmail Pub/Sub topic** (saved on the same card; `gmail-api-push@system.gserviceaccount.com` must be allowed to publish to it) and a push subscription to `https://your-domain/api/outreach/webhooks/gmail-watch`. The card then shows **Reply sync: Gmail watching N mailboxes**; the watch registers when you save and when a mailbox connects, and renews daily. Give each mailbox a **display name**: replies and AI drafts are signed with it. Personal Gmail is not supported. | `docs/integrations/google-workspace.mdx`, `docs/integrations/gmail-reply-sync.mdx` |
+| Email, option A: **Unipile** (no domain needed) | Settings → Email → Connection (the Unipile card; the same connection as LinkedIn and WhatsApp), then Email → Accounts → **Sync from Unipile** | A Gmail, Outlook, iCloud or IMAP inbox **linked in the Unipile dashboard** (Accounts → connect an email account). Sync makes each linked inbox a mailbox and, if needed, registers Unipile's **email webhook**, which is how replies arrive (it needs the public HTTPS address; on `localhost` it is skipped). Getting started says **Connected** once a Unipile mailbox exists and the email webhook is registered. Read the limits under "Email through Unipile" below. | `docs/integrations/unipile.mdx` |
+| Email, option B: **Google Workspace** (your own domain) | Settings → Email → Connection, then Mailboxes → Add mailbox | Google Workspace service account with domain-wide delegation. For replies to stop follow-ups you also need a **Gmail Pub/Sub topic** (saved on the same card; `gmail-api-push@system.gserviceaccount.com` must be allowed to publish to it) and a push subscription to `https://your-domain/api/outreach/webhooks/gmail-watch`. The card then shows **Reply sync: Gmail watching N mailboxes**; the watch registers when you save and when a mailbox connects, and renews daily. Give each mailbox a **display name**: replies and AI drafts are signed with it. A personal Gmail cannot be used this way (domain-wide delegation needs a Workspace domain); use option A for it. | `docs/integrations/google-workspace.mdx`, `docs/integrations/gmail-reply-sync.mdx` |
 | LinkedIn | Settings → LinkedIn → Connection, then Accounts | A Unipile workspace (API key and DSN). LinkedIn profiles link through Unipile's hosted sign-in. | `docs/integrations/unipile.mdx` |
 | WhatsApp | Settings → WhatsApp → Integrations, then Numbers | The same Unipile connection (no R2 in this release). Link the number **in the Unipile dashboard** (scan the QR code there), then press **Sync from Unipile**. New numbers start no new chats for 24 h. | `docs/whatsapp/accounts.mdx` |
 | AI | Settings → AI provider | Pick **one** provider for the whole workspace. **AI/ML API** (verified in this release): one key (aimlapi.com → Keys), then select structured-output models and a default; no management key, BYOK or routing step. For **company web research**, also tick **Perplexity Sonar** in step 2 and choose it as the research model in step 4, with a daily run limit (default 25). **OpenRouter**: an inference key and a management key, at least one BYOK provider, a default model and the shared-capacity confirmation; research stays off with it in this release. Drafts always wait for your review either way. | `src/lib/ai/README.md`, `docs/workspace/ai-provider.mdx`, `docs/integrations/openrouter.mdx` |
@@ -146,9 +168,36 @@ To check AI end to end after setup (it spends a little real usage and never
 sends anything), against a local copy of the database:
 `ORGANIZATION_ID=<id> AI_LIVE_INLINE_WORKER=1 bun run --conditions=react-server scripts/e2e/ai-live-crm.ts`.
 
-After you save Unipile, its dashboard lists two webhooks named
-**22nd X AI · …**. Upstream docs call them "AgentSDR · …"; only the label
-changed, and they are still matched by URL.
+After you save Unipile, its dashboard lists three webhooks named
+**22nd X AI · …** (connections, messages, and email replies). Upstream docs
+call them "AgentSDR · …"; only the label changed, and they are still matched
+by URL. A workspace that saved Unipile before email support gets the email
+webhook on its next **Sync from Unipile** (or **Register again** on the
+LinkedIn connection page).
+
+### Email through Unipile: what to know first
+
+- **Sending cold email from a personal Gmail risks that Gmail account.**
+  Google limits a personal account to roughly 500 recipients a day and may
+  suspend one that sends unsolicited mail or collects bounces and spam
+  reports. Keep the mailbox's daily limit low (the default is 30), warm the
+  address up, and send only to people you may lawfully contact. Unipile
+  does not change any of this; it sends as that account.
+- **No `List-Unsubscribe` header.** Google Workspace sends add it; this
+  build does not set it on Unipile sends (Unipile does not document passing
+  that header through), so these emails carry the unsubscribe link in the
+  body only. Gmail and Outlook weigh the header, so expect somewhat lower
+  deliverability.
+- **The sender name** is the one set on the inbox itself (in Gmail:
+  Settings → Accounts → Send mail as), not the mailbox's display name in
+  this app. Set the display name here anyway: AI drafts are signed with it.
+- **Threading:** a follow-up with a blank subject, and a reply from the
+  CRM, are sent as replies to the earlier email through Unipile's
+  `reply_to`. If Unipile no longer knows that email, the message is sent on
+  its own (with "Re:" in the subject) rather than not at all.
+- **Not verified live yet** (see SESSION_STATUS). The request shapes follow
+  Unipile's API reference and SDK, and a stand-in check passes, but the
+  first real send and reply on your server are the proof (§6).
 
 **The Unipile trial is seven days.** Finish everything else (the local checks,
 imports and campaign drafts) before starting it, then use the trial to verify
@@ -206,7 +255,8 @@ Do this on the deployed server (public HTTPS), with **test recipients you
 control**, never a prospect list. Use a campaign of one test lead and a
 sequence of at least two steps with a short wait, so a follow-up is due.
 
-For each connected channel (email, LinkedIn, WhatsApp):
+For each connected channel (email, LinkedIn, WhatsApp; for email, each way
+you send: Google Workspace and/or Unipile):
 
 1. **Delivery:** launch the campaign; confirm the first message arrives at
    the test recipient.
@@ -251,6 +301,10 @@ INITIAL_OWNER_EMAIL=… INITIAL_OWNER_PASSWORD=… BASE_URL=http://localhost:310
 # Campaign engines (email and WhatsApp) on a throwaway organization, with a
 # recording sender instead of Gmail/Unipile; sends nothing. No server needed:
 bun run --conditions=react-server scripts/e2e/campaign-engines.ts
+# Email through Unipile against a stand-in Unipile API (fetch intercepted for a
+# fake host; sends nothing): sync, campaign send and follow-up threading, the
+# email webhook's gate, a reply stopping follow-ups, a CRM reply. No server needed:
+bun run --conditions=react-server scripts/e2e/unipile-email.ts
 # Real AI calls (a little AI/ML usage; never sends). The worker can run in-process:
 ORGANIZATION_ID=<id> AI_LIVE_INLINE_WORKER=1 bun run --conditions=react-server scripts/e2e/ai-live-crm.ts
 ORGANIZATION_ID=<id> bun run --conditions=react-server scripts/e2e/research-live.ts

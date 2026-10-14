@@ -7,11 +7,15 @@ import {
   timestamp,
   uniqueIndex,
   index,
+  check,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { people } from "@/lib/leads/schema";
 import { organizations } from "@/lib/auth/schema";
 
 export type MailboxStatus = "connecting" | "connected" | "failed" | "disabled";
+
+export type MailboxProvider = "google" | "unipile";
 
 export type WorkingDay = { enabled: boolean; from: string; to: string }; // from/to as "HH:mm" 24h
 
@@ -53,6 +57,15 @@ export const mailboxes = pgTable("outreach_mailboxes", {
     .references(() => organizations.id),
   id: uuid("id").primaryKey().defaultRandom(),
   emailAddress: text("email_address").notNull().unique(),
+  /**
+   * What sends and receives for this mailbox: Google Workspace (service
+   * account, Gmail push) or Unipile (an email account linked in Unipile —
+   * Gmail, Outlook or IMAP — sent through Unipile's API, replies by its email
+   * webhook). See src/lib/outreach/mailboxProviders.ts.
+   */
+  provider: text("provider").notNull().default("google").$type<MailboxProvider>(),
+  /** Unipile only: the linked account. A provider identity, so unique across organizations. */
+  unipileAccountId: text("unipile_account_id"),
   displayName: text("display_name"),
   status: text("status").notNull().default("connecting").$type<MailboxStatus>(),
   lastError: text("last_error"),
@@ -69,7 +82,11 @@ export const mailboxes = pgTable("outreach_mailboxes", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
 },
-  (t) => [index("outreach_mailboxes_organization_idx").on(t.organizationId)],
+  (t) => [
+    index("outreach_mailboxes_organization_idx").on(t.organizationId),
+    uniqueIndex("outreach_mailboxes_unipile_account_uq").on(t.unipileAccountId).where(sql`${t.unipileAccountId} IS NOT NULL`),
+    check("outreach_mailboxes_provider_chk", sql`${t.provider} IN ('google', 'unipile')`),
+  ],
 );
 
 export type SuppressionReason = "unsubscribed" | "bounced" | "manual" | "complaint";

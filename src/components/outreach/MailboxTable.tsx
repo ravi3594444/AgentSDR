@@ -167,7 +167,7 @@ function MailboxTableRow({ mailbox }: { mailbox: Mailbox }) {
               {mailbox.emailAddress}
             </span>
           }
-          detail={mailbox.displayName || "No display name"}
+          detail={`${mailbox.displayName || "No display name"} · ${mailbox.provider === "unipile" ? "via Unipile" : "Google Workspace"}`}
           extra={
             note && (
               <p

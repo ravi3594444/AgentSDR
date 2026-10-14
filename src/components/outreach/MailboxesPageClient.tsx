@@ -10,6 +10,7 @@ import { DocsLink } from "@/components/page/DocsLink";
 import { EmptyState } from "@/components/page/EmptyState";
 import { ACCOUNTS_PAGE_SIZE, AccountsFrame, AccountsNoMatch, AccountsPager, type AccountFilter } from "@/components/settings/AccountsOverview";
 import AddMailboxButton from "./AddMailboxButton";
+import SyncUnipileMailboxesButton from "./SyncUnipileMailboxesButton";
 import MailboxTable from "./MailboxTable";
 import type { mailboxes } from "@/lib/outreach/schema";
 
@@ -17,7 +18,14 @@ type Mailbox = typeof mailboxes.$inferSelect;
 
 const healthy = (m: Mailbox) => m.status === "connected";
 
-export default function MailboxesPageClient({ mailboxes }: { mailboxes: Mailbox[] }) {
+export default function MailboxesPageClient({
+  mailboxes,
+  providers,
+}: {
+  mailboxes: Mailbox[];
+  /** Which ways of sending are connected: they decide how a mailbox can be added. */
+  providers: { google: boolean; unipile: boolean };
+}) {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<AccountFilter>("all");
   const [page, setPage] = useState(0);
@@ -55,10 +63,15 @@ export default function MailboxesPageClient({ mailboxes }: { mailboxes: Mailbox[
           <EmptyState
             icon={RiMailLine}
             title="No mailboxes yet"
-            description="Add a Google Workspace address authorised for sending, and campaigns can start sending from it."
+            description={[
+              providers.unipile && "Sync the inboxes linked in Unipile (Gmail, Outlook, IMAP; no domain needed).",
+              providers.google && "Add a Google Workspace address authorised for sending.",
+              "Campaigns send from the mailboxes here.",
+            ].filter(Boolean).join(" ")}
             action={
               <div className="flex flex-wrap items-center justify-center gap-2">
-                <AddMailboxButton />
+                {providers.unipile && <SyncUnipileMailboxesButton mode="filled" />}
+                {providers.google && <AddMailboxButton />}
                 <DocsLink page="email/connect#add-a-mailbox" />
               </div>
             }

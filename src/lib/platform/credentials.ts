@@ -252,6 +252,23 @@ export async function reregisterUnipileWebhooks(): Promise<UnipileWebhookRegistr
 }
 
 /**
+ * Registers Unipile's webhooks again when the stored registration predates
+ * one AgentSDR now needs (the email webhook, added after the first two), so
+ * an organization that connected Unipile earlier gets it without visiting
+ * Settings. Null when nothing needed doing.
+ */
+export async function ensureUnipileWebhook(key: string): Promise<UnipileWebhookRegistration | null> {
+  const [row] = await db
+    .select({ config: gridProviders.config })
+    .from(gridProviders)
+    .where(and(inOrg(gridProviders), eq(gridProviders.key, rowKey("unipile"))))
+    .limit(1);
+  const stored = (row?.config as { webhooks?: UnipileWebhookRegistration | null } | undefined)?.webhooks;
+  if (stored?.status === "registered" && stored.items?.some((item) => item.key === key)) return null;
+  return reregisterUnipileWebhooks();
+}
+
+/**
  * The webhook URLs and the secret, for an admin who chose to reveal them —
  * to register them by hand when automatic registration cannot run. The
  * only place a stored secret leaves the server; the route gates it on the

@@ -150,8 +150,12 @@ const SENDABLE_LEAD_STATUSES: OutreachLeadStatus[] = ["pending", "initial_sent",
 
 /** What emailLaunchProblems needs to know about this campaign, read now. */
 export async function emailLaunchFacts(campaign: { id: string; sequence: unknown }): Promise<EmailLaunchFacts> {
-  const [[mailboxCount], [leadCount], googleConnected] = await Promise.all([
-    db.select({ n: count() }).from(mailboxes).where(and(inOrg(mailboxes), eq(mailboxes.status, "connected"))),
+  const [mailboxCounts, [leadCount], googleConnected, unipileConnected] = await Promise.all([
+    db
+      .select({ provider: mailboxes.provider, n: count() })
+      .from(mailboxes)
+      .where(and(inOrg(mailboxes), eq(mailboxes.status, "connected")))
+      .groupBy(mailboxes.provider),
     db
       .select({ n: count() })
       .from(outreachLeads)
@@ -164,11 +168,15 @@ export async function emailLaunchFacts(campaign: { id: string; sequence: unknown
         isNotNull(people.email),
       )),
     isPlatformConnected("google"),
+    isPlatformConnected("unipile"),
   ]);
+  const connectedMailboxes = { google: 0, unipile: 0 };
+  for (const row of mailboxCounts) connectedMailboxes[row.provider] = Number(row.n);
   return {
     sequence: campaign.sequence,
     googleConnected,
-    connectedMailboxes: Number(mailboxCount?.n ?? 0),
+    unipileConnected,
+    connectedMailboxes,
     usableLeads: Number(leadCount?.n ?? 0),
   };
 }

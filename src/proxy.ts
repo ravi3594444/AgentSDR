@@ -36,6 +36,8 @@ const PUBLIC = [
   "/api/webhooks/whatsapp-message",
   // The single messaging webhook AgentSDR registers; routes to the two above.
   "/api/webhooks/unipile-message",
+  // Unipile's email webhook (inboxes linked in Unipile used as mailboxes); gated like the one above.
+  "/api/webhooks/unipile-email",
   // Called by the WhatsApp call-recorder Chrome extension's service worker,
   // which holds a per-call bearer token, not the site cookie. Every route
   // under this prefix authenticates itself with authorizeRecorder() (see

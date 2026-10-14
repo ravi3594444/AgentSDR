@@ -289,3 +289,42 @@ describe("Gmail watch and incoming replies", () => {
     expect(proven.details).toEqual(["Email: last reply received 2026-10-12.", "LinkedIn: last reply received 2026-10-12."]);
   });
 });
+
+describe("email through Unipile (no Google Workspace)", () => {
+  const unipileEmail = { ...unipileOn, emailWebhook: true };
+  const oneUnipileMailbox = { connected: 1, connecting: 0, failed: 0, disabled: 0, unipileConnected: 1 };
+
+  test("neither provider connected names both ways to send", () => {
+    const item = emailReadiness(fresh());
+    expect(item.status).toBe("not_configured");
+    expect(item.next).toContain("Google Workspace or Unipile");
+  });
+
+  test("Unipile connected without a synced inbox asks for Sync from Unipile", () => {
+    const item = emailReadiness(fresh({ unipile: unipileEmail }));
+    expect(item.status).toBe("not_verified");
+    expect(item.next).toContain("Sync from Unipile");
+  });
+
+  test("a Unipile mailbox without the email webhook sends but cannot hear replies", () => {
+    const item = emailReadiness(fresh({ unipile: unipileOn, mailboxes: oneUnipileMailbox }));
+    expect(item.status).toBe("needs_attention");
+    expect(item.summary).toContain("replies are not picked up");
+  });
+
+  test("a Unipile mailbox with the email webhook is connected, no Gmail topic needed", () => {
+    const item = emailReadiness(fresh({ unipile: unipileEmail, mailboxes: oneUnipileMailbox }));
+    expect(item.status).toBe("connected");
+    expect(item.summary).toContain("through Unipile");
+  });
+
+  test("Google Workspace mailboxes keep the Gmail rules even when Unipile is connected", () => {
+    const item = emailReadiness(fresh({
+      google: { ...googleOn, replySyncTopicSet: false },
+      unipile: unipileEmail,
+      mailboxes: { connected: 2, connecting: 0, failed: 0, disabled: 0, unipileConnected: 1 },
+    }));
+    expect(item.status).toBe("needs_attention");
+    expect(item.next).toContain("Gmail Pub/Sub topic");
+  });
+});

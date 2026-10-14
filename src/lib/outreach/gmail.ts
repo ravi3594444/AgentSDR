@@ -72,6 +72,10 @@ export type SendEmailParams = {
    *  weight when scoring spam, and what renders their native "Unsubscribe"
    *  button next to the sender name. */
   unsubscribeUrl?: string;
+  /** Unipile mailboxes only: Unipile's or the provider's id of the earlier
+   *  email this one answers (Unipile threads by it). Gmail ignores it and
+   *  threads by inReplyTo/references/threadId. */
+  providerReplyTo?: string;
 };
 
 /**

@@ -85,8 +85,19 @@ export type ReadinessFacts = {
   /** May this person change integrations and AI settings (owner or admin)? */
   canManage: boolean;
   google: PlatformFacts & { replySyncTopicSet: boolean; gmailWatch: GmailWatchFacts };
-  mailboxes: { connected: number; connecting: number; failed: number; disabled: number };
-  unipile: PlatformFacts & { webhooks: WebhookFacts };
+  mailboxes: {
+    connected: number;
+    connecting: number;
+    failed: number;
+    disabled: number;
+    /** Of `connected`, those that send through an inbox linked in Unipile. */
+    unipileConnected?: number;
+  };
+  unipile: PlatformFacts & {
+    webhooks: WebhookFacts;
+    /** The registration includes the email webhook, the only way replies to a Unipile mailbox arrive. */
+    emailWebhook?: boolean;
+  };
   linkedinAccounts: { connected: number; disconnected: number };
   whatsappAccounts: { connected: number; notConnected: number };
   ai: {
@@ -154,26 +165,36 @@ export function workspaceReadiness(facts: ReadinessFacts): ReadinessItem {
   };
 }
 
+const mailboxLine = (mailboxes: ReadinessFacts["mailboxes"]) =>
+  `Mailboxes: ${mailboxes.connected} connected${mailboxes.unipileConnected ? ` (${mailboxes.unipileConnected} through Unipile)` : ""}${mailboxes.connecting ? ` · ${mailboxes.connecting} connecting` : ""}${mailboxes.failed ? ` · ${mailboxes.failed} failed` : ""}${mailboxes.disabled ? ` · ${mailboxes.disabled} disabled` : ""}.`;
+
 export function emailReadiness(facts: ReadinessFacts): ReadinessItem {
-  const { google, mailboxes, canManage } = facts;
+  const { google, unipile, mailboxes, canManage } = facts;
   const links = [
     { href: "/settings/email-connection", label: "Email connection" },
     { href: "/settings/email-accounts", label: "Mailboxes" },
     { href: "/settings/email-rules", label: "Sending rules" },
   ];
-  const base = { key: "email" as const, title: "Email (Google Workspace)", links };
-  if (!google.connected) {
+  const base = { key: "email" as const, title: "Email", links };
+  const unipileMailboxes = unipile.connected ? (mailboxes.unipileConnected ?? 0) : 0;
+  if (!google.connected && !unipile.connected) {
     return {
       ...base,
       status: "not_configured",
-      summary: "Google Workspace is not connected.",
-      details: ["Email sends through a Google Workspace service account with domain-wide delegation. Personal Gmail accounts are not supported."],
-      next: forRole("Connect Google Workspace on the Email connection page.", canManage),
+      summary: "No way to send email is connected.",
+      details: [
+        "Email sends through a Google Workspace service account (addresses on your own domain), or through inboxes linked in Unipile (Gmail, Outlook, iCloud, IMAP; no domain needed).",
+      ],
+      next: forRole("Connect Google Workspace or Unipile on the Email connection page.", canManage),
     };
+  }
+  // Without Google Workspace, or with every connected mailbox on Unipile, Unipile is how email sends.
+  if (!google.connected || (unipileMailboxes > 0 && unipileMailboxes === mailboxes.connected)) {
+    return unipileEmailReadiness(facts, base);
   }
   const details = [
     verifiedLine(google.verifiedAt),
-    `Mailboxes: ${mailboxes.connected} connected${mailboxes.connecting ? ` · ${mailboxes.connecting} connecting` : ""}${mailboxes.failed ? ` · ${mailboxes.failed} failed` : ""}${mailboxes.disabled ? ` · ${mailboxes.disabled} disabled` : ""}.`,
+    mailboxLine(mailboxes),
     google.replySyncTopicSet ? "Reply sync: a Gmail Pub/Sub topic is set." : "Reply sync: no Gmail Pub/Sub topic is set.",
     gmailWatchLine(google.gmailWatch),
   ].filter((line): line is string => Boolean(line));
@@ -229,6 +250,49 @@ export function emailReadiness(facts: ReadinessFacts): ReadinessItem {
     ...base,
     status: "connected",
     summary: `${plural(mailboxes.connected, "mailbox", "mailboxes")} connected, with Gmail watching for replies.`,
+    details,
+    next: null,
+  };
+}
+
+/** Email that sends only through inboxes linked in Unipile; replies arrive by Unipile's email webhook. */
+function unipileEmailReadiness(
+  facts: ReadinessFacts,
+  base: { key: "email"; title: string; links: ReadinessItem["links"] },
+): ReadinessItem {
+  const { unipile, mailboxes, canManage } = facts;
+  const details = [verifiedLine(unipile.verifiedAt), mailboxLine(mailboxes)].filter((line): line is string => Boolean(line));
+  if (mailboxes.failed > 0) {
+    return {
+      ...base,
+      status: "needs_attention",
+      summary: `${plural(mailboxes.failed, "mailbox", "mailboxes")} failed the last check.`,
+      details,
+      next: forRole("Open Mailboxes, read the error on the failing mailbox, fix the inbox in the Unipile dashboard if needed, and test it again.", canManage),
+    };
+  }
+  if (!(mailboxes.unipileConnected ?? 0)) {
+    return {
+      ...base,
+      status: "not_verified",
+      summary: "Unipile is connected, but none of its inboxes is a mailbox yet.",
+      details,
+      next: forRole("Link a Gmail, Outlook or IMAP inbox in the Unipile dashboard, then use Sync from Unipile on the Mailboxes page.", canManage),
+    };
+  }
+  if (unipile.webhooks?.status !== "registered" || !unipile.emailWebhook) {
+    return {
+      ...base,
+      status: "needs_attention",
+      summary: "Email sends, but replies are not picked up: Unipile's email webhook is not registered, so follow-ups do not stop when someone answers.",
+      details: [...details, unipile.webhooks?.message ? `Webhooks: ${unipile.webhooks.message}` : "Webhooks: the email webhook is not registered."],
+      next: forRole("Run Sync from Unipile on the Mailboxes page, or Register again on the LinkedIn connection page, once the app runs at its public address.", canManage),
+    };
+  }
+  return {
+    ...base,
+    status: "connected",
+    summary: `${plural(mailboxes.unipileConnected ?? 0, "mailbox", "mailboxes")} connected through Unipile, with its email webhook delivering replies.`,
     details,
     next: null,
   };

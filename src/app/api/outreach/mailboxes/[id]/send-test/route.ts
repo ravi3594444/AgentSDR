@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getMailbox } from "@/lib/outreach/mailboxes";
-import { sendEmail } from "@/lib/outreach/gmail";
+import { mailboxProviderConnected, sendFromMailbox } from "@/lib/outreach/mailboxProviders";
 import { withOrgContext, authContextErrorResponse } from "@/lib/auth/context";
 import { BRAND } from "@/lib/brand";
 
@@ -23,10 +23,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
       const mailbox = await getMailbox(id);
       if (!mailbox) return NextResponse.json({ error: "mailbox not found" }, { status: 404 });
+      if (!(await mailboxProviderConnected(mailbox.provider))) {
+        const name = mailbox.provider === "unipile" ? "Unipile" : "Google Workspace";
+        return NextResponse.json({ ok: false, error: `${name} is not connected, so this mailbox cannot send.` }, { status: 409 });
+      }
 
       try {
-        const result = await sendEmail({
+        const result = await sendFromMailbox(mailbox, {
           from: mailbox.emailAddress,
+          fromName: mailbox.displayName,
           to: [body.to],
           subject: `${BRAND.shortName} test email`,
           text: `This is a test email from ${mailbox.emailAddress}, sent via ${BRAND.shortName} to confirm the mailbox is working.`,
