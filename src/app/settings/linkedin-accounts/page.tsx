@@ -3,7 +3,7 @@ import { Suspense } from "react";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import { RequiresPlatform } from "@/components/settings/RequiresPlatform";
 import { AccountsClient } from "@/components/linkedin/AccountsClient";
-import { ConnectAccountButton, HostedAuthReturn } from "@/components/linkedin/HostedAuth";
+import { ConnectAccountButton, HostedAuthReturn, SyncLinkedInAccountsButton } from "@/components/linkedin/HostedAuth";
 import { requirePageOrgContext } from "@/lib/auth/context";
 import { runInOrganization } from "@/lib/tenancy/scope";
 import { loadConnectedAccounts } from "@/lib/linkedin/connectedAccounts.server";
@@ -42,7 +42,10 @@ export default function LinkedInAccountsPage() {
       description="The LinkedIn profiles campaigns send from, connected through Unipile."
       actions={
         <RequiresPlatform platform="unipile" fallback={null}>
-          <ConnectAccountButton />
+          <div className="flex flex-wrap items-start gap-2">
+            <SyncLinkedInAccountsButton />
+            <ConnectAccountButton />
+          </div>
         </RequiresPlatform>
       }
     >

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { RiAddLine, RiLoader4Line } from "@remixicon/react";
+import { RiAddLine, RiLoader4Line, RiRefreshLine } from "@remixicon/react";
 import * as Button from "@/components/alignui/button";
 import { Callout } from "@/components/settings/SettingsKit";
 
@@ -14,7 +14,7 @@ import { Callout } from "@/components/settings/SettingsKit";
  * wizard sends the user back to /settings/linkedin-accounts?unipile=success|failure.
  */
 export async function startHostedAuth(accountId?: string): Promise<void> {
-  const res = await fetch("/api/settings/linkedin-accounts/hosted-auth", {
+  const res = await fetch("/api/linkedin/accounts/hosted-auth", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(accountId ? { accountId } : {}),
@@ -93,6 +93,43 @@ export function ConnectAccountButton({
 }
 
 /**
+ * Pulls the LinkedIn accounts already linked in the Unipile dashboard into
+ * this workspace now, instead of at the next scheduled LinkedIn run (every 30
+ * minutes). For an account linked outside the wizard, which is the common
+ * case: running the wizard again would link the same profile a second time.
+ */
+export function SyncLinkedInAccountsButton() {
+  const router = useRouter();
+  const [syncing, setSyncing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function sync() {
+    setSyncing(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/linkedin/accounts/sync", { method: "POST" });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.ok) throw new Error(data?.error || `Sync failed (HTTP ${res.status})`);
+      router.refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <Button.Root type="button" variant="neutral" mode="stroke" size="small" disabled={syncing} onClick={() => void sync()}>
+        <Button.Icon as={syncing ? RiLoader4Line : RiRefreshLine} className={syncing ? "animate-spin" : undefined} />
+        {syncing ? "Syncing…" : "Sync from Unipile"}
+      </Button.Root>
+      {error && <p role="alert" className="max-w-72 text-right text-paragraph-xs text-error-base">{error}</p>}
+    </div>
+  );
+}
+
+/**
  * Handles the return leg of the wizard. Unipile's notify_url already triggers a
  * sync server-side, but that callback cannot reach a localhost dev server and
  * may land after the redirect, so the returning tab syncs once itself. Both
@@ -115,7 +152,7 @@ export function HostedAuthReturn() {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch("/api/settings/linkedin-accounts/sync", { method: "POST" });
+        const res = await fetch("/api/linkedin/accounts/sync", { method: "POST" });
         if (!res.ok) throw new Error(await res.text());
         if (cancelled) return;
         setState("done");
