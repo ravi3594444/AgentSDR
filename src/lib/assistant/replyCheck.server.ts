@@ -86,6 +86,7 @@ export async function modelReplyCheck(input: ReplyCheckInput & { knowledge: stri
       "BUSINESS INFORMATION is everything the business has told us. Nothing else counts as known: not general knowledge, not what is typical for such businesses.",
       "Evidence must be copied exactly from BUSINESS INFORMATION (a phrase or sentence). Never paraphrase it. If nothing supports something, leave its evidence empty.",
       "List every question the lead asked, even implied ones (\"how much\", \"do you cover my area\", \"can you come Tuesday\").",
+      "A question is answered only if BUSINESS INFORMATION states the answer itself. Something missing from a list does not answer whether it is offered: 'we service chairs and autoclaves' does not answer 'do you service X-ray machines?', in either direction. A reply that dodges the question, or says it will check, leaves it unanswered: mark answered false with empty evidence.",
       "A reply that only thanks them or asks them a question makes no claims. Greetings, the sender's name and a request to reply are not claims.",
     ].join("\n"),
     userPrompt: `BUSINESS INFORMATION:\n${input.knowledge || "(nothing saved)"}\n\nLEAD'S MESSAGE (from ${input.leadName || "the lead"}):\n${input.leadMessage}\n\nPROPOSED REPLY:\n${input.reply}`,

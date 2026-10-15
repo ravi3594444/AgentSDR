@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ensureSignOff, personalizationKey, personalLineProblem, sequenceProblem, templateProblem, templateTokens } from "./messages";
+import { availableTokens, ensureSignOff, personalizationKey, personalLineProblem, sequenceProblem, templateProblem, templateTokens } from "./messages";
 
 const TOKENS = ["firstName", "company", "city", "category", "p_1a2b3c4d"];
 
@@ -71,5 +71,13 @@ describe("ensureSignOff", () => {
     expect(second!.body).toBe("Any thoughts?");
     expect(ensureSignOff("whatsapp", [step("Hi, this is Ravi from Bright Path.")], profile, false)[0]!.body).toBe("Hi, this is Ravi from Bright Path.");
     expect(ensureSignOff("linkedin", [step("Hi")], profile, false)[0]!.body).toBe("Hi");
+  });
+});
+
+describe("availableTokens", () => {
+  test("only fields every lead has may be used in the messages", () => {
+    expect(availableTokens([{ company: "Lotus Dental", city: "Pune", category: "Dentist" }, { company: "Smile Spot", city: "Pune", category: "" }])).toEqual(["company", "city"]);
+    expect(availableTokens([{ company: "Lotus Dental" }, {}])).toEqual([]);
+    expect(availableTokens([])).toEqual([]);
   });
 });

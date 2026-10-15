@@ -63,7 +63,9 @@ type Job = {
   runId: string | null;
 };
 
-type Run = { id: string; status: string; autopilot: boolean; error: string | null; campaigns: Record<string, string> };
+type RunReply = { id: string; who: string; channel: string; receivedAt: string; preview: string; state: { tone: "done" | "waiting" | "you" | "failed"; text: string; at?: string } };
+
+type Run = { id: string; status: string; autopilot: boolean; error: string | null; campaigns: Record<string, string>; replies?: RunReply[] };
 
 type DecisionState = { status: "open" | "answered" | "resolved"; answer: string | null };
 
@@ -359,8 +361,30 @@ function ProposalCard({ message, run, canManageAutopilot, onChanged }: { message
           <Button.Root variant="error" mode="stroke" size="xsmall" disabled={busy} onClick={() => void act("stop")}>Stop</Button.Root>
         </div>
       )}
+      {run?.replies && run.replies.length > 0 && <RepliesList replies={run.replies} />}
       {run?.error && <p className="mt-2 text-paragraph-xs text-error-base">{run.error}</p>}
       {error && <p role="alert" className="mt-2 text-paragraph-xs text-error-base">{error}</p>}
+    </div>
+  );
+}
+
+const timeOf = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+/** The latest replies to a run and what became of each, so "why no answer?" is answered on the card. */
+function RepliesList({ replies }: { replies: RunReply[] }) {
+  const tone = { done: "text-success-base", waiting: "text-text-sub-600", you: "text-warning-base", failed: "text-error-base" } as const;
+  return (
+    <div className="mt-3 border-t border-stroke-soft-200 pt-3">
+      <p className="text-label-xs text-text-strong-950">Replies</p>
+      <ul className="mt-1.5 space-y-2">
+        {replies.map((reply) => (
+          <li key={reply.id} className="text-paragraph-xs">
+            <p className="text-text-sub-600"><span className="text-label-xs text-text-strong-950">{reply.who}</span> · {CHANNEL_LABEL[reply.channel] ?? reply.channel} · {timeOf(reply.receivedAt)}</p>
+            {reply.preview && <p className="mt-0.5 line-clamp-2 border-l-2 border-stroke-sub-300 pl-2 text-text-sub-600">{reply.preview}</p>}
+            <p className={cn("mt-0.5", tone[reply.state.tone])}>{reply.state.text}{reply.state.at ? ` ${timeOf(reply.state.at)}` : ""}.</p>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -724,6 +748,14 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
     const timer = setInterval(() => void refresh(false), 2_000);
     return () => clearInterval(timer);
   }, [working, refresh]);
+
+  // While a run is live, replies, answers and decisions arrive on their own: show them without a reload.
+  const live = Object.values(state.runs).some((run) => run.status === "running" || run.status === "paused");
+  useEffect(() => {
+    if (working || !live) return;
+    const timer = setInterval(() => void refresh(false), 15_000);
+    return () => clearInterval(timer);
+  }, [working, live, refresh]);
 
   const showPending = pending !== null && !state.messages.slice(pending.baseline).some((message) => message.role === "user");
   const count = state.messages.length + (showPending ? 1 : 0);

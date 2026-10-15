@@ -22,7 +22,7 @@ import { whatsappAccounts, whatsappCampaignLeads } from "@/lib/whatsapp/schema";
 import { requeueRunAutopilot } from "./autopilotRun.server";
 import { eligibleAudienceMembers, summarizeAudience } from "./audiences.server";
 import { countReasons } from "./audiences";
-import { personalizationKey } from "./messages";
+import { availableTokens, personalizationKey, templateTokens } from "./messages";
 import { getBusinessProfile } from "./profile.server";
 import { missingForOutreach } from "./profile";
 import {
@@ -140,11 +140,14 @@ export type PrepareInput = {
 };
 
 /** An earlier run's sequences for the channels wanted, with its per-lead merge key swapped for the new run's. */
-function reuseSequences(base: OutreachPlan, key: string, channels: AudienceChannel[]): Partial<Record<AudienceChannel, PlannedStep[]>> {
+function reuseSequences(base: OutreachPlan, key: string, channels: AudienceChannel[], tokens: readonly string[]): Partial<Record<AudienceChannel, PlannedStep[]>> {
   const out: Partial<Record<AudienceChannel, PlannedStep[]>> = {};
   const token = new RegExp(`\\{\\{\\s*${base.personalizationKey}\\s*\\}\\}`, "g");
+  const allowed = new Set([...tokens, base.personalizationKey].map((name) => name.toLowerCase()));
   for (const channel of channels) {
     const steps = base.sequences[channel];
+    // Messages using a field these leads lack are written afresh instead.
+    if (steps?.some((step) => templateTokens(`${step.subject ?? ""} ${step.body}`).some((name) => !allowed.has(name.toLowerCase())))) continue;
     if (steps?.length) out[channel] = steps.map((step) => ({ ...step, subject: step.subject?.replace(token, `{{${key}}}`) ?? null, body: step.body.replace(token, `{{${key}}}`) }));
   }
   return out;
@@ -197,7 +200,13 @@ export async function prepareOutreach(input: PrepareInput): Promise<Proposal> {
   const cost: WriterCost = { calls: 0, usd: null, runId };
   const context = await businessContext(profile);
   const audienceDescription = `${audience.name}${typeof audience.criteria.what === "string" ? ` (${audience.criteria.what} in ${String(audience.criteria.where ?? "")})` : ""}; ${assignments.length} leads, mostly businesses rather than named people`;
-  const reused = base ? reuseSequences(base.plan, key, channels) : {};
+  // Merge fields every chosen lead has; the others are left out of the messages.
+  const leadRows = await loadPeople(assignments.map((assignment) => assignment.personId));
+  const tokens = availableTokens(assignments.map((assignment) => {
+    const row = leadRows.get(assignment.personId);
+    return row ? leadVariables(row, key, "") : {};
+  }));
+  const reused = base ? reuseSequences(base.plan, key, channels, tokens) : {};
   const toWrite = channels.filter((channel) => !reused[channel]);
   const written = toWrite.length ? await writeSequences({
     profile,
@@ -207,6 +216,7 @@ export async function prepareOutreach(input: PrepareInput): Promise<Proposal> {
     signatureAppended: availability.signatureAppended,
     instructions: input.instructions?.trim() || null,
     audienceDescription,
+    tokens,
     cost,
   }) : {};
   const sequences: Partial<Record<AudienceChannel, PlannedStep[]>> = { ...reused, ...written };

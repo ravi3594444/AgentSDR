@@ -123,6 +123,26 @@ new `assistant-chat-live.ts` (real model, the owner's own conversations)
 passing on four runs after the fixes; `campaign-engines.ts` 25/25,
 `unipile-email.ts` 23/23; lint; build.
 
+### Follow-up: the first real WhatsApp message (2026-10-15)
+
+The owner's test reached their own WhatsApp through the VM — the first real
+delivery on any channel — but their reply got no visible answer, and the
+message read "Hi  team" / "managing  in  is" (blank merge fields).
+
+- Messages use only merge fields every lead of the run has
+  (`availableTokens`): a contact typed in the chat or a bare list has no
+  company or city, so the writer greets plainly and leaves them out.
+- The running plan card lists each reply and what became of it (answered,
+  going out at a time, waiting for the owner and why, failed), and the chat
+  refreshes every 15 s while a run is live; before, a decision card or an
+  answer appeared only after a reload.
+- A list of places sent as an array is saved as text instead of failing.
+- The reply check no longer counts "not in the list" as an answer.
+
+Not yet known: why the owner's reply got no answer on the VM (still
+waiting the 10 minutes, held for a decision, or never delivered by
+Unipile). The diagnostic in the chat reply reads the VM's records.
+
 ### Live services vs stand-ins
 
 - **Live, real services:** gosom/google-maps-scraper v1.18.1 against Google

@@ -50,3 +50,10 @@ describe("contactChannels", () => {
     expect(countReasons(["a", "b", "a", null])).toEqual([{ reason: "a", count: 2 }, { reason: "b", count: 1 }]);
   });
 });
+
+test("a list of places or customers is saved as one line of text", () => {
+  const { profile, problems } = mergeProfile({}, { locations: ["Pune", " PCMC "], targetCustomers: ["dental clinics"], offer: { bad: true } });
+  expect(profile.locations).toBe("Pune, PCMC");
+  expect(profile.targetCustomers).toBe("dental clinics");
+  expect(problems).toEqual(["offer must be text"]);
+});

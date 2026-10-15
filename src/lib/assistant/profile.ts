@@ -49,11 +49,15 @@ export function mergeProfile(current: BusinessProfile, patch: Record<string, unk
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined || value === null) continue;
     if ((PROFILE_TEXT_FIELDS as readonly string[]).includes(key)) {
-      if (typeof value !== "string") {
+      // A list of places or customers ("Pune", "PCMC") is written as one line of text.
+      const asText = typeof value === "string" ? value
+        : Array.isArray(value) && value.every((item) => typeof item === "string") ? value.map((item) => item.trim()).filter(Boolean).join(", ")
+        : null;
+      if (asText === null) {
         problems.push(`${key} must be text`);
         continue;
       }
-      const text = value.trim().slice(0, MAX_FIELD);
+      const text = asText.trim().slice(0, MAX_FIELD);
       const field = key as (typeof PROFILE_TEXT_FIELDS)[number];
       if (!text) delete profile[field];
       else if (field === "language") {
@@ -135,7 +139,8 @@ const stem = (word: string) => (/\d/.test(word) ? word : word.slice(0, 5));
 export function ungroundedProfileValues(patch: Record<string, unknown>, corpus: string): string[] {
   const known = new Set(significantWords(corpus).map(stem));
   const flat = corpus.toLowerCase().replace(/\s+/g, "");
-  return Object.entries(patch).flatMap(([key, value]) => {
+  return Object.entries(patch).flatMap(([key, raw]) => {
+    const value = Array.isArray(raw) && raw.every((item) => typeof item === "string") ? raw.join(", ") : raw;
     if (typeof value !== "string" || !value.trim() || key === "language") return [];
     if (!(PROFILE_TEXT_FIELDS as readonly string[]).includes(key)) return [];
     if (key === "website") {

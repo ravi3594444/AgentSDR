@@ -6,6 +6,7 @@ import { authContextErrorResponse, can, requireOrgContext, type OrgContext } fro
 import { crmRequestErrorResponse, requireCrmMutationContext } from "@/lib/crm/http";
 import { inOrg, runInOrganization } from "@/lib/tenancy/scope";
 import { assistantJobs, outreachRuns, ownerDecisions } from "./schema";
+import { runReplies } from "./runReplies.server";
 import { listMessages, listThreads, resolveThread, threadBusy } from "./threads.server";
 import { setupSnapshot } from "./tools.server";
 
@@ -72,6 +73,8 @@ export async function assistantState(threadId: string | null, ctx: OrgContext, w
     ? await db.select({ id: outreachRuns.id, status: outreachRuns.status, autopilot: outreachRuns.autopilot, error: outreachRuns.error, campaigns: outreachRuns.campaigns })
       .from(outreachRuns).where(and(inOrg(outreachRuns), inArray(outreachRuns.id, [...new Set(runIds)])))
     : [];
+  // What became of each lead's reply, for the plan card (answered, due at, waiting for the owner and why).
+  const replies = await runReplies(runs.filter((run) => run.status !== "proposed" && run.status !== "cancelled").map((run) => run.id));
   return {
     thread: { id: thread.id, title: thread.title },
     viewer: { firstName: ctx.userName?.trim().split(/\s+/)[0] || null },
@@ -89,7 +92,7 @@ export async function assistantState(threadId: string | null, ctx: OrgContext, w
       createdAt: message.createdAt.toISOString(),
     })),
     jobs: jobs.map((job) => ({ ...job, createdAt: job.createdAt.toISOString() })),
-    runs: Object.fromEntries(runs.map((run) => [run.id, run])),
+    runs: Object.fromEntries(runs.map((run) => [run.id, { ...run, replies: replies[run.id] ?? [] }])),
     decisions: Object.fromEntries(decisions.map((decision) => [decision.id, { status: decision.status, answer: decision.answer }])),
     setup: withSetup ? { ...(await setupSnapshot()), canManageAutopilot: canManageAutopilot(ctx) } : null,
   };

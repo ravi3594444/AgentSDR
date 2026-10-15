@@ -8,8 +8,18 @@ import type { AudienceChannel, BusinessProfile, PlannedStep } from "./schema";
  * checks CRM reply drafts pass). Pure, so the rules are unit-tested.
  */
 
-/** Merge fields every lead has a value for (or that read fine empty). */
+/** Merge fields a lead found on Maps has; a typed or imported contact may lack any of them. */
 export const BASE_TOKENS = ["company", "city", "category"] as const;
+
+/**
+ * The merge fields every lead of a run has a value for: only these may be
+ * written into its messages, so no lead gets "Hi  team" or "in  ," with a
+ * blank where a field was.
+ */
+export function availableTokens(leadValues: readonly Record<string, string | undefined>[]): string[] {
+  if (!leadValues.length) return [];
+  return BASE_TOKENS.filter((token) => leadValues.every((values) => Boolean(values[token]?.trim())));
+}
 
 export const CHANNEL_RULES: Record<AudienceChannel, { steps: number; maxBody: number; subject: boolean; waitUnit: "days"; defaultWaits: number[]; describe: string }> = {
   email: {

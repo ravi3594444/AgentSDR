@@ -1,0 +1,46 @@
+/**
+ * What became of each reply to an outreach run, in words the owner can act
+ * on: answered, going out at a time, waiting for them (and why), or
+ * failed. Pure, from the records runReplies.server.ts reads.
+ */
+
+export type ReplyRecord = {
+  draftStatus: string | null;
+  autoStatus: string | null;
+  autoReason: string | null;
+  jobStatus: string | null;
+  sendAfter: string | null;
+  receivedAt: string;
+};
+
+export type ReplyState = {
+  tone: "done" | "waiting" | "you" | "failed";
+  text: string;
+  /** When the automatic answer is due (the client shows it in local time). */
+  at?: string;
+};
+
+/** A reply with no draft yet is still being read for this long; after that it is shown as not answered. */
+const READING_MS = 5 * 60_000;
+
+export function replyState(record: ReplyRecord, automatic: boolean, now: Date = new Date()): ReplyState {
+  if (record.autoStatus === "sent" || (record.draftStatus === "sent" && record.autoStatus === "reserved")) return { tone: "done", text: "Answered automatically" };
+  if (record.draftStatus === "sent") return { tone: "done", text: "Answered" };
+  if (record.autoStatus === "held") return { tone: "you", text: `Waiting for you: ${record.autoReason ?? "the answer needs your decision"}` };
+  if (record.autoStatus === "failed") return { tone: "failed", text: `The automatic answer failed${record.autoReason ? `: ${record.autoReason}` : ""}` };
+  if (record.autoStatus === "reserved") return { tone: "waiting", text: "Sending the answer…" };
+  if ((record.jobStatus === "queued" || record.jobStatus === "running") && record.sendAfter) {
+    return new Date(record.sendAfter).getTime() > now.getTime()
+      ? { tone: "waiting", text: "Answer written; it goes out at", at: record.sendAfter }
+      : { tone: "waiting", text: "Checking the answer before it goes out…" };
+  }
+  if (record.draftStatus === "generating" || (!record.draftStatus && now.getTime() - new Date(record.receivedAt).getTime() < READING_MS)) {
+    return { tone: "waiting", text: "Reading the reply and writing an answer…" };
+  }
+  if (record.draftStatus === "failed") return { tone: "failed", text: "The answer could not be written; see Action required" };
+  if (record.draftStatus === "awaiting_review") {
+    return { tone: "you", text: automatic ? "Waiting for you in Action required" : "Review mode: the answer waits for you in Action required" };
+  }
+  if (record.draftStatus === "discarded" || record.draftStatus === "stale") return { tone: "done", text: "No answer needed (draft set aside)" };
+  return { tone: "you", text: "No answer was written; see Action required" };
+}

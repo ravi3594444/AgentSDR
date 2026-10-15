@@ -4,7 +4,7 @@ import { db } from "@/lib/db";
 import { completeStructured } from "@/lib/ai/server/structuredCompletion";
 import { retrieveKnowledge } from "@/lib/crm/knowledge";
 import { recordUsage } from "./usage.server";
-import { BASE_TOKENS, CHANNEL_RULES, ensureSignOff, personalLineProblem, sequenceProblem } from "./messages";
+import { CHANNEL_RULES, ensureSignOff, personalLineProblem, sequenceProblem } from "./messages";
 import { profileKnowledgeText } from "./profile";
 import type { AudienceChannel, BusinessProfile, PlannedStep } from "./schema";
 
@@ -69,15 +69,18 @@ const SEQUENCE_SCHEMA = {
   },
 };
 
-function sequencePrompt(input: { channels: AudienceChannel[]; personalizationKey: string; signatureAppended: boolean; profile: BusinessProfile; instructions: string | null }) {
-  const tokens = [...BASE_TOKENS, input.personalizationKey];
+function sequencePrompt(input: { channels: AudienceChannel[]; personalizationKey: string; tokens: readonly string[]; signatureAppended: boolean; profile: BusinessProfile; instructions: string | null }) {
+  const tokens = [...input.tokens, input.personalizationKey];
+  const fields = input.tokens.filter((token) => token !== "company");
   return [
     "You write cold outreach for a business owner, as that owner, to businesses or people who have never heard of them.",
     "Write only from the BUSINESS INFORMATION below. Never invent facts, results, clients, prices, offers, links or credentials it does not state. If something is unknown, leave it out.",
     "Be brief, specific and human: no hype, no exclamation marks, no 'I hope this finds you well', no fake familiarity. One clear, low-effort call to action (a reply, a short call).",
-    `Merge fields you may use, written exactly like {{company}}: ${tokens.map((token) => `{{${token}}}`).join(", ")}. {{company}} is the lead's business name. {{city}} and {{category}} may be empty, so the sentence must still read well without them.`,
+    `Merge fields you may use, written exactly as shown, and no others: ${tokens.map((token) => `{{${token}}}`).join(", ")}.${input.tokens.includes("company") ? " {{company}} is the lead's business name." : ""}${fields.length ? ` ${fields.map((token) => `{{${token}}}`).join(" and ")} ${fields.length === 1 ? "is" : "are"} the lead's ${fields.join(" and ")}.` : ""} Every lead has a value for these.`,
     `{{${input.personalizationKey}}} is ONE sentence written separately for each lead from their public details (it may be empty). Put it alone on its own line right after the greeting in the first message, so the message reads well with or without it.`,
-    "Greet the business without a person's name (for example 'Hi {{company}} team,'), because most leads are businesses, not named people.",
+    input.tokens.includes("company")
+      ? "Greet the business without a person's name (for example 'Hi {{company}} team,'), because most leads are businesses, not named people."
+      : "Greet simply ('Hi,' or 'Hello,'): these leads have no business name on record, and you do not know their names.",
     input.signatureAppended
       ? "Do not add a sign-off name: the sender's email signature is added automatically. End with a short closing such as 'Best regards,'."
       : `Sign off with the sender's name${input.profile.senderName ? ` (${input.profile.senderName}${input.profile.senderRole ? `, ${input.profile.senderRole}` : ""})` : ""}${input.profile.businessName ? ` and the business name (${input.profile.businessName})` : ""}.`,
@@ -97,9 +100,11 @@ export async function writeSequences(input: {
   signatureAppended: boolean;
   instructions: string | null;
   audienceDescription: string;
+  /** The merge fields every lead of the run has (messages.ts availableTokens). */
+  tokens: readonly string[];
   cost: WriterCost;
 }): Promise<Partial<Record<AudienceChannel, PlannedStep[]>>> {
-  const allowed = [...BASE_TOKENS, input.personalizationKey];
+  const allowed = [...input.tokens, input.personalizationKey];
   let parsed: Partial<Record<AudienceChannel, PlannedStep[]>> = {};
   const result = await completeStructured({
     timeoutMs: TIMEOUT_MS,
