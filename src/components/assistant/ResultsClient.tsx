@@ -16,6 +16,7 @@ import {
 } from "@remixicon/react";
 
 import { KpiCell, KpiStrip } from "@/components/analytics/kit/KpiStrip";
+import NeedsYouList, { type NeedsYouPayload } from "@/components/assistant/NeedsYouList";
 import { figure, money, PERIOD_KINDS, type PeriodKind } from "@/lib/assistant/results";
 import type { Results } from "@/lib/assistant/results.server";
 import { cn } from "@/utils/cn";
@@ -30,7 +31,7 @@ import { cn } from "@/utils/cn";
 type Decision = { id: string; kind: string; reason: string; decision: string; crmRecordId: string | null; createdAt: string };
 type Summary = { day: string; timeZone: string; data: { text?: string } };
 
-export type ResultsPayload = { results: Results; decisions: Decision[]; summaries: Summary[] };
+export type ResultsPayload = { results: Results; decisions: Decision[]; summaries: Summary[]; needsYou?: NeedsYouPayload };
 
 const PERIOD_LABEL: Record<PeriodKind, string> = {
   today: "Today",
@@ -68,7 +69,7 @@ export default function ResultsClient({ initial }: { initial: ResultsPayload }) 
       const response = await fetch(`/api/assistant/results?period=${period}`, { cache: "no-store" });
       const body = (await response.json()) as ResultsPayload & { error?: string };
       if (!response.ok) throw new Error(body.error ?? `HTTP ${response.status}`);
-      setPayload(body);
+      setPayload((current) => ({ ...body, needsYou: current.needsYou }));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -93,6 +94,8 @@ export default function ResultsClient({ initial }: { initial: ResultsPayload }) 
       </header>
       {error && <p role="alert" className="text-paragraph-sm text-error-base">{error}</p>}
 
+      <NeedsYouList initial={initial.needsYou ?? null} />
+
       <KpiStrip columns={5}>
         <KpiCell icon={RiSearchLine} label="Leads found" value={String(r.leads.discovered)} context={`${r.leads.imported} from your lists · ${r.leads.duplicates} duplicates merged`} hint="Businesses found by lead search, and people imported from lists, in this period." />
         <KpiCell icon={RiCheckboxCircleLine} label="Contactable" value={String(r.leads.usable)} context={`${r.leads.leftOut} left out with a reason`} hint="Leads with a usable, permitted email, phone or LinkedIn profile." />
@@ -112,22 +115,6 @@ export default function ResultsClient({ initial }: { initial: ResultsPayload }) 
       <div className="grid gap-4 lg:grid-cols-2">
         <Section title="Interested people">
           <List items={r.interestedPeople.map((p) => `${p.name}${p.what ? ` — ${p.what}` : ""} (${new Date(p.at).toLocaleString()})`)} empty="No interested replies in this period." />
-        </Section>
-        <Section title="Decisions waiting for you">
-          {payload.decisions.length ? (
-            <ul className="space-y-2 text-paragraph-xs">
-              {payload.decisions.map((d) => (
-                <li key={d.id} className="rounded-lg bg-bg-weak-50 p-2">
-                  <p className="text-text-strong-950">{d.reason}</p>
-                  <p>{d.decision}</p>
-                  <div className="mt-1 flex gap-3">
-                    <Link href="/assistant" className="text-primary-base hover:underline">Answer in the assistant</Link>
-                    {d.crmRecordId && <Link href={`/crm/records/${d.crmRecordId}`} className="text-primary-base hover:underline">Open conversation</Link>}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          ) : <p className="text-paragraph-xs text-text-soft-400">Nothing is waiting for you.</p>}
         </Section>
         <Section title="Still to send">
           <p className="text-paragraph-xs">{r.pending.emailFollowUps} email leads, {r.pending.whatsappFollowUps} WhatsApp leads and {r.pending.linkedinSteps} LinkedIn leads are still in their sequences (active campaigns, now).</p>

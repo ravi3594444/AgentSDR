@@ -28,8 +28,11 @@ import * as Badge from "@/components/alignui/badge";
 import * as Dropdown from "@/components/alignui/dropdown";
 import * as Popover from "@/components/alignui/popover";
 import { displayThreadTitle } from "@/lib/assistant/agent";
+import { takesAnAnswer } from "@/lib/assistant/handoff";
+import type { OwnerDecisionKind } from "@/lib/assistant/schema";
 import { AUTOPILOT_LIMITS } from "@/lib/crm/autopilot";
 import * as Button from "@/components/alignui/button";
+import NeedsYouList from "@/components/assistant/NeedsYouList";
 import { cn } from "@/utils/cn";
 
 /**
@@ -487,6 +490,9 @@ const DECISION_LABEL: Record<string, string> = {
   meeting: "Meeting",
   interested: "Interested lead",
   opt_out: "Opted out",
+  ready: "Ready to buy",
+  person: "Asked for a person",
+  limit: "Chat limit reached",
 };
 
 function DecisionCard({ message, state, onChanged }: { message: Message; state: DecisionState | undefined; onChanged: () => void }) {
@@ -497,6 +503,8 @@ function DecisionCard({ message, state, onChanged }: { message: Message; state: 
   const [note, setNote] = useState<string | null>(null);
   if (!data) return <Card title={TOOL_TITLE.owner_decision!} status={message.status}><p>{message.content}</p></Card>;
   const report = data.kind === "interested" || data.kind === "opt_out";
+  // A ready lead, one asking for a person, or a complaint needs you to contact them, not an answer to save.
+  const answerable = takesAnAnswer(data.kind as OwnerDecisionKind) || data.kind === "uncertain";
   const status = state?.status ?? (report ? "resolved" : "open");
 
   async function act(action: "answer" | "resolve" | "takeover") {
@@ -529,12 +537,12 @@ function DecisionCard({ message, state, onChanged }: { message: Message; state: 
       {state?.answer && <p className="mt-1 text-paragraph-xs text-text-sub-600">Your answer: {state.answer}</p>}
       {!report && status === "open" && (
         <div className="mt-2 space-y-2">
-          <textarea value={answer} onChange={(event) => setAnswer(event.target.value)} rows={2} placeholder="Your answer (saved for later replies)…" aria-label="Your answer" className="w-full resize-y rounded-lg bg-bg-weak-50 px-2.5 py-2 text-paragraph-sm text-text-strong-950 outline-none ring-1 ring-inset ring-stroke-soft-200 focus:ring-primary-base" />
+          {answerable && <textarea value={answer} onChange={(event) => setAnswer(event.target.value)} rows={2} placeholder="Your answer (saved for later replies)…" aria-label="Your answer" className="w-full resize-y rounded-lg bg-bg-weak-50 px-2.5 py-2 text-paragraph-sm text-text-strong-950 outline-none ring-1 ring-inset ring-stroke-soft-200 focus:ring-primary-base" />}
           <div className="flex flex-wrap justify-end gap-2">
             {data.crmRecordId && <Link href={`/crm/records/${data.crmRecordId}`} className="inline-flex items-center gap-1 self-center text-label-xs text-primary-base hover:underline">Open conversation <RiExternalLinkLine className="size-3.5" /></Link>}
             <Button.Root variant="neutral" mode="stroke" size="xsmall" disabled={busy} onClick={() => void act("takeover")}>I&apos;ll reply myself</Button.Root>
-            <Button.Root variant="neutral" mode="ghost" size="xsmall" disabled={busy} onClick={() => void act("resolve")}>Dismiss</Button.Root>
-            <Button.Root variant="primary" mode="filled" size="xsmall" disabled={busy || !answer.trim()} onClick={() => void act("answer")}>Save answer</Button.Root>
+            <Button.Root variant="neutral" mode="ghost" size="xsmall" disabled={busy} onClick={() => void act("resolve")}>{answerable ? "Dismiss" : "Done"}</Button.Root>
+            {answerable && <Button.Root variant="primary" mode="filled" size="xsmall" disabled={busy || !answer.trim()} onClick={() => void act("answer")}>Save answer</Button.Root>}
           </div>
         </div>
       )}
@@ -934,6 +942,10 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
           </Button.Root>
         </div>
       </header>
+
+      <div className="shrink-0 px-3 pt-2 empty:hidden sm:px-5">
+        <NeedsYouList initial={null} compact />
+      </div>
 
       <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-6">
         {empty ? (

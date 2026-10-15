@@ -2,7 +2,7 @@ import "server-only";
 
 import { and, arrayContains, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { regenerateDraft } from "@/lib/crm/drafts";
+import { generateFallbackDraft, regenerateDraft } from "@/lib/crm/drafts";
 import { createKnowledgeDocument, getKnowledgeDocument, updateKnowledgeDocument } from "@/lib/crm/knowledge-service";
 import { crmDrafts, crmKnowledgeDocuments } from "@/lib/crm/schema";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
@@ -114,11 +114,21 @@ export async function answerDecision(id: string, answer: string, userId: string 
   await db.update(ownerDecisions).set({ status: "answered", answer: text.slice(0, 4_000), answeredBy: userId, answeredAt: new Date(), updatedAt: new Date() })
     .where(and(inOrg(ownerDecisions), eq(ownerDecisions.id, id), eq(ownerDecisions.status, "open")));
   if (!decision.draftId) return { saved: true, rewritten: false, problem: null };
-  const [draft] = await db.select({ status: crmDrafts.status }).from(crmDrafts).where(eq(crmDrafts.id, decision.draftId)).limit(1);
-  if (!draft || !["awaiting_review", "failed"].includes(draft.status)) return { saved: true, rewritten: false, problem: null };
+  const [draft] = await db.select({ status: crmDrafts.status, subject: crmDrafts.subject, body: crmDrafts.aiBodyText }).from(crmDrafts).where(eq(crmDrafts.id, decision.draftId)).limit(1);
+  if (!draft) return { saved: true, rewritten: false, problem: null };
+  const feedback = `The business owner answered the open question. Use this answer (it is now part of the business information): ${text}`;
   try {
-    await regenerateDraft(decision.draftId, {}, `The business owner answered the open question. Use this answer (it is now part of the business information): ${text}`);
-    return { saved: true, rewritten: true, problem: null };
+    if (["awaiting_review", "failed"].includes(draft.status)) {
+      await regenerateDraft(decision.draftId, {}, feedback);
+      return { saved: true, rewritten: true, problem: null };
+    }
+    // The lead was told a personal reply follows (that draft was sent): the answer is a new reply.
+    if (draft.status !== "sent" || !decision.crmRecordId || !draft.body?.trim()) return { saved: true, rewritten: false, problem: null };
+    const written = await generateFallbackDraft(decision.crmRecordId, {}, {
+      previousDraft: { subject: draft.subject, bodyText: draft.body },
+      reviewerFeedback: `${feedback}\nThe previous message only told them a personal reply would follow; now write that reply: answer their question with the owner's answer.`,
+    });
+    return { saved: true, rewritten: Boolean(written), problem: null };
   } catch (error) {
     return { saved: true, rewritten: false, problem: error instanceof Error ? error.message : String(error) };
   }

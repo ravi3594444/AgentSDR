@@ -57,4 +57,9 @@ export async function register() {
   registerAssistantJobs();
   const { startAssistantWorker } = await import("./lib/assistant/worker");
   startAssistantWorker();
+
+  // Leads waiting for a person (Needs you): the owners and admins are
+  // emailed once, and reminded once if nobody answers within hours.
+  const { startHandoffAlerts } = await import("./lib/assistant/handoff.server");
+  startHandoffAlerts();
 }

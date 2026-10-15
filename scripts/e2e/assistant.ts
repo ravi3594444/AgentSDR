@@ -28,7 +28,7 @@
  * fake Unipile connection removed. Lead and mailbox addresses are on .test
  * domains. Refuses a non-local DATABASE_URL.
  */
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, like, sql } from "drizzle-orm";
 import { strToU8, zipSync } from "fflate";
 
 if (!/@(localhost|127\.0\.0\.1)[:/]/.test(process.env.DATABASE_URL ?? "")) {
@@ -524,20 +524,47 @@ await runInOrganization(org!.id, async () => {
     });
     await drainFor(xray.record.id);
     const [xrayDraft] = await db.select().from(crmDrafts).where(eq(crmDrafts.crmRecordId, xray.record.id));
-    const [xrayHold] = xrayDraft ? await db.select().from(autopilotReplies).where(eq(autopilotReplies.draftId, xrayDraft.id)) : [];
+    const [xrayHold] = xrayDraft ? await db.select().from(autopilotReplies).where(and(eq(autopilotReplies.draftId, xrayDraft.id), eq(autopilotReplies.status, "held"))) : [];
+    const [xrayHandover] = xrayDraft ? await db.select().from(autopilotReplies).where(and(eq(autopilotReplies.draftId, xrayDraft.id), like(autopilotReplies.reason, "handover%"))) : [];
     const [xrayDecision] = xrayDraft ? await db.select().from(ownerDecisions).where(and(eq(ownerDecisions.draftId, xrayDraft.id), eq(ownerDecisions.status, "open"))) : [];
-    console.log(`      X-ray question: ${xrayHold?.status} — ${xrayHold?.reason ?? ""}; asks the owner: ${xrayDecision?.decision ?? "nothing"}`);
-    check("a question the information does not answer is not sent; the owner gets a focused question", xrayHold?.status === "held" && Boolean(xrayDecision), `${xrayHold?.status} ${xrayDecision?.kind}`);
+    console.log(`      X-ray question: ${xrayHold?.status} — ${xrayHold?.reason ?? ""}; asks the owner: ${xrayDecision?.decision ?? "nothing"}; brief: ${xrayDecision?.brief ?? "none"}`);
+    check("a question the information does not answer is not sent; the owner gets a focused question", Boolean(xrayHold) && Boolean(xrayDecision), `${xrayHold?.status} ${xrayDecision?.kind}`);
+    check("the lead is told once that a personal reply follows, and the owner gets a brief", xrayHandover?.status === "sent" && Boolean(xrayDecision?.handoverSentAt) && /personally/.test(unipileSends.at(-1)?.body ?? "") && Boolean(xrayDecision?.brief),
+      `${xrayHandover?.status} | ${unipileSends.at(-1)?.body?.slice(0, 120)} | ${xrayDecision?.brief ?? ""}`);
     if (xrayDecision) {
       const sendsBeforeAnswer = unipileSends.length;
       const result = await answerDecision(xrayDecision.id, "Yes. We service intraoral dental X-ray units in Pune as part of the same-week servicing; it is quoted per unit after a free check.", owner);
-      check("the owner's answer is saved and the waiting reply rewritten with it", result.saved && result.rewritten, result.problem ?? "");
+      check("the owner's answer is saved and a reply written with it", result.saved && result.rewritten, result.problem ?? "");
       await drainFor(xray.record.id);
-      const [rewritten] = await db.select().from(crmDrafts).where(eq(crmDrafts.id, xrayDraft!.id));
-      const [afterAnswer] = await db.select().from(autopilotReplies).where(and(eq(autopilotReplies.draftId, xrayDraft!.id), eq(autopilotReplies.revision, rewritten!.revision)));
+      const [rewritten] = await db.select().from(crmDrafts).where(eq(crmDrafts.crmRecordId, xray.record.id)).orderBy(desc(crmDrafts.createdAt)).limit(1);
+      const [afterAnswer] = rewritten ? await db.select().from(autopilotReplies).where(and(eq(autopilotReplies.draftId, rewritten.id), eq(autopilotReplies.revision, rewritten.revision))) : [];
       console.log(`      after the answer: ${afterAnswer?.status} — ${afterAnswer?.reason ?? ""}; draft: ${(rewritten?.aiBodyText ?? "").replace(/\s+/g, " ").slice(0, 240)}`);
-      check("the rewritten reply, now backed by the saved answer, is sent automatically", afterAnswer?.status === "sent" && unipileSends.length === sendsBeforeAnswer + 1, `${afterAnswer?.status}: ${afterAnswer?.reason ?? ""}`);
+      check("the reply with the owner's answer is sent automatically", afterAnswer?.status === "sent" && unipileSends.length === sendsBeforeAnswer + 1 && /x-ray/i.test(rewritten?.aiBodyText ?? ""), `${afterAnswer?.status}: ${afterAnswer?.reason ?? ""}`);
     }
+
+    // A lead who says yes goes straight to the owner (no more questions), with a brief.
+    const ready = await ingestInboundReply({
+      personId: asker.id, channel: "email", accountRef: mailboxAddress, providerThreadId: `live-ready-${stamp}`, idempotencyKey: `live-ready-${stamp}`, providerMessageId: `live-ready-pm-${stamp}`,
+      subject: "Re: Dental chair servicing",
+      bodyText: "Sounds good. We have 3 chairs and one keeps breaking down. Please call me to set up the monthly plan.",
+      sentAt: new Date(),
+    });
+    const sendsBeforeReady = unipileSends.length;
+    // Wait for this message's own reply to be decided (the same lead's earlier replies are already settled).
+    let readyDecided = false;
+    for (let round = 0; round < 40 && !readyDecided; round += 1) {
+      await db.update(crmJobs).set({ runAfter: new Date(Date.now() - 1_000) }).where(and(eq(crmJobs.organizationId, orgId), eq(crmJobs.status, "queued")));
+      await drainOnce();
+      const [readyDraft] = await db.select().from(crmDrafts).where(eq(crmDrafts.replyForMessageId, ready.message.id));
+      const decided = readyDraft ? await db.select().from(autopilotReplies).where(eq(autopilotReplies.draftId, readyDraft.id)) : [];
+      readyDecided = decided.length > 0 || readyDraft?.status === "failed";
+      if (!readyDecided) await new Promise((resolve) => setTimeout(resolve, 1_500));
+    }
+    const [readyDecision] = await db.select().from(ownerDecisions).where(and(eq(ownerDecisions.organizationId, orgId), eq(ownerDecisions.conversationId, ready.message.conversationId), eq(ownerDecisions.status, "open")));
+    console.log(`      ready lead: ${readyDecision?.kind ?? "no handoff"} — ${readyDecision?.reason ?? ""}; brief: ${readyDecision?.brief ?? "none"}; told: ${unipileSends.at(-1)?.body?.replace(/<[^>]+>/g, " ").slice(0, 120)}`);
+    check("a lead who agrees to the next step is handed to the owner (Ready to buy) with a brief, told once, not asked more",
+      readyDecision?.kind === "ready" && Boolean(readyDecision.brief) && Boolean(readyDecision.handoverSentAt) && unipileSends.length === sendsBeforeReady + 1,
+      `${readyDecision?.kind}: ${readyDecision?.reason ?? ""} | ${readyDecision?.brief ?? ""}`);
 
     // ------------------------------------------------------------ report and pause
     const report = await runTool("report", { runId: proposed.id }, context);

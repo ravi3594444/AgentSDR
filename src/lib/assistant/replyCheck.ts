@@ -32,9 +32,16 @@ export type ModelCheck = {
 export type ReplyVerdict =
   | { action: "send"; check: ReplyCheck }
   | { action: "opt_out"; check: ReplyCheck; reason: string }
+  /** Their message needs no answer (an "ok" or "thanks" after being answered): nothing is sent. */
+  | { action: "no_reply"; check: ReplyCheck; reason: string }
   | { action: "hold"; check: ReplyCheck; kind: Exclude<OwnerDecisionKind, "opt_out" | "interested">; reason: string; decision: string };
 
-export const REPLY_CHECK_INTENTS = ["question", "interested", "not_interested", "opt_out", "complaint", "negotiation", "scheduling", "out_of_office", "other"] as const;
+/**
+ * `ready`: agrees to the next step or asks to buy, for a price quote, a call
+ * or a visit — a person takes over. `wants_person`: asks for a human.
+ * `acknowledgement`: only "ok", "thanks", 👍, asking nothing.
+ */
+export const REPLY_CHECK_INTENTS = ["question", "interested", "ready", "wants_person", "acknowledgement", "not_interested", "opt_out", "complaint", "negotiation", "scheduling", "out_of_office", "other"] as const;
 
 /** Lowercase, one kind of quote and dash, single spaces, no edge punctuation: for quote matching. */
 export function normalizeForMatch(value: string): string {
@@ -111,7 +118,7 @@ function quote(value: string, max = 140): string {
   return `“${text.length > max ? `${text.slice(0, max - 1)}…` : text}”`;
 }
 
-export function judgeReply(model: ModelCheck, input: { reply: string; knowledge: string; leadName: string }): ReplyVerdict {
+export function judgeReply(model: ModelCheck, input: { reply: string; knowledge: string; leadName: string; /** The assistant already answered in this conversation. */ answeredBefore?: boolean }): ReplyVerdict {
   const intent = (REPLY_CHECK_INTENTS as readonly string[]).includes(model.intent) ? model.intent : "other";
   const questions = model.questions.map((item) => ({
     question: item.question.trim(),
@@ -133,6 +140,17 @@ export function judgeReply(model: ModelCheck, input: { reply: string; knowledge:
   if (intent === "complaint") {
     problems.push("complaint");
     return { action: "hold", check, kind: "complaint", reason: `${who} is complaining${model.escalate ? `: ${model.escalate}` : ""}.`, decision: "Read their message and answer it yourself; the assistant does not answer complaints." };
+  }
+  if (intent === "wants_person") {
+    problems.push("asked for a person");
+    return { action: "hold", check, kind: "person", reason: `${who} asked to talk to a person${model.escalate ? `: ${model.escalate}` : ""}.`, decision: "Reply to them yourself; they were told you will." };
+  }
+  if (intent === "ready") {
+    problems.push("ready for the next step");
+    return { action: "hold", check, kind: "ready", reason: `${who} is ready${model.escalate ? `: ${model.escalate}` : " for the next step"}.`, decision: "Contact them now: call them or reply in the chat. They were told you will." };
+  }
+  if (intent === "acknowledgement" && input.answeredBefore) {
+    return { action: "no_reply", check, reason: `${who} only acknowledged the last answer; nothing to reply` };
   }
   if (intent === "out_of_office") {
     problems.push("automatic reply");

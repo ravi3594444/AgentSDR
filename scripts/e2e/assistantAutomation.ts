@@ -8,7 +8,10 @@
  * holding and resume re-queueing, stop, takeover, newer messages, edits,
  * the 24-hour limit under concurrent jobs, the production guard, restart
  * recovery, the results figures against recorded events, the daily summary,
- * the unsolicited-plan guard, and isolation from a second organization.
+ * the unsolicited-plan guard, the handoff to a person (Needs you, the one
+ * handover message, the alert email and reminder, the owner's reply settling
+ * it, no reply to an "ok", the per-chat limit), and isolation from a second
+ * organization.
  */
 import { and, count, eq, inArray, like, sql } from "drizzle-orm";
 import type { DraftCompletion } from "@/lib/crm/ai/draft";
@@ -205,6 +208,80 @@ export async function runAutomationChecks(input: {
   const production = await reply(P[9]!, "How much is the plan?", answer);
   const productionOutcome = await run(production.draft!, supportedCheck, false);
   check("outside production the autopilot never sends", !productionOutcome.sent && /production/.test(productionOutcome.reason ?? ""), productionOutcome.reason ?? "");
+
+  // ------------------------------------------------------------ the handoff to a person (Needs you)
+  const { listNeedsYou, sendHandoffAlerts } = await import("@/lib/assistant/handoff.server");
+  const { loadNavBadges } = await import("@/lib/nav/badges.server");
+  const { users, members } = await import("@/lib/auth/schema");
+  const [ownerUser] = await db.insert(users).values({ name: "Handoff Owner", email: `handoff-owner-${stamp}@example.test`, emailVerified: true }).returning({ id: users.id });
+  await db.insert(members).values({ organizationId: orgId, userId: ownerUser!.id, role: "owner" });
+  const handoffPeople = await db.insert(people).values([1, 2, 3].map((index) => ({ organizationId: orgId, email: `handoff${index}-${stamp}@clinic-auto.test`, fullName: `Dr Handoff ${index}`, firstName: "Asha", source: "assistant-automation-check" }))).returning({ id: people.id });
+  await db.insert(schema.outreachRunLeads).values(handoffPeople.map((person) => ({ organizationId: orgId, runId: autoRun!.id, personId: person.id, channel: "email" as const })));
+  const H = handoffPeople.map((person) => person.id);
+
+  const readyLead = await reply(H[0]!, "Sounds good. Please call me to set it up for our 3 chairs.", "Great, thank you! — Ravi", { thread: "ready" });
+  const beforeReady = sent();
+  const readyOutcome = await run(readyLead.draft!, async () => ({ intent: "ready", questions: [], claims: [], commitments: [], missing: "", escalate: "wants a call to set up 3 chairs" }));
+  const [readyDecision] = await db.select().from(schema.ownerDecisions).where(and(eq(schema.ownerDecisions.draftId, readyLead.draft!.id), eq(schema.ownerDecisions.kind, "ready")));
+  const handoverSend = unipileSends.at(-1);
+  check("a lead ready to buy goes to Needs you, and is told once, as the sender, that a personal reply follows",
+    !readyOutcome.sent && readyOutcome.handover === true && readyDecision?.status === "open" && Boolean(readyDecision?.handoverSentAt) && sent() === beforeReady + 1
+      && /get back to you personally/.test(handoverSend?.body ?? "") && !/Ravi will/.test(handoverSend?.body ?? ""),
+    `${readyOutcome.reason} | ${handoverSend?.body ?? ""}`);
+  const waiting = await reply(H[0]!, "Also, do you service autoclaves?", "Yes, we service autoclaves. — Ravi", { thread: "ready" });
+  const beforeWaiting = sent();
+  const waitingOutcome = await run(waiting.draft!);
+  check("while the lead waits for the owner, the assistant stays quiet in that chat (no second message)", !waitingOutcome.sent && /Needs you/.test(waitingOutcome.reason ?? "") && sent() === beforeWaiting, waitingOutcome.reason ?? "");
+  const needs = await listNeedsYou();
+  const badges = await loadNavBadges();
+  check("Needs you lists the ready lead first: the label, the wait, that they were told, their newer message; the menu counts them",
+    needs.items[0]?.id === readyDecision?.id && needs.items[0]?.label === "Ready to buy" && Boolean(needs.items[0]?.handoverSentAt) && (needs.items[0]?.newerMessages ?? 0) >= 1 && badges.needsYou === needs.items.length,
+    JSON.stringify({ first: needs.items.slice(0, 3).map((item) => [item.label, item.leadName, item.newerMessages]), badge: badges.needsYou, listed: needs.items.length }));
+
+  const mails: { to: string; subject: string; text: string }[] = [];
+  const record = async (mail: { to: string; subject: string; text: string }) => { mails.push(mail); };
+  await db.update(schema.ownerDecisions).set({ createdAt: new Date(Date.now() - 3 * 60_000) }).where(eq(schema.ownerDecisions.organizationId, orgId));
+  const firstPass = await sendHandoffAlerts({ organizationId: orgId, send: record });
+  const secondPass = await sendHandoffAlerts({ organizationId: orgId, send: record });
+  const readyMail = mails.find((mail) => mail.subject === "Ready to buy: Dr Handoff 1");
+  check("the owners are emailed once when a lead needs them, with what the lead wants and a link to Needs you",
+    Boolean(readyMail) && readyMail!.to === `handoff-owner-${stamp}@example.test` && /wants a call to set up 3 chairs/.test(readyMail!.text) && /\/assistant\/results#needs-you/.test(readyMail!.text) && firstPass.alerted >= 1 && secondPass.emails === 0,
+    JSON.stringify({ subjects: mails.map((mail) => mail.subject), second: secondPass }));
+  await db.update(schema.ownerDecisions).set({ alertedAt: new Date(Date.now() - 4 * 3_600_000) }).where(eq(schema.ownerDecisions.id, readyDecision!.id));
+  const remindPass = await sendHandoffAlerts({ organizationId: orgId, send: record });
+  const remindAgain = await sendHandoffAlerts({ organizationId: orgId, send: record });
+  check("a lead still waiting hours later is reminded once", remindPass.reminded >= 1 && mails.some((mail) => mail.subject.startsWith("Still waiting: Dr Handoff 1")) && remindAgain.emails === 0, JSON.stringify(remindPass));
+
+  const [conversation] = await db.select().from(crm.crmConversations).where(eq(crm.crmConversations.id, readyLead.conversationId));
+  await db.insert(crm.crmConversationMessages).values({
+    conversationId: conversation!.id, personId: conversation!.personId, channel: conversation!.channel, accountRef: conversation!.accountRef,
+    direction: "outbound", idempotencyKey: `owner-reply-${stamp}`, bodyText: "Hi Asha, Ravi here. Calling you in 5 minutes.", sentAt: new Date(),
+  });
+  const afterOwner = await listNeedsYou();
+  const [settledReady] = await db.select().from(schema.ownerDecisions).where(eq(schema.ownerDecisions.id, readyDecision!.id));
+  const quietAfter = await run(waiting.draft!);
+  check("when the owner replies in the chat (app or phone), the lead leaves Needs you and the chat is theirs",
+    !afterOwner.items.some((item) => item.id === readyDecision!.id) && settledReady?.status === "resolved" && !quietAfter.sent && /yourself/.test(quietAfter.reason ?? ""),
+    `${settledReady?.status} ${quietAfter.reason}`);
+
+  const thanks = await reply(H[1]!, "How much is the maintenance plan?", answer, { thread: "thanks" });
+  const thanksAnswered = await run(thanks.draft!);
+  const ok = await reply(H[1]!, "Ok, thanks!", "You're welcome! — Ravi", { thread: "thanks" });
+  const beforeOk = sent();
+  const okOutcome = await run(ok.draft!, async () => ({ intent: "acknowledgement", questions: [], claims: [], commitments: [], missing: "", escalate: "" }));
+  check("an 'ok, thanks' after an answer gets no reply (the chat ends there)", thanksAnswered.sent && !okOutcome.sent && /^no answer needed/.test(okOutcome.reason ?? "") && sent() === beforeOk, `${thanksAnswered.reason} | ${okOutcome.reason}`);
+
+  const chatty = await reply(H[2]!, "How much is the maintenance plan?", answer, { thread: "limit" });
+  const limitFillers = await db.insert(schema.autopilotReplies).values(Array.from({ length: 10 }, () => ({
+    organizationId: orgId, draftId: crypto.randomUUID(), revision: 1, conversationId: chatty.conversationId, status: "sent" as const, reason: "conversation-limit filler",
+  }))).returning({ id: schema.autopilotReplies.id });
+  const beforeLimit = sent();
+  const limitOutcome = await run(chatty.draft!);
+  const [limitDecision] = await db.select().from(schema.ownerDecisions).where(and(eq(schema.ownerDecisions.draftId, chatty.draft!.id), eq(schema.ownerDecisions.kind, "limit")));
+  check("after 10 automatic replies in one chat, it is handed to the owner (and the lead told once), never an endless chat",
+    !limitOutcome.sent && limitDecision?.status === "open" && limitOutcome.handover === true && sent() === beforeLimit + 1,
+    `${limitOutcome.reason} ${limitDecision?.kind}`);
+  await db.delete(schema.autopilotReplies).where(inArray(schema.autopilotReplies.id, limitFillers.map((row) => row.id)));
 
   // ------------------------------------------------------------ the 24-hour limit under concurrent jobs
   const fill = 40 - Number((await db.select({ n: count() }).from(schema.autopilotReplies).where(and(eq(schema.autopilotReplies.organizationId, orgId), inArray(schema.autopilotReplies.status, ["reserved", "sent", "failed"]))))[0]?.n ?? 0) - 2;

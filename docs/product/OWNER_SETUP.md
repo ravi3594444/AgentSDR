@@ -109,7 +109,9 @@ Rules that matter:
   `scripts/add-assistant-automation.ts` (same command); until they run, the
   assistant and Results pages fail to load. The second also switches off the
   old organization-wide reply autopilot for good (automatic replies are now
-  chosen per outreach run, §3b).
+  chosen per outreach run, §3b). The handoff (Needs you, §3b) needs one
+  more, `scripts/add-handoff.ts` (same command); until it runs, replies that
+  need a person fail to be handed over and the Results page fails to load.
 - **Lead search (optional):** add `-f docker-compose.discovery.yml` to every
   compose command (or put
   `COMPOSE_FILE=docker-compose.yml:docker-compose.build.yml:docker-compose.discovery.yml`
@@ -237,7 +239,9 @@ plans. The strip at the top of the assistant says what is missing and who
 sets it up.
 
 **What the owner does:** use the Assistant page. Tell it what the business
-sells, to whom, where, and who signs the messages; attach brochures or
+sells, to whom, where, and who signs the messages, which problems the offer
+solves, and what an interested lead should be offered next (a call, a
+visit, a quote; a short call with you when you say nothing); attach brochures or
 price lists; then either ask it to find leads and contact them, or attach a
 contact list and ask it to run outreach. It answers with a **plan card**:
 the leads, the channel each gets, how it sorted them (below), a sample per
@@ -290,7 +294,7 @@ each does:
 - **Automatic replies** (owners and admins): a reply from one of this run's
   leads is answered automatically when your saved information backs the
   answer. Each automatic reply waits **10 minutes** after its draft is
-  ready; at most **3 per conversation** (then a person takes over) and
+  ready; at most **10 per conversation** (then a person takes over) and
   **40 per organization in any 24 hours**; only from a production server.
 - **Review**: every reply waits for you in Action required.
 
@@ -327,9 +331,17 @@ amount, percentage, time, day, link and email address in the reply must
 appear in it. An "interested" classification is not enough on its own.
 Each send happens at most once per draft revision.
 
-**How replies are written.** The draft answers the lead's question in its
+**How replies are written.** Replies sell like a salesperson in a chat,
+not like customer support. The draft answers the lead's question in its
 first sentence, in the lead's language (Hindi and Hinglish are answered in
-kind), from your saved information only. It offers only next steps your
+kind), from your saved information only. Then, if the lead has not said
+what problem they have, it asks one short question about their situation
+(at most one per message, about three in a whole chat, none once they
+ignore one); when they describe a need your information covers ("Problems
+we solve", the offer), it connects it in your words and offers the **next
+step**: what you set in the business information (a call, a visit, a
+quote), or a short call with the sender when you set nothing. It never
+invents urgency, discounts or results. It offers only next steps your
 information offers, never proposes days or time windows, and never says
 "no" or "only" about something your information simply does not mention:
 a draft that does is held as missing information, because a list of
@@ -337,17 +349,50 @@ services is not proof you do not offer something else. A reply held only
 because it proposed a time is rewritten once without it and checked again
 before it comes to you.
 
-**When it needs you**, it posts a decision card in the chat (also listed
-on Results) with the reason and the decision needed, for example: "Dr Rao
-asked 'Do you service X-ray machines?', and your saved information does not
-answer it." Kinds: missing information, complaint, negotiation outside your
-saved terms (discounts, prices you have not published), a commitment it
-cannot back (appointments, attachments, "I'll send…", completed actions),
-a meeting time, and anything uncertain. Answer in the card and the answer
-is saved to the knowledge document "Answers you gave the assistant", used in
-every later conversation, and the waiting reply is rewritten with it (and
-sent, in Automatic mode, once it passes the checks). Or choose "I'll reply
-myself", or dismiss it.
+**When it needs you: the handoff (Needs you).** The assistant hands a
+chat to you when:
+
+- the lead is **ready to buy**: agrees to the next step, asks to buy or
+  book, or for a call, a visit or a quote for their order (a question about
+  the price is answered, not handed over);
+- they **ask for a person**, or **complain**;
+- they ask what your information does not answer (**answer needed**), want
+  a discount or price you have not published, a meeting time, or a promise
+  it cannot back;
+- the chat reached **10 automatic replies** (a safety net against endless
+  chats);
+- or it is unsure (an auto-reply, someone who left, a message nobody
+  understood: "Take a look").
+
+Then, at once:
+
+1. The lead gets **one** message, from the same number, mailbox or profile
+   and in their language: "Thanks for your message! I'll get back to you
+   personally on this soon." (for a ready lead: "…to take this forward").
+   It names no time and promises nothing else. At most one a day per chat;
+   none in Review mode, none for "Take a look", none outside production.
+2. The assistant stops replying in that chat until it is settled.
+3. The lead appears in **Needs you** at the top of the Results page, most
+   urgent first (Ready to buy, then a person or a complaint, then
+   questions, longest wait first), with the label, a short brief written
+   from the conversation ("3 chairs, one keeps breaking down; wants a call
+   to set up the monthly plan"), their message, the wait, whether they were
+   told, and new messages since. The menu shows the count next to Results,
+   and the assistant chat shows a banner. It is also posted in the run's
+   chat.
+4. Owners and admins get an **email** (Resend, the sign-in email service)
+   once, and **one reminder** if it is still open after 3 hours.
+
+It leaves Needs you when you **reply in the chat** — from Action
+required, the Messages tab or your phone (the chat is then yours: the
+assistant stays out of it) — when you **Answer** in the card (saved to the
+knowledge document "Answers you gave the assistant" for every later
+conversation, and a reply with your answer is written and sent
+automatically once it passes the checks), or when you press **Done** (for
+ready, a person, a complaint or the limit, the chat stays yours; otherwise
+the assistant may answer it again). An "ok" or "thanks" after an answer
+gets no reply: the chat simply ends there. Replies of Review-mode runs are
+counted under Needs you with a link to Action required.
 
 **Opt-outs.** A reply asking to stop or unsubscribe, a Do Not Contact
 classification, or marking the person Do Not Contact in the CRM suppresses
@@ -442,7 +487,7 @@ lead search service.
 nothing to sort by); writing is one call per kind of lead, plus one per 5
 leads written to individually; each standard lead's opening line costs one
 call per ten leads, at Start; checking a reply before it is sent
-automatically is one more call. The plan card shows the estimate before you
+automatically is one more call, and each handoff's brief one more. The plan card shows the estimate before you
 press Start; Results shows what was recorded.
 
 ## 4. Brand settings

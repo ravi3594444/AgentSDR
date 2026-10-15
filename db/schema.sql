@@ -2555,7 +2555,11 @@ CREATE TABLE public.owner_decisions (
     answered_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT owner_decisions_kind_chk CHECK ((kind = ANY (ARRAY['missing_info'::text, 'complaint'::text, 'negotiation'::text, 'commitment'::text, 'uncertain'::text, 'meeting'::text, 'opt_out'::text, 'interested'::text]))),
+    brief text,
+    handover_sent_at timestamp with time zone,
+    alerted_at timestamp with time zone,
+    reminded_at timestamp with time zone,
+    CONSTRAINT owner_decisions_kind_chk CHECK ((kind = ANY (ARRAY['missing_info'::text, 'complaint'::text, 'negotiation'::text, 'commitment'::text, 'uncertain'::text, 'meeting'::text, 'opt_out'::text, 'interested'::text, 'ready'::text, 'person'::text, 'limit'::text]))),
     CONSTRAINT owner_decisions_status_chk CHECK ((status = ANY (ARRAY['open'::text, 'answered'::text, 'resolved'::text])))
 );
 
@@ -4867,6 +4871,12 @@ CREATE INDEX outreach_suppression_list_organization_idx ON public.outreach_suppr
 --
 
 CREATE UNIQUE INDEX outreach_suppression_org_email_uq ON public.outreach_suppression_list USING btree (organization_id, email);
+
+--
+-- Name: owner_decisions_conversation_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX owner_decisions_conversation_idx ON public.owner_decisions USING btree (conversation_id) WHERE (status = 'open'::text);
 
 --
 -- Name: owner_decisions_draft_kind_uq; Type: INDEX; Schema: public; Owner: -

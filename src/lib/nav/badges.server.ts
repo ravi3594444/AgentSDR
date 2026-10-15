@@ -21,12 +21,15 @@ export async function loadNavBadges(): Promise<NavBadges> {
         AND d.crm_record_id IN (SELECT id FROM crm_records WHERE organization_id = ${org}))::int AS drafts,
       (SELECT count(*) FROM outreach_mailboxes WHERE organization_id = ${org} AND status = 'failed')::int
         + (SELECT count(*) FROM "LinkedInAccount" WHERE "organizationId" = ${org} AND status = 'DISCONNECTED')::int
-        + (SELECT count(*) FROM whatsapp_accounts WHERE organization_id = ${org} AND status <> 'connected')::int AS accounts`);
+        + (SELECT count(*) FROM whatsapp_accounts WHERE organization_id = ${org} AND status <> 'connected')::int AS accounts,
+      (SELECT count(*) FROM owner_decisions WHERE organization_id = ${org} AND status = 'open'
+        AND kind NOT IN ('interested', 'opt_out'))::int AS needs_you`);
   const n = (v: unknown) => Number(v ?? 0) || 0;
   return {
     actionRequired: n(row?.action_required),
     whatsappUnread: n(row?.whatsapp_unread),
     draftsAwaitingReview: n(row?.drafts),
     accountsNeedingAttention: n(row?.accounts),
+    needsYou: n(row?.needs_you),
   };
 }

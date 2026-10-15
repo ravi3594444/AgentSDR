@@ -166,7 +166,7 @@ export const TOOLS: Record<string, Tool> = {
 
   save_business_info: {
     description: "Remember what the owner said about the business, customers, places, offer, sender or preferences. Saved for every later conversation and used by every message the AI writes. Call it as soon as the owner gives such information.",
-    arguments: "any of: businessName, website, offer, targetCustomers, locations, outreachInstructions, senderName, senderRole, bookingDetails, language (two letters), notes (all text); preferredChannels (array of email|whatsapp|linkedin). An empty string clears a field.",
+    arguments: "any of: businessName, website, offer, problemsSolved (the problems the offer solves and how), nextStep (what an interested lead is offered next: a call, a visit, a quote), targetCustomers, locations, outreachInstructions, senderName, senderRole, bookingDetails, language (two letters), notes (all text); preferredChannels (array of email|whatsapp|linkedin). An empty string clears a field.",
     run: async (args, context) => {
       const current = await getBusinessProfile();
       // Bad values are reported below; a save of valid values that changes nothing is refused.

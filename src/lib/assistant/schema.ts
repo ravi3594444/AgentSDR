@@ -71,6 +71,10 @@ export type BusinessProfile = {
   website?: string;
   /** What is sold, to whom, and why it helps. */
   offer?: string;
+  /** The problems the offer solves and how, in the owner's words: what replies connect a lead's problem to. */
+  problemsSolved?: string;
+  /** What an interested lead is offered next ("a 10-minute call with Ravi", "a free visit", "a quote"); default: a short call with the sender. */
+  nextStep?: string;
   /** Who the customers are: kinds of businesses or roles, sizes, signals. */
   targetCustomers?: string;
   /** Cities, regions or countries to look in. */
@@ -347,7 +351,7 @@ export const autopilotReplies = pgTable(
   ],
 );
 
-export type OwnerDecisionKind = "missing_info" | "complaint" | "negotiation" | "commitment" | "uncertain" | "meeting" | "opt_out" | "interested";
+export type OwnerDecisionKind = "missing_info" | "complaint" | "negotiation" | "commitment" | "uncertain" | "meeting" | "opt_out" | "interested" | "ready" | "person" | "limit";
 export type OwnerDecisionStatus = "open" | "answered" | "resolved";
 
 /**
@@ -375,6 +379,13 @@ export const ownerDecisions = pgTable(
     conversationId: uuid("conversation_id"),
     draftId: uuid("draft_id"),
     runId: uuid("run_id"),
+    /** A few lines on the lead and what they want, for the Needs you list and the alert. */
+    brief: text("brief"),
+    /** When the lead was told a person takes over (one message, see handoff.ts). */
+    handoverSentAt: timestamp("handover_sent_at", { withTimezone: true }),
+    /** When the owners were emailed about it, and reminded. */
+    alertedAt: timestamp("alerted_at", { withTimezone: true }),
+    remindedAt: timestamp("reminded_at", { withTimezone: true }),
     answer: text("answer"),
     answeredBy: uuid("answered_by"),
     answeredAt: timestamp("answered_at", { withTimezone: true }),
@@ -384,7 +395,8 @@ export const ownerDecisions = pgTable(
   (t) => [
     index("owner_decisions_organization_idx").on(t.organizationId, t.status, t.createdAt),
     uniqueIndex("owner_decisions_draft_kind_uq").on(t.draftId, t.kind).where(sql`${t.draftId} IS NOT NULL AND ${t.status} = 'open'`),
-    check("owner_decisions_kind_chk", sql`${t.kind} IN ('missing_info', 'complaint', 'negotiation', 'commitment', 'uncertain', 'meeting', 'opt_out', 'interested')`),
+    index("owner_decisions_conversation_idx").on(t.conversationId).where(sql`${t.status} = 'open'`),
+    check("owner_decisions_kind_chk", sql`${t.kind} IN ('missing_info', 'complaint', 'negotiation', 'commitment', 'uncertain', 'meeting', 'opt_out', 'interested', 'ready', 'person', 'limit')`),
     check("owner_decisions_status_chk", sql`${t.status} IN ('open', 'answered', 'resolved')`),
   ],
 );
@@ -406,7 +418,7 @@ export const autopilotTakeovers = pgTable(
   ],
 );
 
-export type UsageKind = "assistant" | "outreach_writing" | "personal_lines" | "lead_sorting" | "reply_check" | "linkedin_search";
+export type UsageKind = "assistant" | "outreach_writing" | "personal_lines" | "lead_sorting" | "reply_check" | "handoff_brief" | "linkedin_search";
 
 /**
  * Recorded AI spending of the assistant's own model calls: the provider's

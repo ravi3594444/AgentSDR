@@ -1,3 +1,5 @@
+import { NO_ANSWER_NEEDED } from "./handoff";
+
 /**
  * What became of each reply to an outreach run, in words the owner can act
  * on: answered, going out at a time, waiting for them (and why), or
@@ -24,8 +26,14 @@ export type ReplyState = {
 const READING_MS = 5 * 60_000;
 
 export function replyState(record: ReplyRecord, automatic: boolean, now: Date = new Date()): ReplyState {
+  const handover = record.autoReason?.startsWith("handover") ?? false;
+  if (handover && (record.autoStatus === "sent" || (record.draftStatus === "sent" && record.autoStatus === "reserved"))) {
+    return { tone: "you", text: "Told them you will reply personally; waiting for you in Needs you" };
+  }
   if (record.autoStatus === "sent" || (record.draftStatus === "sent" && record.autoStatus === "reserved")) return { tone: "done", text: "Answered automatically" };
   if (record.draftStatus === "sent") return { tone: "done", text: "Answered" };
+  if (record.autoStatus === "held" && record.autoReason?.startsWith(NO_ANSWER_NEEDED)) return { tone: "done", text: "No answer needed (they only acknowledged the last answer)" };
+  if (record.autoStatus === "held" && record.autoReason?.includes("waits for you in Needs you")) return { tone: "you", text: "Waiting for you in Needs you" };
   if (record.autoStatus === "held") return { tone: "you", text: `Waiting for you: ${record.autoReason ?? "the answer needs your decision"}` };
   if (record.autoStatus === "failed") return { tone: "failed", text: `The automatic answer failed${record.autoReason ? `: ${record.autoReason}` : ""}` };
   if (record.autoStatus === "reserved") return { tone: "waiting", text: "Sending the answer…" };

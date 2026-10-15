@@ -10,6 +10,8 @@ export const PROFILE_TEXT_FIELDS = [
   "businessName",
   "website",
   "offer",
+  "problemsSolved",
+  "nextStep",
   "targetCustomers",
   "locations",
   "outreachInstructions",
@@ -24,6 +26,8 @@ export const PROFILE_LABELS: Record<(typeof PROFILE_TEXT_FIELDS)[number] | "pref
   businessName: "Business",
   website: "Website",
   offer: "Offer",
+  problemsSolved: "Problems we solve",
+  nextStep: "Next step offered to interested leads",
   targetCustomers: "Target customers",
   locations: "Locations",
   outreachInstructions: "Outreach instructions",
@@ -94,11 +98,17 @@ export function missingForDiscovery(profile: BusinessProfile): string[] {
   return missing;
 }
 
+/** The next step offered to an interested lead when the owner has not named one: a short call with the sender. */
+export function nextStepOf(profile: Pick<BusinessProfile, "nextStep" | "senderName">): string {
+  return profile.nextStep?.trim() || `a short call with ${profile.senderName?.trim() || "us"}`;
+}
+
 /** The profile as a knowledge document: one labelled line or paragraph per field. */
 export function profileKnowledgeText(profile: BusinessProfile): string {
   const lines: string[] = [];
   for (const field of PROFILE_TEXT_FIELDS) {
-    const value = profile[field];
+    // The default next step is written only once there is an offer to lead to it.
+    const value = field === "nextStep" ? (profile.nextStep || (profile.offer ? nextStepOf(profile) : "")) : profile[field];
     if (value) lines.push(`${PROFILE_LABELS[field]}: ${value}`);
   }
   if (profile.preferredChannels?.length) lines.push(`${PROFILE_LABELS.preferredChannels}: ${profile.preferredChannels.join(", ")}`);

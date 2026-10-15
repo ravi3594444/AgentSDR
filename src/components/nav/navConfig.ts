@@ -52,6 +52,8 @@ export type NavBadges = {
   draftsAwaitingReview: number;
   /** Failing mailboxes + disconnected LinkedIn and WhatsApp accounts. */
   accountsNeedingAttention: number;
+  /** Leads waiting for a person: the assistant's open handoffs (Needs you). */
+  needsYou: number;
 };
 export type NavBadgeKey = keyof NavBadges;
 
@@ -90,7 +92,7 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     entries: [
       link("/assistant", "Assistant", RiRobot2Line),
-      link("/assistant/results", "Results", RiBarChartBoxLine),
+      link("/assistant/results", "Results", RiBarChartBoxLine, { badge: "needsYou" }),
       link("/analytics", "Analytics", RiBarChartBoxLine),
       link("/crm/actions", "Action required", RiTodoLine, { badge: "actionRequired" }),
       link("/leads", "Leads", RiUserSearchLine, { match: ["/crm/records"] }),

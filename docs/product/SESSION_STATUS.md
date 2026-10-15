@@ -43,7 +43,7 @@ AI.** No message was sent to anyone; no real reply was received.
 | Reply check | `src/lib/assistant/replyCheck*.ts` | A model lists the lead's questions and the reply's claims and promises, each with a supporting quote; only quotes found word for word in the profile, documents and earlier answers count. Prices, amounts, percentages, times, days, links and email addresses are checked directly. Result: send, opt-out, or hold with a decision. |
 | Owner decisions | `decisions.server.ts`, `owner_decisions`, `/api/assistant/decisions/[id]` | Missing information, complaint, negotiation, commitment, meeting, uncertain: a card in the chat and on Results with the reason and the decision needed. An answer is saved to the always-included knowledge document "Answers you gave the assistant" and the waiting reply is rewritten; or take over; or dismiss. Interested replies and opt-outs are reported too. |
 | Opt-out stop | `src/lib/outreach/optOut.ts`, `crm/policies.ts`, `crm/operations.ts` | Do Not Contact from any source (reply check, classification, CRM) suppresses the person and stops their email, WhatsApp and LinkedIn sequences and run membership at once. |
-| Send-time guards | `src/lib/crm/autopilot.ts` (pure gate), `assistant/autopilotRun.server.ts` | The gate runs before the check and again inside a per-organization advisory lock: run status and mode, membership, takeover, newer inbound, answered since, draft revision, edits, Do Not Contact / suppression, classification. Limits (3 per conversation, 40 per 24 hours) are counted on `autopilot_replies`; one reservation per (draft, revision); provider idempotency key per revision. Pause holds and Resume requeues; Stop is final. |
+| Send-time guards | `src/lib/crm/autopilot.ts` (pure gate), `assistant/autopilotRun.server.ts` | The gate runs before the check and again inside a per-organization advisory lock: run status and mode, membership, takeover, newer inbound, answered since, draft revision, edits, Do Not Contact / suppression, classification. Limits (3 per conversation — 10 since the handoff follow-up — and 40 per 24 hours) are counted on `autopilot_replies`; one reservation per (draft, revision); provider idempotency key per revision. Pause holds and Resume requeues; Stop is final. |
 | Knowledge retrieval fix | `crm/knowledge.ts`, `crm/drafts.ts` | Retrieval required every word of the query and the drafter never searched with the lead's message, so uploaded documents almost never reached a reply. Now any significant word matches (ranked), with the lead's message first. Found by the real-AI test below. |
 | Results | `results.ts`, `results.server.ts`, `/assistant/results`, chat `report` tool | Today / yesterday / 7 / 30 days / all time in the organization's time zone, from recorded events: leads found/imported, duplicates, contactable and left out; contacted; sent per channel with LinkedIn requests apart from messages; replies; interested (not a sale); answered automatically or by you; waiting; still to send; stopped/held with reasons; failures; recorded AI spending (`assistant_usage`) apart from estimates; allowances left. Unrecorded figures read "not measured". |
 | Daily summary | `dailySummary.server.ts`, `daily_summaries`, daily rollover part (d) | At each organization's new day: the previous day's results posted in the chat and listed on Results. In-app only. |
@@ -187,6 +187,62 @@ accounted for, per-lead lines, a Hinglish question answered in Hinglish);
 `campaign-engines.ts` and `unipile-email.ts` pass; build; browser on the
 production server (sends paused): the sorting summary, the left-out list,
 Leads and Replies on the plan card, no page errors.
+
+### Follow-up: replies that sell, and the handoff to a person (2026-10-15)
+
+Asked: the assistant should sell like a salesperson (ask about the lead's
+problem, connect it to the product, offer the next step), know when a chat
+is finished instead of sending endless messages, and hand interested leads
+to a person in one place on the dashboard ("chat needs you", "answer
+needed"), telling the lead something while nobody has answered yet.
+
+- **Selling:** the business information gains `problemsSolved` and
+  `nextStep` (default: a short call with the sender). The drafter answers
+  first, asks at most one question per message (about three per chat),
+  connects the lead's need in the owner's words and offers the next step;
+  when the lead is ready it asks nothing more.
+- **Handoff** (`handoff.ts`, `handoff.server.ts`, `autopilotRun.server.ts`):
+  the reply check recognises `ready`, `wants_person` and `acknowledgement`
+  (a price question is not "ready"). New decision kinds `ready`, `person`,
+  `limit`. A handoff opens a decision with a model-written brief, sends the
+  lead one fixed message in the sender's voice and the lead's language
+  (English, Hindi, Hinglish; at most one a day per chat; never in Review
+  mode, for "uncertain", or outside production), and keeps the autopilot
+  quiet in that chat until it is settled. An "ok"/"thanks" after an answer
+  gets no reply. The per-chat limit went from 3 to 10 and now ends in a
+  handoff instead of silence.
+- **Settling:** answering in the card saves the answer and writes a new
+  reply (sent once it passes the checks); a person's reply in the chat
+  (Action required, Messages, or the phone) settles it and the chat stays
+  theirs; Done settles it.
+- **Needs you:** at the top of Results (ready to buy first, then the
+  longest wait), a banner in the assistant chat, a count next to Results
+  in the menu; Review-mode replies are counted with a link to Action
+  required. Owners and admins are emailed once (Resend) and reminded once
+  after 3 hours (`startHandoffAlerts`, a claim per row so two servers never
+  send the same email).
+- **Migration:** `scripts/add-handoff.ts` (kinds CHECK, `brief`,
+  `handover_sent_at`, `alerted_at`, `reminded_at`, an index); in the
+  Dockerfile; `db/schema.sql` regenerated; scope contract passes.
+
+Checks: `npx tsc --noEmit`, `npx eslint .` (0 errors); `npm test`
+1026/1026 in 123 files; `assistant.ts` 70/70 without AI (new: a ready lead
+told once and listed first, quiet while waiting, the alert email once and
+one reminder, the owner's reply settling it, no reply to "ok, thanks", the
+10-reply limit handing over); 99/99 with real AI (a real "sounds good,
+please call me" became Ready to buy with the brief "wants to set up the
+monthly maintenance plan for their 3 chairs, one keeps breaking down;
+requested a call", the lead told once; a plain price question was still
+answered automatically; the X-ray question handed over, answered by the
+owner, and the new reply sent); campaign engines, build; browser on the
+production server (sends paused), 1440 and 390 px: Needs you with three
+items in the right order, the menu count, the chat banner, no answer box on
+a Ready to buy card, no page errors, no horizontal scroll.
+
+Changed after a review of this work: a reminder counts from the first
+email (not from when the lead wrote), handoffs older than three days are
+not emailed after an upgrade, and only handoffs the lead is told about keep
+a chat quiet (an out-of-office "Take a look" does not).
 
 ### Live services vs stand-ins
 

@@ -57,7 +57,7 @@ const SCHEMA = {
       },
     },
     missing: { type: "string", description: "If the reply cannot fully and truthfully answer from BUSINESS INFORMATION, one short, specific question for the business owner whose answer would let it; otherwise empty." },
-    escalate: { type: "string", description: "If a person should handle this (anger, a complaint, legal or medical advice, a negotiation beyond the information, anything unclear), the reason in one sentence; otherwise empty." },
+    escalate: { type: "string", description: "If a person should handle this (anger, a complaint, legal or medical advice, a negotiation beyond the information, anything unclear), the reason in one sentence. For intent ready or wants_person: what they want, in a few words (\"wants a price for 3 chairs\", \"asked for a call today\"). Otherwise empty." },
   },
 };
 
@@ -88,6 +88,7 @@ export async function modelReplyCheck(input: ReplyCheckInput & { knowledge: stri
       "List every question the lead asked, even implied ones (\"how much\", \"do you cover my area\", \"can you come Tuesday\").",
       "A question is answered only if BUSINESS INFORMATION states the answer itself. Something missing from a list does not answer whether it is offered: 'we service chairs and autoclaves' does not answer 'do you service X-ray machines?', in either direction. A reply that dodges the question, or says it will check, leaves it unanswered: mark answered false with empty evidence.",
       "A reply that only thanks them or asks them a question makes no claims. Greetings, the sender's name and a request to reply are not claims.",
+      "Intent: 'ready' only when the lead agrees to the next step or clearly wants to go ahead: to buy or sign up, to book, a call or visit now, or a quote for their own order ('yes, let's do it', 'call me', 'send me a quote for 3 chairs'). A question about price, features, area or terms ('how much is it?', 'do you cover Baner?') is 'question' or 'interested', never 'ready'. 'wants_person' when they ask to talk to a person, the owner or someone senior. 'acknowledgement' when the message only acknowledges or thanks ('ok', 'thanks', 'noted', 'will check', an emoji) and asks nothing. 'interested' when they are curious or asking about the offer but not yet ready.",
     ].join("\n"),
     userPrompt: `BUSINESS INFORMATION:\n${input.knowledge || "(nothing saved)"}\n\nLEAD'S MESSAGE (from ${input.leadName || "the lead"}):\n${input.leadMessage}\n\nPROPOSED REPLY:\n${input.reply}`,
     accept: (text) => {
