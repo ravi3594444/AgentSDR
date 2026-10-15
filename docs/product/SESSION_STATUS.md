@@ -1,19 +1,122 @@
 # Session status
 
-Last updated 2026-10-14. Run steps are in [OWNER_SETUP.md](OWNER_SETUP.md);
+Last updated 2026-10-15. Run steps are in [OWNER_SETUP.md](OWNER_SETUP.md);
 the plan is [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
 
 ## Where things stand
 
 - **Branch:** `claude/new-session-g5hljn`, pushed. `main` is untouched.
-  The latest work is the owner's assistant (Session 4, below).
+  The latest work is routine automation, controls and results (Session 5,
+  below), on top of the owner's assistant (Session 4).
 - **Readiness: implemented, pending live verification. Not owner-usable
   yet.** The whole messaging workflow is built and checked locally, but no
   real message has been sent or received on any channel. The release is
   owner-usable only once the live checks in OWNER_SETUP §6 pass; they need
   the credentials, server and test recipients listed under "Blockers".
+  Verified against real services so far: Google Maps lead discovery (the
+  self-hosted scraper, real websites) and AI calls.
 - **Nothing was sent to anyone.** Every send in this session went to a
   recording stand-in, or was refused because no provider was connected.
+
+## Session 5: routine automation, reliable controls and results
+
+Asked for: campaigns and sequences kept internal to the assistant; outreach
+that runs on its own after one Start, within the approved audience,
+channels and limits; routine replies answered from the owner's saved
+information and documents, a focused question to the owner when something
+is missing (answer saved for later), opt-outs stopping everything,
+escalations with the reason and decision needed; Automatic and Review kept
+and explained at Start; pause / stop / resume / takeover that hold; checks
+repeated just before each send; an owner dashboard, a daily summary and
+results in chat; a simpler owner setup; verification against real services.
+
+**State: implemented and checked locally. Live only for lead discovery and
+AI.** No message was sent to anyone; no real reply was received.
+
+### What was built
+
+| Part | Where | What it does |
+| --- | --- | --- |
+| Reply mode per run | `outreach_runs.autopilot`, `outreach_run_leads`, `/api/assistant/runs/[id]` | Start requires Automatic or Review (Automatic: owners and admins); the run's approved leads are recorded as its members, and automatic replies are queued only for them. The organization-wide switch is gone and `crm_settings.human_send_only` is pinned on again (CHECK restored). Switching a run to Automatic is confirmed with its limits; the assistant can only switch runs to Review. |
+| Reply check | `src/lib/assistant/replyCheck*.ts` | A model lists the lead's questions and the reply's claims and promises, each with a supporting quote; only quotes found word for word in the profile, documents and earlier answers count. Prices, amounts, percentages, times, days, links and email addresses are checked directly. Result: send, opt-out, or hold with a decision. |
+| Owner decisions | `decisions.server.ts`, `owner_decisions`, `/api/assistant/decisions/[id]` | Missing information, complaint, negotiation, commitment, meeting, uncertain: a card in the chat and on Results with the reason and the decision needed. An answer is saved to the always-included knowledge document "Answers you gave the assistant" and the waiting reply is rewritten; or take over; or dismiss. Interested replies and opt-outs are reported too. |
+| Opt-out stop | `src/lib/outreach/optOut.ts`, `crm/policies.ts`, `crm/operations.ts` | Do Not Contact from any source (reply check, classification, CRM) suppresses the person and stops their email, WhatsApp and LinkedIn sequences and run membership at once. |
+| Send-time guards | `src/lib/crm/autopilot.ts` (pure gate), `assistant/autopilotRun.server.ts` | The gate runs before the check and again inside a per-organization advisory lock: run status and mode, membership, takeover, newer inbound, answered since, draft revision, edits, Do Not Contact / suppression, classification. Limits (3 per conversation, 40 per 24 hours) are counted on `autopilot_replies`; one reservation per (draft, revision); provider idempotency key per revision. Pause holds and Resume requeues; Stop is final. |
+| Knowledge retrieval fix | `crm/knowledge.ts`, `crm/drafts.ts` | Retrieval required every word of the query and the drafter never searched with the lead's message, so uploaded documents almost never reached a reply. Now any significant word matches (ranked), with the lead's message first. Found by the real-AI test below. |
+| Results | `results.ts`, `results.server.ts`, `/assistant/results`, chat `report` tool | Today / yesterday / 7 / 30 days / all time in the organization's time zone, from recorded events: leads found/imported, duplicates, contactable and left out; contacted; sent per channel with LinkedIn requests apart from messages; replies; interested (not a sale); answered automatically or by you; waiting; still to send; stopped/held with reasons; failures; recorded AI spending (`assistant_usage`) apart from estimates; allowances left. Unrecorded figures read "not measured". |
+| Daily summary | `dailySummary.server.ts`, `daily_summaries`, daily rollover part (d) | At each organization's new day: the previous day's results posted in the chat and listed on Results. In-app only. |
+| Lead search | `src/lib/discovery/geocode*.ts`, `mapsScraper.server.ts`, `linkedinSearch.server.ts` | Maps: the scraper's place-page mode now returns empty fields from Google, so fast mode over up to 9 geocoded circles (Nominatim, `GEOCODER_URL`), at most 20 businesses each. LinkedIn: the existing search engine, when an account is connected. |
+| Unsolicited plans | `assistant/agent.ts`, `tools.server.ts` | A plan or "contact afterwards" needs the owner's own words asking for outreach, quoted and checked against their message. |
+| Migration | `scripts/add-assistant-automation.ts` | 6 tables, run status `stopped`, job kind `linkedin_search`, run membership backfill, `human_send_only` pinned on. Registered as scoped, in `OWNED_TABLES` and `db/schema.sql`. |
+
+### Checks run (local PostgreSQL 16)
+
+| Check | Result |
+| --- | --- |
+| `npx tsc --noEmit`, `npx eslint .` | pass (0 errors; the 6 earlier warnings) |
+| `npm test` | pass: 992 tests in 120 files |
+| `bun run db:check` (scope `--contract`), `db:schema:dump` | pass; `db/schema.sql` regenerated |
+| `scripts/e2e/assistant.ts` without AI | 62/62: Review vs Automatic, a supported answer sent once, an invented quote held, owner answer saved and reply rewritten, discount held, opt-out stopping all channels, Do Not Contact from the CRM, pause/resume requeue, edited draft, old revision, takeover, newer message, production guard, 5 concurrent jobs against 2 remaining → exactly 2 sent, restart recovery, duplicate protection, no plan without an owner request, results equal to recorded events, stop, daily summary, a second organization seeing none of it |
+| `scripts/e2e/assistant.ts` with real AI | 85/85, including: the agent prepared no plan when the owner only gave information; a price question answered automatically from the uploaded price list (real classifier, drafter and check); an X-ray question held with a focused question to the owner, answered, rewritten and sent |
+| `campaign-engines.ts`, `unipile-email.ts` | 25/25, 23/23 |
+| `owner-controls.ts` (production server, sends paused) | 36/36 |
+| `tenancy-isolation.ts` (dev server) | 104 reads, 33 writes, 63 pages as a second organization; 0 failures; the decisions route probed with organization A's real decision id |
+| `bun run build` | pass; the production server idles at about 475 MB (the dev server reached 11–13 GB under Turbopack and was OOM-killed twice) |
+| Upgrade path | a Compose database from the pre-assistant release (90 tables): `create-lead-research`, `add-mailbox-provider`, `create-assistant-tables`, `add-assistant-automation` → 103 tables, scope contract passes; the last one re-run is a no-op |
+| Browser (Chromium, 1440 px and 390 px) | `/assistant` (decision cards, run modes) and `/assistant/results`: no page errors, no horizontal scroll. Fixed: plurals on Results |
+
+### Live services vs stand-ins
+
+- **Live, real services:** gosom/google-maps-scraper v1.18.1 against Google
+  Maps (fast mode), OpenStreetMap Nominatim, the businesses' own websites and
+  their DNS (MX). "dental clinics" in Baner, Pune: 32 businesses, 30
+  contactable, 16 with an email from their own website (each with its
+  source page), 2 left out with the reason. AI/ML API for the agent,
+  classifier, drafter and reply check (a few cents).
+- **Stand-ins:** Unipile (fetch intercepted for a fake host; this sandbox
+  cannot reach Unipile), Gmail (a recording sender), inbound replies
+  (injected through the same ingest path the webhooks use), the scraper in
+  `assistant.ts`.
+- **Not verified by anyone yet:** delivery to a real inbox, WhatsApp or
+  LinkedIn account; a real reply arriving; automatic replies on a production
+  server with real providers; the daily summary at a real day boundary on
+  the VM. No channel is marked ready.
+
+### Defects found and fixed in this session
+
+- Uploaded documents rarely reached replies (retrieval, above); the
+  real-AI price question was held until it was fixed.
+- One Automatic run could have made unrelated conversations automatic (the
+  organization-wide switch); now per run.
+- Maps place-page mode returned empty businesses; switched to fast mode.
+- "We run Bright Path" counted as an outreach request; the words run, start
+  and market no longer do.
+- Switch to Automatic took effect without confirmation; now confirmed with
+  its limits.
+- Links and email addresses in a reply were not checked directly; now they
+  must appear in the saved information.
+
+### Blockers, and what resolves each
+
+- **VM not updated:** this sandbox has no SSH access to it. Run the steps in
+  OWNER_SETUP §1 on the VM (pull the branch, `up -d --build`, the four
+  migrations, then check `/assistant/results` loads).
+- **No real send or reply on any channel:** Unipile's API is not reachable
+  from this sandbox, and no test recipients were designated. Run OWNER_SETUP
+  §6 (channels, then "The assistant, live") on the VM with recipients you
+  control.
+- **Credentials shared in earlier chats** (AI/ML key, Unipile key, the Google
+  service-account JSON) should be rotated and entered only in the server's
+  settings.
+
+### Known limitations
+
+- Maps coverage: at most about 180 businesses per search, in Google's
+  order; against Google's Terms of Service; may be blocked.
+- The reply check is English-pattern based for amounts, times and days.
+- The automatic-reply limits (10 minutes, 3 per conversation, 40 per 24
+  hours) are constants (`AUTOPILOT_LIMITS`), deliberately not yet Sending
+  rules while the system is being verified.
 
 ## Session 4: the owner's assistant (AI lead hunting and outreach)
 

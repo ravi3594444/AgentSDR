@@ -1,42 +1,70 @@
 import { describe, expect, test } from "bun:test";
-import { AUTOPILOT_LIMITS, autopilotDecision, autopilotIdempotencyKey, type AutopilotFacts } from "./autopilot";
+import { AUTOPILOT_LIMITS, autopilotGate, autopilotIdempotencyKey, limitProblem, type AutopilotFacts } from "./autopilot";
 
 const ordinary: AutopilotFacts = {
-  enabled: true,
   draftStatus: "awaiting_review",
-  classification: { status: "auto_applied", categoryKey: "interested", subcategoryKey: "wants_info" },
+  draftRevision: 2,
+  queuedRevision: 2,
+  editedByPerson: false,
+  membership: { runStatus: "running", automatic: true, leadStatus: "active" },
+  takeover: false,
+  answeredSinceDraft: false,
+  newerInbound: false,
   doNotContact: false,
   suppressed: false,
-  sentInConversation: 0,
-  sentToday: 0,
+  classification: { status: "auto_applied", categoryKey: "interested", subcategoryKey: "information_requested" },
 };
 
-describe("autopilotDecision", () => {
-  test("an ordinary, confidently classified reply is sent", () => {
-    expect(autopilotDecision(ordinary)).toEqual({ send: true });
-    expect(autopilotDecision({ ...ordinary, classification: { status: "accepted", categoryKey: "not_interested", subcategoryKey: null } })).toEqual({ send: true });
+describe("autopilotGate", () => {
+  test("an ordinary reply in a running Automatic run passes to the support check", () => {
+    expect(autopilotGate(ordinary)).toEqual({ pass: true });
+    expect(autopilotGate({ ...ordinary, classification: { status: "accepted", categoryKey: "not_interested", subcategoryKey: null } })).toEqual({ pass: true });
   });
 
-  test("off, already handled, Do Not Contact and suppressed are held", () => {
-    expect(autopilotDecision({ ...ordinary, enabled: false }).send).toBe(false);
-    expect(autopilotDecision({ ...ordinary, draftStatus: "sent" }).send).toBe(false);
-    expect(autopilotDecision({ ...ordinary, doNotContact: true }).send).toBe(false);
-    expect(autopilotDecision({ ...ordinary, suppressed: true }).send).toBe(false);
+  test("only conversations of an Automatic run: no run, Review mode and other states hold quietly", () => {
+    expect(autopilotGate({ ...ordinary, membership: null })).toMatchObject({ pass: false, quiet: true });
+    expect(autopilotGate({ ...ordinary, membership: { ...ordinary.membership!, automatic: false } })).toMatchObject({ pass: false, quiet: true, reason: expect.stringContaining("Review") });
+    expect(autopilotGate({ ...ordinary, membership: { ...ordinary.membership!, runStatus: "paused" } })).toMatchObject({ pass: false, resumable: true });
+    expect(autopilotGate({ ...ordinary, membership: { ...ordinary.membership!, runStatus: "stopped" } })).toMatchObject({ pass: false, reason: "the run is stopped" });
+    expect(autopilotGate({ ...ordinary, membership: { ...ordinary.membership!, leadStatus: "opted_out" } })).toMatchObject({ pass: false });
   });
 
-  test("uncertain, unusual and person-only replies stay with a person", () => {
-    expect(autopilotDecision({ ...ordinary, classification: null }).send).toBe(false);
-    expect(autopilotDecision({ ...ordinary, classification: { status: "proposed", categoryKey: "interested", subcategoryKey: null } }).send).toBe(false);
-    expect(autopilotDecision({ ...ordinary, classification: { status: "auto_applied", categoryKey: "other", subcategoryKey: "out_of_office" } }).send).toBe(false);
-    expect(autopilotDecision({ ...ordinary, classification: { status: "auto_applied", categoryKey: "customer", subcategoryKey: null } }).send).toBe(false);
-    for (const key of ["do_not_contact", "meeting_no_show", "meeting_done", "trial_user", "customer"]) {
-      expect(autopilotDecision({ ...ordinary, classification: { status: "auto_applied", categoryKey: "interested", subcategoryKey: key } }).send).toBe(false);
+  test("an outdated reply never sends: takeover, edit, newer message, someone answered, new revision", () => {
+    for (const change of [
+      { takeover: true },
+      { editedByPerson: true },
+      { newerInbound: true },
+      { answeredSinceDraft: true },
+      { queuedRevision: 1 },
+      { draftStatus: "stale" },
+      { draftStatus: "sent" },
+    ] satisfies Partial<AutopilotFacts>[]) {
+      expect(autopilotGate({ ...ordinary, ...change }).pass).toBe(false);
     }
   });
 
-  test("per-conversation and daily caps hand over to a person", () => {
-    expect(autopilotDecision({ ...ordinary, sentInConversation: AUTOPILOT_LIMITS.perConversation }).send).toBe(false);
-    expect(autopilotDecision({ ...ordinary, sentToday: AUTOPILOT_LIMITS.perDay })).toEqual({ send: false, reason: `today's autopilot limit (${AUTOPILOT_LIMITS.perDay}) is reached` });
+  test("Do Not Contact and suppression hold", () => {
+    expect(autopilotGate({ ...ordinary, doNotContact: true }).pass).toBe(false);
+    expect(autopilotGate({ ...ordinary, suppressed: true }).pass).toBe(false);
+  });
+
+  test("uncertain, unusual and person-only replies become a decision for the owner", () => {
+    expect(autopilotGate({ ...ordinary, classification: null })).toMatchObject({ pass: false, quiet: false, decision: { kind: "uncertain" } });
+    expect(autopilotGate({ ...ordinary, classification: { status: "proposed", categoryKey: "interested", subcategoryKey: null } })).toMatchObject({ quiet: false });
+    expect(autopilotGate({ ...ordinary, classification: { status: "auto_applied", categoryKey: "customer", subcategoryKey: null } })).toMatchObject({ quiet: false });
+    expect(autopilotGate({ ...ordinary, classification: { status: "auto_applied", categoryKey: "other", subcategoryKey: "connected_to_different_poc" } })).toMatchObject({ quiet: false });
+    expect(autopilotGate({ ...ordinary, classification: { status: "auto_applied", categoryKey: "other", subcategoryKey: "out_of_office" } })).toMatchObject({ quiet: true });
+    for (const key of ["do_not_contact", "meeting_no_show", "meeting_done", "trial_user", "customer"]) {
+      expect(autopilotGate({ ...ordinary, classification: { status: "auto_applied", categoryKey: "interested", subcategoryKey: key } }).pass).toBe(false);
+    }
+  });
+});
+
+describe("limits", () => {
+  test("per conversation and per 24 hours", () => {
+    expect(limitProblem({ sentInConversation: 0, sentInLast24h: 0 })).toBeNull();
+    expect(limitProblem({ sentInConversation: AUTOPILOT_LIMITS.perConversation, sentInLast24h: 0 })).toContain("over to you");
+    expect(limitProblem({ sentInConversation: 0, sentInLast24h: AUTOPILOT_LIMITS.perDay })).toContain("24 hours");
   });
 
   test("one automatic send per draft revision", () => {

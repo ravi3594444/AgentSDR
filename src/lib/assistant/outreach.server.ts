@@ -14,12 +14,12 @@ import { createCampaign, emailLaunchFacts, setCampaignStatus, updateCampaignSequ
 import { parseSequence, emailLaunchProblems } from "@/lib/outreach/launch";
 import { mailboxProviderConnected } from "@/lib/outreach/mailboxProviders";
 import { fillTemplate } from "@/lib/outreach/render";
-import { mailboxes, outreachCampaigns, outreachEmails, outreachLeads } from "@/lib/outreach/schema";
+import { mailboxes, outreachCampaigns, outreachEmails, outreachLeads, outreachMailboxQueue } from "@/lib/outreach/schema";
 import { isPlatformConnected } from "@/lib/platform/credentials";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { addPeopleToWhatsappCampaign, createWhatsappCampaign, getWhatsappCampaignDetail, updateWhatsappCampaign } from "@/lib/whatsapp/campaigns/campaigns.server";
-import { whatsappAccounts } from "@/lib/whatsapp/schema";
-import { setAutopilot } from "@/lib/crm/autopilot.server";
+import { whatsappAccounts, whatsappCampaignLeads } from "@/lib/whatsapp/schema";
+import { requeueRunAutopilot } from "./autopilotRun.server";
 import { eligibleAudienceMembers, summarizeAudience } from "./audiences.server";
 import { countReasons } from "./audiences";
 import { personalizationKey } from "./messages";
@@ -27,6 +27,7 @@ import { getBusinessProfile } from "./profile.server";
 import { missingForOutreach } from "./profile";
 import {
   assistantJobs,
+  outreachRunLeads,
   outreachRuns,
   type AudienceChannel,
   type OutreachPlan,
@@ -130,9 +131,24 @@ export type PrepareInput = {
   maxLeads?: number;
   autopilot?: boolean;
   instructions?: string | null;
+  /** Reuse this earlier run's messages (a follow-on plan, approved again). */
+  basedOnRunId?: string | null;
+  /** The owner's words that asked for this outreach. */
+  ownerRequest?: string | null;
   threadId: string | null;
   userId: string | null;
 };
+
+/** An earlier run's sequences for the channels wanted, with its per-lead merge key swapped for the new run's. */
+function reuseSequences(base: OutreachPlan, key: string, channels: AudienceChannel[]): Partial<Record<AudienceChannel, PlannedStep[]>> {
+  const out: Partial<Record<AudienceChannel, PlannedStep[]>> = {};
+  const token = new RegExp(`\\{\\{\\s*${base.personalizationKey}\\s*\\}\\}`, "g");
+  for (const channel of channels) {
+    const steps = base.sequences[channel];
+    if (steps?.length) out[channel] = steps.map((step) => ({ ...step, subject: step.subject?.replace(token, `{{${key}}}`) ?? null, body: step.body.replace(token, `{{${key}}}`) }));
+  }
+  return out;
+}
 
 export type Proposal = {
   runId: string;
@@ -150,8 +166,10 @@ export async function prepareOutreach(input: PrepareInput): Promise<Proposal> {
   if (!audience) throw new OutreachError("That audience does not exist.");
   if (!audience.eligible) throw new OutreachError(`No lead in “${audience.name}” can be contacted: ${audience.excluded.map((e) => `${e.count} × ${e.reason}`).join("; ") || "it is empty"}.`);
 
+  const base = input.basedOnRunId ? await getRun(input.basedOnRunId) : null;
+  if (input.basedOnRunId && !base) throw new OutreachError("That earlier run does not exist.");
   const availability = await channelAvailability();
-  const wanted = (input.channels?.length ? input.channels : profile.preferredChannels?.length ? profile.preferredChannels : CHANNEL_ORDER)
+  const wanted = (input.channels?.length ? input.channels : base ? base.channels : profile.preferredChannels?.length ? profile.preferredChannels : CHANNEL_ORDER)
     .filter((channel, index, all) => CHANNEL_ORDER.includes(channel) && all.indexOf(channel) === index);
   const usable = wanted.filter((channel) => availability[channel].available);
   if (!usable.length) {
@@ -176,19 +194,22 @@ export async function prepareOutreach(input: PrepareInput): Promise<Proposal> {
 
   const runId = randomUUID();
   const key = personalizationKey(runId);
-  const cost: WriterCost = { calls: 0, usd: null };
+  const cost: WriterCost = { calls: 0, usd: null, runId };
   const context = await businessContext(profile);
   const audienceDescription = `${audience.name}${typeof audience.criteria.what === "string" ? ` (${audience.criteria.what} in ${String(audience.criteria.where ?? "")})` : ""}; ${assignments.length} leads, mostly businesses rather than named people`;
-  const sequences = await writeSequences({
+  const reused = base ? reuseSequences(base.plan, key, channels) : {};
+  const toWrite = channels.filter((channel) => !reused[channel]);
+  const written = toWrite.length ? await writeSequences({
     profile,
     context,
-    channels,
+    channels: toWrite,
     personalizationKey: key,
     signatureAppended: availability.signatureAppended,
     instructions: input.instructions?.trim() || null,
     audienceDescription,
     cost,
-  });
+  }) : {};
+  const sequences: Partial<Record<AudienceChannel, PlannedStep[]>> = { ...reused, ...written };
 
   // A sample per channel, with real opening lines, as the leads will get them.
   const sampleAssignments = channels.flatMap((channel) => assignments.filter((assignment) => assignment.channel === channel).slice(0, channel === channels[0] ? 2 : 1));
@@ -237,6 +258,8 @@ export async function prepareOutreach(input: PrepareInput): Promise<Proposal> {
     },
     autopilot: Boolean(input.autopilot),
     instructions: input.instructions?.trim() || null,
+    basedOnRunId: base?.id ?? null,
+    ownerRequest: input.ownerRequest?.trim() || null,
   };
   const name = `${audience.name}`.slice(0, 120);
   await db.insert(outreachRuns).values({
@@ -276,6 +299,16 @@ export async function startOutreachRun(runId: string, userId: string | null, opt
     .where(and(inOrg(outreachRuns), eq(outreachRuns.id, runId), eq(outreachRuns.status, "proposed")))
     .returning({ id: outreachRuns.id });
   if (!claimed.length) throw new OutreachError("This plan was started already.");
+  // The approved audience, per channel: what the run (and its reply mode) covers.
+  const assignments = run.plan.assignments;
+  for (let index = 0; index < assignments.length; index += 500) {
+    await db.insert(outreachRunLeads).values(assignments.slice(index, index + 500).map((assignment) => ({
+      organizationId: currentOrganizationId(),
+      runId,
+      personId: assignment.personId,
+      channel: assignment.channel,
+    }))).onConflictDoNothing();
+  }
   const [job] = await db.insert(assistantJobs).values({
     organizationId: currentOrganizationId(),
     kind: "outreach_start",
@@ -296,7 +329,7 @@ async function writeLines(runId: string, key: string, personIds: string[], start
   const members = await eligibleAudienceMembers(run.audienceId);
   const facts = new Map(members.map((member) => [member.personId, member.facts]));
   const rows = await loadPeople(personIds);
-  const cost: WriterCost = { calls: 0, usd: null };
+  const cost: WriterCost = { calls: 0, usd: null, runId };
   const lines = await writePersonalLines({
     context: await businessContext(await getBusinessProfile()),
     leads: personIds.map((personId, index) => ({ index: startIndex + index, facts: { ...facts.get(personId), name: rows.get(personId)?.person.fullName ?? "" } })),
@@ -423,7 +456,6 @@ export async function runOutreachStartStep(job: AssistantJob, heartbeat: () => P
     }
     const launched = launches.filter((launch) => launch.campaignId && !launch.problem);
     const campaigns = Object.fromEntries(launches.filter((launch) => launch.campaignId).map((launch) => [launch.channel, launch.campaignId!]));
-    if (launched.length && run.autopilot) await setAutopilot(true);
     await db.update(outreachRuns).set({
       status: launched.length ? "running" : "failed",
       campaigns,
@@ -474,8 +506,64 @@ export async function setRunPaused(runId: string, paused: boolean): Promise<{ st
     }
   }
   const status = changed.length ? (paused ? "paused" : "running") : run.status;
-  await db.update(outreachRuns).set({ status, updatedAt: new Date() }).where(and(inOrg(outreachRuns), eq(outreachRuns.id, runId)));
+  await db.update(outreachRuns).set({ status, ...(changed.length ? { pausedAt: paused ? new Date() : null } : {}), updatedAt: new Date() })
+    .where(and(inOrg(outreachRuns), eq(outreachRuns.id, runId)));
+  // Replies the autopilot held while paused are looked at again, with every check.
+  if (!paused && changed.length && run.autopilot) await requeueRunAutopilot(runId).catch((error) => problems.push(`automatic replies: ${error instanceof Error ? error.message : String(error)}`));
   return { status, changed, problems };
+}
+
+/**
+ * Ends a run for good: its campaigns stop (email campaigns are marked
+ * completed and their queue cleared; open WhatsApp and LinkedIn
+ * enrollments are stopped, so resuming a campaign by hand cannot restart
+ * them), its members are stopped, and the autopilot never answers for it
+ * again. A stopped run cannot be resumed; a new plan can be started.
+ */
+export async function stopRun(runId: string): Promise<{ stopped: AudienceChannel[]; problems: string[] }> {
+  const run = await getRun(runId);
+  if (!run) throw new OutreachError("That outreach run does not exist.");
+  if (!["running", "paused", "starting"].includes(run.status)) throw new OutreachError(`This run is ${run.status}; only a running or paused run can be stopped.`);
+  const now = new Date();
+  await db.update(outreachRuns).set({ status: "stopped", stoppedAt: now, updatedAt: now }).where(and(inOrg(outreachRuns), eq(outreachRuns.id, runId)));
+  await db.update(outreachRunLeads).set({ status: "stopped", stopReason: "the run was stopped", updatedAt: now })
+    .where(and(inOrg(outreachRunLeads), eq(outreachRunLeads.runId, runId), eq(outreachRunLeads.status, "active")));
+  const stopped: AudienceChannel[] = [];
+  const problems: string[] = [];
+  for (const [channel, campaignId] of Object.entries(run.campaigns) as [AudienceChannel, string][]) {
+    try {
+      if (channel === "email") {
+        await setCampaignStatus(campaignId, "completed");
+        const leadIds = db.select({ id: outreachLeads.id }).from(outreachLeads).where(eq(outreachLeads.campaignId, campaignId));
+        await db.delete(outreachMailboxQueue).where(inArray(outreachMailboxQueue.leadId, leadIds));
+      } else if (channel === "whatsapp") {
+        await updateWhatsappCampaign(campaignId, { status: "paused" });
+        await db.update(whatsappCampaignLeads).set({ status: "stopped", nextSendAt: null, updatedAt: now })
+          .where(and(eq(whatsappCampaignLeads.campaignId, campaignId), inArray(whatsappCampaignLeads.status, ["queued", "in_sequence"])));
+      } else {
+        await db.update(linkedinCampaigns).set({ status: "PAUSED", updatedAt: now }).where(and(inOrg(linkedinCampaigns), eq(linkedinCampaigns.id, campaignId)));
+        await db.update(linkedinLeads).set({ status: "CANCELLED", updatedAt: now })
+          .where(and(inOrg(linkedinLeads), eq(linkedinLeads.campaignId, campaignId), inArray(linkedinLeads.status, ["PENDING", "REQUEST_SENT", "CONNECTED", "ACCEPT_MESSAGE_SENT", "FOLLOW_UP_1_SENT", "FOLLOW_UP_2_SENT"])));
+      }
+      stopped.push(channel);
+    } catch (error) {
+      problems.push(`${channel}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return { stopped, problems };
+}
+
+/**
+ * Switches a run between Review and Automatic replies. To Review is always
+ * allowed (less automation); to Automatic is an expansion the caller must
+ * have confirmed with an owner or admin (the route checks).
+ */
+export async function setRunReplyMode(runId: string, automatic: boolean): Promise<void> {
+  const run = await getRun(runId);
+  if (!run) throw new OutreachError("That outreach run does not exist.");
+  if (["stopped", "completed", "failed", "cancelled"].includes(run.status)) throw new OutreachError(`This run is ${run.status}.`);
+  await db.update(outreachRuns).set({ autopilot: automatic, updatedAt: new Date() }).where(and(inOrg(outreachRuns), eq(outreachRuns.id, runId)));
+  if (automatic && run.status === "running") await requeueRunAutopilot(runId);
 }
 
 export type RunReport = {

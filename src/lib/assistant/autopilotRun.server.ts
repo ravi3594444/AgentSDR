@@ -1,0 +1,318 @@
+import "server-only";
+
+import { randomUUID } from "node:crypto";
+import { and, count, desc, eq, gt, gte, inArray, sql } from "drizzle-orm";
+import { db } from "@/lib/db";
+import { AUTOPILOT_ACTOR, AUTOPILOT_LIMITS, autopilotGate, autopilotIdempotencyKey, limitProblem, type AutopilotFacts } from "@/lib/crm/autopilot";
+import { runMembershipFor } from "@/lib/crm/autopilot.server";
+import { appendCrmEvent } from "@/lib/crm/events";
+import { isPersonDoNotContact, setPersonDoNotContact } from "@/lib/crm/policies";
+import { enqueueCrmJobInTransaction } from "@/lib/crm/queue";
+import { draftInOrg } from "@/lib/crm/records";
+import { withCrmTransaction, type CrmExecutor } from "@/lib/crm/repository";
+import {
+  crmClassifications,
+  crmConversationMessages,
+  crmConversations,
+  crmDrafts,
+  crmRecords,
+  crmSubcategories,
+} from "@/lib/crm/schema";
+import { sendDraft, type CrmSendAdapter } from "@/lib/crm/send";
+import { people } from "@/lib/leads/schema";
+import { isSuppressed } from "@/lib/outreach/suppression";
+import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
+import { openDecision } from "./decisions.server";
+import { judgeReply, type ModelCheck } from "./replyCheck";
+import { checkKnowledge, modelReplyCheck, type ReplyCheckInput } from "./replyCheck.server";
+import { autopilotReplies, autopilotTakeovers, outreachRunLeads, ownerDecisions, type ReplyCheck } from "./schema";
+
+/**
+ * Runs the reply autopilot on one draft (the CRM's auto_send job):
+ *
+ * 1. the gate (src/lib/crm/autopilot.ts): the person's run, its mode and
+ *    state, opt-outs, takeover, edits, newer messages, the classification;
+ * 2. the support check (replyCheck.ts): every answer and claim backed by
+ *    the owner's information, no invented prices, times or promises;
+ *    opt-outs stop all outreach; anything else becomes an owner decision;
+ * 3. a reservation under the organization's advisory lock, after reading
+ *    everything again (state can change during the check) and counting
+ *    every reservation toward the limits, so concurrent jobs cannot
+ *    exceed them; unique per (draft, revision), so never two sends;
+ * 4. sendDraft with the autopilot's idempotency key — the same path, DNC
+ *    checks and duplicate protection as a person's Approve & send.
+ *
+ * Each decision is recorded in autopilot_replies with its reason.
+ */
+
+export type AutopilotOutcome = { sent: boolean; reason: string | null };
+
+export type AutopilotDependencies = {
+  /** The revision the job was queued for. */
+  revision?: number | null;
+  /** When the draft became ready; an outbound message after it means someone answered. */
+  readyAt?: Date | null;
+  send?: CrmSendAdapter;
+  /** Replaces the model half of the support check (tests). */
+  check?: (input: ReplyCheckInput & { knowledge: string }) => Promise<ModelCheck>;
+  allowNonProduction?: boolean;
+};
+
+type State = {
+  facts: AutopilotFacts;
+  draft: typeof crmDrafts.$inferSelect;
+  recordId: string;
+  personId: string;
+  pipelineId: string;
+  contextVersion: number;
+  conversationId: string;
+  channel: string;
+  membership: Awaited<ReturnType<typeof runMembershipFor>>;
+  leadMessage: string;
+  leadName: string;
+  email: string | null;
+};
+
+async function loadState(executor: CrmExecutor, draftId: string, deps: AutopilotDependencies): Promise<State | null> {
+  const [draft] = await executor.select().from(crmDrafts).where(and(draftInOrg(), eq(crmDrafts.id, draftId))).limit(1);
+  if (!draft) return null;
+  const [record] = await executor.select().from(crmRecords).where(and(inOrg(crmRecords), eq(crmRecords.id, draft.crmRecordId))).limit(1);
+  if (!record) return null;
+  const [conversation] = await executor.select({ id: crmConversations.id, channel: crmConversations.channel }).from(crmConversations)
+    .where(and(inOrg(crmConversations), eq(crmConversations.id, draft.conversationId))).limit(1);
+  if (!conversation) return null;
+  const [person] = await executor.select({ email: people.email, fullName: people.fullName, firstName: people.firstName, raw: people.raw })
+    .from(people).where(and(inOrg(people), eq(people.id, record.personId))).limit(1);
+  const [classification] = await executor.select({
+    status: crmClassifications.status,
+    categoryKey: crmClassifications.appliedCategoryKey,
+    subcategoryKey: crmSubcategories.key,
+  }).from(crmClassifications)
+    .leftJoin(crmSubcategories, eq(crmSubcategories.id, crmClassifications.appliedSubcategoryId))
+    .where(eq(crmClassifications.crmRecordId, record.id))
+    .orderBy(desc(crmClassifications.createdAt))
+    .limit(1);
+  const membership = await runMembershipFor(executor, record.personId, conversation.channel);
+  const [takeover] = await executor.select({ id: autopilotTakeovers.id }).from(autopilotTakeovers)
+    .where(and(inOrg(autopilotTakeovers), eq(autopilotTakeovers.conversationId, conversation.id))).limit(1);
+  const readyAt = deps.readyAt ?? draft.updatedAt;
+  const [answered] = await executor.select({ n: count() }).from(crmConversationMessages)
+    .where(and(eq(crmConversationMessages.conversationId, conversation.id), eq(crmConversationMessages.direction, "outbound"), gt(crmConversationMessages.sentAt, readyAt)));
+  const answersMessageId = draft.replyForMessageId ?? record.latestInboundMessageId;
+  const [leadMessage] = answersMessageId
+    ? await executor.select({ bodyText: crmConversationMessages.bodyText, subject: crmConversationMessages.subject }).from(crmConversationMessages).where(eq(crmConversationMessages.id, answersMessageId)).limit(1)
+    : [];
+  const newerInbound = Boolean(draft.replyForMessageId && record.latestInboundMessageId && record.latestInboundMessageId !== draft.replyForMessageId);
+  const businessName = typeof (person?.raw as Record<string, unknown> | null)?.businessName === "string" ? String((person!.raw as Record<string, unknown>).businessName) : "";
+  return {
+    facts: {
+      draftStatus: draft.status,
+      draftRevision: draft.revision,
+      queuedRevision: deps.revision ?? null,
+      editedByPerson: Boolean(draft.editedBodyText?.trim()),
+      membership: membership ? { runStatus: membership.runStatus, automatic: membership.automatic, leadStatus: membership.leadStatus } : null,
+      takeover: Boolean(takeover),
+      answeredSinceDraft: Number(answered?.n ?? 0) > 0,
+      newerInbound,
+      doNotContact: await isPersonDoNotContact(executor, record.personId),
+      suppressed: conversation.channel === "email" && person?.email ? await isSuppressed(person.email) : false,
+      classification: classification ? { status: classification.status, categoryKey: classification.categoryKey ?? null, subcategoryKey: classification.subcategoryKey ?? null } : null,
+    },
+    draft,
+    recordId: record.id,
+    personId: record.personId,
+    pipelineId: record.pipelineId,
+    contextVersion: record.contextVersion,
+    conversationId: conversation.id,
+    channel: conversation.channel,
+    membership,
+    leadMessage: [leadMessage?.subject ? `Subject: ${leadMessage.subject}` : null, leadMessage?.bodyText ?? ""].filter(Boolean).join("\n").slice(0, 6_000),
+    leadName: person?.fullName || person?.firstName || businessName || person?.email || "the lead",
+    email: person?.email ?? null,
+  };
+}
+
+async function recordHold(state: State, reason: string, check: ReplyCheck | null = null): Promise<AutopilotOutcome> {
+  const organizationId = currentOrganizationId();
+  await db.insert(autopilotReplies).values({
+    organizationId,
+    draftId: state.draft.id,
+    revision: state.draft.revision,
+    conversationId: state.conversationId,
+    runId: state.membership?.runId ?? null,
+    personId: state.personId,
+    status: "held",
+    reason: reason.slice(0, 1_000),
+    check,
+  }).onConflictDoUpdate({
+    target: [autopilotReplies.draftId, autopilotReplies.revision],
+    set: { status: "held", reason: reason.slice(0, 1_000), check, updatedAt: new Date() },
+    setWhere: eq(autopilotReplies.status, "held"),
+  });
+  await withCrmTransaction(async (tx) => appendCrmEvent(tx, {
+    personId: state.personId,
+    crmRecordId: state.recordId,
+    pipelineId: state.pipelineId,
+    eventType: "autopilot.held",
+    actorType: "ai",
+    actorRef: AUTOPILOT_ACTOR,
+    toData: { draftId: state.draft.id, revision: state.draft.revision },
+    meta: { reason },
+    contextVersion: state.contextVersion,
+  })).catch((error) => console.error("[autopilot] could not record the hold:", error));
+  return { sent: false, reason };
+}
+
+/** An interested lead is reported to the owner once per draft, whatever the mode. */
+async function reportInterest(state: State): Promise<void> {
+  const classification = state.facts.classification;
+  if (!state.membership || classification?.categoryKey !== "interested") return;
+  const [existing] = await db.select({ id: ownerDecisions.id }).from(ownerDecisions)
+    .where(and(inOrg(ownerDecisions), eq(ownerDecisions.kind, "interested"), eq(ownerDecisions.draftId, state.draft.id))).limit(1);
+  if (existing) return;
+  const what = classification.subcategoryKey ? classification.subcategoryKey.replace(/_/g, " ") : "interested";
+  await openDecision({
+    kind: "interested",
+    reason: `${state.leadName} is interested (${what}).`,
+    decision: state.membership.automatic
+      ? "The assistant answers if your information covers their question; otherwise it asks you here."
+      : "This run is in Review mode: their reply waits for you in Action required.",
+    leadMessage: state.leadMessage,
+    personId: state.personId,
+    crmRecordId: state.recordId,
+    conversationId: state.conversationId,
+    draftId: state.draft.id,
+    runId: state.membership.runId,
+    threadId: state.membership.threadId,
+  });
+}
+
+function utc24hAgo(): Date {
+  return new Date(Date.now() - 24 * 60 * 60_000);
+}
+
+export async function runAutopilotForDraft(draftId: string, deps: AutopilotDependencies = {}): Promise<AutopilotOutcome> {
+  const state = await loadState(db, draftId, deps);
+  if (!state || !state.membership) return { sent: false, reason: "not part of an outreach run" };
+  await reportInterest(state).catch((error) => console.error("[autopilot] could not report interest:", error));
+
+  // 1. The gate.
+  const gate = autopilotGate(state.facts);
+  if (!gate.pass) {
+    if (gate.decision) {
+      await openDecision({ kind: gate.decision.kind, reason: `${state.leadName}: ${gate.reason}`, decision: gate.decision.decision, leadMessage: state.leadMessage, personId: state.personId, crmRecordId: state.recordId, conversationId: state.conversationId, draftId: state.draft.id, runId: state.membership.runId, threadId: state.membership.threadId });
+    }
+    return recordHold(state, gate.reason);
+  }
+
+  // 2. The support check.
+  const reply = [state.draft.subject ? `Subject: ${state.draft.subject}` : null, (state.draft.editedBodyText?.trim() || state.draft.aiBodyText || "").trim()].filter(Boolean).join("\n");
+  const knowledge = await checkKnowledge(state.leadMessage);
+  let model: ModelCheck;
+  try {
+    model = deps.check
+      ? await deps.check({ leadMessage: state.leadMessage, reply, leadName: state.leadName, knowledge })
+      : await modelReplyCheck({ leadMessage: state.leadMessage, reply, leadName: state.leadName, knowledge, runId: state.membership.runId });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await openDecision({ kind: "uncertain", reason: `The reply to ${state.leadName} could not be checked (${message.slice(0, 200)}).`, decision: "Read it in Action required and send it yourself if it is right.", leadMessage: state.leadMessage, personId: state.personId, crmRecordId: state.recordId, conversationId: state.conversationId, draftId: state.draft.id, runId: state.membership.runId, threadId: state.membership.threadId });
+    return recordHold(state, "the reply could not be checked");
+  }
+  const verdict = judgeReply(model, { reply, knowledge, leadName: state.leadName });
+  if (verdict.action === "opt_out") {
+    await setPersonDoNotContact({ personId: state.personId, reason: `${verdict.reason} (read in their reply)`, source: "inbound_request", actorType: "ai", actorRef: AUTOPILOT_ACTOR });
+    return recordHold(state, "they asked not to be contacted: all outreach to them stopped", verdict.check);
+  }
+  if (verdict.action === "hold") {
+    await openDecision({ kind: verdict.kind, reason: verdict.reason, decision: verdict.decision, leadMessage: state.leadMessage, personId: state.personId, crmRecordId: state.recordId, conversationId: state.conversationId, draftId: state.draft.id, runId: state.membership.runId, threadId: state.membership.threadId });
+    return recordHold(state, verdict.reason, verdict.check);
+  }
+
+  const allowed = deps.allowNonProduction ?? (process.env.NODE_ENV === "production" || process.env.AUTOPILOT_ALLOW_NON_PRODUCTION === "true");
+  if (!allowed) return recordHold(state, "the autopilot only sends from a production server", verdict.check);
+
+  // 3. Reserve under the organization's lock, after reading everything again.
+  const organizationId = currentOrganizationId();
+  const reservation = await db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`autopilot:${organizationId}`}, 0))`);
+    const fresh = await loadState(tx, draftId, deps);
+    if (!fresh || !fresh.membership) return { held: "the draft or its run disappeared" } as const;
+    const again = autopilotGate(fresh.facts);
+    if (!again.pass) return { held: again.reason } as const;
+    if (fresh.draft.revision !== state.draft.revision) return { held: "the draft changed while it was checked" } as const;
+    const counted = inArray(autopilotReplies.status, ["reserved", "sent", "failed"]);
+    const [inConversation] = await tx.select({ n: count() }).from(autopilotReplies)
+      .where(and(eq(autopilotReplies.organizationId, organizationId), eq(autopilotReplies.conversationId, fresh.conversationId), counted));
+    const [inDay] = await tx.select({ n: count() }).from(autopilotReplies)
+      .where(and(eq(autopilotReplies.organizationId, organizationId), gte(autopilotReplies.createdAt, utc24hAgo()), counted));
+    const limit = limitProblem({ sentInConversation: Number(inConversation?.n ?? 0), sentInLast24h: Number(inDay?.n ?? 0) });
+    if (limit) return { held: limit, perConversation: Number(inConversation?.n ?? 0) >= AUTOPILOT_LIMITS.perConversation } as const;
+    const rows = await tx.insert(autopilotReplies).values({
+      organizationId,
+      draftId: fresh.draft.id,
+      revision: fresh.draft.revision,
+      conversationId: fresh.conversationId,
+      runId: fresh.membership.runId,
+      personId: fresh.personId,
+      status: "reserved",
+      check: verdict.check,
+    }).onConflictDoUpdate({
+      target: [autopilotReplies.draftId, autopilotReplies.revision],
+      set: { status: "reserved", reason: null, check: verdict.check, createdAt: new Date(), updatedAt: new Date() },
+      setWhere: eq(autopilotReplies.status, "held"),
+    }).returning({ id: autopilotReplies.id });
+    if (!rows.length) return { duplicate: true } as const;
+    return { id: rows[0]!.id } as const;
+  });
+  if ("duplicate" in reservation) return { sent: false, reason: "this reply was already sent or is being sent" };
+  if ("held" in reservation) {
+    if ("perConversation" in reservation && reservation.perConversation) {
+      await openDecision({ kind: "uncertain", reason: `The autopilot answered ${state.leadName} ${AUTOPILOT_LIMITS.perConversation} times; this conversation is yours now.`, decision: "Read the conversation and answer yourself.", leadMessage: state.leadMessage, personId: state.personId, crmRecordId: state.recordId, conversationId: state.conversationId, draftId: state.draft.id, runId: state.membership.runId, threadId: state.membership.threadId });
+    }
+    return recordHold(state, reservation.held ?? "held", verdict.check);
+  }
+
+  // 4. Send, through the same path as a person's Approve & send.
+  try {
+    await sendDraft({
+      draftId: state.draft.id,
+      revision: state.draft.revision,
+      idempotencyKey: autopilotIdempotencyKey(state.draft.id, state.draft.revision),
+      requestId: randomUUID(),
+      actorRef: AUTOPILOT_ACTOR,
+    }, { send: deps.send });
+    await db.update(autopilotReplies).set({ status: "sent", updatedAt: new Date() }).where(eq(autopilotReplies.id, reservation.id));
+    return { sent: true, reason: null };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await db.update(autopilotReplies).set({ status: "failed", reason: message.slice(0, 1_000), updatedAt: new Date() }).where(eq(autopilotReplies.id, reservation.id));
+    return { sent: false, reason: `the send failed: ${message}` };
+  }
+}
+
+/**
+ * After a run resumes: replies of its members still waiting are queued for
+ * the autopilot again (each re-checked in full, against the current
+ * accounts and limits).
+ */
+export async function requeueRunAutopilot(runId: string): Promise<number> {
+  const members = await db.select({ personId: outreachRunLeads.personId, channel: outreachRunLeads.channel }).from(outreachRunLeads)
+    .where(and(inOrg(outreachRunLeads), eq(outreachRunLeads.runId, runId), eq(outreachRunLeads.status, "active")));
+  if (!members.length) return 0;
+  const drafts = await db.select({ id: crmDrafts.id, revision: crmDrafts.revision, channel: crmDrafts.channel, personId: crmRecords.personId })
+    .from(crmDrafts)
+    .innerJoin(crmRecords, eq(crmRecords.id, crmDrafts.crmRecordId))
+    .where(and(draftInOrg(), inOrg(crmRecords), eq(crmDrafts.status, "awaiting_review"), inArray(crmRecords.personId, members.map((m) => m.personId))));
+  const wanted = drafts.filter((draft) => members.some((m) => m.personId === draft.personId && m.channel === draft.channel));
+  for (const draft of wanted) {
+    await withCrmTransaction((tx) => enqueueCrmJobInTransaction(tx, {
+      kind: "auto_send",
+      entityId: draft.id,
+      payload: { revision: draft.revision, readyAt: new Date().toISOString() },
+      requeueCompleted: true,
+      maxAttempts: 3,
+      runAfter: new Date(Date.now() + 60_000),
+    }));
+  }
+  return wanted.length;
+}

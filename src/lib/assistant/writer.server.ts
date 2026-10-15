@@ -3,7 +3,7 @@ import "server-only";
 import { db } from "@/lib/db";
 import { completeStructured } from "@/lib/ai/server/structuredCompletion";
 import { retrieveKnowledge } from "@/lib/crm/knowledge";
-import { researchCostUsd } from "@/lib/research/research";
+import { recordUsage } from "./usage.server";
 import { BASE_TOKENS, CHANNEL_RULES, ensureSignOff, personalLineProblem, sequenceProblem } from "./messages";
 import { profileKnowledgeText } from "./profile";
 import type { AudienceChannel, BusinessProfile, PlannedStep } from "./schema";
@@ -18,11 +18,12 @@ import type { AudienceChannel, BusinessProfile, PlannedStep } from "./schema";
 
 const TIMEOUT_MS = 90_000;
 
-export type WriterCost = { calls: number; usd: number | null };
+/** The AI spend of one plan or start, accumulated; each call is also recorded in assistant_usage. */
+export type WriterCost = { calls: number; usd: number | null; runId?: string | null };
 
-function addCost(cost: WriterCost, response: unknown) {
+async function addCost(cost: WriterCost, kind: "outreach_writing" | "personal_lines", result: { model?: string; response?: unknown; usage?: { inputTokens?: number; outputTokens?: number } }) {
   cost.calls += 1;
-  const usd = researchCostUsd(response);
+  const usd = await recordUsage(kind, result, cost.runId ?? null);
   if (usd !== null) cost.usd = (cost.usd ?? 0) + usd;
 }
 
@@ -132,7 +133,7 @@ export async function writeSequences(input: {
       parsed = out;
     },
   });
-  addCost(input.cost, result.response);
+  await addCost(input.cost, "outreach_writing", result);
   return parsed;
 }
 
@@ -193,6 +194,6 @@ export async function writePersonalLines(input: {
       }
     },
   });
-  addCost(input.cost, result.response);
+  await addCost(input.cost, "personal_lines", result);
   return lines;
 }

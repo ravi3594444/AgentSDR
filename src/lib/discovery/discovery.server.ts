@@ -13,7 +13,9 @@ import { upsertPerson, withLeadTransaction } from "@/lib/leads/records";
 import { people } from "@/lib/leads/schema";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { cleanEmail } from "./contacts";
-import { mapsSearchPhrase, parseMapsCsv, rankEmails, type MapsPlace } from "./mapsResults";
+import { geocodePlace } from "./geocode.server";
+import { searchTiles } from "./geocode";
+import { mapsSearchPhrase, parseMapsCsvDetailed, rankEmails, type MapsPlace } from "./mapsResults";
 import { createMapsJob, downloadMapsResults, getMapsJobStatus, mapsScraperUrl, MapsScraperError } from "./mapsScraper.server";
 import { collectWebsiteContacts, type PageFetchOptions } from "./websiteContacts.server";
 
@@ -60,6 +62,12 @@ type DiscoveryPayload = {
   criteria: DiscoveryCriteria;
   phrase: string;
   deadline?: string;
+  /** The scraper jobs of this search: one per tile in fast mode, one in place-page mode. */
+  externalIds?: string[];
+  mode?: "fast" | "place";
+  areaLabel?: string | null;
+  /** Rows the scraper returned without a name (it could not read their details). */
+  nameless?: number;
   places?: EnrichedPlace[];
   enrichIndex?: number;
   saveIndex?: number;
@@ -67,7 +75,7 @@ type DiscoveryPayload = {
   seenPhones?: string[];
   tally?: { eligible: number; excluded: number; duplicates: number; withEmail: number; withPhoneOnly: number };
   /** The owner asked to contact what is found: plan the outreach when the search is done. */
-  contactAfter?: { channels: AudienceChannel[] | null } | null;
+  contactAfter?: { channels: AudienceChannel[] | null; ownerRequest?: string } | null;
 };
 
 export class DiscoveryUnavailableError extends Error {
@@ -99,7 +107,7 @@ export function normalizeCriteria(input: { what?: unknown; where?: unknown; maxR
 export async function startDiscovery(
   criteria: DiscoveryCriteria,
   context: { threadId: string | null; userId: string | null },
-  options: { contactAfter?: { channels: AudienceChannel[] | null } | null } = {},
+  options: { contactAfter?: { channels: AudienceChannel[] | null; ownerRequest?: string } | null } = {},
 ): Promise<{ jobId: string; audienceId: string; phrase: string }> {
   const availability = discoveryAvailability();
   if (!availability.available) throw new DiscoveryUnavailableError(availability.reason!);
@@ -169,23 +177,34 @@ function payloadOf(job: AssistantJob): DiscoveryPayload {
 
 async function stageQueued(job: AssistantJob): Promise<StepOutcome> {
   const { criteria, phrase } = payloadOf(job);
-  const depth = Math.max(1, Math.min(10, Math.ceil(criteria.maxResults / 20)));
-  const maxTimeSeconds = Math.max(300, Math.min(1_800, 180 + criteria.maxResults * 6));
+  const name = `${job.organizationId.slice(0, 8)} ${phrase}`.slice(0, 120);
   try {
-    const externalId = await createMapsJob({
-      name: `${job.organizationId.slice(0, 8)} ${phrase}`.slice(0, 120),
-      keywords: [phrase],
-      lang: criteria.language,
-      depth,
-      email: true,
-      maxTimeSeconds,
-    });
+    // Fast mode around the geocoded place, tiled (at most 20 places per search).
+    const area = await geocodePlace(criteria.where, criteria.language);
+    if (area) {
+      const tiles = searchTiles(area, criteria.maxResults);
+      const externalIds: string[] = [];
+      for (const tile of tiles) {
+        externalIds.push(await createMapsJob({ name, keywords: [criteria.what], lang: criteria.language, depth: 1, email: false, maxTimeSeconds: 300, fast: tile }));
+      }
+      return {
+        next: "stage",
+        stage: "searching",
+        externalId: externalIds[0]!,
+        payload: { externalIds, mode: "fast", areaLabel: area.label, deadline: new Date(Date.now() + (300 * tiles.length + 900) * 1_000).toISOString() },
+        progress: { stage: "searching", searches: tiles.length, area: area.label, startedSearchAt: new Date().toISOString() },
+      };
+    }
+    // No coordinates: the scraper's place-page mode with the phrase.
+    const depth = Math.max(1, Math.min(10, Math.ceil(criteria.maxResults / 20)));
+    const maxTimeSeconds = Math.max(300, Math.min(1_800, 180 + criteria.maxResults * 6));
+    const externalId = await createMapsJob({ name, keywords: [phrase], lang: criteria.language, depth, email: true, maxTimeSeconds });
     return {
       next: "stage",
       stage: "searching",
       externalId,
-      payload: { deadline: new Date(Date.now() + (maxTimeSeconds + 600) * 1_000).toISOString() },
-      progress: { stage: "searching", startedSearchAt: new Date().toISOString() },
+      payload: { externalIds: [externalId], mode: "place", areaLabel: null, deadline: new Date(Date.now() + (maxTimeSeconds + 600) * 1_000).toISOString() },
+      progress: { stage: "searching", searches: 1, startedSearchAt: new Date().toISOString() },
     };
   } catch (error) {
     if (error instanceof MapsScraperError) return { next: "failed", error: error.message };
@@ -195,29 +214,42 @@ async function stageQueued(job: AssistantJob): Promise<StepOutcome> {
 
 async function stageSearching(job: AssistantJob): Promise<StepOutcome> {
   const payload = payloadOf(job);
-  if (!job.externalId) return { next: "failed", error: "The search was lost before it started; ask again." };
-  let status;
-  try {
-    status = await getMapsJobStatus(job.externalId);
-  } catch (error) {
-    if (error instanceof MapsScraperError && error.status === 404) return { next: "failed", error: "The Google Maps scraper no longer has this search (it may have restarted). Ask again." };
-    throw error;
-  }
-  if (status === "failed") return { next: "failed", error: "The Google Maps scraper could not complete this search. Google may have blocked it; try again later or with fewer results." };
-  if (status !== "ok") {
-    if (payload.deadline && Date.now() > new Date(payload.deadline).getTime()) {
-      return { next: "failed", error: "The Google Maps search took too long and was stopped." };
+  const ids = payload.externalIds?.length ? payload.externalIds : job.externalId ? [job.externalId] : [];
+  if (!ids.length) return { next: "failed", error: "The search was lost before it started; ask again." };
+  const statuses: { id: string; status: string }[] = [];
+  for (const id of ids) {
+    try {
+      statuses.push({ id, status: await getMapsJobStatus(id) });
+    } catch (error) {
+      if (error instanceof MapsScraperError && error.status === 404) statuses.push({ id, status: "lost" });
+      else throw error;
     }
-    return { next: "wait", delayMs: POLL_MS, progress: { stage: "searching", scraperStatus: status } };
   }
-  const csv = await downloadMapsResults(job.externalId);
-  const places = parseMapsCsv(csv, await organizationPhoneCountry()).slice(0, payload.criteria.maxResults);
+  const done = statuses.filter((entry) => entry.status === "ok");
+  const open = statuses.filter((entry) => entry.status === "pending" || entry.status === "working");
+  const pastDeadline = Boolean(payload.deadline && Date.now() > new Date(payload.deadline).getTime());
+  if (open.length && !pastDeadline) {
+    return { next: "wait", delayMs: POLL_MS, progress: { stage: "searching", searches: ids.length, searchesDone: ids.length - open.length } };
+  }
+  if (!done.length) {
+    if (statuses.every((entry) => entry.status === "lost")) return { next: "failed", error: "The Google Maps scraper no longer has this search (it may have restarted). Ask again." };
+    return { next: "failed", error: pastDeadline ? "The Google Maps search took too long and was stopped." : "The Google Maps scraper could not complete this search. Google may have blocked it; try again later or with fewer results." };
+  }
+  const country = await organizationPhoneCountry();
+  const byKey = new Map<string, MapsPlace>();
+  let nameless = 0;
+  for (const entry of done) {
+    const parsed = parseMapsCsvDetailed(await downloadMapsResults(entry.id), country);
+    nameless += parsed.nameless;
+    for (const place of parsed.places) if (!byKey.has(place.placeKey)) byKey.set(place.placeKey, place);
+  }
+  const places = [...byKey.values()].slice(0, payload.criteria.maxResults);
   const enriched: EnrichedPlace[] = places.map((place) => ({ ...place, websiteEmails: [], websitePhones: [], companyLinkedin: null, websiteError: null }));
   return {
     next: "stage",
     stage: "enriching",
-    payload: { places: enriched, enrichIndex: 0 },
-    progress: { stage: "enriching", found: places.length, websitesChecked: 0, websitesToCheck: places.filter((place) => place.website).length },
+    payload: { places: enriched, enrichIndex: 0, nameless },
+    progress: { stage: "enriching", found: places.length, websitesChecked: 0, websitesToCheck: places.filter((place) => place.website).length, ...(open.length ? { searchesUnfinished: open.length } : {}) },
   };
 }
 
@@ -263,7 +295,8 @@ async function stageEnriching(job: AssistantJob, heartbeat: () => Promise<void>)
 }
 
 function factsOf(place: EnrichedPlace): Record<string, string> {
-  const facts: Record<string, string> = { businessName: place.name };
+  const facts: Record<string, string> = { businessName: place.displayName };
+  if (place.displayName !== place.name) facts.listingName = place.name;
   if (place.category) facts.category = place.category;
   if (place.city) facts.city = place.city;
   if (place.address) facts.address = place.address;
@@ -294,7 +327,7 @@ async function savePlace(place: EnrichedPlace, payload: DiscoveryPayload): Promi
   const evidence = placeEvidence(place);
   const facts = factsOf(place);
   const base = { source: DISCOVERY_SOURCE, sourceUrl: place.mapsUrl, evidence, facts };
-  if (place.closed) return { member: { personId: null, name: place.name, reason: `listed on Google Maps as ${place.closed.toLowerCase()}`, ...base }, outcome: "excluded", email: false };
+  if (place.closed) return { member: { personId: null, name: place.displayName, reason: `listed on Google Maps as ${place.closed.toLowerCase()}`, ...base }, outcome: "excluded", email: false };
 
   let email: string | null = null;
   let emailRejected = false;
@@ -316,7 +349,7 @@ async function savePlace(place: EnrichedPlace, payload: DiscoveryPayload): Promi
           ? `no email or phone on its Google Maps listing, and its website could not be read (${place.websiteError})`
           : "no email or phone on its Google Maps listing or website"
         : "no email or phone on its Google Maps listing, and no website";
-    return { member: { personId: null, name: place.name, reason, ...base }, outcome: "excluded", email: false };
+    return { member: { personId: null, name: place.displayName, reason, ...base }, outcome: "excluded", email: false };
   }
   const seenEmails = new Set(payload.seenEmails ?? []);
   const seenPhones = new Set(payload.seenPhones ?? []);
@@ -325,7 +358,8 @@ async function savePlace(place: EnrichedPlace, payload: DiscoveryPayload): Promi
   if (phone) payload.seenPhones = [...seenPhones, phone];
 
   const raw = {
-    businessName: place.name,
+    businessName: place.displayName,
+    ...(place.displayName !== place.name ? { listingName: place.name } : {}),
     ...(place.category ? { category: place.category } : {}),
     ...(place.city ? { city: place.city } : {}),
     ...(place.address ? { address: place.address } : {}),
@@ -339,7 +373,7 @@ async function savePlace(place: EnrichedPlace, payload: DiscoveryPayload): Promi
       return upsertPerson(tx, {
         email,
         phone,
-        company: { name: place.name, domain: place.domain, linkedinUrl: place.companyLinkedin },
+        company: { name: place.displayName, domain: place.domain, linkedinUrl: place.companyLinkedin },
         raw,
         source: "discovery:google-maps",
       });
@@ -347,7 +381,7 @@ async function savePlace(place: EnrichedPlace, payload: DiscoveryPayload): Promi
     const created = await findOrCreateContactPerson(tx, {
       fullName: null,
       phone: phone!,
-      companyName: place.name,
+      companyName: place.displayName,
       companyDomain: place.domain,
       title: null,
       email: null,
@@ -396,7 +430,9 @@ async function stageSaving(job: AssistantJob, heartbeat: () => Promise<void>): P
       ...tally,
       note: places.length
         ? null
-        : `Google Maps returned no listings for “${payload.phrase}”. It only covers businesses with a public Maps listing; try other words or a wider area.`,
+        : payload.nameless
+          ? `The Google Maps scraper found ${payload.nameless} listings for “${payload.phrase}” but could not read their details (Google may have changed its pages). Try again later; uploaded lists still work.`
+          : `Google Maps returned no listings for “${payload.phrase}”. It only covers businesses with a public Maps listing; try other words or a wider area.`,
     },
   };
 }

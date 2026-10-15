@@ -9,6 +9,7 @@ import { channelSettings } from "@/lib/channels/schema";
 import { startTrackedJob } from "@/lib/linkedin/jobTracker";
 import { serializeError } from "@/lib/linkedin/serializeError";
 import { migrationMutationBlockReason } from "@/lib/migration/controls";
+import { runInOrganization } from "@/lib/tenancy/scope";
 import { buildMailboxQueues } from "@/lib/outreach/buildQueue";
 import { renewMailboxWatches } from "@/lib/outreach/mailboxWatch";
 import { lastStarts } from "./claims";
@@ -97,6 +98,15 @@ export async function runDailyRollover(organizationId: string): Promise<{ summar
     } catch (error) {
       errors.push(`linkedin reset: ${serializeError(error)}`);
     }
+  }
+
+  // d. The assistant's daily summary of yesterday, in the organization's time zone.
+  try {
+    const { writeDailySummary } = await import("@/lib/assistant/dailySummary.server");
+    const day = await runInOrganization(organizationId, () => writeDailySummary());
+    notes.push(day ? `assistant summary: ${day}` : "assistant summary: none");
+  } catch (error) {
+    errors.push(`assistant summary: ${serializeError(error)}`);
   }
 
   return { summary: notes.join("; "), error: errors.length ? errors.join("; ") : null };

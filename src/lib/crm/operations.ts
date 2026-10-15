@@ -1,5 +1,5 @@
 import { and, desc, eq, inArray, ne } from "drizzle-orm";
-import { isPersonDoNotContact } from "./policies";
+import { isPersonDoNotContact, setPersonDoNotContactInTransaction } from "./policies";
 import { appendCrmEvent } from "./events";
 import {
   acknowledgeClassificationInTransaction,
@@ -19,6 +19,7 @@ import {
   crmRecords,
   crmSequenceRuns,
   type CrmCategoryKey,
+  crmSubcategories,
 } from "./schema";
 import { interruptActiveSequenceRunInTransaction, startSequenceRunInTransaction } from "./sequences";
 import { STAGE_MOVED_EVENT, type StageMoveNext } from "./stageMove";
@@ -85,6 +86,20 @@ export async function applyHumanClassification(input: {
       source: "human",
       actorType: "authenticated_operator",
     });
+    // A person confirming "Do Not Contact" sets it, as the AI's own result does.
+    if (input.subcategoryId) {
+      const [subcategory] = await tx.select({ key: crmSubcategories.key }).from(crmSubcategories)
+        .where(eq(crmSubcategories.id, input.subcategoryId)).limit(1);
+      if (subcategory?.key === "do_not_contact") {
+        await setPersonDoNotContactInTransaction(tx, {
+          personId: updated.personId,
+          reason: input.reason?.trim() || "Classified as Do Not Contact by a person",
+          source: "human",
+          actorType: "authenticated_operator",
+          actorRef: input.actorRef ?? null,
+        });
+      }
+    }
     // A re-applied classification keeps its id, and its draft job has
     // usually already succeeded for the previous run's step.
     return restartRecordWorkInTransaction(tx, updated, {

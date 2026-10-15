@@ -15,7 +15,10 @@ import { cleanEmail, emailMatchesDomain, ownWebsite, websiteDomain } from "./con
 export type MapsPlace = {
   /** Google's place id (or cid) — the dedupe key across searches. */
   placeKey: string;
+  /** The name as listed. */
   name: string;
+  /** The name without appended keywords, for messages. */
+  displayName: string;
   category: string | null;
   address: string | null;
   city: string | null;
@@ -59,6 +62,39 @@ function addressParts(raw: string | undefined): { city: string | null; country: 
 const CLOSED = /closed/i;
 
 /**
+ * The listing's own Maps link; in fast mode the scraper leaves `link`, `cid`
+ * and `place_id` empty but gives `data_id` ("0x…:0x…"), whose second half
+ * is the place's CID in hex.
+ */
+export function listingUrl(row: Record<string, string | undefined>): string | null {
+  const link = text(row.link);
+  if (link) return link;
+  const cid = text(row.cid);
+  if (cid && /^\d+$/.test(cid)) return `https://maps.google.com/?cid=${cid}`;
+  const hex = text(row.data_id)?.split(":")[1];
+  if (hex && /^0x[0-9a-f]+$/i.test(hex)) return `https://maps.google.com/?cid=${BigInt(hex).toString()}`;
+  const placeId = text(row.place_id);
+  return placeId ? `https://www.google.com/maps/place/?q=place_id:${encodeURIComponent(placeId)}` : null;
+}
+
+/**
+ * The business name as a person would write it: listings often append
+ * keywords ("Smile Care | Best Dentist in Baner", "Dr. X Clinic-Dentist in
+ * Balewadi/RCT Specialist"). Cut at the first separator; keep the listing
+ * name when nothing sensible is left.
+ */
+export function cleanBusinessName(name: string): string {
+  const original = name.replace(/\s+/g, " ").trim();
+  let value = original.split(/\s+[|•·–—-]\s+|\s*\|\s*/)[0]!.trim();
+  if (value.length > 45) {
+    const cut = value.slice(15).search(/[/,(]|-(?=[A-Z])/);
+    if (cut >= 0) value = value.slice(0, 15 + cut).trim();
+  }
+  value = value.replace(/[\s,;:–—-]+$/, "");
+  return value.length >= 3 ? value : original;
+}
+
+/**
  * Every place in a scraper CSV. Rows without a name are dropped; repeats of
  * the same place (the scraper can return one twice across scroll pages) keep
  * the first. Emails are kept only when they are well-formed and not junk;
@@ -66,14 +102,25 @@ const CLOSED = /closed/i;
  * businesses use Gmail), since the scraper read it from that website.
  */
 export function parseMapsCsv(csv: string | Uint8Array, defaultCountry?: string): MapsPlace[] {
+  return parseMapsCsvDetailed(csv, defaultCountry).places;
+}
+
+/** The places, plus how many rows the scraper returned and how many had no name (no details read). */
+export function parseMapsCsvDetailed(csv: string | Uint8Array, defaultCountry?: string): { places: MapsPlace[]; rows: number; nameless: number } {
   const bytes = typeof csv === "string" ? new TextEncoder().encode(csv) : csv;
   const { records } = readTextRecords(bytes);
+  const nameless = records.filter((row) => !text(row.title)).length;
+  return { places: placesFrom(records, defaultCountry), rows: records.length, nameless };
+}
+
+function placesFrom(records: Record<string, string>[], defaultCountry?: string): MapsPlace[] {
   const seen = new Set<string>();
   const places: MapsPlace[] = [];
   for (const row of records) {
     const name = text(row.title);
     if (!name) continue;
     const placeKey = text(row.place_id) ?? text(row.cid) ?? text(row.data_id) ?? text(row.link) ?? `${name}|${text(row.address) ?? ""}`;
+    const mapsUrl = listingUrl(row);
     if (seen.has(placeKey)) continue;
     seen.add(placeKey);
 
@@ -86,11 +133,12 @@ export function parseMapsCsv(csv: string | Uint8Array, defaultCountry?: string):
     places.push({
       placeKey,
       name,
+      displayName: cleanBusinessName(name),
       category: text(row.category),
       address: text(row.address),
       city,
       country,
-      mapsUrl: text(row.link),
+      mapsUrl,
       website,
       domain: websiteDomain(website),
       phone: phoneCheck?.ok ? phoneCheck.e164 : null,

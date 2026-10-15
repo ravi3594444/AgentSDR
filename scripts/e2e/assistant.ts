@@ -40,6 +40,8 @@ const SCRAPER = "http://gmaps-check.invalid";
 const UNIPILE = "https://unipile-assistant-check.invalid";
 process.env.GMAPS_SCRAPER_URL = SCRAPER;
 process.env.DISCOVERY_DNS_CHECK = "off";
+// Automatic replies send only in production; this script sends to its own fake Unipile.
+process.env.AUTOPILOT_ALLOW_NON_PRODUCTION = "true";
 const stamp = Date.now();
 
 // ------------------------------------------------------------ fixtures
@@ -129,9 +131,10 @@ const { gridProviderCredentials, gridProviders } = await import("@/lib/grid/sche
 const { encryptIntegrationCredentials } = await import("@/lib/integrations/credentials");
 const { mailboxes, outreachCampaigns, outreachLeads, outreachMailboxQueue } = await import("@/lib/outreach/schema");
 const { whatsappAccounts, whatsappCampaigns, whatsappCampaignLeads } = await import("@/lib/whatsapp/schema");
-const { crmDrafts, crmEvents, crmJobs, crmKnowledgeDocuments: knowledgeDocuments, crmSendAttempts } = await import("@/lib/crm/schema");
+const { crmDrafts, crmJobs, crmKnowledgeDocuments: knowledgeDocuments, crmSettings } = await import("@/lib/crm/schema");
 const { runInOrganization, currentOrganizationId } = await import("@/lib/tenancy/scope");
-const { assistantJobs, assistantMessages, assistantProfiles, leadAudienceMembers, outreachRuns } = await import("@/lib/assistant/schema");
+const { assistantJobs, assistantMessages, assistantProfiles, autopilotReplies, leadAudienceMembers, outreachRunLeads, outreachRuns, ownerDecisions } = await import("@/lib/assistant/schema");
+const { answerDecision } = await import("@/lib/assistant/decisions.server");
 const { runTool } = await import("@/lib/assistant/tools.server");
 const { runOneAssistantStep } = await import("@/lib/assistant/worker");
 const { registerAssistantJobs } = await import("@/lib/assistant/register.server");
@@ -143,12 +146,16 @@ const { startOutreachRun, getRun } = await import("@/lib/assistant/outreach.serv
 const { personalLineProblem } = await import("@/lib/assistant/messages");
 const { setDiscoveryPageOptions } = await import("@/lib/discovery/discovery.server");
 const { fetchPublicPage } = await import("@/lib/discovery/websiteContacts.server");
-const { isAutopilotOn, runAutopilotForDraft, setAutopilot } = await import("@/lib/crm/autopilot.server");
+const { setGeocoderFetch } = await import("@/lib/discovery/geocode.server");
+const { runAutomationChecks, runIsolationChecks } = await import("./assistantAutomation");
+let automation: { missingDecisionId: string; supportedDraftId: string } | null = null;
 const { ingestInboundReply } = await import("@/lib/crm/conversations");
 const { registerDefaultCrmJobHandlers } = await import("@/lib/crm/handlers");
 const { drainOnce } = await import("@/lib/crm/worker");
 
 setDiscoveryPageOptions({ allowPrivate: true, fetchImpl: websiteFetch });
+// OpenStreetMap's geocoder, stood in: one small area around Pune.
+setGeocoderFetch(async () => new Response(JSON.stringify([{ lat: "18.5590", lon: "73.7868", boundingbox: ["18.5490", "18.5690", "73.7768", "73.7968"], display_name: "Baner, Pune, India" }]), { status: 200, headers: { "content-type": "application/json" } }));
 registerAssistantJobs();
 
 let failures = 0;
@@ -246,7 +253,7 @@ await runInOrganization(org!.id, async () => {
   }).returning();
 
   const thread = await createThread(owner);
-  const context = { threadId: thread.id, userId: owner };
+  const context = { threadId: thread.id, userId: owner, ownerText: "" };
 
   try {
     // ------------------------------------------------------------ setup and profile tools
@@ -316,8 +323,8 @@ await runInOrganization(org!.id, async () => {
     check("find_leads starts a background search", search.ok && Boolean(searchData?.jobId), search.summary);
     const job = searchData ? await finishJob(searchData.jobId) : null;
     const scraperJob = [...scraperJobs.values()].at(-1);
-    check("the scraper is asked for the phrase, in the profile's language, with website emails on",
-      scraperJob?.keywords[0] === "dental clinics in Pune, India" && scraperJob.body.email === true && scraperJob.body.lang === "en" && Number(scraperJob.body.max_time) >= 300,
+    check("the scraper runs a fast search around the geocoded place, in the profile's language",
+      scraperJob?.keywords[0] === "dental clinics" && scraperJob.body.fast_mode === true && scraperJob.body.lat === "18.559000" && scraperJob.body.lang === "en" && Number(scraperJob.body.radius) >= 1_500,
       JSON.stringify(scraperJob?.body));
     check("the search job finishes", job?.status === "succeeded", `${job?.status} ${job?.error ?? ""}`);
     const result = (job?.result ?? {}) as Record<string, number>;
@@ -369,16 +376,17 @@ await runInOrganization(org!.id, async () => {
     check("an empty search says Maps only covers listed businesses", emptyJob?.status === "succeeded" && /only covers businesses with a public Maps listing/.test(String((emptyJob.result as Record<string, unknown>)?.note)), String((emptyJob?.result as Record<string, unknown>)?.note));
 
     // ------------------------------------------------------------ outreach without AI / without profile
-    const early = await runTool("prepare_outreach", { audienceId: searchData!.audienceId }, context);
+    const early = await runTool("prepare_outreach", { audienceId: searchData!.audienceId, ownerRequest: "email them" }, { ...context, ownerText: "Find dental clinics and email them." });
     check("outreach needs the business name, offer and sender first", !early.ok && /business name/.test(early.summary), early.summary);
     await runTool("save_business_info", { businessName: "Bright Path Dental Supplies", offer: "Same-week servicing for dental chairs and autoclaves, with a monthly maintenance plan", senderName: "Ravi" }, context);
     if (!aiReady) {
-      const noAi = await runTool("prepare_outreach", { audienceId: searchData!.audienceId }, context);
+      const noAi = await runTool("prepare_outreach", { audienceId: searchData!.audienceId, ownerRequest: "email them" }, { ...context, ownerText: "Find dental clinics and email them." });
       const runs = await db.select().from(outreachRuns).where(eq(outreachRuns.organizationId, orgId));
       check("without AI, prepare_outreach fails with the reason and plans nothing", !noAi.ok && runs.length === 0, noAi.summary);
-      check("the autopilot is off by default", !(await isAutopilotOn()));
+      automation = await runAutomationChecks({ check, organizationId: orgId, stamp, mailboxAddress, unipileSends, ownerId: owner });
       return;
     }
+    automation = await runAutomationChecks({ check, organizationId: orgId, stamp, mailboxAddress, unipileSends, ownerId: owner });
 
     // ------------------------------------------------------------ the chat agent
     await db.update(assistantProfiles).set({ profile: {} }).where(eq(assistantProfiles.organizationId, orgId));
@@ -412,10 +420,9 @@ await runInOrganization(org!.id, async () => {
     }
     turn = await listMessages(chat.id);
     const searchEvent = turn.findIndex((m) => m.role === "event" && m.content.includes("can be contacted"));
-    // The prompt asks it to offer, not prepare, unasked outreach; models do not always comply. A proposal sends nothing, so this is reported, not failed.
-    if (turn.slice(0, turn.findIndex((m) => m.tool === "find_leads")).some((m) => m.tool === "prepare_outreach")) {
-      console.log("NOTE  the agent prepared a plan before the owner asked for outreach (nothing is sent without Start)");
-    }
+    // Before the owner asked for outreach no plan may exist (the server refuses one without the owner's words).
+    check("no outreach plan was prepared before the owner asked for it",
+      !turn.slice(0, turn.findIndex((m) => m.tool === "find_leads")).some((m) => m.tool === "prepare_outreach" && m.status === "ok"));
     const prepareCall = searchEvent >= 0 ? turn.slice(searchEvent).find((m) => m.role === "tool" && m.tool === "prepare_outreach" && m.status === "ok") : undefined;
     console.log(`      assistant: ${turn.filter((m) => m.role === "assistant").slice(-2).map((m) => m.content).join(" / ").slice(0, 500)}`);
     check("after the search, the agent proposes outreach on its own", Boolean(prepareCall), turn.filter((m) => m.role === "tool").map((m) => `${m.tool}:${m.status}:${m.content.slice(0, 120)}`).join(" | "));
@@ -454,66 +461,65 @@ await runInOrganization(org!.id, async () => {
       const waLeads = await db.select().from(whatsappCampaignLeads).where(eq(whatsappCampaignLeads.campaignId, running.campaigns.whatsapp));
       check("the WhatsApp campaign is active with the phone-only leads", waCampaign?.status === "active" && waLeads.length > 0);
     }
-    check("Start with autopilot turns the reply autopilot on", await isAutopilotOn());
-    check("nothing was sent by starting (sending is the engines' tick)", unipileSends.length === 0);
+    const [runMembers] = await db.select({ n: sql<number>`count(*)::int` }).from(outreachRunLeads).where(eq(outreachRunLeads.runId, proposed.id));
+    const [orgWide] = await db.select({ n: sql<number>`count(*)::int` }).from(crmSettings).where(sql`${crmSettings.humanSendOnly} IS NOT TRUE`);
+    check("Start in Automatic mode makes this run automatic, records its approved audience, and nothing organization-wide",
+      Boolean(running?.autopilot) && Number(runMembers?.n) === plan.assignments.length && Number(orgWide?.n ?? 0) === 0, `${runMembers?.n} members`);
+    const sendsBeforeStart = unipileSends.length;
+    check("nothing was sent by starting (sending is the engines' tick)", unipileSends.length === sendsBeforeStart);
 
-    // ------------------------------------------------------------ a reply, the CRM worker and the autopilot
-    const replier = lotus ?? memberPeople.find((p) => p.email);
+    // ------------------------------------------------------------ live AI: classify, draft, check, answer
     registerDefaultCrmJobHandlers();
-    const inbound = await ingestInboundReply({
-      personId: replier!.id,
-      channel: "email",
-      accountRef: mailboxAddress,
-      providerThreadId: `assistant-check-thread-${stamp}`,
-      idempotencyKey: `assistant-check-inbound-${stamp}`,
-      providerMessageId: `assistant-check-provider-${stamp}`,
+    async function drainFor(recordId: string, rounds = 40) {
+      for (let round = 0; round < rounds; round += 1) {
+        await db.update(crmJobs).set({ runAfter: new Date(Date.now() - 1_000) }).where(and(eq(crmJobs.organizationId, orgId), eq(crmJobs.status, "queued")));
+        await drainOnce();
+        const replies = await db.select().from(autopilotReplies).where(eq(autopilotReplies.organizationId, orgId));
+        const drafts = await db.select().from(crmDrafts).where(eq(crmDrafts.crmRecordId, recordId));
+        if (drafts.some((d) => d.status === "failed") || replies.some((r) => drafts.some((d) => d.id === r.draftId && r.revision === d.revision))) return;
+        await new Promise((resolve) => setTimeout(resolve, 1_500));
+      }
+    }
+    const discovered = memberPeople.filter((p) => p.email);
+    const asker = discovered[0]!;
+    const sendsBefore = unipileSends.length;
+    const priceQuestion = await ingestInboundReply({
+      personId: asker.id, channel: "email", accountRef: mailboxAddress, providerThreadId: `live-price-${stamp}`, idempotencyKey: `live-price-${stamp}`, providerMessageId: `live-price-pm-${stamp}`,
       subject: `Re: ${plan.samples[0]?.messages[0]?.subject ?? "Dental chair servicing"}`,
-      bodyText: "Hi Ravi, thanks for writing. We have two chairs and one autoclave. How does the monthly maintenance plan work?",
+      bodyText: "Hi Ravi, thanks. How much is your monthly maintenance plan per chair, and how many visits does it include?",
       sentAt: new Date(),
     });
-    let decided = false;
-    let delayChecked = false;
-    for (let round = 0; round < 40 && !decided; round += 1) {
-      // The autopilot waits AUTOPILOT_LIMITS.delayMinutes after a draft; check that, then skip the wait.
-      const waiting = await db.select().from(crmJobs).where(and(eq(crmJobs.organizationId, orgId), eq(crmJobs.kind, "auto_send"), eq(crmJobs.status, "queued")));
-      if (waiting.length && !delayChecked) {
-        delayChecked = true;
-        check("the autopilot waits about 10 minutes before answering", waiting[0]!.runAfter.getTime() - Date.now() > 9 * 60_000, waiting[0]!.runAfter.toISOString());
-        await db.update(crmJobs).set({ runAfter: new Date(Date.now() - 1_000) }).where(inArray(crmJobs.id, waiting.map((job) => job.id)));
-      }
-      await drainOnce();
-      const drafts = await db.select().from(crmDrafts).where(eq(crmDrafts.crmRecordId, inbound.record.id));
-      const attempts = drafts.length ? await db.select().from(crmSendAttempts).where(inArray(crmSendAttempts.draftId, drafts.map((d) => d.id))) : [];
-      const held = await db.select().from(crmEvents).where(and(eq(crmEvents.crmRecordId, inbound.record.id), eq(crmEvents.eventType, "autopilot.held")));
-      decided = attempts.length > 0 || held.length > 0 || drafts.some((d) => d.status === "failed");
-      if (!decided) await new Promise((resolve) => setTimeout(resolve, 1_500));
-    }
-    const drafts = await db.select().from(crmDrafts).where(eq(crmDrafts.crmRecordId, inbound.record.id));
-    const attempts = drafts.length ? await db.select().from(crmSendAttempts).where(inArray(crmSendAttempts.draftId, drafts.map((d) => d.id))) : [];
-    const held = await db.select().from(crmEvents).where(and(eq(crmEvents.crmRecordId, inbound.record.id), eq(crmEvents.eventType, "autopilot.held")));
-    check("the CRM worker drafted a reply and the autopilot decided on it", drafts.length > 0 && (attempts.length > 0 || held.length > 0), `drafts ${drafts.map((d) => d.status).join(",")}, attempts ${attempts.length}, held ${held.length}`);
-    if (held.length) {
-      console.log(`      autopilot held it: ${JSON.stringify(held[0]!.meta)}`);
-      // Outside production nothing is sent; check the hold is the production guard or a policy reason.
-    } else if (attempts.length) {
-      // Only possible with AUTOPILOT_ALLOW_NON_PRODUCTION=true.
-      check("an automatic send goes through the mailbox's provider with the autopilot's key", attempts[0]!.idempotencyKey.startsWith("autopilot:") && unipileSends.length === 1, attempts[0]!.idempotencyKey);
-    }
-    const draft = drafts.find((d) => d.status === "awaiting_review");
-    if (draft) {
-      const outcome = await runAutopilotForDraft(draft.id, { allowNonProduction: false });
-      check("a development server never auto-sends (production guard)", !outcome.sent, outcome.reason ?? "");
-      const sentBefore = unipileSends.length;
-      const forced = await runAutopilotForDraft(draft.id, { allowNonProduction: true });
-      console.log(`      autopilot decision with the guard lifted: ${forced.sent ? "sent" : `held — ${forced.reason}`}`);
-      if (forced.sent) {
-        const sent = unipileSends.at(-1);
-        check("the automatic reply went to the lead through Unipile, from the run's mailbox", unipileSends.length === sentBefore + 1 && JSON.parse(sent?.to ?? "[]")[0]?.identifier === replier!.email && sent?.account_id === unipileAccount, JSON.stringify(sent).slice(0, 300));
-        const [attempt] = await db.select().from(crmSendAttempts).where(eq(crmSendAttempts.draftId, draft.id));
-        check("it is recorded as the autopilot's send, once per draft revision", attempt?.idempotencyKey === `autopilot:${draft.id}:${draft.revision}`);
-        const second = await runAutopilotForDraft(draft.id, { allowNonProduction: true });
-        check("running it again sends nothing more", !second.sent && unipileSends.length === sentBefore + 1, second.reason ?? "");
-      }
+    await drainFor(priceQuestion.record.id);
+    const [priceDraft] = await db.select().from(crmDrafts).where(eq(crmDrafts.crmRecordId, priceQuestion.record.id));
+    const [priceDecision] = priceDraft ? await db.select().from(autopilotReplies).where(eq(autopilotReplies.draftId, priceDraft.id)) : [];
+    console.log(`      price question: ${priceDecision?.status ?? "no decision"} — ${priceDecision?.reason ?? ""}`);
+    console.log(`      draft: ${(priceDraft?.aiBodyText ?? "").replace(/\s+/g, " ").slice(0, 300)}`);
+    check("a question the uploaded price list answers is answered automatically (real classifier, drafter and check), through Unipile",
+      priceDecision?.status === "sent" && unipileSends.length === sendsBefore + 1,
+      `${priceDecision?.status}: ${priceDecision?.reason ?? ""} ${JSON.stringify(priceDecision?.check?.problems ?? [])}`);
+
+    const xrayAsker = discovered[1] ?? discovered[0]!;
+    const xray = await ingestInboundReply({
+      personId: xrayAsker.id, channel: "email", accountRef: mailboxAddress, providerThreadId: `live-xray-${stamp}`, idempotencyKey: `live-xray-${stamp}`, providerMessageId: `live-xray-pm-${stamp}`,
+      subject: "Re: Dental chair servicing",
+      bodyText: "Interesting. Do you also service dental X-ray machines? We have two intraoral units.",
+      sentAt: new Date(),
+    });
+    await drainFor(xray.record.id);
+    const [xrayDraft] = await db.select().from(crmDrafts).where(eq(crmDrafts.crmRecordId, xray.record.id));
+    const [xrayHold] = xrayDraft ? await db.select().from(autopilotReplies).where(eq(autopilotReplies.draftId, xrayDraft.id)) : [];
+    const [xrayDecision] = xrayDraft ? await db.select().from(ownerDecisions).where(and(eq(ownerDecisions.draftId, xrayDraft.id), eq(ownerDecisions.status, "open"))) : [];
+    console.log(`      X-ray question: ${xrayHold?.status} — ${xrayHold?.reason ?? ""}; asks the owner: ${xrayDecision?.decision ?? "nothing"}`);
+    check("a question the information does not answer is not sent; the owner gets a focused question", xrayHold?.status === "held" && Boolean(xrayDecision), `${xrayHold?.status} ${xrayDecision?.kind}`);
+    if (xrayDecision) {
+      const sendsBeforeAnswer = unipileSends.length;
+      const result = await answerDecision(xrayDecision.id, "Yes. We service intraoral dental X-ray units in Pune as part of the same-week servicing; it is quoted per unit after a free check.", owner);
+      check("the owner's answer is saved and the waiting reply rewritten with it", result.saved && result.rewritten, result.problem ?? "");
+      await drainFor(xray.record.id);
+      const [rewritten] = await db.select().from(crmDrafts).where(eq(crmDrafts.id, xrayDraft!.id));
+      const [afterAnswer] = await db.select().from(autopilotReplies).where(and(eq(autopilotReplies.draftId, xrayDraft!.id), eq(autopilotReplies.revision, rewritten!.revision)));
+      console.log(`      after the answer: ${afterAnswer?.status} — ${afterAnswer?.reason ?? ""}; draft: ${(rewritten?.aiBodyText ?? "").replace(/\s+/g, " ").slice(0, 240)}`);
+      check("the rewritten reply, now backed by the saved answer, is sent automatically", afterAnswer?.status === "sent" && unipileSends.length === sendsBeforeAnswer + 1, `${afterAnswer?.status}: ${afterAnswer?.reason ?? ""}`);
     }
 
     // ------------------------------------------------------------ report and pause
@@ -522,8 +528,10 @@ await runInOrganization(org!.id, async () => {
     const paused = await runTool("pause_outreach", { runId: proposed.id }, context);
     const [pausedCampaign] = await db.select().from(outreachCampaigns).where(eq(outreachCampaigns.id, running!.campaigns.email!));
     check("pause_outreach pauses the campaigns", paused.ok && pausedCampaign?.status === "paused" && (await getRun(proposed.id))?.status === "paused", paused.summary);
-    const off = await runTool("turn_off_autopilot", {}, context);
-    check("turn_off_autopilot turns it off", off.ok && !(await isAutopilotOn()));
+    const off = await runTool("switch_to_review", { runId: proposed.id }, context);
+    check("switch_to_review puts the run in Review mode", off.ok && (await getRun(proposed.id))?.autopilot === false, off.summary);
+    const chatReport = await runTool("report", { period: "today" }, context);
+    check("the owner can ask for results in chat (from recorded events)", chatReport.ok && /people contacted/.test(chatReport.summary) && /automatically/.test(chatReport.summary), chatReport.summary.slice(0, 300));
   } finally {
     // Leave nothing that could send: campaigns paused, mailbox disabled, number disconnected, fake Unipile removed.
     await db.update(outreachCampaigns).set({ status: "paused" }).where(and(eq(outreachCampaigns.organizationId, orgId), eq(outreachCampaigns.status, "active")));
@@ -532,11 +540,14 @@ await runInOrganization(org!.id, async () => {
     // The other e2e scripts refuse to tick while any organization has queued email.
     await db.delete(outreachMailboxQueue).where(eq(outreachMailboxQueue.mailboxId, mailbox!.id));
     await db.update(whatsappAccounts).set({ status: "disconnected" }).where(eq(whatsappAccounts.id, whatsapp!.id));
-    await setAutopilot(false).catch(() => undefined);
+    await db.update(outreachRuns).set({ autopilot: false }).where(eq(outreachRuns.organizationId, orgId));
     await db.delete(gridProviderCredentials).where(eq(gridProviderCredentials.providerId, unipile!.id));
     await db.delete(gridProviders).where(eq(gridProviders.id, unipile!.id));
   }
 });
+
+const automationDone = automation as { missingDecisionId: string; supportedDraftId: string } | null;
+if (automationDone) await runIsolationChecks({ check, stamp, ...automationDone });
 
 const strayMessages = await db.select({ n: sql<number>`count(*)::int` }).from(assistantMessages).where(and(eq(assistantMessages.organizationId, org!.id), eq(assistantMessages.status, "running")));
 check("no tool call was left running", Number(strayMessages[0]?.n ?? 0) === 0);

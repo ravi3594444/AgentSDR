@@ -16,21 +16,26 @@ been sent or received yet.
 - **In:** Leads import (CSV/XLSX, phone-only WhatsApp contacts), company web
   research, email / LinkedIn / WhatsApp campaigns with server-enforced
   launch rules and sending rules, reply sync, AI classification and drafts
-  that wait for your approval (unless you turn on the reply autopilot, §3b),
-  Action required and the CRM.
+  that wait for your approval (or, for an outreach run started in Automatic
+  mode, are answered automatically when your saved information backs the
+  answer, §3b), Action required and the CRM.
 - **The assistant** (the first page, `/assistant`): you tell it about your
   business in a chat, attach documents (PDF, Word, text) and contact lists
   (CSV, Excel), and ask it to "find suitable leads and contact them" or "use
   this list and run outreach". It searches, imports, writes the messages and
-  shows a plan; **nothing is sent until you press Start on that plan**. See
-  §3b.
+  shows a plan; **nothing is sent until you press Start on that plan**. It
+  creates and manages the campaigns and sequences itself, asks you when a
+  lead asks something your information does not answer, and reports results
+  in the chat, on the Results page and in a daily summary. See §3b.
 - **Email without a domain:** email can send through Google Workspace *or*
   through an inbox linked in Unipile (a personal Gmail, Outlook, iCloud or
   IMAP account). Each mailbox uses its own; see §3.
 - **Hidden for this release** (`src/lib/release.ts`; code and data kept):
   WhatsApp calling, call recordings and the recorder extension, image AI
-  columns, LinkedIn lead search, Tables and Prospecting. Do not set up
-  Cloudflare R2, Deepgram, Twilio, AssemblyAI or Bland for this release.
+  columns, the standalone LinkedIn Search page, Tables and Prospecting. (The
+  assistant uses the same LinkedIn search engine when a LinkedIn account is
+  connected, §3b.) Do not set up Cloudflare R2, Deepgram, Twilio,
+  AssemblyAI or Bland for this release.
 
 Never paste secrets into this repository, this file or a chat. They go in the
 server's `.env` (or `.env.local` from source) or in the app's own settings,
@@ -99,9 +104,12 @@ Rules that matter:
   and the same with `scripts/add-mailbox-provider.ts` (from source:
   `bun scripts/create-lead-research.ts` and `bun scripts/add-mailbox-provider.ts`).
   Until the first runs, Research says so; until the second runs, the email
-  pages fail to load. The assistant needs a third one,
-  `scripts/create-assistant-tables.ts` (same command); until it runs, the
-  assistant page fails to load.
+  pages fail to load. The assistant needs two more, in this order:
+  `scripts/create-assistant-tables.ts`, then
+  `scripts/add-assistant-automation.ts` (same command); until they run, the
+  assistant and Results pages fail to load. The second also switches off the
+  old organization-wide reply autopilot for good (automatic replies are now
+  chosen per outreach run, §3b).
 - **Lead search (optional):** add `-f docker-compose.discovery.yml` to every
   compose command (or put
   `COMPOSE_FILE=docker-compose.yml:docker-compose.build.yml:docker-compose.discovery.yml`
@@ -218,24 +226,107 @@ imports and campaign drafts) before starting it, then use the trial to verify
 the LinkedIn/WhatsApp accounts you actually plan to run. After the trial,
 connected-channel access needs a paid Unipile subscription.
 
-## 3b. The assistant, lead search and the reply autopilot
+## 3b. The assistant, lead search, automatic replies and results
 
-**What the owner does:** connect the sending accounts and AI once (§3),
-then use the Assistant page. Tell it what the business sells, to whom,
-where, and who signs the messages; attach brochures or price lists; then
-either ask it to find leads and contact them, or attach a contact list and
-ask it to run outreach. It answers with a **plan card**: the leads, the
-channel each gets, three sample messages per channel with real lead
-details filled in, the daily limits, how long it takes and the AI cost.
-**Start outreach** on that card is the only thing that sends. After that,
-campaigns run on the normal engines (sending hours, daily limits, Do Not
-Contact, unsubscribe) and the assistant reports, pauses and resumes them on
-request.
+**Who sets up what.** The operator (whoever runs the server) sets up
+hosting, the AI provider (Settings → AI provider) and the optional lead
+search services (the Maps scraper overlay and `GEOCODER_URL`, below). The
+owner connects the sending accounts (Settings → Email / LinkedIn /
+WhatsApp → Connection), tells the assistant about the business and approves
+plans. The strip at the top of the assistant says what is missing and who
+sets it up.
 
-**Everything it says it did is a recorded tool call.** Each action appears as
-a card in the chat with its real result; a reply that claims something was
-done without a successful tool is rejected and rewritten. Starting outreach
-is not something the AI can do at all.
+**What the owner does:** use the Assistant page. Tell it what the business
+sells, to whom, where, and who signs the messages; attach brochures or
+price lists; then either ask it to find leads and contact them, or attach a
+contact list and ask it to run outreach. It answers with a **plan card**:
+the leads, the channel each gets, three sample messages per channel with
+real lead details filled in, the daily limits, how long it takes and the
+estimated AI cost. **Start outreach** on that card is the only thing that
+sends, and the server refuses a start that did not come from that button.
+The assistant creates and manages the campaigns and sequences; you do not
+need the campaign pages for ordinary outreach. It prepares a plan only when
+you ask for outreach in your own words: a question, or saving information
+about the business, never creates one.
+
+**Reply mode, chosen at Start.** The plan card shows two choices and what
+each does:
+
+- **Automatic replies** (owners and admins): a reply from one of this run's
+  leads is answered automatically when your saved information backs the
+  answer. Each automatic reply waits **10 minutes** after its draft is
+  ready; at most **3 per conversation** (then a person takes over) and
+  **40 per organization in any 24 hours**; only from a production server.
+- **Review**: every reply waits for you in Action required.
+
+The mode belongs to that run's leads only. Starting an Automatic run never
+makes replies automatic for anyone else, and there is no organization-wide
+switch any more. The card's Switch to Review / Switch to Automatic changes
+it (switching to Automatic is confirmed first, with the limits); the
+assistant itself can only switch a run to Review. Anything that widens what
+you approved — new leads, another channel, another list — comes back as a
+new plan to Start ("send the same to this list" reuses the approved
+messages).
+
+**Pause, Resume, Stop, takeover.** Pause holds the run's campaign sends and
+its queued automatic replies. Resume restarts the same campaigns in the
+run's original mode; every send still passes the engines' current checks
+(account connected and not restricted, daily limits, sending hours, Do Not
+Contact). Stop ends the run for good: its campaigns are closed, its leads
+stop and no automatic reply is sent for them afterwards. "I'll reply
+myself" on a decision takes the conversation over: the autopilot does not
+reply there again. Editing a draft, or answering the lead yourself, holds
+that reply for you to send.
+
+**What is checked immediately before an automatic reply is sent:** the run
+is still running and Automatic and the lead still in it; nobody took over;
+no newer message came from the lead; the draft is the revision that was
+queued and nobody edited it; the person is not Do Not Contact or
+suppressed; the limits, counted under a per-organization lock so jobs
+running at the same time cannot overshoot them; and the reply is backed by
+your saved information (business profile, documents, your earlier
+answers). A model lists the lead's questions and the reply's claims and
+promises, each with the passage that supports it, and the app keeps only
+passages found word for word in that information; separately, every price,
+amount, percentage, time, day, link and email address in the reply must
+appear in it. An "interested" classification is not enough on its own.
+Each send happens at most once per draft revision.
+
+**When it needs you**, it posts a decision card in the chat (also listed
+on Results) with the reason and the decision needed, for example: "Dr Rao
+asked 'Do you service X-ray machines?', and your saved information does not
+answer it." Kinds: missing information, complaint, negotiation outside your
+saved terms (discounts, prices you have not published), a commitment it
+cannot back (appointments, attachments, "I'll send…", completed actions),
+a meeting time, and anything uncertain. Answer in the card and the answer
+is saved to the knowledge document "Answers you gave the assistant", used in
+every later conversation, and the waiting reply is rewritten with it (and
+sent, in Automatic mode, once it passes the checks). Or choose "I'll reply
+myself", or dismiss it.
+
+**Opt-outs.** A reply asking to stop or unsubscribe, a Do Not Contact
+classification, or marking the person Do Not Contact in the CRM suppresses
+them and stops every open email, WhatsApp and LinkedIn sequence for them at
+once. Nothing more is sent, not even a polite sign-off.
+
+**Results.** The Results page (`/assistant/results`) and "how are we
+doing?" in the chat give, for today, yesterday, 7 days, 30 days or all
+time, in the organization's time zone (Settings → Organization): leads found
+and imported, duplicates merged, contactable and left out with reasons;
+people contacted; emails and WhatsApp messages sent; LinkedIn connection
+requests separately from LinkedIn messages; replies; interested (a
+classification, not a sale); replies answered automatically and by you;
+decisions and replies waiting for you; follow-ups still to send; stopped,
+opted-out and held replies with reasons; failures with reasons; recorded AI
+spending (costs recorded per call, kept apart from the plan card's
+estimates) and the automatic replies left. All of it is counted from
+recorded events, so a lead who unsubscribes later still counts as
+contacted. A figure the app does not record is shown as "not measured",
+never estimated.
+
+**Daily summary.** At the start of each day in the organization's time zone
+the assistant posts the previous day's figures in the chat; Results lists
+them too. In the app only (no email or push).
 
 **Lead search (Google Maps).** It runs a self-hosted copy of
 [gosom/google-maps-scraper](https://github.com/gosom/google-maps-scraper)
@@ -253,38 +344,42 @@ Read this before turning it on:
 - **Scraping Google Maps is against Google's Terms of Service**, and Google
   can rate-limit or block the server's IP address. When that happens the
   search fails and the chat says so; uploaded lists keep working.
+- **Coverage is limited.** As of October 2026 the scraper's detailed
+  place-page mode returns empty fields from Google, so the app uses its
+  fast mode: the place is located with OpenStreetMap's Nominatim (free, one
+  request per search; set `GEOCODER_URL` to a self-hosted Nominatim, or
+  `off`), and up to 9 circles over the area are searched, each returning at
+  most 20 businesses in Google's own order. One search therefore finds at
+  most about 180 businesses, fewer in a small area, and not necessarily the
+  best ones. Fast mode gives name, address, phone, website, rating and
+  category; emails come only from the businesses' own websites.
 - **It finds businesses that have a public Maps listing**, not private
   individuals, and not every potential customer. If the customers are
-  people (not businesses), or businesses that are not on Maps, upload a list
-  instead.
+  people, or businesses that are not on Maps, upload a list instead.
 - **It costs no fees**, but the scraper runs a headless browser: budget
   about 1 GB of memory (the e2-standard-2 VM has enough). A search of 50
-  businesses takes roughly 3–10 minutes.
+  businesses takes a few minutes.
 - Without the overlay, `GMAPS_SCRAPER_URL` is empty and the assistant says
   that lead search is not set up.
+
+**Lead search (LinkedIn).** When Unipile and a LinkedIn account are
+connected, the assistant can also search LinkedIn people by keywords ("clinic
+owner Pune") through the existing LinkedIn search engine, within that
+account's daily search allowance (one LinkedIn search runs at a time per
+server). LinkedIn gives profiles only, no email or phone, so those leads are
+contacted on LinkedIn (a connection request, then messages). The standalone
+Search page stays hidden in this release.
 
 **Lists.** CSV and Excel go through the same People import as Leads →
 Import (same column handling, same errors). Leads with no usable contact on
 any connected channel are reported with the reason (for example "reachable
-only by WhatsApp, which is not used in this run").
-
-**The reply autopilot** (off by default; owners and admins turn it on, on
-the plan card or in the page header). When on, an ordinary reply that the AI
-classified with confidence (interested or not interested) is answered with
-the AI draft without waiting for review, 10 minutes after the draft is
-ready (answer or edit it yourself in that window and the autopilot stands
-down). Anything else stays in Action
-required for a person: uncertain classifications, out-of-office, wrong
-person, customers, meetings, trial users, Do Not Contact, unsubscribed or
-bounced addresses. Limits: 3 automatic replies per conversation (then a
-person takes over) and 40 per organization per day. It sends only from a
-production server. Every automatic send and every hold is recorded on the
-CRM record with its reason. Turn it off in the page header or by telling the
-assistant.
+only by WhatsApp, which is not used in this run"). Lists work without any
+lead search service.
 
 **AI cost.** Writing a plan is two model calls; each lead's opening line
-costs one call per ten leads. The plan card shows the estimate before you
-press Start.
+costs one call per ten leads; checking a reply before it is sent
+automatically is one more call. The plan card shows the estimate before you
+press Start; Results shows what was recorded.
 
 ## 4. Brand settings
 
@@ -325,7 +420,8 @@ a channel is connected, and record the results in `SESSION_STATUS.md`.
 5. Configure one real channel and send a controlled test to yourself.
 6. Reply to it and confirm the reply appears in Action required, and that the
    remaining follow-ups for that person stop.
-7. Review and edit an AI draft, then send it yourself. Nothing is sent automatically.
+7. Review and edit an AI draft, then send it yourself. Outside an outreach
+   run started in Automatic mode, nothing is sent automatically.
 8. Restart the app container and confirm that settings, leads and campaign
    state are still there.
 9. Check Getting started, Leads import and the campaign pages at phone width
@@ -362,6 +458,30 @@ you send: Google Workspace and/or Unipile):
 A simulated webhook, a mocked provider or a successful API submission is
 not proof; only the message arriving, and the real reply arriving back, is.
 
+**The assistant, live** (after the channel checks above pass; test
+recipients only — make the test list from your own addresses, never
+from search results):
+
+1. Ask for a small lead search ("find 10 dental clinics in Baner, Pune");
+   open a few results and check the contacts against the businesses'
+   websites (each shows its source page). Do not start outreach to them.
+2. Upload a list of your test recipients and ask the assistant to contact
+   them. Check the plan card (samples, limits, reply mode) and press Start
+   in **Automatic** mode.
+3. From a test recipient, reply with a question your uploaded price list
+   answers. About 10 minutes after the draft is ready, the answer must
+   arrive, and the remaining follow-ups for that recipient must not send.
+4. Reply with a question your information does not answer: a decision
+   card appears in the chat; answer it; the rewritten reply arrives.
+5. Reply "please stop": the recipient is suppressed, everything to them
+   stops, and nothing more arrives.
+6. Pause the run, reply from another recipient: nothing is sent until
+   Resume. Press "I'll reply myself" on a decision: nothing more is sent
+   there. Restart the app container mid-run: nothing is sent twice.
+7. Stop the run: nothing more is sent for it.
+8. Compare Results (today) and the next morning's daily summary with what
+   the recipients actually received.
+
 ## 7. Re-running the automated checks
 
 ```bash
@@ -378,6 +498,8 @@ INITIAL_OWNER_EMAIL=… INITIAL_OWNER_PASSWORD=… BASE_URL=http://localhost:300
 #     bun run dev -- -p 3100
 # Under `bun run start` Better Auth's production rate limiter answers its rapid
 # sign-ins with 429; with the wrong BETTER_AUTH_URL sign-in fails "Invalid origin".
+# The dev server (Turbopack) can use 11+ GB of memory once the suite has
+# compiled every page; give the machine room, or restart it between suites.
 INITIAL_OWNER_EMAIL=… INITIAL_OWNER_PASSWORD=… BASE_URL=http://localhost:3100 BETTER_AUTH_URL=http://localhost:3100 \
   bun run --conditions=react-server scripts/e2e/tenancy-isolation.ts
 # Campaign engines (email and WhatsApp) on a throwaway organization, with a
@@ -392,6 +514,14 @@ bun run --conditions=react-server scripts/e2e/unipile-email.ts
 # running server first: its worker would claim the script's jobs. Without
 # AI_SOURCE_ORGANIZATION_ID the model-backed steps are skipped:
 AI_SOURCE_ORGANIZATION_ID=<org with AI Settings> bun run --conditions=react-server scripts/e2e/assistant.ts
+#   (it includes scripts/e2e/assistantAutomation.ts: Review vs Automatic,
+#   supported and unsupported answers, owner answers, opt-out, pause/resume,
+#   stop, takeover, edits, newer messages, concurrent limits, restart
+#   recovery, duplicates, results against recorded events, the daily
+#   summary, and a second organization seeing none of it)
+# The real Google Maps scraper and real websites (needs the scraper running,
+# e.g. docker compose … -f docker-compose.discovery.yml; sends nothing):
+GMAPS_SCRAPER_URL=http://127.0.0.1:8080 bun run --conditions=react-server scripts/e2e/discovery-live.ts "dental clinics" "Baner, Pune, India" 40
 # Real AI calls (a little AI/ML usage; never sends). The worker can run in-process:
 ORGANIZATION_ID=<id> AI_LIVE_INLINE_WORKER=1 bun run --conditions=react-server scripts/e2e/ai-live-crm.ts
 ORGANIZATION_ID=<id> bun run --conditions=react-server scripts/e2e/research-live.ts

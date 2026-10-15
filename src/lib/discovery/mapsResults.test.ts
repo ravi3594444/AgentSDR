@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mapsSearchPhrase, parseMapsCsv, rankEmails } from "./mapsResults";
+import { cleanBusinessName, listingUrl, mapsSearchPhrase, parseMapsCsv, rankEmails } from "./mapsResults";
 
 const HEADER = "input_id,link,title,category,address,website,phone,review_count,review_rating,place_id,cid,status,complete_address,emails";
 
@@ -52,5 +52,23 @@ describe("helpers", () => {
   test("mapsSearchPhrase joins what and where", () => {
     expect(mapsSearchPhrase("  dental   clinics ", "Pune,  India")).toBe("dental clinics in Pune, India");
     expect(mapsSearchPhrase("bakeries", null)).toBe("bakeries");
+  });
+});
+
+describe("fast-mode rows", () => {
+  test("listingUrl builds the Maps link from data_id's CID when link, cid and place_id are empty", () => {
+    expect(listingUrl({ link: "", cid: "", place_id: "", data_id: "0x3bc2bed749aa32ff:0x33c07af4f2fcd209" })).toBe(`https://maps.google.com/?cid=${BigInt("0x33c07af4f2fcd209").toString()}`);
+    expect(listingUrl({ link: "https://maps.google.com/?cid=1" })).toBe("https://maps.google.com/?cid=1");
+    expect(listingUrl({ cid: "42" })).toBe("https://maps.google.com/?cid=42");
+    expect(listingUrl({})).toBeNull();
+  });
+
+  test("cleanBusinessName drops keywords appended to listings", () => {
+    expect(cleanBusinessName("Go-Best Dentist | Dr Mokashi Dental clinic | Baner")).toBe("Go-Best Dentist");
+    expect(cleanBusinessName("Dental Clinic in Baner| Enamel Craft Dental")).toBe("Dental Clinic in Baner");
+    expect(cleanBusinessName("No Decay Dental Clinic - Dr. Geeta Kolte Ursal - Dental Clinic in Aundh Pune")).toBe("No Decay Dental Clinic");
+    expect(cleanBusinessName("Dr. Varsha's Dental Cosmetic and Implant Centre-Dentist in Balewadi/RCT Specialist/Child Oral Care")).toBe("Dr. Varsha's Dental Cosmetic and Implant Centre");
+    expect(cleanBusinessName("Go-Best Dentist")).toBe("Go-Best Dentist");
+    expect(cleanBusinessName("A | B")).toBe("A | B");
   });
 });

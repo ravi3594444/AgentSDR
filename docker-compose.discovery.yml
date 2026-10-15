@@ -15,6 +15,11 @@
 # works with uploaded contact lists and says lead search is not set up.
 #
 # The scraper runs a headless Chromium: budget about 1 GB of memory for it.
+#
+# The app uses the scraper's fast mode (its place-page mode returns empty
+# fields from Google as of October 2026): the place is located with
+# OpenStreetMap's Nominatim (GEOCODER_URL; the public one by default) and
+# searched in up to 9 circles of at most 20 businesses each.
 
 services:
   gmaps-scraper:
@@ -29,6 +34,8 @@ services:
   app:
     environment:
       GMAPS_SCRAPER_URL: http://gmaps-scraper:8080
+      # Empty: OpenStreetMap's public Nominatim. "off" disables geocoding.
+      GEOCODER_URL: ${GEOCODER_URL:-}
     depends_on:
       gmaps-scraper:
         condition: service_started

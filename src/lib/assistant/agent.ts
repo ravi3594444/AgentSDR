@@ -121,3 +121,58 @@ export function transcriptText(messages: readonly TranscriptMessage[], maxChars 
   }
   return text;
 }
+
+/** Words that ask for outreach, in English and common Hinglish; matched with typo tolerance. */
+const OUTREACH_WORDS = [
+  "contact", "email", "emails", "mail", "message", "messages", "msg", "reach", "outreach", "campaign", "campaigns",
+  "pitch", "send", "sell", "whatsapp", "linkedin", "launch", "approach", "connect", "promote",
+  "followup", "follow", "bhejo", "bhej", "sampark",
+];
+
+function editDistance(a: string, b: string): number {
+  const row = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i += 1) {
+    let previous = row[0]!;
+    row[0] = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      const current = row[j]!;
+      row[j] = Math.min(row[j]! + 1, row[j - 1]! + 1, previous + (a[i - 1] === b[j - 1] ? 0 : 1));
+      previous = current;
+    }
+  }
+  return row[b.length]!;
+}
+
+/** Whether the owner's words ask to contact people (typos allowed: "campagion", "contcat"). */
+export function outreachIntent(words: string): boolean {
+  const tokens = words.toLowerCase().match(/[a-z]+/g) ?? [];
+  return tokens.some((token) => OUTREACH_WORDS.some((word) => {
+    if (token === word) return true;
+    if (token.length < 4 || word.length < 4) return false;
+    if (token.startsWith(word) && word.length >= 5) return true;
+    const allowed = word.length >= 7 ? 2 : 1;
+    return Math.abs(token.length - word.length) <= allowed && editDistance(token, word) <= allowed;
+  }));
+}
+
+function squash(value: string): string {
+  return value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Whether a tool may create an outreach plan: the model must quote the
+ * owner's own words asking for it, the quote must be in what the owner
+ * wrote, and it must actually ask for outreach. Returns the problem, or null.
+ */
+export function ownerRequestProblem(quote: unknown, ownerText: string): string | null {
+  if (typeof quote !== "string" || squash(quote).length < 3) {
+    return "ownerRequest is required: quote the owner's words that ask for outreach. If the owner did not ask, offer it instead of preparing it.";
+  }
+  if (!squash(ownerText).includes(squash(quote))) {
+    return "ownerRequest must be the owner's exact words from their message in this conversation. If the owner did not ask for outreach, offer it instead.";
+  }
+  if (!outreachIntent(quote)) {
+    return "Those words do not ask for outreach. Offer to prepare it and wait for the owner to ask.";
+  }
+  return null;
+}

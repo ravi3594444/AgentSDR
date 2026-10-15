@@ -11,6 +11,14 @@ import "server-only";
  *   GET  /api/v1/jobs/{id}/download → the results CSV (404 until it exists)
  *   DELETE /api/v1/jobs/{id}
  *
+ * Fast mode (`fast_mode` with lat/lon/radius/zoom) reads the search results'
+ * own data instead of opening each place page. Checked live on 2026-10-15
+ * against v1.18.1: the place-page mode returned every listing with empty
+ * fields (Google now loads place details by a separate request the scraper
+ * does not read), while fast mode returned names, phones, websites and
+ * addresses — at most 20 places per search, so discovery tiles the area
+ * (geocode.ts) and runs one fast search per tile.
+ *
  * The scraper is infrastructure shared by every organization on this
  * server, like the database, so its address comes from GMAPS_SCRAPER_URL
  * (set by docker-compose to the sidecar), not from a per-organization
@@ -73,6 +81,8 @@ export type MapsJobInput = {
   email: boolean;
   /** Hard stop for the whole job, in seconds. */
   maxTimeSeconds: number;
+  /** Fast mode around a point (needs lat/lon); radius in meters. */
+  fast?: { lat: number; lon: number; radiusMeters: number; zoom: number } | null;
 };
 
 export async function createMapsJob(input: MapsJobInput): Promise<string> {
@@ -86,7 +96,10 @@ export async function createMapsJob(input: MapsJobInput): Promise<string> {
       depth: input.depth,
       email: input.email,
       max_time: input.maxTimeSeconds,
-      zoom: 15,
+      zoom: input.fast?.zoom ?? 15,
+      ...(input.fast
+        ? { fast_mode: true, lat: input.fast.lat.toFixed(6), lon: input.fast.lon.toFixed(6), radius: Math.round(input.fast.radiusMeters) }
+        : {}),
     }),
   });
   if (response.status !== 201 && !response.ok) throw await failure(response, "start the search");

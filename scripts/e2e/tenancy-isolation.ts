@@ -168,6 +168,7 @@ function walk(dir: string, out: string[] = []): string[] {
 /** Path segment → which of A's tables supplies a value for it. First matching prefix wins. */
 const PARAM_TABLE: [RegExp, Record<string, string>][] = [
   [/^\/api\/assistant\/runs\//, { id: "outreach_runs" }],
+  [/^\/api\/assistant\/decisions\//, { id: "owner_decisions" }],
   [/^\/api\/crm\/records\//, { id: "crm_records" }],
   [/^\/api\/crm\/drafts\//, { id: "crm_drafts" }],
   [/^\/api\/crm\/classifications\//, { id: "crm_classifications" }],

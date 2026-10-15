@@ -92,7 +92,17 @@ async function loadDraftSubject(
     .orderBy(desc(crmClassifications.createdAt))
     .limit(1);
 
-  const retrieved = await retrieveKnowledge(tx, knowledge);
+  // What the lead wrote decides which of the owner's documents matter (a price
+  // question finds the price list), alongside the step's own instructions. It
+  // goes first: the search keeps only the first significant words.
+  const [inbound] = record.latestInboundMessageId
+    ? await tx.select({ bodyText: crmConversationMessages.bodyText, subject: crmConversationMessages.subject }).from(crmConversationMessages)
+      .where(eq(crmConversationMessages.id, record.latestInboundMessageId)).limit(1)
+    : [];
+  const retrieved = await retrieveKnowledge(tx, {
+    ...knowledge,
+    query: [inbound?.subject, inbound?.bodyText?.slice(0, 2_000), knowledge.query].filter(Boolean).join(" "),
+  });
   const stageMove = await currentStageMoveInTransaction(tx, record);
   const [conversation] = await tx
     .select({ channel: crmConversations.channel, accountRef: crmConversations.accountRef })
@@ -342,9 +352,9 @@ async function finishGeneratedDraft(
       },
       contextVersion: record.contextVersion,
     });
-    // With the owner's reply autopilot on, an ordinary reply is sent without
-    // waiting for a person (src/lib/crm/autopilot.ts decides at send time).
-    await enqueueAutopilotInTransaction(tx, { draftId: draft.id, pipelineId: record.pipelineId, revision: updated.revision });
+    // A person in an assistant outreach run: the reply autopilot looks at it
+    // (src/lib/crm/autopilot.ts decides at send time; Review runs never send).
+    await enqueueAutopilotInTransaction(tx, { draftId: draft.id, personId: record.personId, channel: updated.channel, revision: updated.revision });
     return updated;
   });
 }

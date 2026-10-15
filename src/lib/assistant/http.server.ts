@@ -5,7 +5,7 @@ import { db } from "@/lib/db";
 import { authContextErrorResponse, can, requireOrgContext, type OrgContext } from "@/lib/auth/context";
 import { crmRequestErrorResponse, requireCrmMutationContext } from "@/lib/crm/http";
 import { inOrg, runInOrganization } from "@/lib/tenancy/scope";
-import { assistantJobs, outreachRuns } from "./schema";
+import { assistantJobs, outreachRuns, ownerDecisions } from "./schema";
 import { listMessages, listThreads, resolveThread, threadBusy } from "./threads.server";
 import { setupSnapshot } from "./tools.server";
 
@@ -60,6 +60,14 @@ export async function assistantState(threadId: string | null, ctx: OrgContext, w
     const data = (message.toolResult as { data?: { runId?: unknown } } | null)?.data;
     return typeof data?.runId === "string" ? [data.runId] : [];
   });
+  const decisionIds = messages.flatMap((message) => {
+    const data = (message.toolResult as { data?: { decisionId?: unknown } } | null)?.data;
+    return message.tool === "owner_decision" && typeof data?.decisionId === "string" ? [data.decisionId] : [];
+  });
+  const decisions = decisionIds.length
+    ? await db.select({ id: ownerDecisions.id, status: ownerDecisions.status, answer: ownerDecisions.answer })
+      .from(ownerDecisions).where(and(inOrg(ownerDecisions), inArray(ownerDecisions.id, [...new Set(decisionIds)])))
+    : [];
   const runs = runIds.length
     ? await db.select({ id: outreachRuns.id, status: outreachRuns.status, autopilot: outreachRuns.autopilot, error: outreachRuns.error, campaigns: outreachRuns.campaigns })
       .from(outreachRuns).where(and(inOrg(outreachRuns), inArray(outreachRuns.id, [...new Set(runIds)])))
@@ -81,6 +89,7 @@ export async function assistantState(threadId: string | null, ctx: OrgContext, w
     })),
     jobs: jobs.map((job) => ({ ...job, createdAt: job.createdAt.toISOString() })),
     runs: Object.fromEntries(runs.map((run) => [run.id, run])),
+    decisions: Object.fromEntries(decisions.map((decision) => [decision.id, { status: decision.status, answer: decision.answer }])),
     setup: withSetup ? { ...(await setupSnapshot()), canManageAutopilot: canManageAutopilot(ctx) } : null,
   };
 }

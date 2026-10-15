@@ -1,18 +1,22 @@
 import "server-only";
 
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { getByokSettings } from "@/lib/ai/byok";
 import { getAiConnection } from "@/lib/ai/connections";
 import { retrieveKnowledge } from "@/lib/crm/knowledge";
-import { isAutopilotOn, setAutopilot } from "@/lib/crm/autopilot.server";
 import { discoveryAvailability, DiscoveryUnavailableError, normalizeCriteria, startDiscovery } from "@/lib/discovery/discovery.server";
+import { linkedinSearchAvailability, startLinkedinSearch } from "./linkedinSearch.server";
 import { inOrg } from "@/lib/tenancy/scope";
 import { listAudiences, summarizeAudience } from "./audiences.server";
-import { channelAvailability, listRuns, OutreachError, prepareOutreach, reportRun, setRunPaused } from "./outreach.server";
+import { ownerRequestProblem } from "./agent";
+import { answerDecision, DecisionError, listOpenDecisions } from "./decisions.server";
+import { channelAvailability, listRuns, OutreachError, prepareOutreach, reportRun, setRunPaused, setRunReplyMode, stopRun } from "./outreach.server";
 import { missingForDiscovery, missingForOutreach, PROFILE_LABELS } from "./profile";
 import { getBusinessProfile, updateBusinessProfile } from "./profile.server";
-import { assistantJobs, type AudienceChannel } from "./schema";
+import { PERIOD_KINDS, type PeriodKind } from "./results";
+import { results, resultsText } from "./results.server";
+import { assistantJobs, outreachRuns, type AudienceChannel } from "./schema";
 
 /**
  * What the assistant can do, and nothing else. Each tool is a call into an
@@ -23,7 +27,14 @@ import { assistantJobs, type AudienceChannel } from "./schema";
  * owner's Start button does that (POST /api/assistant/runs/[id]/start).
  */
 
-export type ToolContext = { threadId: string; userId: string | null };
+export type ToolContext = {
+  threadId: string;
+  userId: string | null;
+  /** What the owner wrote in this turn (or, after a background event, their latest message): ownerRequest quotes are checked against it. */
+  ownerText: string;
+  /** Set when the server itself prepares outreach the owner already asked for (a "find and contact" search finished). */
+  authorizedBy?: "search" | null;
+};
 
 /**
  * `summary` is what the model reads (ids included, for later tool calls);
@@ -67,7 +78,12 @@ function channels(args: Record<string, unknown>): AudienceChannel[] | undefined 
 }
 
 async function setupSnapshot() {
-  const [profile, availability, autopilot, byok] = await Promise.all([getBusinessProfile(), channelAvailability(), isAutopilotOn(), getByokSettings()]);
+  const [profile, availability, automaticRuns, byok] = await Promise.all([
+    getBusinessProfile(),
+    channelAvailability(),
+    db.select({ id: outreachRuns.id }).from(outreachRuns).where(and(inOrg(outreachRuns), eq(outreachRuns.autopilot, true), eq(outreachRuns.status, "running"))),
+    getByokSettings(),
+  ]);
   const connection = byok.connectionId ? await getAiConnection(byok.connectionId) : null;
   const discovery = discoveryAvailability();
   return {
@@ -81,7 +97,8 @@ async function setupSnapshot() {
     },
     leadDiscovery: discovery,
     ai: { connected: Boolean(connection?.verified), defaultModel: byok.defaultModel?.modelId ?? null },
-    autopilot,
+    /** Running runs in Automatic reply mode (each answers only its own conversations). */
+    automaticRuns: automaticRuns.length,
   };
 }
 
@@ -96,7 +113,7 @@ export const TOOLS: Record<string, Tool> = {
         .join("; ");
       return {
         ok: true,
-        summary: `${channelLine}. Lead discovery: ${setup.leadDiscovery.available ? "Google Maps ready" : setup.leadDiscovery.reason}. AI: ${setup.ai.connected ? "connected" : "not connected"}. Reply autopilot: ${setup.autopilot ? "on" : "off"}. Profile missing for discovery: ${setup.missingForDiscovery.join(", ") || "nothing"}; for outreach: ${setup.missingForOutreach.join(", ") || "nothing"}.`,
+        summary: `${channelLine}. Lead discovery: ${setup.leadDiscovery.available ? "Google Maps ready" : setup.leadDiscovery.reason}. AI: ${setup.ai.connected ? "connected" : "not connected"}. Runs answering replies automatically: ${setup.automaticRuns}. Profile missing for discovery: ${setup.missingForDiscovery.join(", ") || "nothing"}; for outreach: ${setup.missingForOutreach.join(", ") || "nothing"}.`,
         data: setup as unknown as Record<string, unknown>,
       };
     },
@@ -135,13 +152,17 @@ export const TOOLS: Record<string, Tool> = {
 
   find_leads: {
     description: "Search public Google Maps business listings for leads matching the owner's target customers, then read each business's own website for published contact details. Takes a few minutes and runs in the background; the chat shows its progress and announces the result. Costs nothing per search (self-hosted). Only businesses with a public listing are found.",
-    arguments: "what (kind of business, e.g. 'dental clinics'), where (city/region/country), maxResults (5-200, default 50), language (two letters, optional), contactAfter (true when the owner asked to contact, email or message the leads found: the outreach plan is then prepared automatically when the search finishes), channels (optional, with contactAfter: array of email|whatsapp|linkedin)",
+    arguments: "what (kind of business, e.g. 'dental clinics'), where (city/region/country), maxResults (5-200, default 50), language (two letters, optional), contactAfter (true only when the owner asked to contact, email or message the leads found: the outreach plan is then prepared automatically when the search finishes; needs ownerRequest), ownerRequest (with contactAfter: the owner's exact words asking for outreach), channels (optional, with contactAfter: array of email|whatsapp|linkedin)",
     run: async (args, context) => {
       const profile = await getBusinessProfile();
       const criteria = normalizeCriteria(args, profile.language ?? "en");
       if ("error" in criteria) throw new ToolArgumentError(criteria.error);
       if (args.contactAfter !== undefined && typeof args.contactAfter !== "boolean") throw new ToolArgumentError("contactAfter must be true or false");
-      const contactAfter = args.contactAfter === true ? { channels: channels(args) ?? null } : null;
+      if (args.contactAfter === true) {
+        const problem = ownerRequestProblem(args.ownerRequest, context.ownerText);
+        if (problem) throw new ToolArgumentError(problem);
+      }
+      const contactAfter = args.contactAfter === true ? { channels: channels(args) ?? null, ownerRequest: String(args.ownerRequest) } : null;
       try {
         const started = await startDiscovery(criteria, context, { contactAfter });
         return {
@@ -156,13 +177,38 @@ export const TOOLS: Record<string, Tool> = {
     },
   },
 
+  find_linkedin_leads: {
+    description: "Search LinkedIn for people by keywords (a job title, profession or industry, plus a place), with the organization's connected LinkedIn account through Unipile and its daily search allowance. Runs in the background; the profiles found can be contacted on LinkedIn only (LinkedIn gives no email or phone). Use for people (owners, managers, professionals); use find_leads for businesses with a public Maps listing.",
+    arguments: "keywords (e.g. 'clinic owner Pune'), maxResults (5-200, default 50), contactAfter (true only when the owner asked to contact them; needs ownerRequest), ownerRequest (the owner's exact words asking for outreach)",
+    run: async (args, context) => {
+      const keywords = text(args, "keywords", true)!.trim().slice(0, 200);
+      const requested = Number(args.maxResults ?? 50);
+      const maxResults = Number.isFinite(requested) ? Math.min(200, Math.max(5, Math.round(requested))) : 50;
+      if (args.contactAfter === true) {
+        const problem = ownerRequestProblem(args.ownerRequest, context.ownerText);
+        if (problem) throw new ToolArgumentError(problem);
+      }
+      const availability = await linkedinSearchAvailability();
+      if (!availability.available) return { ok: false, summary: `LinkedIn search is not available: ${availability.reason}` };
+      const started = await startLinkedinSearch({ keywords, maxResults }, context, {
+        contactAfter: args.contactAfter === true ? { channels: ["linkedin"], ownerRequest: String(args.ownerRequest) } : null,
+      });
+      return {
+        ok: true,
+        summary: `LinkedIn search started for “${keywords}” (up to ${maxResults} people); job ${started.jobId}, audience ${started.audienceId}. Results are announced in the chat when done.`,
+        display: `LinkedIn search started for “${keywords}” (up to ${maxResults} people).`,
+        data: { jobId: started.jobId, audienceId: started.audienceId, keywords },
+      };
+    },
+  },
+
   lead_search_status: {
     description: "The progress or result of a lead search.",
     arguments: "jobId (optional; the latest search when left out)",
     run: async (args) => {
       const jobId = uuid(args, "jobId", false);
       const [job] = await db.select().from(assistantJobs)
-        .where(and(inOrg(assistantJobs), eq(assistantJobs.kind, "discovery"), ...(jobId ? [eq(assistantJobs.id, jobId)] : [])))
+        .where(and(inOrg(assistantJobs), inArray(assistantJobs.kind, ["discovery", "linkedin_search"]), ...(jobId ? [eq(assistantJobs.id, jobId)] : [])))
         .orderBy(desc(assistantJobs.createdAt)).limit(1);
       if (!job) return { ok: false, summary: "No lead search found." };
       const progress = job.progress as { found?: number; websitesChecked?: number; websitesToCheck?: number; saved?: number };
@@ -214,10 +260,15 @@ export const TOOLS: Record<string, Tool> = {
   },
 
   prepare_outreach: {
-    description: "Write the outreach for a lead list and plan the run: which channel each lead gets, the messages (with real samples), daily limits, how long it takes and the AI cost. Creates nothing and sends nothing; the owner reviews the plan and presses Start.",
-    arguments: "audienceId; channels (optional array of email|whatsapp|linkedin in order of preference); maxLeads (optional, default up to 100); autopilot (optional true/false: answer ordinary replies automatically); instructions (optional text, e.g. tone or angle for this run)",
+    description: "Write the outreach for a lead list and plan the run: which channel each lead gets, the messages (with real samples), daily limits, how long it takes and the AI cost. Creates nothing and sends nothing; the owner reviews the plan, chooses Automatic or Review replies and presses Start. Only when the owner asked for outreach: quote their words in ownerRequest. To contact more people with an earlier run's messages, pass basedOnRunId (a new plan the owner approves again).",
+    arguments: "audienceId; ownerRequest (the owner's exact words asking for outreach); channels (optional array of email|whatsapp|linkedin in order of preference); maxLeads (optional, default up to 100); autopilot (optional true/false: propose Automatic replies); instructions (optional text, e.g. tone or angle for this run); basedOnRunId (optional: reuse that run's messages)",
     run: async (args, context) => {
+      if (context.authorizedBy !== "search") {
+        const problem = ownerRequestProblem(args.ownerRequest, context.ownerText);
+        if (problem) throw new ToolArgumentError(problem);
+      }
       const audienceId = uuid(args, "audienceId")!;
+      const basedOnRunId = uuid(args, "basedOnRunId", false) ?? null;
       const maxLeads = args.maxLeads === undefined ? undefined : Number(args.maxLeads);
       if (maxLeads !== undefined && (!Number.isFinite(maxLeads) || maxLeads < 1)) throw new ToolArgumentError("maxLeads must be a positive number");
       if (args.autopilot !== undefined && typeof args.autopilot !== "boolean") throw new ToolArgumentError("autopilot must be true or false");
@@ -228,6 +279,8 @@ export const TOOLS: Record<string, Tool> = {
           maxLeads,
           autopilot: args.autopilot as boolean | undefined,
           instructions: text(args, "instructions") ?? null,
+          basedOnRunId,
+          ownerRequest: typeof args.ownerRequest === "string" ? args.ownerRequest : null,
           threadId: context.threadId,
           userId: context.userId,
         });
@@ -259,18 +312,22 @@ export const TOOLS: Record<string, Tool> = {
   },
 
   report: {
-    description: "How an outreach run is going: leads contacted, messages sent, replies, finished and stopped, per channel.",
-    arguments: "runId (optional; the latest run when left out)",
+    description: "Results from what was recorded: leads found and imported, duplicates, people contacted, emails/WhatsApp/LinkedIn requests and messages sent, replies, interested people, what waits for the owner, pending follow-ups, stopped and failed sends, AI spending and remaining limits. With runId, one run's per-channel counts.",
+    arguments: "period (optional: today | yesterday | last_7_days | last_30_days | all_time; default last_7_days); runId (optional)",
     run: async (args) => {
-      const runId = uuid(args, "runId", false) ?? (await listRuns(1))[0]?.id;
-      if (!runId) return { ok: false, summary: "There is no outreach run yet." };
-      const report = await reportRun(runId);
-      if (!report) return { ok: false, summary: "No such run." };
-      return {
-        ok: true,
-        summary: `“${report.name}” is ${report.status}${report.autopilot ? " (autopilot on)" : ""}: ${report.channels.map((c) => `${c.channel}: ${c.contacted} contacted, ${c.messagesSent === null ? "" : `${c.messagesSent} sent, `}${c.replied} replied, ${c.finished} finished, ${c.stopped} stopped`).join("; ") || "no campaign launched yet"}.${report.error ? ` Problems: ${report.error}` : ""}`,
-        data: report as unknown as Record<string, unknown>,
-      };
+      const runId = uuid(args, "runId", false);
+      if (runId) {
+        const report = await reportRun(runId);
+        if (!report) return { ok: false, summary: "No such run." };
+        return {
+          ok: true,
+          summary: `“${report.name}” is ${report.status} (${report.autopilot ? "Automatic" : "Review"} replies): ${report.channels.map((c) => `${c.channel}: ${c.contacted} contacted, ${c.messagesSent === null ? "" : `${c.messagesSent} sent, `}${c.replied} replied, ${c.finished} finished, ${c.stopped} stopped`).join("; ") || "no campaign launched yet"}.${report.error ? ` Problems: ${report.error}` : ""}`,
+          data: report as unknown as Record<string, unknown>,
+        };
+      }
+      const kind = (PERIOD_KINDS as readonly string[]).includes(String(args.period)) ? args.period as PeriodKind : "last_7_days";
+      const r = await results(kind);
+      return { ok: true, summary: resultsText(r), data: { results: r } as unknown as Record<string, unknown> };
     },
   },
 
@@ -302,12 +359,66 @@ export const TOOLS: Record<string, Tool> = {
     },
   },
 
-  turn_off_autopilot: {
-    description: "Stop answering replies automatically: every reply then waits for the owner in Action required. (Turning it on is the owner's switch on the page, not a tool.)",
+  stop_outreach: {
+    description: "End an outreach run for good: its campaigns stop, its leads get nothing more and no automatic replies are sent for it. Cannot be undone (a new plan can be started). Use when the owner asks to stop or cancel a run.",
+    arguments: "runId",
+    run: async (args) => {
+      try {
+        const result = await stopRun(uuid(args, "runId")!);
+        return { ok: true, summary: `Stopped ${result.stopped.join(", ") || "the run"}.${result.problems.length ? ` Problems: ${result.problems.join("; ")}` : ""}`, data: result };
+      } catch (error) {
+        if (error instanceof OutreachError) return { ok: false, summary: error.message };
+        throw error;
+      }
+    },
+  },
+
+  switch_to_review: {
+    description: "Stop answering replies automatically for a run (or every run): replies then wait for the owner in Action required. Switching a run to Automatic is the owner's button on the run card, not a tool.",
+    arguments: "runId (optional; every running or paused run when left out)",
+    run: async (args) => {
+      const runId = uuid(args, "runId", false);
+      const targets = runId
+        ? [runId]
+        : (await db.select({ id: outreachRuns.id }).from(outreachRuns).where(and(inOrg(outreachRuns), eq(outreachRuns.autopilot, true)))).map((row) => row.id);
+      for (const id of targets) await setRunReplyMode(id, false).catch(() => undefined);
+      return { ok: true, summary: targets.length ? `Review mode for ${targets.length} run${targets.length === 1 ? "" : "s"}: every reply now waits for the owner.` : "No run was answering automatically." };
+    },
+  },
+
+  list_decisions: {
+    description: "The questions and decisions waiting for the owner (missing information, complaints, offers or meetings the assistant may not decide), with the reason for each.",
     arguments: "none",
     run: async () => {
-      await setAutopilot(false);
-      return { ok: true, summary: "Reply autopilot is off: every reply now waits for the owner." };
+      const decisions = await listOpenDecisions(20);
+      return {
+        ok: true,
+        summary: decisions.length ? decisions.map((d) => `${d.id} [${d.kind}] ${d.reason} — ${d.decision}`).join("\n") : "Nothing is waiting for the owner.",
+        display: decisions.length ? decisions.map((d) => `${d.reason} ${d.decision}`).join("\n") : "Nothing is waiting for you.",
+        data: { decisions: decisions.map((d) => ({ id: d.id, kind: d.kind, reason: d.reason, decision: d.decision })) },
+      };
+    },
+  },
+
+  answer_decision: {
+    description: "Record the owner's answer to an open question or decision (only words the owner actually wrote). The answer is saved for every later conversation, and the waiting reply is rewritten with it and checked again.",
+    arguments: "decisionId; answer (the owner's answer, in their words)",
+    run: async (args, context) => {
+      const answer = text(args, "answer", true)!;
+      if (!context.ownerText.toLowerCase().includes(answer.toLowerCase().slice(0, 40))) {
+        throw new ToolArgumentError("answer must be the owner's own words from this turn");
+      }
+      try {
+        const result = await answerDecision(uuid(args, "decisionId")!, answer, context.userId);
+        return {
+          ok: true,
+          summary: `Saved the answer for later conversations.${result.rewritten ? " The waiting reply was rewritten with it and goes through the checks again." : ""}${result.problem ? ` The reply could not be rewritten: ${result.problem}` : ""}`,
+          data: result,
+        };
+      } catch (error) {
+        if (error instanceof DecisionError) return { ok: false, summary: error.message };
+        throw error;
+      }
     },
   },
 };

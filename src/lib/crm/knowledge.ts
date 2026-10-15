@@ -223,6 +223,25 @@ export function selectKnowledgeCandidates(
 /** More descriptive alias for callers assembling a draft context. */
 export const selectKnowledge = selectKnowledgeCandidates;
 
+const SEARCH_STOPWORDS = new Set([
+  "the", "and", "for", "you", "your", "are", "was", "were", "with", "that", "this", "have", "has", "had", "not", "but", "can",
+  "could", "would", "should", "will", "what", "when", "where", "which", "who", "how", "why", "our", "ours", "they", "them",
+  "their", "there", "here", "from", "into", "about", "also", "just", "any", "some", "all", "more", "most", "very", "much",
+  "many", "one", "two", "its", "it's", "i'm", "hi", "hello", "thanks", "thank", "dear", "regards", "please", "subject",
+]);
+
+/**
+ * The search a query becomes: its significant words, any of which may match
+ * (ranked by ts_rank_cd, so documents matching more of them come first).
+ * Requiring every word, as plain websearch syntax does, matched almost no
+ * document for a sentence like a lead's question.
+ */
+export function knowledgeSearchText(query: string | null | undefined): string {
+  const words = (query ?? "").toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? [];
+  const significant = [...new Set(words.filter((word) => !SEARCH_STOPWORDS.has(word)))].slice(0, 40);
+  return significant.join(" or ");
+}
+
 /**
  * Query only active documents and the version explicitly declared by latest_version.
  * No mutation is performed; pass a transaction executor when this read participates
@@ -232,7 +251,7 @@ export async function queryKnowledgeCandidates(
   executor: CrmExecutor,
   input: Pick<KnowledgeRetrievalInput, "query" | "knowledgeTags" | "tags" | "limit"> = {},
 ): Promise<KnowledgeCandidate[]> {
-  const searchText = input.query?.trim() ?? "";
+  const searchText = knowledgeSearchText(input.query);
   const tags = normalizedTags(input.knowledgeTags ?? input.tags);
   const limit = Math.floor(input.limit ?? 100);
   if (!Number.isFinite(limit) || limit <= 0 || limit > 500) {

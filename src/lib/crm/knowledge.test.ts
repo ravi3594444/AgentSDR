@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
   hashKnowledgeExcerpt,
+  knowledgeSearchText,
   queryKnowledgeCandidates,
   selectKnowledgeCandidates,
   type KnowledgeCandidate,
@@ -113,5 +114,13 @@ describe("CRM Knowledge retrieval", () => {
       }));
     assert.equal(rows[0]?.documentVersionId, "version-2");
     assert.equal(executed, true);
+  });
+});
+
+describe("knowledgeSearchText", () => {
+  test("a sentence becomes its significant words, any of which may match", () => {
+    assert.equal(knowledgeSearchText("Hi Ravi, how much is your monthly maintenance plan per chair?"), "ravi or monthly or maintenance or plan or per or chair");
+    assert.equal(knowledgeSearchText(""), "");
+    assert.equal(knowledgeSearchText(null), "");
   });
 });

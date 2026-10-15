@@ -1,4 +1,4 @@
-import { boolean, check, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { boolean, check, index, integer, jsonb, numeric, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { organizations } from "@/lib/auth/schema";
 import { companies, people } from "@/lib/leads/schema";
@@ -159,7 +159,7 @@ export const leadAudienceMembers = pgTable(
   ],
 );
 
-export type AssistantJobKind = "discovery" | "outreach_start";
+export type AssistantJobKind = "discovery" | "outreach_start" | "linkedin_search";
 export type AssistantJobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 
 /**
@@ -197,12 +197,13 @@ export const assistantJobs = pgTable(
   (t) => [
     index("assistant_jobs_organization_idx").on(t.organizationId, t.createdAt),
     index("assistant_jobs_claim_idx").on(t.status, t.runAfter),
-    check("assistant_jobs_kind_chk", sql`${t.kind} IN ('discovery', 'outreach_start')`),
+    check("assistant_jobs_kind_chk", sql`${t.kind} IN ('discovery', 'outreach_start', 'linkedin_search')`),
     check("assistant_jobs_status_chk", sql`${t.status} IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')`),
   ],
 );
 
-export type OutreachRunStatus = "proposed" | "starting" | "running" | "paused" | "completed" | "failed" | "cancelled";
+/** `stopped` is final: the owner ended the run; nothing more is sent for it. */
+export type OutreachRunStatus = "proposed" | "starting" | "running" | "paused" | "stopped" | "completed" | "failed" | "cancelled";
 
 /** One message of a generated sequence, before per-lead personalization. */
 export type PlannedStep = { subject: string | null; body: string; waitDays: number };
@@ -220,9 +221,13 @@ export type OutreachPlan = {
   /** Leads left out and why, counted by reason. */
   excluded: { reason: string; count: number }[];
   estimate: { aiCalls: number; aiCostUsd: number | null; days: number | null };
-  /** Answer ordinary replies without asking (see src/lib/crm/autopilot.ts). */
+  /** Automatic mode: answer ordinary replies without asking (see src/lib/crm/autopilot.ts). */
   autopilot: boolean;
   instructions: string | null;
+  /** A follow-on plan reusing an earlier run's messages (an expansion the owner confirms again). */
+  basedOnRunId?: string | null;
+  /** The owner's words that asked for this outreach (checked against the chat). */
+  ownerRequest?: string | null;
 };
 
 export const outreachRuns = pgTable(
@@ -238,8 +243,11 @@ export const outreachRuns = pgTable(
     plan: jsonb("plan").$type<OutreachPlan>().notNull(),
     /** The campaigns the run created, per channel. */
     campaigns: jsonb("campaigns").$type<Partial<Record<AudienceChannel, string>>>().notNull().default({}),
+    /** Reply mode of this run: true = Automatic, false = Review. Only this run's conversations. */
     autopilot: boolean("autopilot").notNull().default(false),
     error: text("error"),
+    pausedAt: timestamp("paused_at", { withTimezone: true }),
+    stoppedAt: timestamp("stopped_at", { withTimezone: true }),
     approvedBy: uuid("approved_by"),
     approvedAt: timestamp("approved_at", { withTimezone: true }),
     createdBy: uuid("created_by"),
@@ -248,6 +256,176 @@ export const outreachRuns = pgTable(
   },
   (t) => [
     index("outreach_runs_organization_idx").on(t.organizationId, t.createdAt),
-    check("outreach_runs_status_chk", sql`${t.status} IN ('proposed', 'starting', 'running', 'paused', 'completed', 'failed', 'cancelled')`),
+    check("outreach_runs_status_chk", sql`${t.status} IN ('proposed', 'starting', 'running', 'paused', 'stopped', 'completed', 'failed', 'cancelled')`),
+  ],
+);
+
+export type RunLeadStatus = "active" | "stopped" | "opted_out";
+
+/**
+ * Who a started run covers, on which channel: the approved audience. The
+ * reply autopilot answers a conversation only through the run its person
+ * belongs to on that channel (its mode, its state); nothing outside it.
+ */
+export const outreachRunLeads = pgTable(
+  "outreach_run_leads",
+  {
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    id: uuid("id").primaryKey().defaultRandom(),
+    runId: uuid("run_id").notNull().references(() => outreachRuns.id, { onDelete: "cascade" }),
+    personId: uuid("person_id").notNull().references(() => people.id, { onDelete: "cascade" }),
+    channel: text("channel").notNull().$type<AudienceChannel>(),
+    status: text("status").notNull().default("active").$type<RunLeadStatus>(),
+    stopReason: text("stop_reason"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("outreach_run_leads_run_person_uq").on(t.runId, t.personId),
+    index("outreach_run_leads_person_idx").on(t.organizationId, t.personId),
+    check("outreach_run_leads_channel_chk", sql`${t.channel} IN ('email', 'whatsapp', 'linkedin')`),
+    check("outreach_run_leads_status_chk", sql`${t.status} IN ('active', 'stopped', 'opted_out')`),
+  ],
+);
+
+export type AutopilotReplyStatus = "reserved" | "sent" | "failed" | "held";
+
+/** What the support check found, kept with each decision for the owner to read. */
+export type ReplyCheck = {
+  intent: string;
+  questions: { question: string; answered: boolean; evidence: string; supported: boolean }[];
+  claims: { claim: string; evidence: string; supported: boolean }[];
+  commitments: string[];
+  problems: string[];
+};
+
+/**
+ * One row per draft revision the autopilot decided on: a reservation taken
+ * under the organization's lock before sending (it counts toward the
+ * limits, so concurrent jobs cannot exceed them), then sent or failed; or
+ * held, with the reason. Unique per (draft, revision): never two sends.
+ */
+export const autopilotReplies = pgTable(
+  "autopilot_replies",
+  {
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    id: uuid("id").primaryKey().defaultRandom(),
+    draftId: uuid("draft_id").notNull(),
+    revision: integer("revision").notNull(),
+    conversationId: uuid("conversation_id").notNull(),
+    runId: uuid("run_id"),
+    personId: uuid("person_id"),
+    status: text("status").notNull().$type<AutopilotReplyStatus>(),
+    reason: text("reason"),
+    check: jsonb("check").$type<ReplyCheck>(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("autopilot_replies_draft_revision_uq").on(t.draftId, t.revision),
+    index("autopilot_replies_organization_idx").on(t.organizationId, t.createdAt),
+    index("autopilot_replies_conversation_idx").on(t.conversationId),
+    check("autopilot_replies_status_chk", sql`${t.status} IN ('reserved', 'sent', 'failed', 'held')`),
+  ],
+);
+
+export type OwnerDecisionKind = "missing_info" | "complaint" | "negotiation" | "commitment" | "uncertain" | "meeting" | "opt_out" | "interested";
+export type OwnerDecisionStatus = "open" | "answered" | "resolved";
+
+/**
+ * Something only the owner can settle, with the reason and the decision
+ * needed: a question the saved information does not answer (the answer is
+ * saved to knowledge for every later conversation), a complaint, a
+ * negotiation or promise outside the owner's rules, an uncertain answer, a
+ * meeting to arrange. `opt_out` and `interested` are reports, not questions.
+ */
+export const ownerDecisions = pgTable(
+  "owner_decisions",
+  {
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    id: uuid("id").primaryKey().defaultRandom(),
+    kind: text("kind").notNull().$type<OwnerDecisionKind>(),
+    status: text("status").notNull().default("open").$type<OwnerDecisionStatus>(),
+    /** Why the assistant stopped, in a sentence. */
+    reason: text("reason").notNull(),
+    /** What the owner is asked to decide or answer. */
+    decision: text("decision").notNull(),
+    /** The lead's words the decision is about. */
+    leadMessage: text("lead_message"),
+    personId: uuid("person_id"),
+    crmRecordId: uuid("crm_record_id"),
+    conversationId: uuid("conversation_id"),
+    draftId: uuid("draft_id"),
+    runId: uuid("run_id"),
+    answer: text("answer"),
+    answeredBy: uuid("answered_by"),
+    answeredAt: timestamp("answered_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("owner_decisions_organization_idx").on(t.organizationId, t.status, t.createdAt),
+    uniqueIndex("owner_decisions_draft_kind_uq").on(t.draftId, t.kind).where(sql`${t.draftId} IS NOT NULL AND ${t.status} = 'open'`),
+    check("owner_decisions_kind_chk", sql`${t.kind} IN ('missing_info', 'complaint', 'negotiation', 'commitment', 'uncertain', 'meeting', 'opt_out', 'interested')`),
+    check("owner_decisions_status_chk", sql`${t.status} IN ('open', 'answered', 'resolved')`),
+  ],
+);
+
+/** The owner (or a team member) answers this conversation personally: the autopilot stays out. */
+export const autopilotTakeovers = pgTable(
+  "autopilot_takeovers",
+  {
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    id: uuid("id").primaryKey().defaultRandom(),
+    conversationId: uuid("conversation_id").notNull(),
+    reason: text("reason").notNull(),
+    createdBy: uuid("created_by"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("autopilot_takeovers_conversation_uq").on(t.conversationId),
+    index("autopilot_takeovers_organization_idx").on(t.organizationId),
+  ],
+);
+
+export type UsageKind = "assistant" | "outreach_writing" | "personal_lines" | "reply_check" | "linkedin_search";
+
+/**
+ * Recorded AI spending of the assistant's own model calls: the provider's
+ * reported cost when it gives one (`cost_usd`), else null with the tokens,
+ * so reports separate recorded cost from calls whose cost is unknown.
+ */
+export const assistantUsage = pgTable(
+  "assistant_usage",
+  {
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    id: uuid("id").primaryKey().defaultRandom(),
+    kind: text("kind").notNull().$type<UsageKind>(),
+    model: text("model"),
+    costUsd: numeric("cost_usd", { precision: 12, scale: 6 }),
+    inputTokens: integer("input_tokens"),
+    outputTokens: integer("output_tokens"),
+    runId: uuid("run_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("assistant_usage_organization_idx").on(t.organizationId, t.createdAt),
+  ],
+);
+
+/** The day's results, written at the start of the organization's next day (its time zone). */
+export const dailySummaries = pgTable(
+  "daily_summaries",
+  {
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** The local day summarised, YYYY-MM-DD in `time_zone`. */
+    day: text("day").notNull(),
+    timeZone: text("time_zone").notNull(),
+    data: jsonb("data").$type<Record<string, unknown>>().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("daily_summaries_organization_day_uq").on(t.organizationId, t.day),
   ],
 );

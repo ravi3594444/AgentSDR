@@ -122,11 +122,10 @@ export const crmSubcategories = pgTable(
 /**
  * Per-pipeline classifier policy.
  *
- * `human_send_only` on (the default): the CRM drafts, a person sends. Off
- * only when the owner turns on the assistant's reply autopilot, which then
- * sends drafts for ordinary replies under the rules in src/lib/crm/autopilot.ts
- * and leaves everything else for a person (scripts/create-assistant-tables.ts
- * replaced the CHECK that pinned it on).
+ * `human_send_only` is fixed on: the CRM drafts, a person sends. The one
+ * exception is per outreach run, not per pipeline: the assistant's reply
+ * autopilot answers conversations of runs the owner started in Automatic
+ * mode (src/lib/crm/autopilot.ts), and nothing else.
  * `customer_requires_review` used to be pinned TRUE the same way; it is a
  * plain setting now (see scripts/relax-crm-classification-review.ts) because
  * an AI-applied category is only ever an input to a draft, and holding
@@ -158,6 +157,7 @@ export const crmSettings = pgTable(
       foreignColumns: [crmPipelines.id],
       name: "crm_settings_pipeline_fk",
     }).onDelete("restrict"),
+    check("crm_settings_human_send_only_chk", sql`${table.humanSendOnly} IS TRUE`),
     check(
       "crm_settings_confidence_chk",
       sql`${table.autoApplyConfidence} >= 0 AND ${table.autoApplyConfidence} <= 1`,

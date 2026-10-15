@@ -947,7 +947,7 @@ CREATE TABLE public.assistant_jobs (
     created_by uuid,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     finished_at timestamp with time zone,
-    CONSTRAINT assistant_jobs_kind_chk CHECK ((kind = ANY (ARRAY['discovery'::text, 'outreach_start'::text]))),
+    CONSTRAINT assistant_jobs_kind_chk CHECK ((kind = ANY (ARRAY['discovery'::text, 'outreach_start'::text, 'linkedin_search'::text]))),
     CONSTRAINT assistant_jobs_status_chk CHECK ((status = ANY (ARRAY['queued'::text, 'running'::text, 'succeeded'::text, 'failed'::text, 'cancelled'::text])))
 );
 
@@ -996,6 +996,55 @@ CREATE TABLE public.assistant_threads (
     busy_since timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+--
+-- Name: assistant_usage; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.assistant_usage (
+    organization_id uuid NOT NULL,
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    kind text NOT NULL,
+    model text,
+    cost_usd numeric(12,6),
+    input_tokens integer,
+    output_tokens integer,
+    run_id uuid,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+--
+-- Name: autopilot_replies; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.autopilot_replies (
+    organization_id uuid NOT NULL,
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    draft_id uuid NOT NULL,
+    revision integer NOT NULL,
+    conversation_id uuid NOT NULL,
+    run_id uuid,
+    person_id uuid,
+    status text NOT NULL,
+    reason text,
+    "check" jsonb,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT autopilot_replies_status_chk CHECK ((status = ANY (ARRAY['reserved'::text, 'sent'::text, 'failed'::text, 'held'::text])))
+);
+
+--
+-- Name: autopilot_takeovers; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.autopilot_takeovers (
+    organization_id uuid NOT NULL,
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    conversation_id uuid NOT NULL,
+    reason text NOT NULL,
+    created_by uuid,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
 --
@@ -1763,6 +1812,7 @@ CREATE TABLE public.crm_settings (
     draft_instructions jsonb,
     classification_instructions jsonb,
     CONSTRAINT crm_settings_confidence_chk CHECK (((auto_apply_confidence >= (0)::numeric) AND (auto_apply_confidence <= (1)::numeric))),
+    CONSTRAINT crm_settings_human_send_only_chk CHECK ((human_send_only IS TRUE)),
     CONSTRAINT crm_settings_instructions_shape_chk CHECK ((((draft_instructions IS NULL) OR ((jsonb_typeof(draft_instructions) = 'array'::text) AND (length((draft_instructions)::text) <= 60000))) AND ((classification_instructions IS NULL) OR ((jsonb_typeof(classification_instructions) = 'array'::text) AND (length((classification_instructions)::text) <= 60000)))))
 );
 
@@ -1848,6 +1898,19 @@ CREATE TABLE public.crm_webhook_events (
     status text DEFAULT 'ok'::text NOT NULL,
     steps jsonb DEFAULT '[]'::jsonb NOT NULL,
     organization_id uuid NOT NULL
+);
+
+--
+-- Name: daily_summaries; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.daily_summaries (
+    organization_id uuid NOT NULL,
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    day text NOT NULL,
+    time_zone text NOT NULL,
+    data jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
 --
@@ -2414,6 +2477,24 @@ CREATE TABLE public.outreach_mailboxes (
 );
 
 --
+-- Name: outreach_run_leads; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.outreach_run_leads (
+    organization_id uuid NOT NULL,
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    run_id uuid NOT NULL,
+    person_id uuid NOT NULL,
+    channel text NOT NULL,
+    status text DEFAULT 'active'::text NOT NULL,
+    stop_reason text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT outreach_run_leads_channel_chk CHECK ((channel = ANY (ARRAY['email'::text, 'whatsapp'::text, 'linkedin'::text]))),
+    CONSTRAINT outreach_run_leads_status_chk CHECK ((status = ANY (ARRAY['active'::text, 'stopped'::text, 'opted_out'::text])))
+);
+
+--
 -- Name: outreach_runs; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2434,7 +2515,9 @@ CREATE TABLE public.outreach_runs (
     created_by uuid,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT outreach_runs_status_chk CHECK ((status = ANY (ARRAY['proposed'::text, 'starting'::text, 'running'::text, 'paused'::text, 'completed'::text, 'failed'::text, 'cancelled'::text])))
+    paused_at timestamp with time zone,
+    stopped_at timestamp with time zone,
+    CONSTRAINT outreach_runs_status_chk CHECK ((status = ANY (ARRAY['proposed'::text, 'starting'::text, 'running'::text, 'paused'::text, 'stopped'::text, 'completed'::text, 'failed'::text, 'cancelled'::text])))
 );
 
 --
@@ -2448,6 +2531,32 @@ CREATE TABLE public.outreach_suppression_list (
     note text,
     created_at timestamp with time zone DEFAULT now(),
     organization_id uuid NOT NULL
+);
+
+--
+-- Name: owner_decisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.owner_decisions (
+    organization_id uuid NOT NULL,
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    kind text NOT NULL,
+    status text DEFAULT 'open'::text NOT NULL,
+    reason text NOT NULL,
+    decision text NOT NULL,
+    lead_message text,
+    person_id uuid,
+    crm_record_id uuid,
+    conversation_id uuid,
+    draft_id uuid,
+    run_id uuid,
+    answer text,
+    answered_by uuid,
+    answered_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT owner_decisions_kind_chk CHECK ((kind = ANY (ARRAY['missing_info'::text, 'complaint'::text, 'negotiation'::text, 'commitment'::text, 'uncertain'::text, 'meeting'::text, 'opt_out'::text, 'interested'::text]))),
+    CONSTRAINT owner_decisions_status_chk CHECK ((status = ANY (ARRAY['open'::text, 'answered'::text, 'resolved'::text])))
 );
 
 --
@@ -2855,6 +2964,27 @@ ALTER TABLE ONLY public.assistant_profiles
 
 ALTER TABLE ONLY public.assistant_threads
     ADD CONSTRAINT assistant_threads_pkey PRIMARY KEY (id);
+
+--
+-- Name: assistant_usage assistant_usage_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.assistant_usage
+    ADD CONSTRAINT assistant_usage_pkey PRIMARY KEY (id);
+
+--
+-- Name: autopilot_replies autopilot_replies_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.autopilot_replies
+    ADD CONSTRAINT autopilot_replies_pkey PRIMARY KEY (id);
+
+--
+-- Name: autopilot_takeovers autopilot_takeovers_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.autopilot_takeovers
+    ADD CONSTRAINT autopilot_takeovers_pkey PRIMARY KEY (id);
 
 --
 -- Name: call_campaign_contacts call_campaign_contacts_campaign_person_uq; Type: CONSTRAINT; Schema: public; Owner: -
@@ -3312,6 +3442,13 @@ ALTER TABLE ONLY public.crm_webhook_events
     ADD CONSTRAINT crm_webhook_events_pkey PRIMARY KEY (id);
 
 --
+-- Name: daily_summaries daily_summaries_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.daily_summaries
+    ADD CONSTRAINT daily_summaries_pkey PRIMARY KEY (id);
+
+--
 -- Name: domains domains_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3515,6 +3652,13 @@ ALTER TABLE ONLY public.outreach_mailboxes
     ADD CONSTRAINT outreach_mailboxes_pkey PRIMARY KEY (id);
 
 --
+-- Name: outreach_run_leads outreach_run_leads_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.outreach_run_leads
+    ADD CONSTRAINT outreach_run_leads_pkey PRIMARY KEY (id);
+
+--
 -- Name: outreach_runs outreach_runs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3527,6 +3671,13 @@ ALTER TABLE ONLY public.outreach_runs
 
 ALTER TABLE ONLY public.outreach_suppression_list
     ADD CONSTRAINT outreach_suppression_list_pkey PRIMARY KEY (id);
+
+--
+-- Name: owner_decisions owner_decisions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.owner_decisions
+    ADD CONSTRAINT owner_decisions_pkey PRIMARY KEY (id);
 
 --
 -- Name: people people_pkey; Type: CONSTRAINT; Schema: public; Owner: -
@@ -3876,6 +4027,42 @@ CREATE INDEX assistant_messages_thread_idx ON public.assistant_messages USING bt
 CREATE INDEX assistant_threads_organization_idx ON public.assistant_threads USING btree (organization_id, updated_at);
 
 --
+-- Name: assistant_usage_organization_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX assistant_usage_organization_idx ON public.assistant_usage USING btree (organization_id, created_at);
+
+--
+-- Name: autopilot_replies_conversation_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX autopilot_replies_conversation_idx ON public.autopilot_replies USING btree (conversation_id);
+
+--
+-- Name: autopilot_replies_draft_revision_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX autopilot_replies_draft_revision_uq ON public.autopilot_replies USING btree (draft_id, revision);
+
+--
+-- Name: autopilot_replies_organization_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX autopilot_replies_organization_idx ON public.autopilot_replies USING btree (organization_id, created_at);
+
+--
+-- Name: autopilot_takeovers_conversation_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX autopilot_takeovers_conversation_uq ON public.autopilot_takeovers USING btree (conversation_id);
+
+--
+-- Name: autopilot_takeovers_organization_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX autopilot_takeovers_organization_idx ON public.autopilot_takeovers USING btree (organization_id);
+
+--
 -- Name: call_campaign_contacts_campaign_stage_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4210,6 +4397,12 @@ CREATE INDEX crm_tasks_organization_idx ON public.crm_tasks USING btree (organiz
 --
 
 CREATE INDEX crm_webhook_events_organization_idx ON public.crm_webhook_events USING btree (organization_id);
+
+--
+-- Name: daily_summaries_organization_day_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX daily_summaries_organization_day_uq ON public.daily_summaries USING btree (organization_id, day);
 
 --
 -- Name: entity_columns_entity_pos_idx; Type: INDEX; Schema: public; Owner: -
@@ -4646,6 +4839,18 @@ CREATE INDEX outreach_mailboxes_organization_idx ON public.outreach_mailboxes US
 CREATE UNIQUE INDEX outreach_mailboxes_unipile_account_uq ON public.outreach_mailboxes USING btree (unipile_account_id) WHERE (unipile_account_id IS NOT NULL);
 
 --
+-- Name: outreach_run_leads_person_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX outreach_run_leads_person_idx ON public.outreach_run_leads USING btree (organization_id, person_id);
+
+--
+-- Name: outreach_run_leads_run_person_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX outreach_run_leads_run_person_uq ON public.outreach_run_leads USING btree (run_id, person_id);
+
+--
 -- Name: outreach_runs_organization_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4662,6 +4867,18 @@ CREATE INDEX outreach_suppression_list_organization_idx ON public.outreach_suppr
 --
 
 CREATE UNIQUE INDEX outreach_suppression_org_email_uq ON public.outreach_suppression_list USING btree (organization_id, email);
+
+--
+-- Name: owner_decisions_draft_kind_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX owner_decisions_draft_kind_uq ON public.owner_decisions USING btree (draft_id, kind) WHERE ((draft_id IS NOT NULL) AND (status = 'open'::text));
+
+--
+-- Name: owner_decisions_organization_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX owner_decisions_organization_idx ON public.owner_decisions USING btree (organization_id, status, created_at);
 
 --
 -- Name: people_company_idx; Type: INDEX; Schema: public; Owner: -
@@ -5147,6 +5364,27 @@ ALTER TABLE ONLY public.assistant_profiles
 
 ALTER TABLE ONLY public.assistant_threads
     ADD CONSTRAINT assistant_threads_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
+
+--
+-- Name: assistant_usage assistant_usage_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.assistant_usage
+    ADD CONSTRAINT assistant_usage_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
+
+--
+-- Name: autopilot_replies autopilot_replies_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.autopilot_replies
+    ADD CONSTRAINT autopilot_replies_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
+
+--
+-- Name: autopilot_takeovers autopilot_takeovers_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.autopilot_takeovers
+    ADD CONSTRAINT autopilot_takeovers_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
 
 --
 -- Name: call_campaign_contacts call_campaign_contacts_campaign_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
@@ -5730,6 +5968,13 @@ ALTER TABLE ONLY public.crm_webhook_events
     ADD CONSTRAINT crm_webhook_events_organization_fk FOREIGN KEY (organization_id) REFERENCES public.organizations(id) ON DELETE RESTRICT;
 
 --
+-- Name: daily_summaries daily_summaries_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.daily_summaries
+    ADD CONSTRAINT daily_summaries_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
+
+--
 -- Name: entity_columns entity_columns_organization_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5996,6 +6241,27 @@ ALTER TABLE ONLY public.outreach_mailboxes
     ADD CONSTRAINT outreach_mailboxes_organization_fk FOREIGN KEY (organization_id) REFERENCES public.organizations(id) ON DELETE RESTRICT;
 
 --
+-- Name: outreach_run_leads outreach_run_leads_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.outreach_run_leads
+    ADD CONSTRAINT outreach_run_leads_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
+
+--
+-- Name: outreach_run_leads outreach_run_leads_person_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.outreach_run_leads
+    ADD CONSTRAINT outreach_run_leads_person_id_fkey FOREIGN KEY (person_id) REFERENCES public.people(id) ON DELETE CASCADE;
+
+--
+-- Name: outreach_run_leads outreach_run_leads_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.outreach_run_leads
+    ADD CONSTRAINT outreach_run_leads_run_id_fkey FOREIGN KEY (run_id) REFERENCES public.outreach_runs(id) ON DELETE CASCADE;
+
+--
 -- Name: outreach_runs outreach_runs_audience_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -6022,6 +6288,13 @@ ALTER TABLE ONLY public.outreach_runs
 
 ALTER TABLE ONLY public.outreach_suppression_list
     ADD CONSTRAINT outreach_suppression_list_organization_fk FOREIGN KEY (organization_id) REFERENCES public.organizations(id) ON DELETE RESTRICT;
+
+--
+-- Name: owner_decisions owner_decisions_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.owner_decisions
+    ADD CONSTRAINT owner_decisions_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
 
 --
 -- Name: people people_company_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -

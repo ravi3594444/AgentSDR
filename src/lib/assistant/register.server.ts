@@ -2,6 +2,7 @@ import "server-only";
 
 import { runDiscoveryStep } from "@/lib/discovery/discovery.server";
 import { continueAfterEvent, runToolInThread } from "./agent.server";
+import { runLinkedinSearchStep } from "./linkedinSearch.server";
 import { runOutreachStartStep } from "./outreach.server";
 import { addMessage, claimThread, releaseThread } from "./threads.server";
 import { onAssistantJobFinished, registerAssistantJobHandler, type AssistantJob } from "./worker";
@@ -20,13 +21,15 @@ function discoveryMessage(job: AssistantJob): string {
   if (!found) return String(result.note ?? "The lead search found no businesses.");
   const eligible = Number(result.eligible ?? 0);
   const parts = [
-    `The lead search for “${String(result.phrase ?? "")}” finished: ${found} businesses found on Google Maps, ${eligible} can be contacted`,
-    `(${Number(result.withEmail ?? 0)} by email, ${Number(result.withPhoneOnly ?? 0)} by phone only)`,
+    job.kind === "linkedin_search"
+      ? `The LinkedIn search for “${String(result.phrase ?? "")}” finished: ${found} profiles found, ${eligible} can be contacted on LinkedIn`
+      : `The lead search for “${String(result.phrase ?? "")}” finished: ${found} businesses found on Google Maps, ${eligible} can be contacted`,
+    job.kind === "linkedin_search" ? "" : `(${Number(result.withEmail ?? 0)} by email, ${Number(result.withPhoneOnly ?? 0)} by phone only)`,
   ];
   const extra: string[] = [];
   if (Number(result.excluded ?? 0)) extra.push(`${Number(result.excluded)} left out with the reason recorded`);
   if (Number(result.duplicates ?? 0)) extra.push(`${Number(result.duplicates)} duplicates skipped`);
-  return `${parts.join(" ")}${extra.length ? `; ${extra.join(", ")}` : ""}.`;
+  return `${parts.filter(Boolean).join(" ")}${extra.length ? `; ${extra.join(", ")}` : ""}.`;
 }
 
 function outreachMessage(job: AssistantJob): string {
@@ -45,20 +48,22 @@ export function registerAssistantJobs(): void {
   registered = true;
   registerAssistantJobHandler("discovery", runDiscoveryStep);
   registerAssistantJobHandler("outreach_start", runOutreachStartStep);
+  registerAssistantJobHandler("linkedin_search", runLinkedinSearchStep);
   onAssistantJobFinished(async (job) => {
     if (!job.threadId) return;
-    const content = job.kind === "discovery" ? discoveryMessage(job) : outreachMessage(job);
+    const search = job.kind === "discovery" || job.kind === "linkedin_search";
+    const content = search ? discoveryMessage(job) : outreachMessage(job);
     await addMessage({ threadId: job.threadId, role: "event", content });
-    if (job.kind !== "discovery" || job.status !== "succeeded" || !job.audienceId || Number((job.result ?? {}).eligible ?? 0) <= 0) return;
+    if (!search || job.status !== "succeeded" || !job.audienceId || Number((job.result ?? {}).eligible ?? 0) <= 0) return;
     // The owner asked to contact what is found: the plan is prepared here,
     // not left to the model's judgement. It still waits for the owner's Start.
-    const contactAfter = (job.payload as { contactAfter?: { channels: string[] | null } | null }).contactAfter;
+    const contactAfter = (job.payload as { contactAfter?: { channels: string[] | null; ownerRequest?: string } | null }).contactAfter;
     // Not awaited: writing the plan takes model calls, and the worker moves on.
     void followUpSearch(job, job.threadId, contactAfter ?? null);
   });
 }
 
-async function followUpSearch(job: AssistantJob, threadId: string, contactAfter: { channels: string[] | null } | null): Promise<void> {
+async function followUpSearch(job: AssistantJob, threadId: string, contactAfter: { channels: string[] | null; ownerRequest?: string } | null): Promise<void> {
   try {
     if (contactAfter) {
       // Wait for a turn in progress to end, so the plan is made once.
@@ -70,9 +75,9 @@ async function followUpSearch(job: AssistantJob, threadId: string, contactAfter:
       let prepared;
       try {
         prepared = await runToolInThread(
-          { threadId, userId: job.createdBy },
+          { threadId, userId: job.createdBy, ownerText: contactAfter.ownerRequest ?? "", authorizedBy: "search" },
           "prepare_outreach",
-          { audienceId: job.audienceId, ...(contactAfter.channels?.length ? { channels: contactAfter.channels } : {}) },
+          { audienceId: job.audienceId, ownerRequest: contactAfter.ownerRequest ?? null, ...(contactAfter.channels?.length ? { channels: contactAfter.channels } : {}) },
         );
         if (prepared.ok) {
           await addMessage({ threadId, role: "event", content: "The outreach plan for these leads is ready below. Check the audience, the sample messages and the limits, then press Start. Nothing is sent before that." });

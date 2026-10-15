@@ -11,6 +11,7 @@ import {
   withCrmTransaction,
 } from "./repository";
 import { assertWorkflowTransition } from "./stateMachine";
+import { stopOutreachForPersonInTransaction } from "@/lib/outreach/optOut";
 import { inOrg } from "@/lib/tenancy/scope";
 
 export type CrmContactPolicy = typeof crmPersonContactPolicies.$inferSelect;
@@ -187,6 +188,8 @@ export async function setPersonDoNotContactInTransaction(
     } : null,
     toData: { doNotContact: true, reason, source: input.source, setAt: now },
   });
+  // Campaign enrollments, email suppression, assistant runs: all stop now.
+  await stopOutreachForPersonInTransaction(tx, { personId: input.personId, reason });
   return policy;
 }
 

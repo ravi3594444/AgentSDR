@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { agentReplySchema, MAX_ACTIONS_PER_STEP, parseAgentReply, transcriptText, unbackedClaim, type TranscriptMessage } from "./agent";
+import { agentReplySchema, MAX_ACTIONS_PER_STEP, outreachIntent, ownerRequestProblem, parseAgentReply, transcriptText, unbackedClaim, type TranscriptMessage } from "./agent";
 
 const TOOLS = ["find_leads", "save_business_info", "prepare_outreach"];
 
@@ -80,5 +80,26 @@ describe("transcriptText", () => {
     expect(text.startsWith("(earlier conversation omitted)")).toBe(true);
     expect(text).toContain("message 49");
     expect(text).not.toContain("message 0 ");
+  });
+});
+
+describe("ownerRequestProblem", () => {
+  const owner = "We run Bright Path. Find dental clinics in Pune and email them. liek via campagion ai agent should able ot pitch the coutemr";
+
+  test("a quote of the owner's request for outreach passes, typos included", () => {
+    expect(ownerRequestProblem("email them", owner)).toBeNull();
+    expect(ownerRequestProblem("via campagion ai agent should able ot pitch", owner)).toBeNull();
+  });
+
+  test("no quote, a quote the owner did not write, or words that do not ask for outreach are refused", () => {
+    expect(ownerRequestProblem(undefined, owner)).toContain("required");
+    expect(ownerRequestProblem("please contact everyone", owner)).toContain("exact words");
+    expect(ownerRequestProblem("We run Bright Path", owner)).toContain("do not ask for outreach");
+  });
+
+  test("outreachIntent tolerates typos but not unrelated words", () => {
+    expect(outreachIntent("contcat them")).toBe(true);
+    expect(outreachIntent("whatsap them")).toBe(true);
+    expect(outreachIntent("our prices are fair")).toBe(false);
   });
 });

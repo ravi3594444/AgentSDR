@@ -67,7 +67,7 @@ export async function ingestAttachment(
     const audienceId = await createAudience({
       name: titleFromFileName(file.name),
       source: "list",
-      criteria: { fileName: file.name },
+      criteria: { fileName: file.name, imported: { created: result.created, updated: result.updated, failed: result.failed.length, skippedNoIdentity: result.skippedNoIdentity } },
       threadId: context.threadId,
       userId: context.userId,
     });

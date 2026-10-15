@@ -30,5 +30,6 @@ scripts
 !scripts/create-lead-research.ts
 !scripts/add-mailbox-provider.ts
 !scripts/create-assistant-tables.ts
+!scripts/add-assistant-automation.ts
 
 README.md
