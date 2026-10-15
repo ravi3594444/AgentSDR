@@ -8,6 +8,7 @@ import { runMembershipFor } from "@/lib/crm/autopilot.server";
 import { appendCrmEvent } from "@/lib/crm/events";
 import { isPersonDoNotContact, setPersonDoNotContact } from "@/lib/crm/policies";
 import { enqueueCrmJobInTransaction } from "@/lib/crm/queue";
+import { regenerateDraft } from "@/lib/crm/drafts";
 import { draftInOrg } from "@/lib/crm/records";
 import { withCrmTransaction, type CrmExecutor } from "@/lib/crm/repository";
 import {
@@ -23,7 +24,7 @@ import { people } from "@/lib/leads/schema";
 import { isSuppressed } from "@/lib/outreach/suppression";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { openDecision } from "./decisions.server";
-import { judgeReply, type ModelCheck } from "./replyCheck";
+import { judgeReply, selfFixableTimes, type ModelCheck } from "./replyCheck";
 import { checkKnowledge, modelReplyCheck, type ReplyCheckInput } from "./replyCheck.server";
 import { autopilotReplies, autopilotTakeovers, outreachRunLeads, ownerDecisions, type ReplyCheck } from "./schema";
 
@@ -48,6 +49,8 @@ import { autopilotReplies, autopilotTakeovers, outreachRunLeads, ownerDecisions,
 export type AutopilotOutcome = { sent: boolean; reason: string | null };
 
 export type AutopilotDependencies = {
+  /** Rewrite a reply once when its only fault is a proposed time (default: when the real model checks; it needs the model). */
+  rewrite?: boolean;
   /** The revision the job was queued for. */
   revision?: number | null;
   /** When the draft became ready; an outbound message after it means someone answered. */
@@ -130,6 +133,15 @@ async function loadState(executor: CrmExecutor, draftId: string, deps: Autopilot
     leadName: person?.fullName || person?.firstName || businessName || person?.email || "the lead",
     email: person?.email ?? null,
   };
+}
+
+const SELF_REWRITE_REASON = "rewritten once without the proposed time:";
+
+/** Whether this reply was already rewritten once to drop a proposed time (then the owner decides). */
+async function alreadyRewritten(draftId: string): Promise<boolean> {
+  const [row] = await db.select({ n: count() }).from(autopilotReplies)
+    .where(and(eq(autopilotReplies.organizationId, currentOrganizationId()), eq(autopilotReplies.draftId, draftId), sql`${autopilotReplies.reason} like ${`${SELF_REWRITE_REASON}%`}`));
+  return Number(row?.n ?? 0) > 0;
 }
 
 async function recordHold(state: State, reason: string, check: ReplyCheck | null = null): Promise<AutopilotOutcome> {
@@ -224,6 +236,17 @@ export async function runAutopilotForDraft(draftId: string, deps: AutopilotDepen
     return recordHold(state, "they asked not to be contacted: all outreach to them stopped", verdict.check);
   }
   if (verdict.action === "hold") {
+    // A reply whose only fault is a proposed day or time is rewritten once without it, not handed to the owner.
+    const times = selfFixableTimes(verdict.check);
+    if (times && (deps.rewrite ?? deps.check === undefined) && !(await alreadyRewritten(state.draft.id))) {
+      try {
+        const outcome = await recordHold(state, `${SELF_REWRITE_REASON} ${times.join(", ")}`, verdict.check);
+        await regenerateDraft(state.draft.id, {}, `Rewrite this reply without proposing any day, date or time window (remove: ${times.join(", ")}). Keep the answer itself; give the booking link if the business information has one, or ask when suits them.`);
+        return outcome;
+      } catch (error) {
+        console.error("[assistant/autopilot] rewriting without the proposed time failed:", error);
+      }
+    }
     await openDecision({ kind: verdict.kind, reason: verdict.reason, decision: verdict.decision, leadMessage: state.leadMessage, personId: state.personId, crmRecordId: state.recordId, conversationId: state.conversationId, draftId: state.draft.id, runId: state.membership.runId, threadId: state.membership.threadId });
     return recordHold(state, verdict.reason, verdict.check);
   }

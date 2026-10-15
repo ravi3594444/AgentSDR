@@ -22,7 +22,7 @@ import { whatsappAccounts, whatsappCampaignLeads } from "@/lib/whatsapp/schema";
 import { requeueRunAutopilot } from "./autopilotRun.server";
 import { eligibleAudienceMembers, summarizeAudience } from "./audiences.server";
 import { countReasons } from "./audiences";
-import { availableTokens, personalizationKey, templateTokens } from "./messages";
+import { availableTokens, leadTextKey, MAX_PERSONAL, perLeadSteps, personalizationKey, settleGroups, templateTokens, type LeadApproach } from "./messages";
 import { getBusinessProfile } from "./profile.server";
 import { missingForOutreach } from "./profile";
 import {
@@ -31,10 +31,11 @@ import {
   outreachRuns,
   type AudienceChannel,
   type OutreachPlan,
+  type PlanGroup,
   type PlannedStep,
 } from "./schema";
 import type { AssistantJob, StepOutcome } from "./worker";
-import { businessContext, writePersonalLines, writeSequences, type WriterCost } from "./writer.server";
+import { businessContext, sortLeads, writePersonalLines, writePersonalMessages, writeSequences, type WriterCost } from "./writer.server";
 
 /**
  * Outreach runs: what the owner approves once and the assistant then runs.
@@ -49,6 +50,9 @@ import { businessContext, writePersonalLines, writeSequences, type WriterCost } 
 const DEFAULT_MAX_LEADS = 100;
 const HARD_MAX_LEADS = 1_000;
 const PERSONALIZE_BATCH = 10;
+/** Leads sorted per model call, and first messages written per call. */
+const SORT_BATCH = 25;
+const PERSONAL_BATCH = 5;
 const CHANNEL_ORDER: AudienceChannel[] = ["email", "whatsapp", "linkedin"];
 
 export class OutreachError extends Error {
@@ -118,6 +122,23 @@ function leadVariables(row: PersonRow, key: string, line: string): Record<string
   return variables;
 }
 
+/** What the sorting and writing models may know of a lead: its public facts, title, company and short own fields. */
+function leadFacts(memberFacts: Record<string, string>, row: PersonRow | undefined): Record<string, string> {
+  const out: Record<string, string> = { ...memberFacts };
+  if (!row) return out;
+  if (row.person.fullName && !out.name) out.name = row.person.fullName;
+  if (row.person.title) out.title ??= row.person.title;
+  if (row.company?.name) out.company ??= row.company.name;
+  if (row.company?.domain) out.website ??= row.company.domain;
+  for (const [field, value] of Object.entries((row.person.raw ?? {}) as Record<string, unknown>)) {
+    if (Object.keys(out).length >= 14) break;
+    if (typeof value !== "string" || !value.trim() || value.length > 200) continue;
+    if (/^p_[0-9a-f]{8}/.test(field) || ["addedVia", "discoveredVia"].includes(field)) continue;
+    out[field] ??= value;
+  }
+  return out;
+}
+
 function render(step: PlannedStep, variables: Record<string, string>): { subject: string | null; body: string } {
   return {
     subject: step.subject ? fillTemplate(step.subject, variables) : null,
@@ -135,17 +156,21 @@ export type PrepareInput = {
   basedOnRunId?: string | null;
   /** The owner's words that asked for this outreach. */
   ownerRequest?: string | null;
+  /** Sort the leads into kinds and approaches (default true when they have facts to sort by). */
+  sortLeads?: boolean;
+  /** Contact leads the sorting would leave out, too. */
+  includeSkipped?: boolean;
   threadId: string | null;
   userId: string | null;
 };
 
-/** An earlier run's sequences for the channels wanted, with its per-lead merge key swapped for the new run's. */
-function reuseSequences(base: OutreachPlan, key: string, channels: AudienceChannel[], tokens: readonly string[]): Partial<Record<AudienceChannel, PlannedStep[]>> {
+/** An earlier run's messages for the channels wanted, with its per-lead merge key swapped for the new run's. */
+function reuseSequences(source: Partial<Record<AudienceChannel, PlannedStep[]>>, baseKey: string, key: string, channels: AudienceChannel[], tokens: readonly string[]): Partial<Record<AudienceChannel, PlannedStep[]>> {
   const out: Partial<Record<AudienceChannel, PlannedStep[]>> = {};
-  const token = new RegExp(`\\{\\{\\s*${base.personalizationKey}\\s*\\}\\}`, "g");
-  const allowed = new Set([...tokens, base.personalizationKey].map((name) => name.toLowerCase()));
+  const token = new RegExp(`\\{\\{\\s*${baseKey}\\s*\\}\\}`, "g");
+  const allowed = new Set([...tokens, baseKey].map((name) => name.toLowerCase()));
   for (const channel of channels) {
-    const steps = base.sequences[channel];
+    const steps = source[channel];
     // Messages using a field these leads lack are written afresh instead.
     if (steps?.some((step) => templateTokens(`${step.subject ?? ""} ${step.body}`).some((name) => !allowed.has(name.toLowerCase())))) continue;
     if (steps?.length) out[channel] = steps.map((step) => ({ ...step, subject: step.subject?.replace(token, `{{${key}}}`) ?? null, body: step.body.replace(token, `{{${key}}}`) }));
@@ -193,65 +218,151 @@ export async function prepareOutreach(input: PrepareInput): Promise<Proposal> {
     if (assignments.length < maxLeads) assignments.push({ personId: member.personId, channel });
   }
   if (!assignments.length) throw new OutreachError(`No lead in this audience can be reached on ${usable.join(" or ")}.`);
-  const channels = usable.filter((channel) => assignments.some((assignment) => assignment.channel === channel));
 
   const runId = randomUUID();
   const key = personalizationKey(runId);
   const cost: WriterCost = { calls: 0, usd: null, runId };
   const context = await businessContext(profile);
-  const audienceDescription = `${audience.name}${typeof audience.criteria.what === "string" ? ` (${audience.criteria.what} in ${String(audience.criteria.where ?? "")})` : ""}; ${assignments.length} leads, mostly businesses rather than named people`;
-  // Merge fields every chosen lead has; the others are left out of the messages.
+  const instructions = input.instructions?.trim() || null;
+  const memberByPerson = new Map(members.map((member) => [member.personId, member]));
   const leadRows = await loadPeople(assignments.map((assignment) => assignment.personId));
-  const tokens = availableTokens(assignments.map((assignment) => {
-    const row = leadRows.get(assignment.personId);
-    return row ? leadVariables(row, key, "") : {};
-  }));
-  const reused = base ? reuseSequences(base.plan, key, channels, tokens) : {};
-  const toWrite = channels.filter((channel) => !reused[channel]);
-  const written = toWrite.length ? await writeSequences({
-    profile,
-    context,
-    channels: toWrite,
-    personalizationKey: key,
-    signatureAppended: availability.signatureAppended,
-    instructions: input.instructions?.trim() || null,
-    audienceDescription,
-    tokens,
-    cost,
-  }) : {};
-  const sequences: Partial<Record<AudienceChannel, PlannedStep[]>> = { ...reused, ...written };
+  const nameOf = (personId: string) => memberByPerson.get(personId)?.name ?? leadRows.get(personId)?.person.fullName ?? "Lead";
 
-  // A sample per channel, with real opening lines, as the leads will get them.
-  const sampleAssignments = channels.flatMap((channel) => assignments.filter((assignment) => assignment.channel === channel).slice(0, channel === channels[0] ? 2 : 1));
-  const factsByPerson = new Map(members.map((member) => [member.personId, member.facts]));
-  const peopleRows = await loadPeople(sampleAssignments.map((assignment) => assignment.personId));
+  // 1. Sort the leads: what kind each is, and whether it gets its group's
+  // message, one written for it alone, or nothing (with the reason).
+  const facts = assignments.map((assignment) => leadFacts(memberByPerson.get(assignment.personId)?.facts ?? {}, leadRows.get(assignment.personId)));
+  const sortable = input.sortLeads !== false && facts.some((item) => Object.keys(item).some((name) => name !== "name"));
+  const sorting = new Map<number, { group: string; approach: LeadApproach; reason: string }>();
+  if (sortable) {
+    const known: string[] = [];
+    for (let start = 0; start < assignments.length; start += SORT_BATCH) {
+      const batch = facts.slice(start, start + SORT_BATCH).map((item, offset) => ({ index: start + offset, facts: item }));
+      for (const [index, value] of await sortLeads({ context, leads: batch, knownGroups: known, cost })) {
+        sorting.set(index, value);
+        if (!known.some((label) => label.toLowerCase() === value.group.toLowerCase())) known.push(value.group);
+      }
+    }
+  }
+  const fallbackGroup = typeof audience.criteria.what === "string" && audience.criteria.what.trim() ? audience.criteria.what.trim().replace(/^./, (c) => c.toUpperCase()) : "Your leads";
+  const skipped: NonNullable<OutreachPlan["skipped"]> = [];
+  const kept: { assignment: OutreachPlan["assignments"][number]; facts: Record<string, string>; group: string; approach: "standard" | "personal"; reason: string }[] = [];
+  assignments.forEach((assignment, index) => {
+    const sort = sorting.get(index) ?? { group: fallbackGroup, approach: "standard" as LeadApproach, reason: "" };
+    if (sort.approach === "skip" && !input.includeSkipped) {
+      skipped.push({ personId: assignment.personId, name: nameOf(assignment.personId), reason: sort.reason || "not a fit for your offer" });
+    } else {
+      kept.push({ assignment, facts: facts[index]!, group: sort.group, approach: sort.approach === "personal" ? "personal" : "standard", reason: sort.reason });
+    }
+  });
+  if (!kept.length) {
+    throw new OutreachError(`I sorted these ${assignments.length} leads and none fits your offer (${[...new Set(skipped.map((item) => item.reason))].slice(0, 3).join("; ")}). Say "include them anyway" to contact them.`);
+  }
+  kept.filter((lead) => lead.approach === "personal").slice(MAX_PERSONAL).forEach((lead) => { lead.approach = "standard"; });
+  const finalAssignments = kept.map((lead) => lead.assignment);
+  const channels = usable.filter((channel) => finalAssignments.some((assignment) => assignment.channel === channel));
+
+  // 2. Messages per kind of lead, using only merge fields all its leads have.
+  const groups: PlanGroup[] = [];
+  const leadPlans: NonNullable<OutreachPlan["leadPlans"]> = {};
+  for (const [groupIndex, settled] of settleGroups(kept.map((lead) => lead.group)).entries()) {
+    const id = `g${groupIndex + 1}`;
+    const groupLeads = settled.members.map((index) => kept[index]!);
+    const groupChannels = channels.filter((channel) => groupLeads.some((lead) => lead.assignment.channel === channel));
+    const tokens = availableTokens(groupLeads.map((lead) => {
+      const row = leadRows.get(lead.assignment.personId);
+      return row ? leadVariables(row, key, "") : {};
+    }));
+    const baseSequences = base
+      ? base.plan.groups
+        ? base.plan.groups.find((group) => group.label.toLowerCase() === settled.label.toLowerCase())?.sequences
+        : base.plan.sequences
+      : undefined;
+    const reused = base && baseSequences ? reuseSequences(baseSequences, base.plan.personalizationKey, key, groupChannels, tokens) : {};
+    const toWrite = groupChannels.filter((channel) => !reused[channel]);
+    const written = toWrite.length ? await writeSequences({
+      profile,
+      context,
+      channels: toWrite,
+      personalizationKey: key,
+      signatureAppended: availability.signatureAppended,
+      instructions,
+      audienceDescription: `${settled.label}: ${groupLeads.length} lead${groupLeads.length === 1 ? "" : "s"}, for example ${groupLeads.slice(0, 3).map((lead) => nameOf(lead.assignment.personId)).join(", ")}`,
+      tokens,
+      cost,
+    }) : {};
+    groups.push({ id, label: settled.label, count: groupLeads.length, sequences: { ...reused, ...written } });
+    for (const lead of groupLeads) leadPlans[lead.assignment.personId] = { groupId: id, approach: lead.approach, reason: lead.reason };
+  }
+
+  // 3. First messages written for single leads, in their group's voice; one that fails its checks falls back to the group's.
+  const personalLeads = kept.filter((lead) => lead.approach === "personal");
+  const personal: NonNullable<OutreachPlan["personal"]> = [];
+  for (let start = 0; start < personalLeads.length; start += PERSONAL_BATCH) {
+    const batch = personalLeads.slice(start, start + PERSONAL_BATCH);
+    const written = await writePersonalMessages({
+      context,
+      profile,
+      signatureAppended: availability.signatureAppended,
+      instructions,
+      leads: batch.map((lead, offset) => {
+        const group = groups.find((item) => item.id === leadPlans[lead.assignment.personId]!.groupId)!;
+        return { index: start + offset, channel: lead.assignment.channel, facts: lead.facts, groupMessage: group.sequences[lead.assignment.channel]?.[0]?.body ?? "" };
+      }),
+      cost,
+    });
+    batch.forEach((lead, offset) => {
+      const message = written.get(start + offset);
+      const plan = leadPlans[lead.assignment.personId]!;
+      if (!message) {
+        plan.approach = "standard";
+        return;
+      }
+      personal.push({ personId: lead.assignment.personId, name: nameOf(lead.assignment.personId), channel: lead.assignment.channel, groupId: plan.groupId, subject: message.subject, body: message.body, reason: lead.reason });
+    });
+  }
+
+  // 4. The campaigns send each lead its own texts (written at Start).
+  const sequences: Partial<Record<AudienceChannel, PlannedStep[]>> = Object.fromEntries(
+    channels.map((channel) => [channel, perLeadSteps(key, channel, groups.map((group) => group.sequences[channel] ?? []))]),
+  );
+
+  // 5. A sample per kind of lead and channel, with a real opening line, as it will be sent.
+  const sampleLeads = groups.flatMap((group) => channels.flatMap((channel) => {
+    const lead = kept.find((item) => item.assignment.channel === channel && leadPlans[item.assignment.personId]?.groupId === group.id && leadPlans[item.assignment.personId]?.approach === "standard");
+    return lead ? [{ lead, group, channel }] : [];
+  })).slice(0, 6);
   const lines = await writePersonalLines({
     context,
-    leads: sampleAssignments.map((assignment, index) => ({ index, facts: { ...factsByPerson.get(assignment.personId), name: peopleRows.get(assignment.personId)?.person.fullName ?? "" } })),
+    leads: sampleLeads.map((sample, index) => ({ index, facts: { ...sample.lead.facts, name: nameOf(sample.lead.assignment.personId) } })),
     cost,
   });
-  const samples: OutreachPlan["samples"] = sampleAssignments.flatMap((assignment, index) => {
-    const row = peopleRows.get(assignment.personId);
+  const samples: OutreachPlan["samples"] = sampleLeads.flatMap((sample, index) => {
+    const row = leadRows.get(sample.lead.assignment.personId);
     if (!row) return [];
     const variables = leadVariables(row, key, lines.get(index) ?? "");
-    return [{
-      personId: assignment.personId,
-      name: members.find((member) => member.personId === assignment.personId)?.name ?? "Lead",
-      channel: assignment.channel,
-      messages: (sequences[assignment.channel] ?? []).map((step) => render(step, variables)),
-    }];
+    const steps = (sample.group.sequences[sample.channel] ?? []).slice(0, sequences[sample.channel]?.length ?? 0);
+    return [{ personId: sample.lead.assignment.personId, name: nameOf(sample.lead.assignment.personId), channel: sample.channel, groupId: sample.group.id, approach: "standard" as const, messages: steps.map((step) => render(step, variables)) }];
   });
+  // Every lead written to alone, with the group's follow-ups it will get after its own first message.
+  for (const message of personal) {
+    const row = leadRows.get(message.personId);
+    const group = groups.find((item) => item.id === message.groupId);
+    if (!row || !group) continue;
+    const steps = (group.sequences[message.channel] ?? []).slice(0, sequences[message.channel]?.length ?? 0);
+    const followUps = steps.slice(1).map((step) => render(step, leadVariables(row, key, "")));
+    samples.push({ personId: message.personId, name: message.name, channel: message.channel, groupId: group.id, approach: "personal", messages: [{ subject: message.subject, body: message.body }, ...followUps] });
+  }
 
-  const perChannel = (channel: AudienceChannel) => assignments.filter((assignment) => assignment.channel === channel).length;
+  const perChannel = (channel: AudienceChannel) => finalAssignments.filter((assignment) => assignment.channel === channel).length;
   const days = Math.max(0, ...channels.map((channel) => {
     const status = availability[channel];
     const perDay = (status.senders || 1) * (status.perSenderPerDay ?? 20);
     return Math.ceil(perChannel(channel) / perDay) + (channel === "whatsapp" ? 1 : 0);
   }));
-  const personalizeCalls = Math.ceil(assignments.length / PERSONALIZE_BATCH);
+  const personalizeCalls = Math.ceil(kept.filter((lead) => leadPlans[lead.assignment.personId]?.approach === "standard").length / PERSONALIZE_BATCH);
   const perCall = cost.usd !== null && cost.calls ? cost.usd / cost.calls : null;
   const plan: OutreachPlan = {
-    assignments,
+    assignments: finalAssignments,
     sequences,
     personalizationKey: key,
     samples,
@@ -267,9 +378,13 @@ export async function prepareOutreach(input: PrepareInput): Promise<Proposal> {
       days: days || null,
     },
     autopilot: Boolean(input.autopilot),
-    instructions: input.instructions?.trim() || null,
+    instructions,
     basedOnRunId: base?.id ?? null,
     ownerRequest: input.ownerRequest?.trim() || null,
+    groups,
+    leadPlans,
+    personal,
+    skipped,
   };
   const name = `${audience.name}`.slice(0, 120);
   await db.insert(outreachRuns).values({
@@ -349,6 +464,50 @@ async function writeLines(runId: string, key: string, personIds: string[], start
     const line = lines.get(startIndex + index) ?? "";
     await db.update(people)
       .set({ raw: sql`coalesce(${people.raw}, '{}'::jsonb) || ${JSON.stringify({ [key]: line })}::jsonb`, updatedAt: new Date() })
+      .where(and(inOrg(people), eq(people.id, personId)));
+  }
+  return personIds.length;
+}
+
+/**
+ * A sorted plan's leads get their texts at Start: the group's messages with
+ * the lead's fields and a fresh opening line, or for a lead written to alone
+ * its own first message and the group's follow-ups. Stored on the person
+ * (leadTextKey), where every channel's sender reads them.
+ */
+async function writeLeadTexts(run: NonNullable<Awaited<ReturnType<typeof getRun>>>, personIds: string[], startIndex: number): Promise<number> {
+  const plan = run.plan;
+  const key = plan.personalizationKey;
+  const members = await eligibleAudienceMembers(run.audienceId);
+  const facts = new Map(members.map((member) => [member.personId, member.facts]));
+  const rows = await loadPeople(personIds);
+  const standard = personIds.filter((personId) => plan.leadPlans?.[personId]?.approach !== "personal");
+  const cost: WriterCost = { calls: 0, usd: null, runId: run.id };
+  const lines = await writePersonalLines({
+    context: await businessContext(await getBusinessProfile()),
+    leads: standard.map((personId, index) => ({ index: startIndex + index, facts: { ...facts.get(personId), name: rows.get(personId)?.person.fullName ?? "" } })),
+    cost,
+  });
+  for (const personId of personIds) {
+    const row = rows.get(personId);
+    const assignment = plan.assignments.find((item) => item.personId === personId);
+    if (!row || !assignment) continue;
+    const stepCount = plan.sequences[assignment.channel]?.length ?? 0;
+    const group = plan.groups?.find((item) => item.id === plan.leadPlans?.[personId]?.groupId) ?? plan.groups?.[0];
+    const groupSteps = (group?.sequences[assignment.channel] ?? []).slice(0, stepCount);
+    if (groupSteps.length < stepCount) throw new OutreachError(`The messages for ${row.person.fullName ?? "a lead"} are missing; prepare the plan again.`);
+    const index = standard.indexOf(personId);
+    const line = index >= 0 ? lines.get(startIndex + index) ?? "" : "";
+    const texts = groupSteps.map((step) => render(step, leadVariables(row, key, line)));
+    const own = plan.personal?.find((message) => message.personId === personId);
+    if (own && texts[0]) texts[0] = { subject: own.subject ?? texts[0].subject, body: own.body };
+    const patch: Record<string, string> = { [key]: line };
+    texts.forEach((text, step) => {
+      patch[leadTextKey(key, step + 1, "body")] = text.body;
+      patch[leadTextKey(key, step + 1, "subject")] = text.subject ?? "";
+    });
+    await db.update(people)
+      .set({ raw: sql`coalesce(${people.raw}, '{}'::jsonb) || ${JSON.stringify(patch)}::jsonb`, updatedAt: new Date() })
       .where(and(inOrg(people), eq(people.id, personId)));
   }
   return personIds.length;
@@ -438,7 +597,8 @@ export async function runOutreachStartStep(job: AssistantJob, heartbeat: () => P
     const start = Number(job.payload.personalizeIndex ?? 0);
     const batch = plan.assignments.slice(start, start + PERSONALIZE_BATCH).map((assignment) => assignment.personId);
     if (batch.length) {
-      await writeLines(run.id, plan.personalizationKey, batch, start);
+      if (plan.groups?.length) await writeLeadTexts(run, batch, start);
+      else await writeLines(run.id, plan.personalizationKey, batch, start);
       await heartbeat();
     }
     const next = start + batch.length;

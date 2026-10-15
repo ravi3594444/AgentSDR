@@ -392,8 +392,9 @@ async function failDraftGeneration(draftId: string, error: unknown): Promise<voi
 const FALLBACK_STEP_INSTRUCTIONS = [
   "No reply playbook is configured for this conversation, so the thread is the brief.",
   "Read the whole conversation and write the reply the situation actually calls for:",
-  "answer any question the person asked, acknowledge what they told us, and propose one",
-  "sensible next step. Use only facts present in the conversation or the supplied",
+  "answer any question the person asked first, acknowledge what they told us, and add one",
+  "sensible next step that the knowledge offers (otherwise ask one simple question about",
+  "their needs). Use only facts present in the conversation or the supplied",
   "knowledge — never invent product details, pricing, availability, names, dates or",
   "commitments. If the latest message is only an acknowledgement with no question, keep",
   "the reply short and low-pressure rather than manufacturing enthusiasm. If the person",

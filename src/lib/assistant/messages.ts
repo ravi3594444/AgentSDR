@@ -134,3 +134,72 @@ export function ensureSignOff(
     return { ...step, body: `${step.body.trimEnd()}\n\n${signOff}` };
   });
 }
+
+/** At most this many kinds of lead get their own messages in one plan; smaller kinds share "Other". */
+export const MAX_GROUPS = 4;
+/** At most this many leads get a first message written for them alone, so the owner can read every one. */
+export const MAX_PERSONAL = 10;
+
+export type LeadApproach = "standard" | "personal" | "skip";
+
+/**
+ * The kinds of lead in a plan from the label the sorting model gave each
+ * one: labels merged ignoring case and spacing, the largest kept, and past
+ * MAX_GROUPS the smallest merged into "Other". Members are indexes into
+ * `labels`, in order.
+ */
+export function settleGroups(labels: readonly string[]): { label: string; members: number[] }[] {
+  const byKey = new Map<string, { label: string; members: number[] }>();
+  labels.forEach((raw, index) => {
+    const label = raw.replace(/\s+/g, " ").trim().slice(0, 60) || "Other";
+    const key = label.toLowerCase();
+    const group = byKey.get(key) ?? { label, members: [] };
+    group.members.push(index);
+    byKey.set(key, group);
+  });
+  const groups = [...byKey.values()].sort((a, b) => b.members.length - a.members.length || a.members[0]! - b.members[0]!);
+  if (groups.length <= MAX_GROUPS) return groups;
+  const kept = groups.slice(0, MAX_GROUPS - 1);
+  const rest = groups.slice(MAX_GROUPS - 1);
+  const other = kept.find((group) => group.label.toLowerCase() === "other");
+  const merged = rest.flatMap((group) => group.members);
+  if (other) other.members.push(...merged);
+  else kept.push({ label: "Other", members: merged });
+  for (const group of kept) group.members.sort((a, b) => a - b);
+  return kept;
+}
+
+/** The lead's own field holding the text of step `step` (1-based) of its messages: body or subject. */
+export function leadTextKey(personalization: string, step: number, part: "body" | "subject"): string {
+  return `${personalization}_${part === "body" ? "b" : "s"}${step}`;
+}
+
+/**
+ * The campaign's steps when every lead gets its own text (its group's
+ * messages, or ones written for it alone): each step is that lead's field.
+ * As many steps as the shortest group has; waits from the first group.
+ */
+export function perLeadSteps(personalization: string, channel: AudienceChannel, groupSequences: readonly (readonly PlannedStep[])[]): PlannedStep[] {
+  const sequences = groupSequences.filter((steps) => steps.length);
+  if (!sequences.length) return [];
+  const count = Math.min(...sequences.map((steps) => steps.length));
+  return Array.from({ length: count }, (_, index) => {
+    const withSubject = CHANNEL_RULES[channel].subject && (index === 0 || sequences.some((steps) => steps[index]?.subject?.trim()));
+    return {
+      subject: withSubject ? `{{${leadTextKey(personalization, index + 1, "subject")}}}` : null,
+      body: `{{${leadTextKey(personalization, index + 1, "body")}}}`,
+      waitDays: sequences[0]![index]!.waitDays,
+    };
+  });
+}
+
+/** Why a first message written for one lead cannot be sent, or null. */
+export function personalMessageProblem(channel: AudienceChannel, message: { subject: string | null; body: string }): string | null {
+  const body = message.body.trim();
+  if (!body) return "the message is empty";
+  const limit = channel === "linkedin" ? 280 : CHANNEL_RULES[channel].maxBody;
+  if (body.length > limit) return `keep it under ${limit} characters (it has ${body.length})`;
+  if (CHANNEL_RULES[channel].subject && !message.subject?.trim()) return "an email needs a subject";
+  if (!CHANNEL_RULES[channel].subject && message.subject?.trim()) return "only email has a subject";
+  return templateProblem(`${message.subject ?? ""}\n${body}`, []);
+}

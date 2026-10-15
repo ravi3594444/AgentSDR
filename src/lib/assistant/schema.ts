@@ -216,7 +216,7 @@ export type OutreachPlan = {
   /** The per-lead line's merge key, e.g. "p_1a2b3c4d" (stored on people.raw). */
   personalizationKey: string;
   /** A few leads' messages as they will be sent, for the owner to read. */
-  samples: { personId: string; name: string; channel: AudienceChannel; messages: { subject: string | null; body: string }[] }[];
+  samples: { personId: string; name: string; channel: AudienceChannel; groupId?: string; approach?: "standard" | "personal"; messages: { subject: string | null; body: string }[] }[];
   limits: { maxLeads: number; emailPerMailboxPerDay: number | null; whatsappNewChatsPerDay: number | null };
   /** Leads left out and why, counted by reason. */
   excluded: { reason: string; count: number }[];
@@ -228,6 +228,24 @@ export type OutreachPlan = {
   basedOnRunId?: string | null;
   /** The owner's words that asked for this outreach (checked against the chat). */
   ownerRequest?: string | null;
+  /**
+   * Plans written since leads are sorted: the kinds of lead, each with its
+   * own messages; how each lead is approached; the first messages written
+   * for single leads; and the leads left out, with the reason. Each lead's
+   * texts are stored on it at Start (messages.ts leadTextKey) and the
+   * campaigns' steps point at them; older plans use `sequences` directly.
+   */
+  groups?: PlanGroup[];
+  leadPlans?: Record<string, { groupId: string; approach: "standard" | "personal"; reason: string }>;
+  personal?: { personId: string; name: string; channel: AudienceChannel; groupId: string; subject: string | null; body: string; reason: string }[];
+  skipped?: { personId: string; name: string; reason: string }[];
+};
+
+export type PlanGroup = {
+  id: string;
+  label: string;
+  count: number;
+  sequences: Partial<Record<AudienceChannel, PlannedStep[]>>;
 };
 
 export const outreachRuns = pgTable(
@@ -388,7 +406,7 @@ export const autopilotTakeovers = pgTable(
   ],
 );
 
-export type UsageKind = "assistant" | "outreach_writing" | "personal_lines" | "reply_check" | "linkedin_search";
+export type UsageKind = "assistant" | "outreach_writing" | "personal_lines" | "lead_sorting" | "reply_check" | "linkedin_search";
 
 /**
  * Recorded AI spending of the assistant's own model calls: the provider's

@@ -36,8 +36,8 @@ export async function runReplies(runIds: readonly string[], perRun = 5): Promise
     join people p on p.id = l.person_id and p.organization_id = l.organization_id
     join crm_conversations c on c.person_id = l.person_id and c.organization_id = l.organization_id
     join crm_conversation_messages m on m.conversation_id = c.id and m.direction = 'inbound' and m.sent_at >= coalesce(r.approved_at, r.created_at)
-    left join lateral (select id, status from crm_drafts where reply_for_message_id = m.id order by created_at desc limit 1) d on true
-    left join lateral (select status, reason from autopilot_replies where draft_id = d.id and organization_id = l.organization_id order by created_at desc limit 1) a on true
+    left join lateral (select id, status, revision from crm_drafts where reply_for_message_id = m.id order by created_at desc limit 1) d on true
+    left join lateral (select status, reason from autopilot_replies where draft_id = d.id and revision = d.revision and organization_id = l.organization_id order by created_at desc limit 1) a on true
     left join lateral (select status, run_after from crm_jobs where kind = 'auto_send' and entity_id = d.id and organization_id = l.organization_id order by created_at desc limit 1) j on true
     where l.organization_id = ${organizationId}
       and l.run_id in (${sql.join(runIds.map((id) => sql`${id}::uuid`), sql`, `)})

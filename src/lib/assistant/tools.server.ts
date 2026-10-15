@@ -378,10 +378,11 @@ export const TOOLS: Record<string, Tool> = {
   },
 
   prepare_outreach: {
-    description: "Write the outreach for a lead list and plan the run: which channel each lead gets, the messages (with real samples), daily limits, how long it takes and the AI cost. Creates nothing and sends nothing; the owner reviews the plan, chooses Automatic or Review replies and presses Start. Only when the owner asked for outreach (or said yes to your offer of it). To contact more people with an earlier run's messages, pass basedOnRunId (a new plan the owner approves again).",
-    arguments: "audienceId; channels (optional array of email|whatsapp|linkedin in order of preference); maxLeads (optional, default up to 100); autopilot (optional true/false: propose Automatic replies); instructions (optional text, e.g. tone or angle for this run); basedOnRunId (optional: reuse that run's messages)",
+    description: "Write the outreach for a lead list and plan the run. It first sorts the leads by itself: what kind of lead each is (each kind gets its own messages), which leads deserve a first message written for them alone, and which clearly do not fit the owner's offer (left out with the reason). Then it plans which channel each lead gets, the messages (with real samples), daily limits, how long it takes and the AI cost. Creates nothing and sends nothing; the owner reviews the plan, chooses Automatic or Review replies and presses Start. Only when the owner asked for outreach (or said yes to your offer of it). To contact more people with an earlier run's messages, pass basedOnRunId (a new plan the owner approves again).",
+    arguments: "audienceId; channels (optional array of email|whatsapp|linkedin in order of preference); maxLeads (optional, default up to 100); autopilot (optional true/false: propose Automatic replies); instructions (optional text, e.g. tone or angle for this run); basedOnRunId (optional: reuse that run's messages); includeSkipped (optional true: also contact the leads the sorting leaves out, when the owner asks)",
     run: async (args, context) => {
       const request = context.authorizedBy === "search" ? context.ownerText : requireOutreachRequest(context);
+      if (args.includeSkipped !== undefined && typeof args.includeSkipped !== "boolean") throw new ToolArgumentError("includeSkipped must be true or false");
       const audienceId = uuid(args, "audienceId")!;
       const basedOnRunId = uuid(args, "basedOnRunId", false) ?? null;
       const maxLeads = args.maxLeads === undefined ? undefined : Number(args.maxLeads);
@@ -396,13 +397,18 @@ export const TOOLS: Record<string, Tool> = {
           instructions: text(args, "instructions") ?? null,
           basedOnRunId,
           ownerRequest: request || null,
+          includeSkipped: args.includeSkipped === true,
           threadId: context.threadId,
           userId: context.userId,
         });
         const perChannel = proposal.plan.assignments.reduce<Record<string, number>>((acc, a) => ({ ...acc, [a.channel]: (acc[a.channel] ?? 0) + 1 }), {});
+        const plan = proposal.plan;
+        const sorted = plan.groups?.length
+          ? ` Sorted into ${plan.groups.map((group) => `“${group.label}” (${group.count})`).join(", ")}; ${plan.personal?.length ?? 0} written to individually; ${plan.skipped?.length ?? 0} left out${plan.skipped?.length ? ` (${[...new Set(plan.skipped.map((item) => item.reason))].slice(0, 3).join("; ")})` : ""}.`
+          : "";
         return {
           ok: true,
-          summary: `Plan ${proposal.runId} ready for “${proposal.name}”: ${proposal.plan.assignments.length} leads (${Object.entries(perChannel).map(([c, n]) => `${c} ${n}`).join(", ")}), about ${proposal.plan.estimate.days ?? "?"} days, AI cost about ${proposal.plan.estimate.aiCostUsd === null ? "unknown" : `$${proposal.plan.estimate.aiCostUsd}`}. It is shown to the owner with sample messages and a Start button; nothing is sent until they press Start.`,
+          summary: `Plan ${proposal.runId} ready for “${proposal.name}”: ${plan.assignments.length} leads (${Object.entries(perChannel).map(([c, n]) => `${c} ${n}`).join(", ")}), about ${plan.estimate.days ?? "?"} days, AI cost about ${plan.estimate.aiCostUsd === null ? "unknown" : `$${plan.estimate.aiCostUsd}`}.${sorted} It is shown to the owner with sample messages and a Start button; nothing is sent until they press Start.`,
           data: proposal as unknown as Record<string, unknown>,
         };
       } catch (error) {

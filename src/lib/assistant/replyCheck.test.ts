@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { judgeReply, normalizeForMatch, quoteSupported, unbackedLinks, unbackedNumbers, unbackedTimes, type ModelCheck } from "./replyCheck";
+import { judgeReply, normalizeForMatch, quoteSupported, unbackedLinks, unbackedNumbers, unbackedRefusal, unbackedTimes, selfFixableTimes, type ModelCheck } from "./replyCheck";
 
 const knowledge = [
   "Business: Bright Path Dental Supplies",
@@ -82,5 +82,31 @@ describe("judgeReply", () => {
 
   test("a thank-you with no claims is sent", () => {
     expect(judgeReply({ ...base, intent: "not_interested" }, { reply: "Thanks for letting me know, Dr Rao. All the best. — Ravi", knowledge, leadName: "Dr Rao" }).action).toBe("send");
+  });
+});
+
+describe("saying what is not offered", () => {
+  test("a refusal needs the owner's information to state the limit", () => {
+    expect(unbackedRefusal("No, we currently only provide chair and autoclave servicing.", ["Same-week servicing for dental chairs and autoclaves"])).toBe(true);
+    expect(unbackedRefusal("Hum sirf Pune mein service karte hain.", ["Service area: Pune and Pimpri-Chinchwad."])).toBe(true);
+    expect(unbackedRefusal("We only serve Pune and PCMC.", ["We serve only Pune and Pimpri-Chinchwad, not other cities."])).toBe(false);
+    expect(unbackedRefusal("Yes, the plan is ₹2,499 per chair.", [])).toBe(false);
+  });
+
+  test("an X-ray question answered 'no' from a list of services goes to the owner", () => {
+    const verdict = judgeReply(
+      { ...base, questions: [{ question: "Do you service X-ray machines?", answered: true, evidence: "Same-week servicing for dental chairs and autoclaves" }] },
+      { reply: "No, we currently only provide chair and autoclave servicing. — Ravi", knowledge, leadName: "Dr Rao" },
+    );
+    expect(verdict).toMatchObject({ action: "hold", kind: "missing_info" });
+  });
+});
+
+describe("selfFixableTimes", () => {
+  test("only a reply whose sole fault is a proposed time is rewritten by itself", () => {
+    const check = (problems: string[]) => ({ intent: "question", questions: [], claims: [], commitments: [], problems });
+    expect(selfFixableTimes(check(["time not in your information: this week"]))).toEqual(["this week"]);
+    expect(selfFixableTimes(check(["time not in your information: this week", "amount not in your information: ₹1,999"]))).toBeNull();
+    expect(selfFixableTimes(check([]))).toBeNull();
   });
 });

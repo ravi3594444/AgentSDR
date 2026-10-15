@@ -4,7 +4,7 @@ import { db } from "@/lib/db";
 import { completeStructured } from "@/lib/ai/server/structuredCompletion";
 import { retrieveKnowledge } from "@/lib/crm/knowledge";
 import { recordUsage } from "./usage.server";
-import { CHANNEL_RULES, ensureSignOff, personalLineProblem, sequenceProblem } from "./messages";
+import { CHANNEL_RULES, ensureSignOff, personalLineProblem, personalMessageProblem, sequenceProblem, type LeadApproach } from "./messages";
 import { profileKnowledgeText } from "./profile";
 import type { AudienceChannel, BusinessProfile, PlannedStep } from "./schema";
 
@@ -21,7 +21,7 @@ const TIMEOUT_MS = 90_000;
 /** The AI spend of one plan or start, accumulated; each call is also recorded in assistant_usage. */
 export type WriterCost = { calls: number; usd: number | null; runId?: string | null };
 
-async function addCost(cost: WriterCost, kind: "outreach_writing" | "personal_lines", result: { model?: string; response?: unknown; usage?: { inputTokens?: number; outputTokens?: number } }) {
+async function addCost(cost: WriterCost, kind: "outreach_writing" | "personal_lines" | "lead_sorting", result: { model?: string; response?: unknown; usage?: { inputTokens?: number; outputTokens?: number } }) {
   cost.calls += 1;
   const usd = await recordUsage(kind, result, cost.runId ?? null);
   if (usd !== null) cost.usd = (cost.usd ?? 0) + usd;
@@ -201,4 +201,152 @@ export async function writePersonalLines(input: {
   });
   await addCost(input.cost, "personal_lines", result);
   return lines;
+}
+
+const SORT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["leads"],
+  properties: {
+    leads: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["index", "group", "approach", "reason"],
+        properties: {
+          index: { type: "integer" },
+          group: { type: "string", description: "2 to 4 words naming the kind of lead, the same words for leads of the same kind." },
+          approach: { type: "string", enum: ["standard", "personal", "skip"] },
+          reason: { type: "string", description: "One short sentence for the owner, from the lead's facts only." },
+        },
+      },
+    },
+  },
+};
+
+/**
+ * Sorts leads before outreach: what kind of lead each is (its group, which
+ * gets its own messages), and how to approach it: the group's message
+ * ("standard"), a first message written for it alone ("personal", when its
+ * facts make that clearly better), or not at all ("skip", a clear misfit for
+ * the owner's offer, with the reason). Unsure means standard.
+ */
+export async function sortLeads(input: {
+  context: string;
+  leads: { index: number; facts: Record<string, string> }[];
+  knownGroups: readonly string[];
+  cost: WriterCost;
+}): Promise<Map<number, { group: string; approach: LeadApproach; reason: string }>> {
+  const sorted = new Map<number, { group: string; approach: LeadApproach; reason: string }>();
+  if (!input.leads.length) return sorted;
+  const wanted = new Set(input.leads.map((lead) => lead.index));
+  const result = await completeStructured({
+    timeoutMs: TIMEOUT_MS,
+    maxOutputTokens: 3_000,
+    schemaName: "lead_sorting",
+    schemaDescription: "Submit the group, approach and reason for every lead.",
+    jsonSchema: SORT_SCHEMA,
+    systemPrompt: [
+      "You sort a business owner's leads before outreach, so each gets the right message. You do not write the messages.",
+      "group: name the kind of lead in 2 to 4 words ('Real estate agents', 'Cleaning companies', 'Dental clinics'), the same words for leads of the same kind." + (input.knownGroups.length ? ` Reuse these names when they fit: ${input.knownGroups.map((group) => `'${group}'`).join(", ")}.` : ""),
+      "approach 'standard': the group's message fits this lead. This is the default.",
+      "approach 'personal': rare. Every standard message already opens with a line from the lead's address, rating and category, so choose 'personal' only when the facts show something particular to this lead that the group's message would miss (a specialty, a stated need, a detail from its website or title) and it fits the owner's offer well.",
+      "approach 'skip': clearly not a fit for the owner's offer (a different kind of business, a competitor of the owner, closed, or obviously out of reach). Never skip only because little is known.",
+      "reason: one short sentence the owner reads, based only on the facts given. Never invent facts about a lead.",
+    ].join("\n"),
+    userPrompt: [
+      `THE OWNER'S BUSINESS:\n${input.context.slice(0, 2_500)}`,
+      "LEADS:",
+      ...input.leads.map((lead) => `${lead.index}: ${JSON.stringify(lead.facts)}`),
+    ].join("\n"),
+    accept: (text) => {
+      const body = JSON.parse(text) as { leads: { index: number; group: string; approach: string; reason: string }[] };
+      sorted.clear();
+      for (const item of body.leads) {
+        if (!wanted.has(item.index)) continue;
+        const approach = (["standard", "personal", "skip"] as const).includes(item.approach as LeadApproach) ? item.approach as LeadApproach : "standard";
+        sorted.set(item.index, { group: item.group.trim() || "Other", approach, reason: item.reason.trim().slice(0, 240) });
+      }
+      const missing = [...wanted].filter((index) => !sorted.has(index));
+      if (missing.length) throw new Error(`Sort every lead; missing: ${missing.slice(0, 10).join(", ")}.`);
+    },
+  });
+  await addCost(input.cost, "lead_sorting", result);
+  return sorted;
+}
+
+const PERSONAL_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["messages"],
+  properties: {
+    messages: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["index", "subject", "body"],
+        properties: {
+          index: { type: "integer" },
+          subject: { type: "string", description: "Email only; an empty string for WhatsApp and LinkedIn." },
+          body: { type: "string" },
+        },
+      },
+    },
+  },
+};
+
+/**
+ * First messages written for one lead each, from that lead's facts and the
+ * owner's information, in the voice of the group's approved message. A
+ * message that fails the checks is left out: that lead gets the group's
+ * message instead.
+ */
+export async function writePersonalMessages(input: {
+  context: string;
+  profile: BusinessProfile;
+  signatureAppended: boolean;
+  instructions: string | null;
+  leads: { index: number; channel: AudienceChannel; facts: Record<string, string>; groupMessage: string }[];
+  cost: WriterCost;
+}): Promise<Map<number, { subject: string | null; body: string }>> {
+  const out = new Map<number, { subject: string | null; body: string }>();
+  if (!input.leads.length) return out;
+  const result = await completeStructured({
+    timeoutMs: TIMEOUT_MS,
+    maxOutputTokens: 3_000,
+    schemaName: "personal_messages",
+    schemaDescription: "Submit one first message per lead.",
+    jsonSchema: PERSONAL_SCHEMA,
+    systemPrompt: [
+      "You write the FIRST cold outreach message to one lead at a time, as the business owner, for leads whose details make a tailored message worthwhile.",
+      "Use only the BUSINESS INFORMATION and that lead's FACTS. Never invent facts, results, clients, prices, offers, links, news or compliments the facts do not support.",
+      "Show in the first sentence or two that it was written for them (their kind of business, what they do, their area), then the offer in one or two sentences, then one low-effort question. No hype, no exclamation marks, no merge fields, brackets or placeholders.",
+      "Keep the voice and offer of the GROUP MESSAGE you are given; only make it fit this lead better.",
+      input.signatureAppended
+        ? "Email: do not add a sign-off name (the mailbox adds a signature); end with a short closing."
+        : `Sign off with ${input.profile.senderName ?? "the sender's name"}${input.profile.businessName ? ` from ${input.profile.businessName}` : ""}.`,
+      "Never claim anything was sent, booked, attached or agreed.",
+      ...Object.entries(CHANNEL_RULES).filter(([channel]) => input.leads.some((lead) => lead.channel === channel)).map(([, rules]) => `- ${rules.describe} (this is the first message only)`),
+      input.instructions ? `The owner's instructions for this outreach: ${input.instructions}` : null,
+    ].filter(Boolean).join("\n"),
+    userPrompt: [
+      `BUSINESS INFORMATION:\n${input.context || "(none given)"}`,
+      "LEADS:",
+      ...input.leads.map((lead) => `${lead.index} (${lead.channel}): FACTS ${JSON.stringify(lead.facts)}\nGROUP MESSAGE: ${lead.groupMessage.slice(0, 900)}`),
+    ].join("\n\n"),
+    accept: (text) => {
+      const body = JSON.parse(text) as { messages: { index: number; subject: string; body: string }[] };
+      out.clear();
+      for (const item of body.messages) {
+        const lead = input.leads.find((candidate) => candidate.index === item.index);
+        if (!lead) continue;
+        const [signed] = ensureSignOff(lead.channel, [{ subject: CHANNEL_RULES[lead.channel].subject ? item.subject.trim() || null : null, body: item.body.trim(), waitDays: 0 }], input.profile, input.signatureAppended);
+        if (!personalMessageProblem(lead.channel, { subject: signed!.subject, body: signed!.body })) out.set(item.index, { subject: signed!.subject, body: signed!.body });
+      }
+    },
+  });
+  await addCost(input.cost, "outreach_writing", result);
+  return out;
 }

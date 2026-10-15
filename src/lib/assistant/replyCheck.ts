@@ -82,6 +82,22 @@ export function unbackedTimes(reply: string, knowledge: string): string[] {
   return [...new Set(found)].filter((value) => !known.includes(normalizeForMatch(value)));
 }
 
+/** Words a reply uses to say what the business does NOT do, in English and Hinglish ("No, we only…", "sirf Pune", "service nahi hai"). */
+const SAYS_NOT_OFFERED = /\b(?:no|nope),? (?:we|i)\b|\bwe (?:do not|don't|dont|cannot|can't|currently do not|currently don't)\b|\b(?:not|don't|do not) (?:offer|provide|service|cover|serve|do|work)\b|\b(?:only|currently only|just) (?:offer|provide|service|cover|serve|do|work)\b|\bunfortunately\b|\bsirf\b|\bnahi[n]?\b/i;
+/** Words that state a limit in the owner's own information ("only in Pune", "we do not service X-ray units"). */
+const STATES_A_LIMIT = /\b(?:only|not|no|except|exclusively|don't|do not|outside|limited to|sirf|nahi|nahin)\b/i;
+
+/**
+ * Whether the reply tells the lead something is NOT offered without the
+ * owner's information saying so: a list of what the business does is not
+ * a list of what it does not do. Backed only when a quote the check found in
+ * the information itself states a limit.
+ */
+export function unbackedRefusal(reply: string, evidence: readonly string[]): boolean {
+  if (!SAYS_NOT_OFFERED.test(reply)) return false;
+  return !evidence.some((quote) => STATES_A_LIMIT.test(quote));
+}
+
 /** Links and email addresses the reply gives that the information does not contain (no invented links or attachments). */
 export function unbackedLinks(reply: string, knowledge: string): string[] {
   const known = normalizeForMatch(knowledge);
@@ -121,6 +137,20 @@ export function judgeReply(model: ModelCheck, input: { reply: string; knowledge:
   if (intent === "out_of_office") {
     problems.push("automatic reply");
     return { action: "hold", check, kind: "uncertain", reason: `${who}'s message looks like an automatic reply (out of office), not an answer.`, decision: "Usually nothing to do; follow-ups resume only if you restart them." };
+  }
+
+  // "No, we only do chairs" from a list of services is a guess about what is not offered: the owner decides.
+  const supportedEvidence = [...questions, ...claims].filter((item) => item.supported).map((item) => item.evidence);
+  if (questions.length && unbackedRefusal(input.reply, supportedEvidence)) {
+    const first = questions[0]!;
+    problems.push("says something is not offered, which your information does not say");
+    return {
+      action: "hold",
+      check,
+      kind: "missing_info",
+      reason: `${who} asked ${quote(first.question)}; the reply would say you do not offer it, but your saved information does not say that.`,
+      decision: `Do you offer it? ${quote(first.question, 100)} Your answer is saved for later replies.`,
+    };
   }
 
   const unanswered = questions.filter((item) => !item.answered || !item.supported);
@@ -196,4 +226,15 @@ export function judgeReply(model: ModelCheck, input: { reply: string; knowledge:
     return { action: "hold", check, kind: "missing_info", reason: `The reply to ${who} needs information you have not given yet.`, decision: model.missing.trim() };
   }
   return { action: "send", check };
+}
+
+/**
+ * The times a held reply proposed, when that is all that is wrong with it:
+ * such a reply is rewritten once without them instead of waiting for the
+ * owner. Null when anything else is wrong.
+ */
+export function selfFixableTimes(check: ReplyCheck): string[] | null {
+  const prefix = "time not in your information: ";
+  if (!check.problems.length || !check.problems.every((problem) => problem.startsWith(prefix))) return null;
+  return check.problems.map((problem) => problem.slice(prefix.length));
 }

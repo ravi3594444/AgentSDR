@@ -9,14 +9,16 @@ the plan is [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
   The latest work is routine automation, controls and results (Session 5,
   below), on top of the owner's assistant (Session 4).
 - **Readiness: implemented, pending live verification. Not owner-usable
-  yet.** The whole messaging workflow is built and checked locally, but no
-  real message has been sent or received on any channel. The release is
+  yet.** The whole messaging workflow is built and checked locally. One
+  real WhatsApp message has reached the owner's own number from the VM;
+  no live reply has been answered yet. The release is
   owner-usable only once the live checks in OWNER_SETUP §6 pass; they need
   the credentials, server and test recipients listed under "Blockers".
   Verified against real services so far: Google Maps lead discovery (the
   self-hosted scraper, real websites) and AI calls.
-- **Nothing was sent to anyone.** Every send in this session went to a
+- **Nothing was sent from this sandbox.** Every send here went to a
   recording stand-in, or was refused because no provider was connected.
+  The one real message was the owner's own test, sent from the VM.
 
 ## Session 5: routine automation, reliable controls and results
 
@@ -142,6 +144,49 @@ message read "Hi  team" / "managing  in  is" (blank merge fields).
 Not yet known: why the owner's reply got no answer on the VM (still
 waiting the 10 minutes, held for a decision, or never delivered by
 Unipile). The diagnostic in the chat reply reads the VM's records.
+
+### Follow-up: the assistant sorts the leads itself; better replies (2026-10-15)
+
+Asked: one message for every lead is both good and bad; let the AI decide
+per lead whether the standard message fits or a personal one, do most of
+it on its own, and reply better in chats. Contacts with no information
+must still get the normal message.
+
+- **Sorting** (`writer.server.ts sortLeads`, one call per 25 leads): each
+  lead gets a kind ("Dental clinics"), an approach (standard, personal,
+  or left out) and a reason, from its known facts only. At most 4 kinds
+  (`settleGroups`, the rest share "Other") and 10 personal leads per plan.
+  Leads with no facts beyond a name skip sorting and get the standard
+  message; nobody is left out for lack of information.
+- **Writing:** each kind gets its own sequence per channel, with only the
+  merge fields all its leads have; personal leads get a first message
+  written for them alone (checked like every template; one that fails
+  falls back to its kind's), then their kind's follow-ups. Left-out leads
+  are listed with reasons; `prepare_outreach includeSkipped` contacts them
+  on request.
+- **Sending:** the campaign steps are `{{key_bN}}` / `{{key_sN}}`, and each
+  lead's own texts are written to `people.raw` at Start
+  (`writeLeadTexts`), so one campaign per channel serves every kind and
+  every personal message. No schema change: the plan is jsonb.
+- **Plan card:** how the leads were sorted, the left-out list, a sample per
+  kind and channel, every personal message; after Start a Leads list with
+  each lead's status (`runLeads.ts`: sequence status per channel, CRM
+  category) next to Replies.
+- **Replies:** the drafter answers first, in the lead's language
+  (Hindi/Hinglish included), offers only next steps the knowledge offers
+  and never proposes day or time windows. `unbackedRefusal` holds a draft
+  that says "no"/"only"/"sirf"/"nahi" without a limit stated in the
+  evidence (the X-ray case had been sent as "No, we only…"). A reply held
+  only for a proposed time is rewritten once without it and re-checked
+  (`autopilotRun.server.ts`).
+
+Checks: `npx tsc --noEmit`, `npx eslint .` (0 errors, the 6 old warnings);
+`npm test` 1017/1017 in 122 files; `assistant.ts` 62/62 without AI and
+89/89 with real AI on three runs (sorting into kinds, every lead
+accounted for, per-lead lines, a Hinglish question answered in Hinglish);
+`campaign-engines.ts` and `unipile-email.ts` pass; build; browser on the
+production server (sends paused): the sorting summary, the left-out list,
+Leads and Replies on the plan card, no page errors.
 
 ### Live services vs stand-ins
 

@@ -240,14 +240,49 @@ sets it up.
 sells, to whom, where, and who signs the messages; attach brochures or
 price lists; then either ask it to find leads and contact them, or attach a
 contact list and ask it to run outreach. It answers with a **plan card**:
-the leads, the channel each gets, three sample messages per channel with
-real lead details filled in, the daily limits, how long it takes and the
+the leads, the channel each gets, how it sorted them (below), a sample per
+kind of lead and channel with real lead details filled in, every message
+written for one lead, the daily limits, how long it takes and the
 estimated AI cost. **Start outreach** on that card is the only thing that
 sends, and the server refuses a start that did not come from that button.
 The assistant creates and manages the campaigns and sequences; you do not
 need the campaign pages for ordinary outreach. It prepares a plan only when
 you ask for outreach in your own words: a question, or saving information
 about the business, never creates one.
+
+**How the assistant sorts the leads.** Before writing, a model reads what
+is known about each lead (category, title, company, website, rating,
+review count, a list's own columns) and decides three things on its own:
+
+- **What kind of lead it is** ("Dental clinics", "Hospitals"). Each kind,
+  at most 4 per plan (smaller ones share "Other"), gets its own first
+  message and follow-ups, written for that kind.
+- **Standard or individual.** Most leads get their kind's message with
+  one opening line about them. A few, where the facts show something
+  specific worth mentioning, get a first message written for them alone
+  (at most 10 per plan, so you can read every one on the card); their
+  follow-ups are their kind's.
+- **Left out.** A lead that clearly does not fit your offer (a hospital
+  chain when you sell to single-doctor clinics) is not contacted. The card
+  lists each one with the reason; say "include the left-out leads" for a
+  new plan that contacts them too.
+
+Contacts with nothing known about them but a name and a number or address
+(a number typed in the chat, a bare list) skip the sorting: they all get
+the standard message, with merge fields limited to what every one of them
+has. Nobody is left out for lack of information. Each lead's own texts are
+stored on that lead at Start, so one campaign per channel still sends
+every kind and every individual message.
+
+**Each lead's progress.** After Start the plan card lists the run's leads
+with where each is: waiting to send, first message or follow-up sent,
+LinkedIn invitation sent or accepted, all messages sent with no reply,
+replied (with the CRM category, such as Interested), unsubscribed or
+asked not to be contacted, bounced or could not send (with the reason).
+Below it, **Replies** shows every reply from the run's leads and what
+happened to it: answered automatically, answered, an answer written and
+the time it goes out, waiting for you (with the reason), or failed (with
+the reason).
 
 **Reply mode, chosen at Start.** The plan card shows two choices and what
 each does:
@@ -291,6 +326,16 @@ passages found word for word in that information; separately, every price,
 amount, percentage, time, day, link and email address in the reply must
 appear in it. An "interested" classification is not enough on its own.
 Each send happens at most once per draft revision.
+
+**How replies are written.** The draft answers the lead's question in its
+first sentence, in the lead's language (Hindi and Hinglish are answered in
+kind), from your saved information only. It offers only next steps your
+information offers, never proposes days or time windows, and never says
+"no" or "only" about something your information simply does not mention:
+a draft that does is held as missing information, because a list of
+services is not proof you do not offer something else. A reply held only
+because it proposed a time is rewritten once without it and checked again
+before it comes to you.
 
 **When it needs you**, it posts a decision card in the chat (also listed
 on Results) with the reason and the decision needed, for example: "Dr Rao
@@ -393,8 +438,10 @@ any connected channel are reported with the reason (for example "reachable
 only by WhatsApp, which is not used in this run"). Lists work without any
 lead search service.
 
-**AI cost.** Writing a plan is two model calls; each lead's opening line
-costs one call per ten leads; checking a reply before it is sent
+**AI cost.** Sorting is one model call per 25 leads (none when there is
+nothing to sort by); writing is one call per kind of lead, plus one per 5
+leads written to individually; each standard lead's opening line costs one
+call per ten leads, at Start; checking a reply before it is sent
 automatically is one more call. The plan card shows the estimate before you
 press Start; Results shows what was recorded.
 

@@ -65,7 +65,9 @@ type Job = {
 
 type RunReply = { id: string; who: string; channel: string; receivedAt: string; preview: string; state: { tone: "done" | "waiting" | "you" | "failed"; text: string; at?: string } };
 
-type Run = { id: string; status: string; autopilot: boolean; error: string | null; campaigns: Record<string, string>; replies?: RunReply[] };
+type RunLead = { personId: string; who: string; channel: string; progress: { tone: "waiting" | "sent" | "replied" | "good" | "stopped" | "failed"; text: string } };
+
+type Run = { id: string; status: string; autopilot: boolean; error: string | null; campaigns: Record<string, string>; replies?: RunReply[]; leads?: RunLead[] };
 
 type DecisionState = { status: "open" | "answered" | "resolved"; answer: string | null };
 
@@ -238,7 +240,10 @@ type ProposalData = {
   audience: { name: string; eligible: number; total: number };
   plan: {
     assignments: { channel: string }[];
-    samples: { name: string; channel: string; messages: { subject: string | null; body: string }[] }[];
+    samples: { name: string; channel: string; groupId?: string; approach?: "standard" | "personal"; messages: { subject: string | null; body: string }[] }[];
+    groups?: { id: string; label: string; count: number }[];
+    personal?: { personId: string; name: string }[];
+    skipped?: { personId: string; name: string; reason: string }[];
     limits: { maxLeads: number; emailPerMailboxPerDay: number | null; whatsappNewChatsPerDay: number | null };
     excluded: { reason: string; count: number }[];
     estimate: { aiCalls: number; aiCostUsd: number | null; days: number | null };
@@ -308,10 +313,14 @@ function ProposalCard({ message, run, canManageAutopilot, onChanged }: { message
       {data.plan.excluded.length > 0 && (
         <p className="mt-1 text-paragraph-xs text-text-sub-600">Left out: {data.plan.excluded.slice(0, 3).map((e) => `${e.count} × ${e.reason}`).join("; ")}.</p>
       )}
+      {data.plan.groups && data.plan.groups.length > 0 && <SortingSummary plan={data.plan} />}
       <div className="mt-3 space-y-2">
         {data.plan.samples.map((sample, index) => (
           <details key={`${sample.name}-${index}`} open={index === 0} className="rounded-lg bg-bg-weak-50 px-3 py-2">
-            <summary className="cursor-pointer text-label-sm text-text-strong-950">Sample · {sample.name} · {CHANNEL_LABEL[sample.channel] ?? sample.channel}</summary>
+            <summary className="cursor-pointer text-label-sm text-text-strong-950">
+              {sample.approach === "personal" ? "Written for" : "Sample ·"} {sample.name} · {CHANNEL_LABEL[sample.channel] ?? sample.channel}
+              {data.plan.groups && data.plan.groups.length > 1 && sample.groupId ? <span className="font-normal text-text-sub-600"> · {data.plan.groups.find((group) => group.id === sample.groupId)?.label}</span> : null}
+            </summary>
             <ol className="mt-2 space-y-2">
               {sample.messages.map((msg, step) => (
                 <li key={step} className="rounded-md bg-bg-white-0 p-2.5 ring-1 ring-inset ring-stroke-soft-200">
@@ -362,9 +371,60 @@ function ProposalCard({ message, run, canManageAutopilot, onChanged }: { message
         </div>
       )}
       {run?.replies && run.replies.length > 0 && <RepliesList replies={run.replies} />}
+      {run?.leads && run.leads.length > 0 && <LeadsList leads={run.leads} />}
       {run?.error && <p className="mt-2 text-paragraph-xs text-error-base">{run.error}</p>}
       {error && <p role="alert" className="mt-2 text-paragraph-xs text-error-base">{error}</p>}
     </div>
+  );
+}
+
+/** How the assistant sorted the plan's leads: its kinds (each with its own messages), who is written to alone, and who is left out and why. */
+function SortingSummary({ plan }: { plan: ProposalData["plan"] }) {
+  const groups = plan.groups ?? [];
+  const skipped = plan.skipped ?? [];
+  const personal = plan.personal?.length ?? 0;
+  return (
+    <div className="mt-3 rounded-lg bg-bg-weak-50 px-3 py-2.5 text-paragraph-xs text-text-sub-600">
+      <p className="text-label-xs text-text-strong-950">How the assistant sorted these leads</p>
+      <ul className="mt-1 space-y-0.5">
+        {groups.map((group) => (
+          <li key={group.id}><span className="text-text-strong-950">{group.label}</span> · {group.count} lead{group.count === 1 ? "" : "s"}{groups.length > 1 ? " · their own messages" : ""}</li>
+        ))}
+        {personal > 0 && <li>{personal} with a first message written for them alone (see “Written for” below)</li>}
+      </ul>
+      {skipped.length > 0 && (
+        <details className="mt-1">
+          <summary className="cursor-pointer text-text-strong-950">{skipped.length} left out as not a fit</summary>
+          <ul className="mt-1 space-y-0.5">
+            {skipped.slice(0, 30).map((item) => <li key={item.personId}>{item.name} — {item.reason}</li>)}
+          </ul>
+          <p className="mt-1 text-text-soft-400">To contact them too, tell the assistant “include the left-out leads”.</p>
+        </details>
+      )}
+    </div>
+  );
+}
+
+/** Every lead of a started run and where it stands: waiting, sent, replied (and how), stopped or failed. */
+function LeadsList({ leads }: { leads: RunLead[] }) {
+  const contacted = leads.filter((lead) => ["sent", "replied", "good"].includes(lead.progress.tone)).length;
+  const replied = leads.filter((lead) => ["replied", "good"].includes(lead.progress.tone)).length;
+  const interested = leads.filter((lead) => lead.progress.tone === "good").length;
+  const tone = { good: "text-success-base", replied: "text-text-strong-950", sent: "text-text-sub-600", waiting: "text-text-soft-400", stopped: "text-text-soft-400", failed: "text-error-base" } as const;
+  return (
+    <details className="mt-3 border-t border-stroke-soft-200 pt-3 text-paragraph-xs">
+      <summary className="cursor-pointer text-label-xs text-text-strong-950">
+        Leads · {leads.length} · {contacted} contacted · {replied} replied · {interested} interested
+      </summary>
+      <ul className="mt-1.5 max-h-72 space-y-1 overflow-y-auto">
+        {leads.map((lead) => (
+          <li key={`${lead.personId}-${lead.channel}`} className="flex flex-wrap items-baseline justify-between gap-x-3">
+            <span className="min-w-0 truncate text-text-strong-950">{lead.who} <span className="text-text-soft-400">· {CHANNEL_LABEL[lead.channel] ?? lead.channel}</span></span>
+            <span className={tone[lead.progress.tone]}>{lead.progress.text}</span>
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }
 

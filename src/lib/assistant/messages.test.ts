@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { availableTokens, ensureSignOff, personalizationKey, personalLineProblem, sequenceProblem, templateProblem, templateTokens } from "./messages";
+import { availableTokens, ensureSignOff, leadTextKey, MAX_GROUPS, perLeadSteps, personalMessageProblem, settleGroups, personalizationKey, personalLineProblem, sequenceProblem, templateProblem, templateTokens } from "./messages";
 
 const TOKENS = ["firstName", "company", "city", "category", "p_1a2b3c4d"];
 
@@ -79,5 +79,38 @@ describe("availableTokens", () => {
     expect(availableTokens([{ company: "Lotus Dental", city: "Pune", category: "Dentist" }, { company: "Smile Spot", city: "Pune", category: "" }])).toEqual(["company", "city"]);
     expect(availableTokens([{ company: "Lotus Dental" }, {}])).toEqual([]);
     expect(availableTokens([])).toEqual([]);
+  });
+});
+
+describe("sorting leads into kinds", () => {
+  test("labels merge ignoring case; past the limit the smallest share Other", () => {
+    expect(settleGroups(["Real estate agents", "real estate agents ", "Cleaning companies"])).toEqual([
+      { label: "Real estate agents", members: [0, 1] },
+      { label: "Cleaning companies", members: [2] },
+    ]);
+    const many = settleGroups(["A", "A", "A", "B", "B", "C", "D", "E"]);
+    expect(many.length).toBe(MAX_GROUPS);
+    expect(many.map((group) => group.label)).toEqual(["A", "B", "C", "Other"]);
+    expect(many.find((group) => group.label === "Other")!.members).toEqual([6, 7]);
+  });
+
+  test("each campaign step points at the lead's own text, as many steps as the shortest group", () => {
+    const email = [
+      [{ subject: "Hello", body: "a", waitDays: 0 }, { subject: null, body: "b", waitDays: 3 }, { subject: null, body: "c", waitDays: 5 }],
+      [{ subject: "Hi", body: "x", waitDays: 0 }, { subject: "Again", body: "y", waitDays: 4 }],
+    ];
+    expect(perLeadSteps("p_12345678", "email", email)).toEqual([
+      { subject: "{{p_12345678_s1}}", body: "{{p_12345678_b1}}", waitDays: 0 },
+      { subject: "{{p_12345678_s2}}", body: "{{p_12345678_b2}}", waitDays: 3 },
+    ]);
+    expect(perLeadSteps("p_12345678", "whatsapp", [[{ subject: null, body: "a", waitDays: 0 }]])).toEqual([{ subject: null, body: "{{p_12345678_b1}}", waitDays: 0 }]);
+    expect(leadTextKey("p_12345678", 2, "subject")).toBe("p_12345678_s2");
+  });
+
+  test("a message written for one lead is checked like any other", () => {
+    expect(personalMessageProblem("whatsapp", { subject: null, body: "Hi, I saw Lotus Dental on FC Road. We service chairs within the week. Worth a chat? – Ravi" })).toBeNull();
+    expect(personalMessageProblem("email", { subject: null, body: "Hello" })).toContain("subject");
+    expect(personalMessageProblem("whatsapp", { subject: null, body: "Hi {{company}}" })).not.toBeNull();
+    expect(personalMessageProblem("linkedin", { subject: null, body: "x".repeat(300) })).toContain("280");
   });
 });

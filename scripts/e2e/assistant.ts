@@ -413,12 +413,21 @@ await runInOrganization(org!.id, async () => {
     const proposed = runId ? await getRun(runId) : null;
     check("the agent cannot start it: the run waits for the owner", proposed?.status === "proposed");
     const assistantText = turn.filter((m) => m.role === "assistant").map((m) => m.content).join("\n");
-    check("the agent never says outreach is live before the owner starts it", !/\b(?:is|are) (?:now )?(?:live|running|launched)\b/i.test(assistantText));
+    check("the agent never says outreach is live before the owner starts it", !/\b(?:outreach|campaigns?|emails?|messages?) (?:is|are|has been|have been) (?:now )?(?:live|running|launched|sent)\b/i.test(assistantText), assistantText.slice(0, 200));
     if (!proposed) return;
 
     const plan = proposed.plan;
-    check("the plan writes an email sequence with a subject and the per-lead line", Boolean(plan.sequences.email?.[0]?.subject) && JSON.stringify(plan.sequences).includes(`{{${plan.personalizationKey}}}`), JSON.stringify(plan.sequences.email?.[0]).slice(0, 300));
-    check("the plan shows real samples and the AI cost estimate", plan.samples.length > 0 && plan.samples[0]!.messages.length > 0 && plan.estimate.aiCalls > 0, JSON.stringify(plan.estimate));
+    const groupEmail = (plan.groups ?? []).flatMap((group) => group.sequences.email?.slice(0, 1) ?? []);
+    check("the plan sorts the leads into kinds, each with its messages (an email with a subject and the per-lead line)",
+      Boolean(plan.groups?.length) && groupEmail.length > 0 && groupEmail.every((step) => Boolean(step.subject)) && JSON.stringify(plan.groups).includes(`{{${plan.personalizationKey}}}`),
+      (plan.groups ?? []).map((group) => `${group.label} (${group.count})`).join(", "));
+    check("every lead is accounted for: in a group, or left out with a reason",
+      plan.assignments.every((assignment) => Boolean(plan.leadPlans?.[assignment.personId]?.groupId)) && (plan.skipped ?? []).every((item) => item.reason.length > 0),
+      `${plan.assignments.length} planned, ${plan.personal?.length ?? 0} individual, ${plan.skipped?.length ?? 0} left out: ${(plan.skipped ?? []).map((item) => `${item.name}: ${item.reason}`).join(" | ").slice(0, 300)}`);
+    check("each campaign step sends the lead's own text", JSON.stringify(plan.sequences).includes(`{{${plan.personalizationKey}_b1}}`), JSON.stringify(plan.sequences.email?.[0]).slice(0, 200));
+    check("the plan shows real samples (each individually written lead with its follow-ups) and the AI cost", plan.samples.length > 0 && plan.samples.every((sample) => sample.messages.length > 0)
+      && (plan.personal ?? []).every((message) => plan.samples.some((sample) => sample.personId === message.personId && sample.messages.length === (plan.sequences[message.channel]?.length ?? 0)))
+      && plan.estimate.aiCostUsd !== undefined, JSON.stringify(plan.estimate));
     const sampleText = plan.samples.flatMap((s) => s.messages.map((m) => `${m.subject ?? ""} ${m.body}`)).join("\n");
     check("samples have no unfilled merge fields", !/\{\{/.test(sampleText), sampleText.slice(0, 300));
     const emailSamples = plan.samples.filter((sample) => sample.channel === "email").flatMap((sample) => sample.messages);
@@ -439,6 +448,9 @@ await runInOrganization(org!.id, async () => {
     const lines = (await db.select({ raw: people.raw }).from(people).where(inArray(people.id, plan.assignments.map((a) => a.personId))))
       .map((row) => String((row.raw as Record<string, unknown>)[plan.personalizationKey] ?? ""));
     check("each lead got a personal line that passes the checks", lines.length === plan.assignments.length && lines.every((line) => personalLineProblem(line) === null), lines.join(" | ").slice(0, 400));
+    const firstTexts = (await db.select({ raw: people.raw }).from(people).where(inArray(people.id, plan.assignments.map((a) => a.personId))))
+      .map((row) => String((row.raw as Record<string, unknown>)[`${plan.personalizationKey}_b1`] ?? ""));
+    check("each lead has its own complete first message, nothing left unfilled", firstTexts.length === plan.assignments.length && firstTexts.every((text) => text.trim().length > 20 && !/\{\{/.test(text)), firstTexts.map((text) => text.slice(0, 80)).join(" | "));
     if (running?.campaigns.whatsapp) {
       const [waCampaign] = await db.select().from(whatsappCampaigns).where(eq(whatsappCampaigns.id, running.campaigns.whatsapp));
       const waLeads = await db.select().from(whatsappCampaignLeads).where(eq(whatsappCampaignLeads.campaignId, running.campaigns.whatsapp));
@@ -480,6 +492,28 @@ await runInOrganization(org!.id, async () => {
     check("a question the uploaded price list answers is answered automatically (real classifier, drafter and check), through Unipile",
       priceDecision?.status === "sent" && unipileSends.length === sendsBefore + 1,
       `${priceDecision?.status}: ${priceDecision?.reason ?? ""} ${JSON.stringify(priceDecision?.check?.problems ?? [])}`);
+
+    // A follow-up in Hinglish is answered in Hinglish, from the same price list.
+    const hinglish = await ingestInboundReply({
+      personId: asker.id, channel: "email", accountRef: mailboxAddress, providerThreadId: `live-price-${stamp}`, idempotencyKey: `live-hinglish-${stamp}`, providerMessageId: `live-hinglish-pm-${stamp}`,
+      subject: `Re: ${plan.samples[0]?.messages[0]?.subject ?? "Dental chair servicing"}`,
+      bodyText: "Theek hai. Plan mein ek mahine mein kitne visits hote hain? Aur kya yeh Pune ke bahar bhi milta hai?",
+      sentAt: new Date(Date.now() + 1_000),
+    });
+    let hinglishDraft: typeof crmDrafts.$inferSelect | undefined;
+    let hinglishReply: typeof autopilotReplies.$inferSelect | undefined;
+    for (let round = 0; round < 40 && !hinglishReply; round += 1) {
+      await db.update(crmJobs).set({ runAfter: new Date(Date.now() - 1_000) }).where(and(eq(crmJobs.organizationId, orgId), eq(crmJobs.status, "queued")));
+      await drainOnce();
+      [hinglishDraft] = await db.select().from(crmDrafts).where(eq(crmDrafts.replyForMessageId, hinglish.message.id));
+      if (hinglishDraft) [hinglishReply] = await db.select().from(autopilotReplies).where(and(eq(autopilotReplies.draftId, hinglishDraft.id), eq(autopilotReplies.revision, hinglishDraft.revision)));
+      if (!hinglishReply) await new Promise((resolve) => setTimeout(resolve, 1_500));
+    }
+    const hinglishText = hinglishDraft?.aiBodyText ?? "";
+    console.log(`      Hinglish question: ${hinglishReply?.status} — ${hinglishReply?.reason ?? ""}; draft: ${hinglishText.replace(/\s+/g, " ").slice(0, 240)}`);
+    check("a lead writing in Hinglish gets the answer in Hinglish (two visits; only Pune is covered, or the owner is asked)",
+      /\b(hai|hain|mein|ke|ki|aap|nahi|sirf|haan)\b/i.test(hinglishText) && (hinglishReply?.status === "sent" || hinglishReply?.status === "held"),
+      `${hinglishReply?.status}: ${hinglishText.slice(0, 160)}`);
 
     const xrayAsker = discovered[1] ?? discovered[0]!;
     const xray = await ingestInboundReply({
