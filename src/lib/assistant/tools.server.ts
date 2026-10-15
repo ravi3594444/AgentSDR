@@ -6,13 +6,15 @@ import { getByokSettings } from "@/lib/ai/byok";
 import { getAiConnection } from "@/lib/ai/connections";
 import { retrieveKnowledge } from "@/lib/crm/knowledge";
 import { discoveryAvailability, DiscoveryUnavailableError, normalizeCriteria, startDiscovery } from "@/lib/discovery/discovery.server";
+import { searchAreaProblem } from "@/lib/discovery/geocode";
+import { geocodePlace } from "@/lib/discovery/geocode.server";
 import { linkedinSearchAvailability, startLinkedinSearch } from "./linkedinSearch.server";
 import { inOrg } from "@/lib/tenancy/scope";
 import { listAudiences, summarizeAudience } from "./audiences.server";
-import { ownerRequestProblem } from "./agent";
+import { outreachRequested, outreachRequestProblem } from "./agent";
 import { answerDecision, DecisionError, listOpenDecisions } from "./decisions.server";
 import { channelAvailability, listRuns, OutreachError, prepareOutreach, reportRun, setRunPaused, setRunReplyMode, stopRun } from "./outreach.server";
-import { missingForDiscovery, missingForOutreach, PROFILE_LABELS } from "./profile";
+import { mergeProfile, missingForDiscovery, missingForOutreach, PROFILE_LABELS, profileChanges } from "./profile";
 import { getBusinessProfile, updateBusinessProfile } from "./profile.server";
 import { PERIOD_KINDS, type PeriodKind } from "./results";
 import { results, resultsText } from "./results.server";
@@ -30,8 +32,12 @@ import { assistantJobs, outreachRuns, type AudienceChannel } from "./schema";
 export type ToolContext = {
   threadId: string;
   userId: string | null;
-  /** What the owner wrote in this turn (or, after a background event, their latest message): ownerRequest quotes are checked against it. */
+  /** What the owner wrote in this turn (or, after a background event, their latest message): outreach needs it to ask for outreach. */
   ownerText: string;
+  /** The assistant's last message before the owner's: a "yes" to its offer of outreach counts as asking. */
+  lastAssistantText?: string | null;
+  /** The owner's words asking for outreach that nothing has acted on yet (agent.ts pendingOutreachRequest); null when there are none. */
+  outreachRequest?: string | null;
   /** Set when the server itself prepares outreach the owner already asked for (a "find and contact" search finished). */
   authorizedBy?: "search" | null;
 };
@@ -41,7 +47,14 @@ export type ToolContext = {
  * `display` is the owner's version of it when the summary carries ids; `data`
  * is what the chat card shows.
  */
-export type ToolResult = { ok: boolean; summary: string; display?: string; data?: Record<string, unknown> };
+export type ToolResult = {
+  ok: boolean;
+  summary: string;
+  display?: string;
+  data?: Record<string, unknown>;
+  /** Refused for its arguments before doing anything: the model's mistake, kept for the model and hidden from the owner. */
+  refused?: boolean;
+};
 
 type Tool = {
   description: string;
@@ -51,6 +64,21 @@ type Tool = {
 };
 
 class ToolArgumentError extends Error {}
+
+/** The owner's request for outreach in this turn, or a refusal for the model. */
+function requireOutreachRequest(context: ToolContext): string {
+  const request = context.outreachRequest !== undefined
+    ? context.outreachRequest
+    : outreachRequested(context.ownerText, context.lastAssistantText) ? context.ownerText : null;
+  if (!request) throw new ToolArgumentError(outreachRequestProblem("", null)!);
+  return request;
+}
+
+/** Why a Google Maps search of `where` would be useless (a whole country), or null; null too when the place cannot be looked up. */
+async function checkSearchArea(where: string, language: string): Promise<string | null> {
+  const area = await geocodePlace(where, language).catch(() => null);
+  return area ? searchAreaProblem(area, where) : null;
+}
 
 function text(args: Record<string, unknown>, key: string, required = false): string | undefined {
   const value = args[key];
@@ -123,6 +151,9 @@ export const TOOLS: Record<string, Tool> = {
     description: "Remember what the owner said about the business, customers, places, offer, sender or preferences. Saved for every later conversation and used by every message the AI writes. Call it as soon as the owner gives such information.",
     arguments: "any of: businessName, website, offer, targetCustomers, locations, outreachInstructions, senderName, senderRole, bookingDetails, language (two letters), notes (all text); preferredChannels (array of email|whatsapp|linkedin). An empty string clears a field.",
     run: async (args, context) => {
+      const current = await getBusinessProfile();
+      // Bad values are reported below; a save of valid values that changes nothing is refused.
+      if (!mergeProfile(current, args).problems.length && !profileChanges(current, args).length) throw new ToolArgumentError("nothing new to save");
       const { profile, problems } = await updateBusinessProfile(args, context.userId);
       const saved = Object.keys(args).filter((key) => !problems.some((problem) => problem.startsWith(key)));
       const labels = saved.map((key) => PROFILE_LABELS[key as keyof typeof PROFILE_LABELS] ?? key).join(", ");
@@ -152,17 +183,16 @@ export const TOOLS: Record<string, Tool> = {
 
   find_leads: {
     description: "Search public Google Maps business listings for leads matching the owner's target customers, then read each business's own website for published contact details. Takes a few minutes and runs in the background; the chat shows its progress and announces the result. Costs nothing per search (self-hosted). Only businesses with a public listing are found.",
-    arguments: "what (kind of business, e.g. 'dental clinics'), where (city/region/country), maxResults (5-200, default 50), language (two letters, optional), contactAfter (true only when the owner asked to contact, email or message the leads found: the outreach plan is then prepared automatically when the search finishes; needs ownerRequest), ownerRequest (with contactAfter: the owner's exact words asking for outreach), channels (optional, with contactAfter: array of email|whatsapp|linkedin)",
+    arguments: "what (kind of business, e.g. 'dental clinics'), where (city/region/country), maxResults (5-200, default 50), language (two letters, optional), contactAfter (true only when the owner asked to contact, email or message the leads found: the outreach plan is then prepared automatically when the search finishes), channels (optional, with contactAfter: array of email|whatsapp|linkedin)",
     run: async (args, context) => {
       const profile = await getBusinessProfile();
       const criteria = normalizeCriteria(args, profile.language ?? "en");
       if ("error" in criteria) throw new ToolArgumentError(criteria.error);
       if (args.contactAfter !== undefined && typeof args.contactAfter !== "boolean") throw new ToolArgumentError("contactAfter must be true or false");
-      if (args.contactAfter === true) {
-        const problem = ownerRequestProblem(args.ownerRequest, context.ownerText);
-        if (problem) throw new ToolArgumentError(problem);
-      }
-      const contactAfter = args.contactAfter === true ? { channels: channels(args) ?? null, ownerRequest: String(args.ownerRequest) } : null;
+      const request = args.contactAfter === true ? requireOutreachRequest(context) : null;
+      const area = await checkSearchArea(criteria.where, criteria.language);
+      if (area) throw new ToolArgumentError(area);
+      const contactAfter = request ? { channels: channels(args) ?? null, ownerRequest: request } : null;
       try {
         const started = await startDiscovery(criteria, context, { contactAfter });
         return {
@@ -179,19 +209,18 @@ export const TOOLS: Record<string, Tool> = {
 
   find_linkedin_leads: {
     description: "Search LinkedIn for people by keywords (a job title, profession or industry, plus a place), with the organization's connected LinkedIn account through Unipile and its daily search allowance. Runs in the background; the profiles found can be contacted on LinkedIn only (LinkedIn gives no email or phone). Use for people (owners, managers, professionals); use find_leads for businesses with a public Maps listing.",
-    arguments: "keywords (e.g. 'clinic owner Pune'), maxResults (5-200, default 50), contactAfter (true only when the owner asked to contact them; needs ownerRequest), ownerRequest (the owner's exact words asking for outreach)",
+    arguments: "keywords (e.g. 'clinic owner Pune'), maxResults (5-200, default 50), contactAfter (true only when the owner asked to contact them)",
     run: async (args, context) => {
       const keywords = text(args, "keywords", true)!.trim().slice(0, 200);
       const requested = Number(args.maxResults ?? 50);
       const maxResults = Number.isFinite(requested) ? Math.min(200, Math.max(5, Math.round(requested))) : 50;
       if (args.contactAfter === true) {
-        const problem = ownerRequestProblem(args.ownerRequest, context.ownerText);
-        if (problem) throw new ToolArgumentError(problem);
+        requireOutreachRequest(context);
       }
       const availability = await linkedinSearchAvailability();
       if (!availability.available) return { ok: false, summary: `LinkedIn search is not available: ${availability.reason}` };
       const started = await startLinkedinSearch({ keywords, maxResults }, context, {
-        contactAfter: args.contactAfter === true ? { channels: ["linkedin"], ownerRequest: String(args.ownerRequest) } : null,
+        contactAfter: args.contactAfter === true ? { channels: ["linkedin"], ownerRequest: requireOutreachRequest(context) } : null,
       });
       return {
         ok: true,
@@ -260,13 +289,10 @@ export const TOOLS: Record<string, Tool> = {
   },
 
   prepare_outreach: {
-    description: "Write the outreach for a lead list and plan the run: which channel each lead gets, the messages (with real samples), daily limits, how long it takes and the AI cost. Creates nothing and sends nothing; the owner reviews the plan, chooses Automatic or Review replies and presses Start. Only when the owner asked for outreach: quote their words in ownerRequest. To contact more people with an earlier run's messages, pass basedOnRunId (a new plan the owner approves again).",
-    arguments: "audienceId; ownerRequest (the owner's exact words asking for outreach); channels (optional array of email|whatsapp|linkedin in order of preference); maxLeads (optional, default up to 100); autopilot (optional true/false: propose Automatic replies); instructions (optional text, e.g. tone or angle for this run); basedOnRunId (optional: reuse that run's messages)",
+    description: "Write the outreach for a lead list and plan the run: which channel each lead gets, the messages (with real samples), daily limits, how long it takes and the AI cost. Creates nothing and sends nothing; the owner reviews the plan, chooses Automatic or Review replies and presses Start. Only when the owner asked for outreach (or said yes to your offer of it). To contact more people with an earlier run's messages, pass basedOnRunId (a new plan the owner approves again).",
+    arguments: "audienceId; channels (optional array of email|whatsapp|linkedin in order of preference); maxLeads (optional, default up to 100); autopilot (optional true/false: propose Automatic replies); instructions (optional text, e.g. tone or angle for this run); basedOnRunId (optional: reuse that run's messages)",
     run: async (args, context) => {
-      if (context.authorizedBy !== "search") {
-        const problem = ownerRequestProblem(args.ownerRequest, context.ownerText);
-        if (problem) throw new ToolArgumentError(problem);
-      }
+      const request = context.authorizedBy === "search" ? context.ownerText : requireOutreachRequest(context);
       const audienceId = uuid(args, "audienceId")!;
       const basedOnRunId = uuid(args, "basedOnRunId", false) ?? null;
       const maxLeads = args.maxLeads === undefined ? undefined : Number(args.maxLeads);
@@ -280,7 +306,7 @@ export const TOOLS: Record<string, Tool> = {
           autopilot: args.autopilot as boolean | undefined,
           instructions: text(args, "instructions") ?? null,
           basedOnRunId,
-          ownerRequest: typeof args.ownerRequest === "string" ? args.ownerRequest : null,
+          ownerRequest: request || null,
           threadId: context.threadId,
           userId: context.userId,
         });
@@ -432,7 +458,7 @@ export async function runTool(name: string, args: Record<string, unknown>, conte
   try {
     return await tool.run(args, context);
   } catch (error) {
-    if (error instanceof ToolArgumentError) return { ok: false, summary: `Not run: ${error.message.replace(/\.$/, "")}.` };
+    if (error instanceof ToolArgumentError) return { ok: false, refused: true, summary: `Not run: ${error.message.replace(/\.$/, "")}.` };
     console.error(`[assistant/tools] ${name} failed:`, error);
     return { ok: false, summary: `Failed: ${error instanceof Error ? error.message : String(error)}` };
   }

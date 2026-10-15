@@ -3,6 +3,7 @@ import "server-only";
 import { and, desc, eq, isNull, lt, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
+import { threadTitleFrom } from "./agent";
 import { assistantMessages, assistantThreads, type AssistantAttachment, type AssistantRole, type AssistantToolStatus } from "./schema";
 
 /** Chat threads and their messages, scoped to the organization in scope. */
@@ -66,7 +67,8 @@ export async function addMessage(input: {
     attachments: input.attachments ?? [],
     createdBy: input.createdBy ?? null,
   }).returning();
-  const title = input.role === "user" && input.content?.trim() ? input.content.trim().slice(0, 80) : null;
+  // A greeting does not name the conversation; its first real request does.
+  const title = input.role === "user" ? threadTitleFrom(input.content) : null;
   await db.update(assistantThreads)
     .set({
       updatedAt: new Date(),

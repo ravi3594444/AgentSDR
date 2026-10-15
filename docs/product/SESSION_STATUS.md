@@ -65,6 +65,39 @@ AI.** No message was sent to anyone; no real reply was received.
 | Upgrade path | a Compose database from the pre-assistant release (90 tables): `create-lead-research`, `add-mailbox-provider`, `create-assistant-tables`, `add-assistant-automation` → 103 tables, scope contract passes; the last one re-run is a no-op |
 | Browser (Chromium, 1440 px and 390 px) | `/assistant` (decision cards, run modes) and `/assistant/results`: no page errors, no horizontal scroll. Fixed: plurals on Results |
 
+### Follow-up: the chat, after the owner's first real use (2026-10-15)
+
+On the VM, "hey" ran a business-information save with nothing in it
+("Remembered: ."), and "do outreach" showed refused searches as red cards
+with "Search started…" under each, three times, before one search ran on
+the whole USA. Fixed and checked with the real AI in a browser:
+
+- The model's planned tools are checked before anything runs or is shown:
+  no tools on a greeting; a business-information save must change
+  something and use the owner's own words (messages and documents);
+  outreach needs the owner's latest message to ask for it, a "yes" to the
+  assistant's offer, or a request in their previous two messages that
+  nothing has acted on (so "which cities?" → "Austin" keeps it).
+- Calls the server refuses for their arguments are kept for the model and
+  hidden from the owner; a message is shown only when every tool in its
+  step worked; a turn never repeats a message.
+- A lead search of a whole country is refused with the reason; the
+  assistant asks for cities (one search per city).
+- The chat: a welcome screen with four starting points, the conversation
+  menu (greetings no longer name conversations), one readiness indicator,
+  the assistant's turns with an avatar, routine results as one quiet line,
+  a typing indicator naming the current step, suggested replies, and a
+  growing message box with attach, paste and drag-and-drop.
+
+Checks: `npm test` 1003/1003; `assistant.ts` 62/62 without AI and 85/85
+with real AI; `campaign-engines.ts` 25/25, `unipile-email.ts` 23/23;
+build; browser (1440 and 390 px, no page errors, no horizontal scroll):
+"hey\\" → a one-line greeting with suggestions and no card; business
+details → one "Saved business information" line; "…in USA and do outreach
+on whatsapp" → a question about which cities, no refused cards; "Austin,
+Texas" → one real search (48 businesses, 23 with email), whose plan was
+refused because WhatsApp is not connected, and the assistant said so.
+
 ### Live services vs stand-ins
 
 - **Live, real services:** gosom/google-maps-scraper v1.18.1 against Google

@@ -74,6 +74,7 @@ export async function assistantState(threadId: string | null, ctx: OrgContext, w
     : [];
   return {
     thread: { id: thread.id, title: thread.title },
+    viewer: { firstName: ctx.userName?.trim().split(/\s+/)[0] || null },
     threads,
     busy,
     messages: messages.map((message) => ({

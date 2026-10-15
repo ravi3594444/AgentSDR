@@ -1,25 +1,33 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   RiAddLine,
+  RiArrowDownSLine,
+  RiArrowUpLine,
   RiAttachment2,
+  RiBarChartBoxLine,
   RiCheckboxCircleFill,
   RiCloseLine,
   RiErrorWarningFill,
   RiExternalLinkLine,
+  RiFileList3Line,
   RiFileTextLine,
   RiInformationLine,
   RiLoader4Line,
   RiPauseLine,
   RiPlayLine,
-  RiRobot2Line,
-  RiSendPlane2Fill,
+  RiSearchEyeLine,
+  RiSparkling2Fill,
+  RiStore2Line,
   RiTableLine,
 } from "@remixicon/react";
 
 import * as Badge from "@/components/alignui/badge";
+import * as Dropdown from "@/components/alignui/dropdown";
+import * as Popover from "@/components/alignui/popover";
+import { displayThreadTitle } from "@/lib/assistant/agent";
 import { AUTOPILOT_LIMITS } from "@/lib/crm/autopilot";
 import * as Button from "@/components/alignui/button";
 import { cn } from "@/utils/cn";
@@ -37,7 +45,7 @@ type Message = {
   content: string;
   tool: string | null;
   toolInput: Record<string, unknown> | null;
-  toolResult: { summary?: string; display?: string; data?: Record<string, unknown> } | null;
+  toolResult: { summary?: string; display?: string; data?: Record<string, unknown>; suggestions?: string[]; hidden?: boolean } | null;
   status: "running" | "ok" | "error" | null;
   attachments: { name: string; kind: string; bytes: number }[];
   createdAt: string;
@@ -73,6 +81,7 @@ type Setup = {
 
 export type AssistantStatePayload = {
   thread: { id: string; title: string };
+  viewer?: { firstName: string | null };
   threads: { id: string; title: string; updatedAt: string | Date }[];
   busy: boolean;
   messages: Message[];
@@ -449,6 +458,27 @@ function DecisionCard({ message, state, onChanged }: { message: Message; state: 
   );
 }
 
+/** Small, routine results shown as one quiet line instead of a card. */
+const COMPACT_TOOLS = new Set([
+  "check_setup", "save_business_info", "search_knowledge", "lead_search_status", "list_audiences", "list_runs",
+  "list_decisions", "pause_outreach", "resume_outreach", "stop_outreach", "switch_to_review", "answer_decision",
+]);
+
+function ActivityRow({ message }: { message: Message }) {
+  const title = TOOL_TITLE[message.tool ?? ""] ?? message.tool ?? "Action";
+  const detail = message.status === "running" ? "" : message.toolResult?.display ?? message.content;
+  return (
+    <details className="group w-full max-w-2xl text-paragraph-xs text-text-sub-600">
+      <summary className="flex cursor-pointer list-none items-center gap-2 rounded-lg py-1 hover:text-text-strong-950 [&::-webkit-details-marker]:hidden">
+        <StatusIcon status={message.status} />
+        <span className={cn("text-label-xs", message.status === "error" ? "text-error-base" : "text-text-sub-600")}>{title}</span>
+        {detail && <span className="min-w-0 flex-1 truncate text-text-soft-400 group-open:hidden">· {detail}</span>}
+      </summary>
+      {detail && <p className={cn("ml-6 mt-0.5 whitespace-pre-wrap", message.status === "error" && "text-error-base")}>{detail}</p>}
+    </details>
+  );
+}
+
 function ToolMessage({ message, jobs, runs, decisions, canManageAutopilot, onChanged }: { message: Message; jobs: Job[]; runs: Record<string, Run>; decisions: Record<string, DecisionState>; canManageAutopilot: boolean; onChanged: () => void }) {
   const data = message.toolResult?.data as Record<string, unknown> | undefined;
   if (message.tool === "owner_decision") return <DecisionCard message={message} state={decisions[String(data?.decisionId ?? "")]} onChanged={onChanged} />;
@@ -458,6 +488,7 @@ function ToolMessage({ message, jobs, runs, decisions, canManageAutopilot, onCha
   if (message.tool === "find_leads" || message.tool === "find_linkedin_leads") return <DiscoveryCard message={message} job={jobs.find((job) => job.id === data?.jobId)} />;
   if (message.tool === "prepare_outreach") return <ProposalCard message={message} run={runs[String(data?.runId ?? "")]} canManageAutopilot={canManageAutopilot} onChanged={onChanged} />;
   if (message.tool === "report") return <ReportCard message={message} />;
+  if (COMPACT_TOOLS.has(message.tool ?? "")) return <ActivityRow message={message} />;
   const title = message.tool === "read_document" || message.tool === "import_contacts"
     ? `${TOOL_TITLE[message.tool]}: ${String(message.toolInput?.file ?? "")}`
     : TOOL_TITLE[message.tool ?? ""] ?? message.tool ?? "Action";
@@ -476,35 +507,188 @@ function ToolMessage({ message, jobs, runs, decisions, canManageAutopilot, onCha
   );
 }
 
-function SetupStrip({ setup }: { setup: Setup | null }) {
-  if (!setup) return null;
-  const items: { label: string; ok: boolean; title: string; href: string }[] = [
-    { label: "AI", ok: setup.ai.connected, title: setup.ai.connected ? "AI provider connected" : "AI is not set up on this server yet: the operator who installed it connects it (Settings → AI provider)", href: "/settings/ai" },
-    { label: "Lead search", ok: setup.leadDiscovery.available, title: setup.leadDiscovery.available ? "Google Maps lead search ready" : "Google Maps lead search is not enabled on this server (operator setup). Contact lists still work.", href: "/getting-started" },
-    ...(["email", "whatsapp", "linkedin"] as const).map((channel) => ({
-      label: CHANNEL_LABEL[channel]!,
-      ok: setup.channels[channel].available,
-      title: setup.channels[channel].reason ?? `${setup.channels[channel].senders} connected`,
-      href: channel === "email" ? "/settings/email-accounts" : channel === "whatsapp" ? "/settings/whatsapp-accounts" : "/settings/linkedin-accounts",
-    })),
-  ];
+/** The assistant's words: paragraphs, simple lists, links and **bold**, without rendering HTML. */
+function RichText({ text }: { text: string }) {
+  const inline = (line: string, key: string) => line.split(/(\*\*[^*]+\*\*|https?:\/\/[^\s)]+)/g).filter(Boolean).map((part, index) => {
+    if (part.startsWith("**") && part.endsWith("**")) return <strong key={`${key}-${index}`} className="font-medium text-text-strong-950">{part.slice(2, -2)}</strong>;
+    if (/^https?:\/\//.test(part)) return <a key={`${key}-${index}`} href={part} target="_blank" rel="noopener noreferrer" className="text-primary-base underline-offset-2 hover:underline">{hostOf(part)}</a>;
+    return <span key={`${key}-${index}`}>{part}</span>;
+  });
   return (
-    <div className="flex flex-wrap gap-1.5">
-      {items.map((item) => (
-        <Link key={item.label} href={item.href} title={item.title} className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-label-xs ring-1 ring-inset", item.ok ? "text-success-base ring-success-light" : "text-text-soft-400 ring-stroke-soft-200")}>
-          <span className={cn("size-1.5 rounded-full", item.ok ? "bg-success-base" : "bg-stroke-sub-300")} aria-hidden="true" />
-          {item.label}
-        </Link>
-      ))}
+    <div className="space-y-2">
+      {text.trim().split(/\n{2,}/).map((block, blockIndex) => {
+        const lines = block.split("\n");
+        const listItem = /^\s*(?:[-•*]|\d+[.)])\s+/;
+        if (lines.length > 1 && lines.every((line) => listItem.test(line))) {
+          const ordered = /^\s*\d/.test(lines[0]!);
+          const List = ordered ? "ol" : "ul";
+          return (
+            <List key={blockIndex} className={cn("space-y-1 pl-5", ordered ? "list-decimal" : "list-disc")}>
+              {lines.map((line, index) => <li key={index}>{inline(line.replace(listItem, ""), `${blockIndex}-${index}`)}</li>)}
+            </List>
+          );
+        }
+        return <p key={blockIndex} className="whitespace-pre-wrap">{inline(block, String(blockIndex))}</p>;
+      })}
     </div>
   );
 }
 
-const SUGGESTIONS = [
-  "Find suitable leads and contact them.",
-  "Use the contact list I'm attaching and run outreach.",
-  "Here is what my business does and who we sell to: ",
-];
+function AssistantAvatar({ size = "sm" }: { size?: "sm" | "lg" }) {
+  return (
+    <span className={cn("flex shrink-0 items-center justify-center rounded-full bg-primary-base text-static-white shadow-regular-xs", size === "lg" ? "size-12" : "size-7")} aria-hidden="true">
+      <RiSparkling2Fill className={size === "lg" ? "size-6" : "size-3.5"} />
+    </span>
+  );
+}
+
+function ThinkingIndicator({ label }: { label: string }) {
+  return (
+    <p role="status" data-testid="assistant-thinking" className="flex items-center gap-2 text-paragraph-xs text-text-soft-400">
+      <span className="flex gap-1" aria-hidden="true">
+        {[0, 150, 300].map((delay) => <span key={delay} className="size-1.5 animate-bounce rounded-full bg-text-soft-400" style={{ animationDelay: `${delay}ms` }} />)}
+      </span>
+      {label}
+    </p>
+  );
+}
+
+type SetupItem = { label: string; ok: boolean; detail: string; href: string; operator: boolean };
+
+function setupItems(setup: Setup): SetupItem[] {
+  return [
+    { label: "AI", ok: setup.ai.connected, detail: setup.ai.connected ? "Connected" : "Not set up on this server yet", href: "/settings/ai", operator: true },
+    { label: "Lead search", ok: setup.leadDiscovery.available, detail: setup.leadDiscovery.available ? "Google Maps ready" : "Not enabled on this server; contact lists still work", href: "/getting-started", operator: true },
+    ...(["email", "whatsapp", "linkedin"] as const).map((channel) => ({
+      label: CHANNEL_LABEL[channel]!,
+      ok: setup.channels[channel].available,
+      detail: setup.channels[channel].available ? `${setup.channels[channel].senders} connected` : setup.channels[channel].reason ?? "Not connected",
+      href: channel === "email" ? "/settings/email-accounts" : channel === "whatsapp" ? "/settings/whatsapp-accounts" : "/settings/linkedin-accounts",
+      operator: false,
+    })),
+  ];
+}
+
+function ReadinessMenu({ setup }: { setup: Setup | null }) {
+  if (!setup) return null;
+  const items = setupItems(setup);
+  const missing = items.filter((item) => !item.ok).length;
+  return (
+    <Popover.Root>
+      <Popover.Trigger asChild>
+        <button type="button" className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 text-label-xs text-text-sub-600 ring-1 ring-inset ring-stroke-soft-200 hover:bg-bg-weak-50">
+          <span className={cn("size-2 rounded-full", missing ? "bg-warning-base" : "bg-success-base")} aria-hidden="true" />
+          {missing ? `${missing} to set up` : "Ready"}
+        </button>
+      </Popover.Trigger>
+      <Popover.Content align="end" showArrow={false} sideOffset={8} className="w-80 max-w-[calc(100vw-2rem)] p-3">
+        <p className="text-label-sm text-text-strong-950">What the assistant can use</p>
+        <ul className="mt-2 space-y-1.5">
+          {items.map((item) => (
+            <li key={item.label} className="flex items-start gap-2 text-paragraph-xs">
+              {item.ok ? <RiCheckboxCircleFill className="mt-px size-4 shrink-0 text-success-base" /> : <RiErrorWarningFill className="mt-px size-4 shrink-0 text-warning-base" />}
+              <span className="min-w-0 flex-1">
+                <span className="text-label-xs text-text-strong-950">{item.label}</span>
+                <span className="block text-text-sub-600">{item.detail}{!item.ok && item.operator ? " (set up by whoever runs the server)" : ""}</span>
+              </span>
+              {!item.ok && <Link href={item.href} className="shrink-0 text-label-xs text-primary-base hover:underline">Set up</Link>}
+            </li>
+          ))}
+        </ul>
+      </Popover.Content>
+    </Popover.Root>
+  );
+}
+
+function ConversationMenu({ current, threads, onOpen, onNew }: { current: { id: string; title: string }; threads: AssistantStatePayload["threads"]; onOpen: (id: string) => void; onNew: () => void }) {
+  return (
+    <Dropdown.Root>
+      <Dropdown.Trigger asChild>
+        <button type="button" className="flex min-w-0 items-center gap-2 rounded-lg px-1.5 py-1 text-left hover:bg-bg-weak-50">
+          <AssistantAvatar />
+          <span className="min-w-0">
+            <span className="block text-label-sm text-text-strong-950">Assistant</span>
+            <span className="block max-w-[11rem] truncate text-paragraph-xs text-text-soft-400 sm:max-w-xs">{displayThreadTitle(current.title)}</span>
+          </span>
+          <RiArrowDownSLine className="size-4 shrink-0 text-text-soft-400" aria-hidden="true" />
+        </button>
+      </Dropdown.Trigger>
+      <Dropdown.Content align="start" className="w-72 max-w-[calc(100vw-2rem)]">
+        <Dropdown.Item onSelect={onNew}><Dropdown.ItemIcon as={RiAddLine} />New conversation</Dropdown.Item>
+        {threads.length > 0 && <Dropdown.Separator />}
+        <div className="max-h-80 overflow-y-auto">
+          {threads.map((thread) => (
+            <Dropdown.Item key={thread.id} onSelect={() => onOpen(thread.id)} className={cn(thread.id === current.id && "bg-bg-weak-50")}>
+              <span className="min-w-0 flex-1 truncate">{displayThreadTitle(thread.title)}</span>
+              <span className="shrink-0 text-paragraph-xs text-text-soft-400">{relativeTime(thread.updatedAt)}</span>
+            </Dropdown.Item>
+          ))}
+        </div>
+      </Dropdown.Content>
+    </Dropdown.Root>
+  );
+}
+
+function relativeTime(value: string | Date): string {
+  const minutes = Math.round((Date.now() - new Date(value).getTime()) / 60_000);
+  if (minutes < 1) return "now";
+  if (minutes < 60) return `${minutes}m`;
+  if (minutes < 60 * 24) return `${Math.round(minutes / 60)}h`;
+  return `${Math.round(minutes / (60 * 24))}d`;
+}
+
+type Starter = { icon: React.ComponentType<{ className?: string }>; title: string; description: string; text: string; send?: boolean; attach?: boolean };
+
+function starters(profile: BusinessProfileSummary | undefined): Starter[] {
+  const known = Boolean(profile?.businessName && profile.offer);
+  const who = profile?.targetCustomers?.split(/[,.;]/)[0]?.trim();
+  const where = profile?.locations?.split(/[,.;]/)[0]?.trim();
+  return [
+    known
+      ? { icon: RiStore2Line, title: "Update my business details", description: "Change what you sell, prices, area or who signs the messages.", text: "Update my business details: " }
+      : { icon: RiStore2Line, title: "Tell me about your business", description: "What you sell, to whom, where, and who signs the messages.", text: "We are … We sell … to … in … Sign the messages as …" },
+    { icon: RiSearchEyeLine, title: "Find customers and contact them", description: "I search Google Maps and business websites, then show you a plan to approve.", text: who && where ? `Find ${who} in ${where} and contact them` : "Find … in … and contact them" },
+    { icon: RiFileList3Line, title: "Contact people from my list", description: "Attach a CSV or Excel file; I import it and write the messages.", text: "Contact the people in this list", attach: true },
+    { icon: RiBarChartBoxLine, title: "How is my outreach doing?", description: "Leads, messages, replies, and what is waiting for you.", text: "How is my outreach doing?", send: true },
+  ];
+}
+
+type BusinessProfileSummary = { businessName?: string; offer?: string; targetCustomers?: string; locations?: string };
+
+function Welcome({ firstName, profile, onStarter }: { firstName: string | null; profile: BusinessProfileSummary | undefined; onStarter: (starter: Starter) => void }) {
+  return (
+    <div className="mx-auto flex w-full max-w-2xl flex-col items-center pt-[6vh] text-center">
+      <AssistantAvatar size="lg" />
+      <h2 className="mt-4 text-title-h5 text-text-strong-950">{firstName ? `Hi ${firstName}, what should we work on?` : "What should we work on?"}</h2>
+      <p className="mt-2 max-w-lg text-paragraph-sm text-text-sub-600">
+        I find customers{profile?.businessName ? ` for ${profile.businessName}` : ""}, write the outreach you approve, answer routine replies from your information, and bring you anything that needs a decision.
+      </p>
+      <div className="mt-6 grid w-full gap-2 text-left sm:grid-cols-2">
+        {starters(profile).map((starter) => (
+          <button key={starter.title} type="button" onClick={() => onStarter(starter)} className="group flex items-start gap-3 rounded-xl p-3 text-left ring-1 ring-inset ring-stroke-soft-200 transition hover:bg-bg-weak-50 hover:ring-stroke-sub-300">
+            <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary-alpha-10 text-primary-base"><starter.icon className="size-4" /></span>
+            <span className="min-w-0">
+              <span className="block text-label-sm text-text-strong-950">{starter.title}</span>
+              <span className="mt-0.5 block text-paragraph-xs text-text-sub-600">{starter.description}</span>
+            </span>
+          </button>
+        ))}
+      </div>
+      {!profile?.businessName && <p className="mt-4 text-paragraph-xs text-text-soft-400">Start by telling me about your business, or attach a brochure or price list. I remember it for every conversation.</p>}
+    </div>
+  );
+}
+
+/** Groups the thread into the owner's messages and the assistant's turns (its words, actions and cards together). */
+function groupTurns(messages: Message[]): { owner: Message | null; items: Message[] }[] {
+  const turns: { owner: Message | null; items: Message[] }[] = [];
+  for (const message of messages) {
+    if (message.role === "user") turns.push({ owner: message, items: [] });
+    else if (turns.length) turns[turns.length - 1]!.items.push(message);
+    else turns.push({ owner: null, items: [message] });
+  }
+  return turns;
+}
 
 export default function AssistantClient({ initial }: { initial: AssistantStatePayload }) {
   const [state, setState] = useState(initial);
@@ -512,10 +696,12 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
   const [text, setText] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [sending, setSending] = useState(false);
+  const [dragging, setDragging] = useState(false);
   /** The message being sent, shown until the polled thread holds it (`baseline`: messages before it). */
   const [pending, setPending] = useState<{ text: string; files: string[]; baseline: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const input = useRef<HTMLTextAreaElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const threadId = state.thread.id;
 
@@ -540,8 +726,20 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
   const count = state.messages.length + (showPending ? 1 : 0);
   useEffect(() => {
     const element = scroller.current;
-    if (element) element.scrollTop = element.scrollHeight;
-  }, [count, state.thread.id]);
+    if (element) element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
+  }, [count, state.thread.id, state.busy]);
+
+  // The message box grows with what is typed, up to about eight lines.
+  useLayoutEffect(() => {
+    const element = input.current;
+    if (!element) return;
+    element.style.height = "auto";
+    element.style.height = `${Math.min(element.scrollHeight, 200)}px`;
+  }, [text]);
+
+  function addFiles(picked: File[]) {
+    setFiles((current) => [...current, ...picked].slice(0, 5));
+  }
 
   async function send(value = text) {
     const message = value.trim();
@@ -564,13 +762,33 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
     } finally {
       setPending(null);
       setSending(false);
+      input.current?.focus();
     }
+  }
+
+  function pickStarter(starter: Starter) {
+    if (starter.send) {
+      void send(starter.text);
+      return;
+    }
+    setText(starter.text);
+    if (starter.attach) fileInput.current?.click();
+    requestAnimationFrame(() => {
+      const element = input.current;
+      if (!element) return;
+      element.focus();
+      const blank = starter.text.indexOf("…");
+      if (blank >= 0) element.setSelectionRange(blank, blank + 1);
+      else element.setSelectionRange(starter.text.length, starter.text.length);
+    });
   }
 
   async function newThread() {
     const created = await readJson<{ threadId: string }>(await fetch("/api/assistant/threads", { method: "POST" }));
     const next = await readJson<AssistantStatePayload>(await fetch(`/api/assistant?threadId=${created.threadId}`, { cache: "no-store" }));
     setState(next);
+    setText("");
+    input.current?.focus();
   }
 
   async function openThread(id: string) {
@@ -578,114 +796,118 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
     setState(next);
   }
 
-  const visible = useMemo(() => state.messages, [state.messages]);
+  // Calls the server refused before doing anything are the model's own mistakes: kept for it, not shown.
+  const shown = useMemo(() => state.messages.filter((message) => !message.toolResult?.hidden), [state.messages]);
+  const turns = useMemo(() => groupTurns(shown), [shown]);
+  const last = shown[shown.length - 1];
+  const thinking = sending || state.busy;
+  const runningTool = [...shown].reverse().find((message) => message.role === "tool" && message.status === "running");
+  const thinkingLabel = runningTool ? `${TOOL_TITLE[runningTool.tool ?? ""] ?? "Working"}…` : "Thinking…";
+  const suggestions = !thinking && last?.role === "assistant" ? last.toolResult?.suggestions ?? [] : [];
+  const empty = state.messages.length === 0 && !showPending;
+  const profile = (setup as (Setup & { profile?: BusinessProfileSummary }) | null)?.profile;
+
+  const assistantItems = (items: Message[]) => items.map((message) => {
+    if (message.role === "assistant") return <div key={message.id} className="text-paragraph-sm text-text-strong-950"><RichText text={message.content} /></div>;
+    if (message.role === "event") {
+      return (
+        <div key={message.id} className="flex items-start gap-2 rounded-lg bg-bg-weak-50 px-3 py-2 text-paragraph-xs text-text-sub-600">
+          <RiInformationLine className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+          <span>{message.content}</span>
+        </div>
+      );
+    }
+    return <ToolMessage key={message.id} message={message} jobs={state.jobs} runs={state.runs} decisions={state.decisions ?? {}} canManageAutopilot={Boolean(setup?.canManageAutopilot)} onChanged={() => void refresh(true)} />;
+  });
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-bg-white-0">
-      <header className="flex shrink-0 flex-col gap-2 border-b border-stroke-soft-200 px-4 py-3 sm:px-6">
-        <div className="flex flex-wrap items-center gap-2">
-          <RiRobot2Line className="size-5 text-primary-base" aria-hidden="true" />
-          <h1 className="text-label-lg text-text-strong-950">Assistant</h1>
-          <select
-            aria-label="Conversation"
-            value={state.thread.id}
-            onChange={(event) => void openThread(event.target.value)}
-            className="ml-1 max-w-48 truncate rounded-md bg-transparent px-1 py-0.5 text-paragraph-xs text-text-sub-600 ring-1 ring-inset ring-stroke-soft-200"
-          >
-            {state.threads.map((thread) => <option key={thread.id} value={thread.id}>{thread.title}</option>)}
-          </select>
-          <div className="ml-auto flex items-center gap-2">
-            <Link href="/assistant/results" className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-label-xs text-text-sub-600 ring-1 ring-inset ring-stroke-soft-200 hover:bg-bg-weak-50">
-              Results
-            </Link>
-            <Button.Root variant="neutral" mode="stroke" size="xsmall" onClick={() => void newThread()} disabled={sending}>
-              <Button.Icon as={RiAddLine} />
-              New chat
-            </Button.Root>
-          </div>
+    <div
+      className="relative flex h-full min-h-0 flex-col bg-bg-white-0"
+      onDragOver={(event) => { if (event.dataTransfer.types.includes("Files")) { event.preventDefault(); setDragging(true); } }}
+      onDragLeave={(event) => { if (event.currentTarget === event.target) setDragging(false); }}
+      onDrop={(event) => { event.preventDefault(); setDragging(false); addFiles(Array.from(event.dataTransfer.files)); }}
+    >
+      <header className="flex h-14 shrink-0 items-center gap-2 border-b border-stroke-soft-200 px-3 sm:px-5">
+        <ConversationMenu current={state.thread} threads={state.threads} onOpen={(id) => void openThread(id)} onNew={() => void newThread()} />
+        <div className="ml-auto flex items-center gap-1.5">
+          <ReadinessMenu setup={setup} />
+          <Link href="/assistant/results" className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-label-xs text-text-sub-600 ring-1 ring-inset ring-stroke-soft-200 hover:bg-bg-weak-50">
+            <RiBarChartBoxLine className="size-4" aria-hidden="true" /><span className="hidden sm:inline">Results</span>
+          </Link>
+          <Button.Root variant="neutral" mode="stroke" size="xsmall" onClick={() => void newThread()} disabled={sending} aria-label="New conversation" className="h-8">
+            <Button.Icon as={RiAddLine} /><span className="hidden sm:inline">New chat</span>
+          </Button.Root>
         </div>
-        <SetupStrip setup={setup} />
       </header>
 
-      <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6">
-        <div className="mx-auto flex max-w-3xl flex-col gap-3">
-          {visible.length === 0 && !showPending && (
-            <div className="rounded-2xl border border-dashed border-stroke-soft-200 p-5 text-paragraph-sm text-text-sub-600">
-              <p className="text-label-md text-text-strong-950">Tell me about your business, then ask me to find leads or use your list.</p>
-              <p className="mt-1">I remember what you tell me, read the documents you attach (PDF, Word, text) and import contact lists (CSV, Excel). I find businesses from public Google Maps listings and their websites, write the messages, and show you the plan. Nothing is sent until you press Start.</p>
-              <div className="mt-3 flex flex-wrap gap-2">
-                {SUGGESTIONS.map((suggestion) => (
-                  <button key={suggestion} type="button" onClick={() => setText(suggestion)} className="rounded-full px-3 py-1 text-label-xs text-text-strong-950 ring-1 ring-inset ring-stroke-soft-200 hover:bg-bg-weak-50">
-                    {suggestion.replace(/: $/, "…")}
+      <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-6">
+        {empty ? (
+          <Welcome firstName={state.viewer?.firstName ?? null} profile={profile} onStarter={pickStarter} />
+        ) : (
+          <div role="log" aria-live="polite" className="mx-auto flex max-w-3xl flex-col gap-5">
+            {turns.map((turn, index) => (
+              <div key={turn.owner?.id ?? `turn-${index}`} className="flex flex-col gap-3">
+                {turn.owner && (
+                  <div className="flex flex-col items-end gap-1">
+                    {turn.owner.content && <div className="max-w-[min(36rem,85%)] whitespace-pre-wrap rounded-2xl rounded-br-md bg-bg-weak-50 px-3.5 py-2 text-paragraph-sm text-text-strong-950">{turn.owner.content}</div>}
+                    {turn.owner.attachments.map((file) => (
+                      <span key={file.name} className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-paragraph-xs text-text-sub-600 ring-1 ring-inset ring-stroke-soft-200">
+                        {file.kind === "contacts" ? <RiTableLine className="size-3.5" /> : <RiFileTextLine className="size-3.5" />}
+                        {file.name}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {(turn.items.length > 0 || (thinking && index === turns.length - 1 && !showPending)) && (
+                  <div className="flex gap-3">
+                    <AssistantAvatar />
+                    <div className="flex min-w-0 flex-1 flex-col gap-2.5 pt-0.5">
+                      {assistantItems(turn.items)}
+                      {thinking && index === turns.length - 1 && !showPending && <ThinkingIndicator label={thinkingLabel} />}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+            {showPending && pending && (
+              <div className="flex flex-col gap-3">
+                <div className="flex flex-col items-end gap-1">
+                  {pending.text && <div className="max-w-[min(36rem,85%)] whitespace-pre-wrap rounded-2xl rounded-br-md bg-bg-weak-50 px-3.5 py-2 text-paragraph-sm text-text-strong-950">{pending.text}</div>}
+                  {pending.files.map((name) => <span key={name} className="text-paragraph-xs text-text-sub-600">{name}</span>)}
+                </div>
+                <div className="flex gap-3"><AssistantAvatar /><div className="pt-1.5"><ThinkingIndicator label={pending.files.length ? "Reading your files…" : "Thinking…"} /></div></div>
+              </div>
+            )}
+            {suggestions.length > 0 && (
+              <div className="flex flex-wrap gap-2 pl-10">
+                {suggestions.map((suggestion) => (
+                  <button key={suggestion} type="button" onClick={() => void send(suggestion)} className="rounded-full px-3 py-1.5 text-label-xs text-text-strong-950 ring-1 ring-inset ring-stroke-soft-200 transition hover:bg-bg-weak-50 hover:ring-stroke-sub-300">
+                    {suggestion}
                   </button>
                 ))}
               </div>
-            </div>
-          )}
-          {visible.map((message) => {
-            if (message.role === "user") {
-              return (
-                <div key={message.id} className="flex flex-col items-end gap-1">
-                  {message.content && <div className="max-w-[min(36rem,85%)] whitespace-pre-wrap rounded-2xl bg-primary-alpha-10 px-3.5 py-2 text-paragraph-sm text-text-strong-950 ring-1 ring-inset ring-primary-alpha-16">{message.content}</div>}
-                  {message.attachments.map((file) => (
-                    <span key={file.name} className="inline-flex items-center gap-1 text-paragraph-xs text-text-sub-600">
-                      {file.kind === "contacts" ? <RiTableLine className="size-3.5" /> : <RiFileTextLine className="size-3.5" />}
-                      {file.name}
-                    </span>
-                  ))}
-                </div>
-              );
-            }
-            if (message.role === "assistant") {
-              return <div key={message.id} className="max-w-[min(40rem,92%)] whitespace-pre-wrap text-paragraph-sm text-text-strong-950">{message.content}</div>;
-            }
-            if (message.role === "event") {
-              return (
-                <div key={message.id} className="flex items-start gap-2 rounded-lg bg-bg-weak-50 px-3 py-2 text-paragraph-xs text-text-sub-600">
-                  <RiInformationLine className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-                  <span>{message.content}</span>
-                </div>
-              );
-            }
-            return <ToolMessage key={message.id} message={message} jobs={state.jobs} runs={state.runs} decisions={state.decisions ?? {}} canManageAutopilot={Boolean(setup?.canManageAutopilot)} onChanged={() => void refresh(true)} />;
-          })}
-          {showPending && pending && (
-            <div className="flex flex-col items-end gap-1 opacity-70">
-              {pending.text && <div className="max-w-[min(36rem,85%)] whitespace-pre-wrap rounded-2xl bg-primary-alpha-10 px-3.5 py-2 text-paragraph-sm text-text-strong-950">{pending.text}</div>}
-              {pending.files.map((name) => <span key={name} className="text-paragraph-xs text-text-sub-600">{name}</span>)}
-            </div>
-          )}
-          {(sending || state.busy) && (
-            <p role="status" className="flex items-center gap-2 text-paragraph-xs text-text-soft-400">
-              <RiLoader4Line className="size-4 animate-spin" aria-hidden="true" /> Working…
-            </p>
-          )}
-        </div>
+            )}
+          </div>
+        )}
       </div>
 
-      <div className="shrink-0 border-t border-stroke-soft-200 px-3 py-3 sm:px-6">
+      <div className="shrink-0 px-3 pb-3 pt-1 sm:px-6 sm:pb-4">
         <div className="mx-auto max-w-3xl">
           {error && <p role="alert" className="mb-2 text-paragraph-xs text-error-base">{error}</p>}
-          {files.length > 0 && (
-            <div className="mb-2 flex flex-wrap gap-1.5">
-              {files.map((file) => (
-                <span key={file.name} className="inline-flex items-center gap-1 rounded-full bg-bg-weak-50 py-0.5 pl-2 pr-1 text-label-xs text-text-sub-600">
-                  {file.name}
-                  <button type="button" aria-label={`Remove ${file.name}`} onClick={() => setFiles((current) => current.filter((item) => item !== file))} className="rounded-full p-0.5 hover:bg-bg-soft-200"><RiCloseLine className="size-3.5" /></button>
-                </span>
-              ))}
-            </div>
-          )}
-          <div className="flex items-end gap-2 rounded-2xl bg-bg-white-0 p-2 shadow-regular-xs ring-1 ring-inset ring-stroke-soft-200 focus-within:ring-stroke-strong-950">
-            <input ref={fileInput} type="file" multiple accept={ACCEPT} className="hidden" onChange={(event) => {
-              const picked = Array.from(event.target.files ?? []);
-              setFiles((current) => [...current, ...picked].slice(0, 5));
-              event.target.value = "";
-            }} />
-            <Button.Root variant="neutral" mode="ghost" size="small" aria-label="Attach documents or a contact list" title="Attach a PDF, Word or text document, or a CSV/Excel contact list" onClick={() => fileInput.current?.click()} disabled={sending}>
-              <Button.Icon as={RiAttachment2} />
-            </Button.Root>
+          <div className="rounded-2xl bg-bg-white-0 shadow-regular-sm ring-1 ring-inset ring-stroke-soft-200 focus-within:ring-stroke-sub-300">
+            {files.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 px-3 pt-3">
+                {files.map((file) => (
+                  <span key={`${file.name}-${file.size}`} className="inline-flex items-center gap-1.5 rounded-lg bg-bg-weak-50 py-1 pl-2 pr-1 text-label-xs text-text-sub-600">
+                    {/\.(csv|tsv|xlsx?)$/i.test(file.name) ? <RiTableLine className="size-3.5" /> : <RiFileTextLine className="size-3.5" />}
+                    <span className="max-w-[12rem] truncate">{file.name}</span>
+                    <button type="button" aria-label={`Remove ${file.name}`} onClick={() => setFiles((current) => current.filter((item) => item !== file))} className="rounded p-0.5 hover:bg-bg-soft-200"><RiCloseLine className="size-3.5" /></button>
+                  </span>
+                ))}
+              </div>
+            )}
             <textarea
+              ref={input}
               value={text}
               onChange={(event) => setText(event.target.value)}
               onKeyDown={(event) => {
@@ -694,22 +916,42 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
                   void send();
                 }
               }}
+              onPaste={(event) => {
+                const pasted = Array.from(event.clipboardData.files);
+                if (pasted.length) { event.preventDefault(); addFiles(pasted); }
+              }}
               rows={1}
-              placeholder="Message the assistant…"
+              placeholder={empty ? "Describe your business, or ask for leads…" : "Reply to the assistant…"}
               aria-label="Message the assistant"
               disabled={sending}
-              className="max-h-48 min-h-9 flex-1 resize-none bg-transparent px-1 py-2 text-paragraph-sm text-text-strong-950 outline-none placeholder:text-text-soft-400"
+              className="block max-h-52 min-h-11 w-full resize-none bg-transparent px-4 pb-1 pt-3 text-paragraph-sm text-text-strong-950 outline-none placeholder:text-text-soft-400"
             />
-            <Button.Root variant="primary" mode="filled" size="small" onClick={() => void send()} disabled={sending || (!text.trim() && !files.length)} aria-label="Send">
-              {sending ? <Button.Icon as={RiLoader4Line} className="animate-spin" /> : <Button.Icon as={RiSendPlane2Fill} />}
-            </Button.Root>
+            <div className="flex items-center gap-2 px-2 pb-2">
+              <input ref={fileInput} type="file" multiple accept={ACCEPT} className="hidden" onChange={(event) => {
+                addFiles(Array.from(event.target.files ?? []));
+                event.target.value = "";
+              }} />
+              <button type="button" onClick={() => fileInput.current?.click()} disabled={sending} title="Attach a PDF, Word or text document, or a CSV/Excel contact list" className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-label-xs text-text-sub-600 hover:bg-bg-weak-50 disabled:opacity-50">
+                <RiAttachment2 className="size-4" aria-hidden="true" /><span>Attach</span>
+              </button>
+              <span className="hidden flex-1 truncate text-paragraph-xs text-text-soft-400 sm:block">Documents, price lists or a contact list (CSV, Excel)</span>
+              <Button.Root variant="primary" mode="filled" size="small" onClick={() => void send()} disabled={sending || (!text.trim() && !files.length)} aria-label="Send" className="ml-auto size-8 rounded-lg p-0">
+                {sending ? <Button.Icon as={RiLoader4Line} className="animate-spin" /> : <Button.Icon as={RiArrowUpLine} />}
+              </Button.Root>
+            </div>
           </div>
-          <p className="mt-1.5 flex items-center gap-1 text-paragraph-xs text-text-soft-400">
-            Outreach starts only when you press Start on a plan.
-            <Link href="/crm/actions" className="inline-flex items-center gap-0.5 underline">Action required <RiExternalLinkLine className="size-3" /></Link>
+          <p className="mt-2 text-center text-paragraph-xs text-text-soft-400">
+            Nothing reaches your leads until you press Start on a plan.
+            <span className="hidden sm:inline"> Replies waiting for you are in <Link href="/crm/actions" className="underline underline-offset-2 hover:text-text-sub-600">Action required</Link>.</span>
           </p>
         </div>
       </div>
+
+      {dragging && (
+        <div className="pointer-events-none absolute inset-2 z-10 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary-base bg-bg-white-0 text-label-md text-primary-base">
+          Drop documents or a contact list to attach
+        </div>
+      )}
     </div>
   );
 }

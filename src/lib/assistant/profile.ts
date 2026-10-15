@@ -100,3 +100,51 @@ export function profileKnowledgeText(profile: BusinessProfile): string {
   if (profile.preferredChannels?.length) lines.push(`${PROFILE_LABELS.preferredChannels}: ${profile.preferredChannels.join(", ")}`);
   return lines.join("\n\n");
 }
+
+/** Fields of `patch` that would change the stored profile (a no-op save changes none). */
+export function profileChanges(current: BusinessProfile, patch: Record<string, unknown>): string[] {
+  const { profile } = mergeProfile(current, patch);
+  return Object.keys(patch).filter((key) => {
+    if (!(PROFILE_TEXT_FIELDS as readonly string[]).includes(key) && key !== "preferredChannels") return false;
+    const field = key as keyof BusinessProfile;
+    return JSON.stringify(current[field] ?? null) !== JSON.stringify(profile[field] ?? null);
+  });
+}
+
+const GROUNDING_STOPWORDS = new Set([
+  "the", "and", "for", "with", "our", "your", "you", "are", "was", "who", "that", "this", "from", "into", "per", "all", "any",
+  "can", "will", "also", "their", "they", "them", "its", "not", "but", "has", "have", "more", "most", "very", "such", "via",
+  "within", "including", "across", "based", "offer", "offers", "provide", "provides", "providing", "business", "services",
+]);
+
+function significantWords(value: string): string[] {
+  const words = value.toLowerCase().replace(/(\d),(?=\d)/g, "$1").match(/[\p{L}\p{N}]+/gu) ?? [];
+  return [...new Set(words.filter((word) => (/\d/.test(word) || word.length >= 3) && !GROUNDING_STOPWORDS.has(word)))];
+}
+
+const stem = (word: string) => (/\d/.test(word) ? word : word.slice(0, 5));
+
+/**
+ * Text fields of `patch` whose words are mostly not in what the owner wrote
+ * (`corpus`: their messages and the documents and lists they attached), so
+ * the assistant saves the owner's information, not its own guesses. Words
+ * match on their first five letters (service / servicing), numbers exactly;
+ * at least 40% of a value's significant words must appear. An empty value
+ * (clearing a field), the language code and channel choices are not checked.
+ */
+export function ungroundedProfileValues(patch: Record<string, unknown>, corpus: string): string[] {
+  const known = new Set(significantWords(corpus).map(stem));
+  const flat = corpus.toLowerCase().replace(/\s+/g, "");
+  return Object.entries(patch).flatMap(([key, value]) => {
+    if (typeof value !== "string" || !value.trim() || key === "language") return [];
+    if (!(PROFILE_TEXT_FIELDS as readonly string[]).includes(key)) return [];
+    if (key === "website") {
+      const host = value.toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").split(/[/?#]/)[0] ?? "";
+      return host && flat.includes(host) ? [] : [key];
+    }
+    const words = significantWords(value);
+    if (!words.length) return [];
+    const grounded = words.filter((word) => known.has(stem(word))).length;
+    return grounded / words.length >= 0.4 ? [] : [key];
+  });
+}

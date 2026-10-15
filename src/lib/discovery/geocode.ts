@@ -24,6 +24,19 @@ function distanceMeters(lat1: number, lon1: number, lat2: number, lon2: number):
   return 2 * EARTH_RADIUS * Math.asin(Math.sqrt(a));
 }
 
+/** Widest area one lead search covers usefully (half its diagonal): a large metro area or a small region. */
+export const MAX_SEARCH_HALF_DIAGONAL_KM = 150;
+
+/**
+ * Why `area` is too wide for one search, or null: up to 9 circles of about
+ * 20 businesses each would sample a country or a large state at random.
+ */
+export function searchAreaProblem(area: GeoArea, where: string): string | null {
+  const halfDiagonalKm = distanceMeters(area.south, area.west, area.north, area.east) / 2_000;
+  if (halfDiagonalKm <= MAX_SEARCH_HALF_DIAGONAL_KM) return null;
+  return `“${where}” is too wide for one search: Google Maps gives about ${PLACES_PER_SEARCH} businesses per area and one search covers at most ${MAX_TILES} areas. Ask the owner which cities or districts to search, then run one search per city.`;
+}
+
 /** A Google Maps zoom that shows roughly a circle of this radius. */
 export function zoomForRadius(radiusMeters: number): number {
   if (radiusMeters <= 2_000) return 15;
