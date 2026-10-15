@@ -23,7 +23,8 @@ extensions/*/release
 # Migrations run by hand against a database, not from the image — except
 # the fresh-install setup the entrypoint runs before the app starts, and the
 # upgrade migrations Docker installs run in the container (scheduler, web
-# research).
+# research, the assistant, the handoff). Every script the Dockerfile copies
+# must be listed here too, or the image build fails with "not found".
 scripts
 !scripts/db/setup.ts
 !scripts/create-scheduled-job-runs.ts
@@ -31,5 +32,6 @@ scripts
 !scripts/add-mailbox-provider.ts
 !scripts/create-assistant-tables.ts
 !scripts/add-assistant-automation.ts
+!scripts/add-handoff.ts
 
 README.md
