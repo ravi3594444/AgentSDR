@@ -120,6 +120,8 @@ const TOOL_TITLE: Record<string, string> = {
   daily_summary: "Daily summary",
   read_document: "Document",
   import_contacts: "Contact list",
+  add_contacts: "Added contacts",
+  read_webpage: "Read a web page",
 };
 
 async function readJson<T>(response: Response): Promise<T> {
@@ -461,7 +463,7 @@ function DecisionCard({ message, state, onChanged }: { message: Message; state: 
 /** Small, routine results shown as one quiet line instead of a card. */
 const COMPACT_TOOLS = new Set([
   "check_setup", "save_business_info", "search_knowledge", "lead_search_status", "list_audiences", "list_runs",
-  "list_decisions", "pause_outreach", "resume_outreach", "stop_outreach", "switch_to_review", "answer_decision",
+  "list_decisions", "pause_outreach", "resume_outreach", "stop_outreach", "switch_to_review", "answer_decision", "read_webpage",
 ]);
 
 function ActivityRow({ message }: { message: Message }) {
@@ -492,12 +494,13 @@ function ToolMessage({ message, jobs, runs, decisions, canManageAutopilot, onCha
   const title = message.tool === "read_document" || message.tool === "import_contacts"
     ? `${TOOL_TITLE[message.tool]}: ${String(message.toolInput?.file ?? "")}`
     : TOOL_TITLE[message.tool ?? ""] ?? message.tool ?? "Action";
-  const audience = message.tool === "import_contacts" ? (data?.audience as AudienceData | undefined) : message.tool === "describe_audience" ? (data as AudienceData | undefined) : undefined;
+  const audience = message.tool === "import_contacts" || message.tool === "add_contacts" ? (data?.audience as AudienceData | undefined) : message.tool === "describe_audience" ? (data as AudienceData | undefined) : undefined;
   return (
     <Card title={title} status={message.status}>
       {message.status === "running" ? null : audience && message.status === "ok" ? (
         <>
           {message.tool === "import_contacts" && <p className="text-paragraph-xs">{message.content.split(". Lead list")[0]}.</p>}
+          {message.tool === "add_contacts" && message.toolResult?.display && <p className="text-paragraph-xs">{message.toolResult.display}</p>}
           <AudienceSummary audience={audience} />
         </>
       ) : (

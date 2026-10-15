@@ -370,6 +370,23 @@ server). LinkedIn gives profiles only, no email or phone, so those leads are
 contacted on LinkedIn (a connection request, then messages). The standalone
 Search page stays hidden in this release.
 
+**Contacts typed in the chat.** "Pitch this WhatsApp number: +91 80847
+94983" (or emails, or LinkedIn profile links) adds those people as a lead
+list and, when you asked to contact them, prepares the plan right away. A
+number without + and a country code needs a Default phone country
+(Settings → Organization), otherwise the assistant asks which country; it
+never guesses. It adds only contacts you wrote or that are on a page it
+read for you.
+
+**Links.** Give the assistant a link (your website, a page listing people)
+and it opens that one page and reads its text and the emails, phones and
+LinkedIn links on it. It opens only links you give; it does not search the
+web.
+
+**Not supported:** Instagram, Facebook, X and TikTok, for finding leads or
+reading pages: they need a login and do not allow automated reading. On
+LinkedIn it can search people (below) but cannot open LinkedIn pages.
+
 **Lists.** CSV and Excel go through the same People import as Leads →
 Import (same column handling, same errors). Leads with no usable contact on
 any connected channel are reported with the reason (for example "reachable
@@ -519,6 +536,11 @@ AI_SOURCE_ORGANIZATION_ID=<org with AI Settings> bun run --conditions=react-serv
 #   stop, takeover, edits, newer messages, concurrent limits, restart
 #   recovery, duplicates, results against recorded events, the daily
 #   summary, and a second organization seeing none of it)
+# The owner's own conversations against the real model: a greeting, "any city",
+# a WhatsApp number typed in the chat, Instagram, a link (queues searches and
+# cancels them; sends nothing):
+AI_SOURCE_ORGANIZATION_ID=<org with AI Settings> GMAPS_SCRAPER_URL=http://127.0.0.1:8080 \
+  bun run --conditions=react-server scripts/e2e/assistant-chat-live.ts
 # The real Google Maps scraper and real websites (needs the scraper running,
 # e.g. docker compose … -f docker-compose.discovery.yml; sends nothing):
 GMAPS_SCRAPER_URL=http://127.0.0.1:8080 bun run --conditions=react-server scripts/e2e/discovery-live.ts "dental clinics" "Baner, Pune, India" 40

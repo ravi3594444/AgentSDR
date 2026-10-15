@@ -7,10 +7,15 @@ import { getAiConnection } from "@/lib/ai/connections";
 import { retrieveKnowledge } from "@/lib/crm/knowledge";
 import { discoveryAvailability, DiscoveryUnavailableError, normalizeCriteria, startDiscovery } from "@/lib/discovery/discovery.server";
 import { searchAreaProblem } from "@/lib/discovery/geocode";
-import { geocodePlace } from "@/lib/discovery/geocode.server";
+import { extractContacts, visibleText } from "@/lib/discovery/contacts";
+import { fetchPublicPage } from "@/lib/discovery/websiteContacts.server";
+import type { ImportRow } from "@/lib/leads/importRows";
+import { importPeopleRows } from "@/lib/leads/peopleImport.server";
+import { people } from "@/lib/leads/schema";
+import { geocoderUrl, lookupPlace } from "@/lib/discovery/geocode.server";
 import { linkedinSearchAvailability, startLinkedinSearch } from "./linkedinSearch.server";
 import { inOrg } from "@/lib/tenancy/scope";
-import { listAudiences, summarizeAudience } from "./audiences.server";
+import { addAudienceMembers, createAudience, listAudiences, summarizeAudience } from "./audiences.server";
 import { outreachRequested, outreachRequestProblem } from "./agent";
 import { answerDecision, DecisionError, listOpenDecisions } from "./decisions.server";
 import { channelAvailability, listRuns, OutreachError, prepareOutreach, reportRun, setRunPaused, setRunReplyMode, stopRun } from "./outreach.server";
@@ -65,6 +70,10 @@ type Tool = {
 
 class ToolArgumentError extends Error {}
 
+const MAX_CHAT_CONTACTS = 50;
+/** Sites that need a login and forbid automated reading. */
+const LOGIN_WALLED = /(?:^|\.)(?:instagram\.com|facebook\.com|fb\.com|x\.com|twitter\.com|tiktok\.com|linkedin\.com|threads\.net)$/i;
+
 /** The owner's request for outreach in this turn, or a refusal for the model. */
 function requireOutreachRequest(context: ToolContext): string {
   const request = context.outreachRequest !== undefined
@@ -74,10 +83,18 @@ function requireOutreachRequest(context: ToolContext): string {
   return request;
 }
 
-/** Why a Google Maps search of `where` would be useless (a whole country), or null; null too when the place cannot be looked up. */
-async function checkSearchArea(where: string, language: string): Promise<string | null> {
-  const area = await geocodePlace(where, language).catch(() => null);
-  return area ? searchAreaProblem(area, where) : null;
+/**
+ * Why a Google Maps search of `where` cannot run well now, or null: a whole
+ * country is too wide, and while the map lookup is down a search would fall
+ * back to a mode that returns almost nothing. An unknown place is left to
+ * the scraper, and with geocoding switched off the check is skipped.
+ */
+async function checkSearchArea(where: string, language: string): Promise<{ problem: string; refused: boolean } | null> {
+  if (!geocoderUrl()) return null;
+  const { area, unavailable } = await lookupPlace(where, language);
+  if (unavailable) return { problem: `The map lookup for “${where}” is not answering right now, so the search was not started. Try again in a minute.`, refused: false };
+  const problem = area ? searchAreaProblem(area, where) : null;
+  return problem ? { problem, refused: true } : null;
 }
 
 function text(args: Record<string, unknown>, key: string, required = false): string | undefined {
@@ -191,7 +208,8 @@ export const TOOLS: Record<string, Tool> = {
       if (args.contactAfter !== undefined && typeof args.contactAfter !== "boolean") throw new ToolArgumentError("contactAfter must be true or false");
       const request = args.contactAfter === true ? requireOutreachRequest(context) : null;
       const area = await checkSearchArea(criteria.where, criteria.language);
-      if (area) throw new ToolArgumentError(area);
+      if (area?.refused) throw new ToolArgumentError(area.problem);
+      if (area) return { ok: false, summary: area.problem };
       const contactAfter = request ? { channels: channels(args) ?? null, ownerRequest: request } : null;
       try {
         const started = await startDiscovery(criteria, context, { contactAfter });
@@ -204,6 +222,77 @@ export const TOOLS: Record<string, Tool> = {
         if (error instanceof DiscoveryUnavailableError) return { ok: false, summary: error.message };
         throw error;
       }
+    },
+  },
+
+  add_contacts: {
+    description: "Add people the owner gave in the chat (phone numbers, emails or LinkedIn profile links, with a name or company when given) as a new lead list, so outreach can be prepared for them (contactAfter true when the owner asked for it: the plan follows automatically). Only contacts the owner wrote, or that are on a page read with read_webpage. A phone number without + and a country code is refused unless the organization has a Default phone country: ask the owner which country, never guess it.",
+    arguments: "contacts (array of objects with name, phone, email, linkedinUrl, company; each needs a phone, email or linkedinUrl; up to 50), listName (optional), contactAfter (true when the owner asked to contact, message or pitch these people: the outreach plan is then prepared right after), channels (optional, with contactAfter: array of email|whatsapp|linkedin)",
+    run: async (args, context) => {
+      if (!Array.isArray(args.contacts) || !args.contacts.length) throw new ToolArgumentError("contacts must be a non-empty array");
+      if (args.contacts.length > MAX_CHAT_CONTACTS) throw new ToolArgumentError(`at most ${MAX_CHAT_CONTACTS} contacts at once; for more, attach a CSV or Excel list`);
+      const rows: ImportRow[] = args.contacts.map((item, index) => {
+        const contact = (item && typeof item === "object" ? item : {}) as Record<string, unknown>;
+        const field = (key: string) => (typeof contact[key] === "string" && contact[key].trim() ? contact[key].trim() : null);
+        return { rowNumber: index + 1, fullName: field("name"), phone: field("phone"), email: field("email"), linkedinUrl: field("linkedinUrl"), companyName: field("company"), customFields: { addedVia: "assistant chat" } };
+      });
+      const result = await importPeopleRows(rows);
+      const failures = result.failed.map((failure) => `${failure.identity}: ${failure.error}`);
+      // Nothing usable (usually a number without its country code): the assistant asks the owner, no card.
+      if (!result.personIds.length) throw new ToolArgumentError(`no contact was added. ${failures.join(" ")}`);
+      const name = text(args, "listName")?.slice(0, 200) ?? `Contacts from the chat (${new Date().toISOString().slice(0, 10)})`;
+      const audienceId = await createAudience({
+        name,
+        source: "list",
+        criteria: { source: "chat", imported: { created: result.created, updated: result.updated, failed: result.failed.length, skippedNoIdentity: result.skippedNoIdentity } },
+        threadId: context.threadId,
+        userId: context.userId,
+      });
+      await addAudienceMembers(audienceId, result.personIds.map((personId) => ({ personId, source: "list" })));
+      // Read back what was stored (phones normalized with their country code) so the owner can check it.
+      const stored = await db.select({ name: people.fullName, phone: people.phone, email: people.email, linkedinUrl: people.linkedinUrl })
+        .from(people).where(and(inOrg(people), inArray(people.id, result.personIds)));
+      const saved = stored.map((person) => [person.name, person.phone, person.email, person.linkedinUrl].filter(Boolean).join(" · ")).join("; ");
+      return {
+        ok: true,
+        summary: `Added ${result.personIds.length} contact${result.personIds.length === 1 ? "" : "s"} as lead list ${audienceId} “${name}”: ${saved}.${failures.length ? ` Not added: ${failures.join(" ")}` : ""}`,
+        display: `${saved}${failures.length ? `. Not added: ${failures.join(" ")}` : ""}`,
+        data: { audienceId, audience: await summarizeAudience(audienceId) },
+      };
+    },
+  },
+
+  read_webpage: {
+    description: "Open one public web page from a link the owner gave (or a link on a page already read) and read its text and the emails, phones and LinkedIn links on it: for example the owner's own website, to learn about the business, or a page listing people to contact. Not a web search; it cannot log in, so Instagram, Facebook, X, TikTok and LinkedIn pages cannot be read.",
+    arguments: "url",
+    run: async (args) => {
+      const raw = text(args, "url", true)!.trim();
+      let url: URL;
+      try {
+        url = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+      } catch {
+        throw new ToolArgumentError(`“${raw}” is not a web address`);
+      }
+      if (LOGIN_WALLED.test(url.hostname)) {
+        return { ok: false, summary: `${url.hostname} needs a login and does not allow automated reading, so it cannot be opened. LinkedIn people can be found with find_linkedin_leads; other networks are not supported.` };
+      }
+      let page: { url: string; html: string } | null;
+      try {
+        page = await fetchPublicPage(url.toString());
+      } catch (error) {
+        return { ok: false, summary: `Could not open ${url.toString()}: ${error instanceof Error ? error.message : String(error)}` };
+      }
+      if (!page) return { ok: false, summary: `${url.toString()} is not a readable web page.` };
+      const title = visibleText(page.html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? "").trim().slice(0, 200);
+      const body = visibleText(page.html).trim();
+      const contacts = extractContacts(page.html, page.url).slice(0, 60);
+      const host = new URL(page.url).hostname.replace(/^www\./, "");
+      return {
+        ok: true,
+        summary: `Read ${page.url}${title ? ` “${title}”` : ""} (${body.length.toLocaleString("en-US")} characters). Contacts on the page: ${contacts.map((contact) => `${contact.kind} ${contact.value}`).join(", ") || "none"}. Text: ${body.slice(0, 6_000)}`,
+        display: `${host}${title ? ` · ${title}` : ""} · ${contacts.length} contact${contacts.length === 1 ? "" : "s"} found`,
+        data: { url: page.url, title, contacts },
+      };
     },
   },
 

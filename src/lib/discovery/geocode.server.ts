@@ -28,27 +28,41 @@ export function geocoderUrl(): string | null {
   return value || DEFAULT_URL;
 }
 
-export async function geocodePlace(where: string, language: string): Promise<GeoArea | null> {
+/**
+ * The place, or why not: `area` null with `unavailable` false means the
+ * geocoder answered and knows no such place; `unavailable` means it could
+ * not be asked (off, down, rate-limited after one retry a second later).
+ */
+export async function lookupPlace(where: string, language: string): Promise<{ area: GeoArea | null; unavailable: boolean }> {
   const base = geocoderUrl();
-  if (!base) return null;
+  if (!base) return { area: null, unavailable: true };
   const key = `${language}:${where.trim().toLowerCase()}`;
-  if (cache.has(key)) return cache.get(key)!;
+  if (cache.has(key)) return { area: cache.get(key)!, unavailable: false };
   const url = new URL(base);
   url.searchParams.set("q", where);
   url.searchParams.set("format", "json");
   url.searchParams.set("limit", "1");
   url.searchParams.set("accept-language", language);
   const site = publicAppUrl();
-  try {
-    const response = await fetchImpl(url, {
-      headers: { "User-Agent": `${BRAND.shortName}-lead-search/1.0${site ? ` (+${site})` : ""}` },
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!response.ok) return null;
-    const area = parseNominatim(await response.json());
-    cache.set(key, area);
-    return area;
-  } catch {
-    return null;
+  // Nominatim allows one request a second: a refused or failed one is tried once more after that.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (attempt) await new Promise((resolve) => setTimeout(resolve, 1_100));
+    try {
+      const response = await fetchImpl(url, {
+        headers: { "User-Agent": `${BRAND.shortName}-lead-search/1.0${site ? ` (+${site})` : ""}` },
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!response.ok) continue;
+      const area = parseNominatim(await response.json());
+      cache.set(key, area);
+      return { area, unavailable: false };
+    } catch {
+      // tried again below, once
+    }
   }
+  return { area: null, unavailable: true };
+}
+
+export async function geocodePlace(where: string, language: string): Promise<GeoArea | null> {
+  return (await lookupPlace(where, language)).area;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { actionsProblem, agentReplySchema, cleanSuggestions, displayThreadTitle, isSmallTalk, MAX_ACTIONS_PER_STEP, outreachIntent, outreachRequested, outreachRequestProblem, parseAgentReply, pendingOutreachRequest, sameMessage, threadTitleFrom, transcriptText, unbackedClaim, type TranscriptMessage } from "./agent";
+import { actionsProblem, agentReplySchema, cleanSuggestions, displayThreadTitle, isSmallTalk, MAX_ACTIONS_PER_STEP, outreachIntent, outreachRequested, outreachRequestProblem, parseAgentReply, pendingOutreachRequest, sameMessage, threadTitleFrom, transcriptText, unbackedClaim, ungroundedContacts, urlGiven, type TranscriptMessage } from "./agent";
 
 const TOOLS = ["find_leads", "save_business_info", "prepare_outreach"];
 
@@ -182,5 +182,30 @@ describe("actionsProblem", () => {
     expect(actionsProblem([{ tool: "save_business_info", args: { senderName: "Amit Sharma", website: "brightpath.in" } }], { smallTalk: false, profile, ownerCorpus, outreachRequested: false })).toContain("senderName, website are not what the owner wrote");
     expect(actionsProblem([{ tool: "save_business_info", args: { offer: "Monthly plan at ₹2,499 with 20% discount" } }], { smallTalk: false, profile, ownerCorpus, outreachRequested: false })).toContain("offer is not what the owner wrote");
     expect(actionsProblem([{ tool: "save_business_info", args: { notes: "" , language: "en" } }], { smallTalk: false, profile: { ...profile, notes: "old" }, ownerCorpus, outreachRequested: false })).toBeNull();
+  });
+});
+
+describe("contacts and links from the chat", () => {
+  const owner = "can u do outreach to a people on whatsapp num is 8084794983 tery to sell him. also mail priya@sparkle.example and see https://www.sparklehome.example/team";
+
+  test("a contact the owner typed is accepted, with or without the country code; an invented one is not", () => {
+    expect(ungroundedContacts([{ phone: "8084794983" }, { phone: "+91 80847 94983", name: "Lead" }, { email: "Priya@Sparkle.example" }], owner)).toEqual([]);
+    expect(ungroundedContacts([{ phone: "+1 415 555 0100" }, { email: "ceo@sparkle.example" }, { linkedinUrl: "https://linkedin.com/in/someone" }], owner))
+      .toEqual(["+1 415 555 0100", "ceo@sparkle.example", "https://linkedin.com/in/someone"]);
+  });
+
+  test("only links the owner gave are opened", () => {
+    expect(urlGiven("https://sparklehome.example/team", owner)).toBe(true);
+    expect(urlGiven("sparklehome.example", owner)).toBe(true);
+    expect(urlGiven("https://competitor.example", owner)).toBe(false);
+    expect(urlGiven("", owner)).toBe(false);
+  });
+
+  test("actionsProblem refuses invented contacts and links nobody gave", () => {
+    const input = { smallTalk: false, profile: {}, ownerCorpus: owner, outreachRequested: true };
+    expect(actionsProblem([{ tool: "add_contacts", args: { contacts: [{ phone: "8084794983" }] } }], input)).toBeNull();
+    expect(actionsProblem([{ tool: "add_contacts", args: { contacts: [{ phone: "9999999999" }] } }], input)).toContain("not in what the owner wrote");
+    expect(actionsProblem([{ tool: "read_webpage", args: { url: "https://www.sparklehome.example/team" } }], input)).toBeNull();
+    expect(actionsProblem([{ tool: "read_webpage", args: { url: "https://example.org" } }], input)).toContain("only links the owner gave");
   });
 });

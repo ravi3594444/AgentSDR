@@ -172,7 +172,8 @@ export function transcriptText(messages: readonly TranscriptMessage[], maxChars 
     if (message.role === "event") return `EVENT: ${message.content}`;
     const summary = typeof message.toolResult?.summary === "string" ? message.toolResult.summary : message.content;
     const args = message.toolInput && Object.keys(message.toolInput).length ? JSON.stringify(message.toolInput).slice(0, 300) : "";
-    return `TOOL ${message.tool}(${args}) → ${message.status ?? "?"}: ${summary.slice(0, 1_500)}`;
+    // A page the owner asked to read is the model's only copy of it: keep more of it.
+    return `TOOL ${message.tool}(${args}) → ${message.status ?? "?"}: ${summary.slice(0, message.tool === "read_webpage" ? 6_000 : 1_500)}`;
   });
   let text = lines.join("\n");
   while (text.length > maxChars && lines.length > 4) {
@@ -273,6 +274,42 @@ export function outreachRequestProblem(ownerText: string, lastAssistantText?: st
     : "The owner has not asked to contact anyone in their latest message. Offer it in one sentence and wait for them to say yes.";
 }
 
+const digitsOf = (value: string) => value.replace(/\D/g, "");
+
+/**
+ * Contacts in `contacts` that are not in `corpus` (what the owner wrote and
+ * the pages they had read): a phone matches when one number in the corpus
+ * ends the other (so "8084794983" backs "+91 8084794983"), an email or a
+ * LinkedIn profile when it appears as written. Returns the values that do not.
+ */
+export function ungroundedContacts(contacts: unknown, corpus: string): string[] {
+  if (!Array.isArray(contacts)) return [];
+  const lower = corpus.toLowerCase();
+  const numbers = (corpus.match(/\+?\d[\d\s().-]{5,}\d/g) ?? []).map(digitsOf).filter((digits) => digits.length >= 7);
+  const out: string[] = [];
+  for (const item of contacts) {
+    const contact = (item && typeof item === "object" ? item : {}) as Record<string, unknown>;
+    const phone = typeof contact.phone === "string" ? digitsOf(contact.phone) : "";
+    if (phone && !numbers.some((known) => phone.endsWith(known) || known.endsWith(phone))) out.push(String(contact.phone));
+    const email = typeof contact.email === "string" ? contact.email.trim().toLowerCase() : "";
+    if (email && !lower.includes(email)) out.push(email);
+    const profile = typeof contact.linkedinUrl === "string" ? contact.linkedinUrl.toLowerCase().match(/linkedin\.com\/(?:in|company)\/([^/?#\s]+)/)?.[1] : null;
+    if (typeof contact.linkedinUrl === "string" && contact.linkedinUrl.trim() && (!profile || !lower.includes(profile))) out.push(contact.linkedinUrl);
+  }
+  return out;
+}
+
+/** Whether `url`'s site appears in what the owner wrote or a page they had read (the assistant opens only links it was given). */
+export function urlGiven(url: unknown, corpus: string): boolean {
+  if (typeof url !== "string" || !url.trim()) return false;
+  try {
+    const host = new URL(/^https?:\/\//i.test(url.trim()) ? url.trim() : `https://${url.trim()}`).hostname.toLowerCase().replace(/^www\./, "");
+    return corpus.toLowerCase().includes(host);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Why the model's planned tool calls must not run, or null. Checked before
  * anything runs or is shown, so a mistaken call is sent back to the model
@@ -284,9 +321,18 @@ export function actionsProblem(actions: readonly AgentAction[], input: { smallTa
   if (input.smallTalk && actions.length) {
     return "The owner only greeted or thanked you. Run no tools: answer in one or two friendly sentences and offer the next useful step.";
   }
-  const contacts = actions.some((action) => action.tool === "prepare_outreach" || ((action.tool === "find_leads" || action.tool === "find_linkedin_leads") && action.args.contactAfter === true));
+  const contacts = actions.some((action) => action.tool === "prepare_outreach" || ((action.tool === "find_leads" || action.tool === "find_linkedin_leads" || action.tool === "add_contacts") && action.args.contactAfter === true));
   if (contacts && !input.outreachRequested) return outreachRequestProblem("", null);
   for (const action of actions) {
+    if (action.tool === "add_contacts") {
+      const invented = ungroundedContacts(action.args.contacts, input.ownerCorpus);
+      if (invented.length) return `add_contacts: ${invented.join(", ")} ${invented.length === 1 ? "is" : "are"} not in what the owner wrote. Add only contacts the owner gave, exactly as given.`;
+      continue;
+    }
+    if (action.tool === "read_webpage") {
+      if (!urlGiven(action.args.url, input.ownerCorpus)) return "read_webpage opens only links the owner gave (or links on a page already read). Ask the owner for the link.";
+      continue;
+    }
     if (action.tool !== "save_business_info") continue;
     if (!mergeProfile(input.profile, action.args).problems.length && !profileChanges(input.profile, action.args).length) {
       return "save_business_info would change nothing: the owner gave no new business information. Do not call it; answer them instead.";

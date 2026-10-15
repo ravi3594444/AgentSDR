@@ -98,6 +98,31 @@ on whatsapp" → a question about which cities, no refused cards; "Austin,
 Texas" → one real search (48 businesses, 23 with email), whose plan was
 refused because WhatsApp is not connected, and the assistant said so.
 
+### Follow-up: choosing cities, contacts in the chat, links (2026-10-15)
+
+From the next screenshots: told "any city where we get most leads", the
+assistant asked again and claimed it could search only one city at a time;
+a WhatsApp number typed in the chat could not be used without a CSV.
+
+- Left to choose (or given a whole country), it picks the three largest
+  cities for that kind of business and starts one search per city at once.
+  A country-wide search is refused before it runs; when the map lookup is
+  down the search is not started (it would return almost nothing).
+- `add_contacts`: phones, emails and LinkedIn links typed in the chat
+  become a lead list (People import, numbers normalized); only values the
+  owner wrote or a read page shows; without a country code and no Default
+  phone country the owner is asked. With "contact them" the plan follows
+  automatically.
+- `read_webpage`: one public page from a link the owner gave (SSRF-guarded
+  fetcher); login-walled networks are refused by name.
+- Instagram, Facebook, X and TikTok are not supported, and the assistant
+  says so.
+
+Checks: `npm test` 1006/1006; `assistant.ts` 62/62 and 85/85 with real AI;
+new `assistant-chat-live.ts` (real model, the owner's own conversations)
+passing on four runs after the fixes; `campaign-engines.ts` 25/25,
+`unipile-email.ts` 23/23; lint; build.
+
 ### Live services vs stand-ins
 
 - **Live, real services:** gosom/google-maps-scraper v1.18.1 against Google

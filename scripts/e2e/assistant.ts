@@ -193,30 +193,13 @@ console.log(`Organization ${org!.name} (${org!.id})`);
 const aiSource = process.env.AI_SOURCE_ORGANIZATION_ID?.trim() || null;
 let aiReady = false;
 if (aiSource) {
-  const sourceRows = await db.select().from(gridProviders).where(eq(gridProviders.organizationId, aiSource));
-  const settings = sourceRows.find((row) => row.key === "openrouter-byok-settings");
-  const connectionId = (settings?.config as { connectionId?: string } | null)?.connectionId;
-  const connection = sourceRows.find((row) => row.id === connectionId);
-  const [credential] = connection ? await db.select().from(gridProviderCredentials).where(eq(gridProviderCredentials.providerId, connection.id)) : [];
-  if (!settings || !connection || !credential) {
-    console.error(`AI_SOURCE_ORGANIZATION_ID ${aiSource} has no saved AI Settings with a connection.`);
+  const { copyAiSettings } = await import("./copyAiSettings");
+  try {
+    await copyAiSettings(aiSource, org!.id);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
   }
-  const [copy] = await db.insert(gridProviders).values({
-    organizationId: org!.id,
-    key: connection.key.replace(/[0-9a-f-]{36}$/, crypto.randomUUID()),
-    name: connection.name,
-    config: connection.config,
-    enabled: connection.enabled,
-  }).returning();
-  await db.insert(gridProviderCredentials).values({ providerId: copy!.id, encryptedPayload: credential.encryptedPayload });
-  await db.insert(gridProviders).values({
-    organizationId: org!.id,
-    key: settings.key,
-    name: settings.name,
-    config: { ...(settings.config as Record<string, unknown>), connectionId: copy!.id },
-    enabled: true,
-  });
   aiReady = true;
   console.log(`AI Settings copied from organization ${aiSource}.`);
 } else {

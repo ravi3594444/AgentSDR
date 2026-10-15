@@ -35,7 +35,7 @@ function systemPrompt(): string {
     "3. Ask only for what the next step needs, one or two questions at a time. Read the BUSINESS PROFILE and SETUP first and never ask for what is already there. For a lead search you need the kind of customers and where; for outreach, the business name, the offer and the sender's name. If the owner describes a different business from the BUSINESS PROFILE, save the new details and ask before relying on older ones that may belong to the previous business (places, website, prices, booking details).",
     "4. When the owner tells you anything about the business, customers, places, offer, prices, service area, sender, tone or preferences, call save_business_info in the same response, so it is remembered and automatic replies can use it. Attached documents are already saved to knowledge; contact lists are already imported (see the attachment TOOL lines).",
     "5. Prepare outreach only when the owner's latest message asks to contact, email, message or pitch people, or says yes to your offer of it. If they only gave information or asked a question, answer or save it and offer outreach in one sentence. 'Find leads and contact them': call find_leads with contactAfter true; the plan is then prepared automatically when the search ends. 'Use this list': call prepare_outreach for the audience the import created. Do not check a search's progress right after starting it; its result is announced.",
-    "6. Lead search reads public Google Maps listings and each business's own website. It finds businesses, not private individuals, and only those with a public listing. One search covers one kind of business in a city or district (about 20 businesses per area searched): for two kinds of business run two searches; for a country or a large region, ask which cities to search and run one search per city. Say so when results are few, and suggest other words or nearby places. Never invent contacts, emails, phones, profiles, prices or results.",
+    "6. Lead sources: (a) find_leads — businesses with a public Google Maps listing, then each business's own website (home and contact pages) for the emails, phones and LinkedIn pages it publishes; (b) find_linkedin_leads — people on LinkedIn by keywords, when a LinkedIn account is connected (profiles only, contacted on LinkedIn); (c) contact lists the owner attaches; (d) contacts the owner types in the chat — call add_contacts with exactly what they wrote (contactAfter true when they asked to contact, message or pitch them; the plan then follows by itself); read back the saved numbers. A phone number without + and a country code is refused when no Default phone country is set: ask which country, never guess. (e) read_webpage opens a link the owner gives (their website, a page listing people) and reads its text and contacts. You cannot search the web and cannot read Instagram, Facebook, X, TikTok or LinkedIn pages (they need a login); say so plainly when asked, and offer what you can do instead. One find_leads call covers one kind of business in one city or district (about 20 businesses per area it searches); you can run up to 4 at once, one per city or kind. For a country or large region, or when the owner leaves the place to you ('any city', 'wherever there are most'), choose yourself: the 3 largest cities for that kind of business in that country (or near the owner's locations), name them, and start one search per city in the same response. Ask about the place only when you know neither the country nor the owner's area. Never invent contacts, emails, phones, profiles, prices or results.",
     "7. Replies: each run is in Automatic or Review mode. In Automatic mode ordinary replies are answered from the owner's saved information; anything the information does not cover, complaints, negotiations, promises and meetings come to the owner as a DECISION with the reason. When the owner answers an OPEN DECISION, call answer_decision with their words; it is saved and the reply is rewritten. You may switch runs to Review (switch_to_review); only the owner's button switches a run to Automatic.",
     "8. If a channel is not connected, say which one and where to connect it (Settings). If AI or lead search is not set up on this server, say the operator who installed it must set it up.",
     "9. Write like a capable assistant, in the owner's language: short sentences, no hype, no emojis, no markdown headings. Use ids only inside tool arguments, never in what you say.",
@@ -150,7 +150,7 @@ export async function runAgentTurn(input: {
       const messages = await listMessages(input.threadId, 80);
       // What the owner wrote or attached: business information is saved only from it.
       const ownerCorpus = messages
-        .filter((message) => message.role === "user" || (message.role === "tool" && (message.tool === "read_document" || message.tool === "import_contacts")))
+        .filter((message) => message.role === "user" || (message.role === "tool" && (message.tool === "read_document" || message.tool === "import_contacts" || (message.tool === "read_webpage" && message.status === "ok"))))
         .map((message) => `${message.content} ${typeof message.toolResult?.summary === "string" ? message.toolResult.summary : ""}`)
         .join("\n") + `\n${documentsText}`;
       let reply: AgentReply | null = null;
@@ -201,6 +201,14 @@ export async function runAgentTurn(input: {
         const result = await runToolInThread(context, action.tool, action.args);
         if (result.ok) succeeded.push(action.tool);
         else allOk = false;
+        // Contacts the owner asked to reach get their plan straight away, as a "find and contact" search does.
+        const audienceId = typeof result.data?.audienceId === "string" ? result.data.audienceId : null;
+        if (action.tool === "add_contacts" && result.ok && action.args.contactAfter === true && askedForOutreach && audienceId && !actions.some((other) => other.tool === "prepare_outreach")) {
+          const channels = Array.isArray(action.args.channels) ? { channels: action.args.channels } : {};
+          const plan = await runToolInThread(context, "prepare_outreach", { audienceId, ...channels });
+          if (plan.ok) succeeded.push("prepare_outreach");
+          else allOk = false;
+        }
       }
       // Shown only when every tool in this step worked: after a failure the
       // next step says what happened instead of what was hoped for.
