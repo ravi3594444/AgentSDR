@@ -124,7 +124,133 @@ export function placesFromMapsItems(items: readonly unknown[], defaultCountry?: 
   return { places, skipped };
 }
 
+// ── Facebook Search Scraper items → places ─────────────────────────────────
+
+function firstString(value: unknown): string | null {
+  return Array.isArray(value) ? value.map(text).find((item): item is string => Boolean(item)) ?? null : text(value);
+}
+
+/**
+ * Facebook pages found by keyword and place (apify/facebook-search-scraper)
+ * as places: the page's own published phone, email and website, and the
+ * page as the source. Field names are the Actor's documented output (title,
+ * pageName, pageUrl / facebookUrl, pageId / facebookId, categories, address,
+ * phone, email, website / websites, ratingCount), read defensively.
+ */
+export function placesFromFacebookItems(items: readonly unknown[], defaultCountry?: string): { places: MapsPlace[]; skipped: number } {
+  const seen = new Set<string>();
+  const places: MapsPlace[] = [];
+  let skipped = 0;
+  for (const raw of items) {
+    const item = raw && typeof raw === "object" ? (raw as Json) : null;
+    const name = item ? text(item.title) ?? text(item.name) ?? text(item.pageName) : null;
+    const pageUrl = item ? text(item.pageUrl) ?? text(item.facebookUrl) ?? text(item.url) : null;
+    if (!item || !name || !pageUrl) {
+      skipped += 1;
+      continue;
+    }
+    const placeKey = `facebook:${text(item.pageId) ?? text(item.facebookId) ?? pageUrl}`;
+    if (seen.has(placeKey)) continue;
+    seen.add(placeKey);
+    const website = ownWebsite(text(item.website) ?? firstString(item.websites) ?? undefined);
+    const rawPhone = text(item.phone);
+    const phoneCheck = rawPhone ? checkPhone(rawPhone, defaultCountry) : null;
+    const email = cleanEmail(text(item.email) ?? "") ?? null;
+    const categories = Array.isArray(item.categories) ? item.categories.map(text).filter((value): value is string => Boolean(value) && value !== "Page") : [];
+    places.push({
+      placeKey,
+      name,
+      displayName: cleanBusinessName(name),
+      category: categories[0] ?? null,
+      address: text(item.address),
+      city: null,
+      country: null,
+      mapsUrl: pageUrl,
+      website,
+      domain: websiteDomain(website),
+      phone: phoneCheck?.ok ? phoneCheck.e164 : null,
+      phoneProblem: rawPhone && phoneCheck && !phoneCheck.ok ? phoneCheck.reason : null,
+      emails: email ? [email] : [],
+      rating: null,
+      reviewCount: num(item.ratingCount),
+      closed: null,
+    });
+  }
+  return { places, skipped };
+}
+
+// ── LinkedIn company search items → places ─────────────────────────────────
+
+/**
+ * LinkedIn companies found by keyword and place
+ * (harvestapi/linkedin-company-search, full mode) as places. LinkedIn shows
+ * no emails: the contacts come from reading each company's own website.
+ * Field names are the Actor's documented output (name, linkedinUrl, id /
+ * universalName, website, phone, industries[].name, headquarter / locations),
+ * read defensively.
+ */
+export function placesFromLinkedinCompanyItems(items: readonly unknown[], defaultCountry?: string): { places: (MapsPlace & { linkedinUrl: string })[]; skipped: number } {
+  const seen = new Set<string>();
+  const places: (MapsPlace & { linkedinUrl: string })[] = [];
+  let skipped = 0;
+  for (const raw of items) {
+    const item = raw && typeof raw === "object" ? (raw as Json) : null;
+    const name = item ? text(item.name) : null;
+    const linkedinUrl = item ? text(item.linkedinUrl) ?? text(item.url) : null;
+    if (!item || !name || !linkedinUrl || !/linkedin\.com\/company\//i.test(linkedinUrl)) {
+      skipped += 1;
+      continue;
+    }
+    const placeKey = `linkedin:${text(item.id) ?? text(item.universalName) ?? linkedinUrl}`;
+    if (seen.has(placeKey)) continue;
+    seen.add(placeKey);
+    const website = ownWebsite(text(item.website) ?? undefined);
+    const rawPhone = text(item.phone) ?? text((item.phone as Json | undefined)?.number);
+    const phoneCheck = rawPhone ? checkPhone(rawPhone, defaultCountry) : null;
+    const industries = Array.isArray(item.industries) ? item.industries.map((industry) => text((industry as Json | null)?.name) ?? text(industry)).filter((value): value is string => Boolean(value)) : [];
+    const office = (item.headquarter && typeof item.headquarter === "object" ? item.headquarter : Array.isArray(item.locations) ? item.locations[0] : null) as Json | null;
+    const city = office ? text(office.city) : null;
+    const address = office ? [text(office.line1) ?? text(office.address), city, text(office.country)].filter(Boolean).join(", ") || null : null;
+    places.push({
+      placeKey,
+      name,
+      displayName: cleanBusinessName(name),
+      category: industries[0] ?? null,
+      address,
+      city,
+      country: office ? text(office.country)?.toUpperCase().slice(0, 2) ?? null : null,
+      mapsUrl: linkedinUrl,
+      linkedinUrl,
+      website,
+      domain: websiteDomain(website),
+      phone: phoneCheck?.ok ? phoneCheck.e164 : null,
+      phoneProblem: rawPhone && phoneCheck && !phoneCheck.ok ? phoneCheck.reason : null,
+      emails: [],
+      rating: null,
+      reviewCount: null,
+      closed: null,
+    });
+  }
+  return { places, skipped };
+}
+
 // ── Instagram ────────────────────────────────────────────────────────────────
+
+/**
+ * Usernames from apify/instagram-search-scraper (a user search, or a place
+ * search's linked business profile), in order, unique, valid.
+ */
+export function usernamesFromSearchItems(items: readonly unknown[]): string[] {
+  const out: string[] = [];
+  for (const raw of items) {
+    const item = raw && typeof raw === "object" ? (raw as Json) : null;
+    if (!item) continue;
+    const business = ((item.ig_business as Json | undefined)?.profile as Json | undefined) ?? null;
+    const username = (text(item.username) ?? text(business?.username))?.toLowerCase() ?? null;
+    if (username && /^[a-z0-9._]{1,30}$/.test(username) && !out.includes(username)) out.push(username);
+  }
+  return out;
+}
 
 /**
  * Hashtags for a customer type in a place: "dentist" + "Pune" →

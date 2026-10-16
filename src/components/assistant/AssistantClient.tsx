@@ -133,6 +133,7 @@ const TOOL_TITLE: Record<string, string> = {
   read_webpage: "Read a web page",
   find_customers_on_web: "Web search",
   find_instagram_prospects: "Instagram prospects",
+  find_social_leads: "Social media search",
   use_existing_leads: "Lead list from your leads",
   list_inquiries: "Inquiries",
   prepare_inquiry_replies: "Answering new inquiries",
@@ -304,6 +305,8 @@ function DiscoveryCard({ message, job }: { message: Message; job: Job | undefine
   const data = message.toolResult?.data as { phrase?: string; keywords?: string } | undefined;
   const linkedin = message.tool === "find_linkedin_leads";
   const instagram = message.tool === "find_instagram_prospects" && job?.kind === "apify_instagram";
+  // Facebook, LinkedIn or Instagram search through Apify (find_social_leads).
+  const social = message.tool === "find_social_leads";
   // A search handed to website search (no Google Maps or Apify available) shows as one.
   const web = message.tool === "find_customers_on_web" || job?.kind === "web_discovery";
   const viaApify = (job?.progress as Record<string, unknown> | undefined)?.provider === "Apify" || (job?.result as Record<string, unknown> | null | undefined)?.provider === "apify";
@@ -311,7 +314,7 @@ function DiscoveryCard({ message, job }: { message: Message; job: Job | undefine
   const progress = job.progress as Record<string, number | string>;
   const stageText: Record<string, string> = {
     queued: progress.note ? `${String(progress.note)}…` : "Starting the search…",
-    searching: linkedin ? `Searching LinkedIn (${progress.found ?? 0} profiles so far)…` : web ? "Searching the web for matching businesses and directories…" : instagram ? `Searching Instagram through Apify (${String(progress.actor ?? "")})…` : `Searching Google Maps${viaApify ? " through Apify" : ""}${progress.searches ? ` in ${progress.searches} area${Number(progress.searches) === 1 ? "" : "s"}` : ""} (usually 1–10 minutes)…`,
+    searching: social ? `Searching through Apify (${String(progress.actor ?? "social media")})…` : linkedin ? `Searching LinkedIn (${progress.found ?? 0} profiles so far)…` : web ? "Searching the web for matching businesses and directories…" : instagram ? `Searching Instagram through Apify (${String(progress.actor ?? "")})…` : `Searching Google Maps${viaApify ? " through Apify" : ""}${progress.searches ? ` in ${progress.searches} area${Number(progress.searches) === 1 ? "" : "s"}` : ""} (usually 1–10 minutes)…`,
     reading: `Reading the pages the search found for published contact details (${progress.read ?? progress.pagesRead ?? 0} of ${progress.toRead ?? progress.candidates ?? "?"})…`,
     enriching: `Reading business websites for contact details (${progress.websitesChecked ?? 0} of ${progress.websitesToCheck ?? "?"})…`,
     saving: `Checking and saving contacts (${progress.saved ?? 0} of ${progress.found ?? "?"})…`,
@@ -843,7 +846,7 @@ function ToolMessage({ message, jobs, runs, decisions, canManageAutopilot, lastR
   if (message.tool === "daily_summary") {
     return <Card title={`Daily summary · ${String(data?.day ?? "")}`} status={message.status}><p className="whitespace-pre-wrap text-paragraph-xs">{message.content.split("\n").slice(1).join("\n")}</p></Card>;
   }
-  if (message.tool === "find_leads" || message.tool === "find_linkedin_leads" || message.tool === "find_customers_on_web" || message.tool === "find_instagram_prospects") return <DiscoveryCard message={message} job={jobs.find((job) => job.id === data?.jobId)} />;
+  if (message.tool === "find_leads" || message.tool === "find_linkedin_leads" || message.tool === "find_customers_on_web" || message.tool === "find_instagram_prospects" || message.tool === "find_social_leads") return <DiscoveryCard message={message} job={jobs.find((job) => job.id === data?.jobId)} />;
   if (message.tool === "prepare_outreach") return <ProposalCard message={message} run={runs[String(data?.runId ?? "")]} canManageAutopilot={canManageAutopilot} lastReplyMode={lastReplyMode} onChanged={onChanged} />;
   if (message.tool === "prepare_inquiry_replies") return <InquiryRunCard message={message} run={runs[String(data?.runId ?? "")]} canManageAutopilot={canManageAutopilot} onChanged={onChanged} />;
   if (message.tool === "report") return <ReportCard message={message} />;

@@ -5,7 +5,7 @@ import { db } from "@/lib/db";
 import { getByokSettings } from "@/lib/ai/byok";
 import { getAiConnection } from "@/lib/ai/connections";
 import { retrieveKnowledge } from "@/lib/crm/knowledge";
-import { discoveryAvailability, DiscoveryUnavailableError, normalizeCriteria, startDiscovery, startInstagramProspects } from "@/lib/discovery/discovery.server";
+import { discoveryAvailability, DiscoveryUnavailableError, normalizeCriteria, startDiscovery, startInstagramProspects, startSocialProspects } from "@/lib/discovery/discovery.server";
 import { searchAreaProblem } from "@/lib/discovery/geocode";
 import { extractContacts, visibleText } from "@/lib/discovery/contacts";
 import { fetchPublicPage } from "@/lib/discovery/websiteContacts.server";
@@ -315,6 +315,39 @@ export const TOOLS: Record<string, Tool> = {
         return {
           ok: true,
           summary: `${via}; job ${started.jobId}, audience ${started.audienceId}. Results are announced in the chat when done.${contactAfter ? " The outreach plan will be prepared automatically for those who can be contacted." : ""} ${started.note ?? ""}`.trim(),
+          data: { jobId: started.jobId, audienceId: started.audienceId, phrase: started.phrase, provider: started.provider, note: started.note },
+        };
+      } catch (error) {
+        if (error instanceof DiscoveryUnavailableError) return { ok: false, summary: error.message };
+        throw error;
+      }
+    },
+  },
+
+  find_social_leads: {
+    available: (features) => features.apify_discovery,
+    description: "Find businesses on a social platform by keyword and place, through Apify (the organization's approved Actors, within its budget; paid from the owner's Apify account): platform 'facebook' — Facebook business pages with the phone, email, website and address each publishes; 'linkedin' — LinkedIn companies (no emails on LinkedIn: contacts come from reading each company's own website; the Actor reads LinkedIn without logging in, which LinkedIn's terms do not allow, so the owner approves it knowingly); 'instagram' — Instagram accounts from Instagram's own account search, then their public profiles. Each lead's website is read for the contacts it publishes. Finding a page or account is NOT a way to contact it: AgentSDR never messages anyone on Facebook or Instagram, so only those with an email or phone can be contacted; the rest are listed with the reason. When the platform's Actor is not approved or the budget is used, it says so and nothing is searched. Runs in the background and announces the result.",
+    arguments: "platform (facebook|linkedin|instagram), what (kind of business, e.g. 'real estate agencies'), where (city/area), maxResults (5-100, default 30), contactAfter (true only when the owner asked to contact the people found), channels (optional, with contactAfter: array of email|whatsapp|linkedin)",
+    run: async (args, context) => {
+      if (!(await featureEnabled("apify_discovery"))) return { ok: false, summary: new FeatureDisabledError("apify_discovery").message };
+      const platform = args.platform;
+      if (platform !== "facebook" && platform !== "linkedin" && platform !== "instagram") throw new ToolArgumentError("platform must be facebook, linkedin or instagram");
+      const profile = await getBusinessProfile();
+      const what = text(args, "what") ?? profile.targetCustomers?.trim() ?? null;
+      const where = text(args, "where") ?? profile.locations?.trim() ?? null;
+      if (!what) throw new ToolArgumentError("say what kind of businesses to look for");
+      if (!where) throw new ToolArgumentError("say which place (a city or area)");
+      if (args.contactAfter !== undefined && typeof args.contactAfter !== "boolean") throw new ToolArgumentError("contactAfter must be true or false");
+      const requested = Number(args.maxResults ?? 30);
+      const maxResults = Number.isFinite(requested) ? Math.min(100, Math.max(5, Math.round(requested))) : 30;
+      const request = args.contactAfter === true ? requireOutreachRequest(context) : null;
+      const contactAfter = request ? { channels: channels(args) ?? null, ownerRequest: request, requestId: context.outreachRequestId ?? undefined } : null;
+      try {
+        const started = await startSocialProspects(platform, { what: what.slice(0, 200), where: where.slice(0, 200), maxResults, language: profile.language ?? "en" }, context, { contactAfter });
+        const name = platform === "facebook" ? "Facebook" : platform === "linkedin" ? "LinkedIn" : "Instagram";
+        return {
+          ok: true,
+          summary: `${name} search started for “${what}” in ${where} through Apify (up to ${maxResults}); job ${started.jobId}, audience ${started.audienceId}. Results are announced in the chat when done.${contactAfter ? " The outreach plan will be prepared automatically for those who can be contacted." : ""} ${started.note ?? ""}`.trim(),
           data: { jobId: started.jobId, audienceId: started.audienceId, phrase: started.phrase, provider: started.provider, note: started.note },
         };
       } catch (error) {

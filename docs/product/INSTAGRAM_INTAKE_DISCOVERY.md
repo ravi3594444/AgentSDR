@@ -474,6 +474,20 @@ run** (default 100). Code: `src/lib/apify/`, `src/services/apify.ts`,
 | `compass~crawler-google-places` (Google Maps Scraper) | `find_leads`: businesses of a kind in a place, with listed phone and website. Emails come from reading each business's own website (not the Actor's paid contact add-on). |
 | `apify~instagram-hashtag-scraper` | `find_instagram_prospects`: public posts under hashtags made from the customer type and place (plus any the owner names). |
 | `apify~instagram-profile-scraper` | The found accounts' public profiles: bio, category, the website and any email or phone they publish. |
+| `apify~instagram-search-scraper` | `find_social_leads` (platform `instagram`): accounts from Instagram's own account search for "<customer type> <place>" (`searchType: "user"`), whose profiles are then read with the Profile Scraper. |
+| `apify~facebook-search-scraper` | `find_social_leads` (platform `facebook`): Facebook business pages by keyword (`categories`) and place (`locations`), with the phone, email, website and address each publishes. |
+| `harvestapi~linkedin-company-search` | `find_social_leads` (platform `linkedin`): companies by keyword and place, in `full` mode for their website; contacts come from that website. A third-party Actor that reads LinkedIn without logging in; LinkedIn's User Agreement does not allow scraping, and the approval card says so. |
+
+The three `find_social_leads` sources (added 2026-10-16, beta) have no
+fallback: when the platform's Actor is not approved, or the budget is
+used, the tool says so and nothing is searched (a Facebook or LinkedIn
+search has no self-hosted equivalent). A Facebook page or LinkedIn
+company becomes a business lead exactly like a Maps listing (source
+`apify_facebook` / `apify_linkedin`; its page kept as evidence and in
+`raw`), and its website is read for contacts the same way. Their input
+fields were taken from each Actor's published input schema
+(`GET /v2/acts/<id>/builds/default`, 2026-10-16); their output fields
+are read defensively.
 
 **When Apify is used.** Only when the feature is on, a token is saved, the
 Actor is approved, fewer than 2 runs are open, and allowance is left: this

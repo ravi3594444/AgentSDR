@@ -560,9 +560,32 @@ and it opens that one page and reads its text and the emails, phones and
 LinkedIn links on it. It opens only links you give; it does not search the
 web.
 
-**Not supported:** Instagram, Facebook, X and TikTok, for finding leads or
-reading pages: they need a login and do not allow automated reading. On
+**Not supported:** reading Instagram, Facebook, X and TikTok pages
+yourself: they need a login and do not allow automated reading. On
 LinkedIn it can search people (below) but cannot open LinkedIn pages.
+
+**Social media search through Apify (beta, paid, off by default).** With
+the **Apify discovery (paid)** feature on and an Apify token saved
+(Settings → Organization → Apify), "find real estate agencies in Austin
+on Facebook" searches through your Apify account, within your monthly
+budget and per-run cap. Each platform runs only once you tick its Actor
+under **Approved Actors**:
+- **Facebook Search Scraper**: business pages by keyword and place, with
+  the phone, email, website and address each page publishes.
+- **Instagram Search Scraper**: accounts from Instagram's own search (not
+  only hashtags), then their public profiles through the Instagram
+  Profile Scraper (approve both).
+- **LinkedIn Company Search**: companies with their website. LinkedIn
+  shows no emails, so contacts come from each company's own website.
+  **This Actor reads LinkedIn without logging in, which LinkedIn's User
+  Agreement does not allow.** Approve it only if you accept that risk.
+
+Each lead's website is read for its published contacts. The assistant
+never messages anyone on Facebook or Instagram: a page or account without
+a published email or phone is listed as excluded, with the reason. A
+platform whose Actor is not approved, or a used-up budget, is reported in
+the chat and nothing is searched. In Autonomous mode these searches count
+toward the daily search cap.
 
 **Lists.** CSV and Excel go through the same People import as Leads →
 Import (same column handling, same errors). Leads with no usable contact on

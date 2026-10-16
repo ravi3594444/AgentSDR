@@ -71,6 +71,8 @@ const SOURCE_LABELS: Record<string, string> = {
   "discovery:web-search": "Web search",
   linkedin_search: "LinkedIn search",
   apify_instagram: "Instagram (via Apify)",
+  apify_facebook: "Facebook page (via Apify)",
+  apify_linkedin: "LinkedIn company (via Apify)",
   list: "Your list",
   existing: "Your leads",
   "inquiry:website_form": "Website form inquiry",

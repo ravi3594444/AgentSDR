@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
   apifyAllowance,
+  placesFromFacebookItems,
+  placesFromLinkedinCompanyItems,
+  usernamesFromSearchItems,
   hashtagsFor,
   looksExhausted,
   mentionsPlace,
@@ -103,5 +106,36 @@ describe("Instagram mapping", () => {
   test("a place is known only when the post or profile names it", () => {
     expect(mentionsPlace("Pune, India", "Cakes in pune")).toBe(true);
     expect(mentionsPlace("Pune, India", "Best cakes!", null)).toBe(false);
+  });
+});
+
+describe("social sources", () => {
+  test("Facebook pages become places with the contacts the page publishes", () => {
+    // From apify/facebook-search-scraper's documented output (2026-10-16).
+    const { places, skipped } = placesFromFacebookItems([
+      { facebookUrl: "https://www.facebook.com/MKDCLangley", categories: ["Page", "Kitchen & bathroom contractor"], title: "Merit Kitchens Design Centre Langley | Langley BC", address: "Unit 150 - 19888 Langley Bypass, Langley, BC", pageId: "100063562495135", pageName: "MKDCLangley", pageUrl: "https://www.facebook.com/MKDCLangley", phone: "+1 604-532-7197", email: "langley@merit-kitchens.com", website: "meritdesignlangley.com", ratingCount: 8 },
+      { facebookUrl: "https://www.facebook.com/MKDCLangley", title: "duplicate", pageId: "100063562495135" },
+      { title: "no page url" },
+    ], "US");
+    expect(skipped).toBe(1);
+    expect(places).toHaveLength(1);
+    expect(places[0]).toMatchObject({ placeKey: "facebook:100063562495135", category: "Kitchen & bathroom contractor", phone: "+16045327197", emails: ["langley@merit-kitchens.com"], mapsUrl: "https://www.facebook.com/MKDCLangley", domain: "meritdesignlangley.com" });
+  });
+  test("LinkedIn companies become places whose contacts come from their website", () => {
+    const { places, skipped } = placesFromLinkedinCompanyItems([
+      { id: "213520", name: "Acme Robotics", linkedinUrl: "https://www.linkedin.com/company/acme-robotics/", website: "https://acmerobotics.example", industries: [{ name: "Industrial Automation" }], headquarter: { city: "Austin", country: "US", line1: "1 Main St" } },
+      { name: "Not a company page", linkedinUrl: "https://www.linkedin.com/in/someone" },
+    ]);
+    expect(skipped).toBe(1);
+    expect(places[0]).toMatchObject({ placeKey: "linkedin:213520", category: "Industrial Automation", city: "Austin", address: "1 Main St, Austin, US", emails: [], domain: "acmerobotics.example", linkedinUrl: "https://www.linkedin.com/company/acme-robotics/" });
+  });
+  test("Instagram search results give usernames, from a user search or a place's business profile", () => {
+    expect(usernamesFromSearchItems([
+      { username: "BrightSmileDental" },
+      { name: "Bakeshop Praha", ig_business: { profile: { username: "bakeshop.praha" } } },
+      { username: "brightsmiledental" },
+      { username: "not valid!" },
+      { ig_business: { profile: null } },
+    ])).toEqual(["brightsmiledental", "bakeshop.praha"]);
   });
 });

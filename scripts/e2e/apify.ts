@@ -106,7 +106,7 @@ const { memberInsights } = await import("@/lib/assistant/audiences.server");
 const { apifyRuns } = await import("@/lib/apify/schema");
 const { apifySettingsView, saveApifySettings, trackedRun } = await import("@/lib/apify/apify.server");
 const { setApifyApiBase } = await import("@/services/apify");
-const { DiscoveryUnavailableError, runDiscoveryStep, setDiscoveryPageOptions, startDiscovery, startInstagramProspects } = await import("@/lib/discovery/discovery.server");
+const { DiscoveryUnavailableError, runDiscoveryStep, setDiscoveryPageOptions, startDiscovery, startInstagramProspects, startSocialProspects } = await import("@/lib/discovery/discovery.server");
 const { setFeature, clearFeatureCache } = await import("@/lib/features/flags.server");
 const { upsertPerson, withLeadTransaction } = await import("@/lib/leads/records");
 const { saveChannelRules } = await import("@/lib/channels/rules.server");
@@ -344,6 +344,79 @@ await runInOrganization(orgA!.id, async () => {
   check("a post is a potential match, not interest; the place is unknown when not named", /potential match, not interest/.test(contactable?.matchReason ?? "") && /Unknown/.test((unreachable?.facts as Record<string, string> | undefined)?.location ?? ""), `${contactable?.matchReason} | ${JSON.stringify(unreachable?.facts)}`);
   check("a generic post caption is engagement, not a need", (unreachable?.signals ?? []).every((signal) => signal.kind === "engagement"));
   check("both Instagram runs carry the request id", [...(await db.select().from(apifyRuns).where(and(inOrg(apifyRuns), eq(apifyRuns.jobId, ig.jobId))))].every((entry) => entry.requestId === "req-ig"));
+
+  // ---------------------------------------------------------- social platforms (find_social_leads)
+  let socialRefused = "";
+  try {
+    await startSocialProspects("facebook", { what: "kitchen contractors", where: "Langley, BC", maxResults: 10, language: "en" }, context, {});
+  } catch (error) {
+    socialRefused = error instanceof DiscoveryUnavailableError ? error.message : String(error);
+  }
+  check("Facebook Actor not approved: nothing is searched, and it says where to approve it", /not approved/.test(socialRefused) && /Settings → Organization → Apify/.test(socialRefused), socialRefused);
+  await saveApifySettings({ approvedActors: ["google_maps", "instagram_hashtags", "instagram_profiles", "instagram_search", "facebook_pages", "linkedin_companies"] }, null);
+  // A company website that publishes its contacts (LinkedIn shows none).
+  setDiscoveryPageOptions({
+    allowPrivate: true,
+    fetchImpl: (async (input: string | URL | Request) => {
+      const url = String(input instanceof Request ? input.url : input);
+      return url.startsWith("https://acmerobotics.example")
+        ? new Response("<html><body><h1>Acme Robotics</h1><p>Sales: sales@acmerobotics.example</p><p>Call +1 512 555 0100</p></body></html>", { status: 200, headers: { "content-type": "text/html" } })
+        : new Response("not found", { status: 404 });
+    }) as unknown as typeof fetch,
+  });
+
+  apify.next.set("apify~facebook-search-scraper", [{
+    pollsUntilDone: 1,
+    finalStatus: "SUCCEEDED",
+    usage: 0.03,
+    items: [
+      { facebookUrl: "https://www.facebook.com/MKDCLangley", pageUrl: "https://www.facebook.com/MKDCLangley", pageId: "100063562495135", title: "Merit Kitchens Design Centre Langley", categories: ["Page", "Kitchen & bathroom contractor"], address: "19888 Langley Bypass, Langley, BC", phone: "+1 604-532-7197", email: "langley@merit-kitchens.com", website: "meritdesignlangley.com" },
+      { pageUrl: "https://www.facebook.com/quietkitchens", pageId: "200", title: "Quiet Kitchens", categories: ["Page", "Contractor"] },
+    ],
+  }]);
+  const fb = await startSocialProspects("facebook", { what: "kitchen contractors", where: "Langley, BC", maxResults: 10, language: "en" }, context, { contactAfter: contactAfter("req-fb") });
+  const fbJob = await runToEnd(fb.jobId);
+  const fbRun = [...apify.runs.values()].find((entry) => entry.actorId === "apify~facebook-search-scraper");
+  const fbResult = (fbJob.result ?? {}) as Record<string, unknown>;
+  check("Facebook search asks the Actor for the kind of business in the place", JSON.stringify(fbRun?.input.categories) === "[\"kitchen contractors\"]" && JSON.stringify(fbRun?.input.locations) === "[\"Langley, BC\"]" && typeof fbRun?.input.resultsLimit === "number", JSON.stringify(fbRun?.input));
+  check("two pages found; the one publishing an email and phone is contactable, the other is excluded with the reason", fbJob.status === "succeeded" && fbResult.found === 2 && fbResult.eligible === 1, JSON.stringify(fbResult));
+  const fbMembers = await memberInsightsOf(fb.audienceId);
+  const fbContact = fbMembers.find((member) => member.personId);
+  const fbExcluded = fbMembers.find((member) => !member.personId);
+  check("…its contacts are sourced to the Facebook page, and the lead's source says Facebook", JSON.stringify(fbContact?.evidence ?? []).includes("\"source\":\"Facebook page\"") && fbContact?.source === "apify_facebook", `${fbContact?.source} ${JSON.stringify(fbContact?.evidence)}`);
+  check("…the other: no email or phone on its Facebook page", /no email or phone on its Facebook page/.test(fbExcluded?.reason ?? ""), fbExcluded?.reason ?? "");
+
+  apify.next.set("harvestapi~linkedin-company-search", [{
+    pollsUntilDone: 1,
+    finalStatus: "SUCCEEDED",
+    usage: 0.06,
+    items: [{ id: "213520", name: "Acme Robotics", linkedinUrl: "https://www.linkedin.com/company/acme-robotics/", website: "https://acmerobotics.example", industries: [{ name: "Industrial Automation" }], headquarter: { city: "Austin", country: "US" } }],
+  }]);
+  const li = await startSocialProspects("linkedin", { what: "robotics companies", where: "Austin, Texas", maxResults: 10, language: "en" }, context, {});
+  check("LinkedIn search says it reads LinkedIn without logging in, against LinkedIn's terms", /User Agreement does not allow scraping/.test(li.note ?? ""), li.note ?? "");
+  const liJob = await runToEnd(li.jobId);
+  const liRun = [...apify.runs.values()].find((entry) => entry.actorId === "harvestapi~linkedin-company-search");
+  check("LinkedIn search asks for full company profiles (with websites) by keyword and place", liRun?.input.searchQuery === "robotics companies" && JSON.stringify(liRun?.input.locations) === "[\"Austin, Texas\"]" && liRun?.input.scraperMode === "full", JSON.stringify(liRun?.input));
+  const liMembers = await memberInsightsOf(li.audienceId);
+  check("a LinkedIn company is contacted by the email its own website publishes, and keeps its LinkedIn page", liJob.status === "succeeded" && Boolean(liMembers[0]?.personId) && JSON.stringify(liMembers[0]?.evidence ?? []).includes("sales@acmerobotics.example") && JSON.stringify(liMembers[0]?.evidence ?? []).includes("linkedin.com/company/acme-robotics"), JSON.stringify(liMembers[0]?.evidence));
+
+  apify.next.set("apify~instagram-search-scraper", [{ pollsUntilDone: 1, finalStatus: "SUCCEEDED", usage: 0.01, items: [{ username: "glow.salon.la" }, { username: "nails.by.kim" }] }]);
+  apify.next.set("apify~instagram-profile-scraper", [{
+    pollsUntilDone: 1,
+    finalStatus: "SUCCEEDED",
+    usage: 0.02,
+    items: [
+      { username: "glow.salon.la", fullName: "Glow Salon", biography: "Beauty salon in Los Angeles", businessEmail: "hi@glowsalon.example", businessCategoryName: "Beauty salon" },
+      { username: "nails.by.kim", fullName: "Nails by Kim", biography: "Nail art" },
+    ],
+  }]);
+  const igSearch = await startSocialProspects("instagram", { what: "beauty salons", where: "Los Angeles", maxResults: 10, language: "en" }, context, {});
+  const igSearchJob = await runToEnd(igSearch.jobId);
+  const searchRun = [...apify.runs.values()].find((entry) => entry.actorId === "apify~instagram-search-scraper");
+  const igSearchResult = (igSearchJob.result ?? {}) as Record<string, unknown>;
+  check("Instagram account search asks for accounts matching the kind of business and place, then reads their profiles", searchRun?.input.search === "beauty salons Los Angeles" && searchRun?.input.searchType === "user" && igSearchJob.status === "succeeded" && igSearchResult.found === 2 && igSearchResult.eligible === 1, `${JSON.stringify(searchRun?.input)} ${JSON.stringify(igSearchResult)}`);
+  const igSearchMembers = await memberInsightsOf(igSearch.audienceId);
+  check("…an account found by search is a potential match from Instagram's account search", igSearchMembers.some((member) => /Instagram's account search/.test(member.matchReason ?? "")), igSearchMembers.map((member) => member.matchReason).join(" | "));
 
   // ---------------------------------------------------------- never tops up
   check("nothing ever changed the Apify account: only reads, runs and dataset reads", apify.calls.every((call) => /^(GET \/users\/me(\/limits)?|POST \/actors\/[^/]+\/runs|GET \/actor-runs\/[^/]+|GET \/datasets\/[^/]+\/items)$/.test(call)), apify.calls.filter((call) => !/^(GET|POST \/actors)/.test(call)).join(", "));

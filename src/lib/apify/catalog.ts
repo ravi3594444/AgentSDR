@@ -14,7 +14,7 @@
  * search as before.
  */
 
-export type ApifyActorKey = "google_maps" | "instagram_hashtags" | "instagram_profiles";
+export type ApifyActorKey = "google_maps" | "instagram_hashtags" | "instagram_profiles" | "instagram_search" | "facebook_pages" | "linkedin_companies";
 
 export type ApifyActorInfo = {
   key: ApifyActorKey;
@@ -52,6 +52,30 @@ export const APIFY_ACTORS: Record<ApifyActorKey, ApifyActorInfo> = {
     purpose: "The public profiles of the accounts the hashtag search found: their bio, category and the website or contact details they publish.",
     limitation: "Only what a profile publishes; a profile with no website, email or phone stays without a contact route.",
     storeUrl: "https://apify.com/apify/instagram-profile-scraper",
+  },
+  instagram_search: {
+    key: "instagram_search",
+    actorId: "apify~instagram-search-scraper",
+    label: "Instagram Search Scraper (apify/instagram-search-scraper)",
+    purpose: "Instagram accounts found by Instagram's own search for the customer type and place (not only hashtags); their profiles are then read with the Profile Scraper.",
+    limitation: "Instagram's search ranks accounts by name and popularity, not by location: an account that does not name the place keeps its location unknown. Finding someone on Instagram does not give a way to contact them — AgentSDR cannot start Instagram chats.",
+    storeUrl: "https://apify.com/apify/instagram-search-scraper",
+  },
+  facebook_pages: {
+    key: "facebook_pages",
+    actorId: "apify~facebook-search-scraper",
+    label: "Facebook Search Scraper (apify/facebook-search-scraper)",
+    purpose: "Facebook business pages found by keyword and place, with the phone, email, website and address each page publishes.",
+    limitation: "Only what a page publishes publicly; AgentSDR cannot message anyone on Facebook, so a page is contacted by its email or phone only.",
+    storeUrl: "https://apify.com/apify/facebook-search-scraper",
+  },
+  linkedin_companies: {
+    key: "linkedin_companies",
+    actorId: "harvestapi~linkedin-company-search",
+    label: "LinkedIn Company Search (harvestapi/linkedin-company-search, no login)",
+    purpose: "Companies found by LinkedIn's company search for a keyword and place, with their website; the contacts come from reading each company's own website.",
+    limitation: "LinkedIn shows no emails or phones: only companies with a website that publishes contacts can be reached. A third-party Actor that reads LinkedIn without logging in; LinkedIn's User Agreement does not allow scraping, so approve it only if you accept that.",
+    storeUrl: "https://apify.com/harvestapi/linkedin-company-search",
   },
 };
 

@@ -471,6 +471,37 @@ caps, uncounted waiting plans, demoted approver, search count, off again),
 reviewer were not run against a real model here (no working AI key in
 this session).
 
+### Follow-up: social media search through Apify, beta (2026-10-16)
+
+The owner asked for lead search where the leads are, on Facebook,
+LinkedIn and Instagram profiles, not only Instagram hashtags. Built on the
+existing Apify integration (the same approvals, monthly budget, per-run
+cap, 2 open runs, durable `apify_runs` and partial results). It adds three
+Actors, each runnable only once an owner ticks it:
+`apify~facebook-search-scraper` (business pages with published phone,
+email, website), `apify~instagram-search-scraper` (Instagram's own account
+search, then the Profile Scraper) and `harvestapi~linkedin-company-search`
+(companies with their website). The assistant tool is
+`find_social_leads(platform, what, where, …)`. It works with "and contact
+them" and with Autonomous mode, and counts toward the daily search cap.
+
+- Every lead's website is read for contacts; nobody is messaged on
+  Facebook or Instagram, so a page without a published email or phone is
+  excluded with the reason.
+- **Risk the owner accepts by approving it:** the LinkedIn Actor reads
+  LinkedIn without logging in, which LinkedIn's User Agreement does not
+  allow. Its approval card says so.
+- Input fields come from each Actor's published input schema. Output
+  fields are read defensively.
+- **Not run against real Apify:** only against the stand-in in
+  `scripts/e2e/apify.ts`. Its new checks: the refusal before approval,
+  each Actor's input, the Facebook page and LinkedIn company contacted by
+  the email their websites publish, the Instagram search, and the
+  isolation checks.
+
+Checks: unit 1,271 (all), `scripts/e2e/apify.ts` all passed, tsc and lint
+clean.
+
 ### Live services vs stand-ins
 
 - **Live, real services:** gosom/google-maps-scraper v1.18.1 against Google

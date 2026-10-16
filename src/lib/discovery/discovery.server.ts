@@ -13,7 +13,7 @@ import { people } from "@/lib/leads/schema";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { apifyReadiness, pollTrackedRun, startTrackedRun } from "@/lib/apify/apify.server";
 import { APIFY_ACTORS, APIFY_LIMITS, type ApifyActorKey } from "@/lib/apify/catalog";
-import { hashtagsFor, mentionsPlace, placesFromMapsItems, postsFromHashtagItems, profilesFromItems, type InstagramPost } from "@/lib/apify/mapping";
+import { hashtagsFor, mentionsPlace, placesFromFacebookItems, placesFromLinkedinCompanyItems, placesFromMapsItems, postsFromHashtagItems, profilesFromItems, usernamesFromSearchItems, type InstagramPost } from "@/lib/apify/mapping";
 import { needSignal } from "./webDiscovery";
 import { cleanEmail, websiteDomain } from "./contacts";
 import { geocodePlace } from "./geocode.server";
@@ -98,6 +98,15 @@ type EnrichedPlace = MapsPlace & {
   companyLinkedin: string | null;
   websiteError: string | null;
   origin?: InstagramOrigin;
+  /** Found on a Facebook page or a LinkedIn company page (Apify), not a Google Maps listing. */
+  listing?: SocialPlatform;
+};
+
+/** Social sources searched through the owner's Apify (catalog.ts), besides Instagram hashtags. */
+export type SocialPlatform = "facebook" | "linkedin";
+const SOCIAL: Record<SocialPlatform, { actor: ApifyActorKey; label: string; listingLabel: string; source: string; personSource: string }> = {
+  facebook: { actor: "facebook_pages", label: "Facebook", listingLabel: "Facebook page", source: "apify_facebook", personSource: "discovery:apify-facebook" },
+  linkedin: { actor: "linkedin_companies", label: "LinkedIn", listingLabel: "LinkedIn company page", source: "apify_linkedin", personSource: "discovery:apify-linkedin" },
 };
 
 type DiscoveryPayload = {
@@ -118,15 +127,16 @@ type DiscoveryPayload = {
   tally?: { eligible: number; excluded: number; duplicates: number; withEmail: number; withPhoneOnly: number };
   /** The owner asked to contact what is found: plan the outreach when the search is done. */
   contactAfter?: { channels: AudienceChannel[] | null; ownerRequest?: string; requestId?: string } | null;
-  /** Google Maps businesses (default), or Instagram accounts (job kind apify_instagram). */
-  target?: "maps" | "instagram";
+  /** Google Maps businesses (default), Instagram accounts (job kind apify_instagram), or Facebook / LinkedIn pages (Apify). */
+  target?: "maps" | "instagram" | SocialPlatform;
   /** Who searched: Apify, or the self-hosted scraper. */
   provider?: "apify" | "scraper";
   /** The open Apify run, by its apify_runs row (which holds Apify's run id). */
   apify?: { runRowId: string; actor: ApifyActorKey; deadline: string } | null;
   /** Why Apify was not used, or what limited it — said with the result. */
   providerNotes?: string[];
-  instagram?: { hashtags: string[]; posts?: InstagramPost[] };
+  /** search: Instagram's own account search instead of hashtags (instagram_search). */
+  instagram?: { hashtags: string[]; posts?: InstagramPost[]; search?: boolean };
 };
 
 type ContactAfter = { channels: AudienceChannel[] | null; ownerRequest?: string; requestId?: string } | null;
@@ -294,6 +304,50 @@ export async function startInstagramProspects(
   };
 }
 
+/**
+ * Lead search on a social platform through the owner's Apify: Facebook
+ * business pages or LinkedIn companies by keyword and place (their published
+ * contacts and websites, then each website read for more), or Instagram
+ * accounts by Instagram's own search (then their profiles). Needs that
+ * platform's Actor approved with allowance left; otherwise says why, and
+ * nothing is searched.
+ */
+export async function startSocialProspects(
+  platform: SocialPlatform | "instagram",
+  input: { what: string; where: string; maxResults: number; language: string },
+  context: { threadId: string | null; userId: string | null },
+  options: { contactAfter?: ContactAfter } = {},
+): Promise<StartedDiscovery> {
+  const actor: ApifyActorKey = platform === "instagram" ? "instagram_search" : SOCIAL[platform].actor;
+  const label = platform === "instagram" ? "Instagram" : SOCIAL[platform].label;
+  const readiness = await apifyReadiness(actor, input.maxResults);
+  if (!readiness.usable) {
+    throw new DiscoveryUnavailableError(`${label} search runs through Apify: ${apifyFallbackNote(readiness) ?? readiness.reason} Approve the ${APIFY_ACTORS[actor].label} in Settings → Organization → Apify to use it.`);
+  }
+  const criteria: DiscoveryCriteria = { what: input.what, where: input.where, maxResults: input.maxResults, language: input.language };
+  const phrase = `${input.what} — ${input.where}`;
+  const audienceId = await createAudience({
+    name: `${label}: ${input.what} — ${input.where}`,
+    source: "discovery",
+    criteria: { ...criteria, source: platform === "instagram" ? "apify_instagram" : SOCIAL[platform].source, phrase },
+    threadId: context.threadId,
+    userId: context.userId,
+  });
+  const payload: DiscoveryPayload = platform === "instagram"
+    ? { criteria, phrase, contactAfter: options.contactAfter ?? null, target: "instagram", provider: "apify", instagram: { hashtags: [], search: true } }
+    : { criteria, phrase, contactAfter: options.contactAfter ?? null, target: platform, provider: "apify" };
+  const [job] = await db.insert(assistantJobs).values({
+    organizationId: currentOrganizationId(),
+    kind: platform === "instagram" ? "apify_instagram" : "discovery",
+    threadId: context.threadId,
+    audienceId,
+    payload: payload as unknown as Record<string, unknown>,
+    progress: { stage: "queued", found: 0 },
+    createdBy: context.userId,
+  }).returning({ id: assistantJobs.id });
+  return { jobId: job!.id, audienceId, phrase, provider: "apify", note: APIFY_ACTORS[actor].limitation };
+}
+
 // ── DNS: does an email domain accept mail? (mailDomain.server.ts) ───────────
 
 export { emailDomainCheck, mailDomainCheck, type MailDomainCheck } from "./mailDomain.server";
@@ -307,6 +361,31 @@ function payloadOf(job: AssistantJob): DiscoveryPayload {
 async function stageQueued(job: AssistantJob): Promise<StepOutcome> {
   const payload = payloadOf(job);
   const requestId = payload.contactAfter?.requestId ?? null;
+  if (payload.target === "facebook" || payload.target === "linkedin") {
+    const platform = SOCIAL[payload.target];
+    const started = await startTrackedRun({
+      actor: platform.actor,
+      input: payload.target === "facebook"
+        ? (maxItems) => ({ categories: [payload.criteria.what], locations: [payload.criteria.where], resultsLimit: maxItems })
+        : (maxItems) => ({ searchQuery: payload.criteria.what, locations: [payload.criteria.where], scraperMode: "full", maxItems }),
+      wantedItems: payload.criteria.maxResults,
+      jobId: job.id,
+      requestId,
+    });
+    if (started.started) return apifyStage(started.row.id, platform.actor, payload.providerNotes ?? []);
+    return doneWithNothing(job, [...(payload.providerNotes ?? []), `${platform.label} was not searched: ${apifyFallbackNote(started) ?? started.reason}`]);
+  }
+  if (payload.target === "instagram" && payload.instagram?.search) {
+    const started = await startTrackedRun({
+      actor: "instagram_search",
+      input: (maxItems) => ({ search: `${payload.criteria.what} ${payload.criteria.where}`.trim(), searchType: "user", searchLimit: maxItems }),
+      wantedItems: payload.criteria.maxResults,
+      jobId: job.id,
+      requestId,
+    });
+    if (started.started) return apifyStage(started.row.id, "instagram_search", payload.providerNotes ?? []);
+    return handOffToWebsite(job, [...(payload.providerNotes ?? []), apifyFallbackNote(started) ?? started.reason]);
+  }
   if (payload.target === "instagram") {
     const started = await startTrackedRun({
       actor: "instagram_hashtags",
@@ -404,6 +483,44 @@ async function stageApify(job: AssistantJob): Promise<StepOutcome> {
       payload: { places: enriched, enrichIndex: 0, apify: null, providerNotes: notes },
       progress: { stage: "enriching", provider: "Apify", found: kept.length, websitesChecked: 0, websitesToCheck: kept.filter((place) => place.website).length, ...(polled.partial ? { partial: true } : {}) },
     };
+  }
+
+  if (open.actor === "facebook_pages" || open.actor === "linkedin_companies") {
+    const platform: SocialPlatform = open.actor === "facebook_pages" ? "facebook" : "linkedin";
+    const found = platform === "facebook" ? placesFromFacebookItems(polled.items, country).places : placesFromLinkedinCompanyItems(polled.items, country).places;
+    if (!found.length) return doneWithNothing(job, [...notes, `Apify's ${SOCIAL[platform].label} search returned nothing for “${payload.criteria.what}” in ${payload.criteria.where}.`]);
+    const kept = found.slice(0, payload.criteria.maxResults);
+    const enriched: EnrichedPlace[] = kept.map((place) => ({
+      ...place,
+      websiteEmails: [],
+      websitePhones: [],
+      // A LinkedIn company page is itself the company's LinkedIn link.
+      companyLinkedin: platform === "linkedin" ? (place as { linkedinUrl?: string }).linkedinUrl ?? null : null,
+      websiteError: null,
+      listing: platform,
+    }));
+    return {
+      next: "stage",
+      stage: "enriching",
+      payload: { places: enriched, enrichIndex: 0, apify: null, providerNotes: notes },
+      progress: { stage: "enriching", provider: "Apify", found: kept.length, websitesChecked: 0, websitesToCheck: kept.filter((place) => place.website).length, ...(polled.partial ? { partial: true } : {}) },
+    };
+  }
+
+  if (open.actor === "instagram_search") {
+    const usernames = usernamesFromSearchItems(polled.items).slice(0, payload.criteria.maxResults);
+    if (!usernames.length) return doneWithNothing(job, [...notes, `Instagram's search found no accounts for “${payload.criteria.what} ${payload.criteria.where}”.`]);
+    // No post matched these accounts: their profile is the evidence.
+    const posts: InstagramPost[] = usernames.map((username) => ({ username, url: null, caption: null, timestamp: null, locationName: null, hashtag: null }));
+    const profiles = await startTrackedRun({
+      actor: "instagram_profiles",
+      input: (maxItems) => ({ usernames: usernames.slice(0, maxItems) }),
+      wantedItems: usernames.length,
+      jobId: job.id,
+      requestId: payload.contactAfter?.requestId ?? null,
+    });
+    if (profiles.started) return apifyStage(profiles.row.id, "instagram_profiles", notes, { instagram: { hashtags: [], posts, search: true } });
+    return instagramPlaces(job, posts, new Map(), [...notes, `Profiles were not read (${profiles.reason}), so only the usernames are known.`]);
   }
 
   if (open.actor === "instagram_hashtags") {
@@ -588,7 +705,7 @@ async function enrichPlace(place: EnrichedPlace, country: string | undefined): P
       return checked.ok ? [{ value: checked.e164, sourceUrl: contact.sourceUrl }] : [];
     });
   const linkedin = result.contacts.find((contact) => contact.kind === "linkedin" && /\/company\//.test(contact.value))?.value ?? null;
-  return { ...place, websiteEmails: emails, websitePhones: phones, companyLinkedin: linkedin, websiteError: result.error };
+  return { ...place, websiteEmails: emails, websitePhones: phones, companyLinkedin: place.companyLinkedin ?? linkedin, websiteError: result.error };
 }
 
 async function stageEnriching(job: AssistantJob, heartbeat: () => Promise<void>): Promise<StepOutcome> {
@@ -635,7 +752,7 @@ function factsOf(place: EnrichedPlace): Record<string, string> {
 /** The contact details of a place with where each came from, best first. */
 export function placeEvidence(place: EnrichedPlace): ContactEvidence[] {
   const listing = place.mapsUrl;
-  const listingLabel = place.origin ? "Instagram profile" : "Google Maps listing";
+  const listingLabel = place.origin ? "Instagram profile" : place.listing ? SOCIAL[place.listing].listingLabel : "Google Maps listing";
   const evidence: ContactEvidence[] = [];
   if (place.website) evidence.push({ kind: "website", value: place.website, sourceUrl: listing, source: listingLabel });
   if (place.phone) evidence.push({ kind: "phone", value: place.phone, sourceUrl: listing, source: listingLabel });
@@ -662,6 +779,8 @@ function instagramSignals(place: EnrichedPlace): LeadSignal[] {
 }
 
 function matchReasonOf(place: EnrichedPlace, payload: DiscoveryPayload): string {
+  if (place.listing) return `Found on ${SOCIAL[place.listing].label} for “${payload.criteria.what}” in ${payload.criteria.where} (through Apify). A page is a potential match, not interest.`;
+  if (place.origin && !place.origin.postUrl) return `Found by Instagram's account search for “${payload.criteria.what} ${payload.criteria.where}”; ${place.origin.placeNamed ? `the profile names ${payload.criteria.where}` : `its location is unknown`}. An account is a potential match, not interest.`;
   if (!place.origin) return `Listed on Google Maps for “${payload.phrase}”${payload.provider === "apify" ? " (found through Apify)" : ""}.`;
   const where = place.origin.placeNamed ? `names ${payload.criteria.where}` : `does not name ${payload.criteria.where} (location unknown)`;
   return `Posted on Instagram under ${place.origin.hashtag ? `#${place.origin.hashtag}` : payload.phrase}${place.origin.postedAt ? ` on ${place.origin.postedAt.slice(0, 10)}` : ""}; the post or profile ${where}. A post is a potential match, not interest.`;
@@ -670,7 +789,7 @@ function matchReasonOf(place: EnrichedPlace, payload: DiscoveryPayload): string 
 async function savePlace(place: EnrichedPlace, payload: DiscoveryPayload): Promise<{ member: NewMember | null; outcome: "eligible" | "excluded" | "duplicate"; email: boolean }> {
   const evidence = placeEvidence(place);
   const facts = factsOf(place);
-  const base = { source: place.origin ? "apify_instagram" : DISCOVERY_SOURCE, sourceUrl: place.mapsUrl, evidence, facts, matchReason: matchReasonOf(place, payload), signals: instagramSignals(place) };
+  const base = { source: place.origin ? "apify_instagram" : place.listing ? SOCIAL[place.listing].source : DISCOVERY_SOURCE, sourceUrl: place.mapsUrl, evidence, facts, matchReason: matchReasonOf(place, payload), signals: instagramSignals(place) };
   if (place.closed) {
     const reason = place.origin ? `found on Instagram (@${place.origin.username}), ${place.closed}: nothing it publishes can be read` : `listed on Google Maps as ${place.closed.toLowerCase()}`;
     return { member: { personId: null, name: place.displayName, reason, ...base }, outcome: "excluded", email: false };
@@ -698,9 +817,9 @@ async function savePlace(place: EnrichedPlace, payload: DiscoveryPayload): Promi
       ? "its published email's domain does not receive mail, and it lists no phone"
       : place.website
         ? place.websiteError
-          ? `no email or phone on its Google Maps listing, and its website could not be read (${place.websiteError})`
-          : "no email or phone on its Google Maps listing or website"
-        : "no email or phone on its Google Maps listing, and no website";
+          ? `no email or phone on its ${place.listing ? SOCIAL[place.listing].listingLabel : "Google Maps listing"}, and its website could not be read (${place.websiteError})`
+          : `no email or phone on its ${place.listing ? SOCIAL[place.listing].listingLabel : "Google Maps listing"} or website`
+        : `no email or phone on its ${place.listing ? SOCIAL[place.listing].listingLabel : "Google Maps listing"}, and no website`;
     return { member: { personId: null, name: place.displayName, reason, ...base }, outcome: "excluded", email: false };
   }
   const seenEmails = new Set(payload.seenEmails ?? []);
@@ -715,13 +834,13 @@ async function savePlace(place: EnrichedPlace, payload: DiscoveryPayload): Promi
     ...(place.category ? { category: place.category } : {}),
     ...(place.city ? { city: place.city } : {}),
     ...(place.address ? { address: place.address } : {}),
-    ...(place.mapsUrl ? { googleMapsUrl: place.mapsUrl } : {}),
+    ...(place.mapsUrl ? (place.listing === "facebook" ? { facebookUrl: place.mapsUrl } : place.listing === "linkedin" ? { linkedinCompanyUrl: place.mapsUrl } : { googleMapsUrl: place.mapsUrl }) : {}),
     ...(place.website ? { website: place.website } : {}),
     ...(place.rating !== null ? { rating: String(place.rating) } : {}),
     ...(place.origin ? { instagram: { username: place.origin.username, profileUrl: place.origin.profileUrl } } : {}),
-    discoveredVia: place.origin ? "Instagram (Apify)" : payload.provider === "apify" ? "Google Maps (Apify)" : "Google Maps",
+    discoveredVia: place.origin ? "Instagram (Apify)" : place.listing ? `${SOCIAL[place.listing].label} (Apify)` : payload.provider === "apify" ? "Google Maps (Apify)" : "Google Maps",
   };
-  const personSource = place.origin ? "discovery:apify-instagram" : payload.provider === "apify" ? "discovery:apify-google-maps" : "discovery:google-maps";
+  const personSource = place.origin ? "discovery:apify-instagram" : place.listing ? SOCIAL[place.listing].personSource : payload.provider === "apify" ? "discovery:apify-google-maps" : "discovery:google-maps";
   const person = await withLeadTransaction(async (tx) => {
     if (email) {
       return upsertPerson(tx, {
