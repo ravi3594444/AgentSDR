@@ -41,8 +41,10 @@ import { audienceProspects } from "./qualification.server";
  * existing service, with its arguments checked here before anything runs;
  * its result is stored on the chat (assistant_messages, role "tool") and
  * shown as a card, so what the owner reads about an action is what the
- * server recorded. Starting outreach is deliberately not a tool: only the
- * owner's Start button does that (POST /api/assistant/runs/[id]/start).
+ * server recorded. Starting outreach is deliberately not a tool: the
+ * owner's Start button does that (POST /api/assistant/runs/[id]), or, in a
+ * chat the owner put in Autonomous mode, the server right after a plan is
+ * prepared, within the daily caps (autonomy.server.ts).
  */
 
 export type ToolContext = {
@@ -58,6 +60,8 @@ export type ToolContext = {
   outreachRequestId?: string | null;
   /** Set when the server itself prepares outreach the owner already asked for (a "find and contact" search finished). */
   authorizedBy?: "search" | null;
+  /** The chat is in Autonomous mode (autonomy.ts): a prepared plan starts on its own when the caps allow. */
+  autonomous?: boolean;
 };
 
 /**
@@ -627,7 +631,7 @@ export const TOOLS: Record<string, Tool> = {
           : "";
         return {
           ok: true,
-          summary: `Plan ${proposal.runId} ready for “${proposal.name}”: ${plan.assignments.length} leads (${Object.entries(perChannel).map(([c, n]) => `${c} ${n}`).join(", ")}), about ${plan.estimate.days ?? "?"} days, AI cost about ${plan.estimate.aiCostUsd === null ? "unknown" : `$${plan.estimate.aiCostUsd}`}.${sorted} It is shown to the owner with sample messages and a Start button; nothing is sent until they press Start.`,
+          summary: `Plan ${proposal.runId} ready for “${proposal.name}”: ${plan.assignments.length} leads (${Object.entries(perChannel).map(([c, n]) => `${c} ${n}`).join(", ")}), about ${plan.estimate.days ?? "?"} days, AI cost about ${plan.estimate.aiCostUsd === null ? "unknown" : `$${plan.estimate.aiCostUsd}`}.${sorted}${context.autonomous ? " Autonomous mode: it starts on its own right after this unless a daily cap stops it; the next event line says which." : " It is shown to the owner with sample messages and a Start button; nothing is sent until they press Start."}`,
           data: proposal as unknown as Record<string, unknown>,
         };
       } catch (error) {

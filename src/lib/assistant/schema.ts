@@ -31,6 +31,15 @@ export const assistantThreads = pgTable(
     createdBy: uuid("created_by"),
     /** Set while a turn is being worked on, so a second message waits instead of racing it. */
     busySince: timestamp("busy_since", { withTimezone: true }),
+    /**
+     * Autonomous mode (autonomy.server.ts): the assistant works without
+     * asking, and plans it prepares start on their own in Automatic mode,
+     * approved in the name of `autonomousBy` (an owner or admin), within the
+     * organization's daily caps.
+     */
+    autonomous: boolean("autonomous").notNull().default(false),
+    autonomousBy: uuid("autonomous_by"),
+    autonomousAt: timestamp("autonomous_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -258,6 +267,8 @@ export type PlannedStep = { subject: string | null; body: string; waitDays: numb
 
 /** What the owner approves: audience, channels, messages, limits and what it costs. */
 export type OutreachPlan = {
+  /** Started on its own by a chat in Autonomous mode (counted against its daily caps). */
+  autonomous?: boolean;
   /**
    * "outreach" (absent on every plan written before inquiry runs): first
    * messages and follow-ups to an audience. "inquiries": no first message

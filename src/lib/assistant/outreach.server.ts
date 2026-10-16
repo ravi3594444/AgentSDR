@@ -23,6 +23,7 @@ import { requeueRunAutopilot } from "./autopilotRun.server";
 import { eligibleAudienceMembers, summarizeAudience } from "./audiences.server";
 import { countReasons } from "./audiences";
 import { availableTokens, leadTextKey, MAX_PERSONAL, perLeadSteps, personalizationKey, settleGroups, templateTokens, type LeadApproach } from "./messages";
+import { displayBusinessName, pitchProblems } from "./pitch";
 import { getBusinessProfile } from "./profile.server";
 import { effectiveBusinessProfile } from "./businessContext.server";
 import { activeInquiryRun, inquiryRunLockSql, inquiryRunMembers, inquiryRunReadiness } from "./inquiryRuns.server";
@@ -121,6 +122,8 @@ function leadVariables(row: PersonRow, key: string, line: string): Record<string
   const raw = (row.person.raw ?? {}) as Record<string, unknown>;
   variables.company ??= typeof raw.businessName === "string" ? raw.businessName : variables.companyName ?? "";
   if (!variables.company) variables.company = variables.companyName ?? "";
+  // The name as people say it in a greeting: "Sold By Tereza", not "Sold By Tereza Inc.".
+  variables.company = displayBusinessName(variables.company);
   variables[key] = line;
   return variables;
 }
@@ -132,6 +135,7 @@ function leadFacts(memberFacts: Record<string, string>, row: PersonRow | undefin
   if (row.person.fullName && !out.name) out.name = row.person.fullName;
   if (row.person.title) out.title ??= row.person.title;
   if (row.company?.name) out.company ??= row.company.name;
+  if (out.company) out.company = displayBusinessName(out.company);
   if (row.company?.domain) out.website ??= row.company.domain;
   for (const [field, value] of Object.entries((row.person.raw ?? {}) as Record<string, unknown>)) {
     if (Object.keys(out).length >= 14) break;
@@ -140,6 +144,12 @@ function leadFacts(memberFacts: Record<string, string>, row: PersonRow | undefin
     out[field] ??= value;
   }
   return out;
+}
+
+/** The lead's first message as it will read after their opening line: what the line must not repeat. */
+function firstMessageAfterLine(step: PlannedStep | undefined, row: PersonRow | undefined, key: string): string {
+  if (!step) return "";
+  return row ? render(step, leadVariables(row, key, "")).body : step.body;
 }
 
 function render(step: PlannedStep, variables: Record<string, string>): { subject: string | null; body: string } {
@@ -178,6 +188,8 @@ function reuseSequences(source: Partial<Record<AudienceChannel, PlannedStep[]>>,
     const steps = source[channel];
     // Messages using a field these leads lack are written afresh instead.
     if (steps?.some((step) => templateTokens(`${step.subject ?? ""} ${step.body}`).some((name) => !allowed.has(name.toLowerCase())))) continue;
+    // Messages that would be skipped by busy readers (pitch.ts) are written afresh rather than reused.
+    if (steps?.some((step, index) => pitchProblems(channel, step.body, { first: index === 0 }).length)) continue;
     if (steps?.length) out[channel] = steps.map((step) => ({ ...step, subject: step.subject?.replace(token, `{{${key}}}`) ?? null, body: step.body.replace(token, `{{${key}}}`) }));
   }
   return out;
@@ -339,7 +351,12 @@ export async function prepareOutreach(input: PrepareInput): Promise<Proposal> {
   })).slice(0, 6);
   const lines = await writePersonalLines({
     context,
-    leads: sampleLeads.map((sample, index) => ({ index, facts: { ...sample.lead.facts, name: nameOf(sample.lead.assignment.personId) } })),
+    leads: sampleLeads.map((sample, index) => ({
+      index,
+      facts: { ...sample.lead.facts, name: nameOf(sample.lead.assignment.personId) },
+      channel: sample.channel,
+      messageAfter: firstMessageAfterLine(sample.group.sequences[sample.channel]?.[0], leadRows.get(sample.lead.assignment.personId), key),
+    })),
     cost,
   });
   const samples: OutreachPlan["samples"] = sampleLeads.flatMap((sample, index) => {
@@ -415,8 +432,12 @@ export async function getRun(runId: string) {
 }
 
 /**
- * The owner's approval. Only a person calls this (the Start button), never
- * the assistant's model: a proposal becomes a running campaign only here.
+ * The owner's approval: a proposal becomes a running campaign only here.
+ * Called by the Start button, by a request approval the owner gave for
+ * the rest of a request (requestApproval.server.ts), and in a chat the
+ * owner put in Autonomous mode (autonomy.server.ts, in the name of the
+ * owner or admin who turned it on, within the daily caps). Never by the
+ * assistant's model directly: no tool starts outreach.
  */
 export async function startOutreachRun(runId: string, userId: string | null, options: { autopilot?: boolean } = {}): Promise<{ jobId: string }> {
   const run = await getRun(runId);
@@ -490,7 +511,15 @@ async function writeLines(runId: string, key: string, personIds: string[], start
   const cost: WriterCost = { calls: 0, usd: null, runId };
   const lines = await writePersonalLines({
     context: await businessContext(await getBusinessProfile()),
-    leads: personIds.map((personId, index) => ({ index: startIndex + index, facts: { ...facts.get(personId), name: rows.get(personId)?.person.fullName ?? "" } })),
+    leads: personIds.map((personId, index) => {
+      const channel = run.plan.assignments.find((item) => item.personId === personId)?.channel;
+      return {
+        index: startIndex + index,
+        facts: { ...facts.get(personId), name: rows.get(personId)?.person.fullName ?? "" },
+        channel,
+        messageAfter: channel ? firstMessageAfterLine(run.plan.sequences[channel]?.[0], rows.get(personId), key) : "",
+      };
+    }),
     cost,
   });
   for (const [index, personId] of personIds.entries()) {
@@ -518,7 +547,16 @@ async function writeLeadTexts(run: NonNullable<Awaited<ReturnType<typeof getRun>
   const cost: WriterCost = { calls: 0, usd: null, runId: run.id };
   const lines = await writePersonalLines({
     context: await businessContext(await getBusinessProfile()),
-    leads: standard.map((personId, index) => ({ index: startIndex + index, facts: { ...facts.get(personId), name: rows.get(personId)?.person.fullName ?? "" } })),
+    leads: standard.map((personId, index) => {
+      const channel = plan.assignments.find((item) => item.personId === personId)?.channel;
+      const group = plan.groups?.find((item) => item.id === plan.leadPlans?.[personId]?.groupId) ?? plan.groups?.[0];
+      return {
+        index: startIndex + index,
+        facts: { ...facts.get(personId), name: rows.get(personId)?.person.fullName ?? "" },
+        channel,
+        messageAfter: channel ? firstMessageAfterLine(group?.sequences[channel]?.[0], rows.get(personId), key) : "",
+      };
+    }),
     cost,
   });
   for (const personId of personIds) {

@@ -109,7 +109,7 @@ test("WhatsApp's contract constants (shown by the recorder and the website, kept
 
 describe("organization day (general.timeZone, general.dayStartsAt)", () => {
   test("defaults to UTC midnight", () => {
-    expect(defaultValues("general")).toEqual({ timeZone: "UTC", dayStartsAt: "00:00", defaultPhoneCountry: "" });
+    expect(defaultValues("general")).toEqual({ timeZone: "UTC", dayStartsAt: "00:00", defaultPhoneCountry: "", autonomousRunsPerDay: 10, autonomousLeadsPerDay: 300, autonomousSearchesPerDay: 20 });
   });
 
   test("validates the zone and the time", () => {
@@ -124,5 +124,13 @@ describe("organization day (general.timeZone, general.dayStartsAt)", () => {
     expect(validateValues("general", { timeZone: "Asia/Calcutta" })).toEqual({ ok: true, values: { timeZone: "Asia/Kolkata" } });
     expect(resolveValues("general", { timeZone: "Europe/Kiev" }).timeZone).toBe("Europe/Kyiv");
     expect(resolveValues("general", { timeZone: "Nowhere/Land", dayStartsAt: "nope" })).toMatchObject({ timeZone: "UTC", dayStartsAt: "00:00" });
+  });
+});
+
+describe("Autonomous mode caps (general)", () => {
+  test("bounded: a typo cannot let the assistant start thousands of plans", () => {
+    expect(validateValues("general", { autonomousRunsPerDay: 500 }).ok).toBe(false);
+    expect(validateValues("general", { autonomousLeadsPerDay: 5 }).ok).toBe(false);
+    expect(validateValues("general", { autonomousSearchesPerDay: 30 })).toEqual({ ok: true, values: { autonomousSearchesPerDay: 30 } });
   });
 });

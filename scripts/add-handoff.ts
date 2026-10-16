@@ -6,7 +6,8 @@
  * person takes over, and when the owner was alerted and reminded.
  *
  * Also creates reply_agent_runs, the reply agent's record of each incoming
- * message it answered (src/lib/assistant/replyAgent/).
+ * message it answered (src/lib/assistant/replyAgent/), and the per-chat
+ * Autonomous mode columns on assistant_threads.
  *
  * Run with:  bun scripts/add-handoff.ts
  * In Docker: docker compose exec app agentsdr-entrypoint bun scripts/add-handoff.ts
@@ -59,6 +60,10 @@ const STATEMENTS = [
   `CREATE UNIQUE INDEX IF NOT EXISTS reply_agent_runs_message_uq ON reply_agent_runs (message_id)`,
   `CREATE INDEX IF NOT EXISTS reply_agent_runs_organization_idx ON reply_agent_runs (organization_id, created_at)`,
   `CREATE INDEX IF NOT EXISTS reply_agent_runs_conversation_idx ON reply_agent_runs (conversation_id)`,
+  // Autonomous mode, per chat (src/lib/assistant/autonomy.server.ts).
+  `ALTER TABLE assistant_threads ADD COLUMN IF NOT EXISTS autonomous boolean NOT NULL DEFAULT false`,
+  `ALTER TABLE assistant_threads ADD COLUMN IF NOT EXISTS autonomous_by uuid`,
+  `ALTER TABLE assistant_threads ADD COLUMN IF NOT EXISTS autonomous_at timestamptz`,
 ];
 
 async function main() {
@@ -82,7 +87,11 @@ async function main() {
     console.log(columns === 4 ? "handoff columns present (4)" : `MISSING handoff columns: ${4 - columns}`);
     const [{ agent }] = await sql`select to_regclass('public.reply_agent_runs') is not null as agent`;
     console.log(agent ? "reply_agent_runs present" : "MISSING reply_agent_runs");
-    if (columns !== 4 || !agent) process.exitCode = 1;
+    const [{ autonomy }] = await sql`
+      select count(*)::int as autonomy from information_schema.columns
+      where table_name = 'assistant_threads' and column_name in ('autonomous', 'autonomous_by', 'autonomous_at')`;
+    console.log(autonomy === 3 ? "autonomous mode columns present (3)" : `MISSING autonomous mode columns: ${3 - autonomy}`);
+    if (columns !== 4 || !agent || autonomy !== 3) process.exitCode = 1;
   } finally {
     await sql.close();
   }

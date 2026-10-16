@@ -290,6 +290,22 @@ export function pendingOutreachRequestIndex(history: readonly HistoryMessage[]):
   return null;
 }
 
+/**
+ * In Autonomous mode the owner's latest request to contact people stands
+ * until they say otherwise: the most recent owner message (of the last ten)
+ * that asked for outreach, even when a plan already acted on it, so a long
+ * piece of work keeps contacting what it finds. Null when none asked.
+ */
+export function standingOutreachRequestIndex(history: readonly HistoryMessage[]): number | null {
+  const owners = history.flatMap((message, index) => (message.role === "user" ? [index] : []));
+  for (const index of owners.slice(-10).reverse()) {
+    const message = history[index]!;
+    const before = [...history.slice(0, index)].reverse().find((item) => item.role === "assistant")?.content ?? null;
+    if (outreachRequested(message.content, before)) return index;
+  }
+  return null;
+}
+
 /** Why a tool may not prepare outreach for the owner now, or null. */
 export function outreachRequestProblem(ownerText: string, lastAssistantText?: string | null): string | null {
   return outreachRequested(ownerText, lastAssistantText)

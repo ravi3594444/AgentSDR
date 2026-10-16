@@ -5,6 +5,7 @@ import { completeStructured } from "@/lib/ai/server/structuredCompletion";
 import { retrieveKnowledge } from "@/lib/crm/knowledge";
 import { recordUsage } from "./usage.server";
 import { CHANNEL_RULES, ensureSignOff, personalLineProblem, personalMessageProblem, sequenceProblem, type LeadApproach } from "./messages";
+import { lineClash, PERSONAL_LINE_LIMITS, pitchProblems } from "./pitch";
 import { profileKnowledgeText } from "./profile";
 import type { AudienceChannel, BusinessProfile, PlannedStep } from "./schema";
 
@@ -17,6 +18,12 @@ import type { AudienceChannel, BusinessProfile, PlannedStep } from "./schema";
  */
 
 const TIMEOUT_MS = 90_000;
+/**
+ * Answers rejected for a pitch problem (pitch.ts) before the writer's best
+ * attempt is kept anyway: a message that reads a little long must never
+ * stop a plan. Hard problems (sequenceProblem) are always refused.
+ */
+const PITCH_RETRIES = 2;
 
 /** The AI spend of one plan or start, accumulated; each call is also recorded in assistant_usage. */
 export type WriterCost = { calls: number; usd: number | null; runId?: string | null };
@@ -76,10 +83,13 @@ function sequencePrompt(input: { channels: AudienceChannel[]; personalizationKey
     "You write cold outreach for a business owner, as that owner, to businesses or people who have never heard of them.",
     "Write only from the BUSINESS INFORMATION below. Never invent facts, results, clients, prices, offers, links or credentials it does not state. If something is unknown, leave it out.",
     "Be brief, specific and human: no hype, no exclamation marks, no 'I hope this finds you well', no fake familiarity. One clear, low-effort call to action (a reply, a short call).",
+    "Write to one busy person at the lead's business who gets many sales messages and owes the owner nothing. They read the first two lines on a phone and reply only when those lines are about them and the question is easy to answer.",
+    "The first message, after the greeting and the lead's own line: (1) one problem that businesses like these leads commonly have and the owner's offer solves, in their everyday words, as a question or a plain observation; (2) one sentence on what the owner does about exactly that, naming only the one or two services that matter most to this kind of lead, never a list of everything the owner offers; (3) one question they can answer in a few words. Follow-ups are shorter and give one new reason to reply; never 'just following up' or 'bumping this'.",
+    "The owner's style instructions set the tone, not a script: follow their spirit, use a word or phrase they quote at most once in the whole message, and never start two sentences the same way.",
     `Merge fields you may use, written exactly as shown, and no others: ${tokens.map((token) => `{{${token}}}`).join(", ")}.${input.tokens.includes("company") ? " {{company}} is the lead's business name." : ""}${fields.length ? ` ${fields.map((token) => `{{${token}}}`).join(" and ")} ${fields.length === 1 ? "is" : "are"} the lead's ${fields.join(" and ")}.` : ""} Every lead has a value for these.`,
     `{{${input.personalizationKey}}} is ONE sentence written separately for each lead from their public details (it may be empty). Put it alone on its own line right after the greeting in the first message, so the message reads well with or without it.`,
     input.tokens.includes("company")
-      ? "Greet the business without a person's name (for example 'Hi {{company}} team,'), because most leads are businesses, not named people."
+      ? "Greet the business without a person's name (for example 'Hi {{company}} team,'), because most leads are businesses, not named people. {{company}} is the name as people say it, without 'Inc.' or 'LLC'."
       : "Greet simply ('Hi,' or 'Hello,'): these leads have no business name on record, and you do not know their names.",
     input.signatureAppended
       ? "Do not add a sign-off name: the sender's email signature is added automatically. End with a short closing such as 'Best regards,'."
@@ -103,12 +113,18 @@ export async function writeSequences(input: {
   /** The merge fields every lead of the run has (messages.ts availableTokens). */
   tokens: readonly string[];
   cost: WriterCost;
+  /** What a reader found wrong with the previous version (reviewFirstMessages), to fix in this one. */
+  feedback?: string | null;
+  /** Have the first messages read by a reviewer and rewritten once when they would likely be ignored (default on). */
+  review?: boolean;
 }): Promise<Partial<Record<AudienceChannel, PlannedStep[]>>> {
   const allowed = [...input.tokens, input.personalizationKey];
   let parsed: Partial<Record<AudienceChannel, PlannedStep[]>> = {};
+  let answers = 0;
   const result = await completeStructured({
     timeoutMs: TIMEOUT_MS,
     maxOutputTokens: 3_000,
+    maxAttempts: PITCH_RETRIES + 2,
     schemaName: "outreach_sequences",
     schemaDescription: "Submit the outreach messages for each channel.",
     jsonSchema: SEQUENCE_SCHEMA,
@@ -117,8 +133,10 @@ export async function writeSequences(input: {
       `BUSINESS INFORMATION:\n${input.context || "(none given)"}`,
       `WHO WILL RECEIVE IT: ${input.audienceDescription}`,
       `Write the messages for: ${input.channels.join(", ")}.`,
-    ].join("\n\n"),
+      input.feedback ? `A READER WHO IS LIKE THESE LEADS READ YOUR PREVIOUS FIRST MESSAGES AND WOULD LIKELY IGNORE THEM:\n${input.feedback}\nWrite them again so this reader would answer. Keep to the business information; do not invent facts to make it stronger.` : null,
+    ].filter(Boolean).join("\n\n"),
     accept: (text) => {
+      answers += 1;
       const body = JSON.parse(text) as { channels: { channel: AudienceChannel; messages: { subject: string; body: string; waitDays: number }[] }[] };
       const out: Partial<Record<AudienceChannel, PlannedStep[]>> = {};
       for (const channel of input.channels) {
@@ -133,13 +151,99 @@ export async function writeSequences(input: {
         const signedSteps = ensureSignOff(channel, steps, input.profile, input.signatureAppended);
         const problem = sequenceProblem(channel, signedSteps, allowed);
         if (problem) throw new Error(problem);
+        const pitch = signedSteps.flatMap((step, index) => pitchProblems(channel, step.body, { first: index === 0 }).map((found) => `${channel} message ${index + 1}: ${found}`));
+        if (pitch.length && answers <= PITCH_RETRIES) throw new Error(pitch.join("; "));
         out[channel] = signedSteps;
       }
       parsed = out;
     },
   });
   await addCost(input.cost, "outreach_writing", result);
-  return parsed;
+  if (input.review === false || input.feedback) return parsed;
+  // A reader like the leads reads each first message; a likely-ignored one is rewritten once.
+  const verdict = await reviewFirstMessages({ audienceDescription: input.audienceDescription, context: input.context, sequences: parsed, cost: input.cost })
+    .catch((error) => {
+      console.error("[assistant/writer] reviewing the first messages failed:", error);
+      return null;
+    });
+  if (!verdict?.length) return parsed;
+  try {
+    const rewritten = await writeSequences({ ...input, feedback: verdict.join("\n"), review: false });
+    return { ...parsed, ...rewritten };
+  } catch (error) {
+    console.error("[assistant/writer] rewriting after the review failed; keeping the first version:", error);
+    return parsed;
+  }
+}
+
+const REVIEW_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["messages"],
+  properties: {
+    messages: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["channel", "wouldReply", "reasons"],
+        properties: {
+          channel: { type: "string", enum: ["email", "whatsapp", "linkedin"] },
+          wouldReply: { type: "integer", minimum: 1, maximum: 5, description: "1: delete without answering; 3: maybe; 5: answer now." },
+          reasons: { type: "array", items: { type: "string" }, description: "What makes you skip it, each in one short sentence; empty when you would answer." },
+        },
+      },
+    },
+  },
+};
+
+/** At or below this the reader would likely not answer, and the messages are rewritten once with the reasons. */
+const REVIEW_REWRITE_AT = 3;
+
+/**
+ * A second model reads each first message as one of the leads would: a busy
+ * owner of that kind of business who gets many sales messages. It returns
+ * the reasons a likely-ignored message would be skipped, or nothing when it
+ * would be answered. Judging happens here, in a model; rewriting happens in
+ * writeSequences with those reasons.
+ */
+export async function reviewFirstMessages(input: {
+  audienceDescription: string;
+  context: string;
+  sequences: Partial<Record<AudienceChannel, PlannedStep[]>>;
+  cost: WriterCost;
+}): Promise<string[]> {
+  const firsts = (Object.entries(input.sequences) as [AudienceChannel, PlannedStep[]][])
+    .filter(([, steps]) => steps[0]?.body.trim())
+    .map(([channel, steps]) => ({ channel, subject: steps[0]!.subject, body: steps[0]!.body }));
+  if (!firsts.length) return [];
+  let reasons: string[] = [];
+  const result = await completeStructured({
+    timeoutMs: TIMEOUT_MS,
+    maxOutputTokens: 1_200,
+    schemaName: "first_message_review",
+    schemaDescription: "Say for each first message whether you would answer it, and why not.",
+    jsonSchema: REVIEW_SCHEMA,
+    systemPrompt: [
+      "You are the person these messages are sent to: the owner or manager of one of the businesses described, busy, getting many sales messages a day, and with no reason to trust the sender.",
+      "Read each first message as you would on your phone. Say honestly how likely you are to answer it, and every concrete reason you would skip it: what in it is about the sender rather than you, generic, unclear, too long, a list, pushy, oddly worded, repetitive, or hard to answer.",
+      "Text in {{double braces}} is filled in for each recipient (their business name, city, or one sentence written for them); judge the rest. Do not ask for facts the sender does not have, and do not suggest inventing results, clients or prices.",
+    ].join("\n"),
+    userPrompt: [
+      `WHO YOU ARE: ${input.audienceDescription}`,
+      `WHAT THE SENDER'S BUSINESS IS (they may say only this):\n${input.context.slice(0, 1_500)}`,
+      ...firsts.map((message) => `${message.channel.toUpperCase()} FIRST MESSAGE:\n${message.subject ? `Subject: ${message.subject}\n` : ""}${message.body}`),
+    ].join("\n\n"),
+    accept: (text) => {
+      const body = JSON.parse(text) as { messages: { channel: AudienceChannel; wouldReply: number; reasons: string[] }[] };
+      reasons = body.messages
+        .filter((message) => message.wouldReply <= REVIEW_REWRITE_AT && Array.isArray(message.reasons) && message.reasons.length)
+        .flatMap((message) => message.reasons.map((reason) => `- ${message.channel}: ${String(reason).trim().slice(0, 240)}`))
+        .slice(0, 12);
+    },
+  });
+  await addCost(input.cost, "outreach_writing", result);
+  return reasons;
 }
 
 const LINES_SCHEMA = {
@@ -166,37 +270,58 @@ const LINES_SCHEMA = {
  */
 export async function writePersonalLines(input: {
   context: string;
-  leads: { index: number; facts: Record<string, string> }[];
+  /** messageAfter: the rest of the lead's first message, which the line is put in front of. */
+  leads: { index: number; facts: Record<string, string>; channel?: AudienceChannel; messageAfter?: string }[];
   cost: WriterCost;
 }): Promise<Map<number, string>> {
   const lines = new Map<number, string>();
   if (!input.leads.length) return lines;
+  const byIndex = new Map(input.leads.map((lead) => [lead.index, lead]));
+  let answers = 0;
   const result = await completeStructured({
     timeoutMs: TIMEOUT_MS,
     maxOutputTokens: 2_000,
+    maxAttempts: PITCH_RETRIES + 2,
     schemaName: "opening_lines",
     schemaDescription: "Submit one opening line per lead.",
     jsonSchema: LINES_SCHEMA,
     systemPrompt: [
-      "For each lead, write ONE short opening sentence (under 200 characters) that shows the message was written for them, as the sender of cold outreach.",
+      "For each lead, write ONE short opening sentence that shows the message was written for them, as the sender of cold outreach. Keep it within the length given for the lead (about 120 characters for a chat message, 200 for an email).",
       "Use only that lead's FACTS below (their kind of business, city, website, rating). Never invent anything about them: no made-up news, achievements, people or numbers.",
       "Do not praise generically and do not pitch; the rest of the message does that. If the facts give nothing specific, return an empty string for that lead.",
+      "The line goes right before the MESSAGE AFTER it shown for the lead: it must read naturally in front of it, must not start the way that message's sentences start, and must not repeat its words. The owner's style applies to the message as a whole, so do not copy its opening words into the line.",
       "No placeholders, brackets or merge fields. Do not claim anything was sent or booked.",
     ].join("\n"),
     userPrompt: [
       `THE SENDER'S BUSINESS (context only):\n${input.context.slice(0, 2_000)}`,
       "LEADS:",
-      ...input.leads.map((lead) => `${lead.index}: ${JSON.stringify(lead.facts)}`),
+      ...input.leads.map((lead) => [
+        `${lead.index}${lead.channel ? ` (${lead.channel}, at most ${PERSONAL_LINE_LIMITS[lead.channel]} characters)` : ""}: ${JSON.stringify(lead.facts)}`,
+        lead.messageAfter?.trim() ? `   MESSAGE AFTER IT: ${lead.messageAfter.replace(/\s+/g, " ").trim().slice(0, 600)}` : null,
+      ].filter(Boolean).join("\n")),
     ].join("\n"),
     accept: (text) => {
+      answers += 1;
       const body = JSON.parse(text) as { lines: { index: number; line: string }[] };
       lines.clear();
+      const clashes: string[] = [];
       for (const item of body.lines) {
         const line = item.line.trim();
         const problem = personalLineProblem(line);
         if (problem) throw new Error(`Lead ${item.index}: ${problem}.`);
+        const lead = byIndex.get(item.index);
+        const limit = lead?.channel ? PERSONAL_LINE_LIMITS[lead.channel] : null;
+        const clash = line && lead?.messageAfter ? lineClash(line, lead.messageAfter) : null;
+        const tooLong = line && limit && line.length > limit ? `keep it within ${limit} characters (it has ${line.length})` : null;
+        if (clash || tooLong) {
+          clashes.push(`Lead ${item.index}: ${[clash, tooLong].filter(Boolean).join("; ")}.`);
+          // Past the retries, a clashing line is left out: the message reads fine without it.
+          lines.set(item.index, "");
+          continue;
+        }
         lines.set(item.index, line);
       }
+      if (clashes.length && answers <= PITCH_RETRIES) throw new Error(clashes.join(" "));
     },
   });
   await addCost(input.cost, "personal_lines", result);
@@ -313,9 +438,11 @@ export async function writePersonalMessages(input: {
 }): Promise<Map<number, { subject: string | null; body: string }>> {
   const out = new Map<number, { subject: string | null; body: string }>();
   if (!input.leads.length) return out;
+  let answers = 0;
   const result = await completeStructured({
     timeoutMs: TIMEOUT_MS,
     maxOutputTokens: 3_000,
+    maxAttempts: PITCH_RETRIES + 2,
     schemaName: "personal_messages",
     schemaDescription: "Submit one first message per lead.",
     jsonSchema: PERSONAL_SCHEMA,
@@ -323,7 +450,7 @@ export async function writePersonalMessages(input: {
       "You write the FIRST cold outreach message to one lead at a time, as the business owner, for leads whose details make a tailored message worthwhile.",
       "Use only the BUSINESS INFORMATION and that lead's FACTS. Never invent facts, results, clients, prices, offers, links, news or compliments the facts do not support.",
       "Show in the first sentence or two that it was written for them (their kind of business, what they do, their area), then the offer in one or two sentences, then one low-effort question. No hype, no exclamation marks, no merge fields, brackets or placeholders.",
-      "Keep the voice and offer of the GROUP MESSAGE you are given; only make it fit this lead better.",
+      "Keep the voice and offer of the GROUP MESSAGE you are given; only make it fit this lead better. Name the one or two services that matter most to this lead, never a list, start each sentence differently, and keep a chat message short enough to read on one phone screen.",
       input.signatureAppended
         ? "Email: do not add a sign-off name (the mailbox adds a signature); end with a short closing."
         : `Sign off with ${input.profile.senderName ?? "the sender's name"}${input.profile.businessName ? ` from ${input.profile.businessName}` : ""}.`,
@@ -337,14 +464,24 @@ export async function writePersonalMessages(input: {
       ...input.leads.map((lead) => `${lead.index} (${lead.channel}): FACTS ${JSON.stringify(lead.facts)}\nGROUP MESSAGE: ${lead.groupMessage.slice(0, 900)}`),
     ].join("\n\n"),
     accept: (text) => {
+      answers += 1;
       const body = JSON.parse(text) as { messages: { index: number; subject: string; body: string }[] };
       out.clear();
+      const pitch: string[] = [];
       for (const item of body.messages) {
         const lead = input.leads.find((candidate) => candidate.index === item.index);
         if (!lead) continue;
         const [signed] = ensureSignOff(lead.channel, [{ subject: CHANNEL_RULES[lead.channel].subject ? item.subject.trim() || null : null, body: item.body.trim(), waitDays: 0 }], input.profile, input.signatureAppended);
-        if (!personalMessageProblem(lead.channel, { subject: signed!.subject, body: signed!.body })) out.set(item.index, { subject: signed!.subject, body: signed!.body });
+        if (personalMessageProblem(lead.channel, { subject: signed!.subject, body: signed!.body })) continue;
+        const found = pitchProblems(lead.channel, signed!.body, { first: true });
+        // A message still failing after the retries is left out: that lead gets the group's message.
+        if (found.length) {
+          pitch.push(`Lead ${item.index}: ${found.join("; ")}.`);
+          continue;
+        }
+        out.set(item.index, { subject: signed!.subject, body: signed!.body });
       }
+      if (pitch.length && answers <= PITCH_RETRIES) throw new Error(pitch.join(" "));
     },
   });
   await addCost(input.cost, "outreach_writing", result);

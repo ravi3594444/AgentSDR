@@ -91,6 +91,11 @@ export async function claimThread(threadId: string): Promise<boolean> {
   return rows.length > 0;
 }
 
+/** Keeps a long turn's claim fresh, so it is not taken as abandoned after BUSY_TIMEOUT_MS. */
+export async function touchThread(threadId: string): Promise<void> {
+  await db.update(assistantThreads).set({ busySince: new Date() }).where(and(inOrg(assistantThreads), eq(assistantThreads.id, threadId)));
+}
+
 export async function releaseThread(threadId: string): Promise<void> {
   await db.update(assistantThreads).set({ busySince: null }).where(and(inOrg(assistantThreads), eq(assistantThreads.id, threadId)));
 }

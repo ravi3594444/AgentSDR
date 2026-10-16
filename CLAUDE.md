@@ -371,6 +371,23 @@ knowledge), not with word lists or examples in code. Explicit opt-outs,
 non-members and taken-over chats still use the classifier and
 `autopilotRun.server.ts`; `REPLY_AGENT=off` restores that path for all.
 
+## Autonomous mode and the outreach writer
+
+A chat in Autonomous mode (`src/lib/assistant/autonomy*.ts`,
+`assistant_threads.autonomous`) starts the plans its assistant prepares
+through `startOutreachRun`, in the name of the owner/admin who turned it on
+(re-checked at each start), within the "general" Sending rules
+`autonomousRunsPerDay` / `autonomousLeadsPerDay` / `autonomousSearchesPerDay`,
+counted under the `autonomous:<org>` advisory lock. Never add a tool that
+starts outreach; the model only prepares. Off (the default), nothing about
+the Start button changes.
+
+Outreach the assistant writes passes `src/lib/assistant/pitch.ts`
+(structural checks fed back to the writer, never phrase lists) and a
+reviewer model pass in `writer.server.ts`. A pitch problem retries a
+bounded number of times and then keeps the best version: it must never
+stop a plan.
+
 ## WhatsApp messaging (Unipile)
 
 Reps link their WhatsApp number in the Unipile dashboard; AgentSDR reads it

@@ -55,7 +55,7 @@ async function siblingPlans(run: RunRow, status?: string): Promise<RunRow[]> {
 }
 
 /** How many of these people are active in a running, paused or starting run already. */
-async function peopleInActiveRuns(personIds: string[]): Promise<number> {
+export async function peopleInActiveRuns(personIds: string[]): Promise<number> {
   if (!personIds.length) return 0;
   const rows = await db.selectDistinct({ personId: outreachRunLeads.personId }).from(outreachRunLeads)
     .innerJoin(outreachRuns, eq(outreachRuns.id, outreachRunLeads.runId))

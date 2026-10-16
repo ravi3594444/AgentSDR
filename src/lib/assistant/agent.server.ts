@@ -8,12 +8,14 @@ import { BRAND } from "@/lib/brand";
 import { inOrg } from "@/lib/tenancy/scope";
 import type { FeatureState } from "@/lib/features/catalog";
 import { featureState } from "@/lib/features/flags.server";
-import { actionsProblem, agentReplySchema, inquiryRepliesRequested, isSmallTalk, MAX_STEPS, parseAgentReply, pendingOutreachRequestIndex, sameMessage, transcriptText, unbackedClaim, type AgentReply } from "./agent";
+import { actionsProblem, agentReplySchema, inquiryRepliesRequested, isSmallTalk, MAX_STEPS, parseAgentReply, pendingOutreachRequestIndex, sameMessage, standingOutreachRequestIndex, transcriptText, unbackedClaim, type AgentReply } from "./agent";
+import { AUTONOMOUS_MAX_STEPS, autonomousRules, SEARCH_TOOLS, searchCapProblem, type AutonomyCaps } from "./autonomy";
+import { autonomousSearchesToday, autonomyCaps, autoStartPlan, threadAutonomy } from "./autonomy.server";
 import { listAudiences } from "./audiences.server";
 import { listOpenDecisions } from "./decisions.server";
 import { listRuns } from "./outreach.server";
 import { assistantJobs, type AssistantAttachment, type BusinessProfile } from "./schema";
-import { addMessage, claimThread, listMessages, releaseThread, updateMessage } from "./threads.server";
+import { addMessage, claimThread, listMessages, releaseThread, touchThread, updateMessage } from "./threads.server";
 import { recordUsage } from "./usage.server";
 import { runTool, setupSnapshot, toolCatalog, toolNamesFor, type ToolContext, type ToolResult } from "./tools.server";
 
@@ -27,7 +29,7 @@ import { runTool, setupSnapshot, toolCatalog, toolNamesFor, type ToolContext, ty
  * happened that did not.
  */
 
-function systemPrompt(features: FeatureState): string {
+function systemPrompt(features: FeatureState, autonomy: AutonomyCaps | null = null): string {
   return [
     `You are the outreach assistant inside ${BRAND.name}. You work for the owner of a business: you learn about the business, find leads, prepare outreach and report on it, by calling tools. You are honest and brief.`,
     "",
@@ -53,6 +55,7 @@ function systemPrompt(features: FeatureState): string {
     "12. For results (leads found, messages sent, replies, interested people, what waits for the owner, spending), call report; never estimate figures yourself.",
     "13. When the owner greets you, thanks you or chats, answer in one or two warm, natural sentences and offer the one next step that fits them: with an empty BUSINESS PROFILE, ask what the business sells and to whom (or to attach a brochure or a contact list); with a complete one, offer to find customers or show results. Run no tools for small talk, and never save information the owner did not give.",
     "14. suggestions: up to three short replies the owner might send next, in their own words and language (e.g. \"We sell dental equipment servicing in Pune\", \"Find dental clinics in Pune and contact them\", \"Show today's results\"). Suggest only what you could act on; none while a plan card waits for Start or a decision card waits for an answer.",
+    ...(autonomy ? ["", ...autonomousRules(autonomy), "These autonomous rules override rules 2, 5, 10, 11 and 14 where they differ: plans start on their own, you do not offer and wait, and you keep going."] : []),
     "",
     "TOOLS",
     toolCatalog(features),
@@ -126,6 +129,9 @@ export async function runAgentTurn(input: {
 }): Promise<void> {
   if (!(await claimThread(input.threadId))) throw new AssistantBusyError();
   try {
+    // Autonomous mode (autonomy.ts): plans start on their own, no permission questions, longer turns.
+    const autonomy = await threadAutonomy(input.threadId);
+    const caps = autonomy.on ? await autonomyCaps() : null;
     if (input.text !== null || input.attachments?.length) {
       await addMessage({ threadId: input.threadId, role: "user", content: input.text ?? "", attachments: input.attachments ?? [], createdBy: input.userId });
     }
@@ -147,11 +153,12 @@ export async function runAgentTurn(input: {
     const ownerText = input.text ?? history[lastOwnerIndex]?.content ?? "";
     // The assistant's last words before the owner's message: a "yes" to an offer of outreach is a request for it.
     const lastAssistantText = [...history.slice(0, Math.max(0, lastOwnerIndex))].reverse().find((message) => message.role === "assistant")?.content ?? null;
-    const requestIndex = pendingOutreachRequestIndex(history);
+    // In Autonomous mode the owner's request to contact people stands for the work that follows it.
+    const requestIndex = pendingOutreachRequestIndex(history) ?? (autonomy.on ? standingOutreachRequestIndex(history) : null);
     const outreachRequest = requestIndex === null ? null : history[requestIndex]!.content;
     // The owner's message that asked, by id: one Start may cover the plans of exactly this request.
     const outreachRequestId = requestIndex === null ? null : history[requestIndex]!.id;
-    const context: ToolContext = { threadId: input.threadId, userId: input.userId, ownerText, lastAssistantText, outreachRequest, outreachRequestId };
+    const context: ToolContext = { threadId: input.threadId, userId: input.userId, ownerText, lastAssistantText, outreachRequest, outreachRequestId, autonomous: autonomy.on };
     const askedForOutreach = outreachRequest !== null;
     const askedForInquiryReplies = inquiryRepliesRequested(ownerText, lastAssistantText);
     const said: string[] = [];
@@ -161,7 +168,10 @@ export async function runAgentTurn(input: {
     const succeeded: string[] = [];
     const features = await featureState();
     const toolNames = toolNamesFor(features);
-    for (let step = 0; step < MAX_STEPS; step += 1) {
+    const maxSteps = autonomy.on ? AUTONOMOUS_MAX_STEPS : MAX_STEPS;
+    for (let step = 0; step < maxSteps; step += 1) {
+      // A long turn keeps the thread claimed (a step can take a minute or more).
+      if (step > 0) await touchThread(input.threadId);
       const { text: setupText, outreachStarted, profile } = await contextBlock();
       const messages = await listMessages(input.threadId, 80);
       // What the owner wrote or attached: business information is saved only from it.
@@ -177,14 +187,16 @@ export async function runAgentTurn(input: {
           schemaName: "assistant_reply",
           schemaDescription: "Your message to the owner and the tools to run now.",
           jsonSchema: agentReplySchema(toolNames),
-          systemPrompt: systemPrompt(features),
+          systemPrompt: systemPrompt(features, caps),
           userPrompt: `${setupText}\n\nCONVERSATION (newest last):\n${transcriptText(messages)}\n\nYour turn.`,
           accept: (text) => {
             const parsed = parseAgentReply(text, toolNames, { allowEmpty: step > 0 });
             const refused = actionsProblem(parsed.actions, { smallTalk, profile, ownerCorpus, outreachRequested: askedForOutreach, inquiryRepliesRequested: askedForInquiryReplies });
             if (refused) throw new Error(refused);
             // A message sent with tools is checked against their results below.
-            const problem = unbackedClaim(parsed.message, parsed.actions.length ? ["(pending)"] : succeeded, outreachStarted);
+            // In Autonomous mode a plan prepared in this step starts on its own; if it does not, the message is not shown (below).
+            const startsNow = autonomy.on && parsed.actions.some((action) => action.tool === "prepare_outreach");
+            const problem = unbackedClaim(parsed.message, parsed.actions.length ? ["(pending)"] : succeeded, outreachStarted || startsNow);
             if (problem) throw new Error(problem);
             reply = parsed;
           },
@@ -214,9 +226,18 @@ export async function runAgentTurn(input: {
       // and the next step explains what happened instead.
       let allOk = true;
       for (const action of actions) {
+        // Autonomous mode: searches it starts are capped per day (Settings → Organization).
+        const capped = autonomy.on && caps && SEARCH_TOOLS.has(action.tool) ? searchCapProblem(await autonomousSearchesToday(), caps) : null;
+        if (capped) {
+          await addMessage({ threadId: input.threadId, role: "tool", tool: action.tool, toolInput: action.args, status: "error", content: `Not run: ${capped}.`, toolResult: { summary: `Not run: ${capped}.` } });
+          allOk = false;
+          continue;
+        }
         const result = await runToolInThread(context, action.tool, action.args);
         if (result.ok) succeeded.push(action.tool);
         else allOk = false;
+        // Autonomous: the plan starts now; when a cap stops it the message is held and the next step explains.
+        if (action.tool === "prepare_outreach" && result.ok && !(await startedOnItsOwn(input.threadId, autonomy.on, result.data))) allOk = false;
         // Contacts the owner asked to reach get their plan straight away, as a "find and contact" search does.
         const audienceId = typeof result.data?.audienceId === "string" ? result.data.audienceId : null;
         if (action.tool === "add_contacts" && result.ok && action.args.contactAfter === true && askedForOutreach && audienceId && !actions.some((other) => other.tool === "prepare_outreach")) {
@@ -224,6 +245,7 @@ export async function runAgentTurn(input: {
           const plan = await runToolInThread(context, "prepare_outreach", { audienceId, ...channels });
           if (plan.ok) succeeded.push("prepare_outreach");
           else allOk = false;
+          if (plan.ok && !(await startedOnItsOwn(input.threadId, autonomy.on, plan.data))) allOk = false;
         }
       }
       // Shown only when every tool in this step worked: after a failure the
@@ -232,13 +254,28 @@ export async function runAgentTurn(input: {
         said.push(message);
         await addMessage({ threadId: input.threadId, role: "assistant", content: message });
         // A question to the owner ends the turn: their answer decides what happens next.
-        if (message.trim().endsWith("?")) return;
+        // In Autonomous mode it does not: a real question comes with no actions and ends the turn anyway.
+        if (!autonomy.on && message.trim().endsWith("?")) return;
       }
     }
-    await addMessage({ threadId: input.threadId, role: "event", content: "I stopped here so I don't go round in circles. Tell me how you'd like to continue." });
+    await addMessage({
+      threadId: input.threadId,
+      role: "event",
+      content: autonomy.on
+        ? `I paused after ${maxSteps} steps so I don't go round in circles. I continue when a search finishes, or tell me what to do next.`
+        : "I stopped here so I don't go round in circles. Tell me how you'd like to continue.",
+    });
   } finally {
     await releaseThread(input.threadId);
   }
+}
+
+/** In Autonomous mode, starts the plan a tool just prepared; true when it started (or the chat is not autonomous). */
+async function startedOnItsOwn(threadId: string, autonomous: boolean, data: Record<string, unknown> | undefined): Promise<boolean> {
+  if (!autonomous) return true;
+  const runId = typeof data?.runId === "string" ? data.runId : null;
+  if (!runId) return false;
+  return (await autoStartPlan(threadId, runId)).started;
 }
 
 /**

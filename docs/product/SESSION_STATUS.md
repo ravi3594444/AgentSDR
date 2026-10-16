@@ -420,6 +420,57 @@ model outage, the Replies list) and the existing `assistant.ts` suite
 now returns 401 and no other key was available in this session. The real
 run is on the VM.
 
+### Follow-up: first messages people answer, and Autonomous mode (2026-10-16)
+
+**Pitch.** The first WhatsApp the owner saw go out opened two sentences
+with "Listen", listed five services in one sentence and greeted "Sold By
+Tereza Inc.". The cause was in the writer: the owner's style ("open
+casual, like 'listen'") was applied word for word to both the per-lead
+line and the message, which were written apart, and the greeting used the
+listing's legal name. Now (`src/lib/assistant/pitch.ts`, `writer.server.ts`):
+
+- business names in greetings drop the legal form ("Inc.", "LLC",
+  "Pvt. Ltd.") and a listing's tagline, keeping words that belong to the
+  name ("The Cleaning Company", "Smith & Co");
+- every message is checked for shapes busy readers skip: a word opening
+  two sentences, a list of more than three things, a first message longer
+  than one phone screen (WhatsApp 260 characters of its own text, lead's
+  line at most 120). A problem goes back to the writer with what to fix,
+  up to two rewrites, then its best version is kept (a pitch problem never
+  stops a plan);
+- the writer is told how a cold first message earns a reply (one problem
+  that kind of business has, what the owner does about exactly that, one
+  easy question) and that the owner's style is a tone, not a script;
+- a second model reads each first message as a busy owner of that kind of
+  business and, when it would likely be ignored, the messages are
+  rewritten once with its reasons;
+- each lead's line is written seeing the message it goes in front of and
+  may not open or repeat like it; reused messages that fail the checks are
+  written afresh.
+
+**Autonomous mode** (`src/lib/assistant/autonomy*.ts`): a switch in the
+chat header. Only an owner or admin can turn it on (anyone can turn it
+off). While on, plans the assistant prepares start on their own through
+the same `startOutreachRun` as the Start button, in Automatic mode,
+approved in the name of the person who turned it on (checked again at each
+start); it does not ask "want me to…?"; a turn may take 16 steps; a
+finished search (also an empty or failed one) wakes it to continue, and a
+"find and contact" request stands for the work that follows. New caps,
+per organization in Settings → Organization (the "general" Sending rules):
+plans started on their own a day (10), leads in them a day (300), searches
+a day (20). A plan past a cap, or with leads already in another running
+plan, waits for Start and the chat says why. Every channel's sending
+limits, Do Not Contact, opt-outs and the reply agent's checks still apply.
+Columns `assistant_threads.autonomous/_by/_at` come from
+`scripts/add-handoff.ts`.
+
+Checks: unit 1,259 (all), `scripts/e2e/autonomous.ts` (16 checks: off,
+on, owner's name, same launch job, no double start, busy leads, both
+caps, uncounted waiting plans, demoted approver, search count, off again),
+`reply-agent.ts` (23) and `assistant.ts` (73). The writer's new prompt and
+reviewer were not run against a real model here (no working AI key in
+this session).
+
 ### Live services vs stand-ins
 
 - **Live, real services:** gosom/google-maps-scraper v1.18.1 against Google

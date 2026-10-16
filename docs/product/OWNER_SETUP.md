@@ -364,6 +364,31 @@ is written anyway and goes through the same checks, so it is answered,
 held with the reason, or handed to you, never left silent. Customers and
 "they left / ask someone else" replies always come to you.
 
+**Autonomous mode.** The **Autonomous** switch at the top of the assistant
+chat lets it work without asking you. Only an owner or admin can turn it
+on, and anyone can turn it off. While it is on:
+- plans it prepares start on their own in Automatic mode, approved in the
+  name of the person who turned it on, without the Start button;
+- it does not ask "want me to…?" and keeps working on what you asked, for
+  example searching the next cities and contacting what it finds.
+
+It stops at your daily caps under Settings → Organization: plans started
+on its own a day (default 10), leads in them a day (300) and searches a
+day (20). A plan past a cap, or with leads already in another running
+plan, waits for your Start, and the chat says why. Each channel's own
+sending limits, Do Not Contact and opt-outs always apply. To review every
+plan again, turn the switch off.
+
+**First messages.** Before a plan is shown, every message is checked for
+what makes busy people skip it: the same word opening two sentences, a
+list of more than three services, or a first message longer than one
+phone screen. A problem is sent back to the writer to fix. A second model
+then reads each first message as a busy owner of that kind of business
+would, and the messages are rewritten once when it would likely be
+ignored. Business names drop "Inc." and "LLC" in greetings. Your style
+instructions set the tone. A phrase you quote is used at most once, not
+at the start of every sentence.
+
 **How replies are written.** Replies continue the conversation naturally.
 The draft answers the lead's question in its
 first sentence, in the lead's language (Hindi and Hinglish are answered in
@@ -685,6 +710,9 @@ AI_SOURCE_ORGANIZATION_ID=<org with AI Settings> bun run --conditions=react-serv
 # (sends nothing). With AI_SOURCE_ORGANIZATION_ID it also prints real answers
 # and timings; REPLY_AGENT_E2E_MODEL=<model id> tries another model of it:
 bun run --conditions=react-server scripts/e2e/reply-agent.ts
+# Autonomous mode: plans starting on their own in the owner's name, and every cap
+# that makes them wait (sends nothing; the launch job is never run):
+bun run --conditions=react-server scripts/e2e/autonomous.ts
 # The owner's own conversations against the real model: a greeting, "any city",
 # a WhatsApp number typed in the chat, Instagram, a link (queues searches and
 # cancels them; sends nothing):

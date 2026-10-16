@@ -10,6 +10,7 @@ import { runLeads } from "./runLeads.server";
 import { runReplies } from "./runReplies.server";
 import { listMessages, listThreads, resolveThread, threadBusy } from "./threads.server";
 import { setupSnapshot } from "./tools.server";
+import { autonomyCaps } from "./autonomy.server";
 
 /**
  * Route plumbing for /api/assistant/*: the signed-in member and their
@@ -88,7 +89,8 @@ export async function assistantState(threadId: string | null, ctx: OrgContext, w
   const started = runs.filter((run) => run.status !== "proposed" && run.status !== "cancelled").map((run) => run.id);
   const [replies, leads, peers] = await Promise.all([runReplies(started), runLeads(started), requestPeers(thread.id)]);
   return {
-    thread: { id: thread.id, title: thread.title },
+    // Autonomous mode and its daily caps, for the switch in the header (autonomy.ts).
+    thread: { id: thread.id, title: thread.title, autonomous: thread.autonomous, autonomyCaps: thread.autonomous ? await autonomyCaps() : null },
     viewer: { firstName: ctx.userName?.trim().split(/\s+/)[0] || null },
     threads,
     busy,

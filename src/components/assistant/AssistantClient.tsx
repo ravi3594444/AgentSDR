@@ -18,6 +18,7 @@ import {
   RiLoader4Line,
   RiPauseLine,
   RiPlayLine,
+  RiRobot2Line,
   RiSearchEyeLine,
   RiSparkling2Fill,
   RiStore2Line,
@@ -87,7 +88,7 @@ type Setup = {
 };
 
 export type AssistantStatePayload = {
-  thread: { id: string; title: string };
+  thread: { id: string; title: string; autonomous?: boolean; autonomyCaps?: { runsPerDay: number; leadsPerDay: number; searchesPerDay: number } | null };
   viewer?: { firstName: string | null };
   threads: { id: string; title: string; updatedAt: string | Date }[];
   busy: boolean;
@@ -356,6 +357,45 @@ type ProposalData = {
     requestId?: string | null;
   };
 };
+
+/**
+ * Autonomous mode for this chat (src/lib/assistant/autonomy.ts): the
+ * assistant works without asking and plans start on their own in Automatic
+ * mode, within the organization's daily caps. Only owners and admins can
+ * turn it on; anyone can turn it off.
+ */
+function AutonomousSwitch({ thread, canManage, onChanged }: { thread: AssistantStatePayload["thread"]; canManage: boolean; onChanged: (next: AssistantStatePayload) => void }) {
+  const [busy, setBusy] = useState(false);
+  const on = Boolean(thread.autonomous);
+  async function toggle() {
+    if (!on && !window.confirm("Turn on Autonomous mode for this chat?\n\nThe assistant will work without asking you. Plans it prepares start on their own in Automatic mode, so it messages leads you have not reviewed, within your daily caps (Settings → Organization) and each channel's sending limits.\n\nYou can turn it off at any time.")) return;
+    setBusy(true);
+    try {
+      const response = await fetch("/api/assistant/threads", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ threadId: thread.id, autonomous: !on }) });
+      const body = (await response.json().catch(() => ({}))) as AssistantStatePayload & { error?: string };
+      if (!response.ok) throw new Error(body.error ?? `Request failed (HTTP ${response.status})`);
+      onChanged(body);
+    } catch (cause) {
+      window.alert(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+  const locked = !on && !canManage;
+  const title = on
+    ? "Autonomous: the assistant works without asking and starts plans on its own. Click to turn it off."
+    : locked ? "Only an owner or admin can turn on Autonomous mode." : "Let the assistant work without asking: plans start on their own in Automatic mode, within your daily caps.";
+  return (
+    <button type="button" role="switch" aria-checked={on} aria-label="Autonomous mode" title={title} disabled={busy || locked} onClick={() => void toggle()} data-testid="autonomous-switch"
+      className={cn("inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-label-xs ring-1 ring-inset transition-colors", on ? "bg-primary-base text-static-white ring-primary-base" : "text-text-sub-600 ring-stroke-soft-200 hover:bg-bg-weak-50", (busy || locked) && "opacity-60")}>
+      {busy ? <RiLoader4Line className="size-4 animate-spin" aria-hidden="true" /> : <RiRobot2Line className="size-4" aria-hidden="true" />}
+      <span className="hidden sm:inline">Autonomous</span>
+      <span aria-hidden="true" className={cn("relative h-4 w-7 shrink-0 rounded-full", on ? "bg-static-white/40" : "bg-bg-soft-200")}>
+        <span className={cn("absolute top-0.5 size-3 rounded-full bg-static-white shadow-sm transition-all", on ? "left-3.5" : "left-0.5")} />
+      </span>
+    </button>
+  );
+}
 
 function ProposalCard({ message, run, canManageAutopilot, lastReplyMode, onChanged }: { message: Message; run: Run | undefined; canManageAutopilot: boolean; lastReplyMode: "automatic" | "review" | null; onChanged: () => void }) {
   const data = message.toolResult?.data as ProposalData | undefined;
@@ -1161,6 +1201,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
       <header className="flex h-14 shrink-0 items-center gap-2 border-b border-stroke-soft-200 px-3 sm:px-5">
         <ConversationMenu current={state.thread} threads={state.threads} onOpen={(id) => void openThread(id)} onNew={() => void newThread()} />
         <div className="ml-auto flex items-center gap-1.5">
+          <AutonomousSwitch thread={state.thread} canManage={Boolean(setup?.canManageAutopilot)} onChanged={(next) => setState(next)} />
           <ReadinessMenu setup={setup} />
           <Link href="/assistant/results" className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-label-xs text-text-sub-600 ring-1 ring-inset ring-stroke-soft-200 hover:bg-bg-weak-50">
             <RiBarChartBoxLine className="size-4" aria-hidden="true" /><span className="hidden sm:inline">Results</span>
@@ -1276,7 +1317,9 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
             </div>
           </div>
           <p className="mt-2 text-center text-paragraph-xs text-text-soft-400">
-            Nothing reaches your leads until you press Start on a plan.
+            {state.thread.autonomous
+              ? `Autonomous: plans start on their own in Automatic mode, up to ${state.thread.autonomyCaps?.runsPerDay ?? "?"} plans and ${state.thread.autonomyCaps?.leadsPerDay ?? "?"} leads a day. Turn it off at the top to review each plan.`
+              : "Nothing reaches your leads until you press Start on a plan."}
             <span className="hidden sm:inline"> Replies waiting for you are in <Link href="/crm/actions" className="underline underline-offset-2 hover:text-text-sub-600">Action required</Link>.</span>
           </p>
         </div>

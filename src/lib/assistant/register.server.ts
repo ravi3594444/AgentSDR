@@ -3,6 +3,7 @@ import "server-only";
 import { runDiscoveryStep } from "@/lib/discovery/discovery.server";
 import { runWebDiscoveryStep } from "@/lib/discovery/webDiscovery.server";
 import { continueAfterEvent, runToolInThread } from "./agent.server";
+import { autoStartPlan, threadAutonomy } from "./autonomy.server";
 import { runLinkedinSearchStep } from "./linkedinSearch.server";
 import { runOutreachStartStep } from "./outreach.server";
 import { applyRequestApproval } from "./requestApproval.server";
@@ -90,7 +91,12 @@ export function registerAssistantJobs(): void {
     const search = job.kind === "discovery" || job.kind === "linkedin_search" || job.kind === "web_discovery" || job.kind === "apify_instagram";
     const content = search ? discoveryMessage(job) : outreachMessage(job);
     await addMessage({ threadId: job.threadId, role: "event", content });
-    if (!search || job.status !== "succeeded" || !job.audienceId || Number((job.result ?? {}).eligible ?? 0) <= 0) return;
+    if (search && (job.status !== "succeeded" || !job.audienceId || Number((job.result ?? {}).eligible ?? 0) <= 0)) {
+      // Autonomous mode: a search that failed or found nobody still wakes the assistant, to try elsewhere.
+      if ((await threadAutonomy(job.threadId)).on) void continueAfterEvent(job.threadId);
+      return;
+    }
+    if (!search || job.status !== "succeeded" || !job.audienceId) return;
     // The owner asked to contact what is found: the plan is prepared here,
     // not left to the model's judgement. It still waits for the owner's Start.
     const contactAfter = (job.payload as { contactAfter?: { channels: string[] | null; ownerRequest?: string; requestId?: string } | null }).contactAfter;
@@ -101,6 +107,7 @@ export function registerAssistantJobs(): void {
 
 async function followUpSearch(job: AssistantJob, threadId: string, contactAfter: { channels: string[] | null; ownerRequest?: string; requestId?: string } | null): Promise<void> {
   try {
+    const autonomous = (await threadAutonomy(threadId)).on;
     if (contactAfter) {
       // Wait for a turn in progress to end, so the plan is made once.
       let claimed = false;
@@ -111,15 +118,18 @@ async function followUpSearch(job: AssistantJob, threadId: string, contactAfter:
       let prepared;
       try {
         prepared = await runToolInThread(
-          { threadId, userId: job.createdBy, ownerText: contactAfter.ownerRequest ?? "", authorizedBy: "search", outreachRequestId: contactAfter.requestId ?? null },
+          { threadId, userId: job.createdBy, ownerText: contactAfter.ownerRequest ?? "", authorizedBy: "search", outreachRequestId: contactAfter.requestId ?? null, autonomous },
           "prepare_outreach",
-          { audienceId: job.audienceId, ownerRequest: contactAfter.ownerRequest ?? null, ...(contactAfter.channels?.length ? { channels: contactAfter.channels } : {}) },
+          { audienceId: job.audienceId, ownerRequest: contactAfter.ownerRequest ?? null, ...(contactAfter.channels?.length ? { channels: contactAfter.channels } : {}), ...(autonomous ? { autopilot: true } : {}) },
         );
         if (prepared.ok) {
           // Started on its own when the owner already approved this request on another of its plans.
           const runId = typeof prepared.data?.runId === "string" ? prepared.data.runId : null;
           const approval = runId ? await applyRequestApproval(runId) : { started: false, reason: null };
-          if (!approval.started) {
+          // In Autonomous mode it starts on its own within the daily caps (autoStartPlan says why not).
+          if (!approval.started && autonomous && runId) {
+            await autoStartPlan(threadId, runId);
+          } else if (!approval.started) {
             await addMessage({
               threadId,
               role: "event",
@@ -132,7 +142,8 @@ async function followUpSearch(job: AssistantJob, threadId: string, contactAfter:
       } finally {
         if (claimed) await releaseThread(threadId);
       }
-      if (prepared.ok) return;
+      // Autonomous mode keeps working toward the owner's goal (the next search, a report); otherwise the plan waits.
+      if (prepared.ok && !autonomous) return;
     }
     // Otherwise (or when the plan could not be made) the assistant picks up where the owner left it.
     await continueAfterEvent(threadId);
