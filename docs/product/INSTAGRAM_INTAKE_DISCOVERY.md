@@ -187,3 +187,55 @@ outdated drafts, newer messages, the per-conversation and daily limits, the
 support check and the handoff to the owner. It sends nothing first. It never
 covers imported history, chats that began earlier, people AgentSDR already
 knew, or another channel. One inquiry run at a time; Stop is final.
+
+## 5. Website-form inquiries: one-time setup
+
+Feature switch: **Inquiry intake** (Settings → Organization → Optional
+features). Code: `src/lib/intake/`, `src/app/api/intake/`, Settings →
+Inquiries (shown only with the feature on).
+
+**Entering a website address does not connect its forms.** A website's
+forms send their submissions wherever their form tool is told to; AgentSDR
+cannot reach into a site and attach itself. The setup is done once, by the
+owner or whoever manages the website:
+
+1. Settings → Inquiries → **Create a webhook**. AgentSDR shows the URL
+   (`https://<your AgentSDR>/api/intake/form`) and a secret token **once**
+   (copy it; it can be rotated later), plus a ready-made `curl` example.
+2. In the form tool, add a webhook that POSTs each submission to that URL
+   with the header `X-AgentSDR-Token: <token>` (or `Authorization: Bearer
+   <token>`). Zapier and Make: "Webhooks → POST"; Webflow, WordPress
+   (Elementor, Contact Form 7 via a webhook add-on), Tally, Typeform and
+   others have a webhook option; a developer can call it from any backend.
+   Only for tools that cannot send headers: `?token=<token>` on the URL (it
+   may end up in that tool's logs).
+3. Send a test submission and check it under **Recent inquiries**.
+4. If the form's field names are unusual, map them under **Field mapping**
+   (email, phone, name, first/last name, company, message, page URL,
+   submission id, submitted at). Common names are recognized without it.
+
+Contract:
+
+| Request | Response |
+| --- | --- |
+| `application/json` (an object; fields may sit in `data`, `fields: [{name, value}]`, Webflow's `payload.data`, Tally's `data.fields`), `application/x-www-form-urlencoded`, or `multipart/form-data` (text fields), ≤ 64 KB | `202 { ok, inquiryId, duplicate, status }` |
+| unknown or malformed token | `401` |
+| endpoint turned off | `403` |
+| Inquiry intake off for the organization | `409`, nothing stored |
+| over 64 KB / other content types / no fields | `413` / `415` / `400` |
+| `?historical=1` | stored as history: listed, never acted on |
+
+What happens to a submission: the email is checked for format and kept only
+if valid (an address is never repaired or invented); the phone is normalized
+with the organization's default country or dropped with the reason. The
+person is matched to an existing one by email, then by phone (a phone shared
+with a person who has a different email is not merged), else created
+(source `intake:website-form`). A retried delivery (same submission id, or
+the same content) is recorded once. A submission with neither a usable email
+nor phone is kept as **unusable** with the reason. Fresh submissions send
+nothing and create no CRM record by themselves: they become contacts with
+their message as evidence of need, ready for "use my existing leads or
+inquiries" and a plan the owner starts.
+
+There is no per-token rate limit; a leaked token is handled by rotating or
+turning off the endpoint.
