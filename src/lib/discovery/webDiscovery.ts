@@ -259,7 +259,10 @@ const NEED_PATTERNS: RegExp[] = [
   /\bneeds? (?:a|an|some|someone|somebody|help|advice|recommendations?|suggestions?|to (?:find|buy|get|book|hire|fix|repair))\b/i,
   /\b\w+ (?:needed|required) (?:in|near|for|urgently|asap)\b/i,
   /\bany(?:one|body)? (?:know|knows|recommend|suggest)\b/i,
-  /\b(?:does|do) (?:anyone|anybody|someone|somebody|you) know\b/i,
+  /\b(?:does|do) (?:anyone|anybody|someone|somebody) know\b/i,
+  // "Do you know …?" asks only as a question, and not "do you know how
+  // beautiful this is?" ("how" only as "how to", "how I can").
+  /\bdo you know\b(?! how\b(?! (?:to|i can|we can|i could|we could)\b))[^.!?]{0,120}\?/i,
   /\bcan (?:any(?:one|body)|some(?:one|body)|you) (?:recommend|suggest|help|tell)\b/i,
   /\bany (?:good )?(?:recommendations?|suggestions?|references?)\b/i,
   /\b(?:please|pls|plz) (?:recommend|suggest)\b/i,
@@ -267,7 +270,11 @@ const NEED_PATTERNS: RegExp[] = [
   /\bwhere (?:can|do|should|could|would) (?:i|we|one) (?:get|find|buy|go|book)\b/i,
   /\bwhere to (?:get|find|buy|book)\b/i,
   /\bhow (?:do|can|could|to) (?:i |we )?(?:book|order|buy|get|contact|reach|hire|join|enrol|enroll)\b/i,
-  /\bhow much (?:is|are|does|do|for|it|this|would|will|to|per)\b|\bhow much\s*\?/i,
+  // "How much" asks a price only as a question that opens with it ("how
+  // much for a cleaning?", "and how much is it?") or next to a price word;
+  // "I love how much this place has grown" is praise.
+  /(?:^|[.!?,;:]\s*|\b(?:and|so|but|also|ok|okay|hi|hello|hey|sir|madam|ma'?am|bro|bhai|pls|please)\s+)how much\b[^.!?]{0,80}\?/i,
+  /\bhow much\b[^.!?]{0,60}(?:\b(?:price|prices|pricing|cost|costs|charge|charges|charged|fee|fees|rate|rates|pay|rs|rupees|inr|budget)\b|[₹$])/i,
   /\bwhat(?:'s| is| are)(?: the| your)? (?:price|prices|cost|costs|rate|rates|fee|fees|charges?)\b/i,
   /\b(?:price|prices|pricing|cost|rate|rates|fees?|charges?|quote|quotation)\s*\?/i,
   /\b(?:price|rate|cost|details) (?:please|pls|plz)\b/i,
@@ -286,14 +293,19 @@ const NEED_PATTERNS: RegExp[] = [
   /\bkya (?:price|rate|charges?|fees?)\b/i,
 ];
 
-/** Words that turn an ask into its opposite ("no need to look further", "not looking for"). */
-const NEGATED = /\b(?:no|not|don'?t|dont|do not|never|nobody|no one)\s+(?:\w+\s+)?(?:need|looking|searching)\b/gi;
+/**
+ * Words that turn an ask into its opposite: "no need to look further", "not
+ * looking for", and in Hindi/Hinglish "mujhe nahi chahiye", "mat chahiye",
+ * "need nahi hai".
+ */
+const NEGATED = /\b(?:no|not|don'?t|dont|do not|never|nobody|no one|nahi|nahin|nhi)\s+(?:\w+\s+)?(?:need|looking|searching|chahiye|chahie|chaiye)\b|\b(?:mat|na)\s+(?:chahiye|chahie|chaiye)\b|\b(?:need|chahiye|chahie|chaiye)\s+(?:nahi|nahin|nhi)\b/gi;
 
 /**
  * Whether something a person wrote asks for help ("need") or is only
  * engagement. Conservative: "need" only for explicit asks — looking for,
- * recommendations, "need a …", "anyone know", "where can I", "how much",
- * price or quote questions, and their common Hinglish forms. Emojis, praise,
+ * recommendations, "need a …", "anyone know", "where can I", "how much …?",
+ * price or quote questions, and their common Hinglish forms; a negated ask
+ * ("not looking", "nahi chahiye") is none. Emojis, praise,
  * "nice", "follow back" and tagging friends are engagement; a tag without a
  * question is engagement too. A like, follow or generic comment is never a
  * need.
