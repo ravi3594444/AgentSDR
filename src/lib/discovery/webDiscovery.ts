@@ -138,6 +138,40 @@ export function unusableReason(kind: SourceKind, url: string): string | null {
 /** Anchor text that is not a name ("Visit website", "Click here"). */
 const GENERIC_LINK_TEXT = /^(?:(?:visit|view|open|go to)\s+)?(?:(?:our|the|their)\s+)?(?:website|web ?site|site|homepage|home page)$|^(?:visit|click here|here|link|more|read more|view|details|open|go)$|^(?:www\.|https?:)/i;
 
+const ANCHOR_OPEN = /<a\b/gi;
+const ANCHOR_CLOSE = /<\/a\s*>/gi;
+const HREF_ATTRIBUTE = /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i;
+
+/**
+ * Every <a href=…>…</a> on a page: its href and the markup inside it. One
+ * linear pass (a page is read up to 1.5 MB): a single regex for the whole
+ * anchor retries from every "<a" to the end of the page when no "</a>"
+ * follows, which a hostile page turns into minutes. Same reading as that
+ * regex: the href is taken from the opening tag (up to its first ">"), the
+ * text runs to the first "</a>", and the scan resumes after it.
+ */
+function anchorsOf(html: string): { href: string; inner: string }[] {
+  const out: { href: string; inner: string }[] = [];
+  let cursor = 0;
+  while (cursor < html.length) {
+    ANCHOR_OPEN.lastIndex = cursor;
+    const open = ANCHOR_OPEN.exec(html);
+    if (!open) break;
+    const tagEnd = html.indexOf(">", open.index + 2);
+    if (tagEnd < 0) break;
+    const attributes = HREF_ATTRIBUTE.exec(html.slice(open.index + 2, tagEnd));
+    cursor = tagEnd + 1;
+    if (!attributes) continue;
+    ANCHOR_CLOSE.lastIndex = cursor;
+    const close = ANCHOR_CLOSE.exec(html);
+    // No "</a>" after this anchor: none after any later one either.
+    if (!close) break;
+    out.push({ href: attributes[1] ?? attributes[2] ?? attributes[3] ?? "", inner: html.slice(cursor, close.index) });
+    cursor = close.index + close[0].length;
+  }
+  return out;
+}
+
 /**
  * Links on a directory or list page that look like the listed businesses'
  * own websites: other hosts than the directory itself, not social networks
@@ -154,8 +188,8 @@ export function directoryBusinessLinks(html: string, pageUrl: string, limit = 20
   const pageDomain = websiteDomain(base.toString());
   const seen = new Set<string>();
   const out: { url: string; text: string | null }[] = [];
-  for (const match of html.matchAll(/<a\b[^>]*?\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>([\s\S]*?)<\/a\s*>/gi)) {
-    const href = visibleText(match[1] ?? match[2] ?? match[3] ?? "").trim();
+  for (const anchor of anchorsOf(html)) {
+    const href = visibleText(anchor.href).trim();
     if (!href || /^(?:mailto|tel|javascript|#)/i.test(href)) continue;
     let url: URL;
     try {
@@ -169,7 +203,7 @@ export function directoryBusinessLinks(html: string, pageUrl: string, limit = 20
     if (!domain || domain === pageDomain || (pageDomain && (domain.endsWith(`.${pageDomain}`) || pageDomain.endsWith(`.${domain}`)))) continue;
     if (seen.has(domain) || classifySourceUrl(url.toString()) !== "own_site") continue;
     seen.add(domain);
-    const text = visibleText(match[4] ?? "").trim();
+    const text = visibleText(anchor.inner).trim();
     out.push({ url: url.toString(), text: text && text.length <= 120 && !GENERIC_LINK_TEXT.test(text) ? text : null });
     if (out.length >= limit) break;
   }

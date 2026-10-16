@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { cleanEmail, cleanLinkedinUrl, contactPageLinks, emailMatchesDomain, extractContacts, ownWebsite, websiteDomain } from "./contacts";
+import { cleanEmail, cleanLinkedinUrl, contactPageLinks, emailMatchesDomain, extractContacts, MAX_TEXT_SCAN, ownWebsite, visibleText, websiteDomain, withoutElements } from "./contacts";
+import { directoryBusinessLinks } from "./webDiscovery";
 
 describe("cleanEmail", () => {
   test("normalizes a mailto address and strips query and punctuation", () => {
@@ -48,6 +49,76 @@ describe("extractContacts", () => {
 
   test("never invents an address the page does not publish", () => {
     expect(extractContacts("<p>Visit us at smileclinic.in</p>", "https://smileclinic.in/")).toEqual([]);
+  });
+
+  test("a local part longer than 64 characters is no address, not cut down to one", () => {
+    expect(extractContacts(`<p>${"x".repeat(70)}@acme.com</p>`, "https://acme.com/")).toEqual([]);
+    expect(cleanEmail(`${"x".repeat(65)}@acme.com`)).toBeNull();
+  });
+});
+
+describe("hidden addresses", () => {
+  const emailsOf = (text: string) => extractContacts(`<p>${text}</p>`, "https://x.example/").filter((c) => c.kind === "email").map((c) => c.value);
+
+  test("decodes the clear forms", () => {
+    // name [at] domain [dot] com, name(at)domain.com, name at domain dot com
+    expect(emailsOf("Write to sara [at] lotusdental [dot] com")).toEqual(["sara@lotusdental.com"]);
+    expect(emailsOf("Write to sara(at)lotusdental.com today")).toEqual(["sara@lotusdental.com"]);
+    expect(emailsOf("Write to sara at lotusdental dot com")).toEqual(["sara@lotusdental.com"]);
+    expect(emailsOf("Owner: dr.rao {at} smile-clinic (dot) co (dot) in")).toEqual(["dr.rao@smile-clinic.co.in"]);
+    expect(emailsOf("INFO [AT] ACME [DOT] COM")).toEqual(["info@acme.com"]);
+    expect(emailsOf("Mail: hello (at) Acme.com.")).toEqual(["hello@acme.com"]);
+  });
+
+  test("does not turn sentences into addresses", () => {
+    expect(emailsOf("Join our team (at) Pune. Com… we are hiring")).toEqual([]);
+    expect(emailsOf("Visit us (at) Mumbai. In 2024 we moved")).toEqual([]);
+    expect(emailsOf("Visit us (at) Mumbai.In 2024")).toEqual([]);
+    expect(emailsOf("Join our team (at) Pune.Com")).toEqual([]);
+    expect(emailsOf("We are at Baner. Come by")).toEqual([]);
+    expect(emailsOf("Find us at smileclinic.in")).toEqual([]);
+    expect(emailsOf("sara [at] lotusdental . com")).toEqual([]);
+    expect(emailsOf("our team (at) pune.and more")).toEqual([]);
+  });
+});
+
+describe("hostile pages", () => {
+  const SIZE = 1_500_000;
+  const pages: Record<string, string> = {
+    "one long word": "a".repeat(SIZE),
+    "a run of dots": `a${".".repeat(SIZE)}`,
+    "a run of hyphens after an @": `a@${"-".repeat(SIZE)}`,
+    "many @": "a@".repeat(SIZE / 2),
+    "dotted labels after many @": `x@${"a.".repeat(SIZE / 2)}`,
+    "obfuscation tokens": "a (at) b ".repeat(SIZE / 9),
+    "unclosed scripts": "<script>".repeat(SIZE / 8),
+    "unclosed tags": "<a b".repeat(SIZE / 4),
+    "unclosed anchors with a close at the end": `${"<a href=x>".repeat(SIZE / 10)}</a>`,
+    "hrefs without closing quotes": "href=\"x ".repeat(SIZE / 8),
+    "a long mailto": `<a href="mailto:${".".repeat(SIZE)}">x</a>`,
+  };
+
+  for (const [label, html] of Object.entries(pages)) {
+    test(`${label} (1.5 MB) is read in well under a second`, () => {
+      const started = performance.now();
+      extractContacts(html, "https://hostile.example/");
+      contactPageLinks(html, "https://hostile.example/");
+      directoryBusinessLinks(html, "https://hostile.example/list/");
+      expect(performance.now() - started).toBeLessThan(500);
+    });
+  }
+
+  test("text addresses are read from the first MAX_TEXT_SCAN characters of text; links from the whole page", () => {
+    const filler = `<p>${"word ".repeat(MAX_TEXT_SCAN / 5)}</p>`;
+    const contacts = extractContacts(`${filler}<p>late@acme.com</p><a href="mailto:link@acme.com">x</a>`, "https://acme.com/");
+    expect(contacts.map((c) => c.value)).toEqual(["link@acme.com"]);
+  });
+
+  test("visibleText drops scripts, styles and tags as before", () => {
+    expect(visibleText("<p>Hi <b>there</b></p><script>var a = '<b>x</b>';</script><style>p{}</style><noscript>n</noscript> &amp; <> x")).toBe(" Hi there & <> x");
+    // An element never closed keeps its text, as the regexes left it.
+    expect(visibleText("<script>a@b.com")).toBe(" a@b.com");
+    expect(withoutElements("<header>Call 1800</header><main>x</main><footer>y</footer>", ["header", "footer", "nav"])).toBe(" <main>x</main> ");
   });
 });
 
