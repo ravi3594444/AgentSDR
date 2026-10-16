@@ -224,28 +224,64 @@ How it works, for "find gyms in Pune that might need a booking app":
    up to 20 business links on each; with the Instagram feature on and an
    account linked, up to 6 Instagram starting points — a profile's listed
    website and public contact buttons, or a post's comments (up to 50).
-4. **Save** — each email is checked for syntax and for the domain's mail
-   servers (MX, else A/AAAA); this proves the domain can receive mail, not
-   that the mailbox exists, and the UI says so. Phones are normalized to
-   E.164 with the organization's default country. People are matched to
+   The private-address refusal is made where the connection is opened: each
+   request resolves the host through its own lookup, which refuses any
+   private, loopback, link-local or CGNAT answer, so a DNS answer that
+   changes between a check and the connection (rebinding) reaches nothing;
+   every redirect is checked again. Pages are parsed in linear time (a
+   hostile 1.5 MB page takes milliseconds); addresses written as text are
+   read from the first 300 KB of a page's visible text, links from all of
+   it. A hidden address is decoded only when the hiding is clear ("name
+   [at] domain [dot] com", "name(at)domain.com", "name at domain dot com"):
+   no space around a literal ".", and a top-level domain in one case, so
+   "Join our team (at) Pune. Com…" stays a sentence. On a directory page only
+   the listings' contacts count: not the site's header, navigation or
+   footer, not a helpline repeated beside the listings, not an address on
+   the directory's own domain.
+4. **Save** — up to 5 emails per lead, each checked for syntax and for the
+   domain's mail configuration: MX records ("domain has mail servers (MX)"),
+   or, with no MX, an A/AAAA record ("domain can receive mail"). Neither
+   proves that the mailbox exists, and the evidence says "mailbox not
+   verified". A DNS timeout or failure is "not checked" and the email is
+   kept; only definite answers are cached (6 hours). Phones are normalized
+   to E.164 with the organization's default country. People are matched to
    existing ones by email, then phone, before anyone is created (source
    `discovery:web-search`). Each contact keeps the exact page URL it was read
-   from; each lead keeps why it matched (the provider's title and snippet and
-   the query that found it) and any signal.
+   from (a LinkedIn link too); each lead keeps why it matched (the
+   provider's title and snippet and the query that found it) and any signal.
+   When a directory URL the search returned redirects, the lead keeps the
+   page read and the provider's URL beside it, and the match reason names
+   the redirect apart. A retried or taken-over saving step adds nothing
+   twice; the final counts are the audience's rows.
 
 Never invented: an email, phone, person or page that was not on a page the
 provider returned (or a page those pages link to as above). A business that
-publishes no contact stays in the list as **excluded** with the reason. A
-comment is a need only when its own words ask for something ("looking for a
-physio near Baner"); a follow, like, reaction or emoji-only comment is
-engagement. Instagram-only people are listed but excluded with "reachable
+publishes no contact stays in the list as **excluded** with the reason. The
+owner's own business is never a lead: the organization's Instagram accounts,
+mailbox addresses (and their domain, unless a free mail provider), WhatsApp
+numbers and the business profile's website are skipped wherever they turn
+up. A comment is a need only when its own words ask for something ("looking
+for a physio near Baner", "how much for a cleaning?"); a follow, like,
+reaction, emoji-only comment, praise ("I love how much this place has
+grown!", "Do you know how beautiful this is?") or a refusal ("mujhe nahi
+chahiye") is engagement. Instagram-only people are listed but excluded with "reachable
 only on Instagram — open the post/profile to reply yourself", because
 AgentSDR starts no Instagram chats.
 
 Cost: up to 3 provider searches per request (the provider's own price; the
 job stores the cost the provider reports) plus at most 6 Unipile reads.
 Bounds: 5–40 sites per request (default 20), a 60 s deadline per search,
-one retry only for a rate limit or server error.
+one retry only for a rate limit or server error. Per organization: at most
+2 website searches queued or running at once and 10 started in 24 hours
+(`MAX_OPEN_WEB_DISCOVERIES`, `MAX_WEB_DISCOVERIES_PER_DAY` in
+`webDiscovery.server.ts`); a request past either is refused with the reason,
+and nothing is created. On AI/ML API, a request's searches count toward the
+daily research limit (Settings → AI provider) together with company
+research, and a request that does not fit is refused. A search is marked as
+started before the call and its result saved right after, so a step that
+fails later never pays for it again (one that never saved is recorded as
+interrupted). The feature switch is checked again before every search;
+turning it off stops a run before its next paid search.
 
 **Instagram hashtag and keyword discovery** is not possible through Unipile
 (section 1). `src/lib/discovery/socialAdapters.ts` holds an optional Meta
