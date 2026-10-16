@@ -15,7 +15,7 @@ import { listRuns } from "./outreach.server";
 import { assistantJobs, type AssistantAttachment, type BusinessProfile } from "./schema";
 import { addMessage, claimThread, listMessages, releaseThread, updateMessage } from "./threads.server";
 import { recordUsage } from "./usage.server";
-import { runTool, setupSnapshot, TOOL_NAMES, toolCatalog, type ToolContext, type ToolResult } from "./tools.server";
+import { runTool, setupSnapshot, toolCatalog, toolNamesFor, type ToolContext, type ToolResult } from "./tools.server";
 
 /**
  * One turn of the owner's assistant. The model answers with a message and
@@ -52,7 +52,7 @@ function systemPrompt(features: FeatureState): string {
     "14. suggestions: up to three short replies the owner might send next, in their own words and language (e.g. \"We sell dental equipment servicing in Pune\", \"Find dental clinics in Pune and contact them\", \"Show today's results\"). Suggest only what you could act on; none while a plan card waits for Start or a decision card waits for an answer.",
     "",
     "TOOLS",
-    toolCatalog(),
+    toolCatalog(features),
   ].join("\n");
 }
 
@@ -157,6 +157,7 @@ export async function runAgentTurn(input: {
     const documentsText = smallTalk ? "" : await ownerDocumentsText();
     const succeeded: string[] = [];
     const features = await featureState();
+    const toolNames = toolNamesFor(features);
     for (let step = 0; step < MAX_STEPS; step += 1) {
       const { text: setupText, outreachStarted, profile } = await contextBlock();
       const messages = await listMessages(input.threadId, 80);
@@ -172,11 +173,11 @@ export async function runAgentTurn(input: {
           maxOutputTokens: 1_500,
           schemaName: "assistant_reply",
           schemaDescription: "Your message to the owner and the tools to run now.",
-          jsonSchema: agentReplySchema(TOOL_NAMES),
+          jsonSchema: agentReplySchema(toolNames),
           systemPrompt: systemPrompt(features),
           userPrompt: `${setupText}\n\nCONVERSATION (newest last):\n${transcriptText(messages)}\n\nYour turn.`,
           accept: (text) => {
-            const parsed = parseAgentReply(text, TOOL_NAMES, { allowEmpty: step > 0 });
+            const parsed = parseAgentReply(text, toolNames, { allowEmpty: step > 0 });
             const refused = actionsProblem(parsed.actions, { smallTalk, profile, ownerCorpus, outreachRequested: askedForOutreach, inquiryRepliesRequested: askedForInquiryReplies });
             if (refused) throw new Error(refused);
             // A message sent with tools is checked against their results below.

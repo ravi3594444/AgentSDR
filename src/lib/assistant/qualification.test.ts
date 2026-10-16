@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { actionsProblem, inquiryRepliesRequested } from "./agent";
-import { businessContext, priceDocuments, reusableSender } from "./businessContext";
+import { businessContext, looksLikeSenderName, priceDocuments, reusableSender } from "./businessContext";
 import { inquiryFacts, inquirySignal, matchReasonForExisting, peopleSourceLabel } from "./existingLeads";
 import { inquiryRunProblem } from "./inquiryRuns";
 import { approvalProblem, makeRequestApproval } from "./requestApproval";
@@ -113,6 +113,23 @@ describe("business context: reuse before asking", () => {
     expect(known.summary).toContain("prices: in “Price list 2026”");
     const none = businessContext({ businessName: "Acme", offer: "chair servicing" }, { documents: [], senders: [], instructions: [] });
     expect(none.optional[0]).toContain("prices");
+    // Prices the owner told the assistant are known too.
+    const told = businessContext({ businessName: "Acme", offer: "chair servicing", prices: "Servicing ₹1,500 a chair" }, { documents: [], senders: [], instructions: [] });
+    expect(told.optional).toEqual([]);
+    expect(told.summary).toContain("prices: in the business profile");
+  });
+
+  test("an email address, a phone number or a handle never signs a message", () => {
+    expect(looksLikeSenderName("Ravi Kumar")).toBe(true);
+    expect(looksLikeSenderName("Acme Dental Care")).toBe(true);
+    expect(looksLikeSenderName("ravi@acme.com")).toBe(false);
+    expect(looksLikeSenderName("+91 98765 43210")).toBe(false);
+    expect(looksLikeSenderName("sales2024team")).toBe(false);
+    expect(reusableSender([{ name: "ravi@acme.com", source: "mailbox" }])).toBeNull();
+    expect(reusableSender([{ name: "ravi@acme.com", source: "mailbox" }, { name: "Ravi Kumar", source: "LinkedIn" }])).toEqual({ name: "Ravi Kumar", source: "LinkedIn" });
+    const single = businessContext({ businessName: "Acme", offer: "x" }, { documents: [], senders: [{ name: "+91 98765 43210", source: "WhatsApp" }], instructions: [] });
+    expect(single.sender).toBeNull();
+    expect(single.missingForOutreach).toContain("the name messages are signed with");
   });
 
   test("the sender name every account already uses is reused; disagreeing accounts are asked about", () => {

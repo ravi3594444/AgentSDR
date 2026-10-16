@@ -11,6 +11,7 @@ import { extractContacts, visibleText } from "@/lib/discovery/contacts";
 import { fetchPublicPage } from "@/lib/discovery/websiteContacts.server";
 import { normalizeWebCriteria, startWebDiscovery, WebDiscoveryUnavailableError } from "@/lib/discovery/webDiscovery.server";
 import { webSearchAvailability, webSearchAvailabilityFrom } from "@/lib/discovery/webSearch.server";
+import type { FeatureState } from "@/lib/features/catalog";
 import { featureEnabled, FeatureDisabledError } from "@/lib/features/flags.server";
 import type { ImportRow } from "@/lib/leads/importRows";
 import { importPeopleRows } from "@/lib/leads/peopleImport.server";
@@ -77,6 +78,8 @@ type Tool = {
   description: string;
   /** Argument names and meanings, for the model. */
   arguments: string;
+  /** Offered to the model only while this holds for the organization's optional features (always, without it). */
+  available?: (features: FeatureState) => boolean;
   run: (args: Record<string, unknown>, context: ToolContext) => Promise<ToolResult>;
 };
 
@@ -273,6 +276,7 @@ export const TOOLS: Record<string, Tool> = {
   },
 
   find_customers_on_web: {
+    available: (features) => features.web_discovery,
     description: "Find customers matching the owner's description of them with a real web search provider (the organization's OpenRouter connection with its web plugin, or AI/ML API's web research model; never a model answering from memory): only the pages the provider returned are used. It reads the businesses' own websites and the local directories or lists the search returned (and the business websites those directories link to) for the emails and phones they publish, and keeps each contact with the page it came from; it never guesses an email, phone, person or page, and people already in the leads are reused, not duplicated. Public Instagram profiles and posts the search returns are read (a profile's website, a post's comments) only when Instagram is connected (the Instagram feature on and an account linked); otherwise they are skipped. People found only on Instagram are listed but cannot be contacted from here. Up to 3 paid searches; runs in the background and announces the result in the chat. Needs the Website and directory search feature.",
     arguments: "customers (who the customers are, from the owner's words or the business profile), where (city/area/region), maxResults (5-40 business websites to read, default 20), contactAfter (true only when the owner asked to contact, email or message the leads found: the outreach plan is then prepared automatically when the search finishes), channels (optional, with contactAfter: array of email|whatsapp|linkedin)",
     run: async (args, context) => {
@@ -379,6 +383,7 @@ export const TOOLS: Record<string, Tool> = {
   },
 
   list_inquiries: {
+    available: (features) => features.inquiry_intake,
     description: "The inquiries received in the last 30 days (website forms, Instagram): how many are new, how many came from imported history, and the latest few with what they wrote.",
     arguments: "none",
     run: async () => {
@@ -393,6 +398,7 @@ export const TOOLS: Record<string, Tool> = {
   },
 
   prepare_inquiry_replies: {
+    available: (features) => features.instagram && features.inquiry_intake,
     description: "Propose answering new Instagram inquiries: from when the owner presses Start, people whose first message arrives on an Instagram account that treats new messages as inquiries get replies drafted from the owner's saved information — sent automatically in Automatic mode, or waiting in Action required in Review mode — with every existing check, limit and handoff. It never answers imported history, earlier chats or anyone else, and sends nothing first. Only when the owner asked for their inquiries or Instagram messages to be answered.",
     arguments: "autopilot (optional true/false: propose Automatic replies)",
     run: async (args, context) => {
@@ -714,6 +720,11 @@ export const TOOLS: Record<string, Tool> = {
 
 export const TOOL_NAMES = Object.keys(TOOLS);
 
+/** The tools offered to the model: a tool of an optional feature that is off is left out entirely. */
+export function toolNamesFor(features: FeatureState): string[] {
+  return Object.entries(TOOLS).filter(([, tool]) => !tool.available || tool.available(features)).map(([name]) => name);
+}
+
 /** Runs one tool; argument problems come back as a failed result the model can correct. */
 export async function runTool(name: string, args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
   const tool = TOOLS[name];
@@ -727,9 +738,9 @@ export async function runTool(name: string, args: Record<string, unknown>, conte
   }
 }
 
-/** The tools as the model reads them. */
-export function toolCatalog(): string {
-  return Object.entries(TOOLS).map(([name, tool]) => `- ${name}: ${tool.description} Arguments: ${tool.arguments}.`).join("\n");
+/** The tools as the model reads them, only those `features` allow. */
+export function toolCatalog(features: FeatureState): string {
+  return toolNamesFor(features).map((name) => `- ${name}: ${TOOLS[name]!.description} Arguments: ${TOOLS[name]!.arguments}.`).join("\n");
 }
 
 export { setupSnapshot };

@@ -45,12 +45,26 @@ export function priceDocuments(documents: readonly SavedDocument[]): string[] {
 }
 
 /**
+ * Whether an account's label reads as a person's or business's name: not an
+ * email address, not a phone number or handle full of digits. Unipile
+ * mailboxes often carry the address as their name, WhatsApp accounts the
+ * number — neither may sign a message.
+ */
+export function looksLikeSenderName(name: string): boolean {
+  const value = name.trim();
+  if (!value || value.length > 60 || value.includes("@") || /^https?:/i.test(value)) return false;
+  if ((value.match(/\d/g) ?? []).length >= 3) return false;
+  return /\p{L}{2,}/u.test(value);
+}
+
+/**
  * The sender name to reuse when the profile has none: only when every
- * connected account sends under the same name (case-insensitive), so
- * nothing is guessed when a mailbox and a LinkedIn profile disagree.
+ * connected account whose label reads as a name (looksLikeSenderName) uses
+ * the same one (case-insensitive), so nothing is guessed when a mailbox and
+ * a LinkedIn profile disagree, and no address or number signs a message.
  */
 export function reusableSender(senders: readonly SenderIdentity[]): SenderIdentity | null {
-  const named = senders.filter((sender) => sender.name.trim());
+  const named = senders.filter((sender) => looksLikeSenderName(sender.name));
   if (!named.length) return null;
   const distinct = new Set(named.map((sender) => sender.name.trim().toLowerCase()));
   return distinct.size === 1 ? { name: named[0]!.name.trim(), source: named[0]!.source } : null;
@@ -74,10 +88,12 @@ export function businessContext(profile: BusinessProfile, sources: BusinessSourc
     return item === "the name messages are signed with" ? item : `${item}${documentHint}`;
   });
   const prices = priceDocuments(userDocuments);
-  const optional = !prices.length && !/\d/.test(`${profile.offer ?? ""} ${profile.notes ?? ""}`) ? ["prices (ask once if leads are likely to ask; never block on it)"] : [];
+  const savedPrices = profile.prices?.trim() ?? "";
+  const optional = !prices.length && !savedPrices && !/\d/.test(`${profile.offer ?? ""} ${profile.notes ?? ""}`) ? ["prices (ask once if leads are likely to ask; never block on it)"] : [];
+  const priceSources = [...(savedPrices ? ["the business profile"] : []), ...prices.map((title) => `“${title}”`)];
   const summary = [
     `documents: ${userDocuments.length ? userDocuments.map((document) => `“${document.title}” (${document.kind})`).join(", ") : "none"}`,
-    `prices: ${prices.length ? `in ${prices.map((title) => `“${title}”`).join(", ")}` : "none saved"}`,
+    `prices: ${priceSources.length ? `in ${priceSources.join(", ")}` : "none saved"}`,
     `sender: ${sender ? `${sender.name} (from ${sender.source})` : sources.senders.length ? `accounts send as ${[...new Set(sources.senders.map((s) => `${s.name} (${s.source})`))].join(", ")}` : "unknown"}`,
     `reply instructions: ${sources.instructions.length ? sources.instructions.map((title) => `“${title}”`).join(", ") : "none"}`,
   ].join("; ");

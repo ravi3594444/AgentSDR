@@ -10,6 +10,7 @@ import {
 } from "@/lib/linkedin/webhooks/inbox";
 import { serializeError } from "@/lib/linkedin/serializeError";
 import { db } from "@/lib/db";
+import { isMissingTable } from "@/lib/features/flags.server";
 import { instagramAccounts } from "@/lib/instagram/schema";
 import { currentOrganizationId, runInOrganization } from "@/lib/tenancy/scope";
 import { gateUnipileWebhook } from "@/lib/linkedin/organizations.server";
@@ -57,12 +58,18 @@ async function authorized(req: NextRequest): Promise<boolean> {
  * that organization matches.
  */
 async function organizationOfAccount(accountId: string): Promise<string | null> {
-  const [account] = await db
-    .select({ organizationId: instagramAccounts.organizationId })
-    .from(instagramAccounts)
-    .where(eq(instagramAccounts.unipileAccountId, accountId))
-    .limit(1);
-  return account?.organizationId ?? null;
+  try {
+    const [account] = await db
+      .select({ organizationId: instagramAccounts.organizationId })
+      .from(instagramAccounts)
+      .where(eq(instagramAccounts.unipileAccountId, accountId))
+      .limit(1);
+    return account?.organizationId ?? null;
+  } catch (error) {
+    // Before the migration (scripts/add-instagram-intake-discovery.ts) no account is linked here.
+    if (isMissingTable(error)) return null;
+    throw error;
+  }
 }
 
 function text(value: unknown): string | null {
@@ -96,7 +103,10 @@ export async function POST(req: NextRequest) {
   const gate = await gateUnipileWebhook(req, organizationId);
   if (gate.verdict === "reject") return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   if (gate.verdict === "ignore") return NextResponse.json({ ok: true, skipped: true });
-  if (!organizationId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  // No organization has linked this account (or the feature never synced it):
+  // nothing to store, and nothing for Unipile to retry — as before Instagram
+  // was routed here.
+  if (!organizationId) return NextResponse.json({ ok: true, skipped: true });
 
   return runInOrganization(organizationId, () => handle(req, payload, gate.verdict === "accept"));
 }

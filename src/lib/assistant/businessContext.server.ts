@@ -22,8 +22,8 @@ export async function businessSources(): Promise<BusinessSources> {
   const [documents, mailboxRows, linkedinRows, whatsappRows, instructions] = await Promise.all([
     db.select({ title: crmKnowledgeDocuments.title, kind: crmKnowledgeDocuments.kind }).from(crmKnowledgeDocuments)
       .where(and(inOrg(crmKnowledgeDocuments), eq(crmKnowledgeDocuments.active, true))).limit(40),
-    db.select({ name: mailboxes.displayName }).from(mailboxes).where(inOrg(mailboxes)).limit(20),
-    db.select({ name: linkedInAccounts.name }).from(linkedInAccounts).where(inOrg(linkedInAccounts)).limit(20),
+    db.select({ name: mailboxes.displayName }).from(mailboxes).where(and(inOrg(mailboxes), eq(mailboxes.status, "connected"))).limit(20),
+    db.select({ name: linkedInAccounts.name }).from(linkedInAccounts).where(and(inOrg(linkedInAccounts), eq(linkedInAccounts.status, "CONNECTED"))).limit(20),
     db.select({ name: whatsappAccounts.name, status: whatsappAccounts.status }).from(whatsappAccounts).where(inOrg(whatsappAccounts)).limit(20),
     db.select({ blocks: crmSettings.draftInstructions }).from(crmSettings)
       .innerJoin(crmPipelines, eq(crmPipelines.id, crmSettings.pipelineId))
