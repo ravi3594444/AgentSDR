@@ -120,15 +120,21 @@ export async function researchRuntime(timeoutMs = RESEARCH_TIMEOUT_MS) {
  * whether or not they ran yet, so a burst of requests cannot pass the limit.
  */
 async function webDiscoverySearchesSince(since: Date): Promise<number> {
-  const [row] = await db.select({ n: sql<number>`coalesce(sum(jsonb_array_length(coalesce(${assistantJobs.payload}->'queries', '[]'::jsonb))), 0)::int` })
-    .from(assistantJobs)
-    .where(and(
-      inOrg(assistantJobs),
-      eq(assistantJobs.kind, "web_discovery"),
-      gte(assistantJobs.createdAt, since),
-      sql`${assistantJobs.payload}->>'searchProvider' = ${AIML_PROVIDER_KEY}`,
-    ));
-  return Number(row?.n ?? 0);
+  try {
+    const [row] = await db.select({ n: sql<number>`coalesce(sum(jsonb_array_length(coalesce(${assistantJobs.payload}->'queries', '[]'::jsonb))), 0)::int` })
+      .from(assistantJobs)
+      .where(and(
+        inOrg(assistantJobs),
+        eq(assistantJobs.kind, "web_discovery"),
+        gte(assistantJobs.createdAt, since),
+        sql`${assistantJobs.payload}->>'searchProvider' = ${AIML_PROVIDER_KEY}`,
+      ));
+    return Number(row?.n ?? 0);
+  } catch (error) {
+    // An install without the assistant's tables has run no website searches; company research must still work.
+    if (missingTable(error)) return 0;
+    throw error;
+  }
 }
 
 /**

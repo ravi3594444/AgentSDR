@@ -202,6 +202,12 @@ describe("needSignal", () => {
       "Do you know a good dentist near Aundh?",
       "Does anyone know how to book an appointment?",
       "Do you know how to reach them?",
+      "how much is a cleaning?",
+      "How much would 3 implants cost?",
+      "how much do I pay for braces?",
+      "mujhe ek achha dentist chahiye",
+      "Does anyone know where to get aligners?",
+      "Anyone know of a clinic open on Sunday?",
     ]) expect([text, needSignal(text)]).toEqual([text, "need"]);
   });
 
@@ -227,6 +233,19 @@ describe("needSignal", () => {
       "mujhe ye nahin chahiye bhai",
       "mat chahiye",
       "need nahi hai",
+      // Found by the review: praise and refusals that read like asks.
+      "Do you know just how beautiful this is?",
+      "Do you have any idea how beautiful this is?",
+      "Does anyone know how beautiful this place is?",
+      "Do you know you're amazing?",
+      "I love how much you pay attention to every patient!",
+      "Love how much attention you pay to detail",
+      "How much fun was this?!",
+      "Wow, how much this place has changed?!",
+      "Mujhe nai chahiye",
+      "Mujhe chahiye hi nahi",
+      "Aisa hi pyaar chahiye 😍",
+      "You don’t need a reason to visit this place!",
       "Thank you so much doctor",
       "",
       "🙏",

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import http from "node:http";
 import type { LookupFunction } from "node:net";
-import { gzipSync } from "node:zlib";
+import { deflateRawSync, gzipSync } from "node:zlib";
 import { fetchPublicPage, proxiedByEnvironment, publicOnlyLookup, requestWithLookup, type Resolver } from "./websiteContacts.server";
 
 /** A local server standing in for a website: it records every request it gets. */
@@ -14,7 +14,16 @@ const server = http.createServer((request, response) => {
     response.end(gzipSync("<p>Write to hello@lotus.example</p>"));
   } else if (request.url === "/big") {
     response.writeHead(200, { "content-type": "text/html" });
-    response.end("x".repeat(2_000_000));
+    response.end(`${"word ".repeat(299_999)}info@acme.com ${"more ".repeat(100_000)}`);
+  } else if (request.url === "/encoding-none") {
+    response.writeHead(200, { "content-type": "text/html", "content-encoding": "none" });
+    response.end("<p>Write to none@lotus.example</p>");
+  } else if (request.url === "/raw-deflate") {
+    response.writeHead(200, { "content-type": "text/html", "content-encoding": "deflate" });
+    response.end(deflateRawSync("<p>Write to raw@lotus.example</p>"));
+  } else if (request.url === "/gzip-trailing") {
+    response.writeHead(200, { "content-type": "text/html", "content-encoding": "gzip" });
+    response.end(Buffer.concat([gzipSync("<p>Write to trail@lotus.example</p>"), Buffer.from([0, 0, 0])]));
   } else if (request.url === "/moved") {
     response.writeHead(301, { location: "/contact" });
     response.end();
@@ -116,14 +125,29 @@ describe("requestWithLookup", () => {
     expect(hits.at(-1)).toEqual({ host: `lotus.test:${port}`, path: "/" });
   });
 
+  test("reads what sloppy servers send, as fetch did", async () => {
+    expect((await requestWithLookup(new URL(`http://lotus.test:${port}/encoding-none`), toLocal)).html).toBe("<p>Write to none@lotus.example</p>");
+    expect((await requestWithLookup(new URL(`http://lotus.test:${port}/raw-deflate`), toLocal)).html).toBe("<p>Write to raw@lotus.example</p>");
+    expect((await requestWithLookup(new URL(`http://lotus.test:${port}/gzip-trailing`), toLocal)).html).toBe("<p>Write to trail@lotus.example</p>");
+  });
+
   test("decompresses gzip, caps the body at 1.5 MB, and reports redirects without following them", async () => {
     expect((await requestWithLookup(new URL(`http://lotus.test:${port}/gzip`), toLocal)).html).toBe("<p>Write to hello@lotus.example</p>");
-    expect((await requestWithLookup(new URL(`http://lotus.test:${port}/big`), toLocal)).html?.length).toBe(1_500_000);
+    // Capped at 1.5 MB, ending on a whole word: the address straddling the cap is dropped, never shortened.
+    const big = (await requestWithLookup(new URL(`http://lotus.test:${port}/big`), toLocal)).html ?? "";
+    expect(big.length).toBeLessThanOrEqual(1_500_000);
+    expect(big.length).toBeGreaterThan(1_499_000);
+    expect(big.endsWith(" ")).toBe(true);
+    expect(big).not.toContain("info@acme.co");
     expect(await requestWithLookup(new URL(`http://lotus.test:${port}/moved`), toLocal)).toEqual({ status: 301, location: "/contact", contentType: "", html: null });
   });
 });
 
 describe("proxiedByEnvironment", () => {
+  test("on Node a proxy variable changes nothing: its fetch would connect directly", () => {
+    expect(proxiedByEnvironment(new URL("https://shop.example/"), { HTTPS_PROXY: "http://proxy:3128" }, false)).toBe(false);
+  });
+
   test("follows the scheme's proxy variable and NO_PROXY", () => {
     const env = { HTTPS_PROXY: "http://proxy:3128", NO_PROXY: "localhost,.internal.example,exempt.example" };
     expect(proxiedByEnvironment(new URL("https://shop.example/"), env)).toBe(true);

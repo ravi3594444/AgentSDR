@@ -315,11 +315,11 @@ const NEED_PATTERNS: RegExp[] = [
   /\bin (?:search|need) of\b/i,
   /\bneeds? (?:a|an|some|someone|somebody|help|advice|recommendations?|suggestions?|to (?:find|buy|get|book|hire|fix|repair))\b/i,
   /\b\w+ (?:needed|required) (?:in|near|for|urgently|asap)\b/i,
-  /\bany(?:one|body)? (?:know|knows|recommend|suggest)\b/i,
-  /\b(?:does|do) (?:anyone|anybody|someone|somebody) know\b/i,
-  // "Do you know …?" asks only as a question, and not "do you know how
-  // beautiful this is?" ("how" only as "how to", "how I can").
-  /\bdo you know\b(?! how\b(?! (?:to|i can|we can|i could|we could)\b))[^.!?]{0,120}\?/i,
+  // "Anyone know / do you know …" asks only about a place, a person or a way
+  // ("anyone know a good dentist", "do you know where…", "how to…"), never
+  // "does anyone know how beautiful this is?".
+  /\bany(?:one|body)? (?:recommend|suggest)\b/i,
+  /\b(?:any(?:one|body)?|(?:does|do) (?:anyone|anybody|someone|somebody)|do you) knows? (?:a|an|any|of|where|who|whom|whether|if (?:you|they|there)|how (?:to|i|we|can|do)|someone|somebody|anyone|good|the best)\b/i,
   /\bcan (?:any(?:one|body)|some(?:one|body)|you) (?:recommend|suggest|help|tell)\b/i,
   /\bany (?:good )?(?:recommendations?|suggestions?|references?)\b/i,
   /\b(?:please|pls|plz) (?:recommend|suggest)\b/i,
@@ -330,19 +330,25 @@ const NEED_PATTERNS: RegExp[] = [
   // "How much" asks a price only as a question that opens with it ("how
   // much for a cleaning?", "and how much is it?") or next to a price word;
   // "I love how much this place has grown" is praise.
-  /(?:^|[.!?,;:]\s*|\b(?:and|so|but|also|ok|okay|hi|hello|hey|sir|madam|ma'?am|bro|bhai|pls|please)\s+)how much\b[^.!?]{0,80}\?/i,
-  /\bhow much\b[^.!?]{0,60}(?:\b(?:price|prices|pricing|cost|costs|charge|charges|charged|fee|fees|rate|rates|pay|rs|rupees|inr|budget)\b|[₹$])/i,
+  // "how much" asks a price only as "how much is/for/does/would…?" or next
+  // to a price word; "how much fun was this?!" and "I love how much you pay
+  // attention" are praise.
+  /\bhow much (?:is|are|does|do|did|for|would|will|to (?:book|buy|get|order|hire|rent|join|enrol|enroll)|per|each|cost|costs|charge|charges)\b[^.!?]{0,80}\?/i,
+  /\bhow much\b[^.!?]{0,60}(?:\b(?:price|prices|pricing|cost|costs|charge|charges|charged|fee|fees|rate|rates|rs|rupees|inr|budget)\b|[₹$])/i,
   /\bwhat(?:'s| is| are)(?: the| your)? (?:price|prices|cost|costs|rate|rates|fee|fees|charges?)\b/i,
   /\b(?:price|prices|pricing|cost|rate|rates|fees?|charges?|quote|quotation)\s*\?/i,
   /\b(?:price|rate|cost|details) (?:please|pls|plz)\b/i,
   /\b(?:send|share|dm|tell)(?: me)?(?: the| your)? (?:price|prices|pricing|rates?|quote|quotation|details)\b/i,
   /\b(?:get|need|want|request) (?:a )?(?:quote|quotation|estimate)\b/i,
   /\b(?:is (?:it|this)|are you) available\b[^.!]*\?/i,
-  /\bdo you (?:deliver|ship|provide|offer|have|do|serve|take)\b[^.!]*\?/i,
+  /\bdo you (?:deliver|ship|provide|offer|have(?! (?:any |an |no )?idea)|do|serve|take)\b[^.!]*\?/i,
   // Hinglish: chahiye (want/need), kahan/kaha milega (where can I get),
   // kitne ka / kitna lagega (how much), koi bata/suggest (someone tell/suggest),
   // price kya hai / kya rate (what is the price).
-  /\bchahiye\b/i,
+  // "chahiye" (want/need) asks only with someone asking ("mujhe … chahiye")
+  // or as a question; "aisa hi pyaar chahiye 😍" is praise.
+  /\b(?:mujhe|muje|mujhko|mereko|mujhe bhi|hume|humein|hamein|hamko|humko)\b[^.!?]{0,60}\b(?:chahiye|chahie|chaiye)\b/i,
+  /\b(?:chahiye|chahie|chaiye)\b[^.!]{0,40}\?/i,
   /\bkah?a+n? (?:mile(?:ga|gi)?|milta|milti)\b/i,
   /\bkitn[aei] (?:ka|ki|ke|lagega|lagegi|lagta|lagti|hoga|hogi|price|rate|charges?|paisa|paise|rs|rupees?)\b|\bkitn[aei](?: hai)?\s*\?/i,
   /\bkoi (?:bata|batao|bataye|batayein|btao|suggest|recommend)\b/i,
@@ -355,7 +361,7 @@ const NEED_PATTERNS: RegExp[] = [
  * looking for", and in Hindi/Hinglish "mujhe nahi chahiye", "mat chahiye",
  * "need nahi hai".
  */
-const NEGATED = /\b(?:no|not|don'?t|dont|do not|never|nobody|no one|nahi|nahin|nhi)\s+(?:\w+\s+)?(?:need|looking|searching|chahiye|chahie|chaiye)\b|\b(?:mat|na)\s+(?:chahiye|chahie|chaiye)\b|\b(?:need|chahiye|chahie|chaiye)\s+(?:nahi|nahin|nhi)\b/gi;
+const NEGATED = /\b(?:no|not|don['’]?t|dont|do not|doesn['’]?t|never|nobody|no one|nahi|nahin|nhi|nai)\s+(?:\w+\s+)?(?:need|needs|looking|searching|chahiye|chahie|chaiye)\b|\b(?:mat|na)\s+(?:chahiye|chahie|chaiye)\b|\b(?:need|chahiye|chahie|chaiye)\s+(?:hi\s+|bhi\s+)?(?:nahi|nahin|nhi|nai)\b/gi;
 
 /**
  * Whether something a person wrote asks for help ("need") or is only

@@ -4,8 +4,8 @@ import { lookup as dnsLookup, type LookupAddress } from "node:dns";
 import http from "node:http";
 import https from "node:https";
 import type { LookupFunction } from "node:net";
-import type { Readable } from "node:stream";
-import { createBrotliDecompress, createGunzip, createInflate } from "node:zlib";
+import { PassThrough, type Readable, type Transform } from "node:stream";
+import { constants as zlibConstants, createBrotliDecompress, createGunzip, createInflate, createInflateRaw } from "node:zlib";
 import { assertPublicUrl, isBlockedAddress } from "@/lib/grid/runners/http";
 import { BRAND } from "@/lib/brand";
 import { publicAppUrl } from "@/lib/http/publicAppUrl";
@@ -25,12 +25,14 @@ import { contactPageLinks, extractContacts, type FoundContact } from "./contacts
  * connection (rebinding) gets nowhere. Every redirect hop is checked again,
  * and no connection is pooled or shared with other code.
  *
- * Behind an outbound proxy (HTTP_PROXY / HTTPS_PROXY, minus NO_PROXY — what
- * fetch honours) the proxy resolves and connects, so pinning the address is
- * not possible here: such a request goes through fetch, as before, after the
- * same public-address check of the name. Without this a server that must go
+ * Behind an outbound proxy (HTTP_PROXY / HTTPS_PROXY, minus NO_PROXY) on
+ * Bun — whose fetch sends such requests through the proxy, which resolves
+ * and connects — pinning the address is not possible here: the request goes
+ * through fetch, as before this reader existed, after the same
+ * public-address check of the name. Without this a server that must go
  * through a proxy could not read websites at all (Google Maps discovery
- * included).
+ * included). Node's fetch ignores those variables and would connect
+ * directly, so under Node the pinned reader is always used.
  */
 
 const MAX_BYTES = 1_500_000;
@@ -89,6 +91,40 @@ export type Answer = { status: number; location: string | null; contentType: str
 
 const readableType = (type: string) => !type || /html|xml/i.test(type);
 
+/** Content-Encoding values decoded here. */
+const DECODED_ENCODINGS = new Set(["gzip", "x-gzip", "deflate", "br"]);
+
+/**
+ * The decompressed body. Lenient like fetch: trailing bytes after a gzip
+ * member are ignored, and "deflate" may be zlib-wrapped (as the standard
+ * says) or raw (as some servers send) — told apart by its first two bytes.
+ */
+function decodedBody(response: Readable, encoding: string): Readable {
+  const options = { finishFlush: zlibConstants.Z_SYNC_FLUSH };
+  if (encoding !== "deflate") {
+    const decoder = encoding === "br" ? createBrotliDecompress() : createGunzip(options);
+    response.on("error", (error) => decoder.destroy(error));
+    return response.pipe(decoder);
+  }
+  const out = new PassThrough();
+  response.on("error", (error) => out.destroy(error));
+  let inflater: Transform | null = null;
+  response.on("data", (chunk: Buffer) => {
+    if (!inflater) {
+      const zlibWrapped = chunk.length >= 2 && (chunk[0]! & 0x0f) === 8 && ((chunk[0]! << 8) | chunk[1]!) % 31 === 0;
+      inflater = zlibWrapped ? createInflate(options) : createInflateRaw(options);
+      inflater.on("error", (error) => out.destroy(error));
+      inflater.pipe(out);
+    }
+    inflater.write(chunk);
+  });
+  response.on("end", () => (inflater ? inflater.end() : out.end()));
+  return out;
+}
+
+/** Content-Encoding values that mean "not encoded" in practice. */
+const PLAIN_ENCODINGS = new Set(["identity", "none", "utf-8", "utf8", "text", "binary", "8bit", "7bit"]);
+
 function decode(bytes: Uint8Array[], total: number): string {
   const out = new Uint8Array(Math.min(total, MAX_BYTES));
   let offset = 0;
@@ -98,7 +134,11 @@ function decode(bytes: Uint8Array[], total: number): string {
     offset += slice.byteLength;
     if (offset >= out.length) break;
   }
-  return new TextDecoder("utf-8", { fatal: false }).decode(out);
+  const text = new TextDecoder("utf-8", { fatal: false }).decode(out);
+  if (total <= MAX_BYTES) return text;
+  // Cut short: drop the last partial word, so "info@acme.com" is never read as "info@acme.co".
+  const end = Math.max(text.lastIndexOf(">"), text.search(/\s\S*$/));
+  return end > 0 ? text.slice(0, end + 1) : "";
 }
 
 async function readCapped(response: Response): Promise<string> {
@@ -182,6 +222,9 @@ export function requestWithLookup(url: URL, lookup: LookupFunction): Promise<Ans
       method: "GET",
       headers: { "User-Agent": userAgent(), Accept: ACCEPT, "Accept-Encoding": "gzip, deflate" },
       lookup,
+      // Read-only and bounded: tolerate the sloppy answers fetch tolerated (a repeated
+      // Content-Length, LF-only lines) rather than lose a business's website.
+      insecureHTTPParser: true,
       // A fresh connection every time: a pooled socket could have been opened by code without this lookup.
       agent: false,
     }, (response) => {
@@ -195,20 +238,14 @@ export function requestWithLookup(url: URL, lookup: LookupFunction): Promise<Ans
         return;
       }
       const encoding = String(response.headers["content-encoding"] ?? "").trim().toLowerCase();
-      const decoder = encoding === "gzip" || encoding === "x-gzip" ? createGunzip()
-        : encoding === "deflate" ? createInflate()
-          : encoding === "br" ? createBrotliDecompress()
-            : null;
-      if (encoding && encoding !== "identity" && !decoder) {
+      // Lenient like fetch: trailing bytes after a gzip body, raw (zlib-less) deflate.
+      if (encoding && !PLAIN_ENCODINGS.has(encoding) && !DECODED_ENCODINGS.has(encoding)) {
         clearTimeout(timer);
         response.destroy();
         reject(new Error(`${url.toString()} answered in an unsupported encoding (${encoding})`));
         return;
       }
-      if (decoder) {
-        response.on("error", (error) => decoder.destroy(error));
-        response.pipe(decoder);
-      }
+      const decoder = DECODED_ENCODINGS.has(encoding) ? decodedBody(response, encoding) : null;
       readStream(decoder ?? response, () => {
         clearTimeout(timer);
         response.destroy();
@@ -226,10 +263,12 @@ export function requestWithLookup(url: URL, lookup: LookupFunction): Promise<Ans
 
 /**
  * Whether fetch would send a request for `url` through an outbound proxy:
- * HTTPS_PROXY / HTTP_PROXY (either case) for its scheme, unless NO_PROXY
- * names its host (exact, a parent domain, or "*").
+ * on Bun, HTTPS_PROXY / HTTP_PROXY (either case) for its scheme, unless
+ * NO_PROXY names its host (exact, a parent domain, or "*").
  */
-export function proxiedByEnvironment(url: URL, env: Record<string, string | undefined> = process.env): boolean {
+export function proxiedByEnvironment(url: URL, env: Record<string, string | undefined> = process.env, onBun: boolean = Boolean(process.versions.bun)): boolean {
+  // Only Bun's fetch uses these variables; Node's connects directly, so pinning still applies there.
+  if (!onBun) return false;
   const proxy = url.protocol === "https:" ? env.HTTPS_PROXY ?? env.https_proxy : env.HTTP_PROXY ?? env.http_proxy;
   if (!proxy?.trim()) return false;
   const host = url.hostname.toLowerCase();

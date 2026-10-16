@@ -61,10 +61,9 @@ describe("hidden addresses", () => {
   const emailsOf = (text: string) => extractContacts(`<p>${text}</p>`, "https://x.example/").filter((c) => c.kind === "email").map((c) => c.value);
 
   test("decodes the clear forms", () => {
-    // name [at] domain [dot] com, name(at)domain.com, name at domain dot com
+    // name [at] domain [dot] com, name(at)domain.com
     expect(emailsOf("Write to sara [at] lotusdental [dot] com")).toEqual(["sara@lotusdental.com"]);
     expect(emailsOf("Write to sara(at)lotusdental.com today")).toEqual(["sara@lotusdental.com"]);
-    expect(emailsOf("Write to sara at lotusdental dot com")).toEqual(["sara@lotusdental.com"]);
     expect(emailsOf("Owner: dr.rao {at} smile-clinic (dot) co (dot) in")).toEqual(["dr.rao@smile-clinic.co.in"]);
     expect(emailsOf("INFO [AT] ACME [DOT] COM")).toEqual(["info@acme.com"]);
     expect(emailsOf("Mail: hello (at) Acme.com.")).toEqual(["hello@acme.com"]);
@@ -73,6 +72,11 @@ describe("hidden addresses", () => {
   });
 
   test("does not turn sentences into addresses", () => {
+    // Bare words read like ordinary sentences, so they are never decoded.
+    expect(emailsOf("Order online at acmedental dot com or call us")).toEqual([]);
+    expect(emailsOf("Visit us at smileclinic dot in for details")).toEqual([]);
+    expect(emailsOf("We started at the dot com boom")).toEqual([]);
+    expect(emailsOf("Write to sara at lotusdental dot com")).toEqual([]);
     expect(emailsOf("Join our team (at) Pune. Com… we are hiring")).toEqual([]);
     expect(emailsOf("Visit us (at) Mumbai. In 2024 we moved")).toEqual([]);
     expect(emailsOf("Visit us (at) Mumbai.In 2024")).toEqual([]);
@@ -168,5 +172,15 @@ describe("websites", () => {
     expect(cleanLinkedinUrl("https://in.linkedin.com/in/jane-doe-123?x=1")).toBe("https://www.linkedin.com/in/jane-doe-123");
     expect(cleanLinkedinUrl("https://linkedin.com/jobs/view/1")).toBeNull();
     expect(cleanLinkedinUrl("https://evil-linkedin.com/in/x")).toBeNull();
+  });
+});
+
+describe("the visible-text limit", () => {
+  test("never cuts an address into a different one", () => {
+    const filler = "word ".repeat(59_998); // 299,990 characters
+    const contacts = extractContacts(`<p>${filler}xx info@acme.com and more text</p>`, "https://x.example/");
+    expect(contacts.filter((c) => c.kind === "email").map((c) => c.value)).toEqual([]);
+    const fits = extractContacts(`<p>${"word ".repeat(1000)}info@acme.com</p>`, "https://x.example/");
+    expect(fits.filter((c) => c.kind === "email").map((c) => c.value)).toEqual(["info@acme.com"]);
   });
 });

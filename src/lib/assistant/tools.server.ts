@@ -87,7 +87,8 @@ class ToolArgumentError extends Error {}
 
 /** The page's <title> text, found with plain searches (linear on any page, unlike a lazy regex on hostile HTML). */
 function pageTitle(html: string): string {
-  const lower = html.toLowerCase();
+  // ASCII-only lowercase keeps every index in place ("İ".toLowerCase() is two characters).
+  const lower = html.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
   const open = lower.indexOf("<title");
   if (open < 0) return "";
   const start = lower.indexOf(">", open);

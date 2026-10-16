@@ -65,6 +65,18 @@ export function cleanEmail(raw: string): string | null {
 export const MAX_TEXT_SCAN = 300_000;
 
 /**
+ * The first MAX_TEXT_SCAN characters, ending at whitespace: a cut through
+ * the middle of "info@acme.com" would otherwise read as "info@acme.co", an
+ * address the page never showed.
+ */
+function withinScanLimit(text: string): string {
+  if (text.length <= MAX_TEXT_SCAN) return text;
+  const cut = text.slice(0, MAX_TEXT_SCAN);
+  const lastSpace = cut.search(/\s\S*$/);
+  return lastSpace > 0 ? cut.slice(0, lastSpace) : "";
+}
+
+/**
  * An address written in text. Every quantifier is bounded (local part 64,
  * domain 253, top-level domain 24) and a match starts only where a run of
  * address characters starts, so a page of one long word, of dots, of
@@ -75,11 +87,12 @@ const EMAIL_IN_TEXT = /(?<![A-Z0-9._%+-])[A-Z0-9._%+-]{1,64}@[A-Z0-9.-]{1,253}\.
 /**
  * Addresses hidden from bots, decoded only when the hiding is unmistakable:
  * "info [at] acme [dot] com", "info(at)acme.com", "info {at} acme (dot) co
- * (dot) in", "info at acme dot com". Whitespace is allowed only around the
- * explicit tokens; a literal "." must have no space on either side, and
- * the bare word " at " goes only with " dot " (else "visit us at acme.in"
- * would become an address). So "Join our team (at) Pune. Com…" and "Visit
- * us (at) Mumbai. In 2024" stay sentences.
+ * (dot) in" — the "at" always in brackets. Whitespace is allowed only around
+ * the explicit tokens, and a literal "." must have no space on either side.
+ * The bare words "info at acme dot com" are not decoded: ordinary sentences
+ * read the same way ("order online at acmedental dot com" is not
+ * online@acmedental.com). So "Join our team (at) Pune. Com…" and "Visit us
+ * (at) Mumbai. In 2024" stay sentences.
  */
 const OBFUSCATION_LOCAL = String.raw`(?<![A-Z0-9._%+-])([A-Z0-9._%+-]{1,64})`;
 const OBFUSCATION_LABEL = String.raw`[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?`;
@@ -90,7 +103,6 @@ const OBFUSCATED_BRACKETED = new RegExp(
   `${OBFUSCATION_LOCAL}\\s{0,2}[[({]\\s{0,2}at\\s{0,2}[\\])}]\\s{0,2}(${OBFUSCATION_LABEL}(?:(?:${DOT_TOKEN}|\\.)${OBFUSCATION_LABEL}){1,7})${DOMAIN_ENDS}`,
   "gi",
 );
-const OBFUSCATED_WORDS = new RegExp(`${OBFUSCATION_LOCAL}\\s{1,2}at\\s{1,2}(${OBFUSCATION_LABEL}(?:${DOT_TOKEN}${OBFUSCATION_LABEL}){1,7})${DOMAIN_ENDS}`, "gi");
 const DOT_TOKEN_GLOBAL = new RegExp(DOT_TOKEN, "gi");
 
 /**
@@ -106,7 +118,7 @@ function plausibleTld(label: string): boolean {
 /** The addresses written in one of the hidden forms above, decoded and cleaned. */
 function obfuscatedEmails(text: string): string[] {
   const out: string[] = [];
-  for (const pattern of [OBFUSCATED_BRACKETED, OBFUSCATED_WORDS]) {
+  for (const pattern of [OBFUSCATED_BRACKETED]) {
     for (const match of text.matchAll(pattern)) {
       const labels = match[2]!.replace(DOT_TOKEN_GLOBAL, ".").split(".");
       if (labels.length < 2 || !plausibleTld(labels.at(-1)!)) continue;
@@ -237,7 +249,7 @@ export function extractContacts(html: string, sourceUrl: string): FoundContact[]
     } else if (/linkedin\.com/i.test(href)) add("linkedin", cleanLinkedinUrl(href));
   }
 
-  const text = visibleText(html).slice(0, MAX_TEXT_SCAN);
+  const text = withinScanLimit(visibleText(html));
   for (const match of text.matchAll(EMAIL_IN_TEXT)) add("email", cleanEmail(match[0]));
   for (const email of obfuscatedEmails(text)) add("email", email);
   return [...found.values()];
