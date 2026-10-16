@@ -9,6 +9,53 @@ Each release lists the database migrations it needs; see
 
 ## [Unreleased]
 
+### Added
+
+- **Two starting points in the assistant:** "Use my existing leads or
+  inquiries" (a lead list from people already in AgentSDR, the latest
+  import, a search, or the people who sent inquiries) and "Find potential
+  customers for me". Both feed the same plan card, Start button, CRM,
+  replies and handoffs.
+- **The assistant reuses what the business already told AgentSDR** — saved
+  documents (a price list answers price questions), the name the connected
+  accounts send as, and the reply instructions — and asks only for what is
+  missing. The business profile gains an optional *prices* field.
+- **Lead review before outreach:** each lead's source and date, why it
+  matched, each contact route with the page it came from, and only the
+  lead's own words as evidence of need. A potential match is kept apart from
+  someone who inquired, replied or is interested; a follow, like or generic
+  comment is engagement, never intent; unknown location or budget stays
+  unknown.
+- **One Start for a whole request:** "Apply to the rest of this request"
+  starts the request's other plans — including ones prepared later by
+  searches still running — with the same reply mode, within the approved
+  channels and size, for 24 hours, and stops applying once the approved run
+  is paused or stopped.
+- **Optional features, off for every organization until an owner or admin
+  turns them on** (Settings → Organization → Optional features):
+  - *Instagram messages* through Unipile (API v1, the existing connection):
+    hosted sign-in, history import (kept as history, never answered),
+    Instagram inbox, replies drafted and sent through the CRM. No cold
+    Instagram outreach.
+  - *Website and directory search*: finds businesses from a description
+    through the organization's web-searching AI provider (OpenRouter web
+    plugin or AI/ML API research model), reads their published contacts,
+    and keeps each with the exact page it came from.
+  - *Inquiry intake*: an authenticated website-form webhook with field
+    mapping (Settings → Inquiries) and Instagram first messages as
+    inquiries. Inquiries are answered automatically only inside an inquiry
+    run the owner started.
+
+### Migrations
+
+- `bun scripts/add-instagram-intake-discovery.ts` — additive and re-runnable:
+  creates `organization_features`, `instagram_accounts`, `instagram_chats`,
+  `instagram_messages`, `intake_endpoints`, `inquiries` and
+  `lead_audience_member_insights`, and widens the channel checks to allow
+  `instagram` and the job kind `web_discovery`. A fresh install gets it from
+  `db/schema.sql`. Until it runs every optional feature reads as off and the
+  rest of the app works unchanged.
+
 ## [0.3.1] - 2026-10-08
 
 ### Fixed

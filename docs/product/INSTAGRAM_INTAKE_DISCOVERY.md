@@ -165,13 +165,21 @@ per city, and each prepares its own plan. The plan card's Start offers
 **Apply to the rest of this request** (on by default): the request's other
 plans — already waiting, or prepared later when their searches finish —
 then start on their own with the same reply mode (`requestApproval*.ts`).
-They still go through the same launch rules as a Start press, and each
-start is announced in the chat. An approval covers only the same
-conversation and the same request words, only the channels the approved plan
-used, at most the approved plan size (100 by default), never an inquiry run,
-and nothing once the approving run is paused, stopped or a day old. A plan it
-does not cover waits for its own Start and says why. The card starts with the
-reply mode chosen last time selected.
+They still go through `startOutreachRun`, the same launch rules as a Start
+press, and each start is announced in the chat.
+
+A *request* is one owner message: every plan it produces carries that
+message's id (`plan.requestId`), so two requests worded the same — two
+"yes" answers — are never one request. An approval covers only plans with
+the same request id in the same conversation, only the channels the
+approved plan used, at most 100 leads per plan (or the approved plan's size
+when larger), never an inquiry run, never a plan in which someone is
+already in another running or paused plan, and nothing once the approving
+run is paused, stopped or 24 hours old. The reply mode is the approving
+run's at the moment each plan starts: switching it to Review makes the rest
+of the request start in Review. A plan it does not cover waits for its own
+Start and the chat says why. The card starts with the reply mode the owner
+chose last time selected (inquiry runs excluded).
 
 ### Inquiry runs: the scope for answering inquiries automatically
 
@@ -186,7 +194,66 @@ the run's mode, Pause/Resume/Stop, Do Not Contact, takeover, edited or
 outdated drafts, newer messages, the per-conversation and daily limits, the
 support check and the handoff to the owner. It sends nothing first. It never
 covers imported history, chats that began earlier, people AgentSDR already
-knew, or another channel. One inquiry run at a time; Stop is final.
+knew, another channel, or an Instagram account that was not listed on its
+card when it was started. One inquiry run at a time (an advisory lock per
+organization); Stop is final.
+
+## 4. Website and directory discovery (optional)
+
+Feature switch: **Website and directory search** (Settings → Organization →
+Optional features). Code: `src/lib/discovery/webSearch.server.ts`,
+`webDiscovery.ts`, `webDiscovery.server.ts`; assistant tool
+`find_customers_on_web`; job kind `web_discovery`. Google Maps and LinkedIn
+search are unchanged and need no switch.
+
+How it works, for "find gyms in Pune that might need a booking app":
+
+1. **Search** — up to 3 queries derived from the owner's description, each
+   one real web search through the organization's own AI provider:
+   OpenRouter with its `web` plugin, or AI/ML API's web research model.
+   Only the URLs the provider returns as sources are used; a URL in the
+   model's text is ignored. With neither configured, the tool answers that
+   discovery is unavailable and how to enable it — nothing is guessed.
+2. **Classify** each returned URL: a business's own website, a directory or
+   list page (Justdial, Sulekha, IndiaMART, Practo, Yelp, "top 10" lists…),
+   a public Instagram profile or post, or something to skip (search engines,
+   social sites other than Instagram, files, platforms).
+3. **Read** (reusing the Maps discovery page reader, `fetchPublicPage`, with
+   its private-address refusal, size and time limits): a business site's
+   pages for the emails and phones it publishes; up to 5 directory pages and
+   up to 20 business links on each; with the Instagram feature on and an
+   account linked, up to 6 Instagram starting points — a profile's listed
+   website and public contact buttons, or a post's comments (up to 50).
+4. **Save** — each email is checked for syntax and for the domain's mail
+   servers (MX, else A/AAAA); this proves the domain can receive mail, not
+   that the mailbox exists, and the UI says so. Phones are normalized to
+   E.164 with the organization's default country. People are matched to
+   existing ones by email, then phone, before anyone is created (source
+   `discovery:web-search`). Each contact keeps the exact page URL it was read
+   from; each lead keeps why it matched (the provider's title and snippet and
+   the query that found it) and any signal.
+
+Never invented: an email, phone, person or page that was not on a page the
+provider returned (or a page those pages link to as above). A business that
+publishes no contact stays in the list as **excluded** with the reason. A
+comment is a need only when its own words ask for something ("looking for a
+physio near Baner"); a follow, like, reaction or emoji-only comment is
+engagement. Instagram-only people are listed but excluded with "reachable
+only on Instagram — open the post/profile to reply yourself", because
+AgentSDR starts no Instagram chats.
+
+Cost: up to 3 provider searches per request (the provider's own price; the
+job stores the cost the provider reports) plus at most 6 Unipile reads.
+Bounds: 5–40 sites per request (default 20), a 60 s deadline per search,
+one retry only for a rate limit or server error.
+
+**Instagram hashtag and keyword discovery** is not possible through Unipile
+(section 1). `src/lib/discovery/socialAdapters.ts` holds an optional Meta
+Graph API hashtag adapter, built only from credentials passed to it
+explicitly; nothing in the app constructs or calls it, and no Meta app,
+account or token exists. Turning it on later needs the requirements in
+section 1 and a settings page that does not exist yet. There is no Facebook
+search of any kind.
 
 ## 5. Website-form inquiries: one-time setup
 
@@ -252,3 +319,80 @@ is made, so nothing a visitor sent is lost. A leaked token is handled by
 rotating it or turning the endpoint off; both (and deleting) work while
 Inquiry intake is off, and turning the feature back on never turns an
 endpoint back on.
+
+## 6. Instagram messages through Unipile
+
+Feature switch: **Instagram messages** (Settings → Organization → Optional
+features). Code: `src/lib/instagram/`, `src/services/unipile.instagram.ts`,
+`src/app/api/instagram/`, `src/app/api/webhooks/instagram-message`,
+Settings → Instagram accounts and Instagram → Messages (both shown only with
+the feature on). API v1 only, through the organization's existing Unipile
+connection.
+
+One-time setup, by an owner or admin:
+
+1. The Unipile integration must already be connected (Settings → LinkedIn
+   or WhatsApp → Connection). Nothing new is registered: Unipile's one
+   messaging webhook (`/api/webhooks/unipile-message`, saved with that
+   integration) already receives every messaging account's events and now
+   routes `account_type: "INSTAGRAM"` to `/api/webhooks/instagram-message`.
+   An install whose webhook was registered before should re-save the Unipile
+   integration once only if Instagram messages do not arrive.
+2. Turn on **Instagram messages**, open Settings → Instagram accounts and
+   **Connect Instagram**: Unipile's hosted sign-in (`POST
+   /hosted/accounts/link`, provider `INSTAGRAM`), so the password never
+   passes through AgentSDR. An account linked in the Unipile dashboard is
+   picked up with **Sync from Unipile**. The member who connects is recorded
+   as the account's owner in AgentSDR.
+3. Optional: **Import history** — the account's recent chats (2 pages) and
+   up to 30 messages each, stored as history. Optional: **Treat new messages
+   as inquiries** on the account (needs the Inquiry intake feature).
+
+What arrives and what happens:
+
+| Message | Stored | Unread | CRM | Inquiry | Answered |
+| --- | --- | --- | --- | --- | --- |
+| Imported history | Yes, `historical` | No | No | No | Never |
+| Webhook message sent before the account's history cutoff (first time it was seen connected) or more than 6 h old on arrival | Yes, `historical` | No | No | No | Never |
+| Fresh reply from someone AgentSDR knows (the chat is linked to a person) | Yes | Yes | Inbound on an `instagram` conversation: classified, drafted, in Action required | No | After the owner's review, or by an inquiry run in Automatic |
+| Fresh first message of a new chat from someone unknown, account treats new messages as inquiries | Yes | Yes | Yes (as above) | Yes (`intake:instagram`, one per sender per account) | Only inside a running inquiry run (section 3); otherwise reviewed |
+| Fresh first message, inquiries off for the account | Yes | Yes | No | No | No (Instagram inbox only) |
+| The account's own message typed in the Instagram app (echo) | Yes, origin `phone` | No | Recorded as outbound: the person was answered | No | — |
+| AgentSDR's own send (echo) | Attached to the reserved row, origin `agentsdr` | No | — | — | — |
+
+Webhook handling: every delivery is written raw to the existing webhook
+ledger first (account type `INSTAGRAM`, so the LinkedIn replay job ignores
+it), keyed so Unipile's retries collapse into one; a message is stored once
+by its Unipile id. The route answers 200 as soon as the delivery is
+recorded and processes it afterwards; only a failure to record answers 500,
+so Unipile retries. The organization comes from the payload's account
+(`gateUnipileWebhook`, `org=` and the secret); with the feature off the
+delivery is recorded and skipped.
+
+Sending: a reply only, into the chat the person wrote in, from the account
+that chat is on — AgentSDR never starts an Instagram chat (no cold
+Instagram outreach). Through the CRM's existing send path
+(`sendInstagramThroughCrm`, the send attempt ledger and its duplicate-send
+protection, stale-draft checks and limits). Refused before Unipile is
+called when the feature is off, the account is unknown or not connected,
+the chat is not that account's, the person is Do Not Contact, or the text is
+empty or over 1,000 characters. The message row is reserved before the
+Unipile call so an early echo is recognised; a 4xx from Unipile removes it,
+a timeout or 5xx keeps it (the message may have gone) and the attempt is
+reconciled rather than resent.
+
+Account changes: the existing `unipile-account` webhook now also syncs
+Instagram accounts, so a disconnected or credential-expired account shows
+as such and stops sending immediately. Disconnecting never deletes chats.
+
+Not built: Instagram unread count in the sidebar badge, group chats (skipped
+on import), attachments sending, comment replies, and any cold Instagram
+outreach.
+
+## 7. Validation: simulated versus live
+
+Everything below ran in this sandbox against a disposable local PostgreSQL
+16 and **stand-ins** for Unipile and the search providers. Nothing was
+verified against a live Unipile account, a live Instagram account, a real
+form tool or a paid search call: the sandbox cannot reach Unipile, and the
+brief forbids paid calls and real messages.
