@@ -24,6 +24,13 @@ import { contactPageLinks, extractContacts, type FoundContact } from "./contacts
  * DNS server that answers "public" to a first check and "private" to the
  * connection (rebinding) gets nowhere. Every redirect hop is checked again,
  * and no connection is pooled or shared with other code.
+ *
+ * Behind an outbound proxy (HTTP_PROXY / HTTPS_PROXY, minus NO_PROXY — what
+ * fetch honours) the proxy resolves and connects, so pinning the address is
+ * not possible here: such a request goes through fetch, as before, after the
+ * same public-address check of the name. Without this a server that must go
+ * through a proxy could not read websites at all (Google Maps discovery
+ * included).
  */
 
 const MAX_BYTES = 1_500_000;
@@ -109,7 +116,7 @@ async function readCapped(response: Response): Promise<string> {
   return decode(chunks, total);
 }
 
-/** Test fixtures only (allowPrivate / fetchImpl): fetch, with the old one-time address check. */
+/** Test fixtures (allowPrivate / fetchImpl) and proxied requests: fetch, with the one-time address check (skipped only for fixtures). */
 async function fetchAnswer(url: URL, options: PageFetchOptions): Promise<Answer> {
   if (!options.allowPrivate) {
     try {
@@ -217,6 +224,19 @@ export function requestWithLookup(url: URL, lookup: LookupFunction): Promise<Ans
   });
 }
 
+/**
+ * Whether fetch would send a request for `url` through an outbound proxy:
+ * HTTPS_PROXY / HTTP_PROXY (either case) for its scheme, unless NO_PROXY
+ * names its host (exact, a parent domain, or "*").
+ */
+export function proxiedByEnvironment(url: URL, env: Record<string, string | undefined> = process.env): boolean {
+  const proxy = url.protocol === "https:" ? env.HTTPS_PROXY ?? env.https_proxy : env.HTTP_PROXY ?? env.http_proxy;
+  if (!proxy?.trim()) return false;
+  const host = url.hostname.toLowerCase();
+  const exempt = (env.NO_PROXY ?? env.no_proxy ?? "").split(",").map((entry) => entry.trim().toLowerCase().replace(/:\d+$/, "")).filter(Boolean);
+  return !exempt.some((entry) => entry === "*" || host === entry.replace(/^\*?\./, "") || host.endsWith(entry.startsWith(".") ? entry : `.${entry.replace(/^\*\./, "")}`));
+}
+
 /** One HTML page from a public address, following up to three redirects; null when it is not HTML. */
 export async function fetchPublicPage(rawUrl: string, options: PageFetchOptions = {}): Promise<{ url: string; html: string } | null> {
   const fixtures = Boolean(options.allowPrivate || options.fetchImpl);
@@ -225,7 +245,8 @@ export async function fetchPublicPage(rawUrl: string, options: PageFetchOptions 
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
     if (!/^https?:$/.test(url.protocol)) throw new Error(`Not a web address: ${url.toString()}`);
     let answer: Answer;
-    if (fixtures) {
+    if (fixtures || proxiedByEnvironment(url)) {
+      // Fixtures, or a proxy that connects for us: fetch, after the name's public-address check.
       answer = await fetchAnswer(url, options);
     } else {
       // Checked here for a clear refusal (and for an address written as the host, which no lookup sees)…

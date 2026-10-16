@@ -22,10 +22,11 @@
  * mailbox; Start only queues the launch job, which this script never runs,
  * so nothing is sent and the stand-in host is never called.
  *
- * Creates two organizations ("Intake check …") and leaves them behind.
+ * Creates two organizations ("Intake check …") and leaves them behind; the
+ * launch jobs its started plans queued are cancelled at the end.
  * Refuses a non-local DATABASE_URL.
  */
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 
 if (!/@(localhost|127\.0\.0\.1)[:/]/.test(process.env.DATABASE_URL ?? "")) {
   console.error("Refusing to run: DATABASE_URL must point at a local, disposable database.");
@@ -236,6 +237,11 @@ await runInOrganization(orgB!.id, async () => {
   const [aRow] = await db.select().from(schema.leadAudienceMembers).where(and(eq(schema.leadAudienceMembers.audienceId, audienceOfA))).limit(1);
   check("isolation sanity: A's rows exist (the checks above are not vacuous)", Boolean(aRow));
 });
+
+// The plans started above queued launch jobs that nothing here runs: cancel them, so another
+// script's worker on this shared local database never picks them up.
+await db.update(assistantJobs).set({ status: "cancelled", error: "assistant-intake check: not run" })
+  .where(and(inArray(assistantJobs.organizationId, [orgA!.id, orgB!.id]), inArray(assistantJobs.status, ["queued", "running"])));
 
 console.log(failures ? `\n${failures} check(s) FAILED` : "\nAll checks passed.");
 process.exit(failures ? 1 : 0);

@@ -85,6 +85,17 @@ type Tool = {
 
 class ToolArgumentError extends Error {}
 
+/** The page's <title> text, found with plain searches (linear on any page, unlike a lazy regex on hostile HTML). */
+function pageTitle(html: string): string {
+  const lower = html.toLowerCase();
+  const open = lower.indexOf("<title");
+  if (open < 0) return "";
+  const start = lower.indexOf(">", open);
+  if (start < 0) return "";
+  const end = lower.indexOf("</title>", start);
+  return end < 0 ? "" : html.slice(start + 1, end);
+}
+
 const MAX_CHAT_CONTACTS = 50;
 /** Sites that need a login and forbid automated reading. */
 const LOGIN_WALLED = /(?:^|\.)(?:instagram\.com|facebook\.com|fb\.com|x\.com|twitter\.com|tiktok\.com|linkedin\.com|threads\.net)$/i;
@@ -442,7 +453,7 @@ export const TOOLS: Record<string, Tool> = {
         return { ok: false, summary: `Could not open ${url.toString()}: ${error instanceof Error ? error.message : String(error)}` };
       }
       if (!page) return { ok: false, summary: `${url.toString()} is not a readable web page.` };
-      const title = visibleText(page.html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? "").trim().slice(0, 200);
+      const title = visibleText(pageTitle(page.html)).trim().slice(0, 200);
       const body = visibleText(page.html).trim();
       const contacts = extractContacts(page.html, page.url).slice(0, 60);
       const host = new URL(page.url).hostname.replace(/^www\./, "");

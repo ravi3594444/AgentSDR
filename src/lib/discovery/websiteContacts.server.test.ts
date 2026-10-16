@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import http from "node:http";
 import type { LookupFunction } from "node:net";
 import { gzipSync } from "node:zlib";
-import { fetchPublicPage, publicOnlyLookup, requestWithLookup, type Resolver } from "./websiteContacts.server";
+import { fetchPublicPage, proxiedByEnvironment, publicOnlyLookup, requestWithLookup, type Resolver } from "./websiteContacts.server";
 
 /** A local server standing in for a website: it records every request it gets. */
 const hits: { host: string | undefined; path: string | undefined }[] = [];
@@ -24,11 +24,17 @@ const server = http.createServer((request, response) => {
   }
 });
 
+// These tests read pages directly; a proxy in the test machine's environment would route them through fetch.
+const PROXY_KEYS = ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"] as const;
+const savedProxyEnv = Object.fromEntries(PROXY_KEYS.map((key) => [key, process.env[key]]));
+
 beforeAll(async () => {
+  for (const key of PROXY_KEYS) delete process.env[key];
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   port = (server.address() as { port: number }).port;
 });
 afterAll(() => {
+  for (const key of PROXY_KEYS) if (savedProxyEnv[key] !== undefined) process.env[key] = savedProxyEnv[key];
   server.close();
 });
 
@@ -73,6 +79,28 @@ describe("fetchPublicPage", () => {
     expect(hits.length).toBe(before);
   });
 
+  test("behind an outbound proxy pages go through fetch (which uses the proxy), after the public-address check", async () => {
+    const realFetch = globalThis.fetch;
+    const fetched: string[] = [];
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      fetched.push(String(input));
+      return new Response("<h1>Proxied page</h1>", { status: 200, headers: { "content-type": "text/html" } });
+    }) as typeof fetch;
+    process.env.HTTP_PROXY = "http://proxy.internal:3128";
+    try {
+      const publicAnswer: Resolver = async () => [{ address: "93.184.216.34", family: 4 }];
+      expect(await fetchPublicPage("http://shop.test/", { resolve: publicAnswer })).toEqual({ url: "http://shop.test/", html: "<h1>Proxied page</h1>" });
+      expect(fetched).toEqual(["http://shop.test/"]);
+      // The name is still checked: a private answer is refused before fetch is called.
+      const privateAnswer: Resolver = async () => [{ address: "10.0.0.5", family: 4 }];
+      await expect(fetchPublicPage("http://intranet.test/", { resolve: privateAnswer })).rejects.toThrow("intranet.test is not a public website");
+      expect(fetched).toEqual(["http://shop.test/"]);
+    } finally {
+      delete process.env.HTTP_PROXY;
+      globalThis.fetch = realFetch;
+    }
+  });
+
   test("an address written as the host is refused before any connection", async () => {
     const before = hits.length;
     await expect(fetchPublicPage(`http://127.0.0.1:${port}/`)).rejects.toThrow("127.0.0.1 is not a public website");
@@ -92,5 +120,19 @@ describe("requestWithLookup", () => {
     expect((await requestWithLookup(new URL(`http://lotus.test:${port}/gzip`), toLocal)).html).toBe("<p>Write to hello@lotus.example</p>");
     expect((await requestWithLookup(new URL(`http://lotus.test:${port}/big`), toLocal)).html?.length).toBe(1_500_000);
     expect(await requestWithLookup(new URL(`http://lotus.test:${port}/moved`), toLocal)).toEqual({ status: 301, location: "/contact", contentType: "", html: null });
+  });
+});
+
+describe("proxiedByEnvironment", () => {
+  test("follows the scheme's proxy variable and NO_PROXY", () => {
+    const env = { HTTPS_PROXY: "http://proxy:3128", NO_PROXY: "localhost,.internal.example,exempt.example" };
+    expect(proxiedByEnvironment(new URL("https://shop.example/"), env)).toBe(true);
+    expect(proxiedByEnvironment(new URL("http://shop.example/"), env)).toBe(false);
+    expect(proxiedByEnvironment(new URL("https://a.internal.example/"), env)).toBe(false);
+    expect(proxiedByEnvironment(new URL("https://exempt.example/"), env)).toBe(false);
+    expect(proxiedByEnvironment(new URL("https://www.exempt.example/"), env)).toBe(false);
+    expect(proxiedByEnvironment(new URL("https://notexempt.example/"), env)).toBe(true);
+    expect(proxiedByEnvironment(new URL("https://shop.example/"), { https_proxy: "http://p:1", no_proxy: "*" })).toBe(false);
+    expect(proxiedByEnvironment(new URL("https://shop.example/"), {})).toBe(false);
   });
 });
