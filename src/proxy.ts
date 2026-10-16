@@ -34,7 +34,9 @@ const PUBLIC = [
   "/api/webhooks/unipile-account",
   // Unipile's WhatsApp messaging webhook; checks the stored Unipile notify secret itself.
   "/api/webhooks/whatsapp-message",
-  // The single messaging webhook AgentSDR registers; routes to the two above.
+  // Unipile's Instagram messaging webhook (reached through unipile-message); checks the stored Unipile notify secret itself.
+  "/api/webhooks/instagram-message",
+  // The single messaging webhook AgentSDR registers; routes to the ones above.
   "/api/webhooks/unipile-message",
   // Unipile's email webhook (inboxes linked in Unipile used as mailboxes); gated like the one above.
   "/api/webhooks/unipile-email",
