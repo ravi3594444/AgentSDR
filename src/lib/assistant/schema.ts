@@ -103,7 +103,8 @@ export const assistantProfiles = pgTable("assistant_profiles", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-export type AudienceSource = "discovery" | "list";
+/** discovery: found by a search; list: an upload or contacts typed in the chat; existing: chosen from the lead database; inquiries: people who wrote in. */
+export type AudienceSource = "discovery" | "list" | "existing" | "inquiries";
 
 /** A set of leads the assistant found or was given, which one outreach run works through. */
 export const leadAudiences = pgTable(
@@ -121,14 +122,31 @@ export const leadAudiences = pgTable(
   },
   (t) => [
     index("lead_audiences_organization_idx").on(t.organizationId, t.createdAt),
-    check("lead_audiences_source_chk", sql`${t.source} IN ('discovery', 'list')`),
+    check("lead_audiences_source_chk", sql`${t.source} IN ('discovery', 'list', 'existing', 'inquiries')`),
   ],
 );
 
 export type AudienceChannel = "email" | "whatsapp" | "linkedin";
 
 /** Where a contact detail came from: the page or listing a person can open to check it. */
-export type ContactEvidence = { kind: "email" | "phone" | "linkedin" | "website"; value: string; sourceUrl: string | null; source: string };
+export type ContactEvidence = { kind: "email" | "phone" | "linkedin" | "website" | "instagram"; value: string; sourceUrl: string | null; source: string };
+
+/**
+ * Something a lead actually said or did that bears on whether they need the
+ * offer, quoted with where it was found. Only `need` signals are evidence of
+ * a need: a follow, like or generic comment is recorded as `engagement` and
+ * never counts as buying intent (qualification.ts).
+ */
+export type LeadSignal = {
+  kind: "need" | "engagement";
+  /** Their words, exactly as found (an inquiry, a comment, a post caption). */
+  text: string;
+  sourceUrl: string | null;
+  /** "website form", "Instagram comment", "Instagram message", … */
+  source: string;
+  /** When they said it, when known (ISO). */
+  at: string | null;
+};
 
 /**
  * One lead in an audience: a person who can be contacted (eligible) or a
@@ -153,6 +171,10 @@ export const leadAudienceMembers = pgTable(
     evidence: jsonb("evidence").$type<ContactEvidence[]>().notNull().default([]),
     /** Facts the messages may use: category, city, rating, … */
     facts: jsonb("facts").$type<Record<string, string>>().notNull().default({}),
+    /** Why the search or list matched this lead, in a sentence (never shown to the lead). */
+    matchReason: text("match_reason"),
+    /** What the lead actually said or did, quoted with its source (LeadSignal). Empty: no evidence of need. */
+    signals: jsonb("signals").$type<LeadSignal[]>().notNull().default([]),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -163,7 +185,7 @@ export const leadAudienceMembers = pgTable(
   ],
 );
 
-export type AssistantJobKind = "discovery" | "outreach_start" | "linkedin_search";
+export type AssistantJobKind = "discovery" | "outreach_start" | "linkedin_search" | "web_discovery";
 export type AssistantJobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 
 /**
@@ -201,7 +223,7 @@ export const assistantJobs = pgTable(
   (t) => [
     index("assistant_jobs_organization_idx").on(t.organizationId, t.createdAt),
     index("assistant_jobs_claim_idx").on(t.status, t.runAfter),
-    check("assistant_jobs_kind_chk", sql`${t.kind} IN ('discovery', 'outreach_start', 'linkedin_search')`),
+    check("assistant_jobs_kind_chk", sql`${t.kind} IN ('discovery', 'outreach_start', 'linkedin_search', 'web_discovery')`),
     check("assistant_jobs_status_chk", sql`${t.status} IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')`),
   ],
 );
@@ -285,6 +307,13 @@ export const outreachRuns = pgTable(
 export type RunLeadStatus = "active" | "stopped" | "opted_out";
 
 /**
+ * The channel a run member is answered on: the outreach channels, plus
+ * "instagram" for an inquiry run (plan.kind "inquiries"), which only answers
+ * people who wrote in on Instagram and never starts a conversation.
+ */
+export type RunLeadChannel = AudienceChannel | "instagram";
+
+/**
  * Who a started run covers, on which channel: the approved audience. The
  * reply autopilot answers a conversation only through the run its person
  * belongs to on that channel (its mode, its state); nothing outside it.
@@ -296,7 +325,7 @@ export const outreachRunLeads = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     runId: uuid("run_id").notNull().references(() => outreachRuns.id, { onDelete: "cascade" }),
     personId: uuid("person_id").notNull().references(() => people.id, { onDelete: "cascade" }),
-    channel: text("channel").notNull().$type<AudienceChannel>(),
+    channel: text("channel").notNull().$type<RunLeadChannel>(),
     status: text("status").notNull().default("active").$type<RunLeadStatus>(),
     stopReason: text("stop_reason"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -305,7 +334,7 @@ export const outreachRunLeads = pgTable(
   (t) => [
     uniqueIndex("outreach_run_leads_run_person_uq").on(t.runId, t.personId),
     index("outreach_run_leads_person_idx").on(t.organizationId, t.personId),
-    check("outreach_run_leads_channel_chk", sql`${t.channel} IN ('email', 'whatsapp', 'linkedin')`),
+    check("outreach_run_leads_channel_chk", sql`${t.channel} IN ('email', 'whatsapp', 'linkedin', 'instagram')`),
     check("outreach_run_leads_status_chk", sql`${t.status} IN ('active', 'stopped', 'opted_out')`),
   ],
 );

@@ -1,4 +1,4 @@
-import { RiLinkedinBoxFill, RiMailFill, RiWhatsappFill } from "@remixicon/react";
+import { RiInstagramFill, RiLinkedinBoxFill, RiMailFill, RiWhatsappFill } from "@remixicon/react";
 import type { ComponentType } from "react";
 import type { AnalyticsChannel } from "@/lib/analytics/contract";
 
@@ -39,6 +39,18 @@ export const CHANNEL_META: Record<
   linkedin: { label: "LinkedIn", color: HUE.blue, icon: RiLinkedinBoxFill },
   email: { label: "Email", color: HUE.orange, icon: RiMailFill },
   whatsapp: { label: "WhatsApp", color: HUE.green, icon: RiWhatsappFill },
+};
+
+/**
+ * Conversation channels (the CRM's): the analytics channels plus Instagram,
+ * which has conversations but no campaigns or analytics view of its own.
+ */
+export const CONVERSATION_CHANNEL_META: Record<
+  AnalyticsChannel | "instagram",
+  { label: string; color: string; icon: ComponentType<{ className?: string }> }
+> = {
+  ...CHANNEL_META,
+  instagram: { label: "Instagram", color: HUE.pink, icon: RiInstagramFill },
 };
 
 /** Categorical slots after the three channel slots, in this order only. */

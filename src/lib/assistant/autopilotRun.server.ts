@@ -30,7 +30,7 @@ import { getBusinessProfile } from "./profile.server";
 import { judgeReply, selfFixableReply, type ModelCheck } from "./replyCheck";
 import { storedReplyConversation, type ReplyConversationMessage } from "@/lib/crm/ai/replyConversation";
 import { checkKnowledge, modelReplyCheck, type ReplyCheckInput } from "./replyCheck.server";
-import { autopilotReplies, autopilotTakeovers, outreachRunLeads, ownerDecisions, type AudienceChannel, type OwnerDecisionKind, type ReplyCheck } from "./schema";
+import { autopilotReplies, autopilotTakeovers, outreachRunLeads, ownerDecisions, type OwnerDecisionKind, type ReplyCheck, type RunLeadChannel } from "./schema";
 
 /**
  * Runs the reply autopilot on one draft (the CRM's auto_send job):
@@ -237,7 +237,7 @@ async function sendHandover(state: State, decisionId: string, kind: OwnerDecisio
   if (!state.membership?.automatic || state.draft.sequenceStepRunId || !tellsTheLead(kind) || !sendingAllowed(deps)) return false;
   const organizationId = currentOrganizationId();
   const profile = await getBusinessProfile();
-  const message = handoverMessage(state.channel as AudienceChannel, {
+  const message = handoverMessage(state.channel as RunLeadChannel, {
     kind,
     leadMessage: state.leadMessage,
     senderName: profile.senderName,

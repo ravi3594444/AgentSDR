@@ -21,6 +21,15 @@ export * from "./calls/schema";
 // WhatsApp messaging through Unipile: linked numbers, chats, messages.
 export * from "./whatsapp/schema";
 
+// Instagram direct messages through Unipile (src/lib/instagram/).
+export * from "./instagram/schema";
+
+// Inquiry intake: website-form webhooks and Instagram inquiries (src/lib/intake/).
+export * from "./intake/schema";
+
+// Optional per-organization features, all off by default (src/lib/features/).
+export * from "./features/schema";
+
 // Web research about imported companies (src/lib/research/).
 export * from "./research/schema";
 

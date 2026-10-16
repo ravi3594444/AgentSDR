@@ -1,7 +1,7 @@
 import "server-only";
 
 import { and, desc, eq, inArray } from "drizzle-orm";
-import { outreachRunLeads, outreachRuns } from "@/lib/assistant/schema";
+import { outreachRunLeads, outreachRuns, type RunLeadChannel } from "@/lib/assistant/schema";
 import { inOrg } from "@/lib/tenancy/scope";
 import { enqueueCrmJobInTransaction, type CrmJob } from "./queue";
 import type { CrmExecutor, CrmTransaction } from "./repository";
@@ -28,7 +28,7 @@ export async function runMembershipFor(executor: CrmExecutor, personId: string, 
     .where(and(
       inOrg(outreachRunLeads),
       eq(outreachRunLeads.personId, personId),
-      eq(outreachRunLeads.channel, channel as "email" | "whatsapp" | "linkedin"),
+      eq(outreachRunLeads.channel, channel as RunLeadChannel),
       inArray(outreachRuns.status, ["starting", "running", "paused", "stopped", "completed"]),
     ))
     .orderBy(desc(outreachRuns.createdAt))

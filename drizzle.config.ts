@@ -125,6 +125,12 @@ const OWNED_TABLES = [
   "whatsapp_campaigns",
   "whatsapp_chats",
   "whatsapp_messages",
+  "instagram_accounts",
+  "instagram_chats",
+  "instagram_messages",
+  "intake_endpoints",
+  "inquiries",
+  "organization_features",
 ];
 
 export default {

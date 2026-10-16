@@ -3,6 +3,7 @@ import { organizations } from "@/lib/auth/schema";
 import { linkedInAccounts } from "@/lib/linkedin/schema";
 import { mailboxes } from "@/lib/outreach/schema";
 import { whatsappAccounts } from "@/lib/whatsapp/schema";
+import { instagramAccounts } from "@/lib/instagram/schema";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { signatureText, type DraftSender } from "./ai/grounding";
 import type { CrmExecutor } from "./repository";
@@ -34,6 +35,13 @@ export async function resolveDraftSender(
       .select({ name: linkedInAccounts.name })
       .from(linkedInAccounts)
       .where(and(inOrg(linkedInAccounts), eq(linkedInAccounts.linkedinId, conversation.accountRef)))
+      .limit(1);
+    name = account?.name?.trim() || null;
+  } else if (conversation.channel === "instagram") {
+    const [account] = await executor
+      .select({ name: instagramAccounts.name })
+      .from(instagramAccounts)
+      .where(and(inOrg(instagramAccounts), eq(instagramAccounts.unipileAccountId, conversation.accountRef)))
       .limit(1);
     name = account?.name?.trim() || null;
   } else {

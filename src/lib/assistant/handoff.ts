@@ -1,4 +1,4 @@
-import type { AudienceChannel, OwnerDecisionKind } from "./schema";
+import type { OwnerDecisionKind, RunLeadChannel } from "./schema";
 
 /**
  * The handoff to a person: when the reply autopilot stops and the owner
@@ -87,7 +87,7 @@ export function messageLanguage(text: string): "hi" | "hinglish" | "en" {
  * same checked text every time.
  */
 export function handoverMessage(
-  channel: AudienceChannel,
+  channel: RunLeadChannel,
   input: { kind: OwnerDecisionKind; leadMessage?: string | null; senderName?: string | null; leadFirstName?: string | null; subject?: string | null },
 ): { subject: string | null; body: string } {
   const language = messageLanguage(input.leadMessage ?? "");

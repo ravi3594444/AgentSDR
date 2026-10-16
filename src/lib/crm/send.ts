@@ -16,6 +16,8 @@ import {
   type DeliverWhatsappResult,
 } from "@/lib/whatsapp/delivery";
 import { whatsappMessages } from "@/lib/whatsapp/schema";
+import { instagramMessages } from "@/lib/instagram/schema";
+import { deliverInstagramFromCrm, InstagramSendRefusedError, type DeliverInstagramInput, type DeliverInstagramResult } from "@/lib/instagram/delivery";
 import { crmChannelSendProvider } from "./channels";
 import { insertConversationMessageInTransaction } from "./conversations";
 import { appendCrmEvent } from "./events";
@@ -62,6 +64,8 @@ export type CrmSendAdapterInput = {
   recipientEmail: string | null;
   /** The Person's phone (people.phone, E.164) — WhatsApp's recipient when the conversation has no chat yet. */
   recipientPhone?: string | null;
+  /** The Person the draft is for (Instagram re-checks Do Not Contact against it). */
+  personId?: string | null;
   subject: string | null;
   bodyText: string;
   bodyHtml: string | null;
@@ -204,6 +208,8 @@ export const sendThroughCrmProvider: CrmSendAdapter = async (input) => {
     };
   }
   if (input.channel === "whatsapp") return sendWhatsappThroughCrm(input);
+  if (input.channel === "instagram") return sendInstagramThroughCrm(input);
+  if (input.channel !== "linkedin") throw new DefiniteCrmSendError(`No sender for the ${String(input.channel)} channel`);
   if (!input.providerThreadId) throw new DefiniteCrmSendError("LinkedIn conversation has no chat ID");
   const messageId = await sendLinkedInMessage(input.providerThreadId, input.bodyText);
   return {
@@ -252,6 +258,43 @@ export async function sendWhatsappThroughCrm(
       messageId: result.unipileMessageId,
       chatId: result.unipileChatId,
       whatsappMessageId: result.whatsappMessageId,
+    },
+  };
+}
+
+/**
+ * The Instagram branch of sendThroughCrmProvider, with the delivery
+ * injectable for tests. A reply into the chat the lead wrote in, never a new
+ * chat; a refusal (no chat, account not connected, Do Not Contact, feature
+ * off) is definite: nothing reached Instagram.
+ */
+export async function sendInstagramThroughCrm(
+  input: CrmSendAdapterInput,
+  deliver: (input: DeliverInstagramInput) => Promise<DeliverInstagramResult> = deliverInstagramFromCrm,
+): Promise<NormalizedCrmSendResult> {
+  if (input.channel !== "instagram") throw new Error(`Not an Instagram send: ${input.channel}`);
+  if (!input.providerThreadId) throw new DefiniteCrmSendError("This Instagram conversation has no chat to reply in");
+  let result: DeliverInstagramResult;
+  try {
+    result = await deliver({
+      unipileAccountId: input.accountRef,
+      unipileChatId: input.providerThreadId,
+      text: input.bodyText,
+      personId: input.personId ?? null,
+    });
+  } catch (error) {
+    if (error instanceof InstagramSendRefusedError) throw new DefiniteCrmSendError(error.message);
+    throw error;
+  }
+  return {
+    provider: "unipile",
+    providerMessageId: result.unipileMessageId,
+    providerThreadId: result.unipileChatId,
+    rfcMessageId: null,
+    response: {
+      messageId: result.unipileMessageId,
+      chatId: result.unipileChatId,
+      instagramMessageId: result.instagramMessageId,
     },
   };
 }
@@ -326,7 +369,7 @@ async function prepareSend(tx: CrmTransaction, input: {
       contextVersion: record.contextVersion,
     });
   }
-  const [person] = await tx.select({ email: people.email, phone: people.phone }).from(people)
+  const [person] = await tx.select({ id: people.id, email: people.email, phone: people.phone }).from(people)
     .where(and(inOrg(people), eq(people.id, record.personId))).limit(1);
   if (!person) throw new CrmNotFoundError("Person", record.personId);
   const history = await tx.select({ raw: crmConversationMessages.raw, providerMessageId: crmConversationMessages.providerMessageId })
@@ -354,6 +397,7 @@ async function prepareSend(tx: CrmTransaction, input: {
     providerContactId: conversation.providerContactId,
     recipientEmail: person.email,
     recipientPhone: draft.channel === "whatsapp" ? person.phone : null,
+    personId: draft.channel === "instagram" ? person.id : null,
     subject: draft.subject,
     bodyText,
     bodyHtml: draft.editedBodyHtml ?? draft.aiBodyHtml,
@@ -487,6 +531,13 @@ async function finishSuccessfulSend(
     if (conversation.channel === "whatsapp" && typeof whatsappMessageId === "string") {
       await tx.update(whatsappMessages).set({ crmConversationMessageId: message.id })
         .where(and(eq(whatsappMessages.id, whatsappMessageId), isNull(whatsappMessages.crmConversationMessageId)));
+    }
+    // The same for Instagram: send.server.ts stored the message before
+    // sending; link it so the history backfill does not copy it again.
+    const instagramMessageId = result.response.instagramMessageId;
+    if (conversation.channel === "instagram" && typeof instagramMessageId === "string") {
+      await tx.update(instagramMessages).set({ crmConversationMessageId: message.id })
+        .where(and(eq(instagramMessages.id, instagramMessageId), isNull(instagramMessages.crmConversationMessageId)));
     }
     // The email Master Inbox is a read surface in the same way: it only ever
     // stored inbound Gmail traffic (replyBridge.ts), so a CRM send would

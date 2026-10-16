@@ -24,6 +24,7 @@ import {
   RiForbid2Line,
   RiHourglass2Fill,
   RiInboxLine,
+  RiInstagramFill,
   RiLinkedinFill,
   RiLinkUnlink,
   RiMailFill,
@@ -49,7 +50,7 @@ import * as Select from "@/components/alignui/select";
 import * as Table from "@/components/alignui/table";
 import { Frame, FrameHeader, FramePanel } from "@/components/analytics/kit/Frame";
 import { KpiCell, KpiStrip } from "@/components/analytics/kit/KpiStrip";
-import { CHANNEL_META, HUE, MUTED_STRONG } from "@/components/analytics/theme";
+import { CHANNEL_META, CONVERSATION_CHANNEL_META, HUE, MUTED_STRONG } from "@/components/analytics/theme";
 import { EmptyState } from "@/components/page/EmptyState";
 import { PageHeader } from "@/components/page/PageHeader";
 import { cn } from "@/utils/cn";
@@ -542,8 +543,8 @@ export function ActionRows({ actions, categories, onActionsChange, pipeline, ref
 /** Contact avatar with the reply channel's mark on its corner, in the channel's own colour. */
 export function ChannelAvatar({ src, name, channel, className }: { src: string | null; name: string; channel: string; className?: string }) {
   const avatarText = name === "Unknown contact" ? "?" : name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase();
-  const meta = CHANNEL_META[channel as keyof typeof CHANNEL_META];
-  const Icon = channel === "whatsapp" ? RiWhatsappFill : channel === "linkedin" ? RiLinkedinFill : RiMailFill;
+  const meta = CONVERSATION_CHANNEL_META[channel as keyof typeof CONVERSATION_CHANNEL_META];
+  const Icon = channel === "whatsapp" ? RiWhatsappFill : channel === "linkedin" ? RiLinkedinFill : channel === "instagram" ? RiInstagramFill : RiMailFill;
   return <span className="relative shrink-0">
     <ContactAvatar src={src} fallback={avatarText} className={cn("size-9 bg-bg-weak-50 text-label-xs text-text-sub-600 ring-1 ring-inset ring-stroke-soft-200", className)} />
     {meta && <span title={meta.label} className="absolute -bottom-0.5 -right-0.5 flex size-4 items-center justify-center rounded-full text-static-white ring-2 ring-bg-white-0" style={{ backgroundColor: meta.color }}>
@@ -782,7 +783,7 @@ function ClassificationCell({ row, categories, busy, onClassify }: { row: Row; c
 
 /** The channel's own mark in its identity colour. */
 function ChannelMark({ channel, className }: { channel: string; className?: string }) {
-  const meta = CHANNEL_META[channel as keyof typeof CHANNEL_META];
+  const meta = CONVERSATION_CHANNEL_META[channel as keyof typeof CONVERSATION_CHANNEL_META];
   if (!meta) return null;
   const Icon = meta.icon;
   return <span className={cn("flex shrink-0", className)} style={{ color: meta.color }} title={meta.label}><Icon className="size-3.5" aria-hidden="true" /></span>;

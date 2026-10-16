@@ -1,0 +1,96 @@
+# Instagram, inquiry intake and website discovery
+
+Branch `claude/instagram-intake-discovery`, based on `claude/new-session-g5hljn`
+(`994fb7d`). Everything here is **off by default** for every organization
+(Settings → Organization → Optional features) and needs the additive migration
+`bun scripts/add-instagram-intake-discovery.ts`.
+
+This document records, before the implementation, what the providers were
+verified to support and which integrations are required or optional. The
+sections after it describe what was built on that basis.
+
+## 1. Verified provider capabilities (checked 2026-10-16)
+
+Sources: Unipile's current documentation and API reference
+(developer.unipile.com, v1 and v2.0), its changelog and pricing page, Meta's
+Instagram Platform documentation, and the installed `unipile-node-sdk@1.9.3`
+source (npm `latest`). Nothing below was verified against a live Unipile
+account: this sandbox cannot reach Unipile.
+
+### Unipile API version
+
+| Fact | Source |
+| --- | --- |
+| v1 (`https://{DSN}/api/v1/…`, `X-API-KEY`) is stable and not deprecated; v2 (`https://api.unipile.com/v2`) is in beta, uses a separate dashboard and account, provider ids instead of Unipile ids (`acc_…`), account-in-path routes, and a different webhook envelope (`type` + `payload`, `message.new`, HMAC `unipile-signature`). | developer.unipile.com/v2.0/docs/migration-from-v1, …/migration-introduction, …/migration-webhooks |
+| `unipile-node-sdk@1.9.3` targets v1 (`DEFAULT_API_VERSION='v1'`); its request builder cannot produce v2's routes. The v2 SDK is a different package (`@unipile/sdk`). | installed SDK `dist/cjs/state.js`, `request-sender.js` |
+| AgentSDR's LinkedIn, WhatsApp and email already use v1 ids and the v1 webhook format. | `src/services/unipile*.ts`, `src/lib/platform/unipileWebhooks.ts` |
+
+**Decision:** Instagram uses **v1 only**, through the same per-organization
+Unipile connection, the same `unipile-message` webhook registration and the
+same id formats. No existing channel is migrated. No v2 identifier or webhook
+format is read or written anywhere.
+
+### Instagram through Unipile v1
+
+| Capability | Supported | Endpoint (v1) | Used here |
+| --- | --- | --- | --- |
+| Connect an account (hosted sign-in) | Yes | `POST /hosted/accounts/link` with `providers: ["INSTAGRAM"]`, `notify_url` → `{status: CREATION_SUCCESS\|RECONNECTED, account_id, name}` | Yes |
+| Connect with password / session cookie, 2FA checkpoint | Yes | `POST /accounts`, `POST /accounts/checkpoint` | No (hosted sign-in keeps passwords out of AgentSDR) |
+| Account status webhook | Yes | `source: account_status` | Yes (existing `unipile-account` route syncs Instagram too) |
+| List chats | Yes | `GET /chats?account_type=INSTAGRAM&account_id=` | Yes (history import) |
+| List messages of a chat | Yes | `GET /chats/{chat_id}/messages` | Yes (history import) |
+| Send in an existing chat | Yes | `POST /chats/{chat_id}/messages` | Yes (replies) |
+| Start a new chat | Yes (`attendees_ids` = the profile's `provider_messaging_id`) | `POST /chats` | **No** — no cold Instagram outreach in this release |
+| Message webhook | Yes; `account_type: "INSTAGRAM"`; the account's own sends also arrive as `message_received` (tell them apart by `is_sender` or `account_info.user_id` = `sender.attendee_provider_id`) | `source: messaging` | Yes |
+| Webhook delivery | 200 within 30 s, else up to 5 retries; dedupe on `message_id` | docs/webhooks-2 | Ledger key + unique message id |
+| Retrieve a profile | Yes | `GET /users/{username\|provider_id}?account_id=` | Yes (discovery) |
+| List a user's posts / get a post | Yes | `GET /users/{id}/posts`, `GET /posts/{id\|shortcode}` | Yes (discovery) |
+| List a post's comments / reactions | Yes | `GET /posts/{provider_id}/comments`, `GET /posts/{id}/reactions` | Comments yes; reactions are engagement only |
+| Followers / following | Yes (25 per page) | `GET /users/followers`, `GET /users/following` | No (a follow is not a need) |
+| Comment, like, follow | Yes | `POST /posts/{id}/comments`, `POST /posts/reaction`, `POST /users/invite` | **No** — nothing is posted on the owner's behalf |
+| Keyword, hashtag or people search on Instagram | **Not documented** in v1 or v2 (`/linkedin/search` is LinkedIn-only; v2 has only "search locations") | — | **Not supported** |
+| Facebook / Messenger search | Not documented; Messenger messaging is documented but "no longer maintained" | — | **Not supported** |
+| Messaging people who do not follow you / message requests | Not documented | — | Not relied on |
+
+Unipile's documented limits for Instagram: about 100 actions a day and 10 an
+hour per account for follows, outreach, likes and comments; replying to
+inbound messages is fine. Pricing is per linked account and the same for
+every channel (€49/month up to 10 accounts, then €5 → €3 per account,
+post-paid on the monthly peak; unipile.com/pricing-api).
+
+### Search providers (website and directory discovery)
+
+An ordinary language model is not a search engine. Discovery uses only
+providers that **return the sources of a real web search**, and only the URLs
+those providers return are ever used (URLs written in the model's text are
+ignored), exactly as the existing company research does
+(`src/lib/research/research.ts researchSources`).
+
+| Provider | How it searches | Already integrated |
+| --- | --- | --- |
+| OpenRouter | `plugins: [{ id: "web" }]` (returns `url_citation` annotations) | Yes: the organization's AI connection |
+| AI/ML API | a research model with `web_search_options` (Perplexity Sonar was verified live on 13 Oct 2026 for company research) | Yes: Settings → AI provider → research model |
+
+### Optional adapter for Instagram hashtag discovery
+
+Instagram hashtag or keyword discovery needs a provider Unipile is not:
+
+| Provider | Requirements | Cost |
+| --- | --- | --- |
+| Meta Instagram Graph API — hashtag search (`GET /ig_hashtag_search`, `/{hashtag-id}/recent_media`) | An Instagram **Business or Creator** account linked to a Facebook Page; a Meta app that passed **App Review** for *Instagram Public Content Access* and `instagram_basic`; a user access token. Limits: 30 unique hashtags per rolling 7 days; `recent_media` covers the last 24 hours, 50 per page, without usernames. | No fee stated by Meta. |
+| Apify "Instagram Hashtag Scraper" | An Apify account and token. Public data only; scraping — check Instagram's terms before use. | From $1.90 per 1,000 results. |
+
+AgentSDR ships the Meta adapter as **optional, not configured, and never
+called during development**; no account was created and no paid call was
+made.
+
+## 2. Required versus optional integrations
+
+| Integration | Needed for | Required? |
+| --- | --- | --- |
+| PostgreSQL migration `scripts/add-instagram-intake-discovery.ts` | Everything below | Required before turning any feature on (without it every feature reads as off) |
+| Unipile (existing per-organization connection) + an Instagram account linked in it | Instagram messages, Instagram inquiries, Instagram profile/post/comment reading in discovery | Required for Instagram; optional otherwise |
+| AI provider (existing) | Drafting replies (all channels), reply checks | Required (as today) |
+| A web-searching AI model (OpenRouter, or AI/ML API research model) | Website and directory discovery | Optional: without it, discovery from a description says it is unavailable; Google Maps and LinkedIn search work as before |
+| The owner's website-form tool (Zapier, Make, Webflow, WordPress plugin, a developer…) | Website-form inquiries | Optional; a one-time setup in that tool (AgentSDR cannot connect a site's forms by itself) |
+| Meta Instagram Graph API (Business account + App Review) | Instagram hashtag discovery | Optional adapter, off |

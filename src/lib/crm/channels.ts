@@ -8,8 +8,12 @@
  * "whatsapp" is WhatsApp messaging through Unipile
  * (src/lib/whatsapp/crmBridge.ts); on a record it is also where call
  * follow-ups from WhatsApp Calling are worked (src/lib/calls/crmFollowUp.ts).
+ *
+ * "instagram" is Instagram direct messages through Unipile
+ * (src/lib/instagram/crmBridge.ts), only for organizations that turned the
+ * Instagram feature on; a reply goes into the chat the lead wrote in.
  */
-export const CRM_CHANNELS = ["email", "linkedin", "whatsapp"] as const;
+export const CRM_CHANNELS = ["email", "linkedin", "whatsapp", "instagram"] as const;
 export type CrmChannel = (typeof CRM_CHANNELS)[number];
 
 export function isCrmChannel(value: unknown): value is CrmChannel {
@@ -24,6 +28,8 @@ export function crmChannelLabel(channel: CrmChannel): string {
       return "LinkedIn";
     case "whatsapp":
       return "WhatsApp";
+    case "instagram":
+      return "Instagram";
   }
 }
 
@@ -34,6 +40,7 @@ export function crmChannelSendProvider(channel: CrmChannel): "gmail" | "unipile"
       return "gmail";
     case "linkedin":
     case "whatsapp":
+    case "instagram":
       return "unipile";
   }
 }
@@ -45,6 +52,7 @@ export function crmChannelHasSubject(channel: CrmChannel): boolean {
       return true;
     case "linkedin":
     case "whatsapp":
+    case "instagram":
       return false;
   }
 }

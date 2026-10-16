@@ -947,7 +947,7 @@ CREATE TABLE public.assistant_jobs (
     created_by uuid,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     finished_at timestamp with time zone,
-    CONSTRAINT assistant_jobs_kind_chk CHECK ((kind = ANY (ARRAY['discovery'::text, 'outreach_start'::text, 'linkedin_search'::text]))),
+    CONSTRAINT assistant_jobs_kind_chk CHECK ((kind = ANY (ARRAY['discovery'::text, 'outreach_start'::text, 'linkedin_search'::text, 'web_discovery'::text]))),
     CONSTRAINT assistant_jobs_status_chk CHECK ((status = ANY (ARRAY['queued'::text, 'running'::text, 'succeeded'::text, 'failed'::text, 'cancelled'::text])))
 );
 
@@ -1280,7 +1280,7 @@ CREATE TABLE public.crm_conversation_messages (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT crm_conversation_messages_body_chk CHECK ((length(btrim(body_text)) > 0)),
-    CONSTRAINT crm_conversation_messages_channel_chk CHECK ((channel = ANY (ARRAY['email'::text, 'linkedin'::text, 'whatsapp'::text]))),
+    CONSTRAINT crm_conversation_messages_channel_chk CHECK ((channel = ANY (ARRAY['email'::text, 'linkedin'::text, 'whatsapp'::text, 'instagram'::text]))),
     CONSTRAINT crm_conversation_messages_direction_chk CHECK ((direction = ANY (ARRAY['inbound'::text, 'outbound'::text]))),
     CONSTRAINT crm_conversation_messages_idempotency_chk CHECK ((length(btrim(idempotency_key)) > 0))
 );
@@ -1302,7 +1302,7 @@ CREATE TABLE public.crm_conversations (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     organization_id uuid NOT NULL,
     CONSTRAINT crm_conversations_account_ref_chk CHECK ((length(btrim(account_ref)) > 0)),
-    CONSTRAINT crm_conversations_channel_chk CHECK ((channel = ANY (ARRAY['email'::text, 'linkedin'::text, 'whatsapp'::text]))),
+    CONSTRAINT crm_conversations_channel_chk CHECK ((channel = ANY (ARRAY['email'::text, 'linkedin'::text, 'whatsapp'::text, 'instagram'::text]))),
     CONSTRAINT crm_conversations_status_chk CHECK ((status = ANY (ARRAY['active'::text, 'closed'::text])))
 );
 
@@ -1347,8 +1347,9 @@ CREATE TABLE public.crm_drafts (
     error text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT crm_drafts_channel_chk CHECK ((channel = ANY (ARRAY['email'::text, 'linkedin'::text, 'whatsapp'::text]))),
+    CONSTRAINT crm_drafts_channel_chk CHECK ((channel = ANY (ARRAY['email'::text, 'linkedin'::text, 'whatsapp'::text, 'instagram'::text]))),
     CONSTRAINT crm_drafts_context_chk CHECK ((expected_context_version >= 0)),
+    CONSTRAINT crm_drafts_instagram_subject_chk CHECK (((channel <> 'instagram'::text) OR (subject IS NULL))),
     CONSTRAINT crm_drafts_linkedin_subject_chk CHECK (((channel <> 'linkedin'::text) OR (subject IS NULL))),
     CONSTRAINT crm_drafts_revision_chk CHECK ((revision > 0)),
     CONSTRAINT crm_drafts_status_chk CHECK ((status = ANY (ARRAY['generating'::text, 'awaiting_review'::text, 'sending'::text, 'sent'::text, 'discarded'::text, 'stale'::text, 'failed'::text, 'delivery_uncertain'::text]))),
@@ -1410,7 +1411,7 @@ CREATE TABLE public.crm_identity_exceptions (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     organization_id uuid NOT NULL,
-    CONSTRAINT crm_identity_exceptions_channel_chk CHECK ((channel = ANY (ARRAY['email'::text, 'linkedin'::text, 'whatsapp'::text]))),
+    CONSTRAINT crm_identity_exceptions_channel_chk CHECK ((channel = ANY (ARRAY['email'::text, 'linkedin'::text, 'whatsapp'::text, 'instagram'::text]))),
     CONSTRAINT crm_identity_exceptions_reason_chk CHECK ((length(btrim(reason)) > 0)),
     CONSTRAINT crm_identity_exceptions_resolution_chk CHECK ((((status = 'open'::text) AND (resolved_person_id IS NULL) AND (resolved_at IS NULL)) OR ((status = 'resolved'::text) AND (resolved_person_id IS NOT NULL) AND (resolved_at IS NOT NULL)) OR ((status = 'ignored'::text) AND (resolved_person_id IS NULL) AND (resolved_at IS NOT NULL)))),
     CONSTRAINT crm_identity_exceptions_status_chk CHECK ((status = ANY (ARRAY['open'::text, 'resolved'::text, 'ignored'::text])))
@@ -1638,7 +1639,7 @@ CREATE TABLE public.crm_records (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     organization_id uuid NOT NULL,
-    CONSTRAINT crm_records_active_channel_chk CHECK (((active_channel IS NULL) OR (active_channel = ANY (ARRAY['email'::text, 'linkedin'::text, 'whatsapp'::text])))),
+    CONSTRAINT crm_records_active_channel_chk CHECK (((active_channel IS NULL) OR (active_channel = ANY (ARRAY['email'::text, 'linkedin'::text, 'whatsapp'::text, 'instagram'::text])))),
     CONSTRAINT crm_records_category_lock_chk CHECK (((category_locked IS FALSE) OR (NOT (category_key IS DISTINCT FROM 'customer'::text)))),
     CONSTRAINT crm_records_category_source_chk CHECK (((category_source IS NULL) OR (category_source = ANY (ARRAY['ai'::text, 'human'::text, 'integration'::text])))),
     CONSTRAINT crm_records_category_source_presence_chk CHECK (((category_key IS NULL) = (category_source IS NULL))),
@@ -2280,6 +2281,121 @@ CREATE TABLE public.import_runs (
 );
 
 --
+-- Name: inquiries; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.inquiries (
+    organization_id uuid NOT NULL,
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    source text NOT NULL,
+    endpoint_id uuid,
+    instagram_chat_id uuid,
+    dedupe_key text NOT NULL,
+    person_id uuid,
+    name text,
+    email text,
+    phone text,
+    message text,
+    fields jsonb DEFAULT '{}'::jsonb NOT NULL,
+    page_url text,
+    historical boolean DEFAULT false NOT NULL,
+    status text DEFAULT 'received'::text NOT NULL,
+    reason text,
+    submitted_at timestamp with time zone,
+    received_at timestamp with time zone DEFAULT now() NOT NULL,
+    raw jsonb,
+    CONSTRAINT inquiries_source_chk CHECK ((source = ANY (ARRAY['website_form'::text, 'instagram'::text]))),
+    CONSTRAINT inquiries_status_chk CHECK ((status = ANY (ARRAY['received'::text, 'unusable'::text])))
+);
+
+--
+-- Name: instagram_accounts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.instagram_accounts (
+    organization_id uuid NOT NULL,
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    unipile_account_id text NOT NULL,
+    username text,
+    name text,
+    provider_user_id text,
+    status text DEFAULT 'connected'::text NOT NULL,
+    connected_at timestamp with time zone,
+    history_cutoff_at timestamp with time zone,
+    connected_by uuid,
+    inquiry_intake boolean DEFAULT false NOT NULL,
+    last_synced_at timestamp with time zone,
+    last_imported_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT instagram_accounts_status_chk CHECK ((status = ANY (ARRAY['connected'::text, 'disconnected'::text, 'credentials'::text, 'error'::text])))
+);
+
+--
+-- Name: instagram_chats; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.instagram_chats (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    account_id uuid NOT NULL,
+    unipile_chat_id text NOT NULL,
+    provider_id text,
+    username text,
+    name text,
+    person_id uuid,
+    first_seen_via text DEFAULT 'webhook'::text NOT NULL,
+    last_message_at timestamp with time zone,
+    last_message_preview text,
+    last_direction text,
+    unread_count integer DEFAULT 0 NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT instagram_chats_first_seen_chk CHECK ((first_seen_via = ANY (ARRAY['webhook'::text, 'import'::text, 'send'::text]))),
+    CONSTRAINT instagram_chats_last_direction_chk CHECK (((last_direction IS NULL) OR (last_direction = ANY (ARRAY['inbound'::text, 'outbound'::text])))),
+    CONSTRAINT instagram_chats_unread_chk CHECK ((unread_count >= 0))
+);
+
+--
+-- Name: instagram_messages; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.instagram_messages (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    chat_id uuid NOT NULL,
+    unipile_message_id text,
+    direction text NOT NULL,
+    origin text NOT NULL,
+    body text DEFAULT ''::text NOT NULL,
+    attachments jsonb DEFAULT '[]'::jsonb NOT NULL,
+    sent_at timestamp with time zone NOT NULL,
+    historical boolean DEFAULT false NOT NULL,
+    crm_conversation_message_id uuid,
+    raw jsonb,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT instagram_messages_direction_chk CHECK ((direction = ANY (ARRAY['inbound'::text, 'outbound'::text]))),
+    CONSTRAINT instagram_messages_origin_chk CHECK ((origin = ANY (ARRAY['lead'::text, 'agentsdr'::text, 'phone'::text]))),
+    CONSTRAINT instagram_messages_origin_direction_chk CHECK (((direction = 'inbound'::text) = (origin = 'lead'::text)))
+);
+
+--
+-- Name: intake_endpoints; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.intake_endpoints (
+    organization_id uuid NOT NULL,
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    name text NOT NULL,
+    token_hash text NOT NULL,
+    token_hint text NOT NULL,
+    field_map jsonb DEFAULT '{}'::jsonb NOT NULL,
+    enabled boolean DEFAULT true NOT NULL,
+    created_by uuid,
+    last_received_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+--
 -- Name: invitations; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2314,6 +2430,8 @@ CREATE TABLE public.lead_audience_members (
     evidence jsonb DEFAULT '[]'::jsonb NOT NULL,
     facts jsonb DEFAULT '{}'::jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
+    match_reason text,
+    signals jsonb DEFAULT '[]'::jsonb NOT NULL,
     CONSTRAINT lead_audience_members_status_chk CHECK ((status = ANY (ARRAY['eligible'::text, 'excluded'::text])))
 );
 
@@ -2330,7 +2448,7 @@ CREATE TABLE public.lead_audiences (
     criteria jsonb DEFAULT '{}'::jsonb NOT NULL,
     created_by uuid,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT lead_audiences_source_chk CHECK ((source = ANY (ARRAY['discovery'::text, 'list'::text])))
+    CONSTRAINT lead_audiences_source_chk CHECK ((source = ANY (ARRAY['discovery'::text, 'list'::text, 'existing'::text, 'inquiries'::text])))
 );
 
 --
@@ -2366,6 +2484,19 @@ CREATE TABLE public.members (
     user_id uuid NOT NULL,
     role text DEFAULT 'member'::text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+--
+-- Name: organization_features; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.organization_features (
+    organization_id uuid NOT NULL,
+    key text NOT NULL,
+    enabled boolean DEFAULT false NOT NULL,
+    updated_by uuid,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT organization_features_key_chk CHECK ((key = ANY (ARRAY['instagram'::text, 'web_discovery'::text, 'inquiry_intake'::text])))
 );
 
 --
@@ -2490,7 +2621,7 @@ CREATE TABLE public.outreach_run_leads (
     stop_reason text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT outreach_run_leads_channel_chk CHECK ((channel = ANY (ARRAY['email'::text, 'whatsapp'::text, 'linkedin'::text]))),
+    CONSTRAINT outreach_run_leads_channel_chk CHECK ((channel = ANY (ARRAY['email'::text, 'whatsapp'::text, 'linkedin'::text, 'instagram'::text]))),
     CONSTRAINT outreach_run_leads_status_chk CHECK ((status = ANY (ARRAY['active'::text, 'stopped'::text, 'opted_out'::text])))
 );
 
@@ -3558,6 +3689,62 @@ ALTER TABLE ONLY public.import_runs
     ADD CONSTRAINT import_runs_pkey PRIMARY KEY (id);
 
 --
+-- Name: inquiries inquiries_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inquiries
+    ADD CONSTRAINT inquiries_pkey PRIMARY KEY (id);
+
+--
+-- Name: instagram_accounts instagram_accounts_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.instagram_accounts
+    ADD CONSTRAINT instagram_accounts_pkey PRIMARY KEY (id);
+
+--
+-- Name: instagram_accounts instagram_accounts_unipile_account_uq; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.instagram_accounts
+    ADD CONSTRAINT instagram_accounts_unipile_account_uq UNIQUE (unipile_account_id);
+
+--
+-- Name: instagram_chats instagram_chats_account_chat_uq; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.instagram_chats
+    ADD CONSTRAINT instagram_chats_account_chat_uq UNIQUE (account_id, unipile_chat_id);
+
+--
+-- Name: instagram_chats instagram_chats_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.instagram_chats
+    ADD CONSTRAINT instagram_chats_pkey PRIMARY KEY (id);
+
+--
+-- Name: instagram_messages instagram_messages_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.instagram_messages
+    ADD CONSTRAINT instagram_messages_pkey PRIMARY KEY (id);
+
+--
+-- Name: intake_endpoints intake_endpoints_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.intake_endpoints
+    ADD CONSTRAINT intake_endpoints_pkey PRIMARY KEY (id);
+
+--
+-- Name: intake_endpoints intake_endpoints_token_hash_uq; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.intake_endpoints
+    ADD CONSTRAINT intake_endpoints_token_hash_uq UNIQUE (token_hash);
+
+--
 -- Name: invitations invitations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3591,6 +3778,13 @@ ALTER TABLE ONLY public.lead_research
 
 ALTER TABLE ONLY public.members
     ADD CONSTRAINT members_pkey PRIMARY KEY (id);
+
+--
+-- Name: organization_features organization_features_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.organization_features
+    ADD CONSTRAINT organization_features_pkey PRIMARY KEY (organization_id, key);
 
 --
 -- Name: organizations organizations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
@@ -4733,6 +4927,66 @@ CREATE INDEX import_runs_created_idx ON public.import_runs USING btree (created_
 --
 
 CREATE INDEX import_runs_organization_idx ON public.import_runs USING btree (organization_id);
+
+--
+-- Name: inquiries_org_source_dedupe_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX inquiries_org_source_dedupe_uq ON public.inquiries USING btree (organization_id, source, dedupe_key);
+
+--
+-- Name: inquiries_organization_received_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX inquiries_organization_received_idx ON public.inquiries USING btree (organization_id, received_at);
+
+--
+-- Name: inquiries_person_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX inquiries_person_idx ON public.inquiries USING btree (person_id);
+
+--
+-- Name: instagram_accounts_organization_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX instagram_accounts_organization_idx ON public.instagram_accounts USING btree (organization_id);
+
+--
+-- Name: instagram_chats_account_last_message_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX instagram_chats_account_last_message_idx ON public.instagram_chats USING btree (account_id, last_message_at);
+
+--
+-- Name: instagram_chats_person_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX instagram_chats_person_idx ON public.instagram_chats USING btree (person_id);
+
+--
+-- Name: instagram_chats_provider_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX instagram_chats_provider_idx ON public.instagram_chats USING btree (provider_id);
+
+--
+-- Name: instagram_messages_chat_sent_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX instagram_messages_chat_sent_idx ON public.instagram_messages USING btree (chat_id, sent_at);
+
+--
+-- Name: instagram_messages_unipile_message_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX instagram_messages_unipile_message_uq ON public.instagram_messages USING btree (unipile_message_id) WHERE (unipile_message_id IS NOT NULL);
+
+--
+-- Name: intake_endpoints_organization_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX intake_endpoints_organization_idx ON public.intake_endpoints USING btree (organization_id);
 
 --
 -- Name: invitations_email_idx; Type: INDEX; Schema: public; Owner: -
@@ -6104,6 +6358,76 @@ ALTER TABLE ONLY public.import_runs
     ADD CONSTRAINT import_runs_organization_fk FOREIGN KEY (organization_id) REFERENCES public.organizations(id) ON DELETE RESTRICT;
 
 --
+-- Name: inquiries inquiries_endpoint_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inquiries
+    ADD CONSTRAINT inquiries_endpoint_id_fkey FOREIGN KEY (endpoint_id) REFERENCES public.intake_endpoints(id) ON DELETE SET NULL;
+
+--
+-- Name: inquiries inquiries_instagram_chat_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inquiries
+    ADD CONSTRAINT inquiries_instagram_chat_id_fkey FOREIGN KEY (instagram_chat_id) REFERENCES public.instagram_chats(id) ON DELETE SET NULL;
+
+--
+-- Name: inquiries inquiries_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inquiries
+    ADD CONSTRAINT inquiries_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
+
+--
+-- Name: inquiries inquiries_person_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inquiries
+    ADD CONSTRAINT inquiries_person_id_fkey FOREIGN KEY (person_id) REFERENCES public.people(id) ON DELETE SET NULL;
+
+--
+-- Name: instagram_accounts instagram_accounts_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.instagram_accounts
+    ADD CONSTRAINT instagram_accounts_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
+
+--
+-- Name: instagram_chats instagram_chats_account_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.instagram_chats
+    ADD CONSTRAINT instagram_chats_account_fk FOREIGN KEY (account_id) REFERENCES public.instagram_accounts(id) ON DELETE CASCADE;
+
+--
+-- Name: instagram_chats instagram_chats_person_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.instagram_chats
+    ADD CONSTRAINT instagram_chats_person_fk FOREIGN KEY (person_id) REFERENCES public.people(id) ON DELETE SET NULL;
+
+--
+-- Name: instagram_messages instagram_messages_chat_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.instagram_messages
+    ADD CONSTRAINT instagram_messages_chat_fk FOREIGN KEY (chat_id) REFERENCES public.instagram_chats(id) ON DELETE CASCADE;
+
+--
+-- Name: instagram_messages instagram_messages_crm_message_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.instagram_messages
+    ADD CONSTRAINT instagram_messages_crm_message_fk FOREIGN KEY (crm_conversation_message_id) REFERENCES public.crm_conversation_messages(id) ON DELETE SET NULL;
+
+--
+-- Name: intake_endpoints intake_endpoints_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.intake_endpoints
+    ADD CONSTRAINT intake_endpoints_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
+
+--
 -- Name: invitations invitations_inviter_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -6186,6 +6510,13 @@ ALTER TABLE ONLY public.members
 
 ALTER TABLE ONLY public.members
     ADD CONSTRAINT members_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+--
+-- Name: organization_features organization_features_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.organization_features
+    ADD CONSTRAINT organization_features_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
 
 --
 -- Name: outreach_campaigns outreach_campaigns_organization_fk; Type: FK CONSTRAINT; Schema: public; Owner: -

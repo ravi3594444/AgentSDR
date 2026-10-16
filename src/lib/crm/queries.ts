@@ -5,6 +5,7 @@ import { companies, people } from "@/lib/leads/schema";
 import { linkedInAccounts, leads as linkedinLeads, messages as linkedinMessages } from "@/lib/linkedin/schema";
 import { outreachEmails, outreachLeads } from "@/lib/outreach/schema";
 import { whatsappAccounts } from "@/lib/whatsapp/schema";
+import { instagramAccounts } from "@/lib/instagram/schema";
 import {
   crmClassifications,
   crmConversationMessages,
@@ -442,6 +443,12 @@ export async function getCrmRecordWorkspace(recordId: string) {
       .from(whatsappAccounts).where(and(inOrg(whatsappAccounts), inArray(whatsappAccounts.unipileAccountId, whatsappRefs)))
     : [];
   const whatsappAccountByRef = new Map(whatsappAccountRows.map((account) => [account.unipileAccountId, account]));
+  const instagramRefs = [...new Set(conversations.filter((conversation) => conversation.channel === "instagram").map((conversation) => conversation.accountRef))];
+  const instagramAccountRows = instagramRefs.length
+    ? await db.select({ unipileAccountId: instagramAccounts.unipileAccountId, name: instagramAccounts.name, username: instagramAccounts.username })
+      .from(instagramAccounts).where(and(inOrg(instagramAccounts), inArray(instagramAccounts.unipileAccountId, instagramRefs)))
+    : [];
+  const instagramAccountByRef = new Map(instagramAccountRows.map((account) => [account.unipileAccountId, account]));
   const conversationAccount = (conversation: (typeof conversations)[number]) => {
     switch (conversation.channel) {
       case "email":
@@ -463,6 +470,16 @@ export async function getCrmRecordWorkspace(recordId: string) {
             ? [account.name, account.phone].filter(Boolean).join(" · ") || "WhatsApp number"
             : "Unknown WhatsApp number",
           name: account?.name ?? account?.phone ?? null,
+          avatarUrl: null,
+        };
+      }
+      case "instagram": {
+        const account = instagramAccountByRef.get(conversation.accountRef);
+        return {
+          label: account
+            ? [account.name, account.username && `@${account.username}`].filter(Boolean).join(" · ") || "Instagram account"
+            : "Unknown Instagram account",
+          name: account?.name ?? account?.username ?? null,
           avatarUrl: null,
         };
       }

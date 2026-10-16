@@ -23,6 +23,7 @@ import {
 import { outreachCampaigns, outreachEmails, outreachLeads } from "@/lib/outreach/schema";
 import { inOrg } from "@/lib/tenancy/scope";
 import { whatsappAccounts, whatsappChats, whatsappMessages } from "@/lib/whatsapp/schema";
+import { instagramAccounts, instagramChats, instagramMessages } from "@/lib/instagram/schema";
 import { htmlToPlainText, looksLikeHtml } from "@/lib/email/htmlToText";
 import {
   insertConversationMessageInTransaction,
@@ -178,6 +179,51 @@ async function loadWhatsappOutreachRows(
     ));
 }
 
+/**
+ * What the owner sent from this Instagram account in the Person's chats
+ * (from AgentSDR or the Instagram app, imported history included), so the
+ * first reply that reaches the CRM is read with what came before it. Same
+ * row shape and rules as WhatsApp; only outbound messages are copied, so
+ * imported history from the lead never becomes a new inbound message.
+ */
+async function loadInstagramOutreachRows(
+  tx: CrmTransaction,
+  personId: string,
+  unipileAccountId: string,
+): Promise<WhatsappOutreachRow[]> {
+  const rows = await tx
+    .select({
+      id: instagramMessages.id,
+      unipileMessageId: instagramMessages.unipileMessageId,
+      body: instagramMessages.body,
+      origin: instagramMessages.origin,
+      sentAt: instagramMessages.sentAt,
+      unipileChatId: instagramChats.unipileChatId,
+      crmConversationMessageId: instagramMessages.crmConversationMessageId,
+    })
+    .from(instagramMessages)
+    .innerJoin(instagramChats, eq(instagramChats.id, instagramMessages.chatId))
+    .innerJoin(instagramAccounts, eq(instagramAccounts.id, instagramChats.accountId))
+    .where(and(
+      inOrg(instagramAccounts),
+      eq(instagramChats.personId, personId),
+      eq(instagramAccounts.unipileAccountId, unipileAccountId),
+      eq(instagramMessages.direction, "outbound"),
+    ));
+  return rows;
+}
+
+/** An outbound Instagram message as a CRM message: the WhatsApp rules with Instagram's key and source. */
+export function instagramOutreachRowToMessageInput(row: WhatsappOutreachRow): PendingOutboundMessage | null {
+  const message = whatsappOutreachRowToMessageInput(row);
+  if (!message) return null;
+  return {
+    ...message,
+    idempotencyKey: `instagram:${row.unipileMessageId}`,
+    raw: { ...(message.raw as Record<string, unknown>), source: "instagram_messages" },
+  };
+}
+
 async function loadEmailOutreachRows(tx: CrmTransaction, personId: string): Promise<EmailOutreachRow[]> {
   return tx
     .select({
@@ -275,6 +321,8 @@ async function loadPendingOutreach(
       return (await loadLinkedinOutreachRows(tx, input.personId)).map(linkedinOutreachRowToMessageInput);
     case "whatsapp":
       return (await loadWhatsappOutreachRows(tx, input.personId, input.accountRef)).map(whatsappOutreachRowToMessageInput);
+    case "instagram":
+      return (await loadInstagramOutreachRows(tx, input.personId, input.accountRef)).map(instagramOutreachRowToMessageInput);
   }
 }
 
