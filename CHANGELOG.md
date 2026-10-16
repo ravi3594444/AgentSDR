@@ -52,9 +52,12 @@ Each release lists the database migrations it needs; see
   creates `organization_features`, `instagram_accounts`, `instagram_chats`,
   `instagram_messages`, `intake_endpoints`, `inquiries` and
   `lead_audience_member_insights`, and widens the channel checks to allow
-  `instagram` and the job kind `web_discovery`. A fresh install gets it from
-  `db/schema.sql`. Until it runs every optional feature reads as off and the
-  rest of the app works unchanged.
+  `instagram` and the job kind `web_discovery` (added `NOT VALID`, then
+  validated without blocking reads or writes). A fresh install gets it from
+  `db/schema.sql`. Until it runs every optional feature reads as off, turning
+  one on explains that the migration is needed, and the rest of the app works
+  unchanged. With Docker Compose:
+  `docker compose exec app agentsdr-entrypoint bun scripts/add-instagram-intake-discovery.ts`.
 
 ## [0.3.1] - 2026-10-08
 

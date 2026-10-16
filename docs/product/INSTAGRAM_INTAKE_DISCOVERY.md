@@ -111,15 +111,19 @@ assistant reads, besides the business profile:
   assistant reads documents with `search_knowledge` before asking for an
   offer or customers;
 - the names the connected accounts send as (mailbox display names,
-  LinkedIn, WhatsApp and Instagram account names) — when the profile has no
-  sender name and every account uses the same one, outreach is signed with
-  it (visible in the plan's samples before Start); when they disagree, the
-  assistant asks which one;
+  LinkedIn, WhatsApp and Instagram account names, connected accounts only)
+  — when the profile has no sender name and every account label that reads
+  as a name uses the same one, outreach and handover messages are signed
+  with it (visible in the plan's samples before Start). A label that is an
+  email address, a phone number or a handle never signs a message; when the
+  names disagree, the assistant asks which one;
 - the reply instructions saved in Settings → Instructions.
 
 Its context gains `ALREADY KNOWN ELSEWHERE`, and `STILL MISSING` lists only
-what none of those holds; prices are "worth asking once", never blocking.
-The profile gains an optional **prices** field.
+what none of those holds; prices are "worth asking once", never blocking,
+and count as known once a price document or the profile's new optional
+**prices** field holds them. Tools of an optional feature that is off are
+not offered to the model at all.
 
 ### "Use my existing leads or inquiries"
 
@@ -161,8 +165,11 @@ stated them.
 ### One Start for a whole request
 
 "Find dentists in Pune, Mumbai and Nagpur and contact them" runs one search
-per city, and each prepares its own plan. The plan card's Start offers
-**Apply to the rest of this request** (on by default): the request's other
+per city, and each prepares its own plan. When the request has more than
+this one plan — other plans, or searches still running that will make one —
+the plan card's Start offers **Apply to the rest of this request (N more)**
+(on by default, as the owner asked for one choice to cover the whole
+request): the request's other
 plans — already waiting, or prepared later when their searches finish —
 then start on their own with the same reply mode (`requestApproval*.ts`).
 They still go through `startOutreachRun`, the same launch rules as a Start
