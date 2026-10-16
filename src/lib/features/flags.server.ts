@@ -26,6 +26,14 @@ export class FeatureDisabledError extends Error {
   }
 }
 
+/** The optional features' tables do not exist yet: the database needs this release's migration. */
+export class FeaturesNotInstalledError extends Error {
+  constructor() {
+    super("Optional features need a database update first: the server's operator runs `bun scripts/add-instagram-intake-discovery.ts` (see CHANGELOG). Until then everything else works as before.");
+    this.name = "FeaturesNotInstalledError";
+  }
+}
+
 /** A query on a table a migration has not created yet (42P01 undefined_table). */
 export function isMissingTable(error: unknown): boolean {
   for (let current: unknown = error; current && typeof current === "object"; current = (current as { cause?: unknown }).cause) {
@@ -68,16 +76,23 @@ export async function requireFeature(feature: FeatureKey): Promise<void> {
 
 /** Turns a feature on or off for the organization in scope; the caller checks the permission. */
 export async function setFeature(feature: FeatureKey, enabled: boolean, userId: string | null): Promise<FeatureState> {
-  await db.insert(organizationFeatures).values({
-    organizationId: currentOrganizationId(),
-    key: feature,
-    enabled,
-    updatedBy: userId,
-    updatedAt: new Date(),
-  }).onConflictDoUpdate({
-    target: [organizationFeatures.organizationId, organizationFeatures.key],
-    set: { enabled, updatedBy: userId, updatedAt: new Date() },
-  });
+  try {
+    await db.insert(organizationFeatures).values({
+      organizationId: currentOrganizationId(),
+      key: feature,
+      enabled,
+      updatedBy: userId,
+      updatedAt: new Date(),
+    }).onConflictDoUpdate({
+      target: [organizationFeatures.organizationId, organizationFeatures.key],
+      set: { enabled, updatedBy: userId, updatedAt: new Date() },
+    });
+  } catch (error) {
+    if (isMissingTable(error)) {
+      throw new FeaturesNotInstalledError();
+    }
+    throw error;
+  }
   cache.delete(currentOrganizationId());
   return featureState();
 }

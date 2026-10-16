@@ -1,5 +1,6 @@
 import { authContextErrorResponse, withOrgContext } from "@/lib/auth/context";
 import type { NavData } from "@/components/nav/navConfig";
+import { defaultFeatureState } from "@/lib/features/catalog";
 import { featureState } from "@/lib/features/flags.server";
 import { loadNavBadges } from "@/lib/nav/badges.server";
 
@@ -13,7 +14,8 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
   try {
     return await withOrgContext(request, async () => {
-      const [badges, features] = await Promise.all([loadNavBadges(), featureState()]);
+      // The counts never depend on the optional features: if their switches cannot be read, they read as off.
+      const [badges, features] = await Promise.all([loadNavBadges(), featureState().catch(() => defaultFeatureState())]);
       return Response.json({ ...badges, features } satisfies NavData, { headers: { "Cache-Control": "no-store" } });
     });
   } catch (error) {

@@ -70,7 +70,7 @@ type RunReply = { id: string; who: string; channel: string; receivedAt: string; 
 
 type RunLead = { personId: string; who: string; channel: string; progress: { tone: "waiting" | "sent" | "replied" | "good" | "stopped" | "failed"; text: string } };
 
-type Run = { id: string; status: string; autopilot: boolean; error: string | null; campaigns: Record<string, string>; replies?: RunReply[]; leads?: RunLead[] };
+type Run = { id: string; status: string; autopilot: boolean; error: string | null; campaigns: Record<string, string>; replies?: RunReply[]; leads?: RunLead[]; /** Other plans of the same request, and its searches still running. */ requestPeers?: number };
 
 type DecisionState = { status: "open" | "answered" | "resolved"; answer: string | null };
 
@@ -361,6 +361,8 @@ function ProposalCard({ message, run, canManageAutopilot, lastReplyMode, onChang
   const [error, setError] = useState<string | null>(null);
   if (message.status !== "ok" || !data) return <Card title={TOOL_TITLE.prepare_outreach!} status={message.status}><p>{message.content}</p></Card>;
   const status = run?.status ?? "proposed";
+  // Offered only when the request has a rest: other plans, or searches that will make one.
+  const requestHasMore = Boolean(data.plan.requestId) && (run?.requestPeers ?? 0) > 0;
   const perChannel = data.plan.assignments.reduce<Record<string, number>>((acc, a) => ({ ...acc, [a.channel]: (acc[a.channel] ?? 0) + 1 }), {});
 
   async function act(action: "start" | "cancel" | "pause" | "resume" | "stop" | "mode", nextMode?: "automatic" | "review") {
@@ -376,7 +378,7 @@ function ProposalCard({ message, run, canManageAutopilot, lastReplyMode, onChang
       await readJson(await fetch(`/api/assistant/runs/${data!.runId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(action === "start" ? { action, mode, applyToRequest: Boolean(data!.plan.requestId) && applyToRequest } : action === "mode" ? { action, mode: nextMode } : { action }),
+        body: JSON.stringify(action === "start" ? { action, mode, applyToRequest: requestHasMore && applyToRequest } : action === "mode" ? { action, mode: nextMode } : { action }),
       }));
       onChanged();
     } catch (cause) {
@@ -447,10 +449,10 @@ function ProposalCard({ message, run, canManageAutopilot, lastReplyMode, onChang
             <span><span className="text-label-xs text-text-strong-950">Review.</span> The AI drafts every reply; each waits for you in Action required.</span>
           </label>
           <p className="text-paragraph-xs text-text-soft-400">Either way the first messages and follow-ups go out automatically to these {data.plan.assignments.length} leads only, within the limits above. Adding people, channels or higher limits needs a new plan you approve.</p>
-          {data.plan.requestId && (
+          {requestHasMore && (
             <label className="flex items-start gap-2 rounded-lg p-2 text-paragraph-xs ring-1 ring-inset ring-stroke-soft-200">
               <input type="checkbox" className="mt-0.5" checked={applyToRequest} disabled={busy} onChange={(event) => setApplyToRequest(event.target.checked)} />
-              <span><span className="text-label-xs text-text-strong-950">Apply to the rest of this request.</span> The other plans this request makes (more cities or searches, including leads found later) start on their own as soon as they are ready, in this run&apos;s reply mode, on these channels, with up to 100 leads each; you will not be asked again. A plan outside that, or with someone already in another running plan, waits for you with the reason. Pause or stop any of them on its card; pausing or stopping this one ends the approval.</span>
+              <span><span className="text-label-xs text-text-strong-950">Apply to the rest of this request ({run!.requestPeers} more {run!.requestPeers === 1 ? "plan or search" : "plans or searches"}).</span> The other plans this request makes (more cities or searches, including leads found later) start on their own as soon as they are ready, in this run&apos;s reply mode, on these channels, with up to 100 leads each; you will not be asked again. A plan outside that, or with someone already in another running plan, waits for you with the reason. Pause or stop any of them on its card; pausing or stopping this one ends the approval.</span>
             </label>
           )}
           <div className="flex justify-end gap-2">
@@ -944,7 +946,7 @@ function starters(profile: BusinessProfileSummary | undefined): Starter[] {
     known
       ? { icon: RiStore2Line, title: "Update my business details", description: "Change what you sell, prices, area or who signs the messages.", text: "Update my business details: " }
       : { icon: RiStore2Line, title: "Tell me about your business", description: "What you sell, to whom, where, and who signs the messages.", text: "We are … We sell … to … in … Sign the messages as …" },
-    { icon: RiFileList3Line, title: "Use my existing leads or inquiries", description: "People already in your leads, new inquiries, or a CSV or Excel list you attach. I write the messages; you approve.", text: "Use my existing leads: " },
+    { icon: RiFileList3Line, title: "Use my existing leads or inquiries", description: "People already in your leads, new inquiries, or a CSV or Excel list (Attach, below). I write the messages; you approve.", text: "Contact my existing leads: " },
     { icon: RiSearchEyeLine, title: "Find potential customers for me", description: "Optional: I search public listings and websites for businesses that match, then show you a plan to approve.", text: who && where ? `Find ${who} in ${where} and contact them` : "Find … in … and contact them" },
     { icon: RiBarChartBoxLine, title: "How is my outreach doing?", description: "Leads, messages, replies, and what is waiting for you.", text: "How is my outreach doing?", send: true },
   ];
