@@ -1397,12 +1397,15 @@ export default function SculptureHero(props: SculptureHeroProps) {
   const [isTouch, setIsTouch] = React.useState(false)
 
   const layout = React.useRef({ scale: sculptureScale, mobileScale: mobileSculptureScale, x: sculptureX, y: sculptureY })
-  layout.current = {
-    scale: clamp(sculptureScale, 0.3, 3),
-    mobileScale: clamp(mobileSculptureScale, 0.3, 3),
-    x: sculptureX,
-    y: sculptureY,
-  }
+  // The latest props for the engine's callbacks, updated after render (refs are not written during render).
+  React.useLayoutEffect(() => {
+    layout.current = {
+      scale: clamp(sculptureScale, 0.3, 3),
+      mobileScale: clamp(mobileSculptureScale, 0.3, 3),
+      x: sculptureX,
+      y: sculptureY,
+    }
+  })
 
   const [localMode, setMode] = React.useState<"light" | "dark">(theme)
   const mode = onThemeChange ? theme : localMode
@@ -1446,7 +1449,9 @@ export default function SculptureHero(props: SculptureHeroProps) {
     imgBg: imgBgRgb,
   })
   const optsRef = React.useRef(engineOpts)
-  optsRef.current = engineOpts
+  React.useLayoutEffect(() => {
+    optsRef.current = engineOpts
+  })
 
   React.useEffect(() => {
     if (loadFonts) injectFonts()
