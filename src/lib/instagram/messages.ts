@@ -307,7 +307,12 @@ async function chatHasMessages(chatId: string): Promise<boolean> {
 // --- webhook ------------------------------------------------------------------------------
 
 export type WebhookLog = { level: "info" | "warn" | "error"; message: string; time: string }[];
-export type WebhookOutcome = "ok" | "skipped";
+/**
+ * "error" means the delivery is worth processing again (the CRM could not
+ * record a stored message): the ledger row is marked errored and the replay
+ * job (src/jobs/replayInstagramWebhooks.ts) runs it again.
+ */
+export type WebhookOutcome = "ok" | "skipped" | "error";
 
 function logger(entries: WebhookLog) {
   const add = (level: WebhookLog[number]["level"]) => (message: string) => {
@@ -318,9 +323,13 @@ function logger(entries: WebhookLog) {
 
 /**
  * One delivery of /api/webhooks/instagram-message, in the organization's
- * scope. Throws only on a database failure (the caller marks the delivery
- * errored, and Unipile's retry is processed again); everything it cannot or
- * must not use is a logged "skipped".
+ * scope. `receivedAt` is when the delivery reached AgentSDR (its ledger
+ * row's creation, also on a replay): what is history is judged from it.
+ * Throws only on a database failure; that and an "error" outcome (the CRM
+ * could not record the message) leave the delivery errored for the replay.
+ * Everything it cannot or must not use is a logged "skipped". Safe to run
+ * again for the same delivery: a message already stored is not stored
+ * twice, and a fresh one the CRM has not recorded yet is forwarded again.
  */
 export async function ingestInstagramWebhook(payload: unknown, entries: WebhookLog, receivedAt = new Date()): Promise<WebhookOutcome> {
   const log = logger(entries);
@@ -377,10 +386,7 @@ async function ingestMessageEvent(
   log: ReturnType<typeof logger>,
 ): Promise<WebhookOutcome> {
   const stored = await findInstagramMessageByUnipileId(event.unipileMessageId);
-  if (stored) {
-    log.info(`Message ${event.unipileMessageId} already stored (${stored.origin}) — ${event.isSender ? "echo of a stored send" : "retried delivery"}, no-op`);
-    return "skipped";
-  }
+  if (stored) return resumeStoredMessage(account, stored, event, raw, log);
 
   const chat = await upsertInstagramChat({
     accountId: account.id,
@@ -416,31 +422,37 @@ async function ingestMessageEvent(
   let personId = chat.personId;
   // A fresh message from someone not linked yet may be an inquiry. That is
   // settled before the message is stored, so a failure there leaves nothing
-  // behind and Unipile's retry runs it again (inquiry intake de-duplicates).
+  // behind and the replay runs it again (inquiry intake de-duplicates).
   if (origin === "lead" && !historical && !personId) personId = await inquiryPerson(account, chat, event, log);
 
-  const message = await insertInstagramMessage({
-    chatId: chat.id,
-    unipileMessageId: event.unipileMessageId,
-    direction: origin === "lead" ? "inbound" : "outbound",
-    origin,
-    body: event.body,
-    attachments: event.attachments,
-    sentAt: event.sentAt,
-    historical,
-    raw,
+  // The message and the chat's last message / unread count move together,
+  // so a failure leaves neither and the replay stores both.
+  const message = await db.transaction(async (tx) => {
+    const inserted = await insertInstagramMessage({
+      chatId: chat.id,
+      unipileMessageId: event.unipileMessageId,
+      direction: origin === "lead" ? "inbound" : "outbound",
+      origin,
+      body: event.body,
+      attachments: event.attachments,
+      sentAt: event.sentAt,
+      historical,
+      raw,
+    }, tx);
+    if (!inserted) return null;
+    await applyMessageToChat(chat.id, {
+      sentAt: inserted.sentAt,
+      body: inserted.body,
+      attachments: inserted.attachments,
+      direction: inserted.direction,
+      countUnread: origin === "lead" && !historical,
+    }, tx);
+    return inserted;
   });
   if (!message) {
     log.info(`Message ${event.unipileMessageId} stored concurrently — no-op`);
     return "skipped";
   }
-  await applyMessageToChat(chat.id, {
-    sentAt: message.sentAt,
-    body: message.body,
-    attachments: message.attachments,
-    direction: message.direction,
-    countUnread: origin === "lead" && !historical,
-  });
   const who = origin === "lead" ? "inbound message" : "message the owner sent from the Instagram app";
   if (historical) {
     log.info(`Stored ${who} as history (sent ${message.sentAt.toISOString()}, before the account's cutoff or long before it arrived) — not forwarded, never answered (${message.id})`);
@@ -448,29 +460,75 @@ async function ingestMessageEvent(
   }
   log.info(`Stored ${who} (${message.id})`);
   if (!personId) return "ok";
+  return recordOnCrm(account, chat, message, personId, event.counterpartyProviderId, raw, log);
+}
 
+/**
+ * A delivery of a message already stored: a retry of a delivery that failed
+ * part-way, the replay, or the echo of an AgentSDR send. A fresh message
+ * from the person (or typed in the Instagram app) in a chat with a person,
+ * that the CRM has not recorded yet, is forwarded again — the CRM's
+ * idempotency key (`instagram:<id>`) makes a second forward a no-op if the
+ * first one did land. History and AgentSDR's own sends never are.
+ */
+async function resumeStoredMessage(
+  account: InstagramAccountRow,
+  stored: InstagramMessageRow,
+  event: ParsedInstagramMessageEvent,
+  raw: Record<string, unknown>,
+  log: ReturnType<typeof logger>,
+): Promise<WebhookOutcome> {
+  const noOp = () => {
+    log.info(`Message ${event.unipileMessageId} already stored (${stored.origin}) — ${event.isSender ? "echo of a stored send" : "retried delivery"}, no-op`);
+    return "skipped" as const;
+  };
+  if (stored.historical || stored.origin === "agentsdr" || stored.crmConversationMessageId) return noOp();
+  const [chat] = await db
+    .select()
+    .from(instagramChats)
+    .where(and(chatInOrg(), eq(instagramChats.id, stored.chatId), eq(instagramChats.accountId, account.id)))
+    .limit(1);
+  if (!chat?.personId) return noOp();
+  log.info(`Message ${event.unipileMessageId} already stored (${stored.id}) but not on the CRM yet — recording it now`);
+  return recordOnCrm(account, chat, stored, chat.personId, event.counterpartyProviderId, raw, log);
+}
+
+/** A fresh stored message → the CRM (inbound from the person, or outbound typed in the app), linked to its CRM twin. */
+async function recordOnCrm(
+  account: InstagramAccountRow,
+  chat: InstagramChatRow,
+  message: InstagramMessageRow,
+  personId: string,
+  counterpartyProviderId: string,
+  raw: Record<string, unknown>,
+  log: ReturnType<typeof logger>,
+): Promise<WebhookOutcome> {
   const crmInput = {
     personId,
     unipileAccountId: account.unipileAccountId,
     unipileChatId: chat.unipileChatId,
-    providerContactId: chat.providerId ?? event.counterpartyProviderId,
-    unipileMessageId: event.unipileMessageId,
+    providerContactId: chat.providerId ?? counterpartyProviderId,
+    unipileMessageId: message.unipileMessageId!,
     body: message.body,
     sentAt: message.sentAt,
     raw,
   };
-  const result = origin === "lead"
+  const result = message.origin === "lead"
     ? await forwardInstagramInboundToCrm(crmInput)
     : await recordInstagramOutboundInCrm({ ...crmInput, origin: "phone" });
-  if (result.crmConversationMessageId) {
-    await db
-      .update(instagramMessages)
-      .set({ crmConversationMessageId: result.crmConversationMessageId })
-      .where(and(messageInOrg(), eq(instagramMessages.id, message.id)));
-    log.info(`Recorded on the CRM (${result.crmConversationMessageId})`);
-  } else {
-    log.info("Not recorded on the CRM (the bridge returned no message)");
+  if (result.error) {
+    log.error(`Not recorded on the CRM: ${result.error} — the message is kept and the delivery will be processed again`);
+    return "error";
   }
+  if (!result.crmConversationMessageId) {
+    log.info("Not recorded on the CRM (the bridge returned no message)");
+    return "ok";
+  }
+  await db
+    .update(instagramMessages)
+    .set({ crmConversationMessageId: result.crmConversationMessageId })
+    .where(and(messageInOrg(), eq(instagramMessages.id, message.id)));
+  log.info(`Recorded on the CRM (${result.crmConversationMessageId})`);
   return "ok";
 }
 

@@ -346,7 +346,7 @@ integration, [Google Workspace](integrations/google-workspace.mdx).
 
 The scheduled jobs run inside the app when `NODE_ENV=production` (`bun run
 start` or the Docker image), never in a demo deployment: the daily rollover,
-LinkedIn outreach every 30 minutes, LinkedIn webhook replay every 10 minutes
+LinkedIn outreach every 30 minutes, webhook replay (LinkedIn and Instagram) every 10 minutes
 and history pruning. Nothing to schedule and no secrets to set. The daily
 rollover (email send queues, Gmail watch renewal, LinkedIn daily limits) runs
 at the start of each organization's day, set in Settings, Organization,

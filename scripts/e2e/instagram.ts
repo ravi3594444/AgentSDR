@@ -114,6 +114,7 @@ const { setPersonDoNotContact } = await import("@/lib/crm/policies");
 const { crmConversationMessages, crmConversations, crmDrafts, crmJobs, crmRecords, crmSendAttempts } = await import("@/lib/crm/schema");
 const { webhookEvents } = await import("@/lib/linkedin/schema");
 const { replayableWebhookEvents } = await import("@/lib/linkedin/webhooks/inbox");
+const { replayInstagramWebhooks } = await import("@/jobs/replayInstagramWebhooks");
 const { POST: unipileMessageWebhook } = await import("@/app/api/webhooks/unipile-message/route");
 const { POST: unipileAccountWebhook } = await import("@/app/api/webhooks/unipile-account/route");
 
@@ -437,6 +438,57 @@ try {
     "Unipile's retry of the errored delivery is processed again: stored and on the CRM",
     retried.status === 200 && retriedBody.duplicate !== true && retriedLedger?.processingStatus === "ok" && retriedLedger.processingAttempt === 2 && Boolean(m2Row?.crmConversationMessageId),
     JSON.stringify({ status: retriedLedger?.processingStatus, attempt: retriedLedger?.processingAttempt }),
+  );
+
+  // ============================================================ a CRM failure after the message is stored: the replay job
+  // Unipile never retries a delivery answered 200, so this one only reaches
+  // the CRM through the replay. The failure is injected with a trigger on
+  // this local, disposable database, for this one message only.
+  const m4 = `ig-m4-${stamp}`;
+  const m4Key = `instagram:message_received:v1:${A1}:${m4}`;
+  const failCrm = `ig_check_fail_crm_${stamp}`;
+  await db.execute(sql.raw(`create function ${failCrm}() returns trigger language plpgsql as $$ begin if new.idempotency_key = 'instagram:${m4}' then raise exception 'injected CRM failure (instagram check)'; end if; return new; end $$`));
+  await db.execute(sql.raw(`create trigger ${failCrm} before insert on crm_conversation_messages for each row execute function ${failCrm}()`));
+  const beforeCrmFail = await countA();
+  let crmFailHook: Response;
+  console.log("      (the CRM forwarding error printed next is expected)");
+  try {
+    crmFailHook = await messageHook(A, SECRET_A, delivery({ chatId: CHAT1, messageId: m4, text: "And can you write a name on the cake?", lead: LEAD1 }));
+  } finally {
+    await db.execute(sql.raw(`drop trigger if exists ${failCrm} on crm_conversation_messages`));
+    await db.execute(sql.raw(`drop function if exists ${failCrm}()`));
+  }
+  const crmFailLedger = await ledgerRow(m4Key);
+  const [m4Stored] = await messageRows(m4);
+  const afterCrmFail = await countA();
+  check(
+    "a delivery whose CRM forward fails: answered 200, the message kept (unread counted), not on the CRM, and the delivery errored",
+    crmFailHook.status === 200 && crmFailLedger?.processingStatus === "error" && Boolean(m4Stored) && !m4Stored!.crmConversationMessageId
+      && afterCrmFail.messages === beforeCrmFail.messages + 1 && afterCrmFail.unread === beforeCrmFail.unread + 1 && afterCrmFail.crm === beforeCrmFail.crm,
+    JSON.stringify({ status: crmFailLedger?.processingStatus, beforeCrmFail, afterCrmFail }),
+  );
+  check("the LinkedIn replay job never picks it", !(await replayableWebhookEvents(500, new Date(Date.now() + 60 * 60_000), A)).some((row) => row.id === crmFailLedger?.id));
+  const notYet = await replayInstagramWebhooks(100, A);
+  check("the Instagram replay waits for the ledger's backoff", notYet.claimed === 0 && (await ledgerRow(m4Key))?.processingAttempt === 1, JSON.stringify(notYet));
+  await new Promise((resolve) => setTimeout(resolve, 5_300)); // the ledger's first retry delay
+  const replayed = await replayInstagramWebhooks(100, A);
+  const replayedLedger = await ledgerRow(m4Key);
+  const [m4Replayed] = await messageRows(m4);
+  const afterReplay = await countA();
+  check(
+    "the replay forwards it to the CRM exactly once, without storing it again or counting it unread twice",
+    replayed.claimed === 1 && replayed.succeeded === 1 && replayedLedger?.processingStatus === "ok" && replayedLedger.processingAttempt === 2
+      && Boolean(m4Replayed?.crmConversationMessageId) && (await messageRows(m4)).length === 1
+      && afterReplay.crm === afterCrmFail.crm + 1 && afterReplay.jobs === afterCrmFail.jobs + 1 && afterReplay.messages === afterCrmFail.messages && afterReplay.unread === afterCrmFail.unread,
+    JSON.stringify({ replayed, status: replayedLedger?.processingStatus, attempt: replayedLedger?.processingAttempt, afterCrmFail, afterReplay }),
+  );
+  const replayedAgain = await replayInstagramWebhooks(100, A);
+  const redelivered = await messageHook(A, SECRET_A, delivery({ chatId: CHAT1, messageId: m4, text: "And can you write a name on the cake?", lead: LEAD1 }));
+  const redeliveredBody = await redelivered.json() as { duplicate?: boolean };
+  check(
+    "after that, neither the replay nor Unipile's retry adds anything",
+    replayedAgain.claimed === 0 && redeliveredBody.duplicate === true && (await countA()).crm === afterReplay.crm,
+    JSON.stringify(replayedAgain),
   );
 
   // ============================================================ history

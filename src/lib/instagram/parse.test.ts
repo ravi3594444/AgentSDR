@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { INSTAGRAM_FRESH_MESSAGE_WINDOW_MS } from "./contract";
 import {
   decideIngest,
+  deliveryReceivedAt,
   instagramUsername,
   instagramWebhookEventKey,
   isHistoricalMessage,
@@ -194,6 +195,16 @@ describe("isHistoricalMessage", () => {
   test("a fresh message on an account without a cutoff is not history, nor is one from a clock running ahead", () => {
     expect(isHistoricalMessage({ sentAt: new Date(NOW.getTime() - 2000), receivedAt: NOW, historyCutoffAt: null })).toBe(false);
     expect(isHistoricalMessage({ sentAt: new Date(NOW.getTime() + 60_000), receivedAt: NOW, historyCutoffAt: null })).toBe(false);
+  });
+});
+
+describe("deliveryReceivedAt", () => {
+  test("a replay judges history from when the delivery first arrived, never from a time after now", () => {
+    const arrived = new Date(NOW.getTime() - 40 * 60_000);
+    expect(deliveryReceivedAt(arrived, NOW)).toEqual(arrived);
+    expect(deliveryReceivedAt(NOW, NOW)).toEqual(NOW);
+    // A database zone ahead of UTC makes the ledger's createdAt read hours late.
+    expect(deliveryReceivedAt(new Date(NOW.getTime() + 5.5 * 3600_000), NOW)).toEqual(NOW);
   });
 });
 

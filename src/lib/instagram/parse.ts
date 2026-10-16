@@ -232,6 +232,18 @@ export function instagramWebhookEventKey(payload: unknown): string {
   return `instagram:${event}:payload-sha256:${digest}`;
 }
 
+/**
+ * When a recorded delivery first reached AgentSDR, for a retry or a replay:
+ * its ledger row's creation time — but never later than now. WebhookEvent.
+ * createdAt is a `timestamp without time zone` filled by the database's own
+ * clock and zone, so on a server whose zone is ahead of UTC it reads as
+ * later than it was; taking now then keeps a fresh message from being
+ * judged history only because it was replayed.
+ */
+export function deliveryReceivedAt(createdAt: Date, now = new Date()): Date {
+  return createdAt.getTime() <= now.getTime() ? createdAt : now;
+}
+
 // --- history ---------------------------------------------------------------------
 
 /**

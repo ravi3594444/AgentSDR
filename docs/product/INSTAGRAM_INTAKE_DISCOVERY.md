@@ -361,13 +361,21 @@ What arrives and what happens:
 | AgentSDR's own send (echo) | Attached to the reserved row, origin `agentsdr` | No | — | — | — |
 
 Webhook handling: every delivery is written raw to the existing webhook
-ledger first (account type `INSTAGRAM`, so the LinkedIn replay job ignores
-it), keyed so Unipile's retries collapse into one; a message is stored once
-by its Unipile id. The route answers 200 as soon as the delivery is
-recorded and processes it afterwards; only a failure to record answers 500,
-so Unipile retries. The organization comes from the payload's account
-(`gateUnipileWebhook`, `org=` and the secret); with the feature off the
-delivery is recorded and skipped.
+ledger first (account type `INSTAGRAM`), keyed so Unipile's retries
+collapse into one; a message is stored once by its Unipile id. The route
+answers 200 as soon as the delivery is recorded and processes it
+afterwards; only a failure to record answers 500, so Unipile retries.
+Unipile never retries a 200, so a delivery whose processing fails — a
+database error, or the CRM not recording a stored message — is marked
+errored and taken up again by the webhook replay job
+(`src/jobs/replayInstagramWebhooks.ts`, run every 10 minutes with the
+LinkedIn replay; the ledger's backoff, 8 attempts, then `dead`), as is one
+left `processing` past the ledger's 5-minute lease. Processing again is
+safe: a stored message is not stored twice, and a fresh one not yet on the
+CRM is forwarded again under the same idempotency key. The organization
+comes from the payload's account (`gateUnipileWebhook`, `org=` and the
+secret); with the feature off the delivery is acknowledged and nothing of
+it is recorded.
 
 Sending: a reply only, into the chat the person wrote in, from the account
 that chat is on — AgentSDR never starts an Instagram chat (no cold

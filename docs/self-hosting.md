@@ -105,7 +105,7 @@ goes out through the Gmail accounts you connect. Details:
 The scheduled jobs run inside the app in production, so there is no cron
 container and nothing to schedule: the daily rollover (email send queues, Gmail
 watch renewal, LinkedIn daily limits), LinkedIn outreach every 30 minutes,
-LinkedIn webhook replay every 10 minutes, and history pruning. The rollover
+webhook replay (LinkedIn and Instagram) every 10 minutes, and history pruning. The rollover
 happens at the start of each organization's day, set in Settings, Organization,
 Defaults (**Time zone** and **New day starts at**; UTC and 00:00 by default).
 `INTERNAL_SCHEDULER=false` turns the jobs off if you prefer an external cron

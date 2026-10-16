@@ -2,20 +2,15 @@ import { getPlatformCredentials } from "@/lib/platform/credentials";
 import { timingSafeEqual } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { after, type NextRequest, NextResponse } from "next/server";
-import {
-  beginWebhookDelivery,
-  claimWebhookEvent,
-  failWebhookEvent,
-  finishWebhookEvent,
-} from "@/lib/linkedin/webhooks/inbox";
+import { beginWebhookDelivery, claimWebhookEvent } from "@/lib/linkedin/webhooks/inbox";
 import { serializeError } from "@/lib/linkedin/serializeError";
 import { db } from "@/lib/db";
 import { featureEnabled, isMissingTable } from "@/lib/features/flags.server";
 import { instagramAccounts } from "@/lib/instagram/schema";
 import { currentOrganizationId, runInOrganization } from "@/lib/tenancy/scope";
 import { gateUnipileWebhook } from "@/lib/linkedin/organizations.server";
-import { ingestInstagramWebhook, type WebhookLog } from "@/lib/instagram/messages";
-import { instagramWebhookEventKey } from "@/lib/instagram/parse";
+import { deliveryReceivedAt, instagramWebhookEventKey } from "@/lib/instagram/parse";
+import { processInstagramWebhookDelivery } from "@/lib/instagram/webhookProcessing";
 
 /**
  * POST /api/webhooks/instagram-message?secret=… — Unipile's messaging webhook
@@ -28,12 +23,14 @@ import { instagramWebhookEventKey } from "@/lib/instagram/parse";
  * everything after runs in its scope.
  *
  * Every delivery is written raw to the webhook ledger (WebhookEvent, account
- * type INSTAGRAM — the LinkedIn replay job only takes LINKEDIN rows) before
- * anything else, which also collapses Unipile's retries. Unipile retries
- * non-2xx and gives up after 30 s, so the answer is 200 as soon as the
- * delivery is recorded; it is processed after the response (next/server
- * `after`), and the outcome lands on the ledger row. Only a failure to
- * record answers 500, so Unipile retries. With the organization's Instagram
+ * type INSTAGRAM) before anything else, which also collapses Unipile's
+ * retries. Unipile retries non-2xx and gives up after 30 s, so the answer is
+ * 200 as soon as the delivery is recorded; it is processed after the
+ * response (next/server `after`), and the outcome lands on the ledger row.
+ * Only a failure to record answers 500, so Unipile retries. Since Unipile
+ * never retries a 200, a delivery whose processing fails (or is cut off) is
+ * taken up again by the replay job (src/jobs/replayInstagramWebhooks.ts,
+ * run with the LinkedIn replay) with the ledger's backoff and attempt limit. With the organization's Instagram
  * feature off, the delivery is acknowledged and dropped before the ledger:
  * nothing of it — not even the raw payload — is recorded or stored.
  */
@@ -124,6 +121,7 @@ async function handle(req: NextRequest, payload: Record<string, unknown>, secret
   const sender = payload.sender && typeof payload.sender === "object" ? (payload.sender as Record<string, unknown>) : null;
 
   let eventId: string;
+  let receivedAt: Date;
   try {
     const delivery = await beginWebhookDelivery(
       payload,
@@ -139,6 +137,8 @@ async function handle(req: NextRequest, payload: Record<string, unknown>, secret
       { providerEventKey: instagramWebhookEventKey(payload) },
     );
     eventId = delivery.event.id;
+    // When the delivery first arrived — what is history is judged from it, also on a retry.
+    receivedAt = delivery.claimed ? new Date() : deliveryReceivedAt(delivery.event.createdAt);
     if (!delivery.claimed) {
       // A retry. Take it up only when the first attempt failed.
       const reclaimed = delivery.event.processingStatus === "error" ? await claimWebhookEvent(eventId) : null;
@@ -151,17 +151,7 @@ async function handle(req: NextRequest, payload: Record<string, unknown>, secret
 
   // after() may not carry the request's async context, so the scope is
   // opened again from the organization resolved above.
-  after(() => runInOrganization(organizationId, async () => {
-    const entries: WebhookLog = [];
-    try {
-      const status = await ingestInstagramWebhook(payload, entries);
-      await finishWebhookEvent(eventId, status, entries);
-    } catch (error) {
-      entries.push({ level: "error", message: `Unhandled error: ${serializeError(error)}`, time: new Date().toISOString() });
-      console.error("[webhook/instagram-message] processing failed", error);
-      await failWebhookEvent(eventId, entries).catch(() => {});
-    }
-  }));
+  after(() => runInOrganization(organizationId, () => processInstagramWebhookDelivery(eventId, payload, receivedAt)));
 
   return NextResponse.json({ ok: true });
 }

@@ -53,7 +53,7 @@ export const PLATFORM_JOBS: readonly PlatformJob[] = [
     schedule: everyMinutes(10),
     enabled: true,
     endpoint: "/api/linkedin/jobs/replay-webhooks",
-    description: "Retry LinkedIn webhook deliveries that failed",
+    description: "Retry LinkedIn and Instagram webhook deliveries that failed",
   },
   {
     name: "history-prune",
