@@ -38,6 +38,7 @@ import {
   isHistoricalMessage,
   mapUnipileInstagramChat,
   mapUnipileInstagramMessage,
+  messageOpensChat,
   messagePreview,
   parseInstagramWebhook,
   pickPendingSend,
@@ -63,7 +64,8 @@ import { instagramAccounts, instagramChats, instagramMessages, type InstagramCha
  * made an inquiry. Only a fresh message reaches the CRM: a reply from a
  * person the chat is linked to, or — with inquiry intake on for the account
  * and the organization — the first message of a new chat from someone
- * AgentSDR does not know, which becomes an inquiry first.
+ * AgentSDR does not know (new in AgentSDR and in Unipile's copy of the
+ * chat), which becomes an inquiry first.
  *
  * Nothing here runs while the organization's Instagram feature is off.
  */
@@ -532,11 +534,49 @@ async function recordOnCrm(
   return "ok";
 }
 
+/** How many of a chat's latest messages are read from Unipile to tell a new chat from an old one. */
+const INQUIRY_CHAT_CHECK_LIMIT = 10;
+
+/**
+ * Whether Unipile shows the message opening its chat (parse.ts
+ * messageOpensChat). AgentSDR's own table cannot tell: a chat with a
+ * long-standing customer that was never imported is empty there. A failed
+ * read says no, with the reason logged.
+ */
+async function opensChatOnUnipile(
+  account: InstagramAccountRow,
+  chat: InstagramChatRow,
+  event: ParsedInstagramMessageEvent,
+  log: ReturnType<typeof logger>,
+): Promise<boolean> {
+  let items: Record<string, unknown>[];
+  try {
+    ({ items } = await listUnipileInstagramMessages(chat.unipileChatId, null, INQUIRY_CHAT_CHECK_LIMIT));
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    log.warn(`No person for this chat, and Unipile could not show whether it is a new conversation (${reason}) — not an inquiry, kept in the Instagram inbox only`);
+    return false;
+  }
+  const check = messageOpensChat({
+    items,
+    limit: INQUIRY_CHAT_CHECK_LIMIT,
+    unipileMessageId: event.unipileMessageId,
+    sentAt: event.sentAt,
+    historyCutoffAt: account.historyCutoffAt,
+  });
+  if (!check.opens) {
+    log.info(`No person for this chat, but Unipile shows it is not a new conversation (${check.reason}) — kept in the Instagram inbox only`);
+    return false;
+  }
+  return true;
+}
+
 /**
  * A fresh message from someone AgentSDR does not know: an inquiry when the
  * organization has Inquiry intake on, the account takes inquiries, and this
- * is the first message of the chat. Returns the person the chat now belongs
- * to, or null to just keep the message in the inbox.
+ * is the first message of a new chat — in AgentSDR's table and in Unipile's
+ * own copy of the chat. Returns the person the chat now belongs to, or null
+ * to just keep the message in the inbox.
  */
 async function inquiryPerson(
   account: InstagramAccountRow,
@@ -556,6 +596,7 @@ async function inquiryPerson(
     log.info("No person for this chat, but it is not a new conversation — kept in the Instagram inbox only");
     return null;
   }
+  if (!(await opensChatOnUnipile(account, chat, event, log))) return null;
   const inquiry = await recordInstagramInquiry({
     chatId: chat.id,
     unipileAccountId: account.unipileAccountId,

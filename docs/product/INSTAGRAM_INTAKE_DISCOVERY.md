@@ -38,7 +38,7 @@ format is read or written anywhere.
 | Connect with password / session cookie, 2FA checkpoint | Yes | `POST /accounts`, `POST /accounts/checkpoint` | No (hosted sign-in keeps passwords out of AgentSDR) |
 | Account status webhook | Yes | `source: account_status` | Yes (existing `unipile-account` route syncs Instagram too) |
 | List chats | Yes | `GET /chats?account_type=INSTAGRAM&account_id=` | Yes (history import) |
-| List messages of a chat | Yes | `GET /chats/{chat_id}/messages` | Yes (history import) |
+| List messages of a chat | Yes | `GET /chats/{chat_id}/messages` | Yes (history import; the new-chat check before an inquiry) |
 | Send in an existing chat | Yes | `POST /chats/{chat_id}/messages` | Yes (replies) |
 | Start a new chat | Yes (`attendees_ids` = the profile's `provider_messaging_id`) | `POST /chats` | **No** — no cold Instagram outreach in this release |
 | Message webhook | Yes; `account_type: "INSTAGRAM"`; the account's own sends also arrive as `message_received` (tell them apart by `is_sender` or `account_info.user_id` = `sender.attendee_provider_id`) | `source: messaging` | Yes |
@@ -356,6 +356,7 @@ What arrives and what happens:
 | Webhook message sent before the account's history cutoff (first time it was seen connected) or more than 6 h old on arrival | Yes, `historical` | No | No | No | Never |
 | Fresh reply from someone AgentSDR knows (the chat is linked to a person) | Yes | Yes | Inbound on an `instagram` conversation: classified, drafted, in Action required | No | After the owner's review, or by an inquiry run in Automatic |
 | Fresh first message of a new chat from someone unknown, account treats new messages as inquiries | Yes | Yes | Yes (as above) | Yes (`intake:instagram`, one per sender per account) | Only inside a running inquiry run (section 3); otherwise reviewed |
+| The same, but Unipile's copy of the chat has earlier messages (a customer whose chat was never imported), something the account sent, or cannot be read | Yes | Yes | No | No | No (Instagram inbox only) |
 | Fresh first message, inquiries off for the account | Yes | Yes | No | No | No (Instagram inbox only) |
 | The account's own message typed in the Instagram app (echo) | Yes, origin `phone` | No | Recorded as outbound: the person was answered | No | — |
 | AgentSDR's own send (echo) | Attached to the reserved row, origin `agentsdr` | No | — | — | — |

@@ -258,6 +258,46 @@ export function isHistoricalMessage(input: { sentAt: Date; receivedAt: Date; his
   return input.receivedAt.getTime() - input.sentAt.getTime() > INSTAGRAM_FRESH_MESSAGE_WINDOW_MS;
 }
 
+// --- is this a new conversation? -------------------------------------------------
+
+export type ChatOpeningCheck = { opens: true } | { opens: false; reason: string };
+
+/**
+ * Whether a message opens its chat, judged from Unipile's own listing of the
+ * chat's latest messages (GET /chats/{id}/messages, newest first, at most
+ * `limit`): AgentSDR's table only knows what it received or imported, so a
+ * long-standing chat that was never imported looks new there. It does when
+ * Unipile lists the message itself and nothing else but later messages from
+ * the other person — no earlier message (hidden, deleted and chat events
+ * included), nothing the account sent, nothing from before the account's
+ * history cutoff, and fewer than `limit` messages (a full page could hide
+ * older ones). Anything unclear says no: the message then stays in the
+ * Instagram inbox instead of becoming an inquiry an inquiry run may answer.
+ */
+export function messageOpensChat(input: {
+  items: readonly unknown[];
+  limit: number;
+  unipileMessageId: string;
+  sentAt: Date;
+  historyCutoffAt: Date | null;
+}): ChatOpeningCheck {
+  const items = input.items.map(asObject).filter((item): item is Json => Boolean(item));
+  const isThis = (item: Json) => str(item.id) === input.unipileMessageId || str(item.provider_id) === input.unipileMessageId;
+  if (!items.some(isThis)) return { opens: false, reason: "Unipile does not list this message in the chat" };
+  if (items.length >= input.limit) return { opens: false, reason: `the chat has at least ${input.limit} messages` };
+  for (const item of items) {
+    const at = date(item.timestamp);
+    if (input.historyCutoffAt && at && at.getTime() < input.historyCutoffAt.getTime()) {
+      return { opens: false, reason: "the chat has messages from before the account was linked" };
+    }
+    if (isThis(item)) continue;
+    if (!at) return { opens: false, reason: "a message in the chat has no time" };
+    if (at.getTime() <= input.sentAt.getTime()) return { opens: false, reason: "the chat has earlier messages" };
+    if (flag(item.is_sender)) return { opens: false, reason: "the account has already written in the chat" };
+  }
+  return { opens: true };
+}
+
 // --- where a message came from -----------------------------------------------------
 
 /** How long after an AgentSDR send its echo may arrive and still be recognised. */

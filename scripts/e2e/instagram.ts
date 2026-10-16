@@ -70,7 +70,12 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   const messagesMatch = path.match(/^\/chats\/([^/]+)\/messages$/);
   if (method === "GET" && messagesMatch) {
-    return json(200, { object: "MessageList", items: messagesByChat.get(decodeURIComponent(messagesMatch[1]!)) ?? [], cursor: null });
+    const chatId = decodeURIComponent(messagesMatch[1]!);
+    if (chatId.startsWith("ig-chat-unreadable")) return json(503, { status: 503, type: "errors/service_unavailable", title: "Service unavailable" });
+    const limit = Number(url.searchParams.get("limit") ?? 100);
+    // Newest first, as Unipile lists them.
+    const items = [...(messagesByChat.get(chatId) ?? [])].sort((left, right) => String(right.timestamp).localeCompare(String(left.timestamp)));
+    return json(200, { object: "MessageList", items: items.slice(0, limit), cursor: items.length > limit ? "next-page" : null });
   }
   if (method === "POST" && messagesMatch) {
     const chatId = decodeURIComponent(messagesMatch[1]!);
@@ -161,6 +166,8 @@ const LEAD3 = `178414${stamp}13`;
 const LEAD4 = `178414${stamp}14`;
 const LEAD5 = `178414${stamp}15`;
 const LEAD6 = `178414${stamp}16`;
+const LEAD7 = `178414${stamp}17`;
+const LEAD8 = `178414${stamp}18`;
 const A1 = `ig-a1-${stamp}`;
 const A2 = `ig-a2-${stamp}`;
 const A3 = `ig-a3-${stamp}`;
@@ -169,6 +176,8 @@ const CHAT1 = `ig-chat-1-${stamp}`;
 const CHAT_IMP = `ig-chat-imp-${stamp}`;
 const CHAT_U = `ig-chat-u-${stamp}`;
 const CHAT_V = `ig-chat-v-${stamp}`;
+const CHAT_W = `ig-chat-w-${stamp}`;
+const CHAT_UNREADABLE = `ig-chat-unreadable-${stamp}`;
 const CHAT_DNC = `ig-chat-dnc-${stamp}`;
 const CHAT_REFUSE = `ig-chat-refuse-${stamp}`;
 
@@ -525,8 +534,12 @@ try {
   await inA(async () => {
     await setFeature("inquiry_intake", true, userA!.id);
     await accountsLib.setInstagramInquiryIntake(a1Row.id, true);
+    // Unipile's copy of the chat holds this one message: a new conversation.
+    messagesByChat.set(CHAT_V, [{ object: "Message", id: `ig-v1-${stamp}`, chat_id: CHAT_V, text: "Hello! Do you cater weddings?", timestamp: new Date().toISOString(), is_sender: 0, attachments: [] }]);
+    const readsBefore = requests.filter((r) => r.method === "GET" && r.path === `/api/v1/chats/${CHAT_V}/messages`).length;
     const log1: WebhookLog = [];
     await messagesLib.ingestInstagramWebhook(delivery({ chatId: CHAT_V, messageId: `ig-v1-${stamp}`, text: "Hello! Do you cater weddings?", lead: LEAD5, leadName: "New Person", leadUsername: "new.person" }), log1);
+    check("before making an inquiry, the chat is read from Unipile", requests.filter((r) => r.method === "GET" && r.path === `/api/v1/chats/${CHAT_V}/messages`).length === readsBefore + 1);
     const chatV = (await db.select().from(instagramChats).where(and(messagesLib.chatInOrg(), eq(instagramChats.unipileChatId, CHAT_V))))[0];
     const inquiriesV = chatV ? await db.select().from(inquiries).where(eq(inquiries.instagramChatId, chatV.id)) : [];
     check(
@@ -542,6 +555,37 @@ try {
       inquiriesV2.length === 1 && !log2.some((entry) => /New inquiry/.test(entry.message)) && log2.some((entry) => /Recorded on the CRM/.test(entry.message)),
       log2.map((entry) => entry.message).join(" | "),
     );
+
+    // A long-standing customer whose chat was never imported: new to AgentSDR, not to Unipile.
+    const w1 = `ig-w1-${stamp}`;
+    messagesByChat.set(CHAT_W, [
+      { object: "Message", id: w1, chat_id: CHAT_W, text: "Hi again! Same order as last month?", timestamp: new Date().toISOString(), is_sender: 0, attachments: [] },
+      { object: "Message", id: `ig-w0-${stamp}`, chat_id: CHAT_W, text: "Your cake is ready for pickup!", timestamp: new Date(Date.now() - 30 * 86400_000).toISOString(), is_sender: 1, attachments: [] },
+    ]);
+    const beforeW = await countA();
+    const logW: WebhookLog = [];
+    await messagesLib.ingestInstagramWebhook(delivery({ chatId: CHAT_W, messageId: w1, text: "Hi again! Same order as last month?", lead: LEAD7, leadName: "Old Customer", leadUsername: "old.customer" }), logW);
+    const chatW = (await db.select().from(instagramChats).where(and(messagesLib.chatInOrg(), eq(instagramChats.unipileChatId, CHAT_W))))[0];
+    const inquiriesW = chatW ? await db.select().from(inquiries).where(eq(inquiries.instagramChatId, chatW.id)) : [];
+    const afterW = await countA();
+    check(
+      "a first message in a chat that Unipile shows has earlier messages is not an inquiry: kept in the Instagram inbox only",
+      chatW?.personId === null && chatW.unreadCount === 1 && inquiriesW.length === 0 && afterW.messages === beforeW.messages + 1 && afterW.crm === beforeW.crm && afterW.jobs === beforeW.jobs
+        && logW.some((entry) => /Unipile shows it is not a new conversation/.test(entry.message)),
+      logW.map((entry) => entry.message).join(" | "),
+    );
+
+    // Unipile cannot show the chat: fail closed.
+    const logX: WebhookLog = [];
+    await messagesLib.ingestInstagramWebhook(delivery({ chatId: CHAT_UNREADABLE, messageId: `ig-x1-${stamp}`, text: "Hello, are you open today?", lead: LEAD8, leadName: "Someone New", leadUsername: "someone.new" }), logX);
+    const chatX = (await db.select().from(instagramChats).where(and(messagesLib.chatInOrg(), eq(instagramChats.unipileChatId, CHAT_UNREADABLE))))[0];
+    const inquiriesX = chatX ? await db.select().from(inquiries).where(eq(inquiries.instagramChatId, chatX.id)) : [];
+    check(
+      "when Unipile cannot show the chat, no inquiry: the message is kept in the inbox and the reason logged",
+      chatX?.personId === null && chatX.unreadCount === 1 && inquiriesX.length === 0 && logX.some((entry) => /could not show whether it is a new conversation/.test(entry.message)),
+      logX.map((entry) => entry.message).join(" | "),
+    );
+
     await accountsLib.setInstagramInquiryIntake(a1Row.id, false);
     await setFeature("inquiry_intake", false, userA!.id);
   });

@@ -8,6 +8,7 @@ import {
   isHistoricalMessage,
   mapUnipileInstagramChat,
   mapUnipileInstagramMessage,
+  messageOpensChat,
   messagePreview,
   parseInstagramWebhook,
   pickPendingSend,
@@ -205,6 +206,48 @@ describe("deliveryReceivedAt", () => {
     expect(deliveryReceivedAt(NOW, NOW)).toEqual(NOW);
     // A database zone ahead of UTC makes the ledger's createdAt read hours late.
     expect(deliveryReceivedAt(new Date(NOW.getTime() + 5.5 * 3600_000), NOW)).toEqual(NOW);
+  });
+});
+
+describe("messageOpensChat", () => {
+  const sentAt = new Date(NOW.getTime() - 2000);
+  const cutoff = new Date(NOW.getTime() - 3 * 86400_000);
+  const self = { object: "Message", id: "msg_1", text: "Hi, how much is a cake?", timestamp: sentAt.toISOString(), is_sender: 0 };
+  const opens = (items: unknown[], historyCutoffAt: Date | null = cutoff) =>
+    messageOpensChat({ items, limit: 10, unipileMessageId: "msg_1", sentAt, historyCutoffAt });
+
+  test("a chat whose only message is this one opens with it", () => {
+    expect(opens([self])).toEqual({ opens: true });
+    expect(opens([self], null)).toEqual({ opens: true });
+    // Matched by Unipile's provider id too.
+    expect(opens([{ ...self, id: "other-id", provider_id: "msg_1" }])).toEqual({ opens: true });
+  });
+
+  test("later messages from the other person do not make it an old chat", () => {
+    const later = { id: "msg_2", text: "For Saturday", timestamp: new Date(NOW.getTime() - 1000).toISOString(), is_sender: 0 };
+    expect(opens([later, self])).toEqual({ opens: true });
+  });
+
+  test("a long-standing chat AgentSDR never imported is not new", () => {
+    const older = { id: "msg_0", text: "Thanks for the order!", timestamp: new Date(NOW.getTime() - 30 * 86400_000).toISOString(), is_sender: 1 };
+    expect(opens([self, older])).toMatchObject({ opens: false });
+    expect(opens([self, older], null)).toEqual({ opens: false, reason: "the chat has earlier messages" });
+    expect(opens([self, { ...older, timestamp: new Date(NOW.getTime() - 60_000).toISOString() }])).toEqual({ opens: false, reason: "the chat has earlier messages" });
+    // Even hidden, deleted or event items count as an earlier conversation.
+    expect(opens([self, { id: "e", is_event: 1, timestamp: new Date(NOW.getTime() - 60_000).toISOString() }])).toMatchObject({ opens: false });
+  });
+
+  test("messages from before the history cutoff, the account's own messages, undated ones: not new", () => {
+    expect(opens([{ ...self, timestamp: new Date(cutoff.getTime() - 1).toISOString() }])).toEqual({ opens: false, reason: "the chat has messages from before the account was linked" });
+    expect(opens([self, { id: "msg_r", text: "Hello!", timestamp: NOW.toISOString(), is_sender: 1 }])).toEqual({ opens: false, reason: "the account has already written in the chat" });
+    expect(opens([self, { id: "msg_x", text: "?" }])).toEqual({ opens: false, reason: "a message in the chat has no time" });
+  });
+
+  test("fails closed: the message missing from Unipile's listing, an empty listing, or a full page", () => {
+    expect(opens([])).toEqual({ opens: false, reason: "Unipile does not list this message in the chat" });
+    expect(opens([{ ...self, id: "someone-else" }])).toMatchObject({ opens: false });
+    const page = Array.from({ length: 10 }, (_, i) => (i === 9 ? self : { id: `later_${i}`, timestamp: new Date(NOW.getTime() - 1000 + i).toISOString(), is_sender: 0 }));
+    expect(opens(page)).toEqual({ opens: false, reason: "the chat has at least 10 messages" });
   });
 });
 
