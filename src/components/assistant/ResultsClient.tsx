@@ -15,6 +15,7 @@ import {
   RiWhatsappLine,
 } from "@remixicon/react";
 
+import { EmptyState } from "@/components/page/EmptyState";
 import { KpiCell, KpiStrip } from "@/components/analytics/kit/KpiStrip";
 import NeedsYouList, { type NeedsYouPayload } from "@/components/assistant/NeedsYouList";
 import { figure, money, PERIOD_KINDS, type PeriodKind } from "@/lib/assistant/results";
@@ -78,15 +79,15 @@ export default function ResultsClient({ initial }: { initial: ResultsPayload }) 
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-4 py-5 sm:px-6">
+    <div aria-busy={loading} className="mx-auto flex w-full max-w-6xl flex-col gap-5 px-4 py-6 sm:px-6">
       <header className="flex flex-wrap items-center gap-3">
         <Link href="/assistant" className="inline-flex items-center gap-1 text-label-xs text-text-sub-600 hover:text-text-strong-950"><RiArrowLeftLine className="size-4" /> Assistant</Link>
-        <h1 className="text-title-h5 text-text-strong-950">Results</h1>
+        <h1 className="text-[26px] font-semibold tracking-[-0.035em] text-text-strong-950">Results</h1>
         <p className="text-paragraph-xs text-text-soft-400">{r.period.label} · {r.period.timeZone}</p>
-        <div role="tablist" aria-label="Period" className="ml-auto flex flex-wrap gap-1 rounded-lg bg-bg-weak-50 p-1">
+        <div role="group" aria-label="Filter results by period" className="ml-auto flex flex-wrap gap-1 rounded-lg bg-bg-weak-50 p-1">
           {PERIOD_KINDS.map((kind) => (
-            <button key={kind} type="button" role="tab" aria-selected={r.period.kind === kind} disabled={loading} onClick={() => void load(kind)}
-              className={cn("rounded-md px-2.5 py-1 text-label-xs", r.period.kind === kind ? "bg-bg-white-0 text-text-strong-950 shadow-regular-xs" : "text-text-sub-600 hover:text-text-strong-950")}>
+            <button key={kind} type="button" aria-pressed={r.period.kind === kind} disabled={loading} onClick={() => void load(kind)}
+              className={cn("rounded-md px-3 py-2 text-label-xs transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-base disabled:opacity-60", r.period.kind === kind ? "bg-bg-strong-950 text-text-white-0" : "text-text-sub-600 hover:text-text-strong-950")}>
               {PERIOD_LABEL[kind]}
             </button>
           ))}
@@ -164,7 +165,7 @@ export default function ResultsClient({ initial }: { initial: ResultsPayload }) 
               </tbody>
             </table>
           </div>
-        ) : <p className="text-paragraph-xs text-text-soft-400">No outreach has started yet.</p>}
+        ) : <EmptyState compact icon={RiMailSendLine} title="No outreach runs in this period" description="Try another date range, or open the assistant to plan your next outreach." action={<Link href="/assistant" className="rounded-lg bg-bg-strong-950 px-4 py-2 text-label-xs text-text-white-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-base">Open assistant</Link>} />}
       </Section>
 
       <Section title="Daily summaries">

@@ -3,8 +3,8 @@ import { RiArrowRightLine } from "@remixicon/react";
 import { cn } from "@/utils/cn";
 
 /**
- * The house card ("Frame"): a grey outer frame that carries the header, and a
- * white inner panel that carries the content. Compose:
+ * The house card ("Frame"): a quiet border, a distinct header, and a
+ * single surface for the content. Compose:
  *
  *   <Frame>
  *     <FrameHeader title description actions />
@@ -16,7 +16,7 @@ import { cn } from "@/utils/cn";
  */
 export function Frame({ className, children, ...rest }: React.HTMLAttributes<HTMLElement>) {
   return (
-    <section className={cn("flex flex-col rounded-2xl bg-bg-weak-50 p-1 ring-1 ring-inset ring-stroke-soft-200 dark:bg-bg-weak-25", className)} {...rest}>
+    <section className={cn("flex min-w-0 flex-col rounded-xl border border-stroke-soft-200 bg-bg-white-0", className)} {...rest}>
       {children}
     </section>
   );
@@ -30,7 +30,7 @@ export function Frame({ className, children, ...rest }: React.HTMLAttributes<HTM
  */
 export function FrameHeader({ title, description, actions }: { title: React.ReactNode; description?: React.ReactNode; actions?: React.ReactNode }) {
   return (
-    <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 px-4 pb-3 pt-3">
+    <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 border-b border-stroke-soft-200 px-4 py-4 sm:px-5">
       <div className="min-w-0">
         <h2 className="text-label-sm text-text-strong-950">{title}</h2>
         {description && <p className="mt-0.5 text-paragraph-xs text-text-sub-600">{description}</p>}
@@ -42,7 +42,7 @@ export function FrameHeader({ title, description, actions }: { title: React.Reac
 
 export function FramePanel({ className, children, ...rest }: React.HTMLAttributes<HTMLDivElement>) {
   return (
-    <div className={cn("flex-1 rounded-xl bg-bg-white-0 p-4 shadow-regular-xs ring-1 ring-inset ring-stroke-soft-200 sm:p-5", className)} {...rest}>
+    <div className={cn("min-w-0 flex-1 rounded-xl bg-bg-white-0 p-4 sm:p-5", className)} {...rest}>
       {children}
     </div>
   );
@@ -50,7 +50,7 @@ export function FramePanel({ className, children, ...rest }: React.HTMLAttribute
 
 /** A quiet note under the panel, inside the frame. */
 export function FrameFooter({ children }: { children: React.ReactNode }) {
-  return <p className="px-4 pb-2 pt-2.5 text-paragraph-xs text-text-sub-600">{children}</p>;
+  return <p className="border-t border-stroke-soft-200 px-4 py-3 text-paragraph-xs text-text-sub-600">{children}</p>;
 }
 
 /** Full-width subtle link under the panel: "View all campaigns →". */

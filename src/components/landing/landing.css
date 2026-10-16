@@ -180,3 +180,7 @@
 /* Match the supplied flat image backgrounds to white / true black if WebGL is unavailable. */
 .outreach-site .lp-hero[data-mode="light"] .sh-fallback { filter: grayscale(1) brightness(1.12); }
 .outreach-site .lp-hero[data-mode="dark"] .sh-fallback { filter: grayscale(1) contrast(1.16); }
+
+/* The stored theme is applied before hydration by the app's theme script. */
+.dark .outreach-site .lp-hero { --sh-bg: #000 !important; --sh-fg: #fff !important; --sh-acc: #fff !important; }
+.dark .outreach-site .lp-hero[data-mode="light"] .sh-fallback { filter: grayscale(1) invert(1) contrast(1.2); }

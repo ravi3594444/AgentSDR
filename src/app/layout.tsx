@@ -13,6 +13,7 @@ import { BRAND } from "@/lib/brand";
 const fontSerif = Instrument_Serif({
   subsets: ["latin"],
   weight: "400",
+  style: ["normal", "italic"],
   variable: "--font-instrument-serif-next",
 });
 

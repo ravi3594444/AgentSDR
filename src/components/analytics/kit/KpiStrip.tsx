@@ -63,11 +63,11 @@ export function KpiCell({
   onSelect?: () => void;
 }) {
   return (
-    <div className={cn("relative flex flex-col gap-3 bg-bg-white-0 p-4 sm:p-5", selected && "bg-bg-weak-50")}>
+    <div className={cn("relative flex min-w-0 flex-col gap-3 bg-bg-white-0 p-4 transition-colors sm:p-5", selected && "bg-bg-weak-50 shadow-[inset_0_2px_0_var(--color-primary-base)]")}>
       {onSelect && <button type="button" onClick={onSelect} aria-pressed={Boolean(selected)} aria-label={`Show ${label}`} className="absolute inset-0 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-base" />}
       <div className="flex items-center justify-between gap-2">
         {Icon ? (
-          <span className="flex size-8 items-center justify-center rounded-lg bg-bg-weak-50 ring-1 ring-inset ring-stroke-soft-200">
+          <span className="flex size-8 items-center justify-center rounded-lg border border-stroke-soft-200">
             <Icon className="size-4 text-text-sub-600" />
           </span>
         ) : (
@@ -95,7 +95,7 @@ export function KpiCell({
           )}
         </div>
         <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
-          <p className="text-title-h4 font-semibold leading-none tracking-tight text-text-strong-950">{value}</p>
+          <p className="text-[32px] font-medium leading-none tracking-[-0.045em] tabular-nums text-text-strong-950">{value}</p>
           {metric && <DeltaPill metric={metric} upIsGood={upIsGood} />}
         </div>
       </div>
