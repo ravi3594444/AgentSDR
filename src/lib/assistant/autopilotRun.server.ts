@@ -464,7 +464,7 @@ export async function requeueRunAutopilot(runId: string): Promise<number> {
       payload: { revision: draft.revision, readyAt: new Date().toISOString() },
       requeueCompleted: true,
       maxAttempts: 3,
-      runAfter: new Date(Date.now() + 60_000),
+      // Resuming uses the queue's immediate default, just like a new draft.
     }));
   }
   return wanted.length;

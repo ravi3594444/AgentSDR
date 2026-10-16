@@ -37,7 +37,7 @@ export async function POST(request: NextRequest, { params }: Ctx) {
             threadId: run.threadId,
             role: "event",
             content: `${ctx.userName || "The owner"} approved the outreach plan “${run.name}” in ${autopilot ? "Automatic" : "Review"} mode. ${autopilot
-              ? `Ordinary replies from these leads are answered from your saved information, ${AUTOPILOT_LIMITS.delayMinutes} minutes after they arrive, at most ${AUTOPILOT_LIMITS.perConversation} per conversation and ${AUTOPILOT_LIMITS.perDay} in 24 hours; anything else comes to you as a decision.`
+              ? `Ordinary replies from these leads are answered from your saved information as soon as the answer is written and checked, at most ${AUTOPILOT_LIMITS.perConversation} per conversation and ${AUTOPILOT_LIMITS.perDay} in 24 hours; anything else comes to you as a decision.`
               : "Every reply waits for you in Action required."} Writing each lead's opening line, then launching.`,
           });
         }

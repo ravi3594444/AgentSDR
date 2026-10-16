@@ -293,8 +293,8 @@ each does:
 
 - **Automatic replies** (owners and admins): a reply from one of this run's
   leads is answered automatically when your saved information backs the
-  answer. Each automatic reply waits **10 minutes** after its draft is
-  ready; at most **10 per conversation** (then a person takes over) and
+  answer. Each automatic reply is checked and sent **as soon as its draft is
+  ready**, with no artificial wait; at most **10 per conversation** (then a person takes over) and
   **40 per organization in any 24 hours**; only from a production server.
 - **Review**: every reply waits for you in Action required.
 
@@ -585,7 +585,7 @@ from search results):
    them. Check the plan card (samples, limits, reply mode) and press Start
    in **Automatic** mode.
 3. From a test recipient, reply with a question your uploaded price list
-   answers. About 10 minutes after the draft is ready, the answer must
+   answers. As soon as the draft is ready and checked, the answer must
    arrive, and the remaining follow-ups for that recipient must not send.
 4. Reply with a question your information does not answer: a decision
    card appears in the chat; answer it; the rewritten reply arrives.

@@ -3,7 +3,6 @@ import "server-only";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { outreachRunLeads, outreachRuns } from "@/lib/assistant/schema";
 import { inOrg } from "@/lib/tenancy/scope";
-import { AUTOPILOT_LIMITS } from "./autopilot";
 import { enqueueCrmJobInTransaction, type CrmJob } from "./queue";
 import type { CrmExecutor, CrmTransaction } from "./repository";
 
@@ -47,7 +46,7 @@ export async function enqueueAutopilotInTransaction(tx: CrmTransaction, input: {
     // A regenerated draft keeps its id: run the job again for the new revision.
     requeueCompleted: true,
     maxAttempts: 3,
-    runAfter: new Date(Date.now() + AUTOPILOT_LIMITS.delayMinutes * 60_000),
+    // The queue defaults to now: check the answer as soon as it is ready.
   });
 }
 

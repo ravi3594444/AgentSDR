@@ -134,7 +134,7 @@ async function main() {
           else if (run[0].status !== "running") problems.push(`${org.name}: the run "${short(run[0].name, 40)}" is ${run[0].status}; automatic replies only go out while it runs.`);
           else if (draft.status === "failed") problems.push(`${org.name}: the answer could not be written (${short(draft.error, 160)}). Check Settings → AI provider.`);
           else if (auto?.status === "held") problems.push(`${org.name}: the automatic reply was held: ${short(auto.reason, 200)}${String(auto.reason ?? "").startsWith("handover") ? "" : " (see Needs you on Results)"}.`);
-          else if (!auto && job && ["queued", "running"].includes(String(job.status))) problems.push(`${org.name}: the answer is queued and goes out at ${when(job.run_after)} (the 10-minute wait). Nothing is broken; check again after that time.`);
+          else if (!auto && job && ["queued", "running"].includes(String(job.status))) problems.push(`${org.name}: the answer is ${job.status}, due ${when(job.run_after)}. There is no artificial reply delay in this version; if it stays here, check the CRM worker and Settings → AI provider.`);
         } else if (classification?.status === "proposed") {
           problems.push(`${org.name}: the AI was unsure what "${short(reply.body_text, 40)}" means, so the reply was left for a person to confirm and no answer was written. Fixed in the update after 2c7fe6d (the assistant now answers its own leads anyway): update, then reply again.`);
         } else if (!classification) {

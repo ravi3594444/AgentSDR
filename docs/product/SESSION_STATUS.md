@@ -260,6 +260,21 @@ rejected or failed classifications, and holds out-of-office replies.
 Checks: unit 1027/1027; `assistant.ts` 71/71 (new: an unsure "Hey" gets a
 draft and is answered).
 
+### Follow-up: automatic replies without an artificial wait (2026-10-16)
+
+Removed the fixed ten-minute wait before checking and sending a ready
+automatic reply. New drafts and drafts requeued after Resume are immediately
+eligible for the CRM worker; AI processing and provider delivery still take
+time. The plan card and confirmation now describe that behavior. Existing
+jobs retain their stored due time until they run or are requeued. Open
+handoffs in Needs you still wait for the owner; removing the timer does not
+settle them.
+
+Checks: full TypeScript check passed; exercised the real enqueue function
+with a transaction stand-in and confirmed WhatsApp, email and LinkedIn jobs
+are due immediately. Review, pause, opt-out, newer-message and owner-handoff
+holds still pass their checks. No live messages were sent.
+
 ### Live services vs stand-ins
 
 - **Live, real services:** gosom/google-maps-scraper v1.18.1 against Google
@@ -309,7 +324,7 @@ draft and is answered).
 - Maps coverage: at most about 180 businesses per search, in Google's
   order; against Google's Terms of Service; may be blocked.
 - The reply check is English-pattern based for amounts, times and days.
-- The automatic-reply limits (10 minutes, 3 per conversation, 40 per 24
+- The automatic-reply limits (10 per conversation, 40 per 24
   hours) are constants (`AUTOPILOT_LIMITS`), deliberately not yet Sending
   rules while the system is being verified.
 
