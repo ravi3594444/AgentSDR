@@ -132,6 +132,8 @@ const OWNED_TABLES = [
   "inquiries",
   "organization_features",
   "lead_audience_member_insights",
+  "apify_settings",
+  "apify_runs",
 ];
 
 export default {

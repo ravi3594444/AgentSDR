@@ -33,23 +33,36 @@ function webDiscoveryMessage(job: AssistantJob): string {
   return `The web search for “${String(result.phrase ?? "")}” finished: ${found} found on business websites, directories and public pages, ${count("eligible")} can be contacted (${count("withEmail")} by email, ${count("withPhoneOnly")} by phone only)${extra.length ? `; ${extra.join(", ")}` : ""}.${result.note ? ` ${String(result.note)}` : ""}${cost}`;
 }
 
+/** A finished Instagram prospect search (Apify): who was found, and who can actually be contacted. */
+function instagramProspectMessage(job: AssistantJob): string {
+  if (job.status === "failed") return `The Instagram prospect search failed: ${job.error ?? "unknown error"}`;
+  const result = (job.result ?? {}) as Record<string, unknown>;
+  const found = Number(result.found ?? 0);
+  const providerNote = typeof result.providerNote === "string" && result.providerNote ? ` ${result.providerNote}` : "";
+  if (!found) return `${String(result.note ?? "The Instagram prospect search found no accounts.")}${providerNote}`;
+  const count = (key: string) => Number(result[key] ?? 0);
+  return `The Instagram prospect search for ${String(result.phrase ?? "")} (through Apify) finished: ${found} accounts found — potential matches, not interested customers. ${count("eligible")} can be contacted through an email or phone they publish (${count("withEmail")} by email, ${count("withPhoneOnly")} by phone only); ${count("excluded")} have no supported channel (AgentSDR cannot start Instagram chats) or were left out with the reason recorded${count("duplicates") ? `; ${count("duplicates")} duplicates skipped` : ""}.${providerNote}`;
+}
+
 function discoveryMessage(job: AssistantJob): string {
   if (job.kind === "web_discovery") return webDiscoveryMessage(job);
+  if (job.kind === "apify_instagram") return instagramProspectMessage(job);
   if (job.status === "failed") return `The lead search failed: ${job.error ?? "unknown error"}`;
   const result = (job.result ?? {}) as Record<string, unknown>;
   const found = Number(result.found ?? 0);
-  if (!found) return String(result.note ?? "The lead search found no businesses.");
+  const providerNote = typeof result.providerNote === "string" && result.providerNote ? ` ${result.providerNote}` : "";
+  if (!found) return `${String(result.note ?? "The lead search found no businesses.")}${result.note ? "" : providerNote}`;
   const eligible = Number(result.eligible ?? 0);
   const parts = [
     job.kind === "linkedin_search"
       ? `The LinkedIn search for “${String(result.phrase ?? "")}” finished: ${found} profiles found, ${eligible} can be contacted on LinkedIn`
-      : `The lead search for “${String(result.phrase ?? "")}” finished: ${found} businesses found on Google Maps, ${eligible} can be contacted`,
+      : `The lead search for “${String(result.phrase ?? "")}” finished: ${found} businesses found on Google Maps${result.provider === "apify" ? " (through Apify)" : ""}, ${eligible} can be contacted`,
     job.kind === "linkedin_search" ? "" : `(${Number(result.withEmail ?? 0)} by email, ${Number(result.withPhoneOnly ?? 0)} by phone only)`,
   ];
   const extra: string[] = [];
   if (Number(result.excluded ?? 0)) extra.push(`${Number(result.excluded)} left out with the reason recorded`);
   if (Number(result.duplicates ?? 0)) extra.push(`${Number(result.duplicates)} duplicates skipped`);
-  return `${parts.filter(Boolean).join(" ")}${extra.length ? `; ${extra.join(", ")}` : ""}.`;
+  return `${parts.filter(Boolean).join(" ")}${extra.length ? `; ${extra.join(", ")}` : ""}.${providerNote}`;
 }
 
 function outreachMessage(job: AssistantJob): string {
@@ -70,9 +83,11 @@ export function registerAssistantJobs(): void {
   registerAssistantJobHandler("outreach_start", runOutreachStartStep);
   registerAssistantJobHandler("linkedin_search", runLinkedinSearchStep);
   registerAssistantJobHandler("web_discovery", runWebDiscoveryStep);
+  // Instagram prospects through Apify run on the discovery job's stages (discovery.server.ts).
+  registerAssistantJobHandler("apify_instagram", runDiscoveryStep);
   onAssistantJobFinished(async (job) => {
     if (!job.threadId) return;
-    const search = job.kind === "discovery" || job.kind === "linkedin_search" || job.kind === "web_discovery";
+    const search = job.kind === "discovery" || job.kind === "linkedin_search" || job.kind === "web_discovery" || job.kind === "apify_instagram";
     const content = search ? discoveryMessage(job) : outreachMessage(job);
     await addMessage({ threadId: job.threadId, role: "event", content });
     if (!search || job.status !== "succeeded" || !job.audienceId || Number((job.result ?? {}).eligible ?? 0) <= 0) return;

@@ -82,7 +82,8 @@ Instagram hashtag or keyword discovery needs a provider Unipile is not:
 
 AgentSDR ships the Meta adapter as **optional, not configured, and never
 called during development**; no account was created and no paid call was
-made.
+made. Apify is now integrated as an optional, paid provider (section 7);
+it was only ever called through a stand-in.
 
 ## 2. Required versus optional integrations
 
@@ -94,6 +95,7 @@ made.
 | A web-searching AI model (OpenRouter, or AI/ML API research model) | Website and directory discovery | Optional: without it, discovery from a description says it is unavailable; Google Maps and LinkedIn search work as before |
 | The owner's website-form tool (Zapier, Make, Webflow, WordPress plugin, a developer…) | Website-form inquiries | Optional; a one-time setup in that tool (AgentSDR cannot connect a site's forms by itself) |
 | Meta Instagram Graph API (Business account + App Review) | Instagram hashtag discovery | Optional adapter, off |
+| Apify account + API token, approved Actors, a monthly budget | Paid Google Maps listings and Instagram hashtag/profile discovery (section 7) | Optional, off; without it every search works as before |
 
 ## 3. What was built: the assistant's two starting points
 
@@ -140,7 +142,8 @@ made. `list_inquiries` summarizes the last 30 days.
 ### "Find potential customers for me" (optional)
 
 The existing Google Maps search and LinkedIn search, plus website and
-directory discovery (section 4) when that feature is on.
+directory discovery (section 4) when that feature is on, and Apify's
+approved Actors (section 7) when that is set up.
 
 ### Qualification before outreach
 
@@ -455,7 +458,81 @@ Not built: Instagram unread count in the sidebar badge, group chats (skipped
 on import), attachments sending, comment replies, and any cold Instagram
 outreach.
 
-## 7. Validation: simulated versus live
+## 7. Apify (optional, paid discovery provider)
+
+Feature switch: **Apify discovery (paid)** (Settings → Organization →
+Optional features), then the **Apify** card on the same page: an API token
+(checked with `GET /v2/users/me` before it is saved, stored encrypted, never
+shown again), the **approved Actors**, a **monthly budget** (default $10),
+the **most one run may spend** (default $2) and the **most results per
+run** (default 100). Code: `src/lib/apify/`, `src/services/apify.ts`,
+`src/lib/discovery/discovery.server.ts`; tables `apify_settings` and
+`apify_runs` (same migration).
+
+| Actor (only these can ever run, and only when approved) | Used for |
+| --- | --- |
+| `compass~crawler-google-places` (Google Maps Scraper) | `find_leads`: businesses of a kind in a place, with listed phone and website. Emails come from reading each business's own website (not the Actor's paid contact add-on). |
+| `apify~instagram-hashtag-scraper` | `find_instagram_prospects`: public posts under hashtags made from the customer type and place (plus any the owner names). |
+| `apify~instagram-profile-scraper` | The found accounts' public profiles: bio, category, the website and any email or phone they publish. |
+
+**When Apify is used.** Only when the feature is on, a token is saved, the
+Actor is approved, fewer than 2 runs are open, and allowance is left: this
+month's spend (Apify's reported cost of finished runs, plus the caps of open
+runs) below the owner's budget, and the Apify account's own monthly limit
+(`GET /v2/users/me/limits`) not reached. The allowance is checked live
+before each run; a run is started with hard limits — `maxTotalChargeUsd`
+(the per-run cap, never more than what is left of either allowance),
+`maxItems`, a 10-minute timeout and 1 GB memory. **AgentSDR never tops up,
+upgrades or raises any Apify limit** (it never calls `PUT
+/v2/users/me/limits` or any billing endpoint).
+
+**Otherwise — not set up, off, over budget, out of credit, refused at start,
+or a run that found nothing — the search continues without Apify**, in the
+same job, with the same customer type, place and owner's request:
+Google Maps through the self-hosted scraper; with no scraper, website and
+directory search (when on); with neither, the assistant says nothing could
+be searched and why. The result always says which provider searched and
+what the fallback covers less well ("website search usually finds fewer
+than a Maps search"; "hashtags do not filter by place").
+
+**One Start still covers the whole request.** Apify jobs and fallback jobs
+keep the owner's request id (`contactAfter.requestId`, also stored on every
+`apify_runs` row), so a plan prepared from them inherits that request's
+approval exactly like the plans of other searches (section 3); the
+Automatic/Review choice is not asked again.
+
+**Runs are durable and partial results are kept.** Every run is recorded in
+`apify_runs` before Apify is called (its cap counted as reserved), then with
+Apify's run id and dataset id; the job polls the run by that record, so a
+restart of the app resumes it. When a run ends early — its spending cap, a
+timeout, a failure, an abort — the items it already wrote are read (up to
+its item cap) and used, the row is marked `partial`, and the result says
+so. A run's cost is what Apify reports (`usageTotalUsd`), or its cap when
+unknown, so the budget never under-counts.
+
+**Deduplication.** Dataset items are deduplicated by Google place id (or by
+Instagram username); businesses that share an email or phone become one
+contact; existing People are matched by email, then phone, before anyone is
+created — the same saving as the scraper's results.
+
+**Discovering an Instagram prospect is not having a way to contact them.**
+AgentSDR starts no Instagram chats. An Instagram account found through
+Apify can be contacted only through an email or phone it publishes (on its
+profile, or on the website it lists), each kept with the page it came from;
+every other account is listed as *excluded* with the reason "found on
+Instagram but no supported channel to contact them … open the profile to
+message them yourself". A matching post is a potential match, never
+interest; its caption is a need only when its own words ask for something;
+an account whose post or profile does not name the place has its location
+*Unknown*.
+
+Live verification is **outstanding**: the Apify integration has only run
+against a stand-in of Apify's API. Field names of the three Actors' outputs
+are read defensively from their documentation (a missing field stays
+empty); Apify's exact error type for exhausted credit is matched by status
+402 and the words of its message.
+
+## 8. Validation: simulated versus live
 
 Everything below ran in this sandbox against a disposable local PostgreSQL
 16 and **stand-ins** for Unipile and the search providers. Nothing was

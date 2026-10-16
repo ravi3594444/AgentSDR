@@ -56,7 +56,7 @@ type Message = {
 
 type Job = {
   id: string;
-  kind: "discovery" | "outreach_start" | "linkedin_search" | "web_discovery";
+  kind: "discovery" | "outreach_start" | "linkedin_search" | "web_discovery" | "apify_instagram";
   status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
   stage: string;
   progress: Record<string, unknown>;
@@ -131,6 +131,7 @@ const TOOL_TITLE: Record<string, string> = {
   add_contacts: "Added contacts",
   read_webpage: "Read a web page",
   find_customers_on_web: "Web search",
+  find_instagram_prospects: "Instagram prospects",
   use_existing_leads: "Lead list from your leads",
   list_inquiries: "Inquiries",
   prepare_inquiry_replies: "Answering new inquiries",
@@ -301,28 +302,33 @@ function ProspectsList({ audienceId }: { audienceId: string }) {
 function DiscoveryCard({ message, job }: { message: Message; job: Job | undefined }) {
   const data = message.toolResult?.data as { phrase?: string; keywords?: string } | undefined;
   const linkedin = message.tool === "find_linkedin_leads";
-  const web = message.tool === "find_customers_on_web";
+  const instagram = message.tool === "find_instagram_prospects" && job?.kind === "apify_instagram";
+  // A search handed to website search (no Google Maps or Apify available) shows as one.
+  const web = message.tool === "find_customers_on_web" || job?.kind === "web_discovery";
+  const viaApify = (job?.progress as Record<string, unknown> | undefined)?.provider === "Apify" || (job?.result as Record<string, unknown> | null | undefined)?.provider === "apify";
   if (message.status !== "ok" || !job) return <Card title={TOOL_TITLE[message.tool ?? "find_leads"] ?? "Lead search"} status={message.status}><p>{message.toolResult?.display ?? message.content}</p></Card>;
   const progress = job.progress as Record<string, number | string>;
   const stageText: Record<string, string> = {
     queued: progress.note ? `${String(progress.note)}…` : "Starting the search…",
-    searching: linkedin ? `Searching LinkedIn (${progress.found ?? 0} profiles so far)…` : web ? "Searching the web for matching businesses and directories…" : `Searching Google Maps${progress.searches ? ` in ${progress.searches} area${Number(progress.searches) === 1 ? "" : "s"}` : ""} (usually 1–10 minutes)…`,
+    searching: linkedin ? `Searching LinkedIn (${progress.found ?? 0} profiles so far)…` : web ? "Searching the web for matching businesses and directories…" : instagram ? `Searching Instagram through Apify (${String(progress.actor ?? "")})…` : `Searching Google Maps${viaApify ? " through Apify" : ""}${progress.searches ? ` in ${progress.searches} area${Number(progress.searches) === 1 ? "" : "s"}` : ""} (usually 1–10 minutes)…`,
     reading: `Reading the pages the search found for published contact details (${progress.read ?? progress.pagesRead ?? 0} of ${progress.toRead ?? progress.candidates ?? "?"})…`,
     enriching: `Reading business websites for contact details (${progress.websitesChecked ?? 0} of ${progress.websitesToCheck ?? "?"})…`,
     saving: `Checking and saving contacts (${progress.saved ?? 0} of ${progress.found ?? "?"})…`,
   };
   const result = job.result as Record<string, number | string | null> | null;
   return (
-    <Card title={`${linkedin ? "LinkedIn search" : web ? "Web search" : "Lead search"}: ${data?.phrase ?? data?.keywords ?? (data as { customers?: string } | undefined)?.customers ?? ""}`} status={job.status}>
+    <Card title={`${linkedin ? "LinkedIn search" : web ? "Web search" : instagram ? "Instagram prospects" : viaApify ? "Lead search (Apify)" : "Lead search"}: ${data?.phrase ?? data?.keywords ?? (data as { customers?: string } | undefined)?.customers ?? ""}`} status={job.status}>
       {job.status === "queued" || job.status === "running" ? (
         <p role="status">{stageText[job.stage] ?? "Working…"}{typeof progress.found === "number" && job.stage !== "searching" ? ` ${progress.found} businesses found.` : ""}</p>
       ) : job.status === "succeeded" && result ? (
         <p>
-          {result.found ?? 0} {linkedin ? "profiles" : "businesses"} found · <span className="text-label-sm text-text-strong-950">{result.eligible ?? 0} contactable</span>{linkedin ? " on LinkedIn" : ` (${result.withEmail ?? 0} by email, ${result.withPhoneOnly ?? 0} by phone only)`}
+          {result.found ?? 0} {linkedin ? "profiles" : instagram ? "Instagram accounts" : "businesses"} found{instagram ? " (potential matches, not interest)" : ""} · <span className="text-label-sm text-text-strong-950">{result.eligible ?? 0} contactable</span>{linkedin ? " on LinkedIn" : ` (${result.withEmail ?? 0} by email, ${result.withPhoneOnly ?? 0} by phone only)`}
+          {instagram && Number(result.instagramOnly ?? 0) > 0 && ` · ${result.instagramOnly} found on Instagram only — no supported channel to contact them`}
           {Number(result.excluded ?? 0) > 0 && ` · ${result.excluded} left out with reasons`}
           {Number(result.duplicates ?? 0) > 0 && ` · ${result.duplicates} duplicates skipped`}
           {Number(result.alreadyKnown ?? 0) > 0 && ` · ${result.alreadyKnown} already in your leads (not duplicated)`}
           {result.note ? <span className="mt-1 block">{String(result.note)}</span> : null}
+          {result.providerNote ? <span className="mt-1 block text-text-sub-600">{String(result.providerNote)}</span> : null}
         </p>
       ) : (
         <p className="text-error-base">{job.error ?? "The search failed."}</p>
@@ -780,7 +786,7 @@ function ToolMessage({ message, jobs, runs, decisions, canManageAutopilot, lastR
   if (message.tool === "daily_summary") {
     return <Card title={`Daily summary · ${String(data?.day ?? "")}`} status={message.status}><p className="whitespace-pre-wrap text-paragraph-xs">{message.content.split("\n").slice(1).join("\n")}</p></Card>;
   }
-  if (message.tool === "find_leads" || message.tool === "find_linkedin_leads" || message.tool === "find_customers_on_web") return <DiscoveryCard message={message} job={jobs.find((job) => job.id === data?.jobId)} />;
+  if (message.tool === "find_leads" || message.tool === "find_linkedin_leads" || message.tool === "find_customers_on_web" || message.tool === "find_instagram_prospects") return <DiscoveryCard message={message} job={jobs.find((job) => job.id === data?.jobId)} />;
   if (message.tool === "prepare_outreach") return <ProposalCard message={message} run={runs[String(data?.runId ?? "")]} canManageAutopilot={canManageAutopilot} lastReplyMode={lastReplyMode} onChanged={onChanged} />;
   if (message.tool === "prepare_inquiry_replies") return <InquiryRunCard message={message} run={runs[String(data?.runId ?? "")]} canManageAutopilot={canManageAutopilot} onChanged={onChanged} />;
   if (message.tool === "report") return <ReportCard message={message} />;

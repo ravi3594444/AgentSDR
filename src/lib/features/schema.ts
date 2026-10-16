@@ -21,7 +21,7 @@ export const organizationFeatures = pgTable(
   },
   (table) => [
     primaryKey({ name: "organization_features_pkey", columns: [table.organizationId, table.key] }),
-    check("organization_features_key_chk", sql`${table.key} IN ('instagram', 'web_discovery', 'inquiry_intake')`),
+    check("organization_features_key_chk", sql`${table.key} IN ('instagram', 'web_discovery', 'inquiry_intake', 'apify_discovery')`),
   ],
 );
 

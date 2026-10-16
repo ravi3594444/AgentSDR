@@ -41,6 +41,13 @@ Each release lists the database migrations it needs; see
     through the organization's web-searching AI provider (OpenRouter web
     plugin or AI/ML API research model), reads their published contacts,
     and keeps each with the exact page it came from.
+  - *Apify discovery (paid)*: Google Maps listings and Instagram hashtag and
+    profile discovery through Actors the owner approves, within a monthly
+    budget and per-run caps; when Apify is not set up, over budget or out of
+    credit, searches fall back to the scraper or website search with the
+    same request (so one Start still covers it). Never tops up or upgrades.
+    An Instagram account found is not a contact route: only published
+    emails and phones are.
   - *Inquiry intake*: an authenticated website-form webhook with field
     mapping (Settings → Inquiries) and Instagram first messages as
     inquiries. Inquiries are answered automatically only inside an inquiry
@@ -50,9 +57,10 @@ Each release lists the database migrations it needs; see
 
 - `bun scripts/add-instagram-intake-discovery.ts` — additive and re-runnable:
   creates `organization_features`, `instagram_accounts`, `instagram_chats`,
-  `instagram_messages`, `intake_endpoints`, `inquiries` and
-  `lead_audience_member_insights`, and widens the channel checks to allow
-  `instagram` and the job kind `web_discovery` (added `NOT VALID`, then
+  `instagram_messages`, `intake_endpoints`, `inquiries`,
+  `lead_audience_member_insights`, `apify_settings` and `apify_runs`, and
+  widens the channel checks to allow `instagram`, the job kinds
+  `web_discovery` and `apify_instagram`, and the feature `apify_discovery` (added `NOT VALID`, then
   validated without blocking reads or writes). A fresh install gets it from
   `db/schema.sql`. Until it runs every optional feature reads as off, turning
   one on explains that the migration is needed, and the rest of the app works
