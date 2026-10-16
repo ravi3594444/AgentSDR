@@ -13,6 +13,7 @@ import {
   type AudienceChannel,
   type AudienceSource,
   type ContactEvidence,
+  type LeadSignal,
 } from "./schema";
 
 /**
@@ -102,15 +103,21 @@ export async function loadPersonFacts(personIds: readonly string[]): Promise<Map
   return facts;
 }
 
+/** Why the search or list matched a lead, and what the lead said or did (stored as given; optional for every caller). */
+type MemberContext = {
+  matchReason?: string | null;
+  signals?: LeadSignal[];
+};
+
 export type NewMember =
-  | {
+  | ({
       personId: string;
       source: string;
       sourceUrl?: string | null;
       evidence?: ContactEvidence[];
       facts?: Record<string, string>;
-    }
-  | {
+    } & MemberContext)
+  | ({
       personId: null;
       name: string;
       reason: string;
@@ -119,7 +126,7 @@ export type NewMember =
       sourceUrl?: string | null;
       evidence?: ContactEvidence[];
       facts?: Record<string, string>;
-    };
+    } & MemberContext);
 
 /**
  * Adds leads to an audience. A person's channels and eligibility are worked
@@ -147,6 +154,8 @@ export async function addAudienceMembers(audienceId: string, members: readonly N
         sourceUrl: member.sourceUrl ?? null,
         evidence: member.evidence ?? [],
         facts: member.facts ?? {},
+        matchReason: member.matchReason ?? null,
+        signals: member.signals ?? [],
       });
     } else {
       values.push({
@@ -162,6 +171,8 @@ export async function addAudienceMembers(audienceId: string, members: readonly N
         sourceUrl: member.sourceUrl ?? null,
         evidence: member.evidence ?? [],
         facts: member.facts ?? {},
+        matchReason: member.matchReason ?? null,
+        signals: member.signals ?? [],
       });
     }
   }

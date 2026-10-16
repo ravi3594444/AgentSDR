@@ -9,6 +9,9 @@ import { discoveryAvailability, DiscoveryUnavailableError, normalizeCriteria, st
 import { searchAreaProblem } from "@/lib/discovery/geocode";
 import { extractContacts, visibleText } from "@/lib/discovery/contacts";
 import { fetchPublicPage } from "@/lib/discovery/websiteContacts.server";
+import { normalizeWebCriteria, startWebDiscovery, WebDiscoveryUnavailableError } from "@/lib/discovery/webDiscovery.server";
+import { webSearchAvailability, webSearchAvailabilityFrom } from "@/lib/discovery/webSearch.server";
+import { featureEnabled, FeatureDisabledError } from "@/lib/features/flags.server";
 import type { ImportRow } from "@/lib/leads/importRows";
 import { importPeopleRows } from "@/lib/leads/peopleImport.server";
 import { people } from "@/lib/leads/schema";
@@ -123,11 +126,12 @@ function channels(args: Record<string, unknown>): AudienceChannel[] | undefined 
 }
 
 async function setupSnapshot() {
-  const [profile, availability, automaticRuns, byok] = await Promise.all([
+  const [profile, availability, automaticRuns, byok, webDiscoveryOn] = await Promise.all([
     getBusinessProfile(),
     channelAvailability(),
     db.select({ id: outreachRuns.id }).from(outreachRuns).where(and(inOrg(outreachRuns), eq(outreachRuns.autopilot, true), eq(outreachRuns.status, "running"))),
     getByokSettings(),
+    featureEnabled("web_discovery"),
   ]);
   const connection = byok.connectionId ? await getAiConnection(byok.connectionId) : null;
   const discovery = discoveryAvailability();
@@ -141,10 +145,35 @@ async function setupSnapshot() {
       linkedin: availability.linkedin,
     },
     leadDiscovery: discovery,
+    /** Website and directory search: the optional feature, and the organization's web-searching AI provider. */
+    webDiscovery: { enabled: webDiscoveryOn, ...webSearchAvailabilityFrom(byok, connection) },
     ai: { connected: Boolean(connection?.verified), defaultModel: byok.defaultModel?.modelId ?? null },
     /** Running runs in Automatic reply mode (each answers only its own conversations). */
     automaticRuns: automaticRuns.length,
   };
+}
+
+/** Website and directory search's readiness, in a sentence for check_setup. */
+function webDiscoveryLine(web: { enabled: boolean; available: boolean; provider: string | null; model: string | null; reason: string | null }): string {
+  if (!web.enabled) return "Website and directory search: off (an owner or admin can turn it on in Settings → Organization).";
+  return web.available
+    ? `Website and directory search: ready (${web.provider === "openrouter" ? "OpenRouter web search" : "AI/ML API web research model"}, ${web.model}).`
+    : `Website and directory search: not ready — ${web.reason}`;
+}
+
+/** What a website and directory search is doing, for lead_search_status. */
+function webDiscoveryProgress(job: typeof assistantJobs.$inferSelect): string {
+  const progress = job.progress as { searches?: number; searchesDone?: number; candidates?: number; read?: number; found?: number; saved?: number };
+  const result = (job.result ?? {}) as { found?: number; eligible?: number; note?: string | null };
+  if (job.status === "failed") return `The web search failed: ${job.error ?? "unknown error"}`;
+  if (job.status === "succeeded") {
+    return result.found
+      ? `Finished: ${result.found} found on websites, directories and public pages, ${result.eligible ?? 0} can be contacted.${result.note ? ` ${result.note}` : ""}`
+      : result.note ?? "Finished: nothing found.";
+  }
+  if (job.stage === "reading") return `Reading websites and directories: ${progress.read ?? 0} of ${progress.candidates ?? "?"} pages done (${progress.found ?? 0} found so far).`;
+  if (job.stage === "saving") return `Saving leads: ${progress.saved ?? 0} of ${progress.found ?? "?"}.`;
+  return `Searching the web (${progress.searchesDone ?? 0} of ${progress.searches ?? "?"} searches done)…`;
 }
 
 export const TOOLS: Record<string, Tool> = {
@@ -158,7 +187,7 @@ export const TOOLS: Record<string, Tool> = {
         .join("; ");
       return {
         ok: true,
-        summary: `${channelLine}. Lead discovery: ${setup.leadDiscovery.available ? "Google Maps ready" : setup.leadDiscovery.reason}. AI: ${setup.ai.connected ? "connected" : "not connected"}. Runs answering replies automatically: ${setup.automaticRuns}. Profile missing for discovery: ${setup.missingForDiscovery.join(", ") || "nothing"}; for outreach: ${setup.missingForOutreach.join(", ") || "nothing"}.`,
+        summary: `${channelLine}. Lead discovery: ${setup.leadDiscovery.available ? "Google Maps ready" : setup.leadDiscovery.reason}. ${webDiscoveryLine(setup.webDiscovery)} AI: ${setup.ai.connected ? "connected" : "not connected"}. Runs answering replies automatically: ${setup.automaticRuns}. Profile missing for discovery: ${setup.missingForDiscovery.join(", ") || "nothing"}; for outreach: ${setup.missingForOutreach.join(", ") || "nothing"}.`,
         data: setup as unknown as Record<string, unknown>,
       };
     },
@@ -220,6 +249,43 @@ export const TOOLS: Record<string, Tool> = {
         };
       } catch (error) {
         if (error instanceof DiscoveryUnavailableError) return { ok: false, summary: error.message };
+        throw error;
+      }
+    },
+  },
+
+  find_customers_on_web: {
+    description: "Find customers matching the owner's description of them with a real web search provider (the organization's OpenRouter connection with its web plugin, or AI/ML API's web research model; never a model answering from memory): only the pages the provider returned are used. It reads the businesses' own websites and the local directories or lists the search returned (and the business websites those directories link to) for the emails and phones they publish, and keeps each contact with the page it came from; it never guesses an email, phone, person or page, and people already in the leads are reused, not duplicated. Public Instagram profiles and posts the search returns are read (a profile's website, a post's comments) only when Instagram is connected (the Instagram feature on and an account linked); otherwise they are skipped. People found only on Instagram are listed but cannot be contacted from here. Up to 3 paid searches; runs in the background and announces the result in the chat. Needs the Website and directory search feature.",
+    arguments: "customers (who the customers are, from the owner's words or the business profile), where (city/area/region), maxResults (5-40 business websites to read, default 20), contactAfter (true only when the owner asked to contact, email or message the leads found: the outreach plan is then prepared automatically when the search finishes), channels (optional, with contactAfter: array of email|whatsapp|linkedin)",
+    run: async (args, context) => {
+      if (!(await featureEnabled("web_discovery"))) return { ok: false, summary: new FeatureDisabledError("web_discovery").message };
+      const availability = await webSearchAvailability();
+      if (!availability.available) return { ok: false, summary: `Website and directory search is not available: ${availability.reason}` };
+      const profile = await getBusinessProfile();
+      const criteria = normalizeWebCriteria({
+        customers: text(args, "customers") ?? profile.targetCustomers,
+        where: text(args, "where") ?? profile.locations,
+        maxResults: args.maxResults,
+        language: profile.language,
+        offer: profile.offer,
+        ownWebsite: profile.website,
+      }, profile.language ?? "en");
+      if ("error" in criteria) throw new ToolArgumentError(criteria.error);
+      if (args.contactAfter !== undefined && typeof args.contactAfter !== "boolean") throw new ToolArgumentError("contactAfter must be true or false");
+      const request = args.contactAfter === true ? requireOutreachRequest(context) : null;
+      const contactAfter = request ? { channels: channels(args) ?? null, ownerRequest: request } : null;
+      try {
+        const started = await startWebDiscovery(criteria, context, { contactAfter });
+        const instagram = started.instagram.usable ? " Public Instagram profiles and posts it returns are read too." : ` Instagram pages are skipped (${started.instagram.reason}).`;
+        const provider = started.provider === "openrouter" ? "OpenRouter web search" : "AI/ML API web research";
+        return {
+          ok: true,
+          summary: `Web search started for “${started.phrase}” with ${provider} (${started.model}): ${started.queries.length} searches, up to ${criteria.maxResults} business websites; job ${started.jobId}, audience ${started.audienceId}.${instagram} Results are announced in the chat when done.${contactAfter ? " The outreach plan will be prepared automatically when it finishes." : ""}`,
+          display: `Searching the web for “${started.phrase}” (${provider}, ${started.queries.length} searches, up to ${criteria.maxResults} websites).${instagram}`,
+          data: { jobId: started.jobId, audienceId: started.audienceId, phrase: started.phrase, queries: started.queries, provider: started.provider, model: started.model, instagram: started.instagram, criteria },
+        };
+      } catch (error) {
+        if (error instanceof WebDiscoveryUnavailableError) return { ok: false, summary: error.message };
         throw error;
       }
     },
@@ -321,14 +387,22 @@ export const TOOLS: Record<string, Tool> = {
   },
 
   lead_search_status: {
-    description: "The progress or result of a lead search.",
+    description: "The progress or result of a lead search (Google Maps, LinkedIn or web).",
     arguments: "jobId (optional; the latest search when left out)",
     run: async (args) => {
       const jobId = uuid(args, "jobId", false);
       const [job] = await db.select().from(assistantJobs)
-        .where(and(inOrg(assistantJobs), inArray(assistantJobs.kind, ["discovery", "linkedin_search"]), ...(jobId ? [eq(assistantJobs.id, jobId)] : [])))
+        .where(and(inOrg(assistantJobs), inArray(assistantJobs.kind, ["discovery", "linkedin_search", "web_discovery"]), ...(jobId ? [eq(assistantJobs.id, jobId)] : [])))
         .orderBy(desc(assistantJobs.createdAt)).limit(1);
       if (!job) return { ok: false, summary: "No lead search found." };
+      if (job.kind === "web_discovery") {
+        return {
+          ok: true,
+          summary: `Web search ${job.id}: ${job.status} (${job.stage}). Progress ${JSON.stringify(job.progress)}.${job.error ? ` Error: ${job.error}` : ""}${job.result ? ` Result: ${JSON.stringify(job.result)}` : ""}`,
+          display: webDiscoveryProgress(job),
+          data: { jobId: job.id, kind: job.kind, status: job.status, stage: job.stage, progress: job.progress, result: job.result, error: job.error, audienceId: job.audienceId },
+        };
+      }
       const progress = job.progress as { found?: number; websitesChecked?: number; websitesToCheck?: number; saved?: number };
       const result = (job.result ?? {}) as { found?: number; eligible?: number; note?: string | null };
       const display = job.status === "failed"

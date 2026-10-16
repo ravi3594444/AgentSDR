@@ -70,9 +70,11 @@ const text = (value: unknown, limit: number) => (typeof value === "string" && va
 /**
  * The sources a chat-completions response carries, in the provider's order:
  * Perplexity's top-level `citations` (the [n] in its answer index into it)
- * and `search_results`, and OpenAI-style `url_citation` annotations. Only
- * what the provider returned counts: URLs written inside the answer text are
- * ignored, so a model answering from memory cannot invent its citations.
+ * and `search_results`, and OpenAI-style `url_citation` annotations (with
+ * the page excerpt OpenRouter's web plugin puts in `content`, when given).
+ * Only what the provider returned counts: URLs written inside the answer
+ * text are ignored, so a model answering from memory cannot invent its
+ * citations.
  */
 export function researchSources(response: unknown): ResearchSource[] {
   const body = (response && typeof response === "object" ? response : {}) as Record<string, unknown>;
@@ -101,7 +103,7 @@ export function researchSources(response: unknown): ResearchSource[] {
   if (Array.isArray(message.annotations)) {
     for (const annotation of message.annotations as Array<Record<string, unknown>>) {
       const citation = (annotation?.url_citation ?? {}) as Record<string, unknown>;
-      add(httpUrl(citation.url), text(citation.title, 300), null);
+      add(httpUrl(citation.url), text(citation.title, 300), text(citation.content, 500));
     }
   }
   return [...byUrl.values()];
