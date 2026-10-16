@@ -1,4 +1,4 @@
-import { ownWebsite, visibleText, websiteDomain } from "./contacts";
+import { contactLinkSequence, emailMatchesDomain, extractContacts, ownWebsite, visibleText, websiteDomain, withoutElements, type FoundContact } from "./contacts";
 
 /**
  * Website and directory discovery, the pure half (the job is in
@@ -210,6 +210,60 @@ export function directoryBusinessLinks(html: string, pageUrl: string, limit = 20
   return out;
 }
 
+/** A contact this many times on a directory page, spread across its listings, is the directory's own (a helpline beside each). */
+const REPEATED_CONTACT_MIN = 3;
+const MAX_LINKS_COMPARED = 2_000;
+
+/**
+ * The emails and phones on a directory or list page that belong to its
+ * listings. Left out: the site's own header, navigation and footer (its
+ * helpline, its support address); a number or address shown beside many
+ * listings (at least three times, with other listings' contacts between
+ * the first and the last); addresses on the directory's own domain; and
+ * LinkedIn links.
+ */
+export function directoryListingContacts(html: string, pageUrl: string): FoundContact[] {
+  const listings = withoutElements(html, ["header", "nav", "footer"]);
+  // The first links are enough to tell (and keep a hostile page cheap).
+  const sequence = contactLinkSequence(listings).slice(0, MAX_LINKS_COMPARED);
+  const positions = new Map<string, number[]>();
+  sequence.forEach((key, index) => {
+    const at = positions.get(key);
+    if (at) at.push(index);
+    else positions.set(key, [index]);
+  });
+  const directoryOwn = new Set<string>();
+  for (const [key, at] of positions) {
+    if (at.length < REPEATED_CONTACT_MIN) continue;
+    const others = new Set<string>();
+    for (let index = at[0]!; index <= at.at(-1)! && others.size < 2; index += 1) {
+      if (sequence[index] !== key) others.add(sequence[index]!);
+    }
+    if (others.size >= 2) directoryOwn.add(key);
+  }
+  const pageDomain = websiteDomain(pageUrl);
+  return extractContacts(listings, pageUrl).filter((contact) => {
+    if (contact.kind === "linkedin") return false;
+    if (directoryOwn.has(`${contact.kind}:${contact.value.toLowerCase()}`)) return false;
+    return !(contact.kind === "email" && emailMatchesDomain(contact.value, pageDomain));
+  });
+}
+
+/** Free mail providers: an owner's mailbox there says nothing about which domain is theirs. */
+const PUBLIC_MAIL_DOMAINS = new Set([
+  "gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "live.com", "msn.com", "yahoo.com", "ymail.com", "rocketmail.com",
+  "icloud.com", "me.com", "mac.com", "aol.com", "proton.me", "protonmail.com", "pm.me", "rediffmail.com", "zoho.com", "zohomail.com",
+  "zohomail.in", "gmx.com", "gmx.net", "mail.com", "yandex.com", "yandex.ru", "tutanota.com", "fastmail.com", "hey.com", "qq.com",
+  "163.com", "126.com", "naver.com", "web.de", "inbox.com",
+]);
+
+/** The domain an owner's mailbox address says is theirs, or null for a free mail provider. */
+export function ownerMailDomain(email: string): string | null {
+  const domain = email.split("@")[1]?.trim().toLowerCase() ?? "";
+  if (!domain || PUBLIC_MAIL_DOMAINS.has(domain) || /^(?:yahoo|hotmail|outlook|live|gmail|googlemail|rediff(?:mail)?)\.[a-z.]+$/.test(domain)) return null;
+  return domain;
+}
+
 /** How a lead relates to the page the search returned, when it is not that page itself. */
 export type MatchRelation = "linked_from" | "listed_on" | "commented_on" | "website_of";
 
@@ -218,6 +272,8 @@ export type MatchSource = {
   query: string;
   /** The page the provider returned. */
   url: string;
+  /** Where that page redirected, when it did: the page actually read (never called a search result). */
+  finalUrl?: string | null;
   /** The provider's title and snippet for it, as returned (null when it gave none). */
   title: string | null;
   snippet: string | null;
@@ -233,11 +289,12 @@ export function matchReasonFor(source: MatchSource): string {
   const title = source.title?.trim() ? `“${clip(source.title, 140)}”` : null;
   const snippet = source.snippet?.trim() ? `“${clip(source.snippet, 220)}”` : null;
   const page = title ? `${title} (${source.url})` : source.url;
+  const redirected = source.finalUrl && source.finalUrl !== source.url ? `, which redirected to ${source.finalUrl}, where it was read` : "";
   switch (source.via) {
     case "linked_from":
-      return `Linked from ${page}, a page the web search for ${query} returned.`;
+      return `Linked from ${page}, a page the web search for ${query} returned${redirected}.`;
     case "listed_on":
-      return `Listed on ${page}, a page the web search for ${query} returned.`;
+      return `Listed on ${page}, a page the web search for ${query} returned${redirected}.`;
     case "commented_on":
       return `Commented on the Instagram post ${source.url}, which the web search for ${query} returned.`;
     case "website_of":

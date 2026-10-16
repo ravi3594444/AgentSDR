@@ -249,6 +249,26 @@ export function extractContacts(html: string, sourceUrl: string): FoundContact[]
   return [...found.values()];
 }
 
+/**
+ * The tel: and mailto: links of a page in page order, as "phone:<number>"
+ * and "email:<address>" (the values extractContacts gives), repeats kept:
+ * how often and where a contact appears tells a directory's own helpline
+ * from its listings' numbers.
+ */
+export function contactLinkSequence(html: string): string[] {
+  const out: string[] = [];
+  for (const href of hrefs(html)) {
+    if (/^mailto:/i.test(href)) {
+      const email = cleanEmail(href);
+      if (email) out.push(`email:${email}`);
+    } else if (/^tel:/i.test(href)) {
+      const phone = href.replace(/^tel:/i, "").replace(/[^\d+]/g, "");
+      if (phone.replace(/\D/g, "").length >= 6) out.push(`phone:${phone.toLowerCase()}`);
+    }
+  }
+  return out;
+}
+
 const CONTACT_LINK = /(?:contact|kontakt|contacto|contato|contatti|about|about-us|impressum|team|reach-us|get-in-touch)/i;
 
 /**
