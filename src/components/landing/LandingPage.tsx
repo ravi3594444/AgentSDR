@@ -92,7 +92,7 @@ export default function LandingPage() {
         background="#ffffff" darkBackground="#000000" textColor={resolved === "dark" ? "#ffffff" : "#000000"}
         theme={resolved} onThemeChange={setPreference}
         headingFont="var(--font-sans)" bodyFont="var(--font-sans)" accentFont="var(--font-instrument-serif)" loadFonts={false}
-        backdropText="connect" showCredit={false} intro particleDensity={0.75}
+        backdropText="connect" showCredit={false} particleDensity={0.75}
         height="max(780px, 100svh)" hint="Move across the form. See what connects." hintTouch="Touch to explore"
         className="lp-hero"
       />
