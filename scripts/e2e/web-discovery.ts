@@ -21,10 +21,17 @@
  *
  *   bun run --conditions=react-server scripts/e2e/web-discovery.ts
  *
- * It creates its own organizations ("Web discovery check A/B/C …") and AI,
- * Unipile and Instagram rows for them (credentials encrypted like any
- * integration), and removes the AI and Unipile rows at the end so nothing
- * points at the stand-ins. Refuses a non-local DATABASE_URL.
+ * It creates its own organizations ("Web discovery check A/B/C/D …") and AI,
+ * Unipile, Instagram, mailbox and WhatsApp rows for them (credentials
+ * encrypted like any integration), and removes the AI and Unipile rows, the
+ * mailbox, and the placeholder jobs used for the limits at the end, so
+ * nothing points at the stand-ins. Refuses a non-local DATABASE_URL.
+ *
+ * Beyond A's full run (websites, a directory, a redirected directory with
+ * helplines and the owner's own listing, Instagram), it checks the bounds
+ * per organization (D): an interrupted paid search is never bought again,
+ * switching the feature off stops a run before its next search, and the
+ * open, daily and AI/ML research limits refuse a new search with a reason.
  *
  * The real worker claims any due job in the database, and a disposable
  * database may be shared with other checks running at the same time. While
@@ -53,18 +60,41 @@ const GLOW_IG = `glow.dental_${tag}`;
 const QUIET_IG = `quiet.studio_${tag}`;
 const POST_URL = `https://www.instagram.com/p/${SHORTCODE}/`;
 const DIRECTORY = `${site("pune-guide")}top-10-dentists-in-pune/`;
+/** A directory URL the search returns that redirects to the page actually read. */
+const REDIRECTING_DIRECTORY = `${site("city-mag")}best-10-dentists/`;
+const REDIRECTED_DIRECTORY = `${site("city-mag")}list-of-dentists-2026/`;
+const OWNER_IG = `owner_${tag}`;
+const OWNER_IG_OLD = `owner2_${tag}`;
+const OWNER_SITE = `https://www.${host("owner")}/`;
+const OWNER_MAILBOX = `ravi@ownermail-${tag}.in`;
+const OWNER_WHATSAPP = "+912025556666";
 
 // ------------------------------------------------------------ fixture websites (Bun.serve)
-const PAGES: Record<string, { status: number; html: string }> = {
+const PAGES: Record<string, { status: number; html: string; location?: string }> = {
   [site("lotus")]: { status: 200, html: `<html><head><title>Home | Lotus Dental Care</title></head><body><h1>Lotus Dental Care</h1><a href="/contact">Contact us</a><a href="https://www.linkedin.com/company/lotus-dental-${tag}">LinkedIn</a></body></html>` },
   [`${site("lotus")}contact`]: { status: 200, html: `<p>Appointments: <a href="mailto:hello@${host("lotus")}">hello@${host("lotus")}</a></p><a href="tel:020 2553 1234">020 2553 1234</a>` },
   [site("smile")]: { status: 200, html: `<h1>Smile Care</h1><p>Write to HELLO@${host("smile")} for appointments.</p>` },
   [site("bright")]: { status: 200, html: `<h1>Bright Dental</h1><a href="tel:+912025550003">Call us</a>` },
-  [site("pearl")]: { status: 200, html: `<h1>Pearl Dental</h1><p>Visit us in Aundh. We love smiles.</p>` },
+  // Sentences that look like hidden addresses are not decoded into any.
+  [site("pearl")]: { status: 200, html: `<h1>Pearl Dental</h1><p>Visit us in Aundh. We love smiles. Join our team (at) Pune. Com… Visit us (at) Mumbai. In 2024 we moved.</p>` },
   [site("nomail")]: { status: 200, html: `<h1>No Mail Dental</h1><a href="mailto:info@${host("nomail")}">Email</a>` },
   [site("broken")]: { status: 503, html: "unavailable" },
   [site("orchid")]: { status: 200, html: `<h1>Orchid Dental Studio</h1><a href="/about-us">About</a>` },
-  [`${site("orchid")}about-us`]: { status: 200, html: `<p>Reach us: care@${host("orchid")}</p>` },
+  [`${site("orchid")}about-us`]: { status: 200, html: `<p>Reach us: care@${host("orchid")}</p><p>Owner: dr.mehta [at] orchid-${tag} [dot] in</p><a href="https://www.linkedin.com/company/orchid-${tag}">LinkedIn</a>` },
+  [site("sunrise")]: { status: 200, html: `<h1>Sunrise Dental</h1><a href="mailto:hello@${host("sunrise")}">Email</a>` },
+  [REDIRECTING_DIRECTORY]: { status: 301, html: "", location: "/list-of-dentists-2026/" },
+  [REDIRECTED_DIRECTORY]: {
+    status: 200,
+    html: `<html><head><title>Best dentists in Pune 2026</title></head><body>
+      <header><a href="tel:+912040000000">City Mag helpline</a></header>
+      <ol>
+        <li><a href="${site("sunrise")}">Sunrise Dental</a> — <a href="tel:+912025557777">020 2555 7777</a> · book via <a href="tel:+912040001111">our desk</a></li>
+        <li>Moon Dental — <a href="tel:+912025557778">020 2555 7778</a> · book via <a href="tel:+912040001111">our desk</a></li>
+        <li>Star Dental — <a href="mailto:hi@star-${tag}.in">hi@star-${tag}.in</a> · book via <a href="tel:+912040001111">our desk</a></li>
+        <li>Your clinic — <a href="mailto:frontdesk@${host("owner")}">frontdesk@${host("owner")}</a> · <a href="tel:${OWNER_WHATSAPP}">020 2555 6666</a> · <a href="mailto:${OWNER_MAILBOX}">${OWNER_MAILBOX}</a></li>
+      </ol>
+      <footer>Toll free <a href="tel:1800-123-4567">1800 123 4567</a> · <a href="mailto:care@citymag-help.in">care@citymag-help.in</a></footer></body></html>`,
+  },
   [site("glow")]: { status: 200, html: `<h1>Glow Dental</h1><a href="mailto:hello@${host("glow")}">hello@${host("glow")}</a>` },
   [DIRECTORY]: {
     status: 200,
@@ -88,7 +118,7 @@ const server = Bun.serve({
     const target = `https://${request.headers.get("x-fixture-host")}${url.pathname}`;
     pageRequests.push(target);
     const page = PAGES[target];
-    return new Response(page?.html ?? "not found", { status: page?.status ?? 404, headers: { "content-type": "text/html; charset=utf-8" } });
+    return new Response(page?.html ?? "not found", { status: page?.status ?? 404, headers: { "content-type": "text/html; charset=utf-8", ...(page?.location ? { location: page.location } : {}) } });
   },
 });
 
@@ -109,6 +139,7 @@ function openRouterAnswer(query: string): Response {
         citation(igProfile(GLOW_IG), "Glow Dental (@glow) • Instagram"),
         citation(igProfile(QUIET_IG), "Quiet Studio • Instagram"),
         citation(POST_URL, "Glow Dental on Instagram: “New clinic in Baner”"),
+        citation(igProfile(OWNER_IG), "Owner Clinic • Instagram"),
         citation(`https://www.facebook.com/glow-${tag}`, "Glow Dental | Facebook"),
       ] } }],
       usage: { prompt_tokens: 800, completion_tokens: 40, cost: 0.011 },
@@ -119,7 +150,10 @@ function openRouterAnswer(query: string): Response {
     if (directoryAttempts === 1) return json(429, { error: { message: "Rate limit exceeded", code: 429 } });
     return json(200, {
       id: "gen-dir",
-      choices: [{ message: { role: "assistant", content: `The best list is ${site("invented-clinic")}directory`, annotations: [citation(DIRECTORY, "Top 10 dentists in Pune", "Our pick of the best dental clinics in Pune.")] } }],
+      choices: [{ message: { role: "assistant", content: `The best list is ${site("invented-clinic")}directory`, annotations: [
+        citation(DIRECTORY, "Top 10 dentists in Pune", "Our pick of the best dental clinics in Pune."),
+        citation(REDIRECTING_DIRECTORY, "Best dentists in Pune", "City Mag's list."),
+      ] } }],
       usage: { cost: 0.012 },
     });
   }
@@ -171,9 +205,12 @@ function unipileAnswer(method: string, url: URL): Response {
         comment("c4", "follow back", "Sam", `sam_${tag}`, "2026-10-14T10:07:00.000Z"),
         comment("c5", "Thank you all!", "Glow Dental", GLOW_IG, "2026-10-14T11:00:00.000Z"),
         comment("c6", "and how much for a cleaning?", "Priya K", `priya.k_${tag}`, "2026-10-14T10:10:00.000Z"),
+        // The owner's own accounts (the connected one, and an older one): never leads.
+        comment("c7", "Thanks for visiting!", "Owner Clinic", OWNER_IG, "2026-10-14T11:05:00.000Z"),
+        comment("c8", "Come see us too", "Owner Clinic (old)", OWNER_IG_OLD, "2026-10-14T11:06:00.000Z"),
       ],
       cursor: null,
-      total_items: 6,
+      total_items: 8,
     });
   }
   return json(404, { title: `No fake for ${method} ${path}`, status: 404 });
@@ -210,12 +247,14 @@ const { organizations } = await import("@/lib/auth/schema");
 const { people } = await import("@/lib/leads/schema");
 const { gridProviderCredentials, gridProviders } = await import("@/lib/grid/schema");
 const { encryptIntegrationCredentials } = await import("@/lib/integrations/credentials");
-const { saveByokSettings } = await import("@/lib/ai/byok");
+const { getByokSettings, saveByokSettings } = await import("@/lib/ai/byok");
 const { saveChannelRules } = await import("@/lib/channels/rules.server");
 const { setFeature } = await import("@/lib/features/flags.server");
 const { instagramAccounts } = await import("@/lib/instagram/schema");
 const { runInOrganization, currentOrganizationId, inOrg } = await import("@/lib/tenancy/scope");
-const { assistantJobs, assistantMessages, leadAudienceMembers, leadAudiences } = await import("@/lib/assistant/schema");
+const { assistantJobs, assistantMessages, assistantProfiles, leadAudienceMembers, leadAudiences } = await import("@/lib/assistant/schema");
+const { mailboxes } = await import("@/lib/outreach/schema");
+const { whatsappAccounts } = await import("@/lib/whatsapp/schema");
 const { memberInsights } = await import("@/lib/assistant/audiences.server");
 const { runTool } = await import("@/lib/assistant/tools.server");
 const { runOneAssistantStep } = await import("@/lib/assistant/worker");
@@ -223,7 +262,7 @@ const { registerAssistantJobs } = await import("@/lib/assistant/register.server"
 const { createThread, claimThread, releaseThread } = await import("@/lib/assistant/threads.server");
 const { listAudiences, summarizeAudience } = await import("@/lib/assistant/audiences.server");
 const { setDiscoveryPageOptions } = await import("@/lib/discovery/discovery.server");
-const { setWebDiscoveryMailCheck, startWebDiscovery, normalizeWebCriteria, WebDiscoveryUnavailableError, INSTAGRAM_ONLY_REASON, INSTAGRAM_PROFILE_ONLY_REASON } = await import("@/lib/discovery/webDiscovery.server");
+const { setWebDiscoveryMailCheck, startWebDiscovery, normalizeWebCriteria, WebDiscoveryUnavailableError, INSTAGRAM_ONLY_REASON, INSTAGRAM_PROFILE_ONLY_REASON, MAX_OPEN_WEB_DISCOVERIES, MAX_WEB_DISCOVERIES_PER_DAY } = await import("@/lib/discovery/webDiscovery.server");
 
 setDiscoveryPageOptions({ allowPrivate: true });
 setWebDiscoveryMailCheck(async (domain) => (domain.includes("nomail") ? "rejects" : domain.includes("lotus") ? "mx" : domain.includes("glow") ? "address" : "unknown"));
@@ -256,7 +295,7 @@ const checkOrganizations: string[] = [];
  * transaction) row locks on every claimable job of other organizations, so
  * the worker never takes another check's job. Nothing of theirs is written.
  */
-async function runJob(jobId: string): Promise<{ job: typeof assistantJobs.$inferSelect; stages: string[] }> {
+async function runJob(jobId: string, stopAtStage?: string): Promise<{ job: typeof assistantJobs.$inferSelect; stages: string[] }> {
   const stages: string[] = [];
   let job: typeof assistantJobs.$inferSelect | undefined;
   await db.transaction(async (tx) => {
@@ -269,7 +308,7 @@ async function runJob(jobId: string): Promise<{ job: typeof assistantJobs.$infer
       [job] = await db.select().from(assistantJobs).where(eq(assistantJobs.id, jobId));
       if (!job) throw new Error(`job ${jobId} disappeared`);
       if (stages.at(-1) !== job.stage) stages.push(job.stage);
-      if (job.status === "succeeded" || job.status === "failed") break;
+      if (job.status === "succeeded" || job.status === "failed" || (stopAtStage && job.stage === stopAtStage)) break;
       if (job.runAfter.getTime() > Date.now()) await new Promise((resolve) => setTimeout(resolve, Math.min(5_000, job!.runAfter.getTime() - Date.now())));
       await fence();
       await runOneAssistantStep();
@@ -278,13 +317,15 @@ async function runJob(jobId: string): Promise<{ job: typeof assistantJobs.$infer
   return { job: job!, stages };
 }
 
-const orgs: Record<"A" | "B" | "C", string> = { A: "", B: "", C: "" };
-for (const name of ["A", "B", "C"] as const) {
+const orgs: Record<"A" | "B" | "C" | "D", string> = { A: "", B: "", C: "", D: "" };
+for (const name of ["A", "B", "C", "D"] as const) {
   const [org] = await db.insert(organizations).values({ name: `Web discovery check ${name} ${stamp}`, slug: `web-discovery-${name.toLowerCase()}-${stamp}` }).returning();
   orgs[name] = org!.id;
   checkOrganizations.push(org!.id);
 }
-console.log(`Organizations A ${orgs.A}, B ${orgs.B}, C ${orgs.C}`);
+console.log(`Organizations A ${orgs.A}, B ${orgs.B}, C ${orgs.C}, D ${orgs.D}`);
+const createdMailboxes: string[] = [];
+const placeholderJobs: string[] = [];
 const ctx = (threadId: string) => ({ threadId, userId: null, ownerText: "Find dental clinics in Baner, Pune" });
 
 let audienceA = "";
@@ -368,7 +409,13 @@ try {
     const [unipile] = await db.insert(gridProviders).values({ organizationId: currentOrganizationId(), key: "platform-unipile", name: "Unipile (web discovery check)" }).returning();
     await db.insert(gridProviderCredentials).values({ providerId: unipile!.id, encryptedPayload: encryptIntegrationCredentials({ baseUrl: UNIPILE, apiKey: "web-check", notifySecret: "web-check-secret" }) });
     createdProviders.push(unipile!.id);
-    await db.insert(instagramAccounts).values({ organizationId: currentOrganizationId(), unipileAccountId: IG_ACCOUNT, username: `owner_${tag}`, name: "Owner", status: "connected" });
+    await db.insert(instagramAccounts).values({ organizationId: currentOrganizationId(), unipileAccountId: IG_ACCOUNT, username: OWNER_IG, name: "Owner", status: "connected" });
+    // The owner's own business: an older Instagram account, a mailbox, a WhatsApp number, the website in the business profile.
+    await db.insert(instagramAccounts).values({ organizationId: currentOrganizationId(), unipileAccountId: `${IG_ACCOUNT}-old`, username: OWNER_IG_OLD, name: "Owner (old)", status: "disconnected" });
+    const [mailbox] = await db.insert(mailboxes).values({ organizationId: currentOrganizationId(), emailAddress: OWNER_MAILBOX, status: "connecting" }).returning({ id: mailboxes.id });
+    createdMailboxes.push(mailbox!.id);
+    await db.insert(whatsappAccounts).values({ organizationId: currentOrganizationId(), unipileAccountId: `wa-acc-${tag}`, phone: OWNER_WHATSAPP, status: "disconnected" });
+    await db.insert(assistantProfiles).values({ organizationId: currentOrganizationId(), profile: { website: OWNER_SITE } });
 
     // People the owner already has: one by email (written in another case), one by phone only.
     const [byEmail] = await db.insert(people).values({ organizationId: currentOrganizationId(), email: `Hello@Smile-${tag}.test`, fullName: "Dr. Smile (already a lead)", source: "manual" }).returning();
@@ -447,6 +494,24 @@ try {
   check("the directory operator's own address is not a lead", !personRows.some((person) => person.email === `editor@${host("pune-guide")}`));
   const orchid = byEmail(`care@${host("orchid")}`);
   check("a business linked from the directory is read, found through it", orchid?.status === "eligible" && orchid.sourceUrl === DIRECTORY && orchid.evidence.some((item) => item.kind === "email" && item.sourceUrl === `${site("orchid")}about-us`) && Boolean(orchid.matchReason?.startsWith("Linked from “Top 10 dentists in Pune”")), JSON.stringify({ sourceUrl: orchid?.sourceUrl, reason: orchid?.matchReason }));
+  const orchidHidden = orchid?.evidence.find((item) => item.kind === "email" && item.value === `dr.mehta@orchid-${tag}.in`);
+  check("an address written as “name [at] domain [dot] in” is decoded, with the page it was on", orchidHidden?.sourceUrl === `${site("orchid")}about-us`, JSON.stringify(orchid?.evidence));
+  const orchidLinkedin = orchid?.evidence.find((item) => item.kind === "linkedin");
+  check("a LinkedIn link keeps the page it was on (the about page), not just the website", orchidLinkedin?.value === `https://www.linkedin.com/company/orchid-${tag}` && orchidLinkedin.sourceUrl === `${site("orchid")}about-us`, JSON.stringify(orchidLinkedin));
+  const everything = JSON.stringify({ members: members.map((member) => member.evidence), people: personRows.map((person) => [person.email, person.phone]) }).toLowerCase();
+  check("sentences like “team (at) Pune. Com” are never decoded into addresses", !/pune\.com|mumbai\.in/.test(everything));
+
+  const moon = members.find((member) => personOf(member.personId)?.phone === "+912025557778");
+  const moonPhone = moon?.evidence.find((item) => item.kind === "phone");
+  check("a redirected directory: the lead keeps the page read, with the search's own URL beside it", moon?.status === "eligible" && moon.sourceUrl === REDIRECTED_DIRECTORY && moonPhone?.sourceUrl === REDIRECTED_DIRECTORY && moon.facts.directoryPage === REDIRECTED_DIRECTORY && moon.facts.searchResult === REDIRECTING_DIRECTORY, JSON.stringify({ sourceUrl: moon?.sourceUrl, facts: moon?.facts }));
+  check("…and its match reason names the URL the search returned, and the redirect apart", Boolean(moon?.matchReason?.startsWith(`Listed on “Best dentists in Pune” (${REDIRECTING_DIRECTORY}), a page the web search for`) && moon.matchReason.endsWith(`which redirected to ${REDIRECTED_DIRECTORY}, where it was read.`)), moon?.matchReason ?? "missing");
+  const sunrise = byEmail(`hello@${host("sunrise")}`);
+  check("a business linked from a redirected directory: found on the page read, the search's URL kept", sunrise?.status === "eligible" && sunrise.sourceUrl === REDIRECTED_DIRECTORY && sunrise.facts.searchResult === REDIRECTING_DIRECTORY && Boolean(sunrise.matchReason?.includes(`(${REDIRECTING_DIRECTORY}), a page the web search for`)), JSON.stringify({ sourceUrl: sunrise?.sourceUrl, reason: sunrise?.matchReason }));
+  check("a listing's own email on a directory page is a lead", byEmail(`hi@star-${tag}.in`)?.status === "eligible");
+  const phones = personRows.map((person) => person.phone ?? "");
+  const emails = personRows.map((person) => (person.email ?? "").toLowerCase());
+  check("the directory's header, footer and a helpline beside every listing are not leads", !phones.some((phone) => ["+912040000000", "+912040001111"].includes(phone) || phone.endsWith("1234567")) && !emails.includes("care@citymag-help.in"), phones.join(", "));
+  check("the owner's own email (website domain, mailbox) and WhatsApp number listed on a directory are not leads", !emails.includes(`frontdesk@${host("owner")}`) && !emails.includes(OWNER_MAILBOX) && !phones.includes(OWNER_WHATSAPP));
   check("the directory's phone for Lotus is a duplicate within the run, not a second person", personRows.filter((person) => person.phone === "+912025531234").length === 1 && Number(result.duplicates) >= 1, `duplicates ${String(result.duplicates)}`);
 
   const glow = byEmail(`hello@${host("glow")}`);
@@ -463,6 +528,8 @@ try {
   check("every Instagram-only commenter is excluded with the reason and Instagram evidence", commenters.every((member) => member.status === "excluded" && member.personId === null && member.reason === INSTAGRAM_ONLY_REASON && member.evidence.some((item) => item.kind === "instagram" && item.sourceUrl === POST_URL)), commenters.map((member) => member.reason).join(" | "));
   check("the explicit ask is a need, quoted, with the post and the comment's date", priya?.signals.length === 2 && priya.signals.every((signal) => signal.kind === "need" && signal.sourceUrl === POST_URL && signal.source === "Instagram comment") && priya.signals[0]!.text === "need a dentist near Baner, any recommendation?" && priya.signals[0]!.at === "2026-10-14T10:00:00.000Z", JSON.stringify(priya?.signals));
   check("emoji, “nice post” and “follow back” are engagement, never a need", others.length === 3 && others.every((member) => member.signals.length === 1 && member.signals[0]!.kind === "engagement"), others.map((member) => `${member.name}: ${member.signals.map((signal) => `${signal.kind} “${signal.text}”`).join()}`).join("; "));
+  check("the owner's own Instagram accounts are not commenters to find", !members.some((member) => /Owner Clinic/.test(member.name) || [OWNER_IG, OWNER_IG_OLD].includes(member.facts.instagramUsername ?? "")));
+  check("the owner's own Instagram profile the search returned is skipped, not read", ((result.skipped ?? []) as { url: string; reason: string }[]).some((item) => item.url === igProfile(OWNER_IG) && item.reason === "the owner's own Instagram profile") && !unipileRequests.some((request) => request.path.includes(OWNER_IG)), JSON.stringify(result.skipped));
   check("Instagram-only and need tallies", Number(result.instagramOnly) === 5 && Number(result.needSignals) === 1, `${String(result.instagramOnly)} / ${String(result.needSignals)}`);
   check("every member has a match reason", members.every((member) => Boolean(member.matchReason)), members.filter((member) => !member.matchReason).map((member) => member.name).join(", "));
   check("website leads carry no signals (no evidence of need is invented)", members.filter((member) => member.sourceUrl !== POST_URL).every((member) => member.signals.length === 0));
@@ -507,11 +574,83 @@ try {
     const peopleB = await db.select({ n: sql<number>`count(*)::int` }).from(people).where(and(inOrg(people), inArray(people.id, personRows.map((person) => person.id))));
     check("B counts none of A's people", Number(peopleB[0]?.n ?? 0) === 0);
   });
+
+  // ------------------------------------------------------------ D: bounds per organization
+  const criteriaD = normalizeWebCriteria({ customers: "dental clinics", where: "Baner, Pune", maxResults: 5 });
+  if ("error" in criteriaD) throw new Error(criteriaD.error);
+  const jobsD = { interrupted: "", switchedOff: "" };
+  await runInOrganization(orgs.D, async () => {
+    await setFeature("web_discovery", true, null);
+    const connectionId = await aiConnection("openrouter");
+    await saveByokSettings({
+      connectionId,
+      providers: ["openai"],
+      modelsByProvider: { openai: ["openai/gpt-5-mini"] },
+      defaultModel: { provider: "openai", modelId: "openai/gpt-5-mini" },
+      transcriptionModel: null,
+      researchModel: null,
+      researchDailyLimit: 25,
+      byokOnlyConfirmed: true,
+    });
+    jobsD.interrupted = (await startWebDiscovery(criteriaD, { threadId: null, userId: null })).jobId;
+  });
+  // A paid search a step started but never saved (the process died after the provider answered): never bought again.
+  await runJob(jobsD.interrupted, "searching");
+  await db.update(assistantJobs).set({ payload: sql`${assistantJobs.payload} || '{"searchStarted":0}'::jsonb` }).where(eq(assistantJobs.id, jobsD.interrupted));
+  const callsBeforeD = aiCalls.length;
+  const runD = await runJob(jobsD.interrupted);
+  const searchesD = ((runD.job.result ?? {}) as { searches?: { error: string | null; provider: string | null }[] }).searches ?? [];
+  check("an interrupted paid search is recorded as such and not bought again; the next one runs", runD.job.status === "succeeded" && aiCalls.length - callsBeforeD === 1 && /never paid for twice/.test(searchesD[0]?.error ?? "") && searchesD[1]?.provider === "openrouter", JSON.stringify({ status: runD.job.status, calls: aiCalls.length - callsBeforeD, searchesD }));
+
+  await runInOrganization(orgs.D, async () => {
+    jobsD.switchedOff = (await startWebDiscovery(criteriaD, { threadId: null, userId: null })).jobId;
+  });
+  await runJob(jobsD.switchedOff, "searching");
+  await runInOrganization(orgs.D, () => setFeature("web_discovery", false, null));
+  const callsBeforeOff = aiCalls.length;
+  const runOff = await runJob(jobsD.switchedOff);
+  check("switching the feature off stops a run before its next paid search", runOff.job.status === "failed" && /is off for this organization.*stopped before its remaining paid searches/.test(runOff.job.error ?? "") && aiCalls.length === callsBeforeOff, `${runOff.job.status}: ${runOff.job.error ?? ""}; ${aiCalls.length - callsBeforeOff} calls`);
+
+  await runInOrganization(orgs.D, async () => {
+    await setFeature("web_discovery", true, null);
+    const thread = await createThread(null);
+    const counts = async () => ({
+      jobs: (await db.select({ id: assistantJobs.id }).from(assistantJobs).where(inOrg(assistantJobs))).length,
+      audiences: (await db.select({ id: leadAudiences.id }).from(leadAudiences).where(inOrg(leadAudiences))).length,
+    });
+    // Placeholders, never due, so the worker leaves them alone; removed at the end.
+    const placeholder = (status: "queued" | "succeeded") => ({ organizationId: currentOrganizationId(), kind: "web_discovery" as const, status, runAfter: new Date(Date.now() + 7 * 86_400_000), payload: {}, progress: {} });
+    const open = await db.insert(assistantJobs).values(Array.from({ length: MAX_OPEN_WEB_DISCOVERIES }, () => placeholder("queued"))).returning({ id: assistantJobs.id });
+    placeholderJobs.push(...open.map((row) => row.id));
+    const before = await counts();
+    const refusedOpen = await runTool("find_customers_on_web", { customers: "dental clinics", where: "Baner, Pune" }, ctx(thread.id));
+    check(`open limit: with ${MAX_OPEN_WEB_DISCOVERIES} searches running a new one is refused, with the reason`, !refusedOpen.ok && new RegExp(`already running for this organization \\(at most ${MAX_OPEN_WEB_DISCOVERIES} at a time\\)`).test(refusedOpen.summary), refusedOpen.summary);
+    await db.update(assistantJobs).set({ status: "succeeded" }).where(inArray(assistantJobs.id, placeholderJobs));
+    const started = before.jobs;
+    if (started < MAX_WEB_DISCOVERIES_PER_DAY) {
+      const more = await db.insert(assistantJobs).values(Array.from({ length: MAX_WEB_DISCOVERIES_PER_DAY - started }, () => placeholder("succeeded"))).returning({ id: assistantJobs.id });
+      placeholderJobs.push(...more.map((row) => row.id));
+    }
+    const refusedDaily = await runTool("find_customers_on_web", { customers: "dental clinics", where: "Baner, Pune" }, ctx(thread.id));
+    check(`daily limit: after ${MAX_WEB_DISCOVERIES_PER_DAY} searches in 24 hours a new one is refused, with the reason`, !refusedDaily.ok && new RegExp(`started ${MAX_WEB_DISCOVERIES_PER_DAY} website searches in the last 24 hours`).test(refusedDaily.summary), refusedDaily.summary);
+    const after = await counts();
+    check("a refused start creates no job and no audience", after.jobs === before.jobs + Math.max(0, MAX_WEB_DISCOVERIES_PER_DAY - started) && after.audiences === before.audiences, JSON.stringify({ before, after }));
+  });
+
+  await runInOrganization(orgs.B, async () => {
+    // B's finished search planned 2 AI/ML API searches today; with a limit of 3, another 2 do not fit.
+    await saveByokSettings({ ...(await getByokSettings()), researchDailyLimit: 3 });
+    const thread = await createThread(null);
+    const refused = await runTool("find_customers_on_web", { customers: "dental clinics", where: "Baner, Pune" }, ctx(thread.id));
+    check("AI/ML API: website searches count toward the daily research limit", !refused.ok && /web research limit on AI\/ML API \(3, Settings → AI provider\) leaves 1 search; this request needs 2/.test(refused.summary), refused.summary);
+  });
 } catch (error) {
   console.error(error);
   failures += 1;
 } finally {
   if (createdProviders.length) await db.delete(gridProviders).where(inArray(gridProviders.id, createdProviders));
+  if (createdMailboxes.length) await db.delete(mailboxes).where(inArray(mailboxes.id, createdMailboxes));
+  if (placeholderJobs.length) await db.delete(assistantJobs).where(inArray(assistantJobs.id, placeholderJobs));
   server.stop(true);
 }
 

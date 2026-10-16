@@ -114,6 +114,8 @@ type MemberContext = {
 
 export type NewMember =
   | ({
+      /** A member id chosen by the caller, so adding the same lead again (a retried step) is a no-op; random when absent. */
+      id?: string;
       personId: string;
       source: string;
       sourceUrl?: string | null;
@@ -121,6 +123,7 @@ export type NewMember =
       facts?: Record<string, string>;
     } & MemberContext)
   | ({
+      id?: string;
       personId: null;
       name: string;
       reason: string;
@@ -142,7 +145,7 @@ export async function addAudienceMembers(audienceId: string, members: readonly N
   // Why each lead matched and what it said, kept apart (leadAudienceMemberInsights) and keyed by the member id chosen here.
   const insights = new Map<string, MemberContext>();
   for (const member of members) {
-    const id = randomUUID();
+    const id = member.id ?? randomUUID();
     if (member.matchReason || member.signals?.length) insights.set(id, { matchReason: member.matchReason ?? null, signals: member.signals ?? [] });
     if (member.personId !== null) {
       const person = facts.get(member.personId);
