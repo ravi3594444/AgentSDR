@@ -181,10 +181,12 @@ async function loadWhatsappOutreachRows(
 
 /**
  * What the owner sent from this Instagram account in the Person's chats
- * (from AgentSDR or the Instagram app, imported history included), so the
- * first reply that reaches the CRM is read with what came before it. Same
- * row shape and rules as WhatsApp; only outbound messages are copied, so
- * imported history from the lead never becomes a new inbound message.
+ * (from AgentSDR or the Instagram app), so the first reply that reaches the
+ * CRM is read with what came before it. Same row shape and rules as
+ * WhatsApp; only outbound messages are copied, so nothing from the lead
+ * becomes a new inbound message. History (imported, sent before the
+ * account's cutoff, or late — `historical`) never reaches the CRM, so it is
+ * not copied either.
  */
 async function loadInstagramOutreachRows(
   tx: CrmTransaction,
@@ -209,6 +211,7 @@ async function loadInstagramOutreachRows(
       eq(instagramChats.personId, personId),
       eq(instagramAccounts.unipileAccountId, unipileAccountId),
       eq(instagramMessages.direction, "outbound"),
+      eq(instagramMessages.historical, false),
     ));
   return rows;
 }

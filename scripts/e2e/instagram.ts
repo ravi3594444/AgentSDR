@@ -503,6 +503,7 @@ try {
   messagesByChat.set(CHAT1, [
     { object: "Message", id: m1, chat_id: CHAT1, text: "Do you deliver to Baner on Saturday?", timestamp: m1Row!.sentAt.toISOString(), is_sender: 0, attachments: [] },
     { object: "Message", id: `ig-old1-${stamp}`, chat_id: CHAT1, text: "Loved the croissants!", timestamp: new Date(Date.now() - 3 * 86400_000).toISOString(), is_sender: 0, attachments: [] },
+    { object: "Message", id: `ig-oldout-${stamp}`, chat_id: CHAT1, text: "Thank you, see you soon!", timestamp: new Date(Date.now() - 3 * 86400_000 + 60_000).toISOString(), is_sender: 1, attachments: [] },
   ]);
   messagesByChat.set(CHAT_IMP, [
     { object: "Message", id: `ig-i1-${stamp}`, chat_id: CHAT_IMP, text: "Are you open on Sunday?", timestamp: new Date(Date.now() - 2 * 86400_000).toISOString(), is_sender: 0, attachments: [] },
@@ -512,12 +513,12 @@ try {
   const beforeImport = await countA();
   const imported = await inA(() => messagesLib.importInstagramHistory(a1Row.id));
   const afterImport = await countA();
-  const importedIds = [`ig-old1-${stamp}`, `ig-i1-${stamp}`, `ig-i2-${stamp}`];
+  const importedIds = [`ig-old1-${stamp}`, `ig-oldout-${stamp}`, `ig-i1-${stamp}`, `ig-i2-${stamp}`];
   const importedRows = await inA(() => db.select().from(instagramMessages).where(and(messagesLib.messageInOrg(), inArray(instagramMessages.unipileMessageId, importedIds))));
   const chatImp = (await inA(() => db.select().from(instagramChats).where(and(messagesLib.chatInOrg(), eq(instagramChats.unipileChatId, CHAT_IMP)))))[0];
   check(
     "import brings in chats and their latest messages, skipping groups and chat events",
-    imported.importedChats === 2 && imported.importedMessages === 3 && imported.skippedGroups === 1 && importedRows.length === 3,
+    imported.importedChats === 2 && imported.importedMessages === 4 && imported.skippedGroups === 1 && importedRows.length === 4,
     JSON.stringify(imported),
   );
   check(
@@ -531,6 +532,21 @@ try {
   const afterReImport = await countA();
   check("importing again imports nothing new", reImport.importedChats === 0 && reImport.importedMessages === 0 && afterReImport.messages === afterImport.messages, JSON.stringify(reImport));
   check("the account remembers when history was imported", Boolean((await inA(() => accountsLib.findInstagramAccountByUnipileId(A1)))?.lastImportedAt));
+
+  // The next fresh reply backfills what the owner sent in the chat — but
+  // never imported history (ig-oldout, sent from the app three days ago).
+  const freshOut = `ig-fresh-out-${stamp}`;
+  await db.insert(instagramMessages).values({ chatId: chat1!.id, unipileMessageId: freshOut, direction: "outbound", origin: "phone", body: "Our Saturday slots are 9 to 12.", sentAt: new Date(Date.now() - 60_000), historical: false });
+  const beforeBackfill = await countA();
+  const m3 = `ig-m3-${stamp}`;
+  await inA(() => messagesLib.ingestInstagramWebhook(delivery({ chatId: CHAT1, messageId: m3, text: "Great, 10 o'clock then?", lead: LEAD1 }), []));
+  const afterBackfill = await countA();
+  const backfillKeys = (await db.select({ key: crmConversationMessages.idempotencyKey }).from(crmConversationMessages).where(eq(crmConversationMessages.conversationId, conversation!.id))).map((row) => row.key);
+  check(
+    "a fresh reply backfills the fresh outbound message but never imported history",
+    afterBackfill.crm === beforeBackfill.crm + 2 && backfillKeys.includes(`instagram:${freshOut}`) && backfillKeys.includes(`instagram:${m3}`) && !backfillKeys.includes(`instagram:ig-oldout-${stamp}`),
+    JSON.stringify({ beforeBackfill, afterBackfill, backfillKeys }),
+  );
 
   // ============================================================ a CRM reply, sent through the real dispatcher
   const [record] = await inA(() => db.select().from(crmRecords).where(and(eq(crmRecords.organizationId, A), eq(crmRecords.id, conversation!.crmRecordId))));
