@@ -5,6 +5,7 @@ import { and, count, desc, eq, gt, gte, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { AUTOPILOT_ACTOR, AUTOPILOT_LIMITS, autopilotGate, autopilotIdempotencyKey, limitProblem, type AutopilotFacts } from "@/lib/crm/autopilot";
 import { runMembershipFor } from "@/lib/crm/autopilot.server";
+import { effectiveBusinessProfile } from "./businessContext.server";
 import { appendCrmEvent } from "@/lib/crm/events";
 import { isPersonDoNotContact, setPersonDoNotContact } from "@/lib/crm/policies";
 import { enqueueCrmJobInTransaction } from "@/lib/crm/queue";
@@ -26,7 +27,6 @@ import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { openDecision } from "./decisions.server";
 import { handoverMessage, HANDOVER_INTERVAL_MS, NO_ANSWER_NEEDED, tellsTheLead } from "./handoff";
 import { settlePersonReplies, waitsForOwner, writeBrief } from "./handoff.server";
-import { getBusinessProfile } from "./profile.server";
 import { judgeReply, selfFixableReply, type ModelCheck } from "./replyCheck";
 import { storedReplyConversation, type ReplyConversationMessage } from "@/lib/crm/ai/replyConversation";
 import { checkKnowledge, modelReplyCheck, type ReplyCheckInput } from "./replyCheck.server";
@@ -236,7 +236,8 @@ function sendingAllowed(deps: AutopilotDependencies): boolean {
 async function sendHandover(state: State, decisionId: string, kind: OwnerDecisionKind, deps: AutopilotDependencies): Promise<boolean> {
   if (!state.membership?.automatic || state.draft.sequenceStepRunId || !tellsTheLead(kind) || !sendingAllowed(deps)) return false;
   const organizationId = currentOrganizationId();
-  const profile = await getBusinessProfile();
+  // Signed like the run's outreach: the profile's sender, else the name every connected account uses.
+  const profile = await effectiveBusinessProfile();
   const message = handoverMessage(state.channel as RunLeadChannel, {
     kind,
     leadMessage: state.leadMessage,
