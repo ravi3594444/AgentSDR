@@ -1,18 +1,40 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { RiCloseLine, RiSettings3Line } from "@remixicon/react";
 import * as Modal from "@/components/alignui/modal";
+import type { FeatureState } from "@/lib/features/catalog";
 import { cn } from "@/utils/cn";
-import { itemPages, SETTINGS_NAV, type SettingsTab } from "./settingsNav";
+import { itemPages, visibleSettingsNav, type SettingsTab } from "./settingsNav";
 
 function isActive(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
-const ITEMS = SETTINGS_NAV.flatMap((group) => group.items);
+/**
+ * The organization's optional features, for rail rows that show only while
+ * theirs is on. Read again on each section change, so turning one on in
+ * Organization shows its row as soon as the person moves on. Null until
+ * known (or if the read fails): those rows stay hidden.
+ */
+function useFeatureState(pathname: string): FeatureState | null {
+  const [features, setFeatures] = useState<FeatureState | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/settings/features", { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((body: { features?: FeatureState } | null) => {
+        if (!cancelled && body?.features) setFeatures(body.features);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [pathname]);
+  return features;
+}
 
 /** The same row shapes the app sidebar uses, so Settings reads as part of it. */
 const rowBase =
@@ -77,8 +99,11 @@ function CloseButton({ className }: { className?: string }) {
  */
 function SettingsFrame({ children, modal }: { children: React.ReactNode; modal: boolean }) {
   const pathname = usePathname();
+  const features = useFeatureState(pathname);
+  const nav = useMemo(() => visibleSettingsNav(features), [features]);
+  const items = useMemo(() => nav.flatMap((group) => group.items), [nav]);
   // A row is active on any of its pages; with tabs, the page is one of them.
-  const activeItem = ITEMS.find((item) => itemPages(item).some((page) => isActive(pathname, page.href)));
+  const activeItem = items.find((item) => itemPages(item).some((page) => isActive(pathname, page.href)));
   const activeHref = activeItem?.href ?? "";
   const activePage = activeItem ? itemPages(activeItem).find((page) => isActive(pathname, page.href))?.href ?? "" : "";
   const Title = modal ? Modal.Title : "h1";
@@ -109,7 +134,7 @@ function SettingsFrame({ children, modal }: { children: React.ReactNode; modal: 
           </div>
         </div>
         <nav aria-label="Settings sections" className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
-          {SETTINGS_NAV.map((group, index) => (
+          {nav.map((group, index) => (
             <div key={group.label} className={cn(index > 0 && "mt-4")}>
               <p className="mb-1 px-2 text-paragraph-xs text-text-soft-400">{group.label}</p>
               <ul className="space-y-0.5">
@@ -151,7 +176,7 @@ function SettingsFrame({ children, modal }: { children: React.ReactNode; modal: 
             ref={stripRef}
             className="flex gap-1 overflow-x-auto px-3 pb-2.5 sm:px-5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
           >
-            {ITEMS.map(({ href, label, icon: Icon }) => {
+            {items.map(({ href, label, icon: Icon }) => {
               const active = href === activeHref;
               return (
                 <Link

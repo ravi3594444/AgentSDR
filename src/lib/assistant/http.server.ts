@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { authContextErrorResponse, can, requireOrgContext, type OrgContext } from "@/lib/auth/context";
 import { crmRequestErrorResponse, requireCrmMutationContext } from "@/lib/crm/http";
@@ -74,9 +74,19 @@ export async function assistantState(threadId: string | null, ctx: OrgContext, w
     ? await db.select({ id: outreachRuns.id, status: outreachRuns.status, autopilot: outreachRuns.autopilot, error: outreachRuns.error, campaigns: outreachRuns.campaigns })
       .from(outreachRuns).where(and(inOrg(outreachRuns), inArray(outreachRuns.id, [...new Set(runIds)])))
     : [];
+  // The mode chosen on the latest started run: the next plan card starts with it selected.
+  // This person's own choice on an outreach plan (not another member's, nor an inquiry run's).
+  const [lastStarted] = ctx.userId ? await db.select({ autopilot: outreachRuns.autopilot }).from(outreachRuns)
+    .where(and(
+      inOrg(outreachRuns),
+      eq(outreachRuns.approvedBy, ctx.userId),
+      inArray(outreachRuns.status, ["starting", "running", "paused", "stopped", "completed"]),
+      sql`coalesce(${outreachRuns.plan} ->> 'kind', 'outreach') <> 'inquiries'`,
+    ))
+    .orderBy(sql`${outreachRuns.approvedAt} desc nulls last`).limit(1) : [];
   // What became of each lead's reply, for the plan card (answered, due at, waiting for the owner and why).
   const started = runs.filter((run) => run.status !== "proposed" && run.status !== "cancelled").map((run) => run.id);
-  const [replies, leads] = await Promise.all([runReplies(started), runLeads(started)]);
+  const [replies, leads, peers] = await Promise.all([runReplies(started), runLeads(started), requestPeers(thread.id)]);
   return {
     thread: { id: thread.id, title: thread.title },
     viewer: { firstName: ctx.userName?.trim().split(/\s+/)[0] || null },
@@ -94,9 +104,32 @@ export async function assistantState(threadId: string | null, ctx: OrgContext, w
       createdAt: message.createdAt.toISOString(),
     })),
     jobs: jobs.map((job) => ({ ...job, createdAt: job.createdAt.toISOString() })),
-    runs: Object.fromEntries(runs.map((run) => [run.id, { ...run, replies: replies[run.id] ?? [], leads: leads[run.id] ?? [] }])),
+    runs: Object.fromEntries(runs.map((run) => [run.id, { ...run, replies: replies[run.id] ?? [], leads: leads[run.id] ?? [], requestPeers: peers(run.id) }])),
     decisions: Object.fromEntries(decisions.map((decision) => [decision.id, { status: decision.status, answer: decision.answer }])),
     setup: withSetup ? { ...(await setupSnapshot()), canManageAutopilot: canManageAutopilot(ctx) } : null,
+    lastReplyMode: lastStarted ? (lastStarted.autopilot ? "automatic" : "review") as "automatic" | "review" : null,
+  };
+}
+
+/**
+ * For each plan of this thread: how many other plans the same owner request
+ * made, plus its searches still running that will make one (contactAfter).
+ * The plan card offers "apply to the rest of this request" only when there
+ * is such a rest.
+ */
+async function requestPeers(threadId: string): Promise<(runId: string) => number> {
+  const [plans, searches] = await Promise.all([
+    db.select({ id: outreachRuns.id, requestId: sql<string | null>`${outreachRuns.plan} ->> 'requestId'` }).from(outreachRuns)
+      .where(and(inOrg(outreachRuns), eq(outreachRuns.threadId, threadId), sql`${outreachRuns.status} <> 'cancelled'`, sql`${outreachRuns.plan} ->> 'requestId' is not null`)),
+    db.select({ requestId: sql<string | null>`${assistantJobs.payload} -> 'contactAfter' ->> 'requestId'` }).from(assistantJobs)
+      .where(and(inOrg(assistantJobs), eq(assistantJobs.threadId, threadId), inArray(assistantJobs.status, ["queued", "running"]))),
+  ]);
+  const count = new Map<string, number>();
+  for (const { requestId } of [...plans, ...searches]) if (requestId) count.set(requestId, (count.get(requestId) ?? 0) + 1);
+  const requestOf = new Map(plans.map((plan) => [plan.id, plan.requestId]));
+  return (runId) => {
+    const requestId = requestOf.get(runId);
+    return requestId ? Math.max(0, (count.get(requestId) ?? 0) - 1) : 0;
   };
 }
 

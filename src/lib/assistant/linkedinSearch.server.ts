@@ -32,7 +32,7 @@ type Payload = {
   accountId: string;
   batchId?: string;
   startedAt?: string;
-  contactAfter?: { channels: AudienceChannel[] | null; ownerRequest?: string } | null;
+  contactAfter?: { channels: AudienceChannel[] | null; ownerRequest?: string; requestId?: string } | null;
 };
 
 export async function linkedinSearchAvailability(): Promise<{ available: boolean; reason: string | null; accountId: string | null }> {

@@ -1,4 +1,5 @@
 import { ChannelRulesForm } from "@/components/settings/ChannelRulesForm";
+import { OrgFeatures } from "@/components/settings/organization/OrgFeatures";
 import { OrgGeneral } from "@/components/settings/organization/OrgGeneral";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import { can, requirePageOrgContext } from "@/lib/auth/context";
@@ -22,6 +23,7 @@ export default async function Page() {
           </div>
           <ChannelRulesForm channel="general" initialValues={values} canEdit={can(ctx, { integrations: ["manage"] })} />
         </section>
+        <OrgFeatures />
       </div>
     </SettingsPage>
   );

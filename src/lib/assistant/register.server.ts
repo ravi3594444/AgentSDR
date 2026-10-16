@@ -1,9 +1,11 @@
 import "server-only";
 
 import { runDiscoveryStep } from "@/lib/discovery/discovery.server";
+import { runWebDiscoveryStep } from "@/lib/discovery/webDiscovery.server";
 import { continueAfterEvent, runToolInThread } from "./agent.server";
 import { runLinkedinSearchStep } from "./linkedinSearch.server";
 import { runOutreachStartStep } from "./outreach.server";
+import { applyRequestApproval } from "./requestApproval.server";
 import { addMessage, claimThread, releaseThread } from "./threads.server";
 import { onAssistantJobFinished, registerAssistantJobHandler, type AssistantJob } from "./worker";
 
@@ -14,7 +16,25 @@ import { onAssistantJobFinished, registerAssistantJobHandler, type AssistantJob 
  * model, so it says exactly what happened.
  */
 
+/** A finished website and directory search, from its result. */
+function webDiscoveryMessage(job: AssistantJob): string {
+  if (job.status === "failed") return `The web search for leads failed: ${job.error ?? "unknown error"}`;
+  const result = (job.result ?? {}) as Record<string, unknown>;
+  const found = Number(result.found ?? 0);
+  if (!found) return String(result.note ?? "The web search found no businesses.");
+  const count = (key: string) => Number(result[key] ?? 0);
+  const extra: string[] = [];
+  if (count("excluded")) extra.push(`${count("excluded")} left out with the reason recorded`);
+  if (count("instagramOnly")) extra.push(`${count("instagramOnly")} of them reachable only on Instagram (open their post or profile to reply yourself)`);
+  if (count("needSignals")) extra.push(`${count("needSignals")} asked for something like this in their own words`);
+  if (count("alreadyKnown")) extra.push(`${count("alreadyKnown")} already in your leads (reused, not duplicated)`);
+  if (count("duplicates")) extra.push(`${count("duplicates")} duplicates skipped`);
+  const cost = typeof result.costUsd === "number" ? ` Search cost $${result.costUsd.toFixed(4)}.` : "";
+  return `The web search for “${String(result.phrase ?? "")}” finished: ${found} found on business websites, directories and public pages, ${count("eligible")} can be contacted (${count("withEmail")} by email, ${count("withPhoneOnly")} by phone only)${extra.length ? `; ${extra.join(", ")}` : ""}.${result.note ? ` ${String(result.note)}` : ""}${cost}`;
+}
+
 function discoveryMessage(job: AssistantJob): string {
+  if (job.kind === "web_discovery") return webDiscoveryMessage(job);
   if (job.status === "failed") return `The lead search failed: ${job.error ?? "unknown error"}`;
   const result = (job.result ?? {}) as Record<string, unknown>;
   const found = Number(result.found ?? 0);
@@ -49,21 +69,22 @@ export function registerAssistantJobs(): void {
   registerAssistantJobHandler("discovery", runDiscoveryStep);
   registerAssistantJobHandler("outreach_start", runOutreachStartStep);
   registerAssistantJobHandler("linkedin_search", runLinkedinSearchStep);
+  registerAssistantJobHandler("web_discovery", runWebDiscoveryStep);
   onAssistantJobFinished(async (job) => {
     if (!job.threadId) return;
-    const search = job.kind === "discovery" || job.kind === "linkedin_search";
+    const search = job.kind === "discovery" || job.kind === "linkedin_search" || job.kind === "web_discovery";
     const content = search ? discoveryMessage(job) : outreachMessage(job);
     await addMessage({ threadId: job.threadId, role: "event", content });
     if (!search || job.status !== "succeeded" || !job.audienceId || Number((job.result ?? {}).eligible ?? 0) <= 0) return;
     // The owner asked to contact what is found: the plan is prepared here,
     // not left to the model's judgement. It still waits for the owner's Start.
-    const contactAfter = (job.payload as { contactAfter?: { channels: string[] | null; ownerRequest?: string } | null }).contactAfter;
+    const contactAfter = (job.payload as { contactAfter?: { channels: string[] | null; ownerRequest?: string; requestId?: string } | null }).contactAfter;
     // Not awaited: writing the plan takes model calls, and the worker moves on.
     void followUpSearch(job, job.threadId, contactAfter ?? null);
   });
 }
 
-async function followUpSearch(job: AssistantJob, threadId: string, contactAfter: { channels: string[] | null; ownerRequest?: string } | null): Promise<void> {
+async function followUpSearch(job: AssistantJob, threadId: string, contactAfter: { channels: string[] | null; ownerRequest?: string; requestId?: string } | null): Promise<void> {
   try {
     if (contactAfter) {
       // Wait for a turn in progress to end, so the plan is made once.
@@ -75,12 +96,23 @@ async function followUpSearch(job: AssistantJob, threadId: string, contactAfter:
       let prepared;
       try {
         prepared = await runToolInThread(
-          { threadId, userId: job.createdBy, ownerText: contactAfter.ownerRequest ?? "", authorizedBy: "search" },
+          { threadId, userId: job.createdBy, ownerText: contactAfter.ownerRequest ?? "", authorizedBy: "search", outreachRequestId: contactAfter.requestId ?? null },
           "prepare_outreach",
           { audienceId: job.audienceId, ownerRequest: contactAfter.ownerRequest ?? null, ...(contactAfter.channels?.length ? { channels: contactAfter.channels } : {}) },
         );
         if (prepared.ok) {
-          await addMessage({ threadId, role: "event", content: "The outreach plan for these leads is ready below. Check the audience, the sample messages and the limits, then press Start. Nothing is sent before that." });
+          // Started on its own when the owner already approved this request on another of its plans.
+          const runId = typeof prepared.data?.runId === "string" ? prepared.data.runId : null;
+          const approval = runId ? await applyRequestApproval(runId) : { started: false, reason: null };
+          if (!approval.started) {
+            await addMessage({
+              threadId,
+              role: "event",
+              content: approval.reason
+                ? `The outreach plan for these leads is ready below. It was not started with the rest of your request because ${approval.reason}: check it and press Start. Nothing is sent before that.`
+                : "The outreach plan for these leads is ready below. Check the audience, the sample messages and the limits, then press Start. Nothing is sent before that.",
+            });
+          }
         }
       } finally {
         if (claimed) await releaseThread(threadId);

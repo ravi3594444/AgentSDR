@@ -72,6 +72,23 @@ export function identityExceptionReplayInput(
     };
   }
 
+  if (exception.channel === "instagram") {
+    // The payload is the InstagramCrmMessageInput src/lib/instagram/crmBridge.ts quarantined.
+    return {
+      personId,
+      channel: "instagram",
+      accountRef: exception.accountRef,
+      providerThreadId: optionalText(payload.unipileChatId),
+      providerContactId: optionalText(payload.providerContactId) ?? exception.identityValue,
+      idempotencyKey: exception.sourceEventKey,
+      providerMessageId: optionalText(payload.unipileMessageId),
+      bodyText: requiredText(payload.body, "Instagram message text"),
+      raw: payload,
+      sentAt: replayDate(payload.sentAt, exception.createdAt),
+      actorRef: "identity-review",
+    };
+  }
+
   const gmailMessageId = optionalText(payload.gmailMessageId);
   if (gmailMessageId) {
     return {

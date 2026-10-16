@@ -67,5 +67,7 @@ export function leadProgress(input: LeadProgressInput): LeadProgress {
     }
   }
   if (input.runStatus === "stopped") return { tone: "stopped", text: "Stopped" };
+  // An inquiry run's members wrote first; nothing is sent to them before their reply.
+  if (input.channel === "instagram") return { tone: "replied", text: "Wrote in on Instagram" };
   return { tone: "waiting", text: "Not started yet" };
 }

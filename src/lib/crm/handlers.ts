@@ -303,7 +303,7 @@ export async function handleClassificationJob(
       // (src/lib/assistant/autopilotRun.server.ts), so a reply such as "Hey"
       // is never left without an answer and without anyone being told.
       const assistantLead = !appliedResult.applied
-        && (await runMembershipFor(tx, context.personId, context.channel))?.leadStatus === "active";
+        && (await runMembershipFor(tx, context.personId, context.channel, context.conversationId))?.leadStatus === "active";
       if (!appliedResult.applied && !assistantLead) return;
       const current = await lockCrmRecord(tx, context.recordId);
       // The rep answered while this ran — e.g. straight from their phone on

@@ -56,7 +56,7 @@ type Message = {
 
 type Job = {
   id: string;
-  kind: "discovery" | "outreach_start" | "linkedin_search";
+  kind: "discovery" | "outreach_start" | "linkedin_search" | "web_discovery";
   status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
   stage: string;
   progress: Record<string, unknown>;
@@ -70,7 +70,7 @@ type RunReply = { id: string; who: string; channel: string; receivedAt: string; 
 
 type RunLead = { personId: string; who: string; channel: string; progress: { tone: "waiting" | "sent" | "replied" | "good" | "stopped" | "failed"; text: string } };
 
-type Run = { id: string; status: string; autopilot: boolean; error: string | null; campaigns: Record<string, string>; replies?: RunReply[]; leads?: RunLead[] };
+type Run = { id: string; status: string; autopilot: boolean; error: string | null; campaigns: Record<string, string>; replies?: RunReply[]; leads?: RunLead[]; /** Other plans of the same request, and its searches still running. */ requestPeers?: number };
 
 type DecisionState = { status: "open" | "answered" | "resolved"; answer: string | null };
 
@@ -96,13 +96,15 @@ export type AssistantStatePayload = {
   runs: Record<string, Run>;
   decisions: Record<string, DecisionState>;
   setup: Setup | null;
+  /** The reply mode the owner chose on their latest started run: the plan card starts with it selected. */
+  lastReplyMode?: "automatic" | "review" | null;
 };
 
 const ACCEPT = ".pdf,.docx,.txt,.md,.csv,.tsv,.xlsx,.xls";
 // The reply limits the server enforces (src/lib/crm/autopilot.ts), shown before Start.
 const AUTOPILOT_PER_CONVERSATION = AUTOPILOT_LIMITS.perConversation;
 const AUTOPILOT_PER_DAY = AUTOPILOT_LIMITS.perDay;
-const CHANNEL_LABEL: Record<string, string> = { email: "Email", whatsapp: "WhatsApp", linkedin: "LinkedIn" };
+const CHANNEL_LABEL: Record<string, string> = { email: "Email", whatsapp: "WhatsApp", linkedin: "LinkedIn", instagram: "Instagram" };
 
 const TOOL_TITLE: Record<string, string> = {
   check_setup: "Checked what is connected",
@@ -128,6 +130,10 @@ const TOOL_TITLE: Record<string, string> = {
   import_contacts: "Contact list",
   add_contacts: "Added contacts",
   read_webpage: "Read a web page",
+  find_customers_on_web: "Web search",
+  use_existing_leads: "Lead list from your leads",
+  list_inquiries: "Inquiries",
+  prepare_inquiry_replies: "Answering new inquiries",
 };
 
 async function readJson<T>(response: Response): Promise<T> {
@@ -206,20 +212,108 @@ function AudienceSummary({ audience }: { audience: AudienceData }) {
   );
 }
 
+type ProspectSignal = { kind: "need" | "engagement"; text: string; sourceUrl: string | null; source: string; at: string | null };
+type ProspectView = {
+  personId: string | null;
+  name: string;
+  status: "potential_match" | "inquired" | "replied" | "interested" | "excluded";
+  statusLabel: string;
+  excludedReason: string | null;
+  source: { label: string; url: string | null };
+  foundAt: string;
+  matchReason: string;
+  routes: { channel: string; value: string; sourceUrl: string | null; note: string }[];
+  needEvidence: ProspectSignal[];
+  engagement: ProspectSignal[];
+  location: string;
+  budget: string;
+};
+type ProspectsPayload = { counts: Record<string, number>; prospects: ProspectView[] };
+
+const PROSPECT_COLOR: Record<ProspectView["status"], "gray" | "green" | "blue" | "orange"> = { potential_match: "gray", inquired: "blue", replied: "orange", interested: "green", excluded: "gray" };
+
+/**
+ * Every lead of a list before outreach: where and when it was found, why it
+ * matched, how it can be reached (each detail with its page), and only the
+ * lead's own words as evidence of a need. Loaded when opened.
+ */
+function ProspectsList({ audienceId }: { audienceId: string }) {
+  const [data, setData] = useState<ProspectsPayload | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  async function load() {
+    if (data || loading) return;
+    setLoading(true);
+    try {
+      setData(await readJson<ProspectsPayload>(await fetch(`/api/assistant/audiences/${audienceId}/prospects`, { cache: "no-store" })));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setLoading(false);
+    }
+  }
+  const counts = data?.counts;
+  return (
+    <details className="text-paragraph-xs" onToggle={(event) => { if ((event.target as HTMLDetailsElement).open) void load(); }}>
+      <summary className="cursor-pointer text-text-strong-950">Review the leads: source, why they match, evidence</summary>
+      {loading && <p className="mt-1.5 text-text-soft-400">Loading…</p>}
+      {error && <p role="alert" className="mt-1.5 text-error-base">{error}</p>}
+      {counts && (
+        <p className="mt-1.5 text-text-sub-600">
+          {counts.potential_match ?? 0} potential match{counts.potential_match === 1 ? "" : "es"} · {counts.inquired ?? 0} inquired · {counts.replied ?? 0} replied · {counts.interested ?? 0} interested · {counts.withNeedEvidence ?? 0} with their own words showing a need. A potential match is not an interested customer.
+        </p>
+      )}
+      {data && (
+        <ul className="mt-1.5 max-h-96 space-y-1.5 overflow-y-auto">
+          {data.prospects.map((prospect, index) => (
+            <li key={`${prospect.personId ?? prospect.name}-${index}`} className="rounded-lg bg-bg-weak-50 px-2.5 py-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="min-w-0 flex-1 truncate text-label-xs text-text-strong-950">{prospect.name}</p>
+                <Badge.Root variant="lighter" size="small" color={PROSPECT_COLOR[prospect.status]}>{prospect.statusLabel}</Badge.Root>
+              </div>
+              <p className="mt-0.5 text-text-sub-600">
+                {prospect.source.url ? <a href={prospect.source.url} target="_blank" rel="noopener noreferrer" className="text-primary-base hover:underline">{prospect.source.label} ({hostOf(prospect.source.url)})</a> : prospect.source.label}
+                {" · "}{new Date(prospect.foundAt).toLocaleDateString()}
+              </p>
+              <p className="mt-0.5 text-text-sub-600">Why: {prospect.matchReason}</p>
+              {prospect.excludedReason && <p className="mt-0.5 text-text-sub-600">Left out: {prospect.excludedReason}</p>}
+              {prospect.routes.length > 0 ? prospect.routes.map((route) => (
+                <p key={`${route.channel}:${route.value}`} className="mt-0.5 truncate text-text-sub-600">
+                  {route.channel}: {route.value} · {route.sourceUrl ? <a href={route.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-primary-base hover:underline">{route.note} ({hostOf(route.sourceUrl)})</a> : route.note}
+                </p>
+              )) : <p className="mt-0.5 text-text-sub-600">Contact: Unknown</p>}
+              {prospect.needEvidence.map((signal, signalIndex) => (
+                <p key={`need-${signalIndex}`} className="mt-0.5 border-l-2 border-stroke-sub-300 pl-2 text-text-sub-600">
+                  “{signal.text}” <span className="text-text-soft-400">— {signal.sourceUrl ? <a href={signal.sourceUrl} target="_blank" rel="noopener noreferrer" className="hover:underline">{signal.source}</a> : signal.source}{signal.at ? `, ${new Date(signal.at).toLocaleDateString()}` : ""}</span>
+                </p>
+              ))}
+              {prospect.engagement.length > 0 && <p className="mt-0.5 text-text-soft-400">{prospect.engagement.length} like{prospect.engagement.length === 1 ? "" : "s"}, follow{prospect.engagement.length === 1 ? "" : "s"} or generic comment{prospect.engagement.length === 1 ? "" : "s"} (not counted as interest)</p>}
+              {!prospect.needEvidence.length && prospect.status === "potential_match" && <p className="mt-0.5 text-text-soft-400">No evidence of a need found.</p>}
+              <p className="mt-0.5 text-text-soft-400">Location: {prospect.location} · Budget: {prospect.budget}</p>
+            </li>
+          ))}
+        </ul>
+      )}
+    </details>
+  );
+}
+
 function DiscoveryCard({ message, job }: { message: Message; job: Job | undefined }) {
   const data = message.toolResult?.data as { phrase?: string; keywords?: string } | undefined;
   const linkedin = message.tool === "find_linkedin_leads";
+  const web = message.tool === "find_customers_on_web";
   if (message.status !== "ok" || !job) return <Card title={TOOL_TITLE[message.tool ?? "find_leads"] ?? "Lead search"} status={message.status}><p>{message.toolResult?.display ?? message.content}</p></Card>;
   const progress = job.progress as Record<string, number | string>;
   const stageText: Record<string, string> = {
     queued: progress.note ? `${String(progress.note)}…` : "Starting the search…",
-    searching: linkedin ? `Searching LinkedIn (${progress.found ?? 0} profiles so far)…` : `Searching Google Maps${progress.searches ? ` in ${progress.searches} area${Number(progress.searches) === 1 ? "" : "s"}` : ""} (usually 1–10 minutes)…`,
+    searching: linkedin ? `Searching LinkedIn (${progress.found ?? 0} profiles so far)…` : web ? "Searching the web for matching businesses and directories…" : `Searching Google Maps${progress.searches ? ` in ${progress.searches} area${Number(progress.searches) === 1 ? "" : "s"}` : ""} (usually 1–10 minutes)…`,
+    reading: `Reading the pages the search found for published contact details (${progress.read ?? progress.pagesRead ?? 0} of ${progress.toRead ?? progress.candidates ?? "?"})…`,
     enriching: `Reading business websites for contact details (${progress.websitesChecked ?? 0} of ${progress.websitesToCheck ?? "?"})…`,
     saving: `Checking and saving contacts (${progress.saved ?? 0} of ${progress.found ?? "?"})…`,
   };
   const result = job.result as Record<string, number | string | null> | null;
   return (
-    <Card title={`${linkedin ? "LinkedIn search" : "Lead search"}: ${data?.phrase ?? data?.keywords ?? ""}`} status={job.status}>
+    <Card title={`${linkedin ? "LinkedIn search" : web ? "Web search" : "Lead search"}: ${data?.phrase ?? data?.keywords ?? (data as { customers?: string } | undefined)?.customers ?? ""}`} status={job.status}>
       {job.status === "queued" || job.status === "running" ? (
         <p role="status">{stageText[job.stage] ?? "Working…"}{typeof progress.found === "number" && job.stage !== "searching" ? ` ${progress.found} businesses found.` : ""}</p>
       ) : job.status === "succeeded" && result ? (
@@ -227,11 +321,13 @@ function DiscoveryCard({ message, job }: { message: Message; job: Job | undefine
           {result.found ?? 0} {linkedin ? "profiles" : "businesses"} found · <span className="text-label-sm text-text-strong-950">{result.eligible ?? 0} contactable</span>{linkedin ? " on LinkedIn" : ` (${result.withEmail ?? 0} by email, ${result.withPhoneOnly ?? 0} by phone only)`}
           {Number(result.excluded ?? 0) > 0 && ` · ${result.excluded} left out with reasons`}
           {Number(result.duplicates ?? 0) > 0 && ` · ${result.duplicates} duplicates skipped`}
+          {Number(result.alreadyKnown ?? 0) > 0 && ` · ${result.alreadyKnown} already in your leads (not duplicated)`}
           {result.note ? <span className="mt-1 block">{String(result.note)}</span> : null}
         </p>
       ) : (
         <p className="text-error-base">{job.error ?? "The search failed."}</p>
       )}
+      {job.status === "succeeded" && job.audienceId && <ProspectsList audienceId={job.audienceId} />}
     </Card>
   );
 }
@@ -250,16 +346,23 @@ type ProposalData = {
     excluded: { reason: string; count: number }[];
     estimate: { aiCalls: number; aiCostUsd: number | null; days: number | null };
     autopilot: boolean;
+    ownerRequest?: string | null;
+    requestId?: string | null;
   };
 };
 
-function ProposalCard({ message, run, canManageAutopilot, onChanged }: { message: Message; run: Run | undefined; canManageAutopilot: boolean; onChanged: () => void }) {
+function ProposalCard({ message, run, canManageAutopilot, lastReplyMode, onChanged }: { message: Message; run: Run | undefined; canManageAutopilot: boolean; lastReplyMode: "automatic" | "review" | null; onChanged: () => void }) {
   const data = message.toolResult?.data as ProposalData | undefined;
-  const [mode, setMode] = useState<"automatic" | "review" | null>(null);
+  // Starts with the mode the owner chose last time (Automatic only for those who may choose it).
+  const [mode, setMode] = useState<"automatic" | "review" | null>(lastReplyMode === "automatic" && !canManageAutopilot ? null : lastReplyMode);
+  // One Start for the whole request: its other plans (more cities, more searches) start under it.
+  const [applyToRequest, setApplyToRequest] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   if (message.status !== "ok" || !data) return <Card title={TOOL_TITLE.prepare_outreach!} status={message.status}><p>{message.content}</p></Card>;
   const status = run?.status ?? "proposed";
+  // Offered only when the request has a rest: other plans, or searches that will make one.
+  const requestHasMore = Boolean(data.plan.requestId) && (run?.requestPeers ?? 0) > 0;
   const perChannel = data.plan.assignments.reduce<Record<string, number>>((acc, a) => ({ ...acc, [a.channel]: (acc[a.channel] ?? 0) + 1 }), {});
 
   async function act(action: "start" | "cancel" | "pause" | "resume" | "stop" | "mode", nextMode?: "automatic" | "review") {
@@ -275,7 +378,7 @@ function ProposalCard({ message, run, canManageAutopilot, onChanged }: { message
       await readJson(await fetch(`/api/assistant/runs/${data!.runId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(action === "start" ? { action, mode } : action === "mode" ? { action, mode: nextMode } : { action }),
+        body: JSON.stringify(action === "start" ? { action, mode, applyToRequest: requestHasMore && applyToRequest } : action === "mode" ? { action, mode: nextMode } : { action }),
       }));
       onChanged();
     } catch (cause) {
@@ -346,6 +449,12 @@ function ProposalCard({ message, run, canManageAutopilot, onChanged }: { message
             <span><span className="text-label-xs text-text-strong-950">Review.</span> The AI drafts every reply; each waits for you in Action required.</span>
           </label>
           <p className="text-paragraph-xs text-text-soft-400">Either way the first messages and follow-ups go out automatically to these {data.plan.assignments.length} leads only, within the limits above. Adding people, channels or higher limits needs a new plan you approve.</p>
+          {requestHasMore && (
+            <label className="flex items-start gap-2 rounded-lg p-2 text-paragraph-xs ring-1 ring-inset ring-stroke-soft-200">
+              <input type="checkbox" className="mt-0.5" checked={applyToRequest} disabled={busy} onChange={(event) => setApplyToRequest(event.target.checked)} />
+              <span><span className="text-label-xs text-text-strong-950">Apply to the rest of this request ({run!.requestPeers} more {run!.requestPeers === 1 ? "plan or search" : "plans or searches"}).</span> The other plans this request makes (more cities or searches, including leads found later) start on their own as soon as they are ready, in this run&apos;s reply mode, on these channels, with up to 100 leads each; you will not be asked again. A plan outside that, or with someone already in another running plan, waits for you with the reason. Pause or stop any of them on its card; pausing or stopping this one ends the approval.</span>
+            </label>
+          )}
           <div className="flex justify-end gap-2">
             <Button.Root variant="neutral" mode="stroke" size="small" disabled={busy} onClick={() => void act("cancel")}>Discard</Button.Root>
             <Button.Root variant="primary" mode="filled" size="small" disabled={busy || !mode} onClick={() => void act("start")}>
@@ -375,6 +484,99 @@ function ProposalCard({ message, run, canManageAutopilot, onChanged }: { message
       {run?.replies && run.replies.length > 0 && <RepliesList replies={run.replies} />}
       {run?.leads && run.leads.length > 0 && <LeadsList leads={run.leads} />}
       {run?.error && <p className="mt-2 text-paragraph-xs text-error-base">{run.error}</p>}
+      {error && <p role="alert" className="mt-2 text-paragraph-xs text-error-base">{error}</p>}
+    </div>
+  );
+}
+
+/**
+ * An inquiry run's card: what it answers (new Instagram inquiries from Start
+ * on, on the accounts listed; never imported history or earlier chats), the
+ * Automatic/Review choice and Start, then Pause / Resume / Stop and the
+ * replies — the same run controls as an outreach plan.
+ */
+function InquiryRunCard({ message, run, canManageAutopilot, onChanged }: { message: Message; run: Run | undefined; canManageAutopilot: boolean; onChanged: () => void }) {
+  const data = message.toolResult?.data as { runId: string; name: string; plan: { inquiry?: { accounts: { username: string | null }[] } } } | undefined;
+  const [mode, setMode] = useState<"automatic" | "review" | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (message.status !== "ok" || !data) return <Card title={TOOL_TITLE.prepare_inquiry_replies!} status={message.status}><p>{message.toolResult?.display ?? message.content}</p></Card>;
+  const status = run?.status ?? "proposed";
+  const accounts = (data.plan.inquiry?.accounts ?? []).map((account) => account.username ? `@${account.username}` : "an Instagram account").join(", ");
+
+  async function act(action: "start" | "cancel" | "pause" | "resume" | "stop" | "mode", nextMode?: "automatic" | "review") {
+    if (action === "stop" && !window.confirm("Stop answering new inquiries for good? Replies already sent stay sent; new inquiries then wait for you in Action required.")) return;
+    if (action === "mode" && nextMode === "automatic" && !window.confirm(
+      `Answer new inquiries automatically? Answers backed by your saved information are checked and sent as soon as they are ready; at most ${AUTOPILOT_PER_CONVERSATION} per conversation and ${AUTOPILOT_PER_DAY} in any 24 hours. Everything else waits for you.`,
+    )) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await readJson(await fetch(`/api/assistant/runs/${data!.runId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(action === "start" ? { action, mode } : action === "mode" ? { action, mode: nextMode } : { action }),
+      }));
+      onChanged();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const badge: Record<string, { label: string; color: "gray" | "green" | "orange" | "red" | "blue" }> = {
+    proposed: { label: "Waiting for your approval", color: "orange" },
+    running: { label: "Answering new inquiries", color: "green" },
+    paused: { label: "Paused", color: "gray" },
+    stopped: { label: "Stopped", color: "gray" },
+    cancelled: { label: "Discarded", color: "gray" },
+  };
+  const shown = badge[status] ?? { label: status, color: "gray" as const };
+
+  return (
+    <div className="w-full max-w-2xl rounded-xl border border-stroke-soft-200 bg-bg-white-0 p-3 shadow-regular-xs sm:p-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="min-w-0 flex-1 text-label-md text-text-strong-950">{data.name}</p>
+        <Badge.Root variant="lighter" size="medium" color={shown.color}>{shown.label}</Badge.Root>
+      </div>
+      <p className="mt-2 text-paragraph-xs text-text-sub-600">
+        Covers people whose first Instagram message arrives after you press Start, on {accounts || "your Instagram accounts that treat new messages as inquiries"}. It sends nothing first, never answers imported history or chats that began earlier, and leaves everyone else to you. Do Not Contact, takeovers and the handoff to you apply as in every run.
+      </p>
+      {status === "proposed" && (
+        <div className="mt-3 space-y-2 border-t border-stroke-soft-200 pt-3">
+          <p className="text-label-sm text-text-strong-950">How should these inquiries be answered?</p>
+          <label className={cn("flex items-start gap-2 rounded-lg p-2 text-paragraph-xs ring-1 ring-inset", mode === "automatic" ? "ring-primary-base" : "ring-stroke-soft-200", !canManageAutopilot && "opacity-60")}>
+            <input type="radio" name={`mode-${data.runId}`} className="mt-0.5" checked={mode === "automatic"} disabled={!canManageAutopilot || busy} onChange={() => setMode("automatic")} />
+            <span><span className="text-label-xs text-text-strong-950">Automatic.</span> Ordinary questions are answered from your saved information as soon as the answer is written and checked, at most {AUTOPILOT_PER_CONVERSATION} times per conversation and {AUTOPILOT_PER_DAY} in 24 hours. Anything your information does not cover comes to you.{!canManageAutopilot && " Only an owner or admin can choose this."}</span>
+          </label>
+          <label className={cn("flex items-start gap-2 rounded-lg p-2 text-paragraph-xs ring-1 ring-inset", mode === "review" ? "ring-primary-base" : "ring-stroke-soft-200")}>
+            <input type="radio" name={`mode-${data.runId}`} className="mt-0.5" checked={mode === "review"} disabled={busy} onChange={() => setMode("review")} />
+            <span><span className="text-label-xs text-text-strong-950">Review.</span> Every answer is drafted and waits for you in Action required.</span>
+          </label>
+          <div className="flex justify-end gap-2">
+            <Button.Root variant="neutral" mode="stroke" size="small" disabled={busy} onClick={() => void act("cancel")}>Discard</Button.Root>
+            <Button.Root variant="primary" mode="filled" size="small" disabled={busy || !mode} onClick={() => void act("start")}>
+              {busy ? <Button.Icon as={RiLoader4Line} className="animate-spin" /> : <Button.Icon as={RiPlayLine} />}
+              Start
+            </Button.Root>
+          </div>
+        </div>
+      )}
+      {(status === "running" || status === "paused") && (
+        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-stroke-soft-200 pt-3 text-paragraph-xs text-text-sub-600">
+          <span className="flex-1"><span className="text-label-xs text-text-strong-950">{run?.autopilot ? "Automatic replies" : "Review mode"}.</span> {run?.autopilot ? "Ordinary questions are answered once checked." : "Answers wait for you in Action required."}</span>
+          <Button.Root variant="neutral" mode="stroke" size="xsmall" disabled={busy || (!run?.autopilot && !canManageAutopilot)} onClick={() => void act("mode", run?.autopilot ? "review" : "automatic")}>
+            {run?.autopilot ? "Switch to Review" : "Switch to Automatic"}
+          </Button.Root>
+          <Button.Root variant="neutral" mode="stroke" size="xsmall" disabled={busy} onClick={() => void act(status === "running" ? "pause" : "resume")}>
+            <Button.Icon as={status === "running" ? RiPauseLine : RiPlayLine} />
+            {status === "running" ? "Pause" : "Resume"}
+          </Button.Root>
+          <Button.Root variant="error" mode="stroke" size="xsmall" disabled={busy} onClick={() => void act("stop")}>Stop</Button.Root>
+        </div>
+      )}
+      {run?.replies && run.replies.length > 0 && <RepliesList replies={run.replies} />}
       {error && <p role="alert" className="mt-2 text-paragraph-xs text-error-base">{error}</p>}
     </div>
   );
@@ -554,7 +756,7 @@ function DecisionCard({ message, state, onChanged }: { message: Message; state: 
 /** Small, routine results shown as one quiet line instead of a card. */
 const COMPACT_TOOLS = new Set([
   "check_setup", "save_business_info", "search_knowledge", "lead_search_status", "list_audiences", "list_runs",
-  "list_decisions", "pause_outreach", "resume_outreach", "stop_outreach", "switch_to_review", "answer_decision", "read_webpage",
+  "list_decisions", "pause_outreach", "resume_outreach", "stop_outreach", "switch_to_review", "answer_decision", "read_webpage", "list_inquiries",
 ]);
 
 function ActivityRow({ message }: { message: Message }) {
@@ -572,27 +774,30 @@ function ActivityRow({ message }: { message: Message }) {
   );
 }
 
-function ToolMessage({ message, jobs, runs, decisions, canManageAutopilot, onChanged }: { message: Message; jobs: Job[]; runs: Record<string, Run>; decisions: Record<string, DecisionState>; canManageAutopilot: boolean; onChanged: () => void }) {
+function ToolMessage({ message, jobs, runs, decisions, canManageAutopilot, lastReplyMode, onChanged }: { message: Message; jobs: Job[]; runs: Record<string, Run>; decisions: Record<string, DecisionState>; canManageAutopilot: boolean; lastReplyMode: "automatic" | "review" | null; onChanged: () => void }) {
   const data = message.toolResult?.data as Record<string, unknown> | undefined;
   if (message.tool === "owner_decision") return <DecisionCard message={message} state={decisions[String(data?.decisionId ?? "")]} onChanged={onChanged} />;
   if (message.tool === "daily_summary") {
     return <Card title={`Daily summary · ${String(data?.day ?? "")}`} status={message.status}><p className="whitespace-pre-wrap text-paragraph-xs">{message.content.split("\n").slice(1).join("\n")}</p></Card>;
   }
-  if (message.tool === "find_leads" || message.tool === "find_linkedin_leads") return <DiscoveryCard message={message} job={jobs.find((job) => job.id === data?.jobId)} />;
-  if (message.tool === "prepare_outreach") return <ProposalCard message={message} run={runs[String(data?.runId ?? "")]} canManageAutopilot={canManageAutopilot} onChanged={onChanged} />;
+  if (message.tool === "find_leads" || message.tool === "find_linkedin_leads" || message.tool === "find_customers_on_web") return <DiscoveryCard message={message} job={jobs.find((job) => job.id === data?.jobId)} />;
+  if (message.tool === "prepare_outreach") return <ProposalCard message={message} run={runs[String(data?.runId ?? "")]} canManageAutopilot={canManageAutopilot} lastReplyMode={lastReplyMode} onChanged={onChanged} />;
+  if (message.tool === "prepare_inquiry_replies") return <InquiryRunCard message={message} run={runs[String(data?.runId ?? "")]} canManageAutopilot={canManageAutopilot} onChanged={onChanged} />;
   if (message.tool === "report") return <ReportCard message={message} />;
   if (COMPACT_TOOLS.has(message.tool ?? "")) return <ActivityRow message={message} />;
   const title = message.tool === "read_document" || message.tool === "import_contacts"
     ? `${TOOL_TITLE[message.tool]}: ${String(message.toolInput?.file ?? "")}`
     : TOOL_TITLE[message.tool ?? ""] ?? message.tool ?? "Action";
-  const audience = message.tool === "import_contacts" || message.tool === "add_contacts" ? (data?.audience as AudienceData | undefined) : message.tool === "describe_audience" ? (data as AudienceData | undefined) : undefined;
+  const audience = message.tool === "import_contacts" || message.tool === "add_contacts" || message.tool === "use_existing_leads" ? (data?.audience as AudienceData | undefined) : message.tool === "describe_audience" ? (data as AudienceData | undefined) : undefined;
+  const audienceId = typeof data?.audienceId === "string" ? data.audienceId : message.tool === "describe_audience" && typeof data?.id === "string" ? data.id : null;
   return (
     <Card title={title} status={message.status}>
       {message.status === "running" ? null : audience && message.status === "ok" ? (
         <>
           {message.tool === "import_contacts" && <p className="text-paragraph-xs">{message.content.split(". Lead list")[0]}.</p>}
-          {message.tool === "add_contacts" && message.toolResult?.display && <p className="text-paragraph-xs">{message.toolResult.display}</p>}
+          {(message.tool === "add_contacts" || message.tool === "use_existing_leads") && message.toolResult?.display && <p className="text-paragraph-xs">{message.toolResult.display}</p>}
           <AudienceSummary audience={audience} />
+          {audienceId && <ProspectsList audienceId={audienceId} />}
         </>
       ) : (
         <p className={cn("whitespace-pre-wrap text-paragraph-xs", message.status === "error" && "text-error-base")}>{message.toolResult?.display ?? message.content}</p>
@@ -741,8 +946,8 @@ function starters(profile: BusinessProfileSummary | undefined): Starter[] {
     known
       ? { icon: RiStore2Line, title: "Update my business details", description: "Change what you sell, prices, area or who signs the messages.", text: "Update my business details: " }
       : { icon: RiStore2Line, title: "Tell me about your business", description: "What you sell, to whom, where, and who signs the messages.", text: "We are … We sell … to … in … Sign the messages as …" },
-    { icon: RiSearchEyeLine, title: "Find customers and contact them", description: "I search Google Maps and business websites, then show you a plan to approve.", text: who && where ? `Find ${who} in ${where} and contact them` : "Find … in … and contact them" },
-    { icon: RiFileList3Line, title: "Contact people from my list", description: "Attach a CSV or Excel file; I import it and write the messages.", text: "Contact the people in this list", attach: true },
+    { icon: RiFileList3Line, title: "Use my existing leads or inquiries", description: "People already in your leads, new inquiries, or a CSV or Excel list (Attach, below). I write the messages; you approve.", text: "Contact my existing leads: " },
+    { icon: RiSearchEyeLine, title: "Find potential customers for me", description: "Optional: I search public listings and websites for businesses that match, then show you a plan to approve.", text: who && where ? `Find ${who} in ${where} and contact them` : "Find … in … and contact them" },
     { icon: RiBarChartBoxLine, title: "How is my outreach doing?", description: "Leads, messages, replies, and what is waiting for you.", text: "How is my outreach doing?", send: true },
   ];
 }
@@ -919,7 +1124,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
         </div>
       );
     }
-    return <ToolMessage key={message.id} message={message} jobs={state.jobs} runs={state.runs} decisions={state.decisions ?? {}} canManageAutopilot={Boolean(setup?.canManageAutopilot)} onChanged={() => void refresh(true)} />;
+    return <ToolMessage key={message.id} message={message} jobs={state.jobs} runs={state.runs} decisions={state.decisions ?? {}} canManageAutopilot={Boolean(setup?.canManageAutopilot)} lastReplyMode={state.lastReplyMode ?? null} onChanged={() => void refresh(true)} />;
   });
 
   return (

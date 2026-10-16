@@ -1,0 +1,50 @@
+/**
+ * Optional features an organization turns on for itself. Every one is off
+ * until an owner or admin switches it on in Settings → Organization, so an
+ * existing organization keeps exactly what it had: no new channel, intake
+ * endpoint or search runs for it until someone chooses it. Pure and
+ * client-safe; the switches are stored in organization_features
+ * (flags.server.ts).
+ */
+
+export const FEATURE_KEYS = ["instagram", "web_discovery", "inquiry_intake"] as const;
+export type FeatureKey = (typeof FEATURE_KEYS)[number];
+
+export type FeatureInfo = {
+  label: string;
+  description: string;
+  /** What it needs before it can do anything, in a sentence. */
+  requires: string;
+};
+
+export const FEATURES: Record<FeatureKey, FeatureInfo> = {
+  instagram: {
+    label: "Instagram messages",
+    description:
+      "Link Instagram accounts through Unipile, see their direct messages next to your other conversations, and answer them with drafts you review.",
+    requires: "Unipile connected, and an Instagram account linked in it.",
+  },
+  web_discovery: {
+    label: "Website and directory search",
+    description:
+      "When you ask the assistant to find customers, it can also search the web for businesses and directories that match your customer description, then read their published contact details.",
+    requires: "An AI provider that searches the web (OpenRouter, or AI/ML API with a web research model).",
+  },
+  inquiry_intake: {
+    label: "Inquiry intake",
+    description:
+      "Receive inquiries from your website forms (through an authenticated webhook you add to your form tool) and, with Instagram on, new Instagram messages from people you have not talked to before.",
+    requires: "A one-time setup in your form tool; see the setup steps on the Inquiries page.",
+  },
+};
+
+export function isFeatureKey(value: unknown): value is FeatureKey {
+  return typeof value === "string" && (FEATURE_KEYS as readonly string[]).includes(value);
+}
+
+export type FeatureState = Record<FeatureKey, boolean>;
+
+/** Every feature off: what an organization has until someone turns one on. */
+export function defaultFeatureState(): FeatureState {
+  return Object.fromEntries(FEATURE_KEYS.map((key) => [key, false])) as FeatureState;
+}

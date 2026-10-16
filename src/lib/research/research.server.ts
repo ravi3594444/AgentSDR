@@ -1,11 +1,12 @@
 import "server-only";
 
-import { and, count, desc, eq, gte } from "drizzle-orm";
+import { and, count, desc, eq, gte, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { AIML_PROVIDER_KEY, AIML_PROVIDER_NAME } from "@/lib/ai/aimlapi-types";
 import { getByokSettings } from "@/lib/ai/byok";
 import { getAiConnection, getAiCredentials } from "@/lib/ai/connections";
 import { createAimlClient } from "@/lib/ai/server/aimlapi";
+import { assistantJobs } from "@/lib/assistant/schema";
 import { isTransientOpenRouterError } from "@/lib/ai/server/openrouter-errors";
 import { companies } from "@/lib/leads/schema";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
@@ -25,7 +26,7 @@ import { leadResearch, type ResearchKind, type ResearchSource, type ResearchStat
  * and only for a rate limit or server error (never after a timeout, which
  * the provider may have billed), a 60 s deadline, a short answer, the
  * "low" search context, and a per-organization daily limit that counts
- * failed runs too.
+ * failed runs too, and website discovery's searches on AI/ML API.
  */
 
 const RESEARCH_TIMEOUT_MS = 60_000;
@@ -89,8 +90,12 @@ async function withResearchTable<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
-/** The organization's research model and key, or why research is unavailable. */
-async function researchRuntime() {
+/**
+ * The organization's research model and key, or why research is unavailable.
+ * Website and directory discovery (src/lib/discovery/webSearch.server.ts)
+ * searches through the same AI/ML API runtime.
+ */
+export async function researchRuntime(timeoutMs = RESEARCH_TIMEOUT_MS) {
   const settings = await getByokSettings();
   const connection = settings.connectionId ? await getAiConnection(settings.connectionId) : null;
   if (!connection?.verified) throw new ResearchError(409, "Connect an AI provider in Settings → AI provider before researching.");
@@ -103,25 +108,72 @@ async function researchRuntime() {
   const credentials = await getAiCredentials(connection.id);
   if (!credentials?.apiKey) throw new ResearchError(409, `Reconnect ${AIML_PROVIDER_NAME} in Settings → AI provider.`);
   return {
-    client: createAimlClient(credentials.apiKey, RESEARCH_TIMEOUT_MS),
+    client: createAimlClient(credentials.apiKey, timeoutMs),
     model: settings.researchModel.modelId,
     dailyLimit: settings.researchDailyLimit,
   };
 }
 
-type ResearchClient = Awaited<ReturnType<typeof researchRuntime>>["client"];
+/**
+ * The paid AI/ML API searches website discovery planned since `since`: each
+ * web_discovery job started on AI/ML API counts all its searches (2 or 3),
+ * whether or not they ran yet, so a burst of requests cannot pass the limit.
+ */
+async function webDiscoverySearchesSince(since: Date): Promise<number> {
+  try {
+    const [row] = await db.select({ n: sql<number>`coalesce(sum(jsonb_array_length(coalesce(${assistantJobs.payload}->'queries', '[]'::jsonb))), 0)::int` })
+      .from(assistantJobs)
+      .where(and(
+        inOrg(assistantJobs),
+        eq(assistantJobs.kind, "web_discovery"),
+        gte(assistantJobs.createdAt, since),
+        sql`${assistantJobs.payload}->>'searchProvider' = ${AIML_PROVIDER_KEY}`,
+      ));
+    return Number(row?.n ?? 0);
+  } catch (error) {
+    // An install without the assistant's tables has run no website searches; company research must still work.
+    if (missingTable(error)) return 0;
+    throw error;
+  }
+}
 
-async function askWithSearch(client: ResearchClient, model: string, question: string): Promise<unknown> {
+/**
+ * What counts against the daily research limit today (UTC): company research
+ * runs, failed ones too, and website discovery's searches on AI/ML API,
+ * which use the same research model and key. Before lead_research exists
+ * only the searches count.
+ */
+export async function researchUsedToday(now = new Date()): Promise<number> {
+  const since = utcDayStart(now);
+  let research = 0;
+  try {
+    const [row] = await db.select({ n: count() }).from(leadResearch).where(and(inOrg(leadResearch), gte(leadResearch.createdAt, since)));
+    research = Number(row?.n ?? 0);
+  } catch (error) {
+    if (!missingTable(error)) throw error;
+  }
+  return research + (await webDiscoverySearchesSince(since));
+}
+
+/** The slice of the AI/ML client a search uses; web discovery's tests substitute a stand-in. */
+export type SearchCompletionsClient = { chat: { completions: { create: (request: never) => Promise<unknown> } } };
+
+export async function askWithSearch(
+  client: SearchCompletionsClient,
+  model: string,
+  question: string,
+  options: { systemPrompt?: string; maxTokens?: number } = {},
+): Promise<unknown> {
   // AI/ML API's chat-completions search request (checked against its
   // per-model schema): web_search_options, with sources returned as
   // `citations`/`search_results` (Perplexity) or url_citation annotations.
   const request = {
     model,
     messages: [
-      { role: "system", content: RESEARCH_SYSTEM_PROMPT },
+      { role: "system", content: options.systemPrompt ?? RESEARCH_SYSTEM_PROMPT },
       { role: "user", content: question },
     ],
-    max_tokens: MAX_OUTPUT_TOKENS,
+    max_tokens: options.maxTokens ?? MAX_OUTPUT_TOKENS,
     web_search_options: { search_context_size: "low" },
   };
   let lastError: unknown;
@@ -166,10 +218,12 @@ export async function researchCompany(input: {
   if (!prompt.ok) throw new ResearchError(400, prompt.error);
 
   const runtime = await researchRuntime();
+  const since = utcDayStart(new Date());
   const [today] = await withResearchTable(() => db.select({ n: count() }).from(leadResearch)
-    .where(and(inOrg(leadResearch), gte(leadResearch.createdAt, utcDayStart(new Date())))));
-  if (Number(today?.n ?? 0) >= runtime.dailyLimit) {
-    throw new ResearchError(429, `Today's research limit (${runtime.dailyLimit}) is reached; it resets at 00:00 UTC. Owners and admins can change it in Settings → AI provider.`);
+    .where(and(inOrg(leadResearch), gte(leadResearch.createdAt, since))));
+  // Website discovery's searches on AI/ML API use the same model and key, so they count too.
+  if (Number(today?.n ?? 0) + (await webDiscoverySearchesSince(since)) >= runtime.dailyLimit) {
+    throw new ResearchError(429, `Today's research limit (${runtime.dailyLimit}, company research and website searches on ${AIML_PROVIDER_NAME} together) is reached; it resets at 00:00 UTC. Owners and admins can change it in Settings → AI provider.`);
   }
 
   let outcome: ResearchOutcome;

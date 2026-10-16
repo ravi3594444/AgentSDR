@@ -12,6 +12,7 @@ import {
   RiCloseCircleLine,
   RiErrorWarningLine,
   RiHistoryLine,
+  RiInstagramLine,
   RiLinkedinLine,
   RiLoopLeftLine,
   RiMailLine,
@@ -34,7 +35,7 @@ import * as Dropdown from "@/components/alignui/dropdown";
 import * as Modal from "@/components/alignui/modal";
 import * as SegmentedControl from "@/components/alignui/segmented-control";
 import { Frame, FrameHeader, FramePanel } from "@/components/analytics/kit/Frame";
-import { CHANNEL_META } from "@/components/analytics/theme";
+import { CONVERSATION_CHANNEL_META } from "@/components/analytics/theme";
 import { CallButton } from "@/components/calls/CallButton";
 import { CallsCard } from "@/components/calls/CallsCard";
 import { EmptyState } from "@/components/page/EmptyState";
@@ -62,7 +63,7 @@ import { ChannelAvatar } from "./CrmActionsClient";
 import { BRAND } from "@/lib/brand";
 
 type Data = Record<string, unknown>;
-type Channel = "email" | "linkedin" | "whatsapp";
+type Channel = "email" | "linkedin" | "whatsapp" | "instagram";
 type TimelineFilter = "all" | Channel;
 
 const eventLabels: Record<string, string> = {
@@ -113,16 +114,16 @@ function initials(name: string): string {
 }
 
 function channelLabel(channel: unknown): string {
-  return channel === "linkedin" ? "LinkedIn" : channel === "whatsapp" ? "WhatsApp" : "Email";
+  return channel === "linkedin" ? "LinkedIn" : channel === "whatsapp" ? "WhatsApp" : channel === "instagram" ? "Instagram" : "Email";
 }
 
 function channelColor(channel: unknown): string | undefined {
-  return CHANNEL_META[channel as keyof typeof CHANNEL_META]?.color;
+  return CONVERSATION_CHANNEL_META[channel as keyof typeof CONVERSATION_CHANNEL_META]?.color;
 }
 
 function channelIcon(channel: unknown, className = "size-4") {
   if (channel === "whatsapp") return <WhatsappLogo className={className} />;
-  const Icon = channel === "linkedin" ? RiLinkedinLine : RiMailLine;
+  const Icon = channel === "linkedin" ? RiLinkedinLine : channel === "instagram" ? RiInstagramLine : RiMailLine;
   return <Icon className={className} aria-hidden="true" />;
 }
 

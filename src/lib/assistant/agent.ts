@@ -245,10 +245,27 @@ export function outreachRequested(ownerText: string, lastAssistantText?: string 
   return Boolean(lastAssistantText && isConfirmation(ownerText) && outreachIntent(lastAssistantText));
 }
 
+const ANSWER_WORDS = /\b(?:answer|answers|answering|reply|replies|replying|respond|responding|handle|handling|jawab)\b/i;
+const INQUIRY_WORDS = /\b(?:inquir\w*|enquir\w*|instagram|insta|dms?|direct messages?|leads? (?:who|that) (?:message|write|ask))\b/i;
+
+/**
+ * Whether the owner asked for inbound inquiries to be answered ("answer my
+ * Instagram inquiries", "reply to new DMs automatically"), or said yes to
+ * the assistant offering exactly that. Answering inquiries is a different
+ * request from contacting people, so it has its own words.
+ */
+export function inquiryRepliesRequested(ownerText: string, lastAssistantText?: string | null): boolean {
+  const asks = (text: string) => ANSWER_WORDS.test(text) && INQUIRY_WORDS.test(text) && !/\b(?:don'?t|do not|never|stop|nahi|mat)\b[^.?!]{0,30}\b(?:answer|reply|respond)/i.test(text);
+  if (asks(ownerText)) return true;
+  return Boolean(lastAssistantText && isConfirmation(ownerText) && asks(lastAssistantText));
+}
+
 type HistoryMessage = Pick<TranscriptMessage, "role" | "content" | "tool" | "toolInput" | "status">;
 
+const CONTACT_AFTER_TOOLS = new Set(["find_leads", "find_linkedin_leads", "find_customers_on_web"]);
+
 const actsOnOutreach = (message: HistoryMessage) => message.role === "tool" && message.status === "ok"
-  && (message.tool === "prepare_outreach" || ((message.tool === "find_leads" || message.tool === "find_linkedin_leads") && message.toolInput?.contactAfter === true));
+  && (message.tool === "prepare_outreach" || (CONTACT_AFTER_TOOLS.has(message.tool ?? "") && message.toolInput?.contactAfter === true));
 
 /**
  * The owner's words that ask for outreach now, or null. Their latest
@@ -257,12 +274,18 @@ const actsOnOutreach = (message: HistoryMessage) => message.role === "tool" && m
  * a clarifying question ("which cities?" → "Austin") keeps the request.
  */
 export function pendingOutreachRequest(history: readonly HistoryMessage[]): string | null {
+  const index = pendingOutreachRequestIndex(history);
+  return index === null ? null : history[index]!.content;
+}
+
+/** Where in `history` the pending outreach request is (see pendingOutreachRequest), or null. */
+export function pendingOutreachRequestIndex(history: readonly HistoryMessage[]): number | null {
   const owners = history.flatMap((message, index) => (message.role === "user" ? [index] : []));
   for (const index of owners.slice(-3).reverse()) {
     const message = history[index]!;
     const before = [...history.slice(0, index)].reverse().find((item) => item.role === "assistant")?.content ?? null;
     if (!outreachRequested(message.content, before)) continue;
-    return history.slice(index + 1).some(actsOnOutreach) ? null : message.content;
+    return history.slice(index + 1).some(actsOnOutreach) ? null : index;
   }
   return null;
 }
@@ -317,12 +340,15 @@ export function urlGiven(url: unknown, corpus: string): boolean {
  * business-information save that changes nothing or holds words the owner
  * never wrote.
  */
-export function actionsProblem(actions: readonly AgentAction[], input: { smallTalk: boolean; profile: BusinessProfile; ownerCorpus: string; outreachRequested: boolean }): string | null {
+export function actionsProblem(actions: readonly AgentAction[], input: { smallTalk: boolean; profile: BusinessProfile; ownerCorpus: string; outreachRequested: boolean; inquiryRepliesRequested?: boolean }): string | null {
   if (input.smallTalk && actions.length) {
     return "The owner only greeted or thanked you. Run no tools: answer in one or two friendly sentences and offer the next useful step.";
   }
-  const contacts = actions.some((action) => action.tool === "prepare_outreach" || ((action.tool === "find_leads" || action.tool === "find_linkedin_leads" || action.tool === "add_contacts") && action.args.contactAfter === true));
+  const contacts = actions.some((action) => action.tool === "prepare_outreach" || ((CONTACT_AFTER_TOOLS.has(action.tool) || action.tool === "add_contacts") && action.args.contactAfter === true));
   if (contacts && !input.outreachRequested) return outreachRequestProblem("", null);
+  if (actions.some((action) => action.tool === "prepare_inquiry_replies") && !input.inquiryRepliesRequested) {
+    return "The owner has not asked for their inquiries to be answered. Offer it in one sentence and wait for them to say yes.";
+  }
   for (const action of actions) {
     if (action.tool === "add_contacts") {
       const invented = ungroundedContacts(action.args.contacts, input.ownerCorpus);

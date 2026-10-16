@@ -169,6 +169,10 @@ function walk(dir: string, out: string[] = []): string[] {
 const PARAM_TABLE: [RegExp, Record<string, string>][] = [
   [/^\/api\/assistant\/runs\//, { id: "outreach_runs" }],
   [/^\/api\/assistant\/decisions\//, { id: "owner_decisions" }],
+  [/^\/api\/assistant\/audiences\//, { id: "lead_audiences" }],
+  [/^\/api\/instagram\/accounts\//, { id: "instagram_accounts" }],
+  [/^\/api\/instagram\/chats\//, { id: "instagram_chats" }],
+  [/^\/api\/intake\/endpoints\//, { id: "intake_endpoints" }],
   [/^\/api\/crm\/records\//, { id: "crm_records" }],
   [/^\/api\/crm\/drafts\//, { id: "crm_drafts" }],
   [/^\/api\/crm\/classifications\//, { id: "crm_classifications" }],
@@ -216,7 +220,7 @@ const FIXED_PARAMS: Record<string, string> = {
   key: "unipile",
 };
 /** Not tenant-session routes: Better Auth itself, the recorder extension (bearer tokens), public webhooks/links. */
-const SKIP = [/^\/api\/auth\//, /^\/api\/call-recorder\//, /^\/api\/webhooks\/(connection-accepted|message-received|unipile-account|whatsapp-message)/, /^\/api\/outreach\/(tick|build-queue|webhooks|unsubscribe|mailboxes\/watch)/, /^\/api\/linkedin\/jobs\/(run|reset|replay)/];
+const SKIP = [/^\/api\/auth\//, /^\/api\/call-recorder\//, /^\/api\/webhooks\/(connection-accepted|message-received|unipile-account|whatsapp-message|instagram-message)/, /^\/api\/intake\/form$/, /^\/api\/outreach\/(tick|build-queue|webhooks|unsubscribe|mailboxes\/watch)/, /^\/api\/linkedin\/jobs\/(run|reset|replay)/];
 
 function fill(pattern: string, idsByTable: Map<string, string[]>, aTargetedDomain: string | null, aPhotoPerson: string | null): { url: string; table: string | null; id: string | null } | null {
   const rule = PARAM_TABLE.find(([re]) => re.test(pattern))?.[1] ?? {};

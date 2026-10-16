@@ -354,7 +354,7 @@ async function finishGeneratedDraft(
     });
     // A person in an assistant outreach run: the reply autopilot looks at it
     // (src/lib/crm/autopilot.ts decides at send time; Review runs never send).
-    await enqueueAutopilotInTransaction(tx, { draftId: draft.id, personId: record.personId, channel: updated.channel, revision: updated.revision });
+    await enqueueAutopilotInTransaction(tx, { draftId: draft.id, personId: record.personId, channel: updated.channel, conversationId: updated.conversationId, revision: updated.revision });
     return updated;
   });
 }

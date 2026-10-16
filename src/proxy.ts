@@ -34,7 +34,9 @@ const PUBLIC = [
   "/api/webhooks/unipile-account",
   // Unipile's WhatsApp messaging webhook; checks the stored Unipile notify secret itself.
   "/api/webhooks/whatsapp-message",
-  // The single messaging webhook AgentSDR registers; routes to the two above.
+  // Unipile's Instagram messaging webhook (reached through unipile-message); checks the stored Unipile notify secret itself.
+  "/api/webhooks/instagram-message",
+  // The single messaging webhook AgentSDR registers; routes to the ones above.
   "/api/webhooks/unipile-message",
   // Unipile's email webhook (inboxes linked in Unipile used as mailboxes); gated like the one above.
   "/api/webhooks/unipile-email",
@@ -43,6 +45,18 @@ const PUBLIC = [
   // under this prefix authenticates itself with authorizeRecorder() (see
   // src/lib/calls/sessions.ts) — never add a route here that doesn't.
   "/api/call-recorder/",
+];
+
+/**
+ * Unauthenticated paths matched exactly, not as a prefix: nothing that might
+ * later be added beside or under them becomes public by accident.
+ */
+const PUBLIC_EXACT = [
+  // The website-form webhook owners add to their form tool. It authenticates
+  // itself with the endpoint's secret token (src/app/api/intake/form/route.ts);
+  // the management routes beside it (/api/intake/endpoints, /inquiries) stay
+  // behind sign-in.
+  "/api/intake/form",
 ];
 
 /**
@@ -81,6 +95,7 @@ export function proxy(request: NextRequest) {
     pathname === "/" ||
     pathname === "/robots.txt" ||
     PUBLIC.some((p) => pathname.startsWith(p)) ||
+    PUBLIC_EXACT.includes(pathname) ||
     pathname.startsWith("/_next") ||
     pathname.startsWith("/favicon") ||
     // The Apple touch icon is generated (src/app/apple-icon.tsx), so it has no file extension.

@@ -1,6 +1,5 @@
 import "server-only";
 
-import { resolve4, resolve6, resolveMx } from "node:dns/promises";
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { addAudienceMembers, createAudience, type NewMember } from "@/lib/assistant/audiences.server";
@@ -14,6 +13,7 @@ import { people } from "@/lib/leads/schema";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { cleanEmail } from "./contacts";
 import { geocodePlace } from "./geocode.server";
+import { emailDomainCheck } from "./mailDomain.server";
 import { searchTiles } from "./geocode";
 import { mapsSearchPhrase, parseMapsCsvDetailed, rankEmails, type MapsPlace } from "./mapsResults";
 import { createMapsJob, downloadMapsResults, getMapsJobStatus, mapsScraperUrl, MapsScraperError } from "./mapsScraper.server";
@@ -75,7 +75,7 @@ type DiscoveryPayload = {
   seenPhones?: string[];
   tally?: { eligible: number; excluded: number; duplicates: number; withEmail: number; withPhoneOnly: number };
   /** The owner asked to contact what is found: plan the outreach when the search is done. */
-  contactAfter?: { channels: AudienceChannel[] | null; ownerRequest?: string } | null;
+  contactAfter?: { channels: AudienceChannel[] | null; ownerRequest?: string; requestId?: string } | null;
 };
 
 export class DiscoveryUnavailableError extends Error {
@@ -107,7 +107,7 @@ export function normalizeCriteria(input: { what?: unknown; where?: unknown; maxR
 export async function startDiscovery(
   criteria: DiscoveryCriteria,
   context: { threadId: string | null; userId: string | null },
-  options: { contactAfter?: { channels: AudienceChannel[] | null; ownerRequest?: string } | null } = {},
+  options: { contactAfter?: { channels: AudienceChannel[] | null; ownerRequest?: string; requestId?: string } | null } = {},
 ): Promise<{ jobId: string; audienceId: string; phrase: string }> {
   const availability = discoveryAvailability();
   if (!availability.available) throw new DiscoveryUnavailableError(availability.reason!);
@@ -132,42 +132,9 @@ export async function startDiscovery(
   return { jobId: job!.id, audienceId, phrase };
 }
 
-// ── DNS: does an email domain accept mail? ──────────────────────────────────
+// ── DNS: does an email domain accept mail? (mailDomain.server.ts) ───────────
 
-type DomainCheck = "accepts" | "rejects" | "unknown";
-const domainCache = new Map<string, DomainCheck>();
-
-async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  return Promise.race([promise, new Promise<T>((_, reject) => setTimeout(() => reject(Object.assign(new Error("timeout"), { code: "ETIMEOUT" })), ms))]);
-}
-
-/**
- * MX records, or an address record (implicit MX), mean the domain can
- * receive mail; a domain that does not exist cannot. A lookup that fails for
- * another reason (a timeout) is "unknown" and the address is kept.
- */
-export async function emailDomainCheck(domain: string): Promise<DomainCheck> {
-  if (process.env.DISCOVERY_DNS_CHECK === "off") return "unknown";
-  const cached = domainCache.get(domain);
-  if (cached) return cached;
-  let result: DomainCheck = "unknown";
-  try {
-    const mx = await withTimeout(resolveMx(domain), 5_000);
-    result = mx.some((record) => record.exchange && record.exchange !== ".") ? "accepts" : "rejects";
-  } catch (error) {
-    const code = (error as { code?: string }).code;
-    if (code === "ENOTFOUND" || code === "ENODATA") {
-      try {
-        const addresses = [...(await withTimeout(resolve4(domain), 5_000).catch(() => [])), ...(await withTimeout(resolve6(domain), 5_000).catch(() => []))];
-        result = addresses.length ? "accepts" : "rejects";
-      } catch {
-        result = code === "ENOTFOUND" ? "rejects" : "unknown";
-      }
-    }
-  }
-  domainCache.set(domain, result);
-  return result;
-}
+export { emailDomainCheck, mailDomainCheck, type MailDomainCheck } from "./mailDomain.server";
 
 // ── Stages ──────────────────────────────────────────────────────────────────
 
@@ -257,6 +224,10 @@ async function stageSearching(job: AssistantJob): Promise<StepOutcome> {
 let pageOptions: PageFetchOptions = {};
 export function setDiscoveryPageOptions(options: PageFetchOptions): void {
   pageOptions = options;
+}
+/** The same options for website and directory discovery (webDiscovery.server.ts). */
+export function discoveryPageOptions(): PageFetchOptions {
+  return pageOptions;
 }
 
 async function enrichPlace(place: EnrichedPlace, country: string | undefined): Promise<EnrichedPlace> {

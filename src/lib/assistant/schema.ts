@@ -2,6 +2,7 @@ import { boolean, check, index, integer, jsonb, numeric, pgTable, text, timestam
 import { sql } from "drizzle-orm";
 import { organizations } from "@/lib/auth/schema";
 import { companies, people } from "@/lib/leads/schema";
+import type { RequestApproval } from "./requestApproval";
 
 /**
  * The owner's assistant (src/lib/assistant/): a chat that takes the owner's
@@ -75,6 +76,8 @@ export type BusinessProfile = {
   problemsSolved?: string;
   /** What an interested lead is offered next ("a 10-minute call with Ravi", "a free visit", "a quote"); default: a short call with the sender. */
   nextStep?: string;
+  /** Prices, packages or rates, in the owner's words (a price list document works too). */
+  prices?: string;
   /** Who the customers are: kinds of businesses or roles, sizes, signals. */
   targetCustomers?: string;
   /** Cities, regions or countries to look in. */
@@ -103,6 +106,11 @@ export const assistantProfiles = pgTable("assistant_profiles", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+/**
+ * discovery: found by a search; list: an upload, contacts typed in the
+ * chat, or people chosen from the lead database (criteria.source says which:
+ * "existing", "inquiries", "inquiry_run").
+ */
 export type AudienceSource = "discovery" | "list";
 
 /** A set of leads the assistant found or was given, which one outreach run works through. */
@@ -128,7 +136,24 @@ export const leadAudiences = pgTable(
 export type AudienceChannel = "email" | "whatsapp" | "linkedin";
 
 /** Where a contact detail came from: the page or listing a person can open to check it. */
-export type ContactEvidence = { kind: "email" | "phone" | "linkedin" | "website"; value: string; sourceUrl: string | null; source: string };
+export type ContactEvidence = { kind: "email" | "phone" | "linkedin" | "website" | "instagram"; value: string; sourceUrl: string | null; source: string };
+
+/**
+ * Something a lead actually said or did that bears on whether they need the
+ * offer, quoted with where it was found. Only `need` signals are evidence of
+ * a need: a follow, like or generic comment is recorded as `engagement` and
+ * never counts as buying intent (qualification.ts).
+ */
+export type LeadSignal = {
+  kind: "need" | "engagement";
+  /** Their words, exactly as found (an inquiry, a comment, a post caption). */
+  text: string;
+  sourceUrl: string | null;
+  /** "website form", "Instagram comment", "Instagram message", … */
+  source: string;
+  /** When they said it, when known (ISO). */
+  at: string | null;
+};
 
 /**
  * One lead in an audience: a person who can be contacted (eligible) or a
@@ -163,7 +188,26 @@ export const leadAudienceMembers = pgTable(
   ],
 );
 
-export type AssistantJobKind = "discovery" | "outreach_start" | "linkedin_search";
+/**
+ * Why a lead matched and what it actually said or did (qualification.ts),
+ * one row per lead of a list. A table of its own rather than columns on
+ * lead_audience_members, so that code reaching a database whose migration
+ * (scripts/add-instagram-intake-discovery.ts) has not run yet still adds and
+ * reads leads exactly as before: this table is then simply absent.
+ */
+export const leadAudienceMemberInsights = pgTable(
+  "lead_audience_member_insights",
+  {
+    memberId: uuid("member_id").primaryKey().references(() => leadAudienceMembers.id, { onDelete: "cascade" }),
+    /** Why the search or list matched this lead, in a sentence (never shown to the lead). */
+    matchReason: text("match_reason"),
+    /** What the lead actually said or did, quoted with its source (LeadSignal). Empty: no evidence of need. */
+    signals: jsonb("signals").$type<LeadSignal[]>().notNull().default([]),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+);
+
+export type AssistantJobKind = "discovery" | "outreach_start" | "linkedin_search" | "web_discovery";
 export type AssistantJobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 
 /**
@@ -201,7 +245,7 @@ export const assistantJobs = pgTable(
   (t) => [
     index("assistant_jobs_organization_idx").on(t.organizationId, t.createdAt),
     index("assistant_jobs_claim_idx").on(t.status, t.runAfter),
-    check("assistant_jobs_kind_chk", sql`${t.kind} IN ('discovery', 'outreach_start', 'linkedin_search')`),
+    check("assistant_jobs_kind_chk", sql`${t.kind} IN ('discovery', 'outreach_start', 'linkedin_search', 'web_discovery')`),
     check("assistant_jobs_status_chk", sql`${t.status} IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')`),
   ],
 );
@@ -214,6 +258,16 @@ export type PlannedStep = { subject: string | null; body: string; waitDays: numb
 
 /** What the owner approves: audience, channels, messages, limits and what it costs. */
 export type OutreachPlan = {
+  /**
+   * "outreach" (absent on every plan written before inquiry runs): first
+   * messages and follow-ups to an audience. "inquiries": no first message
+   * at all — the run only answers people whose fresh inquiry arrives while
+   * it runs (see inquiryRuns.server.ts); its members are added as they
+   * write in, never from imported history.
+   */
+  kind?: "outreach" | "inquiries";
+  /** For an inquiry run: which inbound channels and accounts it answers. */
+  inquiry?: { channels: "instagram"[]; accounts: { unipileAccountId: string; username: string | null }[] };
   /** The people the run will contact, per channel (each person gets one channel). */
   assignments: { personId: string; channel: AudienceChannel }[];
   sequences: Partial<Record<AudienceChannel, PlannedStep[]>>;
@@ -232,6 +286,14 @@ export type OutreachPlan = {
   basedOnRunId?: string | null;
   /** The owner's words that asked for this outreach (checked against the chat). */
   ownerRequest?: string | null;
+  /** The id of the owner's chat message that asked for it: every plan of one request shares it. */
+  requestId?: string | null;
+  /**
+   * Set on a run the owner started with "apply to the rest of this
+   * request": the other plans of the same request start under it
+   * (requestApproval.ts).
+   */
+  requestApproval?: RequestApproval;
   /**
    * Plans written since leads are sorted: the kinds of lead, each with its
    * own messages; how each lead is approached; the first messages written
@@ -285,6 +347,13 @@ export const outreachRuns = pgTable(
 export type RunLeadStatus = "active" | "stopped" | "opted_out";
 
 /**
+ * The channel a run member is answered on: the outreach channels, plus
+ * "instagram" for an inquiry run (plan.kind "inquiries"), which only answers
+ * people who wrote in on Instagram and never starts a conversation.
+ */
+export type RunLeadChannel = AudienceChannel | "instagram";
+
+/**
  * Who a started run covers, on which channel: the approved audience. The
  * reply autopilot answers a conversation only through the run its person
  * belongs to on that channel (its mode, its state); nothing outside it.
@@ -296,7 +365,7 @@ export const outreachRunLeads = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     runId: uuid("run_id").notNull().references(() => outreachRuns.id, { onDelete: "cascade" }),
     personId: uuid("person_id").notNull().references(() => people.id, { onDelete: "cascade" }),
-    channel: text("channel").notNull().$type<AudienceChannel>(),
+    channel: text("channel").notNull().$type<RunLeadChannel>(),
     status: text("status").notNull().default("active").$type<RunLeadStatus>(),
     stopReason: text("stop_reason"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -305,7 +374,7 @@ export const outreachRunLeads = pgTable(
   (t) => [
     uniqueIndex("outreach_run_leads_run_person_uq").on(t.runId, t.personId),
     index("outreach_run_leads_person_idx").on(t.organizationId, t.personId),
-    check("outreach_run_leads_channel_chk", sql`${t.channel} IN ('email', 'whatsapp', 'linkedin')`),
+    check("outreach_run_leads_channel_chk", sql`${t.channel} IN ('email', 'whatsapp', 'linkedin', 'instagram')`),
     check("outreach_run_leads_status_chk", sql`${t.status} IN ('active', 'stopped', 'opted_out')`),
   ],
 );

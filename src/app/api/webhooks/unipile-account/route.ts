@@ -5,12 +5,18 @@ import { organizationIdForNotifySecret, safeEqual, unipileNotifySecret } from "@
 import { serializeError } from "@/lib/linkedin/serializeError";
 import { syncWhatsappAccounts } from "@/lib/whatsapp/accounts";
 import { syncUnipileMailboxes } from "@/lib/outreach/mailboxProviders";
+import { featureEnabled } from "@/lib/features/flags.server";
+import { applyInstagramAccountOwner, syncInstagramAccounts } from "@/lib/instagram/accounts";
+import { parseInstagramHostedAuthName } from "@/services/unipile.instagram";
 
 // POST /api/webhooks/unipile-account?secret=... — the `notify_url` of a hosted
 // auth link. Unipile POSTs { status, account_id, name } once the user finishes
 // the wizard: CREATION_SUCCESS for a new account, RECONNECTED for a repaired one.
 // The account may be LinkedIn, WhatsApp or an email inbox, so all three sync —
 // each on its own, so one failing does not keep the others from running.
+// Instagram syncs too, only while the organization's Instagram feature is on;
+// an Instagram link started from AgentSDR names "<organization>:<member>",
+// and that member is recorded as the account's owner.
 //
 // Public (see proxy.ts) because Unipile calls it without our session cookie,
 // so it carries a shared-secret check: the notify secret stored with the Unipile
@@ -43,10 +49,10 @@ export async function POST(req: NextRequest) {
   if (!organizationId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-  return runInOrganization(organizationId, () => handle(req));
+  return runInOrganization(organizationId, () => handle(req, organizationId));
 }
 
-async function handle(req: NextRequest) {
+async function handle(req: NextRequest, organizationId: string) {
   try {
     const body = await req.json().catch(() => null);
     const status = typeof body?.status === "string" ? body.status : "unknown";
@@ -72,6 +78,19 @@ async function handle(req: NextRequest) {
       await syncUnipileMailboxes();
     } catch (err) {
       errors.push(`Email: ${serializeError(err)}`);
+    }
+    try {
+      if (await featureEnabled("instagram")) {
+        await syncInstagramAccounts();
+        const owner = parseInstagramHostedAuthName(body?.name);
+        const accountId = typeof body?.account_id === "string" ? body.account_id : null;
+        // Only a link this organization started; the member is checked against it too.
+        if (owner && accountId && owner.organizationId === organizationId.toLowerCase()) {
+          await applyInstagramAccountOwner(accountId, owner.userId);
+        }
+      }
+    } catch (err) {
+      errors.push(`Instagram: ${serializeError(err)}`);
     }
     if (errors.length) {
       console.error(`[unipile-account] ${errors.join(" | ")}`);

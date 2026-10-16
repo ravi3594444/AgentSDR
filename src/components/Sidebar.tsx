@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   RiAddLine,
   RiArrowDownSLine,
@@ -29,7 +29,8 @@ import * as Tooltip from "@/components/alignui/tooltip";
 import { SETTINGS_HOME } from "@/components/settings/settingsNav";
 import { CommandPalette } from "@/components/nav/CommandPalette";
 import { ThemeToggleButton } from "@/components/theme/ThemeSwitch";
-import { activeHref, NAV_FOOTER, NAV_SECTIONS, type NavBadges, type NavEntry, type NavGroup, type NavLink } from "@/components/nav/navConfig";
+import { activeHref, NAV_FOOTER, visibleNavSections, type NavBadges, type NavData, type NavEntry, type NavGroup, type NavLink } from "@/components/nav/navConfig";
+import type { FeatureState } from "@/lib/features/catalog";
 import { APP_VERSION, bugReportUrl, SUPPORT_LINKS } from "@/lib/support";
 import { useDemoMode } from "@/components/demo/DemoProvider";
 import { cn } from "@/utils/cn";
@@ -42,7 +43,8 @@ import { BRAND } from "@/lib/brand";
  * the workspace card. Collapses to an icon rail; groups then open as a menu.
  *
  * Badges are live (GET /api/nav/badges): refreshed on navigation and every
- * minute while the tab is visible.
+ * minute while the tab is visible. The same answer says which optional
+ * features are on; an entry tied to one (Instagram) shows only then.
  */
 
 const COLLAPSED_KEY = "agentsdr-sidebar-collapsed";
@@ -64,13 +66,19 @@ function writeStorage(key: string, value: unknown) {
   }
 }
 
-function useBadges(pathname: string): NavBadges | null {
+function useBadges(pathname: string): { badges: NavBadges | null; features: FeatureState | null } {
   const [badges, setBadges] = useState<NavBadges | null>(null);
+  const [features, setFeatures] = useState<FeatureState | null>(null);
   const load = useCallback(() => {
     if (document.visibilityState !== "visible") return;
     fetch("/api/nav/badges", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
-      .then((b: NavBadges | null) => { if (b) setBadges(b); })
+      .then((b: Partial<NavData> | null) => {
+        if (!b) return;
+        const { features: next, ...counts } = b;
+        setBadges(counts as NavBadges);
+        if (next) setFeatures(next);
+      })
       .catch(() => {});
   }, []);
   useEffect(() => {
@@ -84,7 +92,7 @@ function useBadges(pathname: string): NavBadges | null {
       document.removeEventListener("visibilitychange", load);
     };
   }, [load]);
-  return badges;
+  return { badges, features };
 }
 
 function Badge({ link, badges, collapsed }: { link: NavLink; badges: NavBadges | null; collapsed?: boolean }) {
@@ -249,7 +257,8 @@ function GroupRow({ group, current, open, onToggle, badges, collapsed, compact }
 export default function Sidebar({ mobile = false, onClose }: { mobile?: boolean; onClose?: () => void } = {}) {
   const pathname = usePathname();
   const current = activeHref(pathname);
-  const badges = useBadges(pathname);
+  const { badges, features } = useBadges(pathname);
+  const sections = useMemo(() => visibleNavSections(features), [features]);
   const [storedCollapsed, setCollapsed] = useState(false);
   // The phone drawer is always the full sidebar.
   const collapsed = !mobile && storedCollapsed;
@@ -390,7 +399,7 @@ export default function Sidebar({ mobile = false, onClose }: { mobile?: boolean;
 
         {/* Sections */}
         <nav aria-label="Main" className={cn("flex-1 overflow-y-auto pb-3", collapsed ? "px-3" : "px-3")}>
-          {NAV_SECTIONS.map((section, i) => (
+          {sections.map((section, i) => (
             <div key={section.label ?? i} className={cn(i > 0 && "mt-4")}>
               {section.label && (collapsed ? <div className="mx-2 mb-2 border-t border-stroke-soft-200" /> : <p className="mb-2 px-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-text-soft-400">{section.label}</p>)}
               <div className="space-y-0.5">{section.entries.map((e) => renderEntry(e))}</div>
@@ -482,7 +491,7 @@ export default function Sidebar({ mobile = false, onClose }: { mobile?: boolean;
           </Dropdown.Root>
         </div>
       </aside>
-      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} features={features} />
     </Tooltip.Provider>
   );
 }

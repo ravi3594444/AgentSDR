@@ -175,14 +175,24 @@ export async function claimWebhookEvent(
 }
 
 /**
+ * Which ledger rows a replay job takes: one account type, and only these
+ * events (every event when omitted).
+ */
+export type WebhookReplayScope = { accountType: string; events?: readonly string[] };
+
+/** The LinkedIn replay job's rows (src/jobs/replayLinkedinWebhooks.ts) — the default. */
+export const LINKEDIN_WEBHOOK_REPLAY_SCOPE: WebhookReplayScope = { accountType: "LINKEDIN", events: ["new_relation", "message_received"] };
+
+/**
  * Deliveries due for replay across every organization — the one global read in
- * this file, for the replay job, which then runs each event inside its own
+ * this file, for the replay jobs, which then run each event inside its own
  * organization's scope.
  */
 export async function replayableWebhookEvents(
   limit = 100,
   now = new Date(),
   organizationId?: string,
+  scope: WebhookReplayScope = LINKEDIN_WEBHOOK_REPLAY_SCOPE,
 ): Promise<{ id: string; organizationId: string }[]> {
   const staleBefore = new Date(now.getTime() - WEBHOOK_PROCESSING_LEASE_MS);
   const rows = await db
@@ -190,8 +200,8 @@ export async function replayableWebhookEvents(
     .from(webhookEvents)
     .where(and(
       ...(organizationId ? [eq(webhookEvents.organizationId, organizationId)] : []),
-      inArray(webhookEvents.event, ["new_relation", "message_received"]),
-      eq(webhookEvents.accountType, "LINKEDIN"),
+      ...(scope.events ? [inArray(webhookEvents.event, [...scope.events])] : []),
+      eq(webhookEvents.accountType, scope.accountType),
       lt(webhookEvents.processingAttempt, WEBHOOK_MAX_ATTEMPTS),
       or(
         and(

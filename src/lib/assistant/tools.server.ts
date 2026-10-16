@@ -9,6 +9,10 @@ import { discoveryAvailability, DiscoveryUnavailableError, normalizeCriteria, st
 import { searchAreaProblem } from "@/lib/discovery/geocode";
 import { extractContacts, visibleText } from "@/lib/discovery/contacts";
 import { fetchPublicPage } from "@/lib/discovery/websiteContacts.server";
+import { normalizeWebCriteria, startWebDiscovery, WebDiscoveryUnavailableError } from "@/lib/discovery/webDiscovery.server";
+import { webSearchAvailability, webSearchAvailabilityFrom } from "@/lib/discovery/webSearch.server";
+import type { FeatureState } from "@/lib/features/catalog";
+import { featureEnabled, FeatureDisabledError } from "@/lib/features/flags.server";
 import type { ImportRow } from "@/lib/leads/importRows";
 import { importPeopleRows } from "@/lib/leads/peopleImport.server";
 import { people } from "@/lib/leads/schema";
@@ -16,14 +20,21 @@ import { geocoderUrl, lookupPlace } from "@/lib/discovery/geocode.server";
 import { linkedinSearchAvailability, startLinkedinSearch } from "./linkedinSearch.server";
 import { inOrg } from "@/lib/tenancy/scope";
 import { addAudienceMembers, createAudience, listAudiences, summarizeAudience } from "./audiences.server";
-import { outreachRequested, outreachRequestProblem } from "./agent";
+import { inquiryRepliesRequested, outreachRequested, outreachRequestProblem } from "./agent";
 import { answerDecision, DecisionError, listOpenDecisions } from "./decisions.server";
 import { channelAvailability, listRuns, OutreachError, prepareOutreach, reportRun, setRunPaused, setRunReplyMode, stopRun } from "./outreach.server";
-import { mergeProfile, missingForDiscovery, missingForOutreach, PROFILE_LABELS, profileChanges } from "./profile";
+import { mergeProfile, PROFILE_LABELS, profileChanges } from "./profile";
+import { businessContext } from "./businessContext";
+import { businessSources } from "./businessContext.server";
 import { getBusinessProfile, updateBusinessProfile } from "./profile.server";
 import { PERIOD_KINDS, type PeriodKind } from "./results";
 import { results, resultsText } from "./results.server";
 import { assistantJobs, outreachRuns, type AudienceChannel } from "./schema";
+import { featureState } from "@/lib/features/flags.server";
+import { createExistingLeadsAudience, inquiryOverview, MAX_EXISTING_LEADS } from "./existingLeads.server";
+import { isExistingLeadsFrom } from "./existingLeads";
+import { inquiryRunReadiness, InquiryRunError, prepareInquiryReplies } from "./inquiryRuns.server";
+import { audienceProspects } from "./qualification.server";
 
 /**
  * What the assistant can do, and nothing else. Each tool is a call into an
@@ -43,6 +54,8 @@ export type ToolContext = {
   lastAssistantText?: string | null;
   /** The owner's words asking for outreach that nothing has acted on yet (agent.ts pendingOutreachRequest); null when there are none. */
   outreachRequest?: string | null;
+  /** The id of the owner's message holding that request: the plans it leads to share it (one Start may cover them, requestApproval.ts). */
+  outreachRequestId?: string | null;
   /** Set when the server itself prepares outreach the owner already asked for (a "find and contact" search finished). */
   authorizedBy?: "search" | null;
 };
@@ -65,10 +78,24 @@ type Tool = {
   description: string;
   /** Argument names and meanings, for the model. */
   arguments: string;
+  /** Offered to the model only while this holds for the organization's optional features (always, without it). */
+  available?: (features: FeatureState) => boolean;
   run: (args: Record<string, unknown>, context: ToolContext) => Promise<ToolResult>;
 };
 
 class ToolArgumentError extends Error {}
+
+/** The page's <title> text, found with plain searches (linear on any page, unlike a lazy regex on hostile HTML). */
+function pageTitle(html: string): string {
+  // ASCII-only lowercase keeps every index in place ("İ".toLowerCase() is two characters).
+  const lower = html.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
+  const open = lower.indexOf("<title");
+  if (open < 0) return "";
+  const start = lower.indexOf(">", open);
+  if (start < 0) return "";
+  const end = lower.indexOf("</title>", start);
+  return end < 0 ? "" : html.slice(start + 1, end);
+}
 
 const MAX_CHAT_CONTACTS = 50;
 /** Sites that need a login and forbid automated reading. */
@@ -123,28 +150,63 @@ function channels(args: Record<string, unknown>): AudienceChannel[] | undefined 
 }
 
 async function setupSnapshot() {
-  const [profile, availability, automaticRuns, byok] = await Promise.all([
+  const [profile, availability, automaticRuns, byok, webDiscoveryOn] = await Promise.all([
     getBusinessProfile(),
     channelAvailability(),
     db.select({ id: outreachRuns.id }).from(outreachRuns).where(and(inOrg(outreachRuns), eq(outreachRuns.autopilot, true), eq(outreachRuns.status, "running"))),
     getByokSettings(),
+    featureEnabled("web_discovery"),
   ]);
   const connection = byok.connectionId ? await getAiConnection(byok.connectionId) : null;
   const discovery = discoveryAvailability();
+  const known = businessContext(profile, await businessSources());
   return {
     profile,
-    missingForDiscovery: missingForDiscovery(profile),
-    missingForOutreach: missingForOutreach(profile),
+    missingForDiscovery: known.missingForDiscovery,
+    missingForOutreach: known.missingForOutreach,
+    /** What is already known outside the profile (documents, prices, sender, instructions), and what is worth asking once. */
+    knownElsewhere: known.summary,
+    optionalToAsk: known.optional,
     channels: {
       email: availability.email,
       whatsapp: availability.whatsapp,
       linkedin: availability.linkedin,
     },
     leadDiscovery: discovery,
+    /** Website and directory search: the optional feature, and the organization's web-searching AI provider. */
+    webDiscovery: { enabled: webDiscoveryOn, ...webSearchAvailabilityFrom(byok, connection) },
     ai: { connected: Boolean(connection?.verified), defaultModel: byok.defaultModel?.modelId ?? null },
+    /** Optional features (Settings → Organization), all off by default, and whether new inquiries can be answered. */
+    features: await featureState(),
+    inquiryReplies: { problem: await inquiryRunReadiness() },
     /** Running runs in Automatic reply mode (each answers only its own conversations). */
     automaticRuns: automaticRuns.length,
   };
+}
+
+const AUDIENCE_SOURCE_WORD: Record<string, string> = { discovery: "found", list: "uploaded" };
+
+/** Website and directory search's readiness, in a sentence for check_setup. */
+function webDiscoveryLine(web: { enabled: boolean; available: boolean; provider: string | null; model: string | null; reason: string | null }): string {
+  if (!web.enabled) return "Website and directory search: off (an owner or admin can turn it on in Settings → Organization).";
+  return web.available
+    ? `Website and directory search: ready (${web.provider === "openrouter" ? "OpenRouter web search" : "AI/ML API web research model"}, ${web.model}).`
+    : `Website and directory search: not ready — ${web.reason}`;
+}
+
+/** What a website and directory search is doing, for lead_search_status. */
+function webDiscoveryProgress(job: typeof assistantJobs.$inferSelect): string {
+  const progress = job.progress as { searches?: number; searchesDone?: number; candidates?: number; read?: number; found?: number; saved?: number };
+  const result = (job.result ?? {}) as { found?: number; eligible?: number; note?: string | null };
+  if (job.status === "failed") return `The web search failed: ${job.error ?? "unknown error"}`;
+  if (job.status === "succeeded") {
+    return result.found
+      ? `Finished: ${result.found} found on websites, directories and public pages, ${result.eligible ?? 0} can be contacted.${result.note ? ` ${result.note}` : ""}`
+      : result.note ?? "Finished: nothing found.";
+  }
+  if (job.stage === "reading") return `Reading websites and directories: ${progress.read ?? 0} of ${progress.candidates ?? "?"} pages done (${progress.found ?? 0} found so far).`;
+  if (job.stage === "saving") return `Saving leads: ${progress.saved ?? 0} of ${progress.found ?? "?"}.`;
+  return `Searching the web (${progress.searchesDone ?? 0} of ${progress.searches ?? "?"} searches done)…`;
 }
 
 export const TOOLS: Record<string, Tool> = {
@@ -158,7 +220,7 @@ export const TOOLS: Record<string, Tool> = {
         .join("; ");
       return {
         ok: true,
-        summary: `${channelLine}. Lead discovery: ${setup.leadDiscovery.available ? "Google Maps ready" : setup.leadDiscovery.reason}. AI: ${setup.ai.connected ? "connected" : "not connected"}. Runs answering replies automatically: ${setup.automaticRuns}. Profile missing for discovery: ${setup.missingForDiscovery.join(", ") || "nothing"}; for outreach: ${setup.missingForOutreach.join(", ") || "nothing"}.`,
+        summary: `${channelLine}. Lead discovery: ${setup.leadDiscovery.available ? "Google Maps ready" : setup.leadDiscovery.reason}. ${webDiscoveryLine(setup.webDiscovery)} AI: ${setup.ai.connected ? "connected" : "not connected"}. Runs answering replies automatically: ${setup.automaticRuns}. Profile missing for discovery: ${setup.missingForDiscovery.join(", ") || "nothing"}; for outreach: ${setup.missingForOutreach.join(", ") || "nothing"}. Known elsewhere: ${setup.knownElsewhere}. Optional features on: ${Object.entries(setup.features).filter(([, on]) => on).map(([key]) => key).join(", ") || "none"}.${setup.features.instagram || setup.features.inquiry_intake ? ` Answering new inquiries: ${setup.inquiryReplies.problem ?? "ready"}.` : ""}`,
         data: setup as unknown as Record<string, unknown>,
       };
     },
@@ -166,7 +228,7 @@ export const TOOLS: Record<string, Tool> = {
 
   save_business_info: {
     description: "Remember what the owner said about the business, customers, places, offer, sender or preferences. Saved for every later conversation and used by every message the AI writes. Call it as soon as the owner gives such information.",
-    arguments: "any of: businessName, website, offer, problemsSolved (the problems the offer solves and how), nextStep (what an interested lead is offered next: a call, a visit, a quote), targetCustomers, locations, outreachInstructions, senderName, senderRole, bookingDetails, language (two letters), notes (all text); preferredChannels (array of email|whatsapp|linkedin). An empty string clears a field.",
+    arguments: "any of: businessName, website, offer, problemsSolved (the problems the offer solves and how), nextStep (what an interested lead is offered next: a call, a visit, a quote), prices (prices, packages or rates as the owner gave them), targetCustomers, locations, outreachInstructions, senderName, senderRole, bookingDetails, language (two letters), notes (all text); preferredChannels (array of email|whatsapp|linkedin). An empty string clears a field.",
     run: async (args, context) => {
       const current = await getBusinessProfile();
       // Bad values are reported below; a save of valid values that changes nothing is refused.
@@ -210,7 +272,7 @@ export const TOOLS: Record<string, Tool> = {
       const area = await checkSearchArea(criteria.where, criteria.language);
       if (area?.refused) throw new ToolArgumentError(area.problem);
       if (area) return { ok: false, summary: area.problem };
-      const contactAfter = request ? { channels: channels(args) ?? null, ownerRequest: request } : null;
+      const contactAfter = request ? { channels: channels(args) ?? null, ownerRequest: request, requestId: context.outreachRequestId ?? undefined } : null;
       try {
         const started = await startDiscovery(criteria, context, { contactAfter });
         return {
@@ -220,6 +282,44 @@ export const TOOLS: Record<string, Tool> = {
         };
       } catch (error) {
         if (error instanceof DiscoveryUnavailableError) return { ok: false, summary: error.message };
+        throw error;
+      }
+    },
+  },
+
+  find_customers_on_web: {
+    available: (features) => features.web_discovery,
+    description: "Find customers matching the owner's description of them with a real web search provider (the organization's OpenRouter connection with its web plugin, or AI/ML API's web research model; never a model answering from memory): only the pages the provider returned are used. It reads the businesses' own websites and the local directories or lists the search returned (and the business websites those directories link to) for the emails and phones they publish, and keeps each contact with the page it came from; it never guesses an email, phone, person or page, and people already in the leads are reused, not duplicated. Public Instagram profiles and posts the search returns are read (a profile's website, a post's comments) only when Instagram is connected (the Instagram feature on and an account linked); otherwise they are skipped. People found only on Instagram are listed but cannot be contacted from here. Up to 3 paid searches; runs in the background and announces the result in the chat. Needs the Website and directory search feature.",
+    arguments: "customers (who the customers are, from the owner's words or the business profile), where (city/area/region), maxResults (5-40 business websites to read, default 20), contactAfter (true only when the owner asked to contact, email or message the leads found: the outreach plan is then prepared automatically when the search finishes), channels (optional, with contactAfter: array of email|whatsapp|linkedin)",
+    run: async (args, context) => {
+      if (!(await featureEnabled("web_discovery"))) return { ok: false, summary: new FeatureDisabledError("web_discovery").message };
+      const availability = await webSearchAvailability();
+      if (!availability.available) return { ok: false, summary: `Website and directory search is not available: ${availability.reason}` };
+      const profile = await getBusinessProfile();
+      const criteria = normalizeWebCriteria({
+        customers: text(args, "customers") ?? profile.targetCustomers,
+        where: text(args, "where") ?? profile.locations,
+        maxResults: args.maxResults,
+        language: profile.language,
+        offer: profile.offer,
+        ownWebsite: profile.website,
+      }, profile.language ?? "en");
+      if ("error" in criteria) throw new ToolArgumentError(criteria.error);
+      if (args.contactAfter !== undefined && typeof args.contactAfter !== "boolean") throw new ToolArgumentError("contactAfter must be true or false");
+      const request = args.contactAfter === true ? requireOutreachRequest(context) : null;
+      const contactAfter = request ? { channels: channels(args) ?? null, ownerRequest: request, requestId: context.outreachRequestId ?? undefined } : null;
+      try {
+        const started = await startWebDiscovery(criteria, context, { contactAfter });
+        const instagram = started.instagram.usable ? " Public Instagram profiles and posts it returns are read too." : ` Instagram pages are skipped (${started.instagram.reason}).`;
+        const provider = started.provider === "openrouter" ? "OpenRouter web search" : "AI/ML API web research";
+        return {
+          ok: true,
+          summary: `Web search started for “${started.phrase}” with ${provider} (${started.model}): ${started.queries.length} searches, up to ${criteria.maxResults} business websites; job ${started.jobId}, audience ${started.audienceId}.${instagram} Results are announced in the chat when done.${contactAfter ? " The outreach plan will be prepared automatically when it finishes." : ""}`,
+          display: `Searching the web for “${started.phrase}” (${provider}, ${started.queries.length} searches, up to ${criteria.maxResults} websites).${instagram}`,
+          data: { jobId: started.jobId, audienceId: started.audienceId, phrase: started.phrase, queries: started.queries, provider: started.provider, model: started.model, instagram: started.instagram, criteria },
+        };
+      } catch (error) {
+        if (error instanceof WebDiscoveryUnavailableError) return { ok: false, summary: error.message };
         throw error;
       }
     },
@@ -262,6 +362,77 @@ export const TOOLS: Record<string, Tool> = {
     },
   },
 
+  use_existing_leads: {
+    description: "Make a lead list from people already in the lead database: everyone, the latest import, people matching a word (name, company, title, email or details such as a city), or the people who sent inquiries (website forms, Instagram). It only prepares the list, with why each person is on it and what they wrote when they inquired; nobody is contacted. Then call prepare_outreach for it when the owner asked to contact them (they press Start). People already in a running or paused outreach run are left out, and Do Not Contact or unsubscribed people are excluded with the reason. Imported (historical) inquiries are left out unless the owner asks for them.",
+    arguments: "from (all | latest_import | inquiries; default all), search (optional word to match), maxLeads (1-500, default 100), includeHistorical (optional true: inquiries from imported history too), listName (optional)",
+    run: async (args, context) => {
+      const from = args.from === undefined ? "all" : args.from;
+      if (!isExistingLeadsFrom(from)) throw new ToolArgumentError("from must be all, latest_import or inquiries");
+      if (args.includeHistorical !== undefined && typeof args.includeHistorical !== "boolean") throw new ToolArgumentError("includeHistorical must be true or false");
+      const maxLeads = args.maxLeads === undefined ? undefined : Number(args.maxLeads);
+      if (maxLeads !== undefined && (!Number.isFinite(maxLeads) || maxLeads < 1 || maxLeads > MAX_EXISTING_LEADS)) throw new ToolArgumentError(`maxLeads must be between 1 and ${MAX_EXISTING_LEADS}`);
+      const result = await createExistingLeadsAudience({
+        from,
+        search: text(args, "search")?.slice(0, 120) ?? null,
+        maxLeads,
+        includeHistorical: args.includeHistorical === true,
+        listName: text(args, "listName") ?? null,
+        threadId: context.threadId,
+        userId: context.userId,
+      });
+      if (!result.audienceId || !result.audience) {
+        const why = result.alreadyInRuns ? ` ${result.alreadyInRuns} matching ${result.alreadyInRuns === 1 ? "person is" : "people are"} already in a running or paused outreach run.` : "";
+        return { ok: false, summary: `No one in the lead database matches that.${why}` };
+      }
+      const a = result.audience;
+      return {
+        ok: true,
+        summary: `Lead list ${a.id} “${a.name}”: ${a.eligible} contactable of ${a.total} (email ${a.byChannel.email}, WhatsApp ${a.byChannel.whatsapp}, LinkedIn ${a.byChannel.linkedin}).${a.excluded.length ? ` Left out: ${a.excluded.map((e) => `${e.count} × ${e.reason}`).join("; ")}.` : ""}${result.alreadyInRuns ? ` ${result.alreadyInRuns} already in a running outreach run were not added.` : ""} Nobody was contacted.`,
+        display: `“${a.name}”: ${a.eligible} of ${a.total} can be contacted${result.alreadyInRuns ? `; ${result.alreadyInRuns} already in a running outreach run were left out` : ""}.`,
+        data: { audienceId: a.id, audience: a },
+      };
+    },
+  },
+
+  list_inquiries: {
+    available: (features) => features.inquiry_intake,
+    description: "The inquiries received in the last 30 days (website forms, Instagram): how many are new, how many came from imported history, and the latest few with what they wrote.",
+    arguments: "none",
+    run: async () => {
+      const overview = await inquiryOverview(30);
+      const latest = overview.latest.map((item) => `${item.at.slice(0, 10)} ${item.source === "instagram" ? "Instagram" : "website form"}: ${item.name ?? "someone"}${item.message ? ` — “${item.message}”` : ""}`).join("\n");
+      return {
+        ok: true,
+        summary: `Last 30 days: ${overview.fresh} new inquiries (${overview.bySource.map((item) => `${item.source === "instagram" ? "Instagram" : "website form"} ${item.count}`).join(", ") || "none"}), ${overview.historical} from imported history, ${overview.unusable} without a usable email or phone.${latest ? `\n${latest}` : ""}`,
+        data: overview as unknown as Record<string, unknown>,
+      };
+    },
+  },
+
+  prepare_inquiry_replies: {
+    available: (features) => features.instagram && features.inquiry_intake,
+    description: "Propose answering new Instagram inquiries: from when the owner presses Start, people whose first message arrives on an Instagram account that treats new messages as inquiries get replies drafted from the owner's saved information — sent automatically in Automatic mode, or waiting in Action required in Review mode — with every existing check, limit and handoff. It never answers imported history, earlier chats or anyone else, and sends nothing first. Only when the owner asked for their inquiries or Instagram messages to be answered.",
+    arguments: "autopilot (optional true/false: propose Automatic replies)",
+    run: async (args, context) => {
+      if (!inquiryRepliesRequested(context.ownerText, context.lastAssistantText)) {
+        throw new ToolArgumentError("the owner has not asked for their inquiries to be answered; offer it and wait for a yes");
+      }
+      const request = context.ownerText;
+      if (args.autopilot !== undefined && typeof args.autopilot !== "boolean") throw new ToolArgumentError("autopilot must be true or false");
+      try {
+        const proposal = await prepareInquiryReplies({ autopilot: args.autopilot as boolean | undefined, ownerRequest: request, threadId: context.threadId, userId: context.userId });
+        return {
+          ok: true,
+          summary: `Inquiry plan ${proposal.runId} ready: “${proposal.name}”, answering new Instagram inquiries on ${proposal.accounts.filter((account) => account.inquiryIntake && account.status === "connected").map((account) => account.username ? `@${account.username}` : "an account").join(", ")}. It is shown to the owner with a Start button and a choice of Automatic or Review; nothing happens until they press Start.`,
+          data: { runId: proposal.runId, name: proposal.name, plan: proposal.plan },
+        };
+      } catch (error) {
+        if (error instanceof InquiryRunError) return { ok: false, summary: error.message };
+        throw error;
+      }
+    },
+  },
+
   read_webpage: {
     description: "Open one public web page from a link the owner gave (or a link on a page already read) and read its text and the emails, phones and LinkedIn links on it: for example the owner's own website, to learn about the business, or a page listing people to contact. Not a web search; it cannot log in, so Instagram, Facebook, X, TikTok and LinkedIn pages cannot be read.",
     arguments: "url",
@@ -283,7 +454,7 @@ export const TOOLS: Record<string, Tool> = {
         return { ok: false, summary: `Could not open ${url.toString()}: ${error instanceof Error ? error.message : String(error)}` };
       }
       if (!page) return { ok: false, summary: `${url.toString()} is not a readable web page.` };
-      const title = visibleText(page.html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? "").trim().slice(0, 200);
+      const title = visibleText(pageTitle(page.html)).trim().slice(0, 200);
       const body = visibleText(page.html).trim();
       const contacts = extractContacts(page.html, page.url).slice(0, 60);
       const host = new URL(page.url).hostname.replace(/^www\./, "");
@@ -309,7 +480,7 @@ export const TOOLS: Record<string, Tool> = {
       const availability = await linkedinSearchAvailability();
       if (!availability.available) return { ok: false, summary: `LinkedIn search is not available: ${availability.reason}` };
       const started = await startLinkedinSearch({ keywords, maxResults }, context, {
-        contactAfter: args.contactAfter === true ? { channels: ["linkedin"], ownerRequest: requireOutreachRequest(context) } : null,
+        contactAfter: args.contactAfter === true ? { channels: ["linkedin"], ownerRequest: requireOutreachRequest(context), requestId: context.outreachRequestId ?? undefined } : null,
       });
       return {
         ok: true,
@@ -321,14 +492,22 @@ export const TOOLS: Record<string, Tool> = {
   },
 
   lead_search_status: {
-    description: "The progress or result of a lead search.",
+    description: "The progress or result of a lead search (Google Maps, LinkedIn or web).",
     arguments: "jobId (optional; the latest search when left out)",
     run: async (args) => {
       const jobId = uuid(args, "jobId", false);
       const [job] = await db.select().from(assistantJobs)
-        .where(and(inOrg(assistantJobs), inArray(assistantJobs.kind, ["discovery", "linkedin_search"]), ...(jobId ? [eq(assistantJobs.id, jobId)] : [])))
+        .where(and(inOrg(assistantJobs), inArray(assistantJobs.kind, ["discovery", "linkedin_search", "web_discovery"]), ...(jobId ? [eq(assistantJobs.id, jobId)] : [])))
         .orderBy(desc(assistantJobs.createdAt)).limit(1);
       if (!job) return { ok: false, summary: "No lead search found." };
+      if (job.kind === "web_discovery") {
+        return {
+          ok: true,
+          summary: `Web search ${job.id}: ${job.status} (${job.stage}). Progress ${JSON.stringify(job.progress)}.${job.error ? ` Error: ${job.error}` : ""}${job.result ? ` Result: ${JSON.stringify(job.result)}` : ""}`,
+          display: webDiscoveryProgress(job),
+          data: { jobId: job.id, kind: job.kind, status: job.status, stage: job.stage, progress: job.progress, result: job.result, error: job.error, audienceId: job.audienceId },
+        };
+      }
       const progress = job.progress as { found?: number; websitesChecked?: number; websitesToCheck?: number; saved?: number };
       const result = (job.result ?? {}) as { found?: number; eligible?: number; note?: string | null };
       const display = job.status === "failed"
@@ -357,7 +536,7 @@ export const TOOLS: Record<string, Tool> = {
       return {
         ok: true,
         summary: audiences.length ? audiences.map((a) => `${a.id}: “${a.name}” (${a.source}) ${a.eligible} contactable of ${a.total}`).join("\n") : "No lead lists yet.",
-        display: audiences.length ? audiences.map((a) => `“${a.name}” (${a.source === "discovery" ? "found" : "uploaded"}): ${a.eligible} of ${a.total} can be contacted`).join("\n") : "No lead lists yet.",
+        display: audiences.length ? audiences.map((a) => `“${a.name}” (${AUDIENCE_SOURCE_WORD[a.source] ?? a.source}): ${a.eligible} of ${a.total} can be contacted`).join("\n") : "No lead lists yet.",
         data: { audiences },
       };
     },
@@ -367,12 +546,18 @@ export const TOOLS: Record<string, Tool> = {
     description: "One lead list in detail: how many leads per channel, who was left out and why, and a few examples with where their contact details came from.",
     arguments: "audienceId",
     run: async (args) => {
-      const summary = await summarizeAudience(uuid(args, "audienceId")!);
+      const audienceId = uuid(args, "audienceId")!;
+      const summary = await summarizeAudience(audienceId);
       if (!summary) return { ok: false, summary: "No such lead list." };
+      const qualified = await audienceProspects(audienceId);
+      const counts = qualified?.counts;
+      const qualification = counts
+        ? ` Qualification: ${counts.potential_match} potential matches (not yet interested), ${counts.inquired} inquired, ${counts.replied} replied, ${counts.interested} interested; ${counts.withNeedEvidence} with words of their own showing a need. Location and budget stay unknown unless the source stated them.`
+        : "";
       return {
         ok: true,
-        summary: `“${summary.name}”: ${summary.eligible} contactable of ${summary.total} (email ${summary.byChannel.email}, WhatsApp ${summary.byChannel.whatsapp}, LinkedIn ${summary.byChannel.linkedin}). Left out: ${summary.excluded.map((e) => `${e.count} × ${e.reason}`).join("; ") || "none"}.`,
-        data: summary as unknown as Record<string, unknown>,
+        summary: `“${summary.name}”: ${summary.eligible} contactable of ${summary.total} (email ${summary.byChannel.email}, WhatsApp ${summary.byChannel.whatsapp}, LinkedIn ${summary.byChannel.linkedin}). Left out: ${summary.excluded.map((e) => `${e.count} × ${e.reason}`).join("; ") || "none"}.${qualification}`,
+        data: { ...summary, ...(counts ? { qualification: counts } : {}) } as unknown as Record<string, unknown>,
       };
     },
   },
@@ -397,6 +582,7 @@ export const TOOLS: Record<string, Tool> = {
           instructions: text(args, "instructions") ?? null,
           basedOnRunId,
           ownerRequest: request || null,
+          requestId: context.outreachRequestId ?? null,
           includeSkipped: args.includeSkipped === true,
           threadId: context.threadId,
           userId: context.userId,
@@ -546,6 +732,11 @@ export const TOOLS: Record<string, Tool> = {
 
 export const TOOL_NAMES = Object.keys(TOOLS);
 
+/** The tools offered to the model: a tool of an optional feature that is off is left out entirely. */
+export function toolNamesFor(features: FeatureState): string[] {
+  return Object.entries(TOOLS).filter(([, tool]) => !tool.available || tool.available(features)).map(([name]) => name);
+}
+
 /** Runs one tool; argument problems come back as a failed result the model can correct. */
 export async function runTool(name: string, args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
   const tool = TOOLS[name];
@@ -559,9 +750,9 @@ export async function runTool(name: string, args: Record<string, unknown>, conte
   }
 }
 
-/** The tools as the model reads them. */
-export function toolCatalog(): string {
-  return Object.entries(TOOLS).map(([name, tool]) => `- ${name}: ${tool.description} Arguments: ${tool.arguments}.`).join("\n");
+/** The tools as the model reads them, only those `features` allow. */
+export function toolCatalog(features: FeatureState): string {
+  return toolNamesFor(features).map((name) => `- ${name}: ${TOOLS[name]!.description} Arguments: ${TOOLS[name]!.arguments}.`).join("\n");
 }
 
 export { setupSnapshot };

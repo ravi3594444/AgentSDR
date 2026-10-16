@@ -2,10 +2,11 @@ import type { NextRequest } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { assistantRoute, canManageAutopilot } from "@/lib/assistant/http.server";
-import { getRun, OutreachError, setRunPaused, setRunReplyMode, startOutreachRun, stopRun } from "@/lib/assistant/outreach.server";
+import { getRun, OutreachError, setRunPaused, setRunReplyMode, startInquiryRun, startOutreachRun, stopRun } from "@/lib/assistant/outreach.server";
 import { AUTOPILOT_LIMITS } from "@/lib/crm/autopilot";
 import { outreachRuns } from "@/lib/assistant/schema";
 import { addMessage } from "@/lib/assistant/threads.server";
+import { recordRequestApproval } from "@/lib/assistant/requestApproval.server";
 import { inOrg } from "@/lib/tenancy/scope";
 
 export const dynamic = "force-dynamic";
@@ -20,7 +21,7 @@ type Ctx = { params: Promise<{ id: string }> };
 export async function POST(request: NextRequest, { params }: Ctx) {
   const { id } = await params;
   return assistantRoute(request, { mutation: true }, async (ctx) => {
-    const body = (await request.json().catch(() => ({}))) as { action?: unknown; autopilot?: unknown; mode?: unknown };
+    const body = (await request.json().catch(() => ({}))) as { action?: unknown; autopilot?: unknown; mode?: unknown; applyToRequest?: unknown };
     const requestedMode = body.mode === "automatic" ? true : body.mode === "review" ? false : typeof body.autopilot === "boolean" ? body.autopilot : null;
     const run = /^[0-9a-f-]{36}$/i.test(id) ? await getRun(id) : null;
     if (!run) return Response.json({ error: "That outreach plan does not exist." }, { status: 404 });
@@ -31,17 +32,39 @@ export async function POST(request: NextRequest, { params }: Ctx) {
         if (autopilot && !canManageAutopilot(ctx)) {
           return Response.json({ error: "Only an owner or admin can let the assistant answer replies automatically. Start in Review mode, or ask one of them." }, { status: 403 });
         }
+        if (run.plan.kind === "inquiries") {
+          await startInquiryRun(id, ctx.userId, autopilot);
+          if (run.threadId) {
+            await addMessage({
+              threadId: run.threadId,
+              role: "event",
+              content: `${ctx.userName || "The owner"} started answering new Instagram inquiries (“${run.name}”) in ${autopilot ? "Automatic" : "Review"} mode. Only people whose first message arrives from now on, on the accounts that treat new messages as inquiries, are covered; imported history and earlier chats are never answered by it. ${autopilot
+                ? `Ordinary questions are answered from your saved information once the answer is written and checked, at most ${AUTOPILOT_LIMITS.perConversation} per conversation and ${AUTOPILOT_LIMITS.perDay} in 24 hours; anything else comes to you as a decision.`
+                : "Every reply waits for you in Action required."}`,
+            });
+          }
+          return Response.json({ ok: true, jobId: null });
+        }
         const started = await startOutreachRun(id, ctx.userId, { autopilot });
+        const applyToRequest = body.applyToRequest === true && Boolean(run.plan.requestId);
         if (run.threadId) {
           await addMessage({
             threadId: run.threadId,
             role: "event",
-            content: `${ctx.userName || "The owner"} approved the outreach plan “${run.name}” in ${autopilot ? "Automatic" : "Review"} mode. ${autopilot
+            content: `${ctx.userName || "The owner"} approved the outreach plan “${run.name}” in ${autopilot ? "Automatic" : "Review"} mode${applyToRequest ? ", for the rest of this request too: its other plans start on their own as they are ready, with the same mode, channels and limits" : ""}. ${autopilot
               ? `Ordinary replies from these leads are answered from your saved information as soon as the answer is written and checked, at most ${AUTOPILOT_LIMITS.perConversation} per conversation and ${AUTOPILOT_LIMITS.perDay} in 24 hours; anything else comes to you as a decision.`
               : "Every reply waits for you in Action required."} Writing each lead's opening line, then launching.`,
           });
         }
-        return Response.json({ ok: true, jobId: started.jobId });
+        // The rest of the same request (other cities or searches) under this one approval.
+        // The plan has started either way: a failure here only means the rest waits for its own Start.
+        const applied = applyToRequest
+          ? await recordRequestApproval(id, { autopilot, approvedBy: ctx.userId }).catch((error) => {
+            console.error("[assistant/runs] recording the request approval failed:", error);
+            return null;
+          })
+          : null;
+        return Response.json({ ok: true, jobId: started.jobId, ...(applied ? { alsoStarted: applied.started, notStarted: applied.skipped } : {}) });
       }
       if (body.action === "pause" || body.action === "resume") {
         const result = await setRunPaused(id, body.action === "pause");

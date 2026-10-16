@@ -24,12 +24,15 @@ import { eligibleAudienceMembers, summarizeAudience } from "./audiences.server";
 import { countReasons } from "./audiences";
 import { availableTokens, leadTextKey, MAX_PERSONAL, perLeadSteps, personalizationKey, settleGroups, templateTokens, type LeadApproach } from "./messages";
 import { getBusinessProfile } from "./profile.server";
+import { effectiveBusinessProfile } from "./businessContext.server";
+import { activeInquiryRun, inquiryRunLockSql, inquiryRunMembers, inquiryRunReadiness } from "./inquiryRuns.server";
 import { missingForOutreach } from "./profile";
 import {
   assistantJobs,
   outreachRunLeads,
   outreachRuns,
   type AudienceChannel,
+  type RunLeadChannel,
   type OutreachPlan,
   type PlanGroup,
   type PlannedStep,
@@ -156,6 +159,8 @@ export type PrepareInput = {
   basedOnRunId?: string | null;
   /** The owner's words that asked for this outreach. */
   ownerRequest?: string | null;
+  /** The id of the owner's message that asked (requestApproval.ts). */
+  requestId?: string | null;
   /** Sort the leads into kinds and approaches (default true when they have facts to sort by). */
   sortLeads?: boolean;
   /** Contact leads the sorting would leave out, too. */
@@ -187,7 +192,8 @@ export type Proposal = {
 
 /** Writes the messages and plans the run. Creates no campaign and sends nothing. */
 export async function prepareOutreach(input: PrepareInput): Promise<Proposal> {
-  const profile = await getBusinessProfile();
+  // The saved profile, signed with the name the connected accounts already use when it names no sender.
+  const profile = await effectiveBusinessProfile();
   const missing = missingForOutreach(profile);
   if (missing.length) throw new OutreachError(`Before writing outreach I need ${missing.join(", ")}.`);
   const audience = await summarizeAudience(input.audienceId);
@@ -381,6 +387,7 @@ export async function prepareOutreach(input: PrepareInput): Promise<Proposal> {
     instructions,
     basedOnRunId: base?.id ?? null,
     ownerRequest: input.ownerRequest?.trim() || null,
+    requestId: input.requestId ?? null,
     groups,
     leadPlans,
     personal,
@@ -415,6 +422,7 @@ export async function startOutreachRun(runId: string, userId: string | null, opt
   const run = await getRun(runId);
   if (!run) throw new OutreachError("That outreach plan does not exist.");
   if (run.status !== "proposed") throw new OutreachError(`This plan is already ${run.status}.`);
+  if (run.plan.kind === "inquiries") throw new OutreachError("This plan answers inquiries; start it with startInquiryRun.");
   const availability = await channelAvailability();
   const broken = run.channels.filter((channel) => !availability[channel].available);
   if (broken.length) throw new OutreachError(`Cannot start: ${broken.map((channel) => `${channel} — ${availability[channel].reason}`).join("; ")}.`);
@@ -446,6 +454,31 @@ export async function startOutreachRun(runId: string, userId: string | null, opt
     createdBy: userId,
   }).returning({ id: assistantJobs.id });
   return { jobId: job!.id };
+}
+
+/**
+ * Starting an inquiry run (inquiryRuns.server.ts) sends nothing and launches
+ * no campaign: it begins answering people whose fresh inquiries arrive from
+ * now on, in the mode the owner chose. Re-checked here, because features or
+ * accounts may have changed since the plan was proposed.
+ */
+export async function startInquiryRun(runId: string, userId: string | null, autopilot: boolean): Promise<void> {
+  const run = await getRun(runId);
+  if (!run || run.plan.kind !== "inquiries") throw new OutreachError("That inquiry plan does not exist.");
+  if (run.status !== "proposed") throw new OutreachError(`This plan is already ${run.status}.`);
+  const problem = await inquiryRunReadiness();
+  if (problem) throw new OutreachError(`Cannot start: ${problem}`);
+  // Checked and claimed under the organization's inquiry-run lock: two Starts at once cannot both win.
+  await db.transaction(async (tx) => {
+    await tx.execute(inquiryRunLockSql());
+    const active = await activeInquiryRun(tx);
+    if (active) throw new OutreachError(`New inquiries are already answered by “${active.name}”. Stop it first.`);
+    const claimed = await tx.update(outreachRuns)
+      .set({ status: "running", approvedBy: userId, approvedAt: new Date(), autopilot, updatedAt: new Date() })
+      .where(and(inOrg(outreachRuns), eq(outreachRuns.id, run.id), eq(outreachRuns.status, "proposed")))
+      .returning({ id: outreachRuns.id });
+    if (!claimed.length) throw new OutreachError("This plan was started already.");
+  });
 }
 
 async function writeLines(runId: string, key: string, personIds: string[], startIndex: number): Promise<number> {
@@ -644,11 +677,21 @@ export async function runOutreachStartStep(job: AssistantJob, heartbeat: () => P
 }
 
 /** Pauses or resumes every campaign of a run. */
-export async function setRunPaused(runId: string, paused: boolean): Promise<{ status: string; changed: AudienceChannel[]; problems: string[] }> {
+export async function setRunPaused(runId: string, paused: boolean): Promise<{ status: string; changed: RunLeadChannel[]; problems: string[] }> {
   const run = await getRun(runId);
   if (!run) throw new OutreachError("That outreach run does not exist.");
   if (paused ? run.status !== "running" : run.status !== "paused") throw new OutreachError(`This run is ${run.status}; only a ${paused ? "running" : "paused"} run can be ${paused ? "paused" : "resumed"}.`);
-  const changed: AudienceChannel[] = [];
+  if (run.plan.kind === "inquiries") {
+    // No campaigns: pausing holds its automatic replies (the autopilot gate
+    // reads the run's status); resuming looks at the held ones again.
+    const status = paused ? "paused" : "running";
+    await db.update(outreachRuns).set({ status, pausedAt: paused ? new Date() : null, updatedAt: new Date() })
+      .where(and(inOrg(outreachRuns), eq(outreachRuns.id, runId)));
+    const problems: string[] = [];
+    if (!paused && run.autopilot) await requeueRunAutopilot(runId).catch((error) => problems.push(`automatic replies: ${error instanceof Error ? error.message : String(error)}`));
+    return { status, changed: run.plan.inquiry?.channels ?? ["instagram"], problems };
+  }
+  const changed: RunLeadChannel[] = [];
   const problems: string[] = [];
   for (const [channel, campaignId] of Object.entries(run.campaigns) as [AudienceChannel, string][]) {
     try {
@@ -772,7 +815,8 @@ export async function reportRun(runId: string): Promise<RunReport | null> {
       channels.push({ channel, campaignId, contacted: by(reached), messagesSent: null, replied: by(["REPLIED"]), finished: by(["COMPLETED"]), stopped: by(["FAILED", "CANCELLED"]) });
     }
   }
-  return { runId: run.id, name: run.name, status: run.status, autopilot: run.autopilot, leads: run.plan.assignments.length, channels, error: run.error };
+  const leads = run.plan.kind === "inquiries" ? await inquiryRunMembers(run.id) : run.plan.assignments.length;
+  return { runId: run.id, name: run.name, status: run.status, autopilot: run.autopilot, leads, channels, error: run.error };
 }
 
 export async function listRuns(limit = 10) {
