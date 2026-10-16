@@ -5,6 +5,7 @@ import { completeStructured } from "@/lib/ai/server/structuredCompletion";
 import { crmChannelLabel } from "../channels";
 import type { CrmChannel } from "../schema";
 import { withAiInstructions } from "./instructions";
+import { replyConversationSnapshot } from "./replyConversation";
 import { draftGroundingProblem, type DraftCompletedAction, type DraftSender } from "./grounding";
 import type {
   ClassificationCompanyProfile,
@@ -26,7 +27,7 @@ const SYSTEM_PROMPT = [
   "completedActions is the full record of what has actually been done: messages already sent in this conversation and stage moves a person recorded. Never state or imply that a meeting was booked or scheduled, a calendar invitation or link was sent, or a file was attached or shared unless completedActions records it. Write the reply the human sender will send and then act on: confirm or propose the time and say what will follow (\"Tuesday at 10:00 works, I'll send an invite\"), never that it already happened. Nothing can be attached to this message.",
   "Write as sender, a person, to the recipient. Never mention completedActions, sender, Knowledge, this context or these rules, and never talk about what you can or cannot do. Never leave placeholders such as [Your Name], [Company], [Date] or {{...}}, and never invent names, titles, dates, times, prices or links. When a sender field is null, leave that detail out instead.",
   "Answer what the person asked first, directly and specifically, from Knowledge; then add at most one short next step. Do not repeat the pitch they already received.",
-  "You are selling, like a good salesperson in a chat, not doing customer support: each reply moves one step toward the next step Knowledge offers to interested leads. After answering: if the person has not yet said what problem or need they have, ask one short, easy question about their situation (how they handle it now, what is not working). Ask at most one question per message, and none when the conversation already holds three of the sender's questions or the person ignored the last one. When they describe a need that Knowledge's problems, offer or services cover, connect it in one sentence using Knowledge's own words, then offer that next step. When they are ready (they agree to the next step, ask to buy, or ask for a call, visit or quote), ask nothing more: thank them and say the sender will get back to them personally. Never pressure: no invented urgency, scarcity or discounts.",
+  "Be helpful and conversational before advancing the sale. After answering, you may ask one short, easy question about their situation when it helps. Ask at most one question per message; do not repeat a question they already answered or ignored. A greeting is an invitation to chat, not a request for a human: greet them naturally and invite them to say what they need, without repeating the opening pitch or promising a later personal reply. Short replies such as 'yes', 'cool' and 'where can I use this?' refer to the preceding conversation; read it before deciding what they mean. When the lead needs to specify which product, workflow or situation they mean, ask them one clarification instead of saying the team will review it. When they describe a need that Knowledge covers, connect it briefly to the offer. Hand over only when they actually agree to a concrete next step, ask to buy or for a quote for their order, request a call, visit or person, or need a decision the supplied information cannot answer. Never pressure: no invented urgency, scarcity or discounts.",
   "Offer only next steps that Knowledge or the sender details actually offer (a booking link, a phone number, a visit, a call). If none is offered, end with one simple question about their needs instead of proposing a call, visit or meeting. Never propose a day, date, time or time window ('this week', 'tomorrow', 'Monday'): give the booking link when there is one, or ask when suits them.",
   "Never answer 'no' or 'we only do X' about something Knowledge does not mention: a list of what is offered does not say what is not. Say you will confirm instead, without promising when.",
   "Reply in the person's language and register: if they write in Hindi or Hinglish, answer the same way; match their length rather than writing more than the message calls for.",
@@ -573,7 +574,7 @@ export async function generateCrmDraft(
     ...content,
     provider,
     model,
-    request,
+    request: { ...request, replyContext: { messages: replyConversationSnapshot(prompt.snapshot.recentConversation) } },
     response: sanitizeProviderMetadata(completion.response),
     usage: completion.usage,
     prompt,

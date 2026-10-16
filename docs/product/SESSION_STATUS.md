@@ -275,6 +275,35 @@ with a transaction stand-in and confirmed WhatsApp, email and LinkedIn jobs
 are due immediately. Review, pause, opt-out, newer-message and owner-handoff
 holds still pass their checks. No live messages were sent.
 
+### Follow-up: normal conversations before an owner handoff (2026-10-16)
+
+Code review found that the writer saw the thread but the reply checker saw
+only the latest message. Greetings and ambiguous references could become
+missing-information decisions, and unsupported additions in the draft went
+straight to a handoff. The existing time-only repair also relied on
+requeuing an auto_send job while that same job was still running, so its
+rewritten draft could be left without another check.
+
+The writer now stores a bounded conversation snapshot with its request
+metadata and the checker receives that same context. Greeting handling
+keeps factual checks, while a real question asking the lead to clarify
+their needs can continue the conversation. Unsupported draft additions get
+one rewrite followed by an immediate check of the new revision in the same
+job. Genuine missing business answers, complaints, requests for a person,
+opt-outs, limits and explicit buying decisions retain their existing rules.
+No schema migration or extra conversation query is needed.
+
+Validation: full TypeScript check passed; 39 focused tests passed (11 new
+conversation regressions plus existing draft, classification and instruction
+tests). Four checks of the actual autopilot runner with mocked persistence
+and model/provider boundaries passed: repaired revision sent once without a
+handoff; unsuccessful repair attempted only once and not sent; a newer
+inbound during repair stopped the old answer; pausing during repair held
+the send. These are local checks, not a live model-quality evaluation.
+Existing handoffs are not automatically closed. The VM diagnostic now prints
+the stored reason, kind and owner question, so the screenshot's exact
+historical handoff can be checked on the server.
+
 ### Live services vs stand-ins
 
 - **Live, real services:** gosom/google-maps-scraper v1.18.1 against Google

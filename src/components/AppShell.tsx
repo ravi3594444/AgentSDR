@@ -26,9 +26,9 @@ const CHROMELESS_ROUTES = [
   "/setup",
 ];
 
-/** The sign-in screens: no sidebar, no app chrome. */
+/** The public homepage and sign-in screens have no workspace chrome. */
 export function isChromeless(pathname: string) {
-  return CHROMELESS_ROUTES.some((route) => pathname === route || pathname.startsWith(`${route}/`));
+  return pathname === "/" || CHROMELESS_ROUTES.some((route) => pathname === route || pathname.startsWith(`${route}/`));
 }
 
 /**
@@ -50,7 +50,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <SessionGate>
-    <div className="flex h-screen min-h-0 flex-col overflow-hidden bg-bg-white-0">
+    <div className="app-workspace flex h-dvh min-h-0 flex-col overflow-hidden bg-bg-white-0">
     <DemoBanner />
     <div className="flex min-h-0 flex-1 flex-col md:flex-row">
       <div className="hidden h-full md:flex">
@@ -58,7 +58,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       </div>
 
       <header className="flex h-12 shrink-0 items-center justify-between border-b border-stroke-soft-200 bg-bg-white-0 px-4 md:hidden">
-        <Link href="/analytics" aria-label={`${BRAND.name} home`}>
+        <Link href="/assistant" aria-label={`${BRAND.name} home`}>
           <Logo className="text-text-strong-950" iconClassName="size-7" textClassName="text-[15px]" />
         </Link>
         <button

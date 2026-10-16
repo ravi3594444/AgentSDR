@@ -22,7 +22,7 @@ import type { OwnerDecisionKind, ReplyCheck } from "./schema";
 
 export type ModelCheck = {
   intent: string;
-  questions: { question: string; answered: boolean; evidence: string }[];
+  questions: { question: string; answered: boolean; evidence: string; /** Exact question in the draft asking the lead to clarify their own needs or an ambiguous reference. */ clarification?: string }[];
   claims: { claim: string; evidence: string }[];
   commitments: { commitment: string; evidence: string }[];
   missing: string;
@@ -41,7 +41,13 @@ export type ReplyVerdict =
  * or a visit — a person takes over. `wants_person`: asks for a human.
  * `acknowledgement`: only "ok", "thanks", 👍, asking nothing.
  */
-export const REPLY_CHECK_INTENTS = ["question", "interested", "ready", "wants_person", "acknowledgement", "not_interested", "opt_out", "complaint", "negotiation", "scheduling", "out_of_office", "other"] as const;
+export const REPLY_CHECK_INTENTS = ["greeting", "question", "interested", "ready", "wants_person", "acknowledgement", "not_interested", "opt_out", "complaint", "negotiation", "scheduling", "out_of_office", "other"] as const;
+
+/** A literal greeting needs no owner facts. Additional words keep ordinary checks. */
+export function isGreetingOnly(message: string): boolean {
+  const clean = message.trim().toLowerCase().replace(/[!?.،,。\s]+$/gu, "");
+  return /^(?:hi+|he+y+|hello+|hiya|howdy|namaste|namaskar|salaam|salam|नमस्ते|हाय|हेलो|good (?:morning|afternoon|evening))(?:\s+(?:there|bhai|ji|sir|madam))?$/u.test(clean);
+}
 
 /** Lowercase, one kind of quote and dash, single spaces, no edge punctuation: for quote matching. */
 export function normalizeForMatch(value: string): string {
@@ -118,13 +124,22 @@ function quote(value: string, max = 140): string {
   return `“${text.length > max ? `${text.slice(0, max - 1)}…` : text}”`;
 }
 
-export function judgeReply(model: ModelCheck, input: { reply: string; knowledge: string; leadName: string; /** The assistant already answered in this conversation. */ answeredBefore?: boolean }): ReplyVerdict {
+export function judgeReply(model: ModelCheck, input: { reply: string; knowledge: string; leadName: string; leadMessage?: string; /** The assistant already answered in this conversation. */ answeredBefore?: boolean }): ReplyVerdict {
+  if (input.leadMessage && isGreetingOnly(input.leadMessage)) {
+    // Correct an invented question or handoff for "Hey". Claims, amounts,
+    // links, times and promises in the drafted answer are still checked.
+    model = { ...model, intent: "greeting", questions: [], missing: "", escalate: "" };
+  }
   const intent = (REPLY_CHECK_INTENTS as readonly string[]).includes(model.intent) ? model.intent : "other";
   const questions = model.questions.map((item) => ({
     question: item.question.trim(),
     answered: Boolean(item.answered),
     evidence: item.evidence.trim(),
     supported: Boolean(item.answered) && quoteSupported(item.evidence, input.knowledge),
+    clarification: item.clarification?.trim() || "",
+    clarifies: normalizeForMatch(item.clarification || "").length >= 12
+      && /[?？]/u.test(item.clarification!)
+      && normalizeForMatch(input.reply).includes(normalizeForMatch(item.clarification!)),
   })).filter((item) => item.question);
   const claims = model.claims.map((item) => ({ claim: item.claim.trim(), evidence: item.evidence.trim(), supported: quoteSupported(item.evidence, input.knowledge) })).filter((item) => item.claim);
   const commitments = model.commitments.filter((item) => item.commitment.trim());
@@ -171,7 +186,7 @@ export function judgeReply(model: ModelCheck, input: { reply: string; knowledge:
     };
   }
 
-  const unanswered = questions.filter((item) => !item.answered || !item.supported);
+  const unanswered = questions.filter((item) => (!item.answered || !item.supported) && !item.clarifies);
   if (unanswered.length) {
     problems.push(...unanswered.map((item) => `not answered from your information: ${item.question}`));
     const first = unanswered[0]!;
@@ -255,4 +270,11 @@ export function selfFixableTimes(check: ReplyCheck): string[] | null {
   const prefix = "time not in your information: ";
   if (!check.problems.length || !check.problems.every((problem) => problem.startsWith(prefix))) return null;
   return check.problems.map((problem) => problem.slice(prefix.length));
+}
+
+/** Fix the draft's unsupported additions once; genuine unanswered questions still need the owner. */
+export function selfFixableReply(check: ReplyCheck): string | null {
+  const prefixes = ["time not in your information: ", "amount not in your information: ", "claim not in your information: ", "promise not in your rules: ", "link or address not in your information: "];
+  if (!check.problems.length || !check.problems.every((problem) => prefixes.some((prefix) => problem.startsWith(prefix)))) return null;
+  return `Rewrite this reply to correct these unsupported additions: ${check.problems.join("; ")}. Remove them or replace them only with facts explicitly supported by Knowledge. Answer the lead's actual message first. A greeting needs only a natural greeting and, when useful, one short question about their needs; do not repeat the sales pitch. Ask the lead to clarify an ambiguous reference instead of inventing their needs. Do not propose days or times, invent prices or links, promise a later personal reply, or dodge a factual question whose answer is missing.`;
 }

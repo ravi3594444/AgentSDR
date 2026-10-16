@@ -338,13 +338,13 @@ is written anyway and goes through the same checks, so it is answered,
 held with the reason, or handed to you, never left silent. Customers and
 "they left / ask someone else" replies always come to you.
 
-**How replies are written.** Replies sell like a salesperson in a chat,
-not like customer support. The draft answers the lead's question in its
+**How replies are written.** Replies continue the conversation naturally.
+The draft answers the lead's question in its
 first sentence, in the lead's language (Hindi and Hinglish are answered in
 kind), from your saved information only. Then, if the lead has not said
 what problem they have, it asks one short question about their situation
-(at most one per message, about three in a whole chat, none once they
-ignore one); when they describe a need your information covers ("Problems
+(at most one per message, without repeating a question they answered or
+ignored); when they describe a need your information covers ("Problems
 we solve", the offer), it connects it in your words and offers the **next
 step**: what you set in the business information (a call, a visit, a
 quote), or a short call with the sender when you set nothing. It never
@@ -352,9 +352,23 @@ invents urgency, discounts or results. It offers only next steps your
 information offers, never proposes days or time windows, and never says
 "no" or "only" about something your information simply does not mention:
 a draft that does is held as missing information, because a list of
-services is not proof you do not offer something else. A reply held only
-because it proposed a time is rewritten once without it and checked again
-before it comes to you.
+services is not proof you do not offer something else. Unsupported additions
+the draft made (a claim, price, link, promise or proposed time) are corrected
+once and the new revision is checked immediately. An actual unanswered
+business question still comes to you.
+
+The checker receives the writer's recent conversation (up to 20 messages
+and 12,000 characters), so short follow-ups keep their context. A plain
+greeting is answered naturally by the model; it does not ask you what the
+lead needs. When the lead needs to specify their own situation or an unclear
+reference, the assistant can ask them one clarification. Conversation
+history explains intent but cannot substantiate business facts or prices.
+
+After upgrading, an incorrect handoff opened by the older version still
+needs resolving: read its reason in Results → Needs you and use **Dismiss**
+or **Done**, then send a fresh test reply. **I'll reply myself** hands the
+conversation to you. The diagnostic script now prints each handoff's actual
+reason and the question waiting for the owner.
 
 **When it needs you: the handoff (Needs you).** The assistant hands a
 chat to you when:

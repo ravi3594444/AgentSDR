@@ -18,7 +18,7 @@ function IconCheck({ ...rest }: React.SVGProps<SVGSVGElement>) {
       <path
         d='M1 3.5L4 6.5L9 1.5'
         strokeWidth='1.5'
-        className='stroke-static-white'
+        className='stroke-primary-contrast'
       />
     </svg>
   );
@@ -34,7 +34,7 @@ function IconIndeterminate({ ...rest }: React.SVGProps<SVGSVGElement>) {
       xmlns='http://www.w3.org/2000/svg'
       {...rest}
     >
-      <path d='M0 1H8' strokeWidth='1.5' className='stroke-static-white' />
+      <path d='M0 1H8' strokeWidth='1.5' className='stroke-primary-contrast' />
     </svg>
   );
 }

@@ -194,7 +194,7 @@ const theme = themeQuartz.withParams({
   headerFontWeight: 600,
   headerFontSize: 13,
   fontSize: 13,
-  fontFamily: "var(--font-sans-inter), system-ui, sans-serif",
+  fontFamily: "var(--font-sans), system-ui, sans-serif",
   rowHoverColor: "var(--grid-row-hover)",
   selectedRowBackgroundColor: "var(--grid-row-selected)",
   cellHorizontalPadding: 12,

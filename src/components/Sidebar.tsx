@@ -101,7 +101,7 @@ function Badge({ link, badges, collapsed }: { link: NavLink; badges: NavBadges |
 }
 
 const rowBase = "flex w-full items-center gap-2.5 rounded-lg text-label-sm outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-primary-base";
-const rowState = (active: boolean) => (active ? "bg-bg-weak-50 text-text-strong-950" : "text-text-sub-600 hover:bg-bg-weak-50 hover:text-text-strong-950");
+const rowState = (active: boolean) => (active ? "bg-bg-strong-950 text-text-white-0" : "text-text-sub-600 hover:bg-bg-weak-50 hover:text-text-strong-950");
 
 function RailTip({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -118,7 +118,7 @@ function LinkRow({ link, active, badges, collapsed, compact }: { link: NavLink; 
     return (
       <RailTip label={link.label}>
         <Link href={link.href} aria-label={link.label} aria-current={active ? "page" : undefined} className={cn(rowBase, rowState(active), "relative h-9 justify-center")}>
-          <Icon className={cn("size-[18px] shrink-0", active ? "text-text-strong-950" : "text-text-soft-400")} />
+          <Icon className={cn("size-[18px] shrink-0", active ? "text-text-white-0" : "text-text-soft-400")} />
           <Badge link={link} badges={badges} collapsed />
         </Link>
       </RailTip>
@@ -126,7 +126,7 @@ function LinkRow({ link, active, badges, collapsed, compact }: { link: NavLink; 
   }
   return (
     <Link href={link.href} aria-current={active ? "page" : undefined} className={cn(rowBase, rowState(active), compact ? "h-8 px-2 text-paragraph-sm" : "h-9 px-2")}>
-      <Icon className={cn("shrink-0", compact ? "size-4" : "size-[18px]", active ? "text-text-strong-950" : "text-text-soft-400")} />
+      <Icon className={cn("shrink-0", compact ? "size-4" : "size-[18px]", active ? "text-text-white-0" : "text-text-soft-400")} />
       <span className="min-w-0 flex-1 truncate">{link.label}</span>
       <Badge link={link} badges={badges} />
     </Link>
@@ -180,7 +180,7 @@ function HelpRow({ collapsed, compact }: { collapsed: boolean; compact?: boolean
 function GroupIcon({ group, className }: { group: NavGroup; className?: string }) {
   const Icon = group.icon;
   return (
-    <span className={cn("flex shrink-0", !group.color && "text-text-soft-400")} style={group.color ? { color: group.color } : undefined}>
+    <span className="flex shrink-0 text-current">
       <Icon className={className} />
     </span>
   );
@@ -233,7 +233,7 @@ function GroupRow({ group, current, open, onToggle, badges, collapsed, compact }
             return (
               <li key={c.href}>
                 <Link href={c.href} aria-current={active ? "page" : undefined} className={cn(rowBase, rowState(active), "h-8 gap-2 px-2 text-paragraph-sm", active && "text-label-sm")}>
-                  <ChildIcon className={cn("size-4 shrink-0", active ? "text-text-strong-950" : "text-text-soft-400")} />
+                  <ChildIcon className={cn("size-4 shrink-0", active ? "text-text-white-0" : "text-text-soft-400")} />
                   <span className="min-w-0 flex-1 truncate">{c.label}</span>
                   <Badge link={c} badges={badges} />
                 </Link>
@@ -328,11 +328,11 @@ export default function Sidebar({ mobile = false, onClose }: { mobile?: boolean;
 
   return (
     <Tooltip.Provider delayDuration={200}>
-      <aside className={cn("flex h-full shrink-0 flex-col bg-bg-white-0", mobile ? "w-full" : "border-r border-stroke-soft-200 transition-[width] duration-200 ease-out", !mobile && (collapsed ? "w-[68px]" : "w-64"))}>
+      <aside className={cn("workspace-sidebar flex h-full shrink-0 flex-col bg-bg-white-0", mobile ? "w-full" : "border-r border-stroke-soft-200 transition-[width] duration-200 ease-out", !mobile && (collapsed ? "w-[68px]" : "w-64"))}>
         {/* Brand + collapse */}
-        <div className={cn("flex h-14 shrink-0 items-center", collapsed ? "justify-center" : "justify-between pl-4 pr-2.5")}>
+        <div className={cn("flex h-18 shrink-0 items-center", collapsed ? "justify-center" : "justify-between pl-4 pr-2.5")}>
           {!collapsed && (
-            <Link href="/analytics" aria-label={`${BRAND.name} home`} className="group rounded-md outline-none focus-visible:ring-2 focus-visible:ring-primary-base">
+            <Link href="/assistant" aria-label={`${BRAND.name} home`} className="group rounded-md outline-none focus-visible:ring-2 focus-visible:ring-primary-base">
               <Logo className="text-text-strong-950" />
             </Link>
           )}
@@ -354,7 +354,7 @@ export default function Sidebar({ mobile = false, onClose }: { mobile?: boolean;
           </div>
           {/* Collapsed, the brand stays as its app tile, linking home. */}
           {collapsed && (
-            <Link href="/analytics" aria-label={`${BRAND.name} home`} className="group rounded-md outline-none focus-visible:ring-2 focus-visible:ring-primary-base">
+            <Link href="/assistant" aria-label={`${BRAND.name} home`} className="group rounded-md outline-none focus-visible:ring-2 focus-visible:ring-primary-base">
               <AppIcon small className="size-7" />
             </Link>
           )}
@@ -392,7 +392,7 @@ export default function Sidebar({ mobile = false, onClose }: { mobile?: boolean;
         <nav aria-label="Main" className={cn("flex-1 overflow-y-auto pb-3", collapsed ? "px-3" : "px-3")}>
           {NAV_SECTIONS.map((section, i) => (
             <div key={section.label ?? i} className={cn(i > 0 && "mt-4")}>
-              {section.label && (collapsed ? <div className="mx-2 mb-2 border-t border-stroke-soft-200" /> : <p className="mb-1 px-2 text-paragraph-xs text-text-soft-400">{section.label}</p>)}
+              {section.label && (collapsed ? <div className="mx-2 mb-2 border-t border-stroke-soft-200" /> : <p className="mb-2 px-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-text-soft-400">{section.label}</p>)}
               <div className="space-y-0.5">{section.entries.map((e) => renderEntry(e))}</div>
             </div>
           ))}
@@ -461,6 +461,12 @@ export default function Sidebar({ mobile = false, onClose }: { mobile?: boolean;
                 <Dropdown.ItemIcon as={RiSearchLine} />
                 Search or jump to
                 <span className="ml-auto text-paragraph-xs text-text-soft-400">⌘K</span>
+              </Dropdown.Item>
+              <Dropdown.Item asChild>
+                <Link href="/">
+                  <Dropdown.ItemIcon as={RiExternalLinkLine} />
+                  Product website
+                </Link>
               </Dropdown.Item>
               {/* The demo signs every visitor in as the demo user; there is nothing to sign out of. */}
               {!demo && (

@@ -8,21 +8,21 @@
    --------------------------------------------------------------------------- */
 
 :root {
-  --grid-accent: #2563eb;
-  --grid-bg: #ffffff;
-  --grid-fg: #0f172a;
-  --grid-border: #dfe3e8;
-  --grid-row-hover: #f8fafc;
-  --grid-row-selected: #eff6ff;
+  --grid-accent: var(--color-primary-base);
+  --grid-bg: var(--color-bg-white-0);
+  --grid-fg: var(--color-text-strong-950);
+  --grid-border: var(--color-stroke-soft-200);
+  --grid-row-hover: var(--color-bg-weak-50);
+  --grid-row-selected: var(--color-primary-alpha-10);
 }
 
 .dark {
-  --grid-accent: #4d82ff;
+  --grid-accent: var(--color-primary-base);
   --grid-bg: var(--color-bg-white-0);
   --grid-fg: var(--color-text-strong-950);
   --grid-border: var(--color-stroke-soft-200);
   --grid-row-hover: var(--color-neutral-900);
-  --grid-row-selected: rgba(77, 130, 255, 0.12);
+  --grid-row-selected: var(--color-primary-alpha-10);
 }
 
 .dark .grid-clay .ag-cell,
@@ -38,11 +38,11 @@
 }
 
 .dark .grid-clay .ag-row.grid-row-selected .ag-cell {
-  background-color: rgba(77, 130, 255, 0.12);
+  background-color: var(--color-primary-alpha-10);
 }
 
 .dark .grid-clay .ag-row.grid-row-selected:hover .ag-cell {
-  background-color: rgba(77, 130, 255, 0.2);
+  background-color: var(--color-primary-alpha-16);
 }
 
 .dark .grid-clay .grid-coverage-cell,
@@ -57,31 +57,31 @@
 }
 
 .dark .grid-clay .grid-cell-range {
-  background-color: rgba(77, 130, 255, 0.14) !important;
+  background-color: var(--color-primary-alpha-10) !important;
 }
 
 .dark .grid-clay .grid-cell-range-top {
-  border-top-color: #4d82ff !important;
+  border-top-color: var(--color-primary-base) !important;
 }
 
 .dark .grid-clay .grid-cell-range-bottom {
-  border-bottom-color: #4d82ff !important;
+  border-bottom-color: var(--color-primary-base) !important;
 }
 
 .dark .grid-clay .grid-cell-range-left {
-  border-left-color: #4d82ff !important;
+  border-left-color: var(--color-primary-base) !important;
 }
 
 .dark .grid-clay .grid-cell-range-right {
-  border-right-color: #4d82ff !important;
+  border-right-color: var(--color-primary-base) !important;
 }
 
 .dark .grid-clay .grid-fill-handle::after {
   border-color: var(--color-bg-white-0);
-  background: #4d82ff;
+  background: var(--color-primary-base);
 }
 
 .dark .grid-clay .grid-cell-fill-preview {
-  background-color: rgba(77, 130, 255, 0.2) !important;
-  box-shadow: inset 0 0 0 1px #4d82ff;
+  background-color: var(--color-primary-alpha-16) !important;
+  box-shadow: inset 0 0 0 1px var(--color-primary-base);
 }

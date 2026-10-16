@@ -27,7 +27,8 @@ import { openDecision } from "./decisions.server";
 import { handoverMessage, HANDOVER_INTERVAL_MS, NO_ANSWER_NEEDED, tellsTheLead } from "./handoff";
 import { settlePersonReplies, waitsForOwner, writeBrief } from "./handoff.server";
 import { getBusinessProfile } from "./profile.server";
-import { judgeReply, selfFixableTimes, type ModelCheck } from "./replyCheck";
+import { judgeReply, selfFixableReply, type ModelCheck } from "./replyCheck";
+import { storedReplyConversation, type ReplyConversationMessage } from "@/lib/crm/ai/replyConversation";
 import { checkKnowledge, modelReplyCheck, type ReplyCheckInput } from "./replyCheck.server";
 import { autopilotReplies, autopilotTakeovers, outreachRunLeads, ownerDecisions, type AudienceChannel, type OwnerDecisionKind, type ReplyCheck } from "./schema";
 
@@ -58,7 +59,7 @@ import { autopilotReplies, autopilotTakeovers, outreachRunLeads, ownerDecisions,
 export type AutopilotOutcome = { sent: boolean; reason: string | null; /** The lead was told a personal reply follows. */ handover?: boolean };
 
 export type AutopilotDependencies = {
-  /** Rewrite a reply once when its only fault is a proposed time (default: when the real model checks; it needs the model). */
+  /** Rewrite the draft's unsupported additions once (default: when the real model checks; it needs the model). */
   rewrite?: boolean;
   /** The revision the job was queued for. */
   revision?: number | null;
@@ -83,6 +84,7 @@ type State = {
   channel: string;
   membership: Awaited<ReturnType<typeof runMembershipFor>>;
   leadMessage: string;
+  conversation: ReplyConversationMessage[];
   leadName: string;
   leadFirstName: string | null;
   email: string | null;
@@ -145,15 +147,16 @@ async function loadState(executor: CrmExecutor, draftId: string, deps: Autopilot
     channel: conversation.channel,
     membership,
     leadMessage: [leadMessage?.subject ? `Subject: ${leadMessage.subject}` : null, leadMessage?.bodyText ?? ""].filter(Boolean).join("\n").slice(0, 6_000),
+    conversation: storedReplyConversation(draft.request),
     leadName: person?.fullName || person?.firstName || businessName || person?.email || "the lead",
     leadFirstName: person?.firstName?.trim() || null,
     email: person?.email ?? null,
   };
 }
 
-const SELF_REWRITE_REASON = "rewritten once without the proposed time:";
+const SELF_REWRITE_REASON = "rewritten once ";
 
-/** Whether this reply was already rewritten once to drop a proposed time (then the owner decides). */
+/** Whether this draft already used its single repair, including the older time-only repair. */
 async function alreadyRewritten(draftId: string): Promise<boolean> {
   const [row] = await db.select({ n: count() }).from(autopilotReplies)
     .where(and(eq(autopilotReplies.organizationId, currentOrganizationId()), eq(autopilotReplies.draftId, draftId), sql`${autopilotReplies.reason} like ${`${SELF_REWRITE_REASON}%`}`));
@@ -349,34 +352,39 @@ export async function runAutopilotForDraft(draftId: string, deps: AutopilotDepen
 
   // 2. The support check.
   const reply = [state.draft.subject ? `Subject: ${state.draft.subject}` : null, (state.draft.editedBodyText?.trim() || state.draft.aiBodyText || "").trim()].filter(Boolean).join("\n");
-  const knowledge = await checkKnowledge(state.leadMessage);
+  const knowledge = await checkKnowledge(state.leadMessage, state.conversation);
+  const checkInput = { leadMessage: state.leadMessage, reply, leadName: state.leadName, channel: state.channel, conversation: state.conversation, knowledge };
   let model: ModelCheck;
   try {
     model = deps.check
-      ? await deps.check({ leadMessage: state.leadMessage, reply, leadName: state.leadName, knowledge })
-      : await modelReplyCheck({ leadMessage: state.leadMessage, reply, leadName: state.leadName, knowledge, runId: state.membership.runId });
+      ? await deps.check(checkInput)
+      : await modelReplyCheck({ ...checkInput, runId: state.membership.runId });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return handOff(state, { kind: "uncertain", reason: `The reply to ${state.leadName} could not be checked (${message.slice(0, 200)}).`, decision: "Read it in Action required and send it yourself if it is right.", holdReason: "the reply could not be checked" }, deps);
   }
   const [answered] = await db.select({ n: count() }).from(autopilotReplies)
     .where(and(eq(autopilotReplies.organizationId, currentOrganizationId()), eq(autopilotReplies.conversationId, state.conversationId), eq(autopilotReplies.status, "sent")));
-  const verdict = judgeReply(model, { reply, knowledge, leadName: state.leadName, answeredBefore: Number(answered?.n ?? 0) > 0 });
+  const verdict = judgeReply(model, { reply, knowledge, leadName: state.leadName, leadMessage: state.leadMessage, answeredBefore: Number(answered?.n ?? 0) > 0 });
   if (verdict.action === "no_reply") return recordHold(state, `${NO_ANSWER_NEEDED} ${verdict.reason}`, verdict.check);
   if (verdict.action === "opt_out") {
     await setPersonDoNotContact({ personId: state.personId, reason: `${verdict.reason} (read in their reply)`, source: "inbound_request", actorType: "ai", actorRef: AUTOPILOT_ACTOR });
     return recordHold(state, "they asked not to be contacted: all outreach to them stopped", verdict.check);
   }
   if (verdict.action === "hold") {
-    // A reply whose only fault is a proposed day or time is rewritten once without it, not handed to the owner.
-    const times = selfFixableTimes(verdict.check);
-    if (times && (deps.rewrite ?? deps.check === undefined) && !(await alreadyRewritten(state.draft.id))) {
+    // Correct the writer's unsupported additions once. Missing answers,
+    // complaints, requests for a person and real buying decisions still hand off.
+    const feedback = selfFixableReply(verdict.check);
+    if (feedback && (deps.rewrite ?? deps.check === undefined) && !(await alreadyRewritten(state.draft.id))) {
       try {
-        const outcome = await recordHold(state, `${SELF_REWRITE_REASON} ${times.join(", ")}`, verdict.check);
-        await regenerateDraft(state.draft.id, {}, `Rewrite this reply without proposing any day, date or time window (remove: ${times.join(", ")}). Keep the answer itself; give the booking link if the business information has one, or ask when suits them.`);
-        return outcome;
+        await recordHold(state, `${SELF_REWRITE_REASON}to remove unsupported additions: ${verdict.check.problems.join("; ")}`, verdict.check);
+        const repaired = await regenerateDraft(state.draft.id, {}, feedback);
+        // This auto_send job still owns the queue row, so regenerating
+        // cannot requeue it. Check the new revision here instead of losing it
+        // when the current job completes. At most one repair in this call.
+        return runAutopilotForDraft(repaired.id, { ...deps, rewrite: false, revision: repaired.revision, readyAt: repaired.updatedAt });
       } catch (error) {
-        console.error("[assistant/autopilot] rewriting without the proposed time failed:", error);
+        console.error("[assistant/autopilot] repairing the unsupported reply failed:", error);
       }
     }
     return handOff(state, { kind: verdict.kind, reason: verdict.reason, decision: verdict.decision, check: verdict.check }, deps);
