@@ -209,6 +209,34 @@ export async function runAutomationChecks(input: {
   const productionOutcome = await run(production.draft!, supportedCheck, false);
   check("outside production the autopilot never sends", !productionOutcome.sent && /production/.test(productionOutcome.reason ?? ""), productionOutcome.reason ?? "");
 
+  // ------------------------------------------------------------ a reply the AI is unsure about still gets an answer
+  // "Hey" from a lead: the CRM leaves an unsure or "other" classification for a person to confirm; for the
+  // assistant's own leads a draft is written anyway and the autopilot decides (before, nothing happened at all).
+  const { handleClassificationJob } = await import("@/lib/crm/handlers");
+  const [heyPerson] = await db.insert(people).values({ organizationId: orgId, email: `hey-${stamp}@clinic-auto.test`, fullName: "Dr Hey", source: "assistant-automation-check" }).returning({ id: people.id });
+  await db.insert(schema.outreachRunLeads).values({ organizationId: orgId, runId: autoRun!.id, personId: heyPerson!.id, channel: "email" });
+  const hey = await ingestInboundReply({
+    personId: heyPerson!.id, channel: "email", accountRef: mailboxAddress, providerThreadId: `auto-hey-${stamp}`, idempotencyKey: `auto-hey-${stamp}`,
+    providerMessageId: `auto-hey-pm-${stamp}`, subject: "Re: Chair servicing", bodyText: "Hey", sentAt: new Date(),
+  });
+  const [classifyJob] = await db.select().from(crm.crmJobs).where(and(eq(crm.crmJobs.organizationId, orgId), eq(crm.crmJobs.kind, "classification"), eq(crm.crmJobs.entityId, hey.message.id)));
+  const unsureClassifier = async (request: { accept?: (text: string) => void }) => {
+    const text = JSON.stringify({ categoryKey: "other", subcategoryKey: "other", confidence: 0.4, reasoning: "Only a greeting; nothing to classify.", suggestedNextActionAt: null });
+    request.accept?.(text);
+    return { text, provider: "stand-in", model: "stand-in-classifier", request: {}, response: {} };
+  };
+  await handleClassificationJob(classifyJob as never, { complete: unsureClassifier as never });
+  const [heyClassification] = await db.select().from(crm.crmClassifications).where(eq(crm.crmClassifications.messageId, hey.message.id));
+  const [heyDraftJob] = heyClassification
+    ? await db.select().from(crm.crmJobs).where(and(eq(crm.crmJobs.organizationId, orgId), eq(crm.crmJobs.kind, "initial_draft"), eq(crm.crmJobs.entityId, heyClassification.id)))
+    : [];
+  const heyDraft = await generateFallbackDraft(hey.record.id, { complete: fakeDraft("Hi! Thanks for getting back to me. How do you look after your dental chairs at the moment? — Ravi") });
+  const beforeHey = sent();
+  const heyOutcome = await run(heyDraft!, async () => ({ intent: "other", questions: [], claims: [], commitments: [], missing: "", escalate: "" }));
+  check("a short reply the AI is unsure about ('Hey', left for a person to confirm) still gets a draft and is answered",
+    heyClassification?.status === "proposed" && Boolean(heyDraftJob) && heyOutcome.sent && sent() === beforeHey + 1,
+    `${heyClassification?.status} draft-job:${Boolean(heyDraftJob)} ${heyOutcome.reason ?? "sent"}`);
+
   // ------------------------------------------------------------ the handoff to a person (Needs you)
   const { listNeedsYou, sendHandoffAlerts } = await import("@/lib/assistant/handoff.server");
   const { loadNavBadges } = await import("@/lib/nav/badges.server");

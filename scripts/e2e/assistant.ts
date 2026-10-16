@@ -131,7 +131,7 @@ const { gridProviderCredentials, gridProviders } = await import("@/lib/grid/sche
 const { encryptIntegrationCredentials } = await import("@/lib/integrations/credentials");
 const { mailboxes, outreachCampaigns, outreachLeads, outreachMailboxQueue } = await import("@/lib/outreach/schema");
 const { whatsappAccounts, whatsappCampaigns, whatsappCampaignLeads } = await import("@/lib/whatsapp/schema");
-const { crmDrafts, crmJobs, crmKnowledgeDocuments: knowledgeDocuments, crmSettings } = await import("@/lib/crm/schema");
+const { crmClassifications, crmDrafts, crmJobs, crmKnowledgeDocuments: knowledgeDocuments, crmSettings } = await import("@/lib/crm/schema");
 const { runInOrganization, currentOrganizationId } = await import("@/lib/tenancy/scope");
 const { assistantJobs, assistantMessages, assistantProfiles, autopilotReplies, leadAudienceMembers, outreachRunLeads, outreachRuns, ownerDecisions } = await import("@/lib/assistant/schema");
 const { answerDecision } = await import("@/lib/assistant/decisions.server");
@@ -541,6 +541,25 @@ await runInOrganization(org!.id, async () => {
       console.log(`      after the answer: ${afterAnswer?.status} — ${afterAnswer?.reason ?? ""}; draft: ${(rewritten?.aiBodyText ?? "").replace(/\s+/g, " ").slice(0, 240)}`);
       check("the reply with the owner's answer is sent automatically", afterAnswer?.status === "sent" && unipileSends.length === sendsBeforeAnswer + 1 && /x-ray/i.test(rewritten?.aiBodyText ?? ""), `${afterAnswer?.status}: ${afterAnswer?.reason ?? ""}`);
     }
+
+    // A bare "Hey" (the real classifier is often unsure about it) is never left without an answer or a handoff.
+    const heyLead = discovered[1] ?? discovered[0]!;
+    const hey = await ingestInboundReply({
+      personId: heyLead.id, channel: "email", accountRef: mailboxAddress, providerThreadId: `live-hey-${stamp}`, idempotencyKey: `live-hey-${stamp}`, providerMessageId: `live-hey-pm-${stamp}`,
+      subject: "Re: Dental chair servicing", bodyText: "Hey", sentAt: new Date(),
+    });
+    let heyDraft: typeof crmDrafts.$inferSelect | undefined;
+    let heyDecision: typeof autopilotReplies.$inferSelect | undefined;
+    for (let round = 0; round < 40 && !heyDecision; round += 1) {
+      await db.update(crmJobs).set({ runAfter: new Date(Date.now() - 1_000) }).where(and(eq(crmJobs.organizationId, orgId), eq(crmJobs.status, "queued")));
+      await drainOnce();
+      [heyDraft] = await db.select().from(crmDrafts).where(eq(crmDrafts.replyForMessageId, hey.message.id));
+      if (heyDraft) [heyDecision] = await db.select().from(autopilotReplies).where(eq(autopilotReplies.draftId, heyDraft.id)).orderBy(desc(autopilotReplies.createdAt)).limit(1);
+      if (!heyDecision) await new Promise((resolve) => setTimeout(resolve, 1_500));
+    }
+    const [heyClass] = await db.select().from(crmClassifications).where(eq(crmClassifications.messageId, hey.message.id));
+    console.log(`      "Hey": classified ${heyClass?.status} (${heyClass?.proposedCategoryKey}, ${heyClass?.confidence}); ${heyDecision?.status ?? "no decision"} — ${heyDecision?.reason ?? ""}; draft: ${(heyDraft?.aiBodyText ?? "").replace(/\s+/g, " ").slice(0, 200)}`);
+    check("a bare 'Hey' gets an answer written and decided (sent, or handed to the owner), never left stuck", Boolean(heyDraft) && Boolean(heyDecision), `${heyClass?.status} ${heyDraft?.status} ${heyDecision?.status}`);
 
     // A lead who says yes goes straight to the owner (no more questions), with a brief.
     const ready = await ingestInboundReply({

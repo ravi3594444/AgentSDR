@@ -98,12 +98,13 @@ async function loadState(executor: CrmExecutor, draftId: string, deps: Autopilot
   if (!conversation) return null;
   const [person] = await executor.select({ email: people.email, fullName: people.fullName, firstName: people.firstName, raw: people.raw })
     .from(people).where(and(inOrg(people), eq(people.id, record.personId))).limit(1);
+  // An unconfirmed classification counts by what it proposes (the gate decides what that allows).
   const [classification] = await executor.select({
     status: crmClassifications.status,
-    categoryKey: crmClassifications.appliedCategoryKey,
+    categoryKey: sql<string | null>`coalesce(${crmClassifications.appliedCategoryKey}, ${crmClassifications.proposedCategoryKey})`,
     subcategoryKey: crmSubcategories.key,
   }).from(crmClassifications)
-    .leftJoin(crmSubcategories, eq(crmSubcategories.id, crmClassifications.appliedSubcategoryId))
+    .leftJoin(crmSubcategories, sql`${crmSubcategories.id} = coalesce(${crmClassifications.appliedSubcategoryId}, ${crmClassifications.proposedSubcategoryId})`)
     .where(eq(crmClassifications.crmRecordId, record.id))
     .orderBy(desc(crmClassifications.createdAt))
     .limit(1);
@@ -132,7 +133,8 @@ async function loadState(executor: CrmExecutor, draftId: string, deps: Autopilot
       newerInbound,
       doNotContact: await isPersonDoNotContact(executor, record.personId),
       suppressed: conversation.channel === "email" && person?.email ? await isSuppressed(person.email) : false,
-      classification: classification ? { status: classification.status, categoryKey: classification.categoryKey ?? null, subcategoryKey: classification.subcategoryKey ?? null } : null,
+      // A record a person keeps as a customer stays one, whatever a new reply proposes.
+      classification: classification ? { status: classification.status, categoryKey: record.categoryKey === "customer" ? "customer" : classification.categoryKey ?? null, subcategoryKey: classification.subcategoryKey ?? null } : null,
     },
     draft,
     recordId: record.id,

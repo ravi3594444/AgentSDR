@@ -30,6 +30,12 @@ export const AUTOPILOT_LIMITS = {
   delayMinutes: 10,
 } as const;
 
+/** Classifications applied by the AI with confidence or confirmed by a person. */
+const CONFIRMED_CLASSIFICATIONS = new Set(["auto_applied", "accepted", "overridden"]);
+
+/** "Other" replies that are not the lead talking: the right person is someone else, or they left. */
+const NOT_THE_LEAD_SUBCATEGORIES = new Set(["left_company", "connected_to_different_poc", "did_not_connect_to_different_poc"]);
+
 /** Subcategories a person handles even when classified with confidence. */
 export const AUTOPILOT_ESCALATE_SUBCATEGORIES = new Set([
   "do_not_contact",
@@ -114,13 +120,17 @@ export function autopilotGate(facts: AutopilotFacts): AutopilotGate {
 
   const classification = facts.classification;
   if (!classification) return decide("The reply has not been classified.", "uncertain", "Read the conversation and decide how to answer.");
-  if (classification.status !== "auto_applied" && classification.status !== "accepted") {
-    return decide("The AI was not sure what the reply means.", "uncertain", "Confirm the classification in Action required, or answer yourself.");
+  // An unconfirmed ("proposed") classification is no reason to leave the
+  // lead unanswered: the support check reads the message itself and holds
+  // anything it cannot back. Its proposed category still decides the cases
+  // a person must handle. Rejected or failed ones go to the owner.
+  if (!CONFIRMED_CLASSIFICATIONS.has(classification.status) && classification.status !== "proposed") {
+    return decide("The AI could not tell what the reply means.", "uncertain", "Read the conversation and decide how to answer.");
   }
   if (classification.categoryKey === "customer") return decide("They are a customer.", "uncertain", "Answer customers yourself.");
   if (classification.subcategoryKey === "out_of_office") return hold("an out-of-office reply needs no answer");
-  if (classification.categoryKey === "other" || !classification.categoryKey) {
-    return decide("Not an ordinary reply (a different contact, someone who left, or unclear).", "uncertain", "Read the conversation and decide what to do.");
+  if (classification.subcategoryKey && NOT_THE_LEAD_SUBCATEGORIES.has(classification.subcategoryKey)) {
+    return decide("Not an ordinary reply (a different contact, or someone who left).", "uncertain", "Read the conversation and decide what to do.");
   }
   if (classification.subcategoryKey && AUTOPILOT_ESCALATE_SUBCATEGORIES.has(classification.subcategoryKey)) {
     return decide(`${classification.subcategoryKey.replace(/_/g, " ")} is for you to handle.`, "uncertain", "Answer this one yourself.");

@@ -48,13 +48,26 @@ describe("autopilotGate", () => {
     expect(autopilotGate({ ...ordinary, suppressed: true }).pass).toBe(false);
   });
 
+  test("an unconfirmed classification (the AI was unsure, or 'other') goes to the support check instead of stopping", () => {
+    // "Hey", "Yeah that's cool": short replies the CRM leaves for a person to confirm
+    expect(autopilotGate({ ...ordinary, classification: { status: "proposed", categoryKey: "interested", subcategoryKey: null } }).pass).toBe(true);
+    expect(autopilotGate({ ...ordinary, classification: { status: "proposed", categoryKey: "other", subcategoryKey: "other" } }).pass).toBe(true);
+    expect(autopilotGate({ ...ordinary, classification: { status: "proposed", categoryKey: null, subcategoryKey: null } }).pass).toBe(true);
+    expect(autopilotGate({ ...ordinary, classification: { status: "overridden", categoryKey: "interested", subcategoryKey: null } }).pass).toBe(true);
+  });
+
   test("uncertain, unusual and person-only replies become a decision for the owner", () => {
     expect(autopilotGate({ ...ordinary, classification: null })).toMatchObject({ pass: false, quiet: false, decision: { kind: "uncertain" } });
-    expect(autopilotGate({ ...ordinary, classification: { status: "proposed", categoryKey: "interested", subcategoryKey: null } })).toMatchObject({ quiet: false });
+    expect(autopilotGate({ ...ordinary, classification: { status: "rejected", categoryKey: "interested", subcategoryKey: null } })).toMatchObject({ quiet: false, decision: { kind: "uncertain" } });
+    expect(autopilotGate({ ...ordinary, classification: { status: "failed", categoryKey: null, subcategoryKey: null } })).toMatchObject({ quiet: false });
+    // unconfirmed, but still a customer or someone else: a person handles it
+    expect(autopilotGate({ ...ordinary, classification: { status: "proposed", categoryKey: "customer", subcategoryKey: null } })).toMatchObject({ quiet: false });
+    expect(autopilotGate({ ...ordinary, classification: { status: "proposed", categoryKey: "other", subcategoryKey: "left_company" } })).toMatchObject({ quiet: false });
     expect(autopilotGate({ ...ordinary, classification: { status: "auto_applied", categoryKey: "customer", subcategoryKey: null } })).toMatchObject({ quiet: false });
     expect(autopilotGate({ ...ordinary, classification: { status: "auto_applied", categoryKey: "other", subcategoryKey: "connected_to_different_poc" } })).toMatchObject({ quiet: false });
     expect(autopilotGate({ ...ordinary, classification: { status: "auto_applied", categoryKey: "other", subcategoryKey: "out_of_office" } })).toMatchObject({ quiet: true });
     for (const key of ["do_not_contact", "meeting_no_show", "meeting_done", "trial_user", "customer"]) {
+      expect(autopilotGate({ ...ordinary, classification: { status: "proposed", categoryKey: "interested", subcategoryKey: key } }).pass).toBe(false);
       expect(autopilotGate({ ...ordinary, classification: { status: "auto_applied", categoryKey: "interested", subcategoryKey: key } }).pass).toBe(false);
     }
   });

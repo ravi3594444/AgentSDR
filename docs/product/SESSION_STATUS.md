@@ -244,6 +244,22 @@ email (not from when the lead wrote), handoffs older than three days are
 not emailed after an upgrade, and only handoffs the lead is told about keep
 a chat quiet (an out-of-office "Take a look" does not).
 
+### Follow-up: WhatsApp replies that got no answer — found and fixed (2026-10-16)
+
+`scripts/diagnose-whatsapp-replies.ts` (read-only, run in the VM's app
+container) showed the owner's replies ("Hey", "Yeah thats cool") reached
+the server, the lead and the CRM, in a running Automatic run, and stopped
+there: each classification was **proposed** (the classifier was unsure, or
+filed it as "other", which always needs review), and the CRM drafts only
+after a classification is applied. So no draft, no autopilot, no decision:
+a silent dead end. Fixed: for an active lead of an assistant run, an
+unconfirmed classification still gets a draft (`handlers.ts`), and the
+autopilot gate lets the support check decide instead of stopping; it still
+hands over customers, "left the company" / "different contact", and
+rejected or failed classifications, and holds out-of-office replies.
+Checks: unit 1027/1027; `assistant.ts` 71/71 (new: an unsure "Hey" gets a
+draft and is answered).
+
 ### Live services vs stand-ins
 
 - **Live, real services:** gosom/google-maps-scraper v1.18.1 against Google

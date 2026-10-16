@@ -331,6 +331,13 @@ amount, percentage, time, day, link and email address in the reply must
 appear in it. An "interested" classification is not enough on its own.
 Each send happens at most once per draft revision.
 
+**Every reply from a run's lead is handled.** The CRM leaves a reply it
+is unsure about (a bare "Hey", anything it files as "other") for a person
+to confirm in Action required; for the leads of an assistant run a reply
+is written anyway and goes through the same checks, so it is answered,
+held with the reason, or handed to you, never left silent. Customers and
+"they left / ask someone else" replies always come to you.
+
 **How replies are written.** Replies sell like a salesperson in a chat,
 not like customer support. The draft answers the lead's question in its
 first sentence, in the lead's language (Hindi and Hinglish are answered in

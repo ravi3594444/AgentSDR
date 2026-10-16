@@ -1,5 +1,5 @@
 import { and, asc, eq } from "drizzle-orm";
-import { handleAutoSendJob } from "./autopilot.server";
+import { handleAutoSendJob, runMembershipFor } from "./autopilot.server";
 import { messageParticipants } from "./participants";
 import { formatAiInstructions } from "./ai/instructions";
 import { db } from "@/lib/db";
@@ -76,6 +76,7 @@ function scalarAttributes(raw: Record<string, unknown> | null | undefined) {
 async function classificationContext(messageId: string): Promise<{
   recordId: string;
   conversationId: string;
+  channel: string;
   expectedContextVersion: number;
   personId: string;
   dncIntent: boolean;
@@ -192,6 +193,7 @@ async function classificationContext(messageId: string): Promise<{
   return {
     recordId: scope.record.id,
     conversationId: scope.conversation.id,
+    channel: scope.conversation.channel,
     expectedContextVersion: scope.record.contextVersion,
     personId: scope.record.personId,
     dncIntent: detectsExplicitDncIntent(scope.message.bodyText),
@@ -293,7 +295,16 @@ export async function handleClassificationJob(
         });
         return;
       }
-      if (!appliedResult.applied || appliedResult.stale || context.dncIntent) return;
+      if (appliedResult.stale || context.dncIntent) return;
+      // A classification left for a person to confirm (unsure, "other", a
+      // customer) waits in Action required. A lead of the owner's assistant
+      // outreach still gets a draft: the reply autopilot reads the message
+      // itself and answers it, holds it, or hands it to the owner
+      // (src/lib/assistant/autopilotRun.server.ts), so a reply such as "Hey"
+      // is never left without an answer and without anyone being told.
+      const assistantLead = !appliedResult.applied
+        && (await runMembershipFor(tx, context.personId, context.channel))?.leadStatus === "active";
+      if (!appliedResult.applied && !assistantLead) return;
       const current = await lockCrmRecord(tx, context.recordId);
       // The rep answered while this ran — e.g. straight from their phone on
       // WhatsApp (manualOutbound.ts): keep the classification, skip the draft.
@@ -304,13 +315,14 @@ export async function handleClassificationJob(
         });
         return;
       }
-      const started = await startSequenceRunInTransaction(tx, {
+      // Sequences follow an applied category; an unconfirmed one drafts from the thread.
+      const started = appliedResult.applied ? await startSequenceRunInTransaction(tx, {
         recordId: current.id,
         conversationId: context.conversationId,
         triggerMessageId: job.entityId,
         expectedContextVersion: current.contextVersion,
         actorType: "ai",
-      });
+      }) : null;
       // Every applied reply gets a draft. An assigned sequence supplies the
       // brief; without one the fallback drafts from the conversation itself,
       // so a reply the taxonomy has no playbook for still reaches a human
