@@ -8,7 +8,7 @@ import { BRAND } from "@/lib/brand";
 import { inOrg } from "@/lib/tenancy/scope";
 import type { FeatureState } from "@/lib/features/catalog";
 import { featureState } from "@/lib/features/flags.server";
-import { actionsProblem, agentReplySchema, inquiryRepliesRequested, isSmallTalk, MAX_STEPS, parseAgentReply, pendingOutreachRequest, sameMessage, transcriptText, unbackedClaim, type AgentReply } from "./agent";
+import { actionsProblem, agentReplySchema, inquiryRepliesRequested, isSmallTalk, MAX_STEPS, parseAgentReply, pendingOutreachRequestIndex, sameMessage, transcriptText, unbackedClaim, type AgentReply } from "./agent";
 import { listAudiences } from "./audiences.server";
 import { listOpenDecisions } from "./decisions.server";
 import { listRuns } from "./outreach.server";
@@ -144,8 +144,11 @@ export async function runAgentTurn(input: {
     const ownerText = input.text ?? history[lastOwnerIndex]?.content ?? "";
     // The assistant's last words before the owner's message: a "yes" to an offer of outreach is a request for it.
     const lastAssistantText = [...history.slice(0, Math.max(0, lastOwnerIndex))].reverse().find((message) => message.role === "assistant")?.content ?? null;
-    const outreachRequest = pendingOutreachRequest(history);
-    const context: ToolContext = { threadId: input.threadId, userId: input.userId, ownerText, lastAssistantText, outreachRequest };
+    const requestIndex = pendingOutreachRequestIndex(history);
+    const outreachRequest = requestIndex === null ? null : history[requestIndex]!.content;
+    // The owner's message that asked, by id: one Start may cover the plans of exactly this request.
+    const outreachRequestId = requestIndex === null ? null : history[requestIndex]!.id;
+    const context: ToolContext = { threadId: input.threadId, userId: input.userId, ownerText, lastAssistantText, outreachRequest, outreachRequestId };
     const askedForOutreach = outreachRequest !== null;
     const askedForInquiryReplies = inquiryRepliesRequested(ownerText, lastAssistantText);
     const said: string[] = [];

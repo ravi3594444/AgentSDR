@@ -274,12 +274,18 @@ const actsOnOutreach = (message: HistoryMessage) => message.role === "tool" && m
  * a clarifying question ("which cities?" → "Austin") keeps the request.
  */
 export function pendingOutreachRequest(history: readonly HistoryMessage[]): string | null {
+  const index = pendingOutreachRequestIndex(history);
+  return index === null ? null : history[index]!.content;
+}
+
+/** Where in `history` the pending outreach request is (see pendingOutreachRequest), or null. */
+export function pendingOutreachRequestIndex(history: readonly HistoryMessage[]): number | null {
   const owners = history.flatMap((message, index) => (message.role === "user" ? [index] : []));
   for (const index of owners.slice(-3).reverse()) {
     const message = history[index]!;
     const before = [...history.slice(0, index)].reverse().find((item) => item.role === "assistant")?.content ?? null;
     if (!outreachRequested(message.content, before)) continue;
-    return history.slice(index + 1).some(actsOnOutreach) ? null : message.content;
+    return history.slice(index + 1).some(actsOnOutreach) ? null : index;
   }
   return null;
 }

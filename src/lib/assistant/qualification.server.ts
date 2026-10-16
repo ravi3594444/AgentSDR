@@ -4,7 +4,7 @@ import { and, asc, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { crmPipelines, crmRecords } from "@/lib/crm/schema";
 import { inOrg } from "@/lib/tenancy/scope";
-import { getAudience } from "./audiences.server";
+import { getAudience, memberInsights } from "./audiences.server";
 import { countProspects, derivedMatchReason, qualifyProspect, type Prospect, type ProspectCounts } from "./qualification";
 import { leadAudienceMembers } from "./schema";
 
@@ -33,6 +33,7 @@ export async function audienceProspects(audienceId: string): Promise<AudiencePro
       .where(and(inOrg(crmRecords), inArray(crmRecords.personId, personIds), eq(crmPipelines.isDefault, true)))
     : [];
   const crmByPerson = new Map(records.map((record) => [record.personId, record]));
+  const insights = await memberInsights(members.map((member) => member.id));
   const prospects = members.map((member) => qualifyProspect({
     personId: member.personId,
     name: member.name,
@@ -43,8 +44,8 @@ export async function audienceProspects(audienceId: string): Promise<AudiencePro
     sourceUrl: member.sourceUrl,
     evidence: member.evidence,
     facts: member.facts,
-    matchReason: member.matchReason ?? derivedMatchReason(member.source, audience.criteria, member.facts),
-    signals: member.signals,
+    matchReason: insights.get(member.id)?.matchReason ?? derivedMatchReason(member.source, audience.criteria, member.facts),
+    signals: insights.get(member.id)?.signals ?? [],
     createdAt: member.createdAt,
     crm: member.personId ? crmByPerson.get(member.personId) ?? null : null,
   }));

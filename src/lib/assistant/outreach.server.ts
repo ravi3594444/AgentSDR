@@ -159,6 +159,8 @@ export type PrepareInput = {
   basedOnRunId?: string | null;
   /** The owner's words that asked for this outreach. */
   ownerRequest?: string | null;
+  /** The id of the owner's message that asked (requestApproval.ts). */
+  requestId?: string | null;
   /** Sort the leads into kinds and approaches (default true when they have facts to sort by). */
   sortLeads?: boolean;
   /** Contact leads the sorting would leave out, too. */
@@ -385,6 +387,7 @@ export async function prepareOutreach(input: PrepareInput): Promise<Proposal> {
     instructions,
     basedOnRunId: base?.id ?? null,
     ownerRequest: input.ownerRequest?.trim() || null,
+    requestId: input.requestId ?? null,
     groups,
     leadPlans,
     personal,

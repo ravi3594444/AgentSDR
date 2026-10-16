@@ -10,15 +10,23 @@ import type { AudienceChannel, OutreachPlan } from "./schema";
  * mode, provided they stay inside what was approved. Pure; the server side
  * is requestApproval.server.ts.
  *
- * What an approval never covers: another request (other words), another
- * conversation, a channel the approved plan did not use, a plan larger than
- * the approved one (or the usual 100 leads), an inquiry run, or anything
- * once the approving run is paused, stopped or 24 hours old.
+ * A request is one owner message: the plans share its message id
+ * (`requestId`), recorded when the owner asked, so two requests worded the
+ * same — two "yes" answers — are never one request.
+ *
+ * What an approval never covers: another request, another conversation, a
+ * channel the approved plan did not use, a plan of more than 100 leads (or
+ * the approved plan's size, when larger), an inquiry run, or anything once
+ * the approving run is paused, stopped or 24 hours old. The reply mode is
+ * the approving run's at the moment each plan starts (switching it to
+ * Review covers the rest of the request too).
  */
 
 export type RequestApproval = {
-  /** The owner's words that asked for the outreach (the plan's ownerRequest). */
-  ownerRequest: string;
+  /** The id of the owner's message that asked (the plans' requestId). */
+  requestId: string;
+  /** The owner's words that asked, for the record. */
+  ownerRequest: string | null;
   autopilot: boolean;
   approvedBy: string | null;
   approvedAt: string;
@@ -30,15 +38,11 @@ export type RequestApproval = {
 export const REQUEST_APPROVAL_HOURS = 24;
 const DEFAULT_PLAN_SIZE = 100;
 
-/** The same request, written the same way (spacing and case aside). */
-export function requestKey(text: string | null | undefined): string {
-  return (text ?? "").toLowerCase().replace(/\s+/g, " ").trim();
-}
-
-export function makeRequestApproval(plan: Pick<OutreachPlan, "ownerRequest" | "assignments">, channels: AudienceChannel[], input: { autopilot: boolean; approvedBy: string | null; now: Date }): RequestApproval | null {
-  if (!requestKey(plan.ownerRequest)) return null;
+export function makeRequestApproval(plan: Pick<OutreachPlan, "ownerRequest" | "requestId" | "assignments">, channels: AudienceChannel[], input: { autopilot: boolean; approvedBy: string | null; now: Date }): RequestApproval | null {
+  if (!plan.requestId) return null;
   return {
-    ownerRequest: plan.ownerRequest!,
+    requestId: plan.requestId,
+    ownerRequest: plan.ownerRequest ?? null,
     autopilot: input.autopilot,
     approvedBy: input.approvedBy,
     approvedAt: input.now.toISOString(),
@@ -52,15 +56,16 @@ export function makeRequestApproval(plan: Pick<OutreachPlan, "ownerRequest" | "a
 export function approvalProblem(
   approval: RequestApproval,
   approvingRunStatus: string,
-  candidate: { plan: Pick<OutreachPlan, "ownerRequest" | "assignments" | "kind">; channels: AudienceChannel[] },
+  candidate: { plan: Pick<OutreachPlan, "requestId" | "assignments" | "kind">; channels: AudienceChannel[]; busyPeople?: number },
   now: Date,
 ): string | null {
   if (candidate.plan.kind === "inquiries") return "an inquiry run is always started by itself";
   if (approvingRunStatus !== "running" && approvingRunStatus !== "starting") return `the approved run is ${approvingRunStatus}`;
   if (now.getTime() > new Date(approval.expiresAt).getTime()) return "the approval is more than a day old";
-  if (requestKey(candidate.plan.ownerRequest) !== requestKey(approval.ownerRequest)) return "it comes from another request";
+  if (!candidate.plan.requestId || candidate.plan.requestId !== approval.requestId) return "it comes from another request";
   const extra = candidate.channels.filter((channel) => !approval.channels.includes(channel));
   if (extra.length) return `it uses ${extra.join(" and ")}, which the approved plan did not`;
-  if (candidate.plan.assignments.length > approval.maxLeadsPerPlan) return `it has ${candidate.plan.assignments.length} leads, more than the ${approval.maxLeadsPerPlan} approved per plan`;
+  if (candidate.plan.assignments.length > approval.maxLeadsPerPlan) return `it has ${candidate.plan.assignments.length} leads, more than the ${approval.maxLeadsPerPlan} one approval covers per plan`;
+  if (candidate.busyPeople) return `${candidate.busyPeople} of its leads ${candidate.busyPeople === 1 ? "is" : "are"} already in another running plan (no one gets two first messages without you looking)`;
   return null;
 }

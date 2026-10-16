@@ -3,7 +3,7 @@ import { actionsProblem, inquiryRepliesRequested } from "./agent";
 import { businessContext, priceDocuments, reusableSender } from "./businessContext";
 import { inquiryFacts, inquirySignal, matchReasonForExisting, peopleSourceLabel } from "./existingLeads";
 import { inquiryRunProblem } from "./inquiryRuns";
-import { approvalProblem, makeRequestApproval, requestKey } from "./requestApproval";
+import { approvalProblem, makeRequestApproval } from "./requestApproval";
 import { countProspects, derivedMatchReason, prospectStatus, qualifyProspect, UNKNOWN, type ProspectInput } from "./qualification";
 
 function member(overrides: Partial<ProspectInput> = {}): ProspectInput {
@@ -55,6 +55,8 @@ describe("qualification", () => {
   test("only the person's own inquiry makes them Inquired, and only a classified reply makes them Interested", () => {
     const inquiry = [{ kind: "need" as const, text: "Do you service X-ray units?", sourceUrl: null, source: "website form", at: "2026-10-15T10:00:00.000Z" }];
     expect(qualifyProspect(member({ source: "inquiry:website_form", signals: inquiry })).status).toBe("inquired");
+    // Their Instagram inquiry reaches the CRM as an inbound message: still "Inquired", not "Replied".
+    expect(qualifyProspect(member({ source: "inquiry:instagram", signals: inquiry, crm: { categoryKey: null, lastInboundAt: new Date() } })).status).toBe("inquired");
     expect(qualifyProspect(member({ crm: { categoryKey: "not_interested", lastInboundAt: new Date() } })).status).toBe("replied");
     expect(qualifyProspect(member({ crm: { categoryKey: "interested", lastInboundAt: new Date() } })).status).toBe("interested");
     expect(qualifyProspect(member({ status: "excluded", reason: "no email or phone published" })).excludedReason).toBe("no email or phone published");
@@ -164,29 +166,33 @@ describe("answering inquiries is asked for explicitly and scoped", () => {
 
 describe("one Start for a whole request", () => {
   const now = new Date("2026-10-16T10:00:00Z");
-  const plan = (ownerRequest: string | null, leads = 20) => ({ ownerRequest, assignments: Array.from({ length: leads }, (_, index) => ({ personId: `p${index}`, channel: "email" as const })) });
-  const approval = makeRequestApproval(plan("Find dentists in Pune, Mumbai and Nagpur and contact them"), ["email", "whatsapp"], { autopilot: true, approvedBy: "u1", now })!;
+  const plan = (requestId: string | null, leads = 20, ownerRequest: string | null = "yes") => ({ requestId, ownerRequest, assignments: Array.from({ length: leads }, (_, index) => ({ personId: `p${index}`, channel: "email" as const })) });
+  const approval = makeRequestApproval(plan("msg-1"), ["email", "whatsapp"], { autopilot: true, approvedBy: "u1", now })!;
 
-  test("an approval needs the owner's request to tie it to", () => {
+  test("an approval is tied to the owner's message that asked, not its words", () => {
     expect(makeRequestApproval(plan(null), ["email"], { autopilot: true, approvedBy: "u1", now })).toBeNull();
-    expect(requestKey("  Find   Dentists ")).toBe("find dentists");
+    expect(approval.requestId).toBe("msg-1");
     expect(approval.maxLeadsPerPlan).toBe(100);
     expect(approval.expiresAt).toBe("2026-10-17T10:00:00.000Z");
   });
 
   test("it covers the same request's other plans within the approved channels and size", () => {
-    expect(approvalProblem(approval, "running", { plan: plan("find dentists in Pune, Mumbai and Nagpur and contact them"), channels: ["email"] }, now)).toBeNull();
-    expect(approvalProblem(approval, "starting", { plan: plan("Find dentists in Pune, Mumbai and Nagpur and contact them"), channels: ["whatsapp"] }, now)).toBeNull();
+    expect(approvalProblem(approval, "running", { plan: plan("msg-1"), channels: ["email"] }, now)).toBeNull();
+    expect(approvalProblem(approval, "starting", { plan: plan("msg-1"), channels: ["whatsapp"] }, now)).toBeNull();
   });
 
-  test("it never covers another request, a new channel, a bigger plan, an inquiry run, or a paused, stopped or old approval", () => {
-    const same = "Find dentists in Pune, Mumbai and Nagpur and contact them";
-    expect(approvalProblem(approval, "running", { plan: plan("Find gyms in Pune and contact them"), channels: ["email"] }, now)).toContain("another request");
-    expect(approvalProblem(approval, "running", { plan: plan(same), channels: ["linkedin"] }, now)).toContain("linkedin");
-    expect(approvalProblem(approval, "running", { plan: plan(same, 150), channels: ["email"] }, now)).toContain("150 leads");
-    expect(approvalProblem(approval, "running", { plan: { ...plan(same), kind: "inquiries" as const }, channels: [] }, now)).toContain("inquiry run");
-    expect(approvalProblem(approval, "paused", { plan: plan(same), channels: ["email"] }, now)).toContain("paused");
-    expect(approvalProblem(approval, "stopped", { plan: plan(same), channels: ["email"] }, now)).toContain("stopped");
-    expect(approvalProblem(approval, "running", { plan: plan(same), channels: ["email"] }, new Date("2026-10-17T10:00:01Z"))).toContain("more than a day old");
+  test("two requests worded the same (two 'yes' answers) are never one request", () => {
+    expect(approvalProblem(approval, "running", { plan: plan("msg-2", 20, "yes"), channels: ["email"] }, now)).toContain("another request");
+    expect(approvalProblem(approval, "running", { plan: plan(null, 20, "yes"), channels: ["email"] }, now)).toContain("another request");
+  });
+
+  test("it never covers a new channel, a bigger plan, people already in a running plan, an inquiry run, or a paused, stopped or old approval", () => {
+    expect(approvalProblem(approval, "running", { plan: plan("msg-1"), channels: ["linkedin"] }, now)).toContain("linkedin");
+    expect(approvalProblem(approval, "running", { plan: plan("msg-1", 150), channels: ["email"] }, now)).toContain("150 leads");
+    expect(approvalProblem(approval, "running", { plan: plan("msg-1"), channels: ["email"], busyPeople: 2 }, now)).toContain("2 of its leads are already in another running plan");
+    expect(approvalProblem(approval, "running", { plan: { ...plan("msg-1"), kind: "inquiries" as const }, channels: [] }, now)).toContain("inquiry run");
+    expect(approvalProblem(approval, "paused", { plan: plan("msg-1"), channels: ["email"] }, now)).toContain("paused");
+    expect(approvalProblem(approval, "stopped", { plan: plan("msg-1"), channels: ["email"] }, now)).toContain("stopped");
+    expect(approvalProblem(approval, "running", { plan: plan("msg-1"), channels: ["email"] }, new Date("2026-10-17T10:00:01Z"))).toContain("more than a day old");
   });
 });

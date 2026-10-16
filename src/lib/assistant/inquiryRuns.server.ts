@@ -70,7 +70,7 @@ export async function prepareInquiryReplies(input: { autopilot?: boolean; ownerR
   const accounts = (await inquiryAccounts()).filter((account) => account.status === "connected" && account.inquiryIntake);
   const today = new Date().toISOString().slice(0, 10);
   const name = `New Instagram inquiries (from ${today})`;
-  const audienceId = await createAudience({ name, source: "inquiries", criteria: { source: "inquiry_run", channels: ["instagram"] }, threadId: input.threadId, userId: input.userId });
+  const audienceId = await createAudience({ name, source: "list", criteria: { source: "inquiry_run", channels: ["instagram"] }, threadId: input.threadId, userId: input.userId });
   const plan: OutreachPlan = {
     kind: "inquiries",
     inquiry: { channels: ["instagram"], accounts: accounts.map((account) => ({ unipileAccountId: account.unipileAccountId, username: account.username })) },

@@ -130,6 +130,7 @@ export const INHERITED: Readonly<Record<string, string>> = {
   whatsapp_campaign_leads: "whatsapp_campaigns",
   whatsapp_campaign_sends: "whatsapp_campaign_leads",
   instagram_chats: "instagram_accounts",
+  lead_audience_member_insights: "lead_audience_members",
   instagram_messages: "instagram_chats",
   CampaignAccount: "Campaign",
   SearchQuery: "SearchBatch",

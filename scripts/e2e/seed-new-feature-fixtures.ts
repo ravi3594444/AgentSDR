@@ -24,7 +24,7 @@ const { db } = await import("@/lib/db");
 const { people } = await import("@/lib/leads/schema");
 const { instagramAccounts, instagramChats, instagramMessages } = await import("@/lib/instagram/schema");
 const { intakeEndpoints, inquiries } = await import("@/lib/intake/schema");
-const { leadAudienceMembers, outreachRuns } = await import("@/lib/assistant/schema");
+const { leadAudienceMemberInsights, leadAudienceMembers, outreachRuns } = await import("@/lib/assistant/schema");
 const { createAudience } = await import("@/lib/assistant/audiences.server");
 const { setFeature } = await import("@/lib/features/flags.server");
 const { runInOrganization } = await import("@/lib/tenancy/scope");
@@ -38,8 +38,9 @@ await runInOrganization(organizationId, async () => {
   await db.insert(instagramMessages).values({ chatId: chat!.id, unipileMessageId: `iso-msg-${stamp}`, direction: "inbound", origin: "lead", body: `isolation secret message ${stamp}`, sentAt: new Date() });
   const [endpoint] = await db.insert(intakeEndpoints).values({ organizationId, name: `Isolation form ${stamp}`, tokenHash: `iso-hash-${stamp}`, tokenHint: "abcd", fieldMap: { email: "email" } }).returning();
   await db.insert(inquiries).values({ organizationId, source: "website_form", endpointId: endpoint!.id, dedupeKey: `iso-${stamp}`, personId: person!.id, name: "Isolation Inquirer", email: `isolation-inquirer-${stamp}@example.test`, message: `isolation inquiry ${stamp}` });
-  const audienceId = await createAudience({ name: `Isolation list ${stamp}`, source: "inquiries" });
-  await db.insert(leadAudienceMembers).values({ organizationId, audienceId, personId: person!.id, name: "Isolation Inquirer", status: "eligible", channels: ["email"], source: "inquiry:website_form", matchReason: `isolation reason ${stamp}`, signals: [{ kind: "need", text: `isolation need ${stamp}`, sourceUrl: null, source: "website form", at: null }] });
+  const audienceId = await createAudience({ name: `Isolation list ${stamp}`, source: "list", criteria: { source: "inquiries" } });
+  const [member] = await db.insert(leadAudienceMembers).values({ organizationId, audienceId, personId: person!.id, name: "Isolation Inquirer", status: "eligible", channels: ["email"], source: "inquiry:website_form" }).returning();
+  await db.insert(leadAudienceMemberInsights).values({ memberId: member!.id, matchReason: `isolation reason ${stamp}`, signals: [{ kind: "need", text: `isolation need ${stamp}`, sourceUrl: null, source: "website form", at: null }] });
   await db.insert(outreachRuns).values({
     organizationId,
     audienceId,

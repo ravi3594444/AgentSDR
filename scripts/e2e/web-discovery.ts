@@ -215,6 +215,7 @@ const { setFeature } = await import("@/lib/features/flags.server");
 const { instagramAccounts } = await import("@/lib/instagram/schema");
 const { runInOrganization, currentOrganizationId, inOrg } = await import("@/lib/tenancy/scope");
 const { assistantJobs, assistantMessages, leadAudienceMembers, leadAudiences } = await import("@/lib/assistant/schema");
+const { memberInsights } = await import("@/lib/assistant/audiences.server");
 const { runTool } = await import("@/lib/assistant/tools.server");
 const { runOneAssistantStep } = await import("@/lib/assistant/worker");
 const { registerAssistantJobs } = await import("@/lib/assistant/register.server");
@@ -405,7 +406,11 @@ try {
   check("nothing else left the machine", blocked.length === 0, blocked.join(", "));
 
   // ------------------------------------------------------------ A's audience
-  const members = await runInOrganization(orgs.A, () => db.select().from(leadAudienceMembers).where(and(inOrg(leadAudienceMembers), eq(leadAudienceMembers.audienceId, audienceA))));
+  const members = await runInOrganization(orgs.A, async () => {
+    const rows = await db.select().from(leadAudienceMembers).where(and(inOrg(leadAudienceMembers), eq(leadAudienceMembers.audienceId, audienceA)));
+    const insights = await memberInsights(rows.map((row) => row.id));
+    return rows.map((row) => ({ ...row, matchReason: insights.get(row.id)?.matchReason ?? null, signals: insights.get(row.id)?.signals ?? [] }));
+  });
   const personRows = await runInOrganization(orgs.A, () => db.select().from(people).where(inOrg(people)));
   const personOf = (id: string | null) => personRows.find((person) => person.id === id);
   const byEmail = (email: string) => members.find((member) => personOf(member.personId)?.email?.toLowerCase() === email.toLowerCase());

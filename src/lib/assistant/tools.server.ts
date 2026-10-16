@@ -53,6 +53,8 @@ export type ToolContext = {
   lastAssistantText?: string | null;
   /** The owner's words asking for outreach that nothing has acted on yet (agent.ts pendingOutreachRequest); null when there are none. */
   outreachRequest?: string | null;
+  /** The id of the owner's message holding that request: the plans it leads to share it (one Start may cover them, requestApproval.ts). */
+  outreachRequestId?: string | null;
   /** Set when the server itself prepares outreach the owner already asked for (a "find and contact" search finished). */
   authorizedBy?: "search" | null;
 };
@@ -167,7 +169,7 @@ async function setupSnapshot() {
   };
 }
 
-const AUDIENCE_SOURCE_WORD: Record<string, string> = { discovery: "found", list: "uploaded", existing: "from your leads", inquiries: "inquiries" };
+const AUDIENCE_SOURCE_WORD: Record<string, string> = { discovery: "found", list: "uploaded" };
 
 /** Website and directory search's readiness, in a sentence for check_setup. */
 function webDiscoveryLine(web: { enabled: boolean; available: boolean; provider: string | null; model: string | null; reason: string | null }): string {
@@ -255,7 +257,7 @@ export const TOOLS: Record<string, Tool> = {
       const area = await checkSearchArea(criteria.where, criteria.language);
       if (area?.refused) throw new ToolArgumentError(area.problem);
       if (area) return { ok: false, summary: area.problem };
-      const contactAfter = request ? { channels: channels(args) ?? null, ownerRequest: request } : null;
+      const contactAfter = request ? { channels: channels(args) ?? null, ownerRequest: request, requestId: context.outreachRequestId ?? undefined } : null;
       try {
         const started = await startDiscovery(criteria, context, { contactAfter });
         return {
@@ -289,7 +291,7 @@ export const TOOLS: Record<string, Tool> = {
       if ("error" in criteria) throw new ToolArgumentError(criteria.error);
       if (args.contactAfter !== undefined && typeof args.contactAfter !== "boolean") throw new ToolArgumentError("contactAfter must be true or false");
       const request = args.contactAfter === true ? requireOutreachRequest(context) : null;
-      const contactAfter = request ? { channels: channels(args) ?? null, ownerRequest: request } : null;
+      const contactAfter = request ? { channels: channels(args) ?? null, ownerRequest: request, requestId: context.outreachRequestId ?? undefined } : null;
       try {
         const started = await startWebDiscovery(criteria, context, { contactAfter });
         const instagram = started.instagram.usable ? " Public Instagram profiles and posts it returns are read too." : ` Instagram pages are skipped (${started.instagram.reason}).`;
@@ -460,7 +462,7 @@ export const TOOLS: Record<string, Tool> = {
       const availability = await linkedinSearchAvailability();
       if (!availability.available) return { ok: false, summary: `LinkedIn search is not available: ${availability.reason}` };
       const started = await startLinkedinSearch({ keywords, maxResults }, context, {
-        contactAfter: args.contactAfter === true ? { channels: ["linkedin"], ownerRequest: requireOutreachRequest(context) } : null,
+        contactAfter: args.contactAfter === true ? { channels: ["linkedin"], ownerRequest: requireOutreachRequest(context), requestId: context.outreachRequestId ?? undefined } : null,
       });
       return {
         ok: true,
@@ -562,6 +564,7 @@ export const TOOLS: Record<string, Tool> = {
           instructions: text(args, "instructions") ?? null,
           basedOnRunId,
           ownerRequest: request || null,
+          requestId: context.outreachRequestId ?? null,
           includeSkipped: args.includeSkipped === true,
           threadId: context.threadId,
           userId: context.userId,

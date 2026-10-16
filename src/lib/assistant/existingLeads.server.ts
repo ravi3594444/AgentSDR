@@ -8,7 +8,7 @@ import { people } from "@/lib/leads/schema";
 import { inOrg } from "@/lib/tenancy/scope";
 import { addAudienceMembers, createAudience, summarizeAudience, type AudienceSummary } from "./audiences.server";
 import { inquiryFacts, inquirySignal, matchReasonForExisting, peopleSourceLabel, type ExistingLeadsFrom } from "./existingLeads";
-import { leadAudienceMembers, outreachRunLeads, outreachRuns, type LeadSignal } from "./schema";
+import { outreachRunLeads, outreachRuns } from "./schema";
 
 /**
  * "Use my existing leads or inquiries": a lead list made from people
@@ -176,8 +176,8 @@ export async function createExistingLeadsAudience(input: ExistingLeadsInput): Pr
     || (input.from === "inquiries" ? `Inquiries (${today})` : input.from === "latest_import" ? `Latest import (${today})` : input.search?.trim() ? `Leads matching “${input.search.trim()}” (${today})` : `Existing leads (${today})`);
   const audienceId = await createAudience({
     name,
-    source: input.from === "inquiries" ? "inquiries" : "existing",
-    criteria: { source: input.from, search: input.search?.trim() || null, includeHistorical: Boolean(input.includeHistorical), leftOutInRuns: busy.size },
+    source: "list",
+    criteria: { source: input.from === "inquiries" ? "inquiries" : "existing", from: input.from, search: input.search?.trim() || null, includeHistorical: Boolean(input.includeHistorical), leftOutInRuns: busy.size },
     threadId: input.threadId,
     userId: input.userId,
   });
@@ -186,17 +186,12 @@ export async function createExistingLeadsAudience(input: ExistingLeadsInput): Pr
     source: candidate.inquiry ? `inquiry:${candidate.inquiry.source}` : "existing",
     sourceUrl: candidate.inquiry?.pageUrl ?? null,
     facts: candidate.inquiry ? inquiryFacts(candidate.inquiry) : {},
-  })));
-  // Why each one is on the list, and what they actually said, on the members just added.
-  for (const candidate of chosen) {
-    const signals: LeadSignal[] = candidate.inquiry ? inquirySignal(candidate.inquiry) : [];
-    const reason = candidate.inquiry
+    // Why each one is on the list, and what they actually said.
+    matchReason: candidate.inquiry
       ? `Sent an inquiry on ${candidate.inquiry.at.toISOString().slice(0, 10)} through ${candidate.inquiry.source === "instagram" ? "Instagram" : "your website form"}${candidate.inquiry.historical ? " (imported history)" : ""}.`
-      : matchReasonForExisting({ createdAt: candidate.createdAt, sourceLabel: peopleSourceLabel(candidate.source), search: input.search ?? null });
-    await db.update(leadAudienceMembers)
-      .set({ matchReason: reason, signals })
-      .where(and(inOrg(leadAudienceMembers), eq(leadAudienceMembers.audienceId, audienceId), eq(leadAudienceMembers.personId, candidate.personId)));
-  }
+      : matchReasonForExisting({ createdAt: candidate.createdAt, sourceLabel: peopleSourceLabel(candidate.source), search: input.search ?? null }),
+    signals: candidate.inquiry ? inquirySignal(candidate.inquiry) : [],
+  })));
   return { audienceId, audience: await summarizeAudience(audienceId), matched: candidates.length, alreadyInRuns: busy.size };
 }
 

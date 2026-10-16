@@ -88,7 +88,7 @@ export type WebDiscoveryCriteria = {
   language: string;
 };
 
-type ContactAfter = { channels: AudienceChannel[] | null; ownerRequest?: string } | null;
+type ContactAfter = { channels: AudienceChannel[] | null; ownerRequest?: string; requestId?: string } | null;
 
 /** The search result a candidate came from: what the match reason quotes. */
 type Origin = { query: string; url: string; title: string | null; snippet: string | null };

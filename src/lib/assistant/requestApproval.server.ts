@@ -1,11 +1,11 @@
 import "server-only";
 
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { inOrg } from "@/lib/tenancy/scope";
 import { getRun, OutreachError, startOutreachRun } from "./outreach.server";
-import { approvalProblem, makeRequestApproval, requestKey, type RequestApproval } from "./requestApproval";
-import { outreachRuns } from "./schema";
+import { approvalProblem, makeRequestApproval, type RequestApproval } from "./requestApproval";
+import { outreachRunLeads, outreachRuns } from "./schema";
 import { addMessage } from "./threads.server";
 
 /**
@@ -42,20 +42,41 @@ export async function recordRequestApproval(runId: string, input: { autopilot: b
 
 /** Runs of the same conversation and request, newest first. */
 async function siblingPlans(run: RunRow, status?: string): Promise<RunRow[]> {
-  if (!run.threadId) return [];
-  const rows = await db.select().from(outreachRuns)
-    .where(and(inOrg(outreachRuns), eq(outreachRuns.threadId, run.threadId), ...(status ? [eq(outreachRuns.status, status as RunRow["status"])] : [])))
+  if (!run.threadId || !run.plan.requestId) return [];
+  return db.select().from(outreachRuns)
+    .where(and(
+      inOrg(outreachRuns),
+      eq(outreachRuns.threadId, run.threadId),
+      ne(outreachRuns.id, run.id),
+      sql`${outreachRuns.plan} ->> 'requestId' = ${run.plan.requestId}`,
+      ...(status ? [eq(outreachRuns.status, status as RunRow["status"])] : []),
+    ))
     .orderBy(desc(outreachRuns.createdAt)).limit(50);
-  const key = requestKey(run.plan.ownerRequest);
-  return rows.filter((row) => row.id !== run.id && requestKey(row.plan.ownerRequest) === key);
+}
+
+/** How many of these people are active in a running, paused or starting run already. */
+async function peopleInActiveRuns(personIds: string[]): Promise<number> {
+  if (!personIds.length) return 0;
+  const rows = await db.selectDistinct({ personId: outreachRunLeads.personId }).from(outreachRunLeads)
+    .innerJoin(outreachRuns, eq(outreachRuns.id, outreachRunLeads.runId))
+    .where(and(
+      inOrg(outreachRunLeads),
+      inArray(outreachRunLeads.personId, personIds),
+      eq(outreachRunLeads.status, "active"),
+      inArray(outreachRuns.status, ["starting", "running", "paused"]),
+    ));
+  return rows.length;
 }
 
 async function startUnderApproval(run: RunRow, approval: RequestApproval, approvingRunId: string): Promise<{ started: true } | { started: false; reason: string }> {
   const approving = await getRun(approvingRunId);
-  const problem = approvalProblem(approval, approving?.status ?? "missing", { plan: run.plan, channels: run.channels }, new Date());
+  const busyPeople = await peopleInActiveRuns(run.plan.assignments.map((assignment) => assignment.personId));
+  const problem = approvalProblem(approval, approving?.status ?? "missing", { plan: run.plan, channels: run.channels, busyPeople }, new Date());
   if (problem) return { started: false, reason: problem };
+  // The approving run's mode now: switched to Review, the rest of the request follows.
+  const autopilot = approval.autopilot && approving!.autopilot;
   try {
-    await startOutreachRun(run.id, approval.approvedBy, { autopilot: approval.autopilot });
+    await startOutreachRun(run.id, approval.approvedBy, { autopilot });
   } catch (error) {
     return { started: false, reason: error instanceof Error ? error.message : String(error) };
   }
@@ -63,7 +84,7 @@ async function startUnderApproval(run: RunRow, approval: RequestApproval, approv
     await addMessage({
       threadId: run.threadId,
       role: "event",
-      content: `“${run.name}” started on its own under your approval of this request (${approval.autopilot ? "Automatic" : "Review"} replies, the same channels and limits). Pause or stop it on its card.`,
+      content: `“${run.name}” started on its own under your approval of this request (${autopilot ? "Automatic" : "Review"} replies, the same channels and limits). Pause or stop it on its card.`,
     });
   }
   return { started: true };
@@ -75,7 +96,7 @@ async function startUnderApproval(run: RunRow, approval: RequestApproval, approv
  */
 export async function applyRequestApproval(runId: string): Promise<{ started: boolean; reason: string | null }> {
   const run = await getRun(runId);
-  if (!run || run.status !== "proposed" || !requestKey(run.plan.ownerRequest)) return { started: false, reason: null };
+  if (!run || run.status !== "proposed" || !run.plan.requestId) return { started: false, reason: null };
   for (const sibling of await siblingPlans(run)) {
     const approval = sibling.plan.requestApproval;
     if (!approval) continue;

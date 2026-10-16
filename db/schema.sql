@@ -2412,6 +2412,17 @@ CREATE TABLE public.invitations (
 );
 
 --
+-- Name: lead_audience_member_insights; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.lead_audience_member_insights (
+    member_id uuid NOT NULL,
+    match_reason text,
+    signals jsonb DEFAULT '[]'::jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+--
 -- Name: lead_audience_members; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2430,8 +2441,6 @@ CREATE TABLE public.lead_audience_members (
     evidence jsonb DEFAULT '[]'::jsonb NOT NULL,
     facts jsonb DEFAULT '{}'::jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    match_reason text,
-    signals jsonb DEFAULT '[]'::jsonb NOT NULL,
     CONSTRAINT lead_audience_members_status_chk CHECK ((status = ANY (ARRAY['eligible'::text, 'excluded'::text])))
 );
 
@@ -2448,7 +2457,7 @@ CREATE TABLE public.lead_audiences (
     criteria jsonb DEFAULT '{}'::jsonb NOT NULL,
     created_by uuid,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT lead_audiences_source_chk CHECK ((source = ANY (ARRAY['discovery'::text, 'list'::text, 'existing'::text, 'inquiries'::text])))
+    CONSTRAINT lead_audiences_source_chk CHECK ((source = ANY (ARRAY['discovery'::text, 'list'::text])))
 );
 
 --
@@ -3750,6 +3759,13 @@ ALTER TABLE ONLY public.intake_endpoints
 
 ALTER TABLE ONLY public.invitations
     ADD CONSTRAINT invitations_pkey PRIMARY KEY (id);
+
+--
+-- Name: lead_audience_member_insights lead_audience_member_insights_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lead_audience_member_insights
+    ADD CONSTRAINT lead_audience_member_insights_pkey PRIMARY KEY (member_id);
 
 --
 -- Name: lead_audience_members lead_audience_members_pkey; Type: CONSTRAINT; Schema: public; Owner: -
@@ -6440,6 +6456,13 @@ ALTER TABLE ONLY public.invitations
 
 ALTER TABLE ONLY public.invitations
     ADD CONSTRAINT invitations_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id) ON DELETE CASCADE;
+
+--
+-- Name: lead_audience_member_insights lead_audience_member_insights_member_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lead_audience_member_insights
+    ADD CONSTRAINT lead_audience_member_insights_member_id_fkey FOREIGN KEY (member_id) REFERENCES public.lead_audience_members(id) ON DELETE CASCADE;
 
 --
 -- Name: lead_audience_members lead_audience_members_audience_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -

@@ -75,7 +75,7 @@ type DiscoveryPayload = {
   seenPhones?: string[];
   tally?: { eligible: number; excluded: number; duplicates: number; withEmail: number; withPhoneOnly: number };
   /** The owner asked to contact what is found: plan the outreach when the search is done. */
-  contactAfter?: { channels: AudienceChannel[] | null; ownerRequest?: string } | null;
+  contactAfter?: { channels: AudienceChannel[] | null; ownerRequest?: string; requestId?: string } | null;
 };
 
 export class DiscoveryUnavailableError extends Error {
@@ -107,7 +107,7 @@ export function normalizeCriteria(input: { what?: unknown; where?: unknown; maxR
 export async function startDiscovery(
   criteria: DiscoveryCriteria,
   context: { threadId: string | null; userId: string | null },
-  options: { contactAfter?: { channels: AudienceChannel[] | null; ownerRequest?: string } | null } = {},
+  options: { contactAfter?: { channels: AudienceChannel[] | null; ownerRequest?: string; requestId?: string } | null } = {},
 ): Promise<{ jobId: string; audienceId: string; phrase: string }> {
   const availability = discoveryAvailability();
   if (!availability.available) throw new DiscoveryUnavailableError(availability.reason!);

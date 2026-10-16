@@ -78,13 +78,13 @@ export function registerAssistantJobs(): void {
     if (!search || job.status !== "succeeded" || !job.audienceId || Number((job.result ?? {}).eligible ?? 0) <= 0) return;
     // The owner asked to contact what is found: the plan is prepared here,
     // not left to the model's judgement. It still waits for the owner's Start.
-    const contactAfter = (job.payload as { contactAfter?: { channels: string[] | null; ownerRequest?: string } | null }).contactAfter;
+    const contactAfter = (job.payload as { contactAfter?: { channels: string[] | null; ownerRequest?: string; requestId?: string } | null }).contactAfter;
     // Not awaited: writing the plan takes model calls, and the worker moves on.
     void followUpSearch(job, job.threadId, contactAfter ?? null);
   });
 }
 
-async function followUpSearch(job: AssistantJob, threadId: string, contactAfter: { channels: string[] | null; ownerRequest?: string } | null): Promise<void> {
+async function followUpSearch(job: AssistantJob, threadId: string, contactAfter: { channels: string[] | null; ownerRequest?: string; requestId?: string } | null): Promise<void> {
   try {
     if (contactAfter) {
       // Wait for a turn in progress to end, so the plan is made once.
@@ -96,7 +96,7 @@ async function followUpSearch(job: AssistantJob, threadId: string, contactAfter:
       let prepared;
       try {
         prepared = await runToolInThread(
-          { threadId, userId: job.createdBy, ownerText: contactAfter.ownerRequest ?? "", authorizedBy: "search" },
+          { threadId, userId: job.createdBy, ownerText: contactAfter.ownerRequest ?? "", authorizedBy: "search", outreachRequestId: contactAfter.requestId ?? null },
           "prepare_outreach",
           { audienceId: job.audienceId, ownerRequest: contactAfter.ownerRequest ?? null, ...(contactAfter.channels?.length ? { channels: contactAfter.channels } : {}) },
         );

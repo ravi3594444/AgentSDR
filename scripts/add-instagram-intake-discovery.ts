@@ -10,14 +10,16 @@
  *
  * Additive and backward compatible:
  * - new tables only (organization_features, instagram_accounts,
- *   instagram_chats, instagram_messages, intake_endpoints, inquiries);
+ *   instagram_chats, instagram_messages, intake_endpoints, inquiries,
+ *   lead_audience_member_insights);
  * - CHECK constraints are only widened (a superset of today's values, so
  *   every existing row and every running deployment keeps working):
  *   'instagram' joins the CRM channels and assistant run memberships;
- *   'web_discovery' joins the assistant job kinds; 'existing' and
- *   'inquiries' join the lead-list sources;
- * - two nullable/defaulted columns on lead_audience_members (why a lead
- *   matched, and evidence of need).
+ *   'web_discovery' joins the assistant job kinds;
+ * - no column is added to an existing table, so the code of this release
+ *   also runs before the migration: everything new is behind a feature
+ *   switch (off without organization_features) or reads its new table as
+ *   absent.
  * Nothing is enabled: every organization starts with every new feature off
  * (organization_features has no rows). Re-runnable: every statement is
  * guarded, and the constraint swaps run in one transaction.
@@ -149,8 +151,12 @@ const TABLES = [
   `CREATE INDEX IF NOT EXISTS inquiries_organization_received_idx ON inquiries (organization_id, received_at)`,
   `CREATE INDEX IF NOT EXISTS inquiries_person_idx ON inquiries (person_id)`,
 
-  `ALTER TABLE lead_audience_members ADD COLUMN IF NOT EXISTS match_reason text`,
-  `ALTER TABLE lead_audience_members ADD COLUMN IF NOT EXISTS signals jsonb NOT NULL DEFAULT '[]'::jsonb`,
+  `CREATE TABLE IF NOT EXISTS lead_audience_member_insights (
+     member_id uuid PRIMARY KEY REFERENCES lead_audience_members(id) ON DELETE CASCADE,
+     match_reason text,
+     signals jsonb NOT NULL DEFAULT '[]'::jsonb,
+     created_at timestamptz NOT NULL DEFAULT now()
+   )`,
 ];
 
 /** [table, constraint, definition]: dropped and added again with the wider set. */
@@ -163,10 +169,9 @@ const WIDENED: [string, string, string][] = [
   ["crm_records", "crm_records_active_channel_chk", `CHECK (active_channel IS NULL OR active_channel IN ${CRM_CHANNELS})`],
   ["outreach_run_leads", "outreach_run_leads_channel_chk", `CHECK (channel IN ('email', 'whatsapp', 'linkedin', 'instagram'))`],
   ["assistant_jobs", "assistant_jobs_kind_chk", `CHECK (kind IN ('discovery', 'outreach_start', 'linkedin_search', 'web_discovery'))`],
-  ["lead_audiences", "lead_audiences_source_chk", `CHECK (source IN ('discovery', 'list', 'existing', 'inquiries'))`],
 ];
 
-const EXPECTED_TABLES = ["organization_features", "instagram_accounts", "instagram_chats", "instagram_messages", "intake_endpoints", "inquiries"];
+const EXPECTED_TABLES = ["organization_features", "instagram_accounts", "instagram_chats", "instagram_messages", "intake_endpoints", "inquiries", "lead_audience_member_insights"];
 
 async function main() {
   const url = process.env.DATABASE_URL;

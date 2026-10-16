@@ -75,9 +75,15 @@ export async function assistantState(threadId: string | null, ctx: OrgContext, w
       .from(outreachRuns).where(and(inOrg(outreachRuns), inArray(outreachRuns.id, [...new Set(runIds)])))
     : [];
   // The mode chosen on the latest started run: the next plan card starts with it selected.
-  const [lastStarted] = await db.select({ autopilot: outreachRuns.autopilot }).from(outreachRuns)
-    .where(and(inOrg(outreachRuns), inArray(outreachRuns.status, ["starting", "running", "paused", "stopped", "completed"])))
-    .orderBy(sql`${outreachRuns.approvedAt} desc nulls last`).limit(1);
+  // This person's own choice on an outreach plan (not another member's, nor an inquiry run's).
+  const [lastStarted] = ctx.userId ? await db.select({ autopilot: outreachRuns.autopilot }).from(outreachRuns)
+    .where(and(
+      inOrg(outreachRuns),
+      eq(outreachRuns.approvedBy, ctx.userId),
+      inArray(outreachRuns.status, ["starting", "running", "paused", "stopped", "completed"]),
+      sql`coalesce(${outreachRuns.plan} ->> 'kind', 'outreach') <> 'inquiries'`,
+    ))
+    .orderBy(sql`${outreachRuns.approvedAt} desc nulls last`).limit(1) : [];
   // What became of each lead's reply, for the plan card (answered, due at, waiting for the owner and why).
   const started = runs.filter((run) => run.status !== "proposed" && run.status !== "cancelled").map((run) => run.id);
   const [replies, leads] = await Promise.all([runReplies(started), runLeads(started)]);

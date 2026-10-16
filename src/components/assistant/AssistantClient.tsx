@@ -347,6 +347,7 @@ type ProposalData = {
     estimate: { aiCalls: number; aiCostUsd: number | null; days: number | null };
     autopilot: boolean;
     ownerRequest?: string | null;
+    requestId?: string | null;
   };
 };
 
@@ -375,7 +376,7 @@ function ProposalCard({ message, run, canManageAutopilot, lastReplyMode, onChang
       await readJson(await fetch(`/api/assistant/runs/${data!.runId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(action === "start" ? { action, mode, applyToRequest: Boolean(data!.plan.ownerRequest) && applyToRequest } : action === "mode" ? { action, mode: nextMode } : { action }),
+        body: JSON.stringify(action === "start" ? { action, mode, applyToRequest: Boolean(data!.plan.requestId) && applyToRequest } : action === "mode" ? { action, mode: nextMode } : { action }),
       }));
       onChanged();
     } catch (cause) {
@@ -446,10 +447,10 @@ function ProposalCard({ message, run, canManageAutopilot, lastReplyMode, onChang
             <span><span className="text-label-xs text-text-strong-950">Review.</span> The AI drafts every reply; each waits for you in Action required.</span>
           </label>
           <p className="text-paragraph-xs text-text-soft-400">Either way the first messages and follow-ups go out automatically to these {data.plan.assignments.length} leads only, within the limits above. Adding people, channels or higher limits needs a new plan you approve.</p>
-          {data.plan.ownerRequest && (
+          {data.plan.requestId && (
             <label className="flex items-start gap-2 rounded-lg p-2 text-paragraph-xs ring-1 ring-inset ring-stroke-soft-200">
               <input type="checkbox" className="mt-0.5" checked={applyToRequest} disabled={busy} onChange={(event) => setApplyToRequest(event.target.checked)} />
-              <span><span className="text-label-xs text-text-strong-950">Apply to the rest of this request.</span> The other plans this request makes (more cities or searches, including leads found later) start on their own as soon as they are ready, with this reply mode and the same channels and limits; you will not be asked again. Pause or stop any of them on its card; stopping this one ends the approval.</span>
+              <span><span className="text-label-xs text-text-strong-950">Apply to the rest of this request.</span> The other plans this request makes (more cities or searches, including leads found later) start on their own as soon as they are ready, in this run&apos;s reply mode, on these channels, with up to 100 leads each; you will not be asked again. A plan outside that, or with someone already in another running plan, waits for you with the reason. Pause or stop any of them on its card; pausing or stopping this one ends the approval.</span>
             </label>
           )}
           <div className="flex justify-end gap-2">

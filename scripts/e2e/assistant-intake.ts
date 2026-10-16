@@ -45,7 +45,13 @@ const { activeInquiryRun, attachInquiryToRun, prepareInquiryReplies, InquiryRunE
 const { OutreachError, getRun, setRunPaused, startInquiryRun, startOutreachRun, stopRun } = await import("@/lib/assistant/outreach.server");
 const { runMembershipFor } = await import("@/lib/crm/autopilot.server");
 const { setFeature, clearFeatureCache } = await import("@/lib/features/flags.server");
-const { createAudience } = await import("@/lib/assistant/audiences.server");
+const { createAudience, memberInsights } = await import("@/lib/assistant/audiences.server");
+
+/** Members of a list with their match reason and signals (kept in lead_audience_member_insights). */
+async function withInsights<T extends { id: string }>(rows: T[]) {
+  const insights = await memberInsights(rows.map((row) => row.id));
+  return rows.map((row) => ({ ...row, matchReason: insights.get(row.id)?.matchReason ?? null, signals: insights.get(row.id)?.signals ?? [] }));
+}
 const { runInOrganization, currentOrganizationId } = await import("@/lib/tenancy/scope");
 const { recordRequestApproval, applyRequestApproval } = await import("@/lib/assistant/requestApproval.server");
 const { createThread, listMessages } = await import("@/lib/assistant/threads.server");
@@ -101,17 +107,17 @@ await runInOrganization(orgA!.id, async () => {
 
   // ------------------------------------------------------------ existing leads
   const all = await createExistingLeadsAudience({ from: "all", threadId: null, userId: null });
-  const allMembers = all.audienceId ? await db.select().from(schema.leadAudienceMembers).where(eq(schema.leadAudienceMembers.audienceId, all.audienceId)) : [];
+  const allMembers = all.audienceId ? await withInsights(await db.select().from(schema.leadAudienceMembers).where(eq(schema.leadAudienceMembers.audienceId, all.audienceId))) : [];
   const has = (id: string) => allMembers.find((member) => member.personId === id);
   check("existing leads: people already saved are listed", Boolean(has(listed) && has(phoneOnly) && has(asker)), `${allMembers.length} members`);
   check("existing leads: someone in a running run is left out", !has(busy) && all.alreadyInRuns === 1, `alreadyInRuns ${all.alreadyInRuns}`);
   check("existing leads: Do Not Contact is excluded with the reason", has(dnc)?.status === "excluded" && /do not contact/i.test(has(dnc)?.reason ?? ""), has(dnc)?.reason ?? "missing");
   check("existing leads: each has a reason naming where it came from", /Already in your leads since .* \(from an uploaded list\)/.test(has(listed)?.matchReason ?? ""), has(listed)?.matchReason ?? "");
-  check("existing leads: the audience source is 'existing'", all.audience?.source === "existing");
+  check("existing leads: the list says it came from the lead database", all.audience?.source === "list" && all.audience.criteria.source === "existing");
   audienceOfA = all.audienceId!;
 
   const fresh = await createExistingLeadsAudience({ from: "inquiries", threadId: null, userId: null });
-  const freshMembers = await db.select().from(schema.leadAudienceMembers).where(eq(schema.leadAudienceMembers.audienceId, fresh.audienceId!));
+  const freshMembers = await withInsights(await db.select().from(schema.leadAudienceMembers).where(eq(schema.leadAudienceMembers.audienceId, fresh.audienceId!)));
   check("inquiries: only fresh inquiries by default", freshMembers.length === 1 && freshMembers[0]!.personId === asker, freshMembers.map((m) => m.name).join(", "));
   check("inquiries: the inquiry's own words are the evidence, with its page", freshMembers[0]?.signals[0]?.text === "Do you service X-ray units in Baner?" && freshMembers[0]?.signals[0]?.sourceUrl === "https://acme.example/contact");
   check("inquiries: the writer may quote what they asked", freshMembers[0]?.facts.inquiry === "Do you service X-ray units in Baner?");
@@ -166,38 +172,45 @@ await runInOrganization(orgA!.id, async () => {
   await db.insert(gridProviderCredentials).values({ providerId: provider!.id, encryptedPayload: encryptIntegrationCredentials({ baseUrl: "https://unipile-intake-check.invalid", apiKey: "stand-in", notifySecret: "stand-in" }) });
   await db.insert(mailboxes).values({ organizationId: org, emailAddress: `owner-${stamp}@mail.example.test`, provider: "unipile", unipileAccountId: `mail-${stamp}`, status: "connected" });
   const thread = await createThread(null);
-  const request = "Find dentists in Pune, Mumbai and Nagpur and contact them";
-  const recipients = await Promise.all(Array.from({ length: 5 }, (_, index) => make({ email: `req${index}-${stamp}@clinic.test`, fullName: `Clinic ${index}`, source: "discovery:google-maps" })));
-  const plan = (personIds: string[], ownerRequest: string, channel: "email" | "whatsapp" = "email") => ({
+  // Two owner messages: the request, and a different request that happens to read "yes" too.
+  const requestId = `owner-msg-${stamp}`;
+  const otherRequestId = `owner-msg-other-${stamp}`;
+  const recipients = await Promise.all(Array.from({ length: 6 }, (_, index) => make({ email: `req${index}-${stamp}@clinic.test`, fullName: `Clinic ${index}`, source: "discovery:google-maps" })));
+  const plan = (personIds: string[], reqId: string, channel: "email" | "whatsapp" = "email") => ({
     ...basePlan,
     assignments: personIds.map((personId) => ({ personId, channel })),
     sequences: { [channel]: [{ subject: "Hello", body: "Hello there", waitDays: 0 }] },
-    ownerRequest,
+    ownerRequest: "yes",
+    requestId: reqId,
   });
-  const propose = async (name: string, personIds: string[], ownerRequest: string, channel: "email" | "whatsapp" = "email") => {
+  const propose = async (name: string, personIds: string[], reqId: string, channel: "email" | "whatsapp" = "email") => {
     const audienceId = await createAudience({ name, source: "discovery", threadId: thread.id });
-    const [row] = await db.insert(schema.outreachRuns).values({ organizationId: org, threadId: thread.id, audienceId, name, status: "proposed", channels: [channel], plan: plan(personIds, ownerRequest, channel) }).returning();
+    const [row] = await db.insert(schema.outreachRuns).values({ organizationId: org, threadId: thread.id, audienceId, name, status: "proposed", channels: [channel], plan: plan(personIds, reqId, channel) }).returning();
     return row!.id;
   };
-  const pune = await propose("Dentists — Pune", [recipients[0]!], request);
-  const mumbai = await propose("Dentists — Mumbai", [recipients[1]!], request);
-  const gyms = await propose("Gyms — Pune", [recipients[2]!], "Find gyms in Pune and contact them");
-  const waPlan = await propose("Dentists — Nagpur (WhatsApp)", [recipients[3]!], request, "whatsapp");
+  const pune = await propose("Dentists — Pune", [recipients[0]!], requestId);
+  const mumbai = await propose("Dentists — Mumbai", [recipients[1]!], requestId);
+  const gyms = await propose("Gyms — Pune (another 'yes')", [recipients[2]!], otherRequestId);
+  const waPlan = await propose("Dentists — Nagpur (WhatsApp)", [recipients[3]!], requestId, "whatsapp");
+  const overlap = await propose("Dentists — Pune again", [recipients[0]!], requestId);
 
   await startOutreachRun(pune, null, { autopilot: true });
   const applied = await recordRequestApproval(pune, { autopilot: true, approvedBy: null });
   const statusOf = async (id: string) => (await getRun(id))?.status;
   check("one Start: the request's waiting plan starts too, in the same mode", (await statusOf(mumbai)) === "starting" && (await getRun(mumbai))?.autopilot === true, JSON.stringify(applied.started));
-  check("one Start: another request's plan keeps waiting", (await statusOf(gyms)) === "proposed");
+  check("one Start: another request worded the same ('yes') keeps waiting", (await statusOf(gyms)) === "proposed");
   check("one Start: a plan on a channel the approval did not cover keeps waiting, with the reason", (await statusOf(waPlan)) === "proposed" && applied.skipped.some((item) => item.runId === waPlan && /whatsapp/.test(item.reason)), JSON.stringify(applied.skipped));
+  check("one Start: a plan with someone already in a running plan keeps waiting, with the reason", (await statusOf(overlap)) === "proposed" && applied.skipped.some((item) => item.runId === overlap && /already in another running plan/.test(item.reason)));
   check("one Start: the started plan queued its launch job like a Start press", (await db.select().from(assistantJobs).where(and(eq(assistantJobs.runId, mumbai), eq(assistantJobs.kind, "outreach_start")))).length === 1);
-  const later = await propose("Dentists — Nagpur", [recipients[4]!], request);
+  // Switching the approved run to Review: the rest of the request follows.
+  await db.update(schema.outreachRuns).set({ autopilot: false }).where(eq(schema.outreachRuns.id, pune));
+  const later = await propose("Dentists — Nagpur", [recipients[4]!], requestId);
   const laterOutcome = await applyRequestApproval(later);
-  check("one Start: a plan prepared later by the same request starts on its own", laterOutcome.started && (await statusOf(later)) === "starting");
+  check("one Start: a plan prepared later by the same request starts on its own, in the approved run's current mode (Review)", laterOutcome.started && (await statusOf(later)) === "starting" && (await getRun(later))?.autopilot === false);
   const events = (await listMessages(thread.id, 50)).filter((message) => message.role === "event").map((message) => message.content);
   check("one Start: the chat says each plan started under the approval", events.filter((text) => /started on its own under your approval/.test(text)).length === 2, `${events.length} events`);
   await stopRun(pune);
-  const afterStop = await propose("Dentists — Thane", [recipients[0]!], request);
+  const afterStop = await propose("Dentists — Thane", [recipients[5]!], requestId);
   const stoppedOutcome = await applyRequestApproval(afterStop);
   check("one Start: stopping the approved run ends the approval", !stoppedOutcome.started && (await statusOf(afterStop)) === "proposed" && /stopped/.test(stoppedOutcome.reason ?? ""), stoppedOutcome.reason ?? "");
 });

@@ -106,9 +106,10 @@ function budgetOf(facts: Record<string, string>): string {
 export function prospectStatus(input: Pick<ProspectInput, "status" | "signals" | "crm" | "source">): ProspectStatus {
   if (input.status === "excluded") return "excluded";
   if (input.crm?.categoryKey === "interested") return "interested";
-  if (input.crm?.lastInboundAt) return "replied";
-  // Writing in is the person's own initiative; a comment someone else's search found is not.
+  // Writing in is the person's own initiative (and their inquiry is itself the
+  // CRM's inbound message); a comment someone else's search found is not.
   if (input.source.startsWith("inquiry:") && input.signals.some((signal) => signal.kind === "need")) return "inquired";
+  if (input.crm?.lastInboundAt) return "replied";
   return "potential_match";
 }
 

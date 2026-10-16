@@ -106,8 +106,12 @@ export const assistantProfiles = pgTable("assistant_profiles", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-/** discovery: found by a search; list: an upload or contacts typed in the chat; existing: chosen from the lead database; inquiries: people who wrote in. */
-export type AudienceSource = "discovery" | "list" | "existing" | "inquiries";
+/**
+ * discovery: found by a search; list: an upload, contacts typed in the
+ * chat, or people chosen from the lead database (criteria.source says which:
+ * "existing", "inquiries", "inquiry_run").
+ */
+export type AudienceSource = "discovery" | "list";
 
 /** A set of leads the assistant found or was given, which one outreach run works through. */
 export const leadAudiences = pgTable(
@@ -125,7 +129,7 @@ export const leadAudiences = pgTable(
   },
   (t) => [
     index("lead_audiences_organization_idx").on(t.organizationId, t.createdAt),
-    check("lead_audiences_source_chk", sql`${t.source} IN ('discovery', 'list', 'existing', 'inquiries')`),
+    check("lead_audiences_source_chk", sql`${t.source} IN ('discovery', 'list')`),
   ],
 );
 
@@ -174,10 +178,6 @@ export const leadAudienceMembers = pgTable(
     evidence: jsonb("evidence").$type<ContactEvidence[]>().notNull().default([]),
     /** Facts the messages may use: category, city, rating, … */
     facts: jsonb("facts").$type<Record<string, string>>().notNull().default({}),
-    /** Why the search or list matched this lead, in a sentence (never shown to the lead). */
-    matchReason: text("match_reason"),
-    /** What the lead actually said or did, quoted with its source (LeadSignal). Empty: no evidence of need. */
-    signals: jsonb("signals").$type<LeadSignal[]>().notNull().default([]),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -186,6 +186,25 @@ export const leadAudienceMembers = pgTable(
     uniqueIndex("lead_audience_members_person_uq").on(t.audienceId, t.personId).where(sql`${t.personId} IS NOT NULL`),
     check("lead_audience_members_status_chk", sql`${t.status} IN ('eligible', 'excluded')`),
   ],
+);
+
+/**
+ * Why a lead matched and what it actually said or did (qualification.ts),
+ * one row per lead of a list. A table of its own rather than columns on
+ * lead_audience_members, so that code reaching a database whose migration
+ * (scripts/add-instagram-intake-discovery.ts) has not run yet still adds and
+ * reads leads exactly as before: this table is then simply absent.
+ */
+export const leadAudienceMemberInsights = pgTable(
+  "lead_audience_member_insights",
+  {
+    memberId: uuid("member_id").primaryKey().references(() => leadAudienceMembers.id, { onDelete: "cascade" }),
+    /** Why the search or list matched this lead, in a sentence (never shown to the lead). */
+    matchReason: text("match_reason"),
+    /** What the lead actually said or did, quoted with its source (LeadSignal). Empty: no evidence of need. */
+    signals: jsonb("signals").$type<LeadSignal[]>().notNull().default([]),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
 );
 
 export type AssistantJobKind = "discovery" | "outreach_start" | "linkedin_search" | "web_discovery";
@@ -267,6 +286,8 @@ export type OutreachPlan = {
   basedOnRunId?: string | null;
   /** The owner's words that asked for this outreach (checked against the chat). */
   ownerRequest?: string | null;
+  /** The id of the owner's chat message that asked for it: every plan of one request shares it. */
+  requestId?: string | null;
   /**
    * Set on a run the owner started with "apply to the rest of this
    * request": the other plans of the same request start under it

@@ -131,6 +131,7 @@ const OWNED_TABLES = [
   "intake_endpoints",
   "inquiries",
   "organization_features",
+  "lead_audience_member_insights",
 ];
 
 export default {

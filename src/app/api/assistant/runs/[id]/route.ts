@@ -46,7 +46,7 @@ export async function POST(request: NextRequest, { params }: Ctx) {
           return Response.json({ ok: true, jobId: null });
         }
         const started = await startOutreachRun(id, ctx.userId, { autopilot });
-        const applyToRequest = body.applyToRequest === true && Boolean(run.plan.ownerRequest?.trim());
+        const applyToRequest = body.applyToRequest === true && Boolean(run.plan.requestId);
         if (run.threadId) {
           await addMessage({
             threadId: run.threadId,
@@ -57,7 +57,13 @@ export async function POST(request: NextRequest, { params }: Ctx) {
           });
         }
         // The rest of the same request (other cities or searches) under this one approval.
-        const applied = applyToRequest ? await recordRequestApproval(id, { autopilot, approvedBy: ctx.userId }) : null;
+        // The plan has started either way: a failure here only means the rest waits for its own Start.
+        const applied = applyToRequest
+          ? await recordRequestApproval(id, { autopilot, approvedBy: ctx.userId }).catch((error) => {
+            console.error("[assistant/runs] recording the request approval failed:", error);
+            return null;
+          })
+          : null;
         return Response.json({ ok: true, jobId: started.jobId, ...(applied ? { alsoStarted: applied.started, notStarted: applied.skipped } : {}) });
       }
       if (body.action === "pause" || body.action === "resume") {

@@ -7,7 +7,10 @@ import { companies, people } from "@/lib/leads/schema";
 import { suppressionList } from "@/lib/outreach/schema";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { contactChannels, countReasons } from "./audiences";
+import { randomUUID } from "node:crypto";
+import { isMissingTable } from "@/lib/features/flags.server";
 import {
+  leadAudienceMemberInsights,
   leadAudienceMembers,
   leadAudiences,
   type AudienceChannel,
@@ -136,12 +139,17 @@ export type NewMember =
 export async function addAudienceMembers(audienceId: string, members: readonly NewMember[]): Promise<{ added: number; eligible: number; excluded: number }> {
   const facts = await loadPersonFacts(members.flatMap((member) => (member.personId !== null ? [member.personId] : [])));
   const values: (typeof leadAudienceMembers.$inferInsert)[] = [];
+  // Why each lead matched and what it said, kept apart (leadAudienceMemberInsights) and keyed by the member id chosen here.
+  const insights = new Map<string, MemberContext>();
   for (const member of members) {
+    const id = randomUUID();
+    if (member.matchReason || member.signals?.length) insights.set(id, { matchReason: member.matchReason ?? null, signals: member.signals ?? [] });
     if (member.personId !== null) {
       const person = facts.get(member.personId);
       if (!person) continue;
       const { channels, reason } = contactChannels(person);
       values.push({
+        id,
         organizationId: currentOrganizationId(),
         audienceId,
         personId: person.id,
@@ -154,11 +162,10 @@ export async function addAudienceMembers(audienceId: string, members: readonly N
         sourceUrl: member.sourceUrl ?? null,
         evidence: member.evidence ?? [],
         facts: member.facts ?? {},
-        matchReason: member.matchReason ?? null,
-        signals: member.signals ?? [],
       });
     } else {
       values.push({
+        id,
         organizationId: currentOrganizationId(),
         audienceId,
         personId: null,
@@ -171,20 +178,52 @@ export async function addAudienceMembers(audienceId: string, members: readonly N
         sourceUrl: member.sourceUrl ?? null,
         evidence: member.evidence ?? [],
         facts: member.facts ?? {},
-        matchReason: member.matchReason ?? null,
-        signals: member.signals ?? [],
       });
     }
   }
   let added = 0;
   let eligible = 0;
+  const insertedIds: string[] = [];
   for (let index = 0; index < values.length; index += 500) {
     const inserted = await db.insert(leadAudienceMembers).values(values.slice(index, index + 500)).onConflictDoNothing()
-      .returning({ status: leadAudienceMembers.status });
+      .returning({ id: leadAudienceMembers.id, status: leadAudienceMembers.status });
     added += inserted.length;
     eligible += inserted.filter((row) => row.status === "eligible").length;
+    insertedIds.push(...inserted.map((row) => row.id));
   }
+  await saveMemberInsights(insertedIds.flatMap((id) => {
+    const insight = insights.get(id);
+    return insight ? [{ memberId: id, matchReason: insight.matchReason ?? null, signals: insight.signals ?? [] }] : [];
+  }));
   return { added, eligible, excluded: added - eligible };
+}
+
+/** Stores match reasons and signals; skipped (nothing lost but the notes) before the migration created their table. */
+async function saveMemberInsights(rows: (typeof leadAudienceMemberInsights.$inferInsert)[]): Promise<void> {
+  if (!rows.length) return;
+  try {
+    for (let index = 0; index < rows.length; index += 500) {
+      await db.insert(leadAudienceMemberInsights).values(rows.slice(index, index + 500)).onConflictDoNothing();
+    }
+  } catch (error) {
+    if (!isMissingTable(error)) throw error;
+  }
+}
+
+/** The match reason and signals of these members (of this organization's lists); empty before the migration. */
+export async function memberInsights(memberIds: readonly string[]): Promise<Map<string, { matchReason: string | null; signals: LeadSignal[] }>> {
+  const out = new Map<string, { matchReason: string | null; signals: LeadSignal[] }>();
+  if (!memberIds.length) return out;
+  try {
+    const rows = await db.select({ memberId: leadAudienceMemberInsights.memberId, matchReason: leadAudienceMemberInsights.matchReason, signals: leadAudienceMemberInsights.signals })
+      .from(leadAudienceMemberInsights)
+      .innerJoin(leadAudienceMembers, eq(leadAudienceMembers.id, leadAudienceMemberInsights.memberId))
+      .where(and(inOrg(leadAudienceMembers), inArray(leadAudienceMemberInsights.memberId, [...memberIds])));
+    for (const row of rows) out.set(row.memberId, { matchReason: row.matchReason, signals: row.signals });
+  } catch (error) {
+    if (!isMissingTable(error)) throw error;
+  }
+  return out;
 }
 
 export type AudienceSummary = {
