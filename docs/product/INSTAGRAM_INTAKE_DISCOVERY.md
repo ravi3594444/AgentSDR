@@ -223,19 +223,32 @@ Contract:
 | endpoint turned off | `403` |
 | Inquiry intake off for the organization | `409`, nothing stored |
 | over 64 KB / other content types / no fields | `413` / `415` / `400` |
+| more than 300 submissions in the last hour on this endpoint | `429` with `Retry-After`, nothing stored |
 | `?historical=1` | stored as history: listed, never acted on |
 
 What happens to a submission: the email is checked for format and kept only
-if valid (an address is never repaired or invented); the phone is normalized
-with the organization's default country or dropped with the reason. The
+if valid (an address is never repaired or invented; one carrying a NUL byte
+or other control character is dropped, not stripped); the phone is
+normalized with the organization's default country or dropped with the
+reason; a page URL is kept only if it is an http(s) address. Every stored
+key and value is cleaned of NUL bytes and lone surrogates. The
 person is matched to an existing one by email, then by phone (a phone shared
 with a person who has a different email is not merged), else created
-(source `intake:website-form`). A retried delivery (same submission id, or
-the same content) is recorded once. A submission with neither a usable email
+(source `intake:website-form`). A retried delivery is recorded once: the
+de-duplication key is the form's submission id together with a hash of the
+content (email, phone, message, submitted-at), or that hash alone, so a
+different submission that reuses an id is still recorded. Two submissions
+with the same new email at the same moment make one person. A submission with neither a usable email
 nor phone is kept as **unusable** with the reason. Fresh submissions send
 nothing and create no CRM record by themselves: they become contacts with
 their message as evidence of need, ready for "use my existing leads or
 inquiries" and a plan the owner starts.
 
-There is no per-token rate limit; a leaked token is handled by rotating or
-turning off the endpoint.
+Limits per endpoint: 300 submissions an hour (more get `429` with
+`Retry-After`; the form tool can resend them later), and 500 new contacts in
+24 hours — past that a submission is still stored, as **unusable** with the
+reason "Daily limit of new contacts from this form reached", and no person
+is made, so nothing a visitor sent is lost. A leaked token is handled by
+rotating it or turning the endpoint off; both (and deleting) work while
+Inquiry intake is off, and turning the feature back on never turns an
+endpoint back on.

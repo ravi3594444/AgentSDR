@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { isValidEmail, normalizeEmail } from "@/lib/email/recipients";
+import { cleanString } from "@/lib/grid/sanitize";
 import type { IntakeFieldMap } from "./schema";
 
 /**
@@ -24,7 +25,10 @@ import type { IntakeFieldMap } from "./schema";
  *
  * Nothing is invented or repaired: an email that is not a valid address is
  * dropped with its reason, never "fixed"; a phone stays as written (the
- * caller normalizes it against the organization's default country).
+ * caller normalizes it against the organization's default country); a page
+ * URL is kept only when it is an http(s) address. Every key and value that
+ * comes out is safe to store (cleanString: no NUL bytes, no half of a
+ * surrogate pair), which Postgres would otherwise refuse.
  */
 
 export type IntakeFieldKey = keyof IntakeFieldMap;
@@ -136,7 +140,20 @@ function namedValue(item: unknown): [string, unknown] | null {
 }
 
 export function truncate(value: string, max: number): string {
-  return value.length <= max ? value : `${value.slice(0, max - 1).trimEnd()}…`;
+  if (value.length <= max) return value;
+  let end = max - 1;
+  // Never between the two halves of a surrogate pair (an emoji): a lone half is what jsonb refuses.
+  const last = value.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  return `${value.slice(0, end).trimEnd()}…`;
+}
+
+/** Control characters (NUL included): never part of an address or a URL, and never stripped into one. */
+const CONTROL = /[\u0000-\u001f\u007f]/;
+
+/** A value as it can be shown and stored: control characters and lone surrogates as "�". */
+function visible(value: string): string {
+  return cleanString(value.replace(/[\u0000-\u001f\u007f]/g, "\ufffd"));
 }
 
 /**
@@ -279,12 +296,12 @@ export function cleanFieldMap(input: unknown): IntakeFieldMap {
   if (!isPlain(input)) return out;
   for (const key of INTAKE_FIELD_KEYS) {
     const value = input[key];
-    if (typeof value === "string" && value.trim()) out[key] = value.trim().slice(0, LIMITS.fieldMapValue);
+    if (typeof value === "string" && value.trim()) out[key] = cleanString(truncate(value.trim(), LIMITS.fieldMapValue));
   }
   return out;
 }
 
-export type DroppedValue = { field: "email" | "phone"; value: string; reason: string };
+export type DroppedValue = { field: "email" | "phone" | "pageUrl"; value: string; reason: string };
 
 export type MappedSubmission = {
   /** A valid address, normalized (trimmed, lowercased); null when there was none or it was not valid. */
@@ -300,7 +317,10 @@ export type MappedSubmission = {
   company: string | null;
   /** What they wrote, word for word (capped at LIMITS.message). */
   message: string | null;
+  /** An http(s) address, as written; null when there was none or it was something else. */
   pageUrl: string | null;
+  /** The page URL field's value when it was not an http(s) address, and why it was dropped. */
+  pageUrlRejected: DroppedValue | null;
   submissionId: string | null;
   submittedAt: Date | null;
   /** The submitted-at value as sent (part of the de-duplication key even when it is not a date we read). */
@@ -374,12 +394,21 @@ export function mapSubmission(fields: FlatField[], fieldMap: IntakeFieldMap = {}
 
   const value = (key: IntakeFieldKey, max: number) => {
     const field = picked.get(key);
-    return field ? truncate(field.value, max) : null;
+    return field ? cleanString(truncate(field.value, max)) : null;
   };
 
+  // The email is checked as sent: a NUL or a stray half-emoji makes it
+  // invalid, rather than being stripped into an address nobody typed.
   const rawEmail = picked.get("email")?.value ?? null;
   const normalized = rawEmail ? normalizeEmail(rawEmail) : null;
-  const emailOk = Boolean(normalized && normalized.length <= LIMITS.email && isValidEmail(normalized));
+  const emailOk = Boolean(
+    normalized
+    && normalized.length <= LIMITS.email
+    && !CONTROL.test(normalized)
+    && cleanString(normalized) === normalized
+    && isValidEmail(normalized),
+  );
+  const pageUrl = pageUrlOf(picked.get("pageUrl")?.value ?? null);
   const firstName = value("firstName", LIMITS.name);
   const lastName = value("lastName", LIMITS.name);
   const submittedAtText = value("submittedAt", LIMITS.key);
@@ -387,8 +416,8 @@ export function mapSubmission(fields: FlatField[], fieldMap: IntakeFieldMap = {}
   const all: Record<string, string> = {};
   const extras: Record<string, string> = {};
   for (const field of fields) {
-    const key = field.key in all ? field.path : field.key;
-    const kept = truncate(field.value, LIMITS.value);
+    const key = cleanString(field.key in all ? field.path : field.key);
+    const kept = cleanString(truncate(field.value, LIMITS.value));
     all[key] = kept;
     if (!used.has(field)) extras[key] = kept;
   }
@@ -396,7 +425,13 @@ export function mapSubmission(fields: FlatField[], fieldMap: IntakeFieldMap = {}
   return {
     email: emailOk ? normalized : null,
     emailRejected: rawEmail && !emailOk
-      ? { field: "email", value: truncate(rawEmail, LIMITS.email), reason: `“${truncate(rawEmail, 80)}” is not a valid email address` }
+      ? {
+          field: "email",
+          value: visible(truncate(rawEmail, LIMITS.email)),
+          reason: CONTROL.test(rawEmail) || cleanString(rawEmail) !== rawEmail
+            ? `“${visible(truncate(rawEmail, 80))}” has characters an email address cannot have`
+            : `“${truncate(rawEmail, 80)}” is not a valid email address`,
+        }
       : null,
     phone: value("phone", LIMITS.phone),
     name: value("name", LIMITS.name) ?? ([firstName, lastName].filter(Boolean).join(" ") || null),
@@ -404,7 +439,8 @@ export function mapSubmission(fields: FlatField[], fieldMap: IntakeFieldMap = {}
     lastName,
     company: value("company", LIMITS.company),
     message: value("message", LIMITS.message),
-    pageUrl: value("pageUrl", LIMITS.pageUrl),
+    pageUrl: pageUrl.url,
+    pageUrlRejected: pageUrl.rejected,
     submissionId: value("submissionId", LIMITS.submissionId),
     submittedAt: parseSubmittedAt(submittedAtText, now),
     submittedAtText,
@@ -413,31 +449,56 @@ export function mapSubmission(fields: FlatField[], fieldMap: IntakeFieldMap = {}
   };
 }
 
+/** The page the form was on, only when it is an http(s) address; anything else (javascript:, a bare path) is dropped with why. */
+function pageUrlOf(raw: string | null): { url: string | null; rejected: DroppedValue | null } {
+  const value = raw?.trim();
+  if (!value) return { url: null, rejected: null };
+  const reject = (reason: string) => ({ url: null, rejected: { field: "pageUrl" as const, value: visible(truncate(value, LIMITS.pageUrl)), reason } });
+  let parsed: URL | null = null;
+  try {
+    parsed = new URL(value);
+  } catch {
+    parsed = null;
+  }
+  if (!parsed || (parsed.protocol !== "http:" && parsed.protocol !== "https:") || CONTROL.test(value)) {
+    return reject(`“${visible(truncate(value, 80))}” is not a web address (http or https)`);
+  }
+  if (value.length > LIMITS.pageUrl) return reject(`the page address is longer than ${LIMITS.pageUrl} characters`);
+  return { url: cleanString(value), rejected: null };
+}
+
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
 /**
  * The key that makes a retried delivery a no-op (unique per organization
- * and source, so it is namespaced by endpoint): the form's own submission id
- * when it sends one, else a SHA-256 of the normalized content — email,
- * phone digits, message with its whitespace collapsed, and submitted-at as
- * sent. Identical retries always agree. A submission with none of those
- * hashes every field instead, so unrelated nameless submissions do not
- * collapse into one.
+ * and source, so it is namespaced by endpoint), built on a SHA-256 of the
+ * normalized content — email, phone digits, message with its whitespace
+ * collapsed, and submitted-at as sent:
+ *
+ * - with the form's own submission id: `<endpoint>:id:<id>:<content hash>`.
+ *   The id alone would let a different submission that reuses it (a form
+ *   tool's bug, or anyone holding the token) pass as a retry and be thrown
+ *   away; with the content only an exact retry matches.
+ * - without one: `<endpoint>:sha256:<content hash>`. A submission with none
+ *   of those four hashes every field instead, so unrelated nameless
+ *   submissions do not collapse into one.
+ *
+ * Identical retries always agree.
  */
 export function inquiryDedupeKey(
   endpointId: string,
   mapped: Pick<MappedSubmission, "email" | "emailRejected" | "phone" | "message" | "submissionId" | "submittedAtText" | "fields">,
 ): string {
-  const id = mapped.submissionId?.trim();
-  if (id) return `${endpointId}:id:${id.length <= 200 ? id : sha256(id)}`;
   const content = [
     (mapped.email ?? mapped.emailRejected?.value ?? "").trim().toLowerCase(),
     (mapped.phone ?? "").replace(/\D/g, ""),
     (mapped.message ?? "").replace(/\s+/g, " ").trim(),
     (mapped.submittedAtText ?? "").trim(),
   ];
+  const id = cleanString(mapped.submissionId?.trim() ?? "");
+  if (id) return `${endpointId}:id:${id.length <= 200 ? id : sha256(id)}:${sha256(JSON.stringify(content))}`;
   const basis = content.some(Boolean)
     ? content
     : Object.entries(mapped.fields).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));

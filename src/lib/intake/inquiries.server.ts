@@ -1,11 +1,12 @@
 import "server-only";
 
-import { and, asc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, count, eq, gt, isNull, min, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { findOrCreateContactPerson } from "@/lib/calls/campaigns";
 import { checkPhone, type PhoneCheck } from "@/lib/calls/phone";
 import { organizationPhoneCountry } from "@/lib/calls/phone.server";
 import { requireFeature } from "@/lib/features/flags.server";
+import { cleanJson, cleanString } from "@/lib/grid/sanitize";
 import { personCompanyName } from "@/lib/leads/companyName";
 import { inferCompanyDomainFromEmail, normalizeCompanyDomain } from "@/lib/leads/identity";
 import { resolvePersonNames, upsertPerson, withLeadTransaction, type LeadExecutor } from "@/lib/leads/records";
@@ -28,13 +29,65 @@ import { inquiries, intakeEndpoints, type InquiryStatus, type IntakeEndpointRow 
  * and calling lists use (upsertPerson for an email, findOrCreateContactPerson
  * for a phone alone), source "intake:website-form".
  *
+ * Two submissions with the same new email (or, without one, the same
+ * phone) are serialized on the advisory lock the People import takes for
+ * that identity, so the second finds the first's person instead of
+ * overwriting it.
+ *
  * Retries: the inquiry is inserted first, ON CONFLICT DO NOTHING on
  * (organization, source, dedupe key) — a retry, even one racing the
  * original, finds the original and creates nothing. The person is resolved
  * in the same transaction, so a failure leaves neither behind.
+ *
+ * Limits, per endpoint, so a leaked token cannot flood the organization:
+ * INTAKE_SUBMISSIONS_PER_HOUR inquiries an hour (the route answers 429
+ * past it, before reading the body), and INTAKE_NEW_CONTACTS_PER_DAY new
+ * people in 24 hours. Past the second, the submission is still stored —
+ * nothing a real visitor sent is lost — as unusable with that reason, and no
+ * person is made; a 429 there would make form tools drop it after their
+ * retries. Both are soft under concurrency (a few over, never far).
  */
 
 export const INTAKE_FORM_PERSON_SOURCE = "intake:website-form";
+export const INTAKE_SUBMISSIONS_PER_HOUR = 300;
+export const INTAKE_NEW_CONTACTS_PER_DAY = 500;
+export const DAILY_CONTACT_LIMIT_REASON =
+  `Daily limit of new contacts from this form reached (${INTAKE_NEW_CONTACTS_PER_DAY} in 24 hours); the submission is kept without a contact.`;
+
+/**
+ * Whether the endpoint has had its hour's worth of inquiries; if so, how
+ * many seconds until the oldest of them leaves the window. Counts what was
+ * stored (refused deliveries do not count), on the (organization,
+ * received_at) index.
+ */
+export async function intakeRateLimit(endpointId: string): Promise<{ retryAfterSeconds: number } | null> {
+  const [row] = await db
+    .select({ total: count(), oldest: min(inquiries.receivedAt) })
+    .from(inquiries)
+    .where(and(inOrg(inquiries), gt(inquiries.receivedAt, sql`now() - interval '1 hour'`), eq(inquiries.endpointId, endpointId)));
+  if (Number(row?.total ?? 0) < INTAKE_SUBMISSIONS_PER_HOUR) return null;
+  const freesAt = (row?.oldest ? new Date(row.oldest).getTime() : Date.now()) + 60 * 60 * 1000;
+  return { retryAfterSeconds: Math.min(3600, Math.max(1, Math.ceil((freesAt - Date.now()) / 1000))) };
+}
+
+/** New people this endpoint made in the last 24 hours (inquiries flagged raw.createdPerson). */
+async function newContactsToday(tx: LeadExecutor, endpointId: string): Promise<number> {
+  const [row] = await tx
+    .select({ total: count() })
+    .from(inquiries)
+    .where(and(
+      inOrg(inquiries),
+      gt(inquiries.receivedAt, sql`now() - interval '24 hours'`),
+      eq(inquiries.endpointId, endpointId),
+      sql`${inquiries.raw} ->> 'createdPerson' = 'true'`,
+    ));
+  return Number(row?.total ?? 0);
+}
+
+/** The same transaction-scoped advisory lock records.ts / campaigns.ts take for this identity. */
+async function lockIdentity(tx: LeadExecutor, key: string) {
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${key}, 0))`);
+}
 
 export type FormInquiryResult = {
   inquiryId: string;
@@ -80,13 +133,24 @@ async function fillBlanks(tx: LeadExecutor, person: typeof people.$inferSelect, 
   return updated ?? person;
 }
 
-/** The person behind a usable inquiry: an existing one by email, then by phone, else a new one. */
-async function resolvePerson(tx: LeadExecutor, contact: Contact) {
+type Resolved = { person: typeof people.$inferSelect; created: boolean };
+
+/**
+ * The person behind a usable inquiry: an existing one by email, then by
+ * phone, else a new one — unless `mayCreate` says the endpoint has made its
+ * day's worth (null then).
+ */
+async function resolvePerson(tx: LeadExecutor, contact: Contact, mayCreate: () => Promise<boolean>): Promise<Resolved | null> {
+  // Held until the transaction ends: a concurrent submission with the same
+  // identity waits here, then finds this one's person.
+  if (contact.email) await lockIdentity(tx, `${currentOrganizationId()}:person:email:${contact.email}`);
+  else if (contact.phone) await lockIdentity(tx, `person:phone:${contact.phone}`);
+
   if (contact.email) {
     const [byEmail] = await tx.select().from(people)
       .where(and(inOrg(people), sql`lower(${people.email}) = ${contact.email}`))
       .limit(1);
-    if (byEmail) return fillBlanks(tx, byEmail, contact);
+    if (byEmail) return { person: await fillBlanks(tx, byEmail, contact), created: false };
   }
   if (contact.phone) {
     // A phone is shared more often than an email (a switchboard, a family
@@ -95,8 +159,9 @@ async function resolvePerson(tx: LeadExecutor, contact: Contact) {
       .where(and(inOrg(people), eq(people.phone, contact.phone), contact.email ? isNull(people.email) : undefined))
       .orderBy(asc(people.createdAt))
       .limit(1);
-    if (byPhone) return fillBlanks(tx, byPhone, contact);
+    if (byPhone) return { person: await fillBlanks(tx, byPhone, contact), created: false };
   }
+  if (!(await mayCreate())) return null;
   if (contact.email) {
     // The company is linked when this organization already has it (by the
     // email's domain) and otherwise kept by name on the person: a name typed
@@ -114,14 +179,14 @@ async function resolvePerson(tx: LeadExecutor, contact: Contact) {
       raw: contact.company ? { company: contact.company, companyName: contact.company } : {},
       source: INTAKE_FORM_PERSON_SOURCE,
     });
-    if (!company || person.companyId) return person;
+    if (!company || person.companyId) return { person, created: true };
     const [linked] = await tx.update(people)
       .set({ companyId: company.id, updatedAt: new Date() })
       .where(and(inOrg(people), eq(people.id, person.id)))
       .returning();
-    return linked ?? person;
+    return { person: linked ?? person, created: true };
   }
-  return findOrCreateContactPerson(tx, {
+  const person = await findOrCreateContactPerson(tx, {
     fullName: contact.name,
     phone: contact.phone!,
     companyName: contact.company,
@@ -129,13 +194,18 @@ async function resolvePerson(tx: LeadExecutor, contact: Contact) {
     title: null,
     email: null,
   }, INTAKE_FORM_PERSON_SOURCE);
+  return { person, created: true };
 }
+
+const text = (value: string | null) => (value === null ? null : cleanString(value));
 
 /**
  * Records one website-form submission for `endpoint`, inside that
  * endpoint's organization scope. Throws FeatureDisabledError (nothing
  * stored) while the organization's Inquiry intake is off. `historical`
  * marks a backfill of old submissions: stored and listed, never acted on.
+ * The hourly limit is the caller's (intakeRateLimit, before the body is
+ * read); the daily new-contact limit is applied here.
  */
 export async function recordFormInquiry(
   endpoint: Pick<IntakeEndpointRow, "id" | "organizationId" | "fieldMap">,
@@ -153,6 +223,7 @@ export async function recordFormInquiry(
   const dropped: DroppedValue[] = [
     ...(mapped.emailRejected ? [mapped.emailRejected] : []),
     ...(mapped.phone && phoneCheck && !phoneCheck.ok ? [{ field: "phone" as const, value: mapped.phone, reason: phoneCheck.reason }] : []),
+    ...(mapped.pageUrlRejected ? [mapped.pageUrlRejected] : []),
   ];
   const usable = Boolean(mapped.email || phone);
   const status: InquiryStatus = usable ? "received" : "unusable";
@@ -160,27 +231,31 @@ export async function recordFormInquiry(
   const dedupeKey = inquiryDedupeKey(endpoint.id, mapped);
   const historical = options.historical === true;
 
+  // Every string is made safe for Postgres (no NUL, no lone surrogate) here,
+  // at the boundary, whatever mapSubmission already did.
+  const raw: Record<string, unknown> = cleanJson({
+    ...(dropped.length ? { dropped } : {}),
+    ...(mapped.submissionId ? { submissionId: mapped.submissionId } : {}),
+    ...(mapped.company ? { company: mapped.company } : {}),
+  });
+
   const result = await withLeadTransaction(async (tx): Promise<FormInquiryResult> => {
     const [inserted] = await tx.insert(inquiries).values({
       organizationId: currentOrganizationId(),
       source: "website_form",
       endpointId: endpoint.id,
-      dedupeKey,
-      name: mapped.name,
-      email: mapped.email,
+      dedupeKey: cleanString(dedupeKey),
+      name: text(mapped.name),
+      email: text(mapped.email),
       phone,
-      message: mapped.message,
-      fields: mapped.fields,
-      pageUrl: mapped.pageUrl,
+      message: text(mapped.message),
+      fields: cleanJson(mapped.fields),
+      pageUrl: text(mapped.pageUrl),
       historical,
       status,
-      reason,
+      reason: text(reason),
       submittedAt: mapped.submittedAt,
-      raw: {
-        ...(dropped.length ? { dropped } : {}),
-        ...(mapped.submissionId ? { submissionId: mapped.submissionId } : {}),
-        ...(mapped.company ? { company: mapped.company } : {}),
-      },
+      raw,
     }).onConflictDoNothing({
       target: [inquiries.organizationId, inquiries.source, inquiries.dedupeKey],
     }).returning({ id: inquiries.id });
@@ -195,16 +270,25 @@ export async function recordFormInquiry(
     }
     if (!usable) return { inquiryId: inserted.id, duplicate: false, status, personId: null, reason };
 
-    const person = await resolvePerson(tx, {
+    const resolved = await resolvePerson(tx, {
       email: mapped.email,
       phone,
-      name: mapped.name,
-      firstName: mapped.firstName,
-      lastName: mapped.lastName,
-      company: mapped.company,
-    });
-    await tx.update(inquiries).set({ personId: person.id }).where(and(inOrg(inquiries), eq(inquiries.id, inserted.id)));
-    return { inquiryId: inserted.id, duplicate: false, status, personId: person.id, reason: null };
+      name: text(mapped.name),
+      firstName: text(mapped.firstName),
+      lastName: text(mapped.lastName),
+      company: text(mapped.company),
+    }, async () => (await newContactsToday(tx, endpoint.id)) < INTAKE_NEW_CONTACTS_PER_DAY);
+
+    if (!resolved) {
+      await tx.update(inquiries)
+        .set({ status: "unusable", reason: DAILY_CONTACT_LIMIT_REASON })
+        .where(and(inOrg(inquiries), eq(inquiries.id, inserted.id)));
+      return { inquiryId: inserted.id, duplicate: false, status: "unusable", personId: null, reason: DAILY_CONTACT_LIMIT_REASON };
+    }
+    await tx.update(inquiries)
+      .set({ personId: resolved.person.id, ...(resolved.created ? { raw: { ...raw, createdPerson: true } } : {}) })
+      .where(and(inOrg(inquiries), eq(inquiries.id, inserted.id)));
+    return { inquiryId: inserted.id, duplicate: false, status, personId: resolved.person.id, reason: null };
   });
 
   // The endpoint is wired up: Settings → Inquiries shows when it last heard from the form.

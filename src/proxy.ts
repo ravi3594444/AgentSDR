@@ -45,6 +45,13 @@ const PUBLIC = [
   // under this prefix authenticates itself with authorizeRecorder() (see
   // src/lib/calls/sessions.ts) — never add a route here that doesn't.
   "/api/call-recorder/",
+];
+
+/**
+ * Unauthenticated paths matched exactly, not as a prefix: nothing that might
+ * later be added beside or under them becomes public by accident.
+ */
+const PUBLIC_EXACT = [
   // The website-form webhook owners add to their form tool. It authenticates
   // itself with the endpoint's secret token (src/app/api/intake/form/route.ts);
   // the management routes beside it (/api/intake/endpoints, /inquiries) stay
@@ -88,6 +95,7 @@ export function proxy(request: NextRequest) {
     pathname === "/" ||
     pathname === "/robots.txt" ||
     PUBLIC.some((p) => pathname.startsWith(p)) ||
+    PUBLIC_EXACT.includes(pathname) ||
     pathname.startsWith("/_next") ||
     pathname.startsWith("/favicon") ||
     // The Apple touch icon is generated (src/app/apple-icon.tsx), so it has no file extension.

@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requirePermission, withOrgContext } from "@/lib/auth/context";
-import { requireFeature } from "@/lib/features/flags.server";
 import { deleteIntakeEndpoint, updateIntakeEndpoint } from "@/lib/intake/endpoints.server";
 import { intakeFailure, notFound } from "@/lib/intake/http";
 
 // One website-form endpoint. Another organization's id is not found (404).
+// Unlike creating one, changing, turning off and deleting work while the
+// organization's Inquiry intake is off, so a leaked token can always be killed.
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -18,7 +19,6 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
   try {
     return await withOrgContext(req, async (ctx) => {
       requirePermission(ctx, { integrations: ["manage"] });
-      await requireFeature("inquiry_intake");
       const endpoint = await updateIntakeEndpoint(id, body as { name?: unknown; fieldMap?: unknown; enabled?: unknown });
       return endpoint ? NextResponse.json({ endpoint }) : notFound();
     });
@@ -33,7 +33,6 @@ export async function DELETE(req: NextRequest, { params }: Ctx) {
   try {
     return await withOrgContext(req, async (ctx) => {
       requirePermission(ctx, { integrations: ["manage"] });
-      await requireFeature("inquiry_intake");
       return (await deleteIntakeEndpoint(id)) ? NextResponse.json({ ok: true }) : notFound();
     });
   } catch (error) {

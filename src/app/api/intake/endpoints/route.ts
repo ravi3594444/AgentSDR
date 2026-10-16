@@ -6,7 +6,9 @@ import { intakeFailure } from "@/lib/intake/http";
 
 // Website-form endpoints (Settings → Inquiries). Every member can read them;
 // making or changing one takes the integrations permission (owners, admins),
-// like connecting a channel, and the organization's Inquiry intake on.
+// like connecting a channel. Only making one also needs the organization's
+// Inquiry intake on (409): listing, turning off, rotating and deleting work
+// while it is off, so a leaked token can always be killed.
 
 // GET /api/intake/endpoints — { endpoints, enabled, canManage }
 export async function GET(req: NextRequest) {
