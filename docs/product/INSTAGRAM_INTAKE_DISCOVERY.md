@@ -238,13 +238,17 @@ How it works, for "find gyms in Pune that might need a booking app":
    every redirect is checked again. Pages are parsed in linear time (a
    hostile 1.5 MB page takes milliseconds); addresses written as text are
    read from the first 300 KB of a page's visible text, links from all of
-   it. A hidden address is decoded only when the hiding is clear ("name
-   [at] domain [dot] com", "name(at)domain.com", "name at domain dot com"):
-   no space around a literal ".", and a top-level domain in one case, so
-   "Join our team (at) Pune. Com…" stays a sentence. On a directory page only
-   the listings' contacts count: not the site's header, navigation or
-   footer, not a helpline repeated beside the listings, not an address on
-   the directory's own domain.
+   it, and a limit always ends on a whole word (an address straddling it is
+   dropped, never shortened). A hidden address is decoded only when the
+   hiding is clear — the "at" in brackets ("name [at] domain [dot] com",
+   "name(at)domain.com") — with no space around a literal "." and a
+   top-level domain in one case, so "Join our team (at) Pune. Com…" and
+   "order online at acmedental dot com" stay sentences. On a directory page
+   only the listings' contacts count: not the site's header, navigation or
+   footer outside the listings, not a number or address shown three or more
+   times (a helpline beside each listing), not an address on the
+   directory's own domain. A helpline in footer markup built from plain
+   divs and shown fewer than three times can still slip through.
 4. **Save** — up to 5 emails per lead, each checked for syntax and for the
    domain's mail configuration: MX records ("domain has mail servers (MX)"),
    or, with no MX, an A/AAAA record ("domain can receive mail"). Neither
@@ -399,7 +403,7 @@ What arrives and what happens:
 | Webhook message sent before the account's history cutoff (first time it was seen connected) or more than 6 h old on arrival | Yes, `historical` | No | No | No | Never |
 | Fresh reply from someone AgentSDR knows (the chat is linked to a person) | Yes | Yes | Inbound on an `instagram` conversation: classified, drafted, in Action required | No | After the owner's review, or by an inquiry run in Automatic |
 | Fresh first message of a new chat from someone unknown, account treats new messages as inquiries | Yes | Yes | Yes (as above) | Yes (`intake:instagram`, one per sender per account) | Only inside a running inquiry run (section 3); otherwise reviewed |
-| The same, but Unipile's copy of the chat has earlier messages (a customer whose chat was never imported), something the account sent, or cannot be read | Yes | Yes | No | No | No (Instagram inbox only) |
+| The same, but Unipile's copy of the chat has earlier messages (a customer whose chat was never imported; a quick earlier message from the same person within 6 h counts as the same new conversation), more than one page, something the account sent, or cannot be read | Yes | Yes | No | No | No (Instagram inbox only) |
 | Fresh first message, inquiries off for the account | Yes | Yes | No | No | No (Instagram inbox only) |
 | The account's own message typed in the Instagram app (echo) | Yes, origin `phone` | No | Recorded as outbound: the person was answered | No | — |
 | AgentSDR's own send (echo) | Attached to the reserved row, origin `agentsdr` | No | — | — | — |
