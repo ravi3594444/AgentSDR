@@ -300,8 +300,14 @@ export function messageOpensChat(input: {
 
 // --- where a message came from -----------------------------------------------------
 
-/** How long after an AgentSDR send its echo may arrive and still be recognised. */
-export const ECHO_MATCH_WINDOW_MS = 2 * 60 * 1000;
+/**
+ * How long after an AgentSDR send its echo may arrive and still be
+ * recognised. Usually seconds; but a send that timed out or got a 5xx, or
+ * that Unipile accepted without an id, keeps its reserved row (no Unipile id)
+ * until the echo comes, which may be much later — then it attaches to that
+ * row instead of being stored a second time as typed in the app.
+ */
+export const ECHO_MATCH_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 export type PendingSend = { id: string; body: string; sentAt: Date };
 
@@ -312,8 +318,9 @@ function sameText(left: string, right: string): boolean {
 
 /**
  * The AgentSDR send an echo belongs to: one stored without a Unipile id yet
- * (Unipile's echo can beat its own send response), same text, within the
- * window. The oldest wins, so two identical sends pair up in order.
+ * (Unipile's echo can beat its own send response, or come long after a send
+ * whose answer was lost), same text, within the window. The oldest wins, so
+ * two identical sends pair up in order.
  */
 export function pickPendingSend(
   candidates: readonly PendingSend[],

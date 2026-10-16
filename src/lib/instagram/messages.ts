@@ -400,7 +400,7 @@ async function ingestMessageEvent(
   });
   log.info(`Chat ${chat.id} (${chat.username ? `@${chat.username}` : event.counterpartyProviderId})${chat.personId ? ` → person ${chat.personId}` : " — no person linked"}`);
 
-  const pendingMatch = event.isSender ? pickPendingSend(await pendingSends(chat.id), event, receivedAt) : null;
+  const pendingMatch = event.isSender ? pickPendingSend(await pendingSends(chat.id, receivedAt), event, receivedAt) : null;
   const decision = decideIngest({ isSender: event.isSender, alreadyStored: false, pendingMatch });
 
   if (decision.action === "attach") {
@@ -409,8 +409,12 @@ async function ingestMessageEvent(
         .update(instagramMessages)
         .set({ unipileMessageId: event.unipileMessageId, raw })
         .where(and(messageInOrg(), eq(instagramMessages.id, decision.pendingId), isNull(instagramMessages.unipileMessageId)))
-        .returning({ id: instagramMessages.id });
-      log.info(attached ? `Echo of AgentSDR send ${decision.pendingId} — id attached` : `Echo of AgentSDR send ${decision.pendingId} — already had its id`);
+        .returning();
+      if (attached) {
+        // A send whose answer was lost never moved the chat's last message.
+        await applyMessageToChat(chat.id, { sentAt: attached.sentAt, body: attached.body, attachments: attached.attachments, direction: "outbound", countUnread: false });
+      }
+      log.info(attached ? `Echo of AgentSDR send ${decision.pendingId} (reserved ${attached.sentAt.toISOString()}) — id attached` : `Echo of AgentSDR send ${decision.pendingId} — already had its id`);
     } catch (error) {
       if (!isUniqueViolation(error)) throw error;
       log.info(`Echo ${event.unipileMessageId} already stored by the send itself — no-op`);
@@ -629,8 +633,12 @@ async function inquiryPerson(
   return personId;
 }
 
-/** AgentSDR sends in this chat still waiting for their Unipile id. */
-async function pendingSends(chatId: string) {
+/**
+ * AgentSDR sends in this chat still waiting for their Unipile id, reserved
+ * within ECHO_MATCH_WINDOW_MS of the echo: in flight, or kept after a send
+ * whose outcome was unknown or that Unipile accepted without an id.
+ */
+async function pendingSends(chatId: string, receivedAt: Date) {
   return db
     .select({ id: instagramMessages.id, body: instagramMessages.body, sentAt: instagramMessages.sentAt })
     .from(instagramMessages)
@@ -639,7 +647,7 @@ async function pendingSends(chatId: string) {
       eq(instagramMessages.chatId, chatId),
       eq(instagramMessages.origin, "agentsdr"),
       isNull(instagramMessages.unipileMessageId),
-      gt(instagramMessages.sentAt, new Date(Date.now() - ECHO_MATCH_WINDOW_MS)),
+      gt(instagramMessages.sentAt, new Date(receivedAt.getTime() - ECHO_MATCH_WINDOW_MS)),
     ));
 }
 

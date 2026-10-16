@@ -10,6 +10,7 @@ import { instagramUnipileErrorStatus, sendUnipileInstagramMessage } from "@/serv
 import { findInstagramAccountByUnipileId } from "./accounts";
 import {
   INSTAGRAM_MAX_MESSAGE_LENGTH,
+  InstagramDeliveryError,
   InstagramSendRefusedError,
   type DeliverInstagramInput,
   type DeliverInstagramResult,
@@ -35,25 +36,15 @@ import { instagramAccounts, instagramChats, instagramMessages, type InstagramMes
  * lock keeps an account's reservations in send order (the echo matcher
  * pairs identical texts oldest first). The Unipile call happens after the
  * reservation commits, so no pooled connection waits on Instagram. If
- * Unipile refuses (a 4xx) the row is removed; if it cannot be reached, or
- * answers 5xx, the row stays — the message may have gone, and its echo
- * will attach to it.
+ * Unipile refuses (a 4xx other than a timeout — 409 and 429 included) the
+ * row is removed and the failure is definite (InstagramDeliveryError
+ * `definite`): the CRM fails the draft. If it cannot be reached, or answers
+ * 408/5xx, the row stays — the message may have gone, and its echo will
+ * attach to it (parse.ts ECHO_MATCH_WINDOW_MS) — and the CRM marks the
+ * delivery uncertain. If it answers 2xx without naming the message, the
+ * message was sent: the send succeeds without an id and the row waits for
+ * its echo.
  */
-
-/**
- * Unipile did not take the message, or could not be reached. `status` is
- * Unipile's HTTP status when it answered: the CRM treats a 4xx as a
- * definite failure and anything else as a delivery to reconcile.
- */
-export class InstagramDeliveryError extends Error {
-  constructor(
-    readonly status: number | null,
-    message: string,
-  ) {
-    super(message);
-    this.name = "InstagramDeliveryError";
-  }
-}
 
 function sendLockKey(accountId: string): string {
   return `instagram-send:${accountId}`;
@@ -131,7 +122,7 @@ export async function performInstagramReply(input: DeliverInstagramInput): Promi
     if (isPlatformNotConnectedError(error)) throw error;
     if (refusedByUnipile(status)) {
       const detail = error instanceof Error ? error.message : String(error);
-      throw new InstagramDeliveryError(status, `Instagram (Unipile) did not accept the message — ${detail}`);
+      throw new InstagramDeliveryError(status, `Instagram (Unipile) did not accept the message — ${detail}`, true);
     }
     console.error("[instagram/send] Unipile send failed", error);
     throw new InstagramDeliveryError(status, "Instagram (Unipile) could not be reached to send the message; it may or may not have been sent");
@@ -141,17 +132,18 @@ export async function performInstagramReply(input: DeliverInstagramInput): Promi
   if (messageId) {
     message = await settleMessageId(reserved, messageId);
   } else {
-    // Unipile took it without naming it; its echo may already have.
+    // Unipile took it (2xx) without naming it: it was sent. Its echo may
+    // already have named it; otherwise the reserved row keeps waiting for
+    // the echo, which attaches the id. Reporting this as uncertain would
+    // invite a manual resend — a duplicate.
     const [current] = await db.select().from(instagramMessages).where(and(messageInOrg(), eq(instagramMessages.id, reserved.id))).limit(1);
-    if (!current?.unipileMessageId) {
-      throw new InstagramDeliveryError(null, "Unipile accepted the Instagram message but did not name it; it appears in the chat once Instagram confirms it");
-    }
-    message = current;
+    if (current) message = current;
+    if (!message.unipileMessageId) console.warn(`[instagram/send] Unipile accepted message ${reserved.id} without an id; its echo will name it`);
   }
 
   await applyMessageToChat(chat.id, { sentAt: message.sentAt, body: message.body, attachments: [], direction: "outbound", countUnread: false });
   return {
-    unipileMessageId: message.unipileMessageId!,
+    unipileMessageId: message.unipileMessageId,
     unipileChatId: chat.unipileChatId,
     instagramMessageId: message.id,
   };

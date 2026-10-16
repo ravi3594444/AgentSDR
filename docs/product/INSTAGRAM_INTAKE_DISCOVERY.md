@@ -386,9 +386,13 @@ protection, stale-draft checks and limits). Refused before Unipile is
 called when the feature is off, the account is unknown or not connected,
 the chat is not that account's, the person is Do Not Contact, or the text is
 empty or over 1,000 characters. The message row is reserved before the
-Unipile call so an early echo is recognised; a 4xx from Unipile removes it,
-a timeout or 5xx keeps it (the message may have gone) and the attempt is
-reconciled rather than resent.
+Unipile call so an early echo is recognised. A 4xx from Unipile (other than
+a 408 timeout; 409 and 429 included) removes it and fails the draft
+definitely — nothing was sent. A timeout or 5xx keeps it (the message may
+have gone): the attempt is marked delivery-uncertain and reconciled rather
+than resent, and an echo arriving up to 24 h later attaches to the reserved
+row instead of being stored again as typed in the app. A 2xx without a
+message id counts as sent; the row gets its id from the echo.
 
 Account changes: the existing `unipile-account` webhook now also syncs
 Instagram accounts, so a disconnected or credential-expired account shows

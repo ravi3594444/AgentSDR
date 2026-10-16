@@ -3,6 +3,7 @@ import { INSTAGRAM_FRESH_MESSAGE_WINDOW_MS } from "./contract";
 import {
   decideIngest,
   deliveryReceivedAt,
+  ECHO_MATCH_WINDOW_MS,
   instagramUsername,
   instagramWebhookEventKey,
   isHistoricalMessage,
@@ -255,7 +256,7 @@ describe("echo matching", () => {
   const pending = [
     { id: "late", body: "See you Saturday", sentAt: new Date(NOW.getTime() - 10_000) },
     { id: "early", body: "See you Saturday ", sentAt: new Date(NOW.getTime() - 20_000) },
-    { id: "stale", body: "See you Saturday", sentAt: new Date(NOW.getTime() - 10 * 60_000) },
+    { id: "stale", body: "See you Saturday", sentAt: new Date(NOW.getTime() - 25 * 3600_000) },
     { id: "other", body: "Something else", sentAt: NOW },
   ];
 
@@ -263,6 +264,12 @@ describe("echo matching", () => {
     expect(pickPendingSend(pending, { body: "See you Saturday" }, NOW)?.id).toBe("early");
     expect(pickPendingSend(pending, { body: "Unrelated" }, NOW)).toBeNull();
     expect(pickPendingSend([pending[2]!], { body: "See you Saturday" }, NOW)).toBeNull();
+  });
+
+  test("a late echo still finds a send whose answer was lost, hours later", () => {
+    const orphan = { id: "orphan", body: "Your order ships Monday", sentAt: new Date(NOW.getTime() - 3 * 3600_000) };
+    expect(pickPendingSend([orphan], { body: "Your order ships Monday" }, NOW)?.id).toBe("orphan");
+    expect(pickPendingSend([{ ...orphan, sentAt: new Date(NOW.getTime() - ECHO_MATCH_WINDOW_MS - 1) }], { body: "Your order ships Monday" }, NOW)).toBeNull();
   });
 
   test("decideIngest: duplicate, lead, attach, phone", () => {

@@ -82,7 +82,11 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (chatId.startsWith("ig-chat-refuse")) {
       return json(422, { status: 422, type: "errors/cannot_resend_yet", title: "Recipient cannot be reached", detail: "The user does not accept messages." });
     }
+    if (chatId.startsWith("ig-chat-busy")) return json(429, { status: 429, type: "errors/too_many_requests", title: "Too many requests", detail: "Slow down." });
+    if (chatId.startsWith("ig-chat-flaky")) return json(503, { status: 503, title: "Service unavailable" });
     sendCount += 1;
+    // Accepted without naming the message: its echo will.
+    if (chatId.startsWith("ig-chat-noid")) return json(201, { object: "MessageSent" });
     const messageId = `ig-sent-${stamp}-${sendCount}`;
     await beforeSendAnswer.get(chatId)?.(messageId, form.text ?? "");
     return json(201, { object: "MessageSent", message_id: messageId });
@@ -180,6 +184,9 @@ const CHAT_W = `ig-chat-w-${stamp}`;
 const CHAT_UNREADABLE = `ig-chat-unreadable-${stamp}`;
 const CHAT_DNC = `ig-chat-dnc-${stamp}`;
 const CHAT_REFUSE = `ig-chat-refuse-${stamp}`;
+const CHAT_BUSY = `ig-chat-busy-${stamp}`;
+const CHAT_NOID = `ig-chat-noid-${stamp}`;
+const CHAT_FLAKY = `ig-chat-flaky-${stamp}`;
 
 const igAccount = (id: string, status: string, im: Record<string, unknown> = {}, name: string | null = null) =>
   ({ object: "Account", type: "INSTAGRAM", id, name, connection_params: { im }, sources: [{ id: `${id}-src`, status }] });
@@ -390,6 +397,9 @@ try {
   await db.insert(instagramChats).values({ accountId: a2Row.id, unipileChatId: `ig-chat-old-${stamp}`, providerId: LEAD1, username: "asha.rao", personId: asha!.id });
   await db.insert(instagramChats).values({ accountId: a1Row.id, unipileChatId: CHAT_DNC, providerId: LEAD6, personId: vikram!.id });
   await db.insert(instagramChats).values({ accountId: a1Row.id, unipileChatId: CHAT_REFUSE, providerId: LEAD6 });
+  await db.insert(instagramChats).values({ accountId: a1Row.id, unipileChatId: CHAT_BUSY, providerId: LEAD1, personId: asha!.id });
+  await db.insert(instagramChats).values({ accountId: a1Row.id, unipileChatId: CHAT_NOID, providerId: LEAD1 });
+  await db.insert(instagramChats).values({ accountId: a1Row.id, unipileChatId: CHAT_FLAKY, providerId: LEAD1 });
 
   // ============================================================ webhook gate
   const wrongSecret = await messageHook(A, "not-the-secret", delivery({ chatId: CHAT1, messageId: `ig-x-${stamp}`, text: "x", lead: LEAD1 }));
@@ -704,11 +714,78 @@ try {
   });
   check("no refusal reached Unipile", posts().length === postsBeforeRefusals, `${posts().length - postsBeforeRefusals} posts`);
   const rejected = await inA(() => sendThroughCrmProvider(crmRequest({ providerThreadId: CHAT_REFUSE, providerContactId: LEAD6 })).then(() => null, (error: unknown) => error as Error & { status?: number }));
-  const refuseRows = await inA(async () => {
-    const [chat] = await db.select({ id: instagramChats.id }).from(instagramChats).where(and(messagesLib.chatInOrg(), eq(instagramChats.unipileChatId, CHAT_REFUSE)));
+  const chatRows = (unipileChatId: string) => inA(async () => {
+    const [chat] = await db.select({ id: instagramChats.id }).from(instagramChats).where(and(messagesLib.chatInOrg(), eq(instagramChats.unipileChatId, unipileChatId)));
     return db.select().from(instagramMessages).where(and(messagesLib.messageInOrg(), eq(instagramMessages.chatId, chat!.id)));
   });
-  check("a send Unipile refuses (422) fails with its status and leaves no stored message", rejected?.status === 422 && refuseRows.length === 0, `${rejected?.status} ${rejected?.message}`);
+  const refuseRows = await chatRows(CHAT_REFUSE);
+  check("a send Unipile refuses (422) fails definitely with its status and leaves no stored message", rejected instanceof DefiniteCrmSendError && (rejected as { status?: number }).status === 422 && refuseRows.length === 0, `${rejected?.status} ${rejected?.message}`);
+
+  // 429 is Unipile refusing too: the reservation is removed, so the draft
+  // fails — it must not sit as "delivery uncertain" when nothing was sent.
+  await inA(() => messagesLib.ingestInstagramWebhook(delivery({ chatId: CHAT_BUSY, messageId: `ig-busy-in-${stamp}`, text: "Can I order three cakes?", lead: LEAD1 }), []));
+  const [busyConversation] = await inA(() => db.select().from(crmConversations).where(and(eq(crmConversations.organizationId, A), eq(crmConversations.channel, "instagram"), eq(crmConversations.providerThreadId, CHAT_BUSY))));
+  const [busyRecord] = await inA(() => db.select().from(crmRecords).where(and(eq(crmRecords.organizationId, A), eq(crmRecords.id, busyConversation!.crmRecordId))));
+  const [busyDraft] = await inA(() => db.insert(crmDrafts).values({
+    crmRecordId: busyRecord!.id,
+    conversationId: busyConversation!.id,
+    expectedContextVersion: busyRecord!.contextVersion,
+    channel: "instagram",
+    editedBodyText: "Yes, three cakes are fine!",
+    status: "awaiting_review",
+  }).returning());
+  const busyPostsBefore = posts(CHAT_BUSY).length;
+  const busySend = await inA(() => sendDraft({ draftId: busyDraft!.id, revision: 1, idempotencyKey: `ig-check-${stamp}-busy`, requestId: `ig-check-${stamp}-busy` }))
+    .then(() => null, (error: unknown) => error as Error & { status?: number });
+  const [busyAttempt] = await db.select().from(crmSendAttempts).where(eq(crmSendAttempts.draftId, busyDraft!.id));
+  const [busyDraftAfter] = await db.select().from(crmDrafts).where(eq(crmDrafts.id, busyDraft!.id));
+  const busyOwnRows = (await chatRows(CHAT_BUSY)).filter((row) => row.origin === "agentsdr");
+  check(
+    "429 from Unipile is a definite failure: one request, the draft and its attempt failed (not uncertain), nothing reserved",
+    busySend instanceof DefiniteCrmSendError && (busySend as { status?: number }).status === 429 && busyAttempt?.status === "failed" && busyDraftAfter?.status === "failed"
+      && posts(CHAT_BUSY).length === busyPostsBefore + 1 && busyOwnRows.length === 0,
+    JSON.stringify({ error: String(busySend), attempt: busyAttempt?.status, draft: busyDraftAfter?.status, rows: busyOwnRows.length }),
+  );
+
+  // 2xx without a message id: sent, not uncertain; the echo names it later.
+  const noIdText = "Noted — your order is in.";
+  const noIdResult = await inA(() => sendThroughCrmProvider(crmRequest({ providerThreadId: CHAT_NOID, bodyText: noIdText })));
+  const noIdRows = await chatRows(CHAT_NOID);
+  check(
+    "a send Unipile accepts without an id succeeds (no provider id yet) and keeps its reserved row",
+    noIdResult.providerMessageId === null && noIdRows.length === 1 && noIdRows[0]!.origin === "agentsdr" && noIdRows[0]!.unipileMessageId === null,
+    JSON.stringify({ providerMessageId: noIdResult.providerMessageId, rows: noIdRows.map((row) => [row.origin, row.unipileMessageId]) }),
+  );
+  const noIdEcho = `ig-noid-echo-${stamp}`;
+  await messageHook(A, SECRET_A, delivery({ chatId: CHAT_NOID, messageId: noIdEcho, text: noIdText, lead: LEAD1, echo: true }));
+  const noIdAfter = await chatRows(CHAT_NOID);
+  check(
+    "its echo names it: the id lands on the same row, nothing is stored as typed in the app",
+    noIdAfter.length === 1 && noIdAfter[0]!.id === noIdRows[0]!.id && noIdAfter[0]!.unipileMessageId === noIdEcho && noIdAfter[0]!.origin === "agentsdr",
+    JSON.stringify(noIdAfter.map((row) => [row.origin, row.unipileMessageId])),
+  );
+
+  // 503: may have gone. The reservation stays, and an echo arriving well
+  // after the send (here ten minutes) still attaches to it.
+  const flakyText = "We will call you tomorrow morning.";
+  const flaky = await inA(() => sendThroughCrmProvider(crmRequest({ providerThreadId: CHAT_FLAKY, bodyText: flakyText }))).then(() => null, (error: unknown) => error as Error & { status?: number });
+  const flakyRows = await chatRows(CHAT_FLAKY);
+  check(
+    "a 503 from Unipile stays uncertain (not definite) and keeps the reserved row for its echo",
+    flaky instanceof Error && !(flaky instanceof DefiniteCrmSendError) && flaky.status === 503 && flakyRows.length === 1 && flakyRows[0]!.unipileMessageId === null,
+    `${String(flaky)} ${flakyRows.length}`,
+  );
+  await db.update(instagramMessages).set({ sentAt: new Date(Date.now() - 10 * 60_000) }).where(eq(instagramMessages.id, flakyRows[0]!.id));
+  const flakyEcho = `ig-flaky-echo-${stamp}`;
+  await messageHook(A, SECRET_A, delivery({ chatId: CHAT_FLAKY, messageId: flakyEcho, text: flakyText, lead: LEAD1, echo: true }));
+  const flakyAfter = await chatRows(CHAT_FLAKY);
+  const [flakyChat] = await inA(() => db.select().from(instagramChats).where(and(messagesLib.chatInOrg(), eq(instagramChats.unipileChatId, CHAT_FLAKY))));
+  check(
+    "a late echo attaches to its reservation (no second row as typed in the app) and becomes the chat's last message",
+    flakyAfter.length === 1 && flakyAfter[0]!.id === flakyRows[0]!.id && flakyAfter[0]!.unipileMessageId === flakyEcho && flakyAfter[0]!.origin === "agentsdr"
+      && flakyChat?.lastMessagePreview === flakyText && flakyChat.lastDirection === "outbound",
+    JSON.stringify({ rows: flakyAfter.map((row) => [row.origin, row.unipileMessageId]), preview: flakyChat?.lastMessagePreview }),
+  );
   check("no new chat is ever started", !requests.some((r) => r.method === "POST" && r.path === "/api/v1/chats"));
 
   // ============================================================ organization B sees none of A
