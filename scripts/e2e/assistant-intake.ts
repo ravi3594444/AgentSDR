@@ -1,0 +1,163 @@
+/**
+ * The assistant's two starting points, lead qualification and inquiry runs,
+ * against the database (no model, no provider): it runs the real services
+ * the assistant's tools call and checks what they record.
+ *
+ *   bun run --conditions=react-server scripts/e2e/assistant-intake.ts
+ *
+ * Proves: "use my existing leads" lists people already saved, leaves out
+ * people in a running run and excludes Do Not Contact with the reason;
+ * "inquiries" lists only fresh inquiries unless history is asked for, with
+ * the inquiry's own words as the only evidence of need; qualification keeps
+ * potential matches apart from inquired and interested people and leaves
+ * unknowns unknown; an inquiry run cannot be proposed with the features
+ * off, starts only through its own start, covers only people attached while
+ * it runs, pauses, resumes and stops, and never takes another run's
+ * channel; a second organization sees none of it.
+ *
+ * Creates two organizations ("Intake check …") and leaves them behind.
+ * Refuses a non-local DATABASE_URL.
+ */
+import { and, eq } from "drizzle-orm";
+
+if (!/@(localhost|127\.0\.0\.1)[:/]/.test(process.env.DATABASE_URL ?? "")) {
+  console.error("Refusing to run: DATABASE_URL must point at a local, disposable database.");
+  process.exit(2);
+}
+
+const { db } = await import("@/lib/db");
+const { organizations } = await import("@/lib/auth/schema");
+const { people } = await import("@/lib/leads/schema");
+const { crmPersonContactPolicies } = await import("@/lib/crm/schema");
+const { inquiries } = await import("@/lib/intake/schema");
+const { instagramAccounts } = await import("@/lib/instagram/schema");
+const schema = await import("@/lib/assistant/schema");
+const { createExistingLeadsAudience } = await import("@/lib/assistant/existingLeads.server");
+const { audienceProspects } = await import("@/lib/assistant/qualification.server");
+const { activeInquiryRun, attachInquiryToRun, prepareInquiryReplies, InquiryRunError } = await import("@/lib/assistant/inquiryRuns.server");
+const { OutreachError, getRun, setRunPaused, startInquiryRun, startOutreachRun, stopRun } = await import("@/lib/assistant/outreach.server");
+const { runMembershipFor } = await import("@/lib/crm/autopilot.server");
+const { setFeature, clearFeatureCache } = await import("@/lib/features/flags.server");
+const { createAudience } = await import("@/lib/assistant/audiences.server");
+const { runInOrganization, currentOrganizationId } = await import("@/lib/tenancy/scope");
+
+let failures = 0;
+function check(label: string, ok: boolean, detail = "") {
+  console.log(`${ok ? "PASS" : "FAIL"}  ${label}${detail ? ` — ${detail}` : ""}`);
+  if (!ok) failures++;
+}
+
+async function throws(promise: Promise<unknown>, type: new (...args: never[]) => Error): Promise<string | null> {
+  try {
+    await promise;
+    return null;
+  } catch (error) {
+    return error instanceof type ? error.message : `unexpected ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+const stamp = Date.now();
+const [orgA] = await db.insert(organizations).values({ name: `Intake check A ${stamp}`, slug: `intake-check-a-${stamp}` }).returning();
+const [orgB] = await db.insert(organizations).values({ name: `Intake check B ${stamp}`, slug: `intake-check-b-${stamp}` }).returning();
+console.log(`Organizations ${orgA!.id} (A) and ${orgB!.id} (B)`);
+
+let audienceOfA = "";
+let personOfA = "";
+
+await runInOrganization(orgA!.id, async () => {
+  const org = currentOrganizationId();
+  const make = async (values: Partial<typeof people.$inferInsert> & { source: string }) =>
+    (await db.insert(people).values({ organizationId: org, ...values }).returning({ id: people.id }))[0]!.id;
+  const listed = await make({ email: `listed-${stamp}@example.test`, fullName: "Listed Lead", source: "manual-people-import", raw: { city: "Pune" } });
+  const phoneOnly = await make({ phone: "+919800000001", fullName: "Phone Lead", source: "manual-people-import" });
+  const busy = await make({ email: `busy-${stamp}@example.test`, fullName: "Busy Lead", source: "manual-people-import" });
+  const dnc = await make({ email: `dnc-${stamp}@example.test`, fullName: "No Contact", source: "manual-people-import" });
+  const asker = await make({ email: `asker-${stamp}@example.test`, fullName: "Asha Asker", source: "intake:website-form" });
+  const oldAsker = await make({ email: `old-${stamp}@example.test`, fullName: "Old Asker", source: "intake:website-form" });
+  personOfA = listed;
+  await db.insert(crmPersonContactPolicies).values({ personId: dnc, doNotContact: true, reason: "asked", source: "human", setAt: new Date() });
+  await db.insert(inquiries).values([
+    { organizationId: org, source: "website_form", dedupeKey: `fresh-${stamp}`, personId: asker, name: "Asha Asker", email: `asker-${stamp}@example.test`, message: "Do you service X-ray units in Baner?", pageUrl: "https://acme.example/contact", historical: false },
+    { organizationId: org, source: "website_form", dedupeKey: `old-${stamp}`, personId: oldAsker, name: "Old Asker", message: "Price list please", historical: true },
+  ]);
+  // Busy is in a running outreach run already.
+  const runAudience = await createAudience({ name: "busy run", source: "list" });
+  const basePlan = { assignments: [], sequences: {}, personalizationKey: "p_00000000", samples: [], limits: { maxLeads: 1, emailPerMailboxPerDay: 30, whatsappNewChatsPerDay: null }, excluded: [], estimate: { aiCalls: 0, aiCostUsd: null, days: 1 }, autopilot: false, instructions: null };
+  const [busyRun] = await db.insert(schema.outreachRuns).values({ organizationId: org, audienceId: runAudience, name: "Busy run", status: "running", channels: ["email"], plan: basePlan }).returning();
+  await db.insert(schema.outreachRunLeads).values({ organizationId: org, runId: busyRun!.id, personId: busy, channel: "email" });
+
+  // ------------------------------------------------------------ existing leads
+  const all = await createExistingLeadsAudience({ from: "all", threadId: null, userId: null });
+  const allMembers = all.audienceId ? await db.select().from(schema.leadAudienceMembers).where(eq(schema.leadAudienceMembers.audienceId, all.audienceId)) : [];
+  const has = (id: string) => allMembers.find((member) => member.personId === id);
+  check("existing leads: people already saved are listed", Boolean(has(listed) && has(phoneOnly) && has(asker)), `${allMembers.length} members`);
+  check("existing leads: someone in a running run is left out", !has(busy) && all.alreadyInRuns === 1, `alreadyInRuns ${all.alreadyInRuns}`);
+  check("existing leads: Do Not Contact is excluded with the reason", has(dnc)?.status === "excluded" && /do not contact/i.test(has(dnc)?.reason ?? ""), has(dnc)?.reason ?? "missing");
+  check("existing leads: each has a reason naming where it came from", /Already in your leads since .* \(from an uploaded list\)/.test(has(listed)?.matchReason ?? ""), has(listed)?.matchReason ?? "");
+  check("existing leads: the audience source is 'existing'", all.audience?.source === "existing");
+  audienceOfA = all.audienceId!;
+
+  const fresh = await createExistingLeadsAudience({ from: "inquiries", threadId: null, userId: null });
+  const freshMembers = await db.select().from(schema.leadAudienceMembers).where(eq(schema.leadAudienceMembers.audienceId, fresh.audienceId!));
+  check("inquiries: only fresh inquiries by default", freshMembers.length === 1 && freshMembers[0]!.personId === asker, freshMembers.map((m) => m.name).join(", "));
+  check("inquiries: the inquiry's own words are the evidence, with its page", freshMembers[0]?.signals[0]?.text === "Do you service X-ray units in Baner?" && freshMembers[0]?.signals[0]?.sourceUrl === "https://acme.example/contact");
+  check("inquiries: the writer may quote what they asked", freshMembers[0]?.facts.inquiry === "Do you service X-ray units in Baner?");
+  const withHistory = await createExistingLeadsAudience({ from: "inquiries", includeHistorical: true, threadId: null, userId: null });
+  check("inquiries: imported history only when asked for", withHistory.audience?.total === 2, `${withHistory.audience?.total}`);
+
+  // ------------------------------------------------------------ qualification
+  const prospects = await audienceProspects(all.audienceId!);
+  const byName = new Map(prospects!.prospects.map((prospect) => [prospect.name, prospect]));
+  check("qualification: a saved lead is a potential match, not interested", byName.get("Listed Lead")?.status === "potential_match");
+  check("qualification: an inquirer is 'Inquired', with their words", byName.get("Asha Asker")?.status === "inquired" && byName.get("Asha Asker")?.needEvidence.length === 1);
+  check("qualification: location and budget stay unknown when no source stated them", byName.get("Listed Lead")?.location === "Unknown" && byName.get("Listed Lead")?.budget === "Unknown");
+  check("qualification: counts keep the groups apart", prospects!.counts.interested === 0 && prospects!.counts.inquired === 1, JSON.stringify(prospects!.counts));
+
+  // ------------------------------------------------------------ inquiry runs
+  clearFeatureCache();
+  const off = await throws(prepareInquiryReplies({ ownerRequest: "answer my instagram inquiries", threadId: null, userId: null }), InquiryRunError);
+  check("inquiry run: refused while the features are off", Boolean(off && /off for this organization/.test(off)), off ?? "no error");
+  await setFeature("instagram", true, null);
+  await setFeature("inquiry_intake", true, null);
+  const noAccount = await throws(prepareInquiryReplies({ ownerRequest: "answer my instagram inquiries", threadId: null, userId: null }), InquiryRunError);
+  check("inquiry run: refused without a connected account taking inquiries", Boolean(noAccount && /No Instagram account is connected/.test(noAccount)), noAccount ?? "no error");
+  await db.insert(instagramAccounts).values({ organizationId: org, unipileAccountId: `ig-intake-check-${stamp}`, username: "acme.dental", status: "connected", inquiryIntake: true, connectedAt: new Date(), historyCutoffAt: new Date() });
+  const proposal = await prepareInquiryReplies({ ownerRequest: "answer my instagram inquiries", threadId: null, userId: null });
+  check("inquiry run: proposed, not started", (await getRun(proposal.runId))?.status === "proposed" && proposal.plan.kind === "inquiries");
+  check("inquiry run: nothing is attached before Start", (await attachInquiryToRun(listed, "instagram")) === null);
+  const viaOutreach = await throws(startOutreachRun(proposal.runId, null, { autopilot: true }), OutreachError);
+  check("inquiry run: the outreach start refuses it (no campaigns, no job)", Boolean(viaOutreach), viaOutreach ?? "started");
+  await startInquiryRun(proposal.runId, null, true);
+  check("inquiry run: Start makes it running in the chosen mode", (await getRun(proposal.runId))?.status === "running" && (await getRun(proposal.runId))?.autopilot === true);
+  const second = await throws(prepareInquiryReplies({ ownerRequest: "answer my instagram inquiries", threadId: null, userId: null }), InquiryRunError);
+  check("inquiry run: only one at a time", Boolean(second && /already being answered/.test(second)), second ?? "allowed");
+
+  const inquirer = await make({ fullName: "@new.patient", source: "intake:instagram" });
+  check("inquiry run: a fresh inquirer is attached", (await attachInquiryToRun(inquirer, "instagram")) === proposal.runId);
+  const membership = await runMembershipFor(db, inquirer, "instagram");
+  check("inquiry run: the autopilot sees them as a running, automatic member on Instagram", membership?.runId === proposal.runId && membership.runStatus === "running" && membership.automatic === true);
+  check("inquiry run: no membership on other channels", (await runMembershipFor(db, inquirer, "email")) === null);
+  check("inquiry run: people never attached are not covered", (await runMembershipFor(db, listed, "instagram")) === null);
+  await setRunPaused(proposal.runId, true);
+  check("inquiry run: Pause holds it (the gate reads 'paused')", (await runMembershipFor(db, inquirer, "instagram"))?.runStatus === "paused");
+  await setRunPaused(proposal.runId, false);
+  check("inquiry run: Resume runs it again", (await runMembershipFor(db, inquirer, "instagram"))?.runStatus === "running");
+  await stopRun(proposal.runId);
+  const stopped = await runMembershipFor(db, inquirer, "instagram");
+  check("inquiry run: Stop is final for its members", stopped?.runStatus === "stopped" && stopped.leadStatus === "stopped");
+  check("inquiry run: nobody is attached after Stop", (await attachInquiryToRun(listed, "instagram")) === null && (await activeInquiryRun()) === null);
+});
+
+// ------------------------------------------------------------ organization B sees nothing of A
+await runInOrganization(orgB!.id, async () => {
+  check("isolation: B cannot read A's list", (await audienceProspects(audienceOfA)) === null);
+  const bList = await createExistingLeadsAudience({ from: "all", threadId: null, userId: null });
+  check("isolation: B's existing leads hold none of A's people", bList.audienceId === null, `audience ${bList.audienceId}`);
+  check("isolation: B has no inquiry run", (await activeInquiryRun()) === null);
+  check("isolation: B sees no run membership of A's people", (await runMembershipFor(db, personOfA, "email")) === null);
+  const [aRow] = await db.select().from(schema.leadAudienceMembers).where(and(eq(schema.leadAudienceMembers.audienceId, audienceOfA))).limit(1);
+  check("isolation sanity: A's rows exist (the checks above are not vacuous)", Boolean(aRow));
+});
+
+console.log(failures ? `\n${failures} check(s) FAILED` : "\nAll checks passed.");
+process.exit(failures ? 1 : 0);

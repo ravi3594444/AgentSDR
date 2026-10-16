@@ -4,7 +4,7 @@ import { and, desc, eq, ilike, inArray, isNotNull, or, sql, type SQL } from "dri
 import { db } from "@/lib/db";
 import { isMissingTable } from "@/lib/features/flags.server";
 import { inquiries } from "@/lib/intake/schema";
-import { companies, people } from "@/lib/leads/schema";
+import { people } from "@/lib/leads/schema";
 import { inOrg } from "@/lib/tenancy/scope";
 import { addAudienceMembers, createAudience, summarizeAudience, type AudienceSummary } from "./audiences.server";
 import { inquiryFacts, inquirySignal, matchReasonForExisting, peopleSourceLabel, type ExistingLeadsFrom } from "./existingLeads";
@@ -107,7 +107,6 @@ async function peopleCandidates(input: ExistingLeadsInput, limit: number): Promi
   const latest = input.from === "latest_import" ? await latestImportSource() : null;
   if (input.from === "latest_import" && !latest) return [];
   const rows = await db.select({ personId: people.id, createdAt: people.createdAt, source: people.source }).from(people)
-    .leftJoin(companies, and(eq(companies.id, people.companyId), inOrg(companies)))
     .where(and(
       inOrg(people),
       ...(latest ? [eq(people.source, latest.source), sql`${people.createdAt} >= ${latest.since.toISOString()}::timestamptz`] : []),
@@ -115,7 +114,33 @@ async function peopleCandidates(input: ExistingLeadsInput, limit: number): Promi
     ))
     .orderBy(desc(people.createdAt))
     .limit(limit * 2);
-  return rows.map((row) => ({ ...row, inquiry: null }));
+  // Someone who wrote in keeps their own words however the list was made.
+  const latestInquiry = await latestInquiries(rows.map((row) => row.personId), Boolean(input.includeHistorical));
+  return rows.map((row) => ({ ...row, inquiry: latestInquiry.get(row.personId) ?? null }));
+}
+
+/** Each person's latest usable inquiry (fresh ones only unless history is asked for). */
+async function latestInquiries(personIds: string[], includeHistorical: boolean): Promise<Map<string, NonNullable<Candidate["inquiry"]>>> {
+  const out = new Map<string, NonNullable<Candidate["inquiry"]>>();
+  if (!personIds.length) return out;
+  try {
+    const rows = await db.select({
+      personId: inquiries.personId,
+      source: inquiries.source,
+      message: inquiries.message,
+      pageUrl: inquiries.pageUrl,
+      at: sql<Date>`coalesce(${inquiries.submittedAt}, ${inquiries.receivedAt})`,
+      historical: inquiries.historical,
+    }).from(inquiries)
+      .where(and(inOrg(inquiries), inArray(inquiries.personId, personIds), eq(inquiries.status, "received"), ...(includeHistorical ? [] : [eq(inquiries.historical, false)])))
+      .orderBy(desc(inquiries.receivedAt));
+    for (const row of rows) {
+      if (row.personId && !out.has(row.personId)) out.set(row.personId, { source: row.source, message: row.message, pageUrl: row.pageUrl, at: new Date(row.at), historical: row.historical });
+    }
+  } catch (error) {
+    if (!isMissingTable(error)) throw error;
+  }
+  return out;
 }
 
 /** People of `ids` already in a running, paused or starting outreach run: they get no second sequence. */
