@@ -3,10 +3,12 @@ import {
   buildSearchQueries,
   classifySourceUrl,
   directoryBusinessLinks,
+  directoryListingContacts,
   instagramTarget,
   matchReasonFor,
   MAX_SEARCH_QUERIES,
   needSignal,
+  ownerMailDomain,
 } from "./webDiscovery";
 
 describe("buildSearchQueries", () => {
@@ -112,6 +114,40 @@ describe("directoryBusinessLinks", () => {
   });
 });
 
+describe("directoryListingContacts", () => {
+  const page = "https://www.citydirectory.example.in/pune/dentists";
+  const html = `
+    <header><a href="tel:+91 20 4000 0000">Helpline</a><a href="mailto:care@help-desk.example.com">Help</a></header>
+    <nav><a href="tel:1800-123-4567">Toll free</a></nav>
+    <ul>
+      <li>Lotus Dental <a href="tel:+912025531234">Call</a> <a href="tel:+912025531234">+91 20 2553 1234</a> · book via <a href="tel:+912040001111">our helpline</a></li>
+      <li>Smile Care <a href="mailto:hello@smilecare.example.in">hello@smilecare.example.in</a> · book via <a href="tel:+912040001111">our helpline</a></li>
+      <li>Pearl Dental <a href="tel:+912025550003">Call</a> · book via <a href="tel:+912040001111">our helpline</a></li>
+      <li>Listed by <a href="mailto:listings@citydirectory.example.in">our team</a></li>
+    </ul>
+    <footer>Customer care <a href="tel:+912040002222">020 4000 2222</a> <a href="mailto:support@gmail.com">support@gmail.com</a></footer>`;
+
+  test("keeps each listing's own contacts, even when one listing shows its number twice", () => {
+    expect(directoryListingContacts(html, page).map((contact) => contact.value)).toEqual(["+912025531234", "hello@smilecare.example.in", "+912025550003"]);
+  });
+
+  test("drops the directory's header, navigation and footer, a helpline beside every listing, and its own domain", () => {
+    const values = directoryListingContacts(html, page).map((contact) => contact.value);
+    for (const own of ["+912040000000", "18001234567", "+912040001111", "+912040002222", "support@gmail.com", "care@help-desk.example.com", "listings@citydirectory.example.in"]) {
+      expect(values).not.toContain(own);
+    }
+  });
+});
+
+describe("ownerMailDomain", () => {
+  test("a business mailbox's domain is the owner's; a free mail provider's is not", () => {
+    expect(ownerMailDomain("ravi@lotusdental.example.in")).toBe("lotusdental.example.in");
+    expect(ownerMailDomain("ravi.lotus@gmail.com")).toBeNull();
+    expect(ownerMailDomain("ravi@yahoo.co.in")).toBeNull();
+    expect(ownerMailDomain("ravi@rediffmail.com")).toBeNull();
+  });
+});
+
 describe("matchReasonFor", () => {
   const source = { query: "dental clinics in Baner, Pune", url: "https://lotus.example.in/", title: "Lotus Dental Care | Baner", snippet: "Family dental clinic in Baner, Pune since 2004." };
 
@@ -128,6 +164,13 @@ describe("matchReasonFor", () => {
     expect(matchReasonFor({ ...directory, via: "linked_from" })).toBe("Linked from “Top 10 dentists in Pune” (https://city.example.in/top-10-dentists/), a page the web search for “dental clinics in Baner, Pune” returned.");
     expect(matchReasonFor({ ...directory, via: "listed_on" })).toContain("Listed on “Top 10 dentists in Pune”");
     expect(matchReasonFor({ ...source, url: "https://www.instagram.com/p/C9xYz12AbCd/", via: "commented_on" })).toBe("Commented on the Instagram post https://www.instagram.com/p/C9xYz12AbCd/, which the web search for “dental clinics in Baner, Pune” returned.");
+  });
+
+  test("a redirected page: the search returned the provider's URL; the page read is named apart, never as a search result", () => {
+    const directory = { ...source, url: "https://city.example.in/best-dentists/", finalUrl: "https://city.example.in/list-of-dentists-2026/", title: "Best dentists", snippet: null };
+    const reason = matchReasonFor({ ...directory, via: "listed_on" });
+    expect(reason).toBe("Listed on “Best dentists” (https://city.example.in/best-dentists/), a page the web search for “dental clinics in Baner, Pune” returned, which redirected to https://city.example.in/list-of-dentists-2026/, where it was read.");
+    expect(reason).not.toContain("list-of-dentists-2026/), a page the web search");
   });
 });
 
@@ -151,6 +194,14 @@ describe("needSignal", () => {
       "koi suggest karo achha dentist",
       "rate kya hai bhai",
       "@rahul need a dentist near Baner, any recommendation?",
+      "looking for a physio near Baner",
+      "how much for a cleaning?",
+      "and how much is it?",
+      "How much does a root canal cost",
+      "anyone know a good dentist in Pune?",
+      "Do you know a good dentist near Aundh?",
+      "Does anyone know how to book an appointment?",
+      "Do you know how to reach them?",
     ]) expect([text, needSignal(text)]).toEqual([text, "need"]);
   });
 
@@ -168,6 +219,14 @@ describe("needSignal", () => {
       "No need to look further, best doctor!",
       "You don't know how much I love this place",
       "kitna sundar hai",
+      "I love how much this place has grown!",
+      "Can't believe how much it changed",
+      "Do you know how beautiful this is?",
+      "Do you know how much I love this place?",
+      "Mujhe nahi chahiye",
+      "mujhe ye nahin chahiye bhai",
+      "mat chahiye",
+      "need nahi hai",
       "Thank you so much doctor",
       "",
       "🙏",

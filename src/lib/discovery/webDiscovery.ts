@@ -1,4 +1,4 @@
-import { ownWebsite, visibleText, websiteDomain } from "./contacts";
+import { contactLinkSequence, emailMatchesDomain, extractContacts, ownWebsite, visibleText, websiteDomain, withoutElements, type FoundContact } from "./contacts";
 
 /**
  * Website and directory discovery, the pure half (the job is in
@@ -138,6 +138,40 @@ export function unusableReason(kind: SourceKind, url: string): string | null {
 /** Anchor text that is not a name ("Visit website", "Click here"). */
 const GENERIC_LINK_TEXT = /^(?:(?:visit|view|open|go to)\s+)?(?:(?:our|the|their)\s+)?(?:website|web ?site|site|homepage|home page)$|^(?:visit|click here|here|link|more|read more|view|details|open|go)$|^(?:www\.|https?:)/i;
 
+const ANCHOR_OPEN = /<a\b/gi;
+const ANCHOR_CLOSE = /<\/a\s*>/gi;
+const HREF_ATTRIBUTE = /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i;
+
+/**
+ * Every <a href=…>…</a> on a page: its href and the markup inside it. One
+ * linear pass (a page is read up to 1.5 MB): a single regex for the whole
+ * anchor retries from every "<a" to the end of the page when no "</a>"
+ * follows, which a hostile page turns into minutes. Same reading as that
+ * regex: the href is taken from the opening tag (up to its first ">"), the
+ * text runs to the first "</a>", and the scan resumes after it.
+ */
+function anchorsOf(html: string): { href: string; inner: string }[] {
+  const out: { href: string; inner: string }[] = [];
+  let cursor = 0;
+  while (cursor < html.length) {
+    ANCHOR_OPEN.lastIndex = cursor;
+    const open = ANCHOR_OPEN.exec(html);
+    if (!open) break;
+    const tagEnd = html.indexOf(">", open.index + 2);
+    if (tagEnd < 0) break;
+    const attributes = HREF_ATTRIBUTE.exec(html.slice(open.index + 2, tagEnd));
+    cursor = tagEnd + 1;
+    if (!attributes) continue;
+    ANCHOR_CLOSE.lastIndex = cursor;
+    const close = ANCHOR_CLOSE.exec(html);
+    // No "</a>" after this anchor: none after any later one either.
+    if (!close) break;
+    out.push({ href: attributes[1] ?? attributes[2] ?? attributes[3] ?? "", inner: html.slice(cursor, close.index) });
+    cursor = close.index + close[0].length;
+  }
+  return out;
+}
+
 /**
  * Links on a directory or list page that look like the listed businesses'
  * own websites: other hosts than the directory itself, not social networks
@@ -154,8 +188,8 @@ export function directoryBusinessLinks(html: string, pageUrl: string, limit = 20
   const pageDomain = websiteDomain(base.toString());
   const seen = new Set<string>();
   const out: { url: string; text: string | null }[] = [];
-  for (const match of html.matchAll(/<a\b[^>]*?\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>([\s\S]*?)<\/a\s*>/gi)) {
-    const href = visibleText(match[1] ?? match[2] ?? match[3] ?? "").trim();
+  for (const anchor of anchorsOf(html)) {
+    const href = visibleText(anchor.href).trim();
     if (!href || /^(?:mailto|tel|javascript|#)/i.test(href)) continue;
     let url: URL;
     try {
@@ -169,11 +203,65 @@ export function directoryBusinessLinks(html: string, pageUrl: string, limit = 20
     if (!domain || domain === pageDomain || (pageDomain && (domain.endsWith(`.${pageDomain}`) || pageDomain.endsWith(`.${domain}`)))) continue;
     if (seen.has(domain) || classifySourceUrl(url.toString()) !== "own_site") continue;
     seen.add(domain);
-    const text = visibleText(match[4] ?? "").trim();
+    const text = visibleText(anchor.inner).trim();
     out.push({ url: url.toString(), text: text && text.length <= 120 && !GENERIC_LINK_TEXT.test(text) ? text : null });
     if (out.length >= limit) break;
   }
   return out;
+}
+
+/** A contact this many times on a directory page, spread across its listings, is the directory's own (a helpline beside each). */
+const REPEATED_CONTACT_MIN = 3;
+const MAX_LINKS_COMPARED = 2_000;
+
+/**
+ * The emails and phones on a directory or list page that belong to its
+ * listings. Left out: the site's own header, navigation and footer (its
+ * helpline, its support address); a number or address shown beside many
+ * listings (at least three times, with other listings' contacts between
+ * the first and the last); addresses on the directory's own domain; and
+ * LinkedIn links.
+ */
+export function directoryListingContacts(html: string, pageUrl: string): FoundContact[] {
+  const listings = withoutElements(html, ["header", "nav", "footer"]);
+  // The first links are enough to tell (and keep a hostile page cheap).
+  const sequence = contactLinkSequence(listings).slice(0, MAX_LINKS_COMPARED);
+  const positions = new Map<string, number[]>();
+  sequence.forEach((key, index) => {
+    const at = positions.get(key);
+    if (at) at.push(index);
+    else positions.set(key, [index]);
+  });
+  const directoryOwn = new Set<string>();
+  for (const [key, at] of positions) {
+    if (at.length < REPEATED_CONTACT_MIN) continue;
+    const others = new Set<string>();
+    for (let index = at[0]!; index <= at.at(-1)! && others.size < 2; index += 1) {
+      if (sequence[index] !== key) others.add(sequence[index]!);
+    }
+    if (others.size >= 2) directoryOwn.add(key);
+  }
+  const pageDomain = websiteDomain(pageUrl);
+  return extractContacts(listings, pageUrl).filter((contact) => {
+    if (contact.kind === "linkedin") return false;
+    if (directoryOwn.has(`${contact.kind}:${contact.value.toLowerCase()}`)) return false;
+    return !(contact.kind === "email" && emailMatchesDomain(contact.value, pageDomain));
+  });
+}
+
+/** Free mail providers: an owner's mailbox there says nothing about which domain is theirs. */
+const PUBLIC_MAIL_DOMAINS = new Set([
+  "gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "live.com", "msn.com", "yahoo.com", "ymail.com", "rocketmail.com",
+  "icloud.com", "me.com", "mac.com", "aol.com", "proton.me", "protonmail.com", "pm.me", "rediffmail.com", "zoho.com", "zohomail.com",
+  "zohomail.in", "gmx.com", "gmx.net", "mail.com", "yandex.com", "yandex.ru", "tutanota.com", "fastmail.com", "hey.com", "qq.com",
+  "163.com", "126.com", "naver.com", "web.de", "inbox.com",
+]);
+
+/** The domain an owner's mailbox address says is theirs, or null for a free mail provider. */
+export function ownerMailDomain(email: string): string | null {
+  const domain = email.split("@")[1]?.trim().toLowerCase() ?? "";
+  if (!domain || PUBLIC_MAIL_DOMAINS.has(domain) || /^(?:yahoo|hotmail|outlook|live|gmail|googlemail|rediff(?:mail)?)\.[a-z.]+$/.test(domain)) return null;
+  return domain;
 }
 
 /** How a lead relates to the page the search returned, when it is not that page itself. */
@@ -184,6 +272,8 @@ export type MatchSource = {
   query: string;
   /** The page the provider returned. */
   url: string;
+  /** Where that page redirected, when it did: the page actually read (never called a search result). */
+  finalUrl?: string | null;
   /** The provider's title and snippet for it, as returned (null when it gave none). */
   title: string | null;
   snippet: string | null;
@@ -199,11 +289,12 @@ export function matchReasonFor(source: MatchSource): string {
   const title = source.title?.trim() ? `“${clip(source.title, 140)}”` : null;
   const snippet = source.snippet?.trim() ? `“${clip(source.snippet, 220)}”` : null;
   const page = title ? `${title} (${source.url})` : source.url;
+  const redirected = source.finalUrl && source.finalUrl !== source.url ? `, which redirected to ${source.finalUrl}, where it was read` : "";
   switch (source.via) {
     case "linked_from":
-      return `Linked from ${page}, a page the web search for ${query} returned.`;
+      return `Linked from ${page}, a page the web search for ${query} returned${redirected}.`;
     case "listed_on":
-      return `Listed on ${page}, a page the web search for ${query} returned.`;
+      return `Listed on ${page}, a page the web search for ${query} returned${redirected}.`;
     case "commented_on":
       return `Commented on the Instagram post ${source.url}, which the web search for ${query} returned.`;
     case "website_of":
@@ -225,7 +316,10 @@ const NEED_PATTERNS: RegExp[] = [
   /\bneeds? (?:a|an|some|someone|somebody|help|advice|recommendations?|suggestions?|to (?:find|buy|get|book|hire|fix|repair))\b/i,
   /\b\w+ (?:needed|required) (?:in|near|for|urgently|asap)\b/i,
   /\bany(?:one|body)? (?:know|knows|recommend|suggest)\b/i,
-  /\b(?:does|do) (?:anyone|anybody|someone|somebody|you) know\b/i,
+  /\b(?:does|do) (?:anyone|anybody|someone|somebody) know\b/i,
+  // "Do you know …?" asks only as a question, and not "do you know how
+  // beautiful this is?" ("how" only as "how to", "how I can").
+  /\bdo you know\b(?! how\b(?! (?:to|i can|we can|i could|we could)\b))[^.!?]{0,120}\?/i,
   /\bcan (?:any(?:one|body)|some(?:one|body)|you) (?:recommend|suggest|help|tell)\b/i,
   /\bany (?:good )?(?:recommendations?|suggestions?|references?)\b/i,
   /\b(?:please|pls|plz) (?:recommend|suggest)\b/i,
@@ -233,7 +327,11 @@ const NEED_PATTERNS: RegExp[] = [
   /\bwhere (?:can|do|should|could|would) (?:i|we|one) (?:get|find|buy|go|book)\b/i,
   /\bwhere to (?:get|find|buy|book)\b/i,
   /\bhow (?:do|can|could|to) (?:i |we )?(?:book|order|buy|get|contact|reach|hire|join|enrol|enroll)\b/i,
-  /\bhow much (?:is|are|does|do|for|it|this|would|will|to|per)\b|\bhow much\s*\?/i,
+  // "How much" asks a price only as a question that opens with it ("how
+  // much for a cleaning?", "and how much is it?") or next to a price word;
+  // "I love how much this place has grown" is praise.
+  /(?:^|[.!?,;:]\s*|\b(?:and|so|but|also|ok|okay|hi|hello|hey|sir|madam|ma'?am|bro|bhai|pls|please)\s+)how much\b[^.!?]{0,80}\?/i,
+  /\bhow much\b[^.!?]{0,60}(?:\b(?:price|prices|pricing|cost|costs|charge|charges|charged|fee|fees|rate|rates|pay|rs|rupees|inr|budget)\b|[₹$])/i,
   /\bwhat(?:'s| is| are)(?: the| your)? (?:price|prices|cost|costs|rate|rates|fee|fees|charges?)\b/i,
   /\b(?:price|prices|pricing|cost|rate|rates|fees?|charges?|quote|quotation)\s*\?/i,
   /\b(?:price|rate|cost|details) (?:please|pls|plz)\b/i,
@@ -252,14 +350,19 @@ const NEED_PATTERNS: RegExp[] = [
   /\bkya (?:price|rate|charges?|fees?)\b/i,
 ];
 
-/** Words that turn an ask into its opposite ("no need to look further", "not looking for"). */
-const NEGATED = /\b(?:no|not|don'?t|dont|do not|never|nobody|no one)\s+(?:\w+\s+)?(?:need|looking|searching)\b/gi;
+/**
+ * Words that turn an ask into its opposite: "no need to look further", "not
+ * looking for", and in Hindi/Hinglish "mujhe nahi chahiye", "mat chahiye",
+ * "need nahi hai".
+ */
+const NEGATED = /\b(?:no|not|don'?t|dont|do not|never|nobody|no one|nahi|nahin|nhi)\s+(?:\w+\s+)?(?:need|looking|searching|chahiye|chahie|chaiye)\b|\b(?:mat|na)\s+(?:chahiye|chahie|chaiye)\b|\b(?:need|chahiye|chahie|chaiye)\s+(?:nahi|nahin|nhi)\b/gi;
 
 /**
  * Whether something a person wrote asks for help ("need") or is only
  * engagement. Conservative: "need" only for explicit asks — looking for,
- * recommendations, "need a …", "anyone know", "where can I", "how much",
- * price or quote questions, and their common Hinglish forms. Emojis, praise,
+ * recommendations, "need a …", "anyone know", "where can I", "how much …?",
+ * price or quote questions, and their common Hinglish forms; a negated ask
+ * ("not looking", "nahi chahiye") is none. Emojis, praise,
  * "nice", "follow back" and tagging friends are engagement; a tag without a
  * question is engagement too. A like, follow or generic comment is never a
  * need.
