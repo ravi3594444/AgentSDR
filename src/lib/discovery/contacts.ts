@@ -84,29 +84,23 @@ const EMAIL_IN_TEXT = /(?<![A-Z0-9._%+-])[A-Z0-9._%+-]{1,64}@[A-Z0-9.-]{1,253}\.
 const OBFUSCATION_LOCAL = String.raw`(?<![A-Z0-9._%+-])([A-Z0-9._%+-]{1,64})`;
 const OBFUSCATION_LABEL = String.raw`[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?`;
 const DOT_TOKEN = String.raw`(?:\s{0,2}[[({]\s{0,2}dot\s{0,2}[\])}]\s{0,2}|\s{1,2}dot\s{1,2})`;
+/** After the domain: no further label, so a long domain is never cut short into a different address. */
+const DOMAIN_ENDS = `(?![A-Z0-9-]|\\.[A-Z0-9]|${DOT_TOKEN}[A-Z0-9])`;
 const OBFUSCATED_BRACKETED = new RegExp(
-  `${OBFUSCATION_LOCAL}\\s{0,2}[[({]\\s{0,2}at\\s{0,2}[\\])}]\\s{0,2}(${OBFUSCATION_LABEL}(?:(?:${DOT_TOKEN}|\\.)${OBFUSCATION_LABEL}){1,4})`,
+  `${OBFUSCATION_LOCAL}\\s{0,2}[[({]\\s{0,2}at\\s{0,2}[\\])}]\\s{0,2}(${OBFUSCATION_LABEL}(?:(?:${DOT_TOKEN}|\\.)${OBFUSCATION_LABEL}){1,7})${DOMAIN_ENDS}`,
   "gi",
 );
-const OBFUSCATED_WORDS = new RegExp(`${OBFUSCATION_LOCAL}\\s{1,2}at\\s{1,2}(${OBFUSCATION_LABEL}(?:${DOT_TOKEN}${OBFUSCATION_LABEL}){1,4})`, "gi");
+const OBFUSCATED_WORDS = new RegExp(`${OBFUSCATION_LOCAL}\\s{1,2}at\\s{1,2}(${OBFUSCATION_LABEL}(?:${DOT_TOKEN}${OBFUSCATION_LABEL}){1,7})${DOMAIN_ENDS}`, "gi");
 const DOT_TOKEN_GLOBAL = new RegExp(DOT_TOKEN, "gi");
 
-/** Generic top-level domains a business plausibly uses (any two letters are a country code). */
-const GENERIC_TLDS = new Set([
-  "com", "org", "net", "edu", "gov", "mil", "int", "info", "biz", "name", "pro", "mobi", "asia", "xyz", "online", "site",
-  "store", "shop", "tech", "app", "dev", "clinic", "dental", "health", "care", "studio", "agency", "company", "business",
-  "services", "solutions", "email", "life", "live", "world", "today", "club", "design", "media", "news", "blog", "space",
-  "website", "global", "group", "center", "centre", "academy", "education", "school", "travel", "hotel", "restaurant",
-  "cafe", "fitness", "salon", "spa", "law", "legal", "finance", "insurance", "realty", "consulting", "digital",
-  "marketing", "network", "systems", "software", "cloud", "ltd", "llc", "inc", "works", "tools", "top", "art", "guru",
-  "expert", "events", "photography", "doctor", "dentist", "hospital", "pharmacy", "coach", "yoga", "bike", "auto",
-  "cars", "kitchen", "estate", "properties", "builders", "construction", "repair", "cleaning", "shopping", "fashion",
-]);
-
-/** A top-level domain written the way a domain is: letters in one case ("com", "COM"), never a capitalized word ("Com", "In"). */
+/**
+ * A top-level domain written the way a domain is: 2 to 24 letters in one
+ * case ("com", "COM", "in"), never a capitalized word ("Com", "In"), which is
+ * the start of a sentence. Not a list of known TLDs: hundreds exist, and an
+ * address the page clearly hides ("[dot] museum") must not be dropped.
+ */
 function plausibleTld(label: string): boolean {
-  if (!/^(?:[a-z]{2,24}|[A-Z]{2,24})$/.test(label)) return false;
-  return label.length === 2 || GENERIC_TLDS.has(label.toLowerCase());
+  return /^(?:[a-z]{2,24}|[A-Z]{2,24})$/.test(label);
 }
 
 /** The addresses written in one of the hidden forms above, decoded and cleaned. */

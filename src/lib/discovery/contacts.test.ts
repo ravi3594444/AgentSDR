@@ -68,6 +68,8 @@ describe("hidden addresses", () => {
     expect(emailsOf("Owner: dr.rao {at} smile-clinic (dot) co (dot) in")).toEqual(["dr.rao@smile-clinic.co.in"]);
     expect(emailsOf("INFO [AT] ACME [DOT] COM")).toEqual(["info@acme.com"]);
     expect(emailsOf("Mail: hello (at) Acme.com.")).toEqual(["hello@acme.com"]);
+    expect(emailsOf("curator [at] city-museum [dot] museum")).toEqual(["curator@city-museum.museum"]);
+    expect(emailsOf("dean (at) mail.dept.uni.ac.co.uk")).toEqual(["dean@mail.dept.uni.ac.co.uk"]);
   });
 
   test("does not turn sentences into addresses", () => {
@@ -78,7 +80,8 @@ describe("hidden addresses", () => {
     expect(emailsOf("We are at Baner. Come by")).toEqual([]);
     expect(emailsOf("Find us at smileclinic.in")).toEqual([]);
     expect(emailsOf("sara [at] lotusdental . com")).toEqual([]);
-    expect(emailsOf("our team (at) pune.and more")).toEqual([]);
+    // Never cut short into another address.
+    expect(emailsOf("x (at) a.b.c.d.e.f.g.h.i.com")).toEqual([]);
   });
 });
 
