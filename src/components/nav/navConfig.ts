@@ -213,6 +213,8 @@ export function paletteItems(): PaletteItem[] {
   }
   for (const g of SETTINGS_NAV) {
     for (const s of g.items) {
+      // A row behind an optional feature shows only in the settings rail, which knows whether it is on.
+      if (s.feature) continue;
       if (!s.tabs) items.push({ href: s.href, label: s.label, group: "Settings", icon: s.icon, keywords: g.label });
       else for (const t of s.tabs) items.push({ href: t.href, label: `${s.label} · ${t.label}`, group: "Settings", icon: t.icon, keywords: g.label });
     }
