@@ -89,8 +89,12 @@ async function withResearchTable<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
-/** The organization's research model and key, or why research is unavailable. */
-async function researchRuntime() {
+/**
+ * The organization's research model and key, or why research is unavailable.
+ * Website and directory discovery (src/lib/discovery/webSearch.server.ts)
+ * searches through the same AI/ML API runtime.
+ */
+export async function researchRuntime(timeoutMs = RESEARCH_TIMEOUT_MS) {
   const settings = await getByokSettings();
   const connection = settings.connectionId ? await getAiConnection(settings.connectionId) : null;
   if (!connection?.verified) throw new ResearchError(409, "Connect an AI provider in Settings → AI provider before researching.");
@@ -103,25 +107,31 @@ async function researchRuntime() {
   const credentials = await getAiCredentials(connection.id);
   if (!credentials?.apiKey) throw new ResearchError(409, `Reconnect ${AIML_PROVIDER_NAME} in Settings → AI provider.`);
   return {
-    client: createAimlClient(credentials.apiKey, RESEARCH_TIMEOUT_MS),
+    client: createAimlClient(credentials.apiKey, timeoutMs),
     model: settings.researchModel.modelId,
     dailyLimit: settings.researchDailyLimit,
   };
 }
 
-type ResearchClient = Awaited<ReturnType<typeof researchRuntime>>["client"];
+/** The slice of the AI/ML client a search uses; web discovery's tests substitute a stand-in. */
+export type SearchCompletionsClient = { chat: { completions: { create: (request: never) => Promise<unknown> } } };
 
-async function askWithSearch(client: ResearchClient, model: string, question: string): Promise<unknown> {
+export async function askWithSearch(
+  client: SearchCompletionsClient,
+  model: string,
+  question: string,
+  options: { systemPrompt?: string; maxTokens?: number } = {},
+): Promise<unknown> {
   // AI/ML API's chat-completions search request (checked against its
   // per-model schema): web_search_options, with sources returned as
   // `citations`/`search_results` (Perplexity) or url_citation annotations.
   const request = {
     model,
     messages: [
-      { role: "system", content: RESEARCH_SYSTEM_PROMPT },
+      { role: "system", content: options.systemPrompt ?? RESEARCH_SYSTEM_PROMPT },
       { role: "user", content: question },
     ],
-    max_tokens: MAX_OUTPUT_TOKENS,
+    max_tokens: options.maxTokens ?? MAX_OUTPUT_TOKENS,
     web_search_options: { search_context_size: "low" },
   };
   let lastError: unknown;

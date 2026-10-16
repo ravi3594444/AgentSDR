@@ -258,6 +258,10 @@ let pageOptions: PageFetchOptions = {};
 export function setDiscoveryPageOptions(options: PageFetchOptions): void {
   pageOptions = options;
 }
+/** The same options for website and directory discovery (webDiscovery.server.ts). */
+export function discoveryPageOptions(): PageFetchOptions {
+  return pageOptions;
+}
 
 async function enrichPlace(place: EnrichedPlace, country: string | undefined): Promise<EnrichedPlace> {
   if (!place.website) return place;
