@@ -7,7 +7,9 @@ the plan is [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
 
 - **Branch:** `claude/new-session-g5hljn`, pushed. `main` is untouched.
   The latest work is routine automation, controls and results (Session 5,
-  below), on top of the owner's assistant (Session 4).
+  below), on top of the owner's assistant (Session 4). Session 6 (existing
+  leads and inquiries, optional Instagram, intake and website discovery) is
+  on `claude/instagram-intake-discovery`, proposed as a PR into it.
 - **Readiness: implemented, pending live verification. Not owner-usable
   yet.** The whole messaging workflow is built and checked locally. One
   real WhatsApp message has reached the owner's own number from the VM;
@@ -19,6 +21,42 @@ the plan is [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
 - **Nothing was sent from this sandbox.** Every send here went to a
   recording stand-in, or was refused because no provider was connected.
   The one real message was the owner's own test, sent from the VM.
+
+## Session 6: existing leads and inquiries, optional Instagram, intake and website discovery
+
+Branch `claude/instagram-intake-discovery` (from `claude/new-session-g5hljn`
+at `994fb7d`), proposed as a PR into it; not merged, not deployed. Design,
+verified provider capabilities, setup and limits:
+[INSTAGRAM_INTAKE_DISCOVERY.md](INSTAGRAM_INTAKE_DISCOVERY.md).
+
+Asked for: reuse of what the business already saved; two starting points
+("use my existing leads or inquiries", "find potential customers for me")
+feeding the same CRM, plans, runs and handoffs; optional website/directory
+discovery with exact sources and no invented contacts; Instagram through
+Unipile (v1) with history kept apart from fresh messages; optional inquiry
+intake (Instagram, authenticated website-form webhook); qualification
+before outreach; owner control unchanged; one Automatic/Review choice for a
+whole request, including leads found later.
+
+**State: implemented and checked locally against stand-ins. Nothing live.**
+No Unipile, Instagram, form tool, search provider or website was called;
+no message was sent.
+
+| Part | Where | Default |
+| --- | --- | --- |
+| Optional features, per organization | `src/lib/features/`, Settings → Organization | all off; off before the migration too |
+| Business context reuse, two starting points, qualification, one Start per request, inquiry runs | `src/lib/assistant/{businessContext,existingLeads,qualification,requestApproval,inquiryRuns}*.ts` | on (no provider, sends nothing by itself) |
+| Website and directory discovery | `src/lib/discovery/web*.ts`, `websiteContacts.server.ts`, `mailDomain.server.ts` | feature off |
+| Instagram messages (Unipile v1) | `src/lib/instagram/`, `src/services/unipile.instagram*.ts`, `src/jobs/replayInstagramWebhooks.ts` | feature off |
+| Inquiry intake | `src/lib/intake/`, `/api/intake/form`, Settings → Inquiries | feature off |
+| Migration | `scripts/add-instagram-intake-discovery.ts` (7 tables, widened checks, NOT VALID then VALIDATE) | run by the operator |
+
+Review: three independent reviewers (Instagram channel; discovery for
+invented data and SSRF; regressions with every feature off) reported 27
+issues. Each was fixed (two fix agents in separate worktrees, the rest
+directly) or deliberately kept with the reason stated in the PR, and the
+fixes were re-verified adversarially, two to three skeptics per finding.
+Checks on the final branch are in the PR description.
 
 ## Session 5: routine automation, reliable controls and results
 
