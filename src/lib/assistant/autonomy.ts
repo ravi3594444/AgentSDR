@@ -27,13 +27,13 @@ export type AutoStartFacts = {
   planLeads: number;
   /** This plan's leads already in another running or paused plan. */
   busyPeople: number;
-  /** The person who turned Autonomous on may still let replies be answered automatically (owner or admin). */
+  /** The person who turned Autonomous on, and the one who asked for this outreach, are owners or admins. */
   approverAllowed: boolean;
 };
 
 /** Why a plan must wait for the owner's Start instead of starting on its own, or null. */
 export function autoStartProblem(facts: AutoStartFacts, caps: AutonomyCaps): string | null {
-  if (!facts.approverAllowed) return "the person who turned Autonomous on is no longer an owner or admin";
+  if (!facts.approverAllowed) return "only an owner or admin can have plans started on their own: the person who turned Autonomous on, or who asked for this outreach, is not one";
   if (facts.planLeads <= 0) return "the plan has no leads to contact";
   if (facts.runsToday >= caps.runsPerDay) return `${facts.runsToday} plans already started on their own in the last 24 hours (your cap is ${caps.runsPerDay})`;
   if (facts.leadsToday + facts.planLeads > caps.leadsPerDay) {

@@ -128,6 +128,7 @@ export async function runAgentTurn(input: {
   attachmentResults?: { tool: string; input: Record<string, unknown>; result: { ok: boolean; summary: string; data?: Record<string, unknown> } }[];
 }): Promise<void> {
   if (!(await claimThread(input.threadId))) throw new AssistantBusyError();
+  let heartbeat: ReturnType<typeof setInterval> | null = null;
   try {
     // Autonomous mode (autonomy.ts): plans start on their own, no permission questions, longer turns.
     const autonomy = await threadAutonomy(input.threadId);
@@ -169,9 +170,9 @@ export async function runAgentTurn(input: {
     const features = await featureState();
     const toolNames = toolNamesFor(features);
     const maxSteps = autonomy.on ? AUTONOMOUS_MAX_STEPS : MAX_STEPS;
+    // A long turn keeps the thread claimed: one step (writing a plan) can take minutes.
+    heartbeat = setInterval(() => void touchThread(input.threadId).catch(() => undefined), 60_000);
     for (let step = 0; step < maxSteps; step += 1) {
-      // A long turn keeps the thread claimed (a step can take a minute or more).
-      if (step > 0) await touchThread(input.threadId);
       const { text: setupText, outreachStarted, profile } = await contextBlock();
       const messages = await listMessages(input.threadId, 80);
       // What the owner wrote or attached: business information is saved only from it.
@@ -266,6 +267,7 @@ export async function runAgentTurn(input: {
         : "I stopped here so I don't go round in circles. Tell me how you'd like to continue.",
     });
   } finally {
+    if (heartbeat) clearInterval(heartbeat);
     await releaseThread(input.threadId);
   }
 }
@@ -275,7 +277,12 @@ async function startedOnItsOwn(threadId: string, autonomous: boolean, data: Reco
   if (!autonomous) return true;
   const runId = typeof data?.runId === "string" ? data.runId : null;
   if (!runId) return false;
-  return (await autoStartPlan(threadId, runId)).started;
+  const outcome = await autoStartPlan(threadId, runId);
+  // Switched off while this turn ran: the plan waits for Start, as without Autonomous mode.
+  if (outcome.off) {
+    await addMessage({ threadId, role: "event", content: "Autonomous mode is off now, so this plan was not started on its own. Check it below and press Start." });
+  }
+  return outcome.started;
 }
 
 /**

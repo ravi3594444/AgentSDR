@@ -222,6 +222,12 @@ export function outreachIntent(words: string): boolean {
   return tokens.some((token, index) => isOutreachWord(token) && !tokens.slice(Math.max(0, index - 3), index).some((before) => NEGATIONS.has(before)));
 }
 
+/** The owner tells the assistant not to contact people ("stop contacting them", "don't message anyone yet"). */
+export function outreachRevoked(words: string): boolean {
+  const tokens = words.toLowerCase().match(/[a-z]+/g) ?? [];
+  return tokens.some((token, index) => isOutreachWord(token) && tokens.slice(Math.max(0, index - 3), index).some((before) => NEGATIONS.has(before)));
+}
+
 const CONFIRMATIONS = new Set([
   "yes", "yeah", "yep", "yup", "ya", "sure", "ok", "okay", "go", "ahead", "do", "it", "please", "proceed", "confirm", "confirmed",
   "start", "right", "correct", "fine", "great", "perfect", "lets", "let", "s", "that", "haan", "han", "ha", "ji", "theek", "thik",
@@ -302,6 +308,8 @@ export function standingOutreachRequestIndex(history: readonly HistoryMessage[])
     const message = history[index]!;
     const before = [...history.slice(0, index)].reverse().find((item) => item.role === "assistant")?.content ?? null;
     if (outreachRequested(message.content, before)) return index;
+    // A newer "stop contacting people" ends the standing request.
+    if (outreachRevoked(message.content)) return null;
   }
   return null;
 }

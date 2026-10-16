@@ -8,7 +8,7 @@ import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { autoStartProblem, type AutonomyCaps } from "./autonomy";
 import { getRun, startOutreachRun } from "./outreach.server";
 import { peopleInActiveRuns } from "./requestApproval.server";
-import { assistantJobs, assistantThreads, outreachRuns } from "./schema";
+import { assistantJobs, assistantMessages, assistantThreads, outreachRuns } from "./schema";
 import { addMessage, getThread } from "./threads.server";
 
 /**
@@ -70,26 +70,47 @@ export async function autonomousSearchesToday(): Promise<number> {
   return Number(row?.n ?? 0);
 }
 
+/** Who asked for this plan's outreach: the author of the request message, else whoever prepared the plan. */
+async function requesterOf(run: NonNullable<Awaited<ReturnType<typeof getRun>>>): Promise<string | null> {
+  if (run.plan.requestId) {
+    const [message] = await db.select({ createdBy: assistantMessages.createdBy }).from(assistantMessages)
+      .where(and(inOrg(assistantMessages), eq(assistantMessages.id, run.plan.requestId))).limit(1);
+    if (message?.createdBy) return message.createdBy;
+  }
+  return run.createdBy ?? null;
+}
+
 /**
  * Starts a plan this chat just prepared, when the chat is in Autonomous
  * mode and the caps allow; posts what happened in the chat. Returns
  * started false (with the reason, when there is one) otherwise: the plan
  * then waits for the owner's Start as usual.
  */
-export async function autoStartPlan(threadId: string, runId: string): Promise<{ started: boolean; reason: string | null }> {
+export async function autoStartPlan(threadId: string, runId: string): Promise<{ started: boolean; reason: string | null; off?: boolean }> {
   const autonomy = await threadAutonomy(threadId);
-  if (!autonomy.on) return { started: false, reason: null };
+  if (!autonomy.on) return { started: false, reason: null, off: true };
   const run = await getRun(runId);
   if (!run || run.status !== "proposed" || run.threadId !== threadId) return { started: false, reason: null };
   if (run.plan.kind === "inquiries") return { started: false, reason: "answering new inquiries always starts with your Start" };
   const organizationId = currentOrganizationId();
   const caps = await autonomyCaps();
-  const [approverAllowed, busyPeople] = await Promise.all([
-    userMayAutomate(autonomy.by),
-    peopleInActiveRuns(run.plan.assignments.map((assignment) => assignment.personId)),
-  ]);
+  // Both must be owners or admins: the one who turned Autonomous on, and the one who asked for this
+  // outreach (a member writing in an autonomous chat does not start plans in an admin's name).
+  const requester = await requesterOf(run);
+  const [approverAllowed, requesterAllowed] = await Promise.all([userMayAutomate(autonomy.by), userMayAutomate(requester)]);
+  const personIds = run.plan.assignments.map((assignment) => assignment.personId);
   const claimed = await db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`autonomous:${organizationId}`}, 0))`);
+    // Read under the lock: people in a running plan, or in another plan this lock just let start
+    // (its leads are inserted after the lock is released).
+    const inRuns = await peopleInActiveRuns(personIds);
+    const pending = personIds.length ? Array.from(await tx.execute(sql`
+      select count(distinct a.value ->> 'personId')::int as n
+      from outreach_runs r, jsonb_array_elements(coalesce(r.plan -> 'assignments', '[]'::jsonb)) as a(value)
+      where r.organization_id = ${organizationId} and r.id <> ${runId}
+        and (r.plan ->> 'autonomous') = 'true' and r.status = 'proposed'
+        and (a.value ->> 'personId') in (${sql.join(personIds.map((id) => sql`${id}`), sql`, `)})`))[0] as { n?: number } | undefined : undefined;
+    const busyPeople = inRuns + Number(pending?.n ?? 0);
     const since = new Date(Date.now() - DAY_MS).toISOString();
     const [today] = await tx.select({
       runs: count(),
@@ -101,7 +122,7 @@ export async function autoStartPlan(threadId: string, runId: string): Promise<{ 
       leadsToday: Number(today?.leads ?? 0),
       planLeads: run.plan.assignments.length,
       busyPeople,
-      approverAllowed,
+      approverAllowed: approverAllowed && requesterAllowed,
     }, caps);
     if (problem) return { problem };
     // Marked before the start, inside the lock, so a plan starting at the same moment counts it.

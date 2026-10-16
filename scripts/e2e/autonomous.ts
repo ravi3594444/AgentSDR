@@ -80,9 +80,11 @@ await runInOrganization(org!.id, async () => {
     instructions: null,
   });
   let n = 0;
-  async function proposed(personIds: string[]) {
+  /** A plan the assistant prepared; `requestedBy` wrote the message that asked for it (the owner by default). */
+  async function proposed(personIds: string[], requestedBy: string = owner!.id) {
+    const [request] = await db.insert(schema.assistantMessages).values({ organizationId: orgId, threadId: thread.id, role: "user", content: "Find clinics and contact them", createdBy: requestedBy }).returning();
     const [run] = await db.insert(schema.outreachRuns).values({
-      organizationId: orgId, threadId: thread.id, audienceId, name: `Plan ${(n += 1)}`, status: "proposed", channels: ["email"], plan: basePlan(personIds), autopilot: false,
+      organizationId: orgId, threadId: thread.id, audienceId, name: `Plan ${(n += 1)}`, status: "proposed", channels: ["email"], plan: { ...basePlan(personIds), requestId: request!.id }, autopilot: false, createdBy: requestedBy,
     }).returning();
     return run!;
   }
@@ -133,9 +135,14 @@ await runInOrganization(org!.id, async () => {
   await saveChannelRules("general", { autonomousRunsPerDay: 10, autonomousLeadsPerDay: 300 }, null);
   await setThreadAutonomous(thread.id, true, member!.id);
   const demoted = await autoStartPlan(thread.id, big.id);
-  check("in the name of someone who is not an owner or admin nothing starts", !demoted.started && /owner or admin/.test(demoted.reason ?? ""), demoted.reason ?? "");
+  check("in the name of someone who is not an owner or admin nothing starts", !demoted.started && /only an owner or admin/.test(demoted.reason ?? ""), demoted.reason ?? "");
   await setThreadAutonomous(thread.id, true, owner!.id);
   check("once an owner turns it on again it starts", (await autoStartPlan(thread.id, big.id)).started);
+
+  // ------------------------------------------------------------ a member asking in an owner's autonomous chat
+  const memberAsked = await proposed(P.slice(20, 22), member!.id);
+  const memberOutcome = await autoStartPlan(thread.id, memberAsked.id);
+  check("a member's request in an owner's Autonomous chat does not start a plan in the owner's name", !memberOutcome.started && /only an owner or admin/.test(memberOutcome.reason ?? "") && (await runRow(memberAsked.id)).status === "proposed", memberOutcome.reason ?? "");
 
   // ------------------------------------------------------------ searches a day
   await saveChannelRules("general", { autonomousSearchesPerDay: 2 }, null);

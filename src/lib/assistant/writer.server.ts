@@ -121,6 +121,8 @@ export async function writeSequences(input: {
   const allowed = [...input.tokens, input.personalizationKey];
   let parsed: Partial<Record<AudienceChannel, PlannedStep[]>> = {};
   let answers = 0;
+  /** The last answer refused only for pitch problems: kept if the retries then fail for another reason. */
+  let fallback: Partial<Record<AudienceChannel, PlannedStep[]>> | null = null;
   const result = await completeStructured({
     timeoutMs: TIMEOUT_MS,
     maxOutputTokens: 3_000,
@@ -139,6 +141,7 @@ export async function writeSequences(input: {
       answers += 1;
       const body = JSON.parse(text) as { channels: { channel: AudienceChannel; messages: { subject: string; body: string; waitDays: number }[] }[] };
       const out: Partial<Record<AudienceChannel, PlannedStep[]>> = {};
+      const pitch: string[] = [];
       for (const channel of input.channels) {
         const entry = body.channels.find((item) => item.channel === channel);
         if (!entry) throw new Error(`Write the ${channel} messages too.`);
@@ -151,14 +154,25 @@ export async function writeSequences(input: {
         const signedSteps = ensureSignOff(channel, steps, input.profile, input.signatureAppended);
         const problem = sequenceProblem(channel, signedSteps, allowed);
         if (problem) throw new Error(problem);
-        const pitch = signedSteps.flatMap((step, index) => pitchProblems(channel, step.body, { first: index === 0 }).map((found) => `${channel} message ${index + 1}: ${found}`));
-        if (pitch.length && answers <= PITCH_RETRIES) throw new Error(pitch.join("; "));
+        // Checked on what the writer wrote, before the sign-off the code adds (a role and business name are not a list).
+        pitch.push(...steps.flatMap((step, index) => pitchProblems(channel, step.body, { first: index === 0 }).map((found) => `${channel} message ${index + 1}: ${found}`)));
         out[channel] = signedSteps;
+      }
+      if (pitch.length && answers <= PITCH_RETRIES) {
+        fallback = out;
+        throw new Error(pitch.join("; "));
       }
       parsed = out;
     },
+  }).catch((error: unknown) => {
+    // A usable answer refused only for its pitch is better than no plan.
+    if (fallback) {
+      parsed = fallback;
+      return null;
+    }
+    throw error;
   });
-  await addCost(input.cost, "outreach_writing", result);
+  if (result) await addCost(input.cost, "outreach_writing", result);
   if (input.review === false || input.feedback) return parsed;
   // A reader like the leads reads each first message; a likely-ignored one is rewritten once.
   const verdict = await reviewFirstMessages({ audienceDescription: input.audienceDescription, context: input.context, sequences: parsed, cost: input.cost })
@@ -278,6 +292,7 @@ export async function writePersonalLines(input: {
   if (!input.leads.length) return lines;
   const byIndex = new Map(input.leads.map((lead) => [lead.index, lead]));
   let answers = 0;
+  let fallback: Map<number, string> | null = null;
   const result = await completeStructured({
     timeoutMs: TIMEOUT_MS,
     maxOutputTokens: 2_000,
@@ -321,10 +336,21 @@ export async function writePersonalLines(input: {
         }
         lines.set(item.index, line);
       }
-      if (clashes.length && answers <= PITCH_RETRIES) throw new Error(clashes.join(" "));
+      if (clashes.length && answers <= PITCH_RETRIES) {
+        fallback = new Map(lines);
+        throw new Error(clashes.join(" "));
+      }
     },
+  }).catch((error: unknown) => {
+    // Clashing lines are already blank in the fallback: the messages read fine without them.
+    if (fallback) {
+      lines.clear();
+      for (const [index, line] of fallback) lines.set(index, line);
+      return null;
+    }
+    throw error;
   });
-  await addCost(input.cost, "personal_lines", result);
+  if (result) await addCost(input.cost, "personal_lines", result);
   return lines;
 }
 
@@ -439,6 +465,7 @@ export async function writePersonalMessages(input: {
   const out = new Map<number, { subject: string | null; body: string }>();
   if (!input.leads.length) return out;
   let answers = 0;
+  let fallback: Map<number, { subject: string | null; body: string }> | null = null;
   const result = await completeStructured({
     timeoutMs: TIMEOUT_MS,
     maxOutputTokens: 3_000,
@@ -473,7 +500,7 @@ export async function writePersonalMessages(input: {
         if (!lead) continue;
         const [signed] = ensureSignOff(lead.channel, [{ subject: CHANNEL_RULES[lead.channel].subject ? item.subject.trim() || null : null, body: item.body.trim(), waitDays: 0 }], input.profile, input.signatureAppended);
         if (personalMessageProblem(lead.channel, { subject: signed!.subject, body: signed!.body })) continue;
-        const found = pitchProblems(lead.channel, signed!.body, { first: true });
+        const found = pitchProblems(lead.channel, item.body.trim(), { first: true });
         // A message still failing after the retries is left out: that lead gets the group's message.
         if (found.length) {
           pitch.push(`Lead ${item.index}: ${found.join("; ")}.`);
@@ -481,9 +508,20 @@ export async function writePersonalMessages(input: {
         }
         out.set(item.index, { subject: signed!.subject, body: signed!.body });
       }
-      if (pitch.length && answers <= PITCH_RETRIES) throw new Error(pitch.join(" "));
+      if (pitch.length && answers <= PITCH_RETRIES) {
+        fallback = new Map(out);
+        throw new Error(pitch.join(" "));
+      }
     },
+  }).catch((error: unknown) => {
+    // The messages that passed are kept; the others get their group's message.
+    if (fallback) {
+      out.clear();
+      for (const [index, message] of fallback) out.set(index, message);
+      return null;
+    }
+    throw error;
   });
-  await addCost(input.cost, "outreach_writing", result);
+  if (result) await addCost(input.cost, "outreach_writing", result);
   return out;
 }

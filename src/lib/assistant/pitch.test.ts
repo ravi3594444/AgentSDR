@@ -61,3 +61,10 @@ describe("a lead's line before the message", () => {
     expect(lineClash("", "anything")).toBeNull();
   });
 });
+
+describe("checked on the writer's own words", () => {
+  test("a role and business name in a signature are not a list (the code adds the signature after the check)", () => {
+    const body = "Hi {{company}} team,\nWhen a buyer enquiry comes in after hours, does it wait until morning? We answer it in seconds. Worth a look?\nBest regards,";
+    expect(pitchProblems("email", body, { first: true })).toEqual([]);
+  });
+});

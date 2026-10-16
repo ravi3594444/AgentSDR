@@ -112,6 +112,16 @@ Rules that matter:
   chosen per outreach run, §3b). The handoff (Needs you, §3b) needs one
   more, `scripts/add-handoff.ts` (same command); until it runs, replies that
   need a person fail to be handed over and the Results page fails to load.
+  Run `scripts/add-handoff.ts` again after every update that changes it
+  (the reply agent's table and Autonomous mode's columns are in it): until
+  it runs on such an update, the assistant chat fails to load.
+- **Updating without that gap:** build first, run the migrations from the
+  new image while the old app keeps serving, then restart. Every migration
+  is additive, so the old app is unaffected:
+  `docker compose … build app`, then
+  `docker compose … run --rm app bun scripts/add-handoff.ts` (and the same
+  for `scripts/add-instagram-intake-discovery.ts`), then
+  `docker compose … up -d`.
 - **Lead search (optional):** add `-f docker-compose.discovery.yml` to every
   compose command (or put
   `COMPOSE_FILE=docker-compose.yml:docker-compose.build.yml:docker-compose.discovery.yml`

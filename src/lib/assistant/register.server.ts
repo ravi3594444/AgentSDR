@@ -7,7 +7,7 @@ import { autoStartPlan, threadAutonomy } from "./autonomy.server";
 import { runLinkedinSearchStep } from "./linkedinSearch.server";
 import { runOutreachStartStep } from "./outreach.server";
 import { applyRequestApproval } from "./requestApproval.server";
-import { addMessage, claimThread, releaseThread } from "./threads.server";
+import { addMessage, claimThread, releaseThread, touchThread } from "./threads.server";
 import { onAssistantJobFinished, registerAssistantJobHandler, type AssistantJob } from "./worker";
 
 /**
@@ -107,7 +107,7 @@ export function registerAssistantJobs(): void {
 
 async function followUpSearch(job: AssistantJob, threadId: string, contactAfter: { channels: string[] | null; ownerRequest?: string; requestId?: string } | null): Promise<void> {
   try {
-    const autonomous = (await threadAutonomy(threadId)).on;
+    let autonomous = (await threadAutonomy(threadId)).on;
     if (contactAfter) {
       // Wait for a turn in progress to end, so the plan is made once.
       let claimed = false;
@@ -115,6 +115,10 @@ async function followUpSearch(job: AssistantJob, threadId: string, contactAfter:
         claimed = await claimThread(threadId);
         if (!claimed) await new Promise((resolve) => setTimeout(resolve, 2_000));
       }
+      // Writing a plan can take minutes: keep the claim fresh meanwhile.
+      const heartbeat = claimed ? setInterval(() => void touchThread(threadId).catch(() => undefined), 60_000) : null;
+      // The switch as it is now, after the wait.
+      autonomous = (await threadAutonomy(threadId)).on;
       let prepared;
       try {
         prepared = await runToolInThread(
@@ -123,13 +127,15 @@ async function followUpSearch(job: AssistantJob, threadId: string, contactAfter:
           { audienceId: job.audienceId, ownerRequest: contactAfter.ownerRequest ?? null, ...(contactAfter.channels?.length ? { channels: contactAfter.channels } : {}), ...(autonomous ? { autopilot: true } : {}) },
         );
         if (prepared.ok) {
-          // Started on its own when the owner already approved this request on another of its plans.
           const runId = typeof prepared.data?.runId === "string" ? prepared.data.runId : null;
-          const approval = runId ? await applyRequestApproval(runId) : { started: false, reason: null };
-          // In Autonomous mode it starts on its own within the daily caps (autoStartPlan says why not).
-          if (!approval.started && autonomous && runId) {
-            await autoStartPlan(threadId, runId);
-          } else if (!approval.started) {
+          // Autonomous mode: every start goes through the capped path (autoStartPlan posts why one waits).
+          const tried = autonomous && runId ? await autoStartPlan(threadId, runId) : null;
+          // Switched off at the last moment: treated as without Autonomous mode.
+          const auto = tried && !tried.off ? tried : null;
+          // Otherwise it starts on its own when the owner already approved this request on another of its plans.
+          const approval = auto ? { started: auto.started, reason: auto.reason } : runId ? await applyRequestApproval(runId) : { started: false, reason: null };
+          // A reason from autoStartPlan was already posted; with none (switched off meanwhile) the plan waits as usual.
+          if (!approval.started && !(auto && auto.reason)) {
             await addMessage({
               threadId,
               role: "event",
@@ -140,6 +146,7 @@ async function followUpSearch(job: AssistantJob, threadId: string, contactAfter:
           }
         }
       } finally {
+        if (heartbeat) clearInterval(heartbeat);
         if (claimed) await releaseThread(threadId);
       }
       // Autonomous mode keeps working toward the owner's goal (the next search, a report); otherwise the plan waits.

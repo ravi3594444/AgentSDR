@@ -12,7 +12,7 @@ describe("starting a plan on its own", () => {
   test("waits for the owner past a cap, without an approver, or with leads already contacted elsewhere", () => {
     expect(autoStartProblem({ ...ok, runsToday: 10 }, caps)).toContain("cap is 10");
     expect(autoStartProblem({ ...ok, leadsToday: 280 }, caps)).toContain("cap of 300");
-    expect(autoStartProblem({ ...ok, approverAllowed: false }, caps)).toContain("owner or admin");
+    expect(autoStartProblem({ ...ok, approverAllowed: false }, caps)).toContain("only an owner or admin");
     expect(autoStartProblem({ ...ok, busyPeople: 3 }, caps)).toContain("3 of its leads");
     expect(autoStartProblem({ ...ok, planLeads: 0 }, caps)).toContain("no leads");
   });

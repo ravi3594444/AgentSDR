@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { actionsProblem, agentReplySchema, cleanSuggestions, displayThreadTitle, isSmallTalk, MAX_ACTIONS_PER_STEP, outreachIntent, outreachRequested, outreachRequestProblem, parseAgentReply, pendingOutreachRequest, sameMessage, threadTitleFrom, transcriptText, unbackedClaim, ungroundedContacts, urlGiven, type TranscriptMessage } from "./agent";
+import { actionsProblem, agentReplySchema, cleanSuggestions, displayThreadTitle, isSmallTalk, MAX_ACTIONS_PER_STEP, outreachIntent, outreachRequested, outreachRequestProblem, parseAgentReply, pendingOutreachRequest, sameMessage, standingOutreachRequestIndex, outreachRevoked, threadTitleFrom, transcriptText, unbackedClaim, ungroundedContacts, urlGiven, type TranscriptMessage } from "./agent";
 
 const TOOLS = ["find_leads", "save_business_info", "prepare_outreach"];
 
@@ -207,5 +207,21 @@ describe("contacts and links from the chat", () => {
     expect(actionsProblem([{ tool: "add_contacts", args: { contacts: [{ phone: "9999999999" }] } }], input)).toContain("not in what the owner wrote");
     expect(actionsProblem([{ tool: "read_webpage", args: { url: "https://www.sparklehome.example/team" } }], input)).toBeNull();
     expect(actionsProblem([{ tool: "read_webpage", args: { url: "https://example.org" } }], input)).toContain("only links the owner gave");
+  });
+});
+
+describe("Autonomous mode: the owner's standing request", () => {
+  const owner = (content: string) => ({ role: "user" as const, content, tool: null, toolInput: null, status: null });
+  const tool = (name: string, toolInput: Record<string, unknown>) => ({ role: "tool" as const, content: "", tool: name, toolInput, status: "ok" as const });
+  test("stands after a plan acted on it, so the next searches still contact what they find", () => {
+    const history = [owner("Find dentists in Pune and contact them"), tool("find_leads", { contactAfter: true })];
+    expect(pendingOutreachRequest(history)).toBeNull();
+    expect(standingOutreachRequestIndex(history)).toBe(0);
+  });
+  test("ends when the owner later says to stop contacting people", () => {
+    expect(outreachRevoked("Stop contacting people, just find leads")).toBe(true);
+    expect(outreachRevoked("Find more dentists and contact them")).toBe(false);
+    const history = [owner("Find dentists in Pune and contact them"), tool("find_leads", { contactAfter: true }), owner("Stop contacting people for now, just find leads")];
+    expect(standingOutreachRequestIndex(history)).toBeNull();
   });
 });
