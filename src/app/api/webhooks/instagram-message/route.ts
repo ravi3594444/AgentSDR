@@ -10,7 +10,7 @@ import {
 } from "@/lib/linkedin/webhooks/inbox";
 import { serializeError } from "@/lib/linkedin/serializeError";
 import { db } from "@/lib/db";
-import { isMissingTable } from "@/lib/features/flags.server";
+import { featureEnabled, isMissingTable } from "@/lib/features/flags.server";
 import { instagramAccounts } from "@/lib/instagram/schema";
 import { currentOrganizationId, runInOrganization } from "@/lib/tenancy/scope";
 import { gateUnipileWebhook } from "@/lib/linkedin/organizations.server";
@@ -34,7 +34,8 @@ import { instagramWebhookEventKey } from "@/lib/instagram/parse";
  * delivery is recorded; it is processed after the response (next/server
  * `after`), and the outcome lands on the ledger row. Only a failure to
  * record answers 500, so Unipile retries. With the organization's Instagram
- * feature off, the delivery is recorded and skipped: nothing is stored.
+ * feature off, the delivery is acknowledged and dropped before the ledger:
+ * nothing of it — not even the raw payload — is recorded or stored.
  */
 
 /**
@@ -113,6 +114,11 @@ export async function POST(req: NextRequest) {
 
 async function handle(req: NextRequest, payload: Record<string, unknown>, secretChecked: boolean): Promise<NextResponse> {
   if (!secretChecked && !(await authorized(req))) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+
+  // The feature off means nothing of the delivery is kept: the ledger row
+  // would hold the message text and the sender. Acknowledged, so Unipile
+  // does not retry it.
+  if (!(await featureEnabled("instagram"))) return NextResponse.json({ ok: true, skipped: true });
 
   const organizationId = currentOrganizationId();
   const sender = payload.sender && typeof payload.sender === "object" ? (payload.sender as Record<string, unknown>) : null;

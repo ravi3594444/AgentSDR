@@ -329,6 +329,15 @@ try {
   const offAccountHook = await accountHook(A, SECRET_A, { status: "CREATION_SUCCESS", account_id: A3, name: instagramHostedAuthName(A, userA!.id) });
   const a3WhileOff = await inA(() => accountsLib.findInstagramAccountByUnipileId(A3));
   check("account webhook with the feature off: no Instagram sync", offAccountHook.status === 200 && a3WhileOff === null, String(offAccountHook.status));
+  // A1 is linked now, so the delivery reaches the route's own feature check.
+  const offMessageId = `ig-off3-${stamp}`;
+  const offLinked = await messageHook(A, SECRET_A, delivery({ chatId: CHAT1, messageId: offMessageId, text: "Is anyone there?", lead: LEAD1 }));
+  const offLinkedBody = await offLinked.json() as { skipped?: boolean };
+  check(
+    "feature off, account linked: the delivery is acknowledged and nothing of it is recorded in the ledger or stored",
+    offLinked.status === 200 && offLinkedBody.skipped === true && (await ledgerRow(`instagram:message_received:v1:${A1}:${offMessageId}`)) === null && (await countA()).messages === 0,
+    JSON.stringify({ status: offLinked.status, body: offLinkedBody }),
+  );
   await inA(() => setFeature("instagram", true, userA!.id));
   const onAccountHook = await accountHook(A, SECRET_A, { status: "CREATION_SUCCESS", account_id: A3, name: instagramHostedAuthName(A, userA!.id) });
   const a3 = await inA(() => accountsLib.findInstagramAccountByUnipileId(A3));
