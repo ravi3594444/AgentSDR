@@ -94,3 +94,96 @@ made.
 | A web-searching AI model (OpenRouter, or AI/ML API research model) | Website and directory discovery | Optional: without it, discovery from a description says it is unavailable; Google Maps and LinkedIn search work as before |
 | The owner's website-form tool (Zapier, Make, Webflow, WordPress plugin, a developer…) | Website-form inquiries | Optional; a one-time setup in that tool (AgentSDR cannot connect a site's forms by itself) |
 | Meta Instagram Graph API (Business account + App Review) | Instagram hashtag discovery | Optional adapter, off |
+
+## 3. What was built: the assistant's two starting points
+
+Both starting points end in the same lead lists, plan card, Start button,
+CRM conversations, replies, decisions and handoffs. Nothing in this section
+needs a feature switch: it adds no provider and sends nothing by itself.
+
+### Reusing what the business already told AgentSDR
+
+`src/lib/assistant/businessContext*.ts`. Before asking anything, the
+assistant reads, besides the business profile:
+
+- the saved knowledge documents (titles and kinds) — a document saved as
+  *pricing* or titled like a price list answers price questions, and the
+  assistant reads documents with `search_knowledge` before asking for an
+  offer or customers;
+- the names the connected accounts send as (mailbox display names,
+  LinkedIn, WhatsApp and Instagram account names) — when the profile has no
+  sender name and every account uses the same one, outreach is signed with
+  it (visible in the plan's samples before Start); when they disagree, the
+  assistant asks which one;
+- the reply instructions saved in Settings → Instructions.
+
+Its context gains `ALREADY KNOWN ELSEWHERE`, and `STILL MISSING` lists only
+what none of those holds; prices are "worth asking once", never blocking.
+The profile gains an optional **prices** field.
+
+### "Use my existing leads or inquiries"
+
+Welcome card and tool `use_existing_leads`: a lead list from people already
+in the lead database — everyone, the latest import, a word to match (name,
+company, title, email or saved details such as a city), or the people who
+sent inquiries. People already in a running or paused outreach run are left
+out (no second sequence), Do Not Contact and unsubscribed people are
+excluded with the reason, and inquiries from imported history are left out
+unless asked for. A person who inquired keeps their inquiry's words (as
+evidence and as something the messages may refer to) however the list was
+made. `list_inquiries` summarizes the last 30 days.
+
+### "Find potential customers for me" (optional)
+
+The existing Google Maps search and LinkedIn search, plus website and
+directory discovery (section 4) when that feature is on.
+
+### Qualification before outreach
+
+`src/lib/assistant/qualification*.ts`, `GET /api/assistant/audiences/[id]/prospects`,
+and "Review the leads" on every lead-list and search card. For each lead:
+source and date, why it matched (recorded at discovery, or derived from what
+was actually searched for older lists), each contact route with the page it
+came from, and only the lead's own words as evidence of need.
+
+| Status | Means |
+| --- | --- |
+| Potential match | Found or listed; no evidence that they want anything |
+| Inquired | They wrote in themselves (website form, Instagram) |
+| Replied | They answered outreach; not classified interested |
+| Interested | The CRM classified their reply as interested |
+| Left out | Cannot be contacted, with the reason |
+
+A follow, like, reaction or generic comment is shown as engagement and never
+changes the status. Location and budget read **Unknown** unless the source
+stated them.
+
+### One Start for a whole request
+
+"Find dentists in Pune, Mumbai and Nagpur and contact them" runs one search
+per city, and each prepares its own plan. The plan card's Start offers
+**Apply to the rest of this request** (on by default): the request's other
+plans — already waiting, or prepared later when their searches finish —
+then start on their own with the same reply mode (`requestApproval*.ts`).
+They still go through the same launch rules as a Start press, and each
+start is announced in the chat. An approval covers only the same
+conversation and the same request words, only the channels the approved plan
+used, at most the approved plan size (100 by default), never an inquiry run,
+and nothing once the approving run is paused, stopped or a day old. A plan it
+does not cover waits for its own Start and says why. The card starts with the
+reply mode chosen last time selected.
+
+### Inquiry runs: the scope for answering inquiries automatically
+
+`src/lib/assistant/inquiryRuns*.ts`. Answering inbound inquiries without
+review is never on by itself. The owner asks for it, the assistant proposes
+an inquiry run (`prepare_inquiry_replies`), and the owner presses Start
+choosing Automatic or Review. While it runs, each person whose **fresh**
+Instagram inquiry arrives (first message of a new chat, on an account that
+treats new messages as inquiries) becomes a member on channel `instagram`,
+so the existing reply autopilot applies to them with every existing check:
+the run's mode, Pause/Resume/Stop, Do Not Contact, takeover, edited or
+outdated drafts, newer messages, the per-conversation and daily limits, the
+support check and the handoff to the owner. It sends nothing first. It never
+covers imported history, chats that began earlier, people AgentSDR already
+knew, or another channel. One inquiry run at a time; Stop is final.
