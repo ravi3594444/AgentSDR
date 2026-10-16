@@ -121,6 +121,8 @@ async function main() {
         const [classification] = await sql<Row[]>`select status, applied_category_key, error from crm_classifications where message_id = ${reply.id} order by created_at desc limit 1`;
         say(`     classified: ${classification ? `${classification.status}${classification.applied_category_key ? ` (${classification.applied_category_key})` : ""}${classification.error ? ` — ${short(classification.error, 120)}` : ""}` : "not yet"}`);
         say(`     answer written: ${draft ? `${draft.status}${draft.error ? ` — ${short(draft.error, 160)}` : ""}${draft.ai_body_text ? ` "${short(draft.ai_body_text, 60)}"` : ""}` : "no"}`);
+        const [decision] = await sql<Row[]>`select kind, status, reason, decision, handover_sent_at from owner_decisions where organization_id = ${orgId} and conversation_id = ${reply.conversation_id} and kind not in ('interested', 'opt_out') order by created_at desc limit 1`;
+        if (decision) say(`     owner handoff: ${decision.kind} (${decision.status})${decision.handover_sent_at ? `, lead notified ${when(decision.handover_sent_at)}` : ""}\n       reason: ${short(decision.reason, 300)}\n       needed: ${short(decision.decision, 300)}`);
         const run = await sql<Row[]>`
           select r.name, r.status, r.autopilot, l.status as lead_status from outreach_run_leads l join outreach_runs r on r.id = l.run_id
           where l.organization_id = ${orgId} and l.person_id = ${reply.person_id} and l.channel = 'whatsapp' order by r.created_at desc limit 1`;
@@ -134,7 +136,7 @@ async function main() {
           else if (run[0].status !== "running") problems.push(`${org.name}: the run "${short(run[0].name, 40)}" is ${run[0].status}; automatic replies only go out while it runs.`);
           else if (draft.status === "failed") problems.push(`${org.name}: the answer could not be written (${short(draft.error, 160)}). Check Settings → AI provider.`);
           else if (auto?.status === "held") problems.push(`${org.name}: the automatic reply was held: ${short(auto.reason, 200)}${String(auto.reason ?? "").startsWith("handover") ? "" : " (see Needs you on Results)"}.`);
-          else if (!auto && job && ["queued", "running"].includes(String(job.status))) problems.push(`${org.name}: the answer is queued and goes out at ${when(job.run_after)} (the 10-minute wait). Nothing is broken; check again after that time.`);
+          else if (!auto && job && ["queued", "running"].includes(String(job.status))) problems.push(`${org.name}: the answer is ${job.status}, due ${when(job.run_after)}. There is no artificial reply delay in this version; if it stays here, check the CRM worker and Settings → AI provider.`);
         } else if (classification?.status === "proposed") {
           problems.push(`${org.name}: the AI was unsure what "${short(reply.body_text, 40)}" means, so the reply was left for a person to confirm and no answer was written. Fixed in the update after 2c7fe6d (the assistant now answers its own leads anyway): update, then reply again.`);
         } else if (!classification) {

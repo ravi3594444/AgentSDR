@@ -260,6 +260,50 @@ rejected or failed classifications, and holds out-of-office replies.
 Checks: unit 1027/1027; `assistant.ts` 71/71 (new: an unsure "Hey" gets a
 draft and is answered).
 
+### Follow-up: automatic replies without an artificial wait (2026-10-16)
+
+Removed the fixed ten-minute wait before checking and sending a ready
+automatic reply. New drafts and drafts requeued after Resume are immediately
+eligible for the CRM worker; AI processing and provider delivery still take
+time. The plan card and confirmation now describe that behavior. Existing
+jobs retain their stored due time until they run or are requeued. Open
+handoffs in Needs you still wait for the owner; removing the timer does not
+settle them.
+
+Checks: full TypeScript check passed; exercised the real enqueue function
+with a transaction stand-in and confirmed WhatsApp, email and LinkedIn jobs
+are due immediately. Review, pause, opt-out, newer-message and owner-handoff
+holds still pass their checks. No live messages were sent.
+
+### Follow-up: normal conversations before an owner handoff (2026-10-16)
+
+Code review found that the writer saw the thread but the reply checker saw
+only the latest message. Greetings and ambiguous references could become
+missing-information decisions, and unsupported additions in the draft went
+straight to a handoff. The existing time-only repair also relied on
+requeuing an auto_send job while that same job was still running, so its
+rewritten draft could be left without another check.
+
+The writer now stores a bounded conversation snapshot with its request
+metadata and the checker receives that same context. Greeting handling
+keeps factual checks, while a real question asking the lead to clarify
+their needs can continue the conversation. Unsupported draft additions get
+one rewrite followed by an immediate check of the new revision in the same
+job. Genuine missing business answers, complaints, requests for a person,
+opt-outs, limits and explicit buying decisions retain their existing rules.
+No schema migration or extra conversation query is needed.
+
+Validation: full TypeScript check passed; 39 focused tests passed (11 new
+conversation regressions plus existing draft, classification and instruction
+tests). Four checks of the actual autopilot runner with mocked persistence
+and model/provider boundaries passed: repaired revision sent once without a
+handoff; unsuccessful repair attempted only once and not sent; a newer
+inbound during repair stopped the old answer; pausing during repair held
+the send. These are local checks, not a live model-quality evaluation.
+Existing handoffs are not automatically closed. The VM diagnostic now prints
+the stored reason, kind and owner question, so the screenshot's exact
+historical handoff can be checked on the server.
+
 ### Live services vs stand-ins
 
 - **Live, real services:** gosom/google-maps-scraper v1.18.1 against Google
@@ -309,7 +353,7 @@ draft and is answered).
 - Maps coverage: at most about 180 businesses per search, in Google's
   order; against Google's Terms of Service; may be blocked.
 - The reply check is English-pattern based for amounts, times and days.
-- The automatic-reply limits (10 minutes, 3 per conversation, 40 per 24
+- The automatic-reply limits (10 per conversation, 40 per 24
   hours) are constants (`AUTOPILOT_LIMITS`), deliberately not yet Sending
   rules while the system is being verified.
 

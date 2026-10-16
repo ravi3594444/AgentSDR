@@ -100,7 +100,6 @@ export type AssistantStatePayload = {
 
 const ACCEPT = ".pdf,.docx,.txt,.md,.csv,.tsv,.xlsx,.xls";
 // The reply limits the server enforces (src/lib/crm/autopilot.ts), shown before Start.
-const AUTOPILOT_DELAY_MINUTES = AUTOPILOT_LIMITS.delayMinutes;
 const AUTOPILOT_PER_CONVERSATION = AUTOPILOT_LIMITS.perConversation;
 const AUTOPILOT_PER_DAY = AUTOPILOT_LIMITS.perDay;
 const CHANNEL_LABEL: Record<string, string> = { email: "Email", whatsapp: "WhatsApp", linkedin: "LinkedIn" };
@@ -267,7 +266,7 @@ function ProposalCard({ message, run, canManageAutopilot, onChanged }: { message
     if (action === "stop" && !window.confirm("Stop this run for good? Nothing more is sent for it and no reply is answered automatically. It cannot be resumed.")) return;
     // Automatic widens what Start approved, so it is confirmed with its limits.
     if (action === "mode" && nextMode === "automatic" && !window.confirm(
-      `Answer this run's replies automatically? Only replies your saved information backs are sent, ${AUTOPILOT_DELAY_MINUTES} minutes after the draft is ready; ` +
+      `Answer this run's replies automatically? Replies backed by your saved information are checked and sent as soon as the draft is ready; ` +
       `at most ${AUTOPILOT_PER_CONVERSATION} per conversation and ${AUTOPILOT_PER_DAY} in any 24 hours. Everything else still waits for you. Other runs are not affected.`,
     )) return;
     setBusy(true);
@@ -340,7 +339,7 @@ function ProposalCard({ message, run, canManageAutopilot, onChanged }: { message
           <p className="text-label-sm text-text-strong-950">How should replies be handled?</p>
           <label className={cn("flex items-start gap-2 rounded-lg p-2 text-paragraph-xs ring-1 ring-inset", mode === "automatic" ? "ring-primary-base" : "ring-stroke-soft-200", !canManageAutopilot && "opacity-60")}>
             <input type="radio" name={`mode-${data.runId}`} className="mt-0.5" checked={mode === "automatic"} disabled={!canManageAutopilot || busy} onChange={() => setMode("automatic")} />
-            <span><span className="text-label-xs text-text-strong-950">Automatic.</span> The assistant answers these leads&apos; ordinary replies from your saved information, {AUTOPILOT_DELAY_MINUTES} minutes after they arrive, at most {AUTOPILOT_PER_CONVERSATION} times per conversation and {AUTOPILOT_PER_DAY} in 24 hours. It never invents prices, discounts, times or promises: questions your information does not answer, complaints, negotiations and meetings come to you here. Opt-outs stop all outreach to that person.{!canManageAutopilot && " Only an owner or admin can choose this."}</span>
+            <span><span className="text-label-xs text-text-strong-950">Automatic.</span> The assistant answers these leads&apos; ordinary replies from your saved information as soon as it has written and checked the answer, at most {AUTOPILOT_PER_CONVERSATION} times per conversation and {AUTOPILOT_PER_DAY} in 24 hours. It never invents prices, discounts, times or promises: questions your information does not answer, complaints, negotiations and meetings come to you here. Opt-outs stop all outreach to that person.{!canManageAutopilot && " Only an owner or admin can choose this."}</span>
           </label>
           <label className={cn("flex items-start gap-2 rounded-lg p-2 text-paragraph-xs ring-1 ring-inset", mode === "review" ? "ring-primary-base" : "ring-stroke-soft-200")}>
             <input type="radio" name={`mode-${data.runId}`} className="mt-0.5" checked={mode === "review"} disabled={busy} onChange={() => setMode("review")} />
@@ -360,7 +359,7 @@ function ProposalCard({ message, run, canManageAutopilot, onChanged }: { message
         <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-stroke-soft-200 pt-3 text-paragraph-xs text-text-sub-600">
           <span className="flex-1">
             <span className="text-label-xs text-text-strong-950">{run?.autopilot ? "Automatic replies" : "Review mode"}.</span>{" "}
-            {run?.autopilot ? `Ordinary replies are answered ${AUTOPILOT_DELAY_MINUTES} minutes after they arrive (at most ${AUTOPILOT_PER_CONVERSATION} per conversation, ${AUTOPILOT_PER_DAY} in 24 hours).` : "Replies wait for you in Action required."}{" "}
+            {run?.autopilot ? `Ordinary replies are answered as soon as the answer is written and checked (at most ${AUTOPILOT_PER_CONVERSATION} per conversation, ${AUTOPILOT_PER_DAY} in 24 hours).` : "Replies wait for you in Action required."}{" "}
             {Object.keys(run?.campaigns ?? {}).length ? `Campaigns: ${Object.keys(run!.campaigns).map((c) => CHANNEL_LABEL[c] ?? c).join(", ")}.` : ""}
           </span>
           <Button.Root variant="neutral" mode="stroke" size="xsmall" disabled={busy || (!run?.autopilot && !canManageAutopilot)} onClick={() => void act("mode", run?.autopilot ? "review" : "automatic")}>

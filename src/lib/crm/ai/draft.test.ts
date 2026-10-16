@@ -189,6 +189,7 @@ describe("CRM draft generation boundary", () => {
     assert.deepEqual(result.request, {
       model: "openai/gpt-5.2",
       provider: { allow_fallbacks: false, only: ["azure"] },
+      replyContext: { messages: [{ direction: "inbound", bodyText: "Can you show me the product this week?" }] },
     });
     assert.deepEqual(result.response, { id: "response-1" });
     assert.equal("send" in result, false);

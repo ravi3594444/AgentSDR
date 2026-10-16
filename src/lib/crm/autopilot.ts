@@ -22,12 +22,6 @@ export const AUTOPILOT_LIMITS = {
   perConversation: 10,
   /** Automatic messages per organization in any 24 hours. */
   perDay: 40,
-  /**
-   * Minutes between a draft being ready and the autopilot answering: a reply
-   * seconds after the lead's looks automated, and it leaves the owner a
-   * window to answer or edit first (the autopilot then stands down).
-   */
-  delayMinutes: 10,
 } as const;
 
 /** Classifications applied by the AI with confidence or confirmed by a person. */

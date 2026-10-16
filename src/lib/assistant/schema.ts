@@ -315,7 +315,7 @@ export type AutopilotReplyStatus = "reserved" | "sent" | "failed" | "held";
 /** What the support check found, kept with each decision for the owner to read. */
 export type ReplyCheck = {
   intent: string;
-  questions: { question: string; answered: boolean; evidence: string; supported: boolean }[];
+  questions: { question: string; answered: boolean; evidence: string; supported: boolean; clarification?: string; clarifies?: boolean }[];
   claims: { claim: string; evidence: string; supported: boolean }[];
   commitments: string[];
   problems: string[];
