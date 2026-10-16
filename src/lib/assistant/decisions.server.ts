@@ -4,7 +4,9 @@ import { and, arrayContains, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { generateFallbackDraft, regenerateDraft } from "@/lib/crm/drafts";
 import { createKnowledgeDocument, getKnowledgeDocument, updateKnowledgeDocument } from "@/lib/crm/knowledge-service";
-import { crmDrafts, crmKnowledgeDocuments } from "@/lib/crm/schema";
+import { crmConversationMessages, crmConversations, crmDrafts, crmKnowledgeDocuments } from "@/lib/crm/schema";
+import { enqueueAutopilotInTransaction } from "@/lib/crm/autopilot.server";
+import { withCrmTransaction } from "@/lib/crm/repository";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { autopilotTakeovers, ownerDecisions, type OwnerDecisionKind } from "./schema";
 import { addMessage } from "./threads.server";
@@ -135,10 +137,33 @@ export async function answerDecision(id: string, answer: string, userId: string 
 }
 
 /** The owner handles the conversation personally: the autopilot stays out of it from now on. */
-export async function takeOverConversation(conversationId: string, userId: string | null, reason = "The owner is answering this conversation personally."): Promise<void> {
+export async function takeOverConversation(conversationId: string, userId: string | null, reason = "You chose to reply to this conversation yourself (\"I'll reply myself\")."): Promise<void> {
   await db.insert(autopilotTakeovers).values({ organizationId: currentOrganizationId(), conversationId, reason, createdBy: userId }).onConflictDoNothing();
   await db.update(ownerDecisions).set({ status: "resolved", updatedAt: new Date() })
     .where(and(inOrg(ownerDecisions), eq(ownerDecisions.conversationId, conversationId), eq(ownerDecisions.status, "open")));
+}
+
+/**
+ * The owner hands a conversation back to the assistant: the takeover is
+ * removed and the latest unanswered message is answered now (its waiting
+ * draft is queued again; without one, a draft is written).
+ */
+export async function releaseConversation(conversationId: string): Promise<{ queued: boolean }> {
+  await db.delete(autopilotTakeovers).where(and(inOrg(autopilotTakeovers), eq(autopilotTakeovers.conversationId, conversationId)));
+  const [conversation] = await db.select({ id: crmConversations.id, recordId: crmConversations.crmRecordId, personId: crmConversations.personId, channel: crmConversations.channel })
+    .from(crmConversations).where(and(inOrg(crmConversations), eq(crmConversations.id, conversationId))).limit(1);
+  if (!conversation) throw new DecisionError("That conversation does not exist.");
+  const [waiting] = await db.select({ id: crmDrafts.id, revision: crmDrafts.revision }).from(crmDrafts)
+    .where(and(eq(crmDrafts.conversationId, conversationId), eq(crmDrafts.status, "awaiting_review"))).orderBy(desc(crmDrafts.createdAt)).limit(1);
+  if (waiting) {
+    await withCrmTransaction((tx) => enqueueAutopilotInTransaction(tx, { draftId: waiting.id, personId: conversation.personId, channel: conversation.channel, conversationId, revision: waiting.revision }));
+    return { queued: true };
+  }
+  const [latest] = await db.select({ direction: crmConversationMessages.direction }).from(crmConversationMessages)
+    .where(eq(crmConversationMessages.conversationId, conversationId)).orderBy(desc(crmConversationMessages.sentAt)).limit(1);
+  if (latest?.direction !== "inbound") return { queued: false };
+  const draft = await generateFallbackDraft(conversation.recordId);
+  return { queued: Boolean(draft) };
 }
 
 export async function resolveDecision(id: string, options: { takeover: boolean; userId: string | null }): Promise<void> {

@@ -66,7 +66,7 @@ type Job = {
   runId: string | null;
 };
 
-type RunReply = { id: string; who: string; channel: string; receivedAt: string; preview: string; state: { tone: "done" | "waiting" | "you" | "failed"; text: string; at?: string } };
+type RunReply = { id: string; conversationId: string; who: string; channel: string; receivedAt: string; preview: string; state: { tone: "done" | "waiting" | "you" | "failed"; text: string; at?: string; release?: boolean } };
 
 type RunLead = { personId: string; who: string; channel: string; progress: { tone: "waiting" | "sent" | "replied" | "good" | "stopped" | "failed"; text: string } };
 
@@ -487,7 +487,7 @@ function ProposalCard({ message, run, canManageAutopilot, lastReplyMode, onChang
           <Button.Root variant="error" mode="stroke" size="xsmall" disabled={busy} onClick={() => void act("stop")}>Stop</Button.Root>
         </div>
       )}
-      {run?.replies && run.replies.length > 0 && <RepliesList replies={run.replies} />}
+      {run?.replies && run.replies.length > 0 && <RepliesList replies={run.replies} onChanged={onChanged} />}
       {run?.leads && run.leads.length > 0 && <LeadsList leads={run.leads} />}
       {run?.error && <p className="mt-2 text-paragraph-xs text-error-base">{run.error}</p>}
       {error && <p role="alert" className="mt-2 text-paragraph-xs text-error-base">{error}</p>}
@@ -582,7 +582,7 @@ function InquiryRunCard({ message, run, canManageAutopilot, onChanged }: { messa
           <Button.Root variant="error" mode="stroke" size="xsmall" disabled={busy} onClick={() => void act("stop")}>Stop</Button.Root>
         </div>
       )}
-      {run?.replies && run.replies.length > 0 && <RepliesList replies={run.replies} />}
+      {run?.replies && run.replies.length > 0 && <RepliesList replies={run.replies} onChanged={onChanged} />}
       {error && <p role="alert" className="mt-2 text-paragraph-xs text-error-base">{error}</p>}
     </div>
   );
@@ -641,8 +641,20 @@ function LeadsList({ leads }: { leads: RunLead[] }) {
 const timeOf = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
 /** The latest replies to a run and what became of each, so "why no answer?" is answered on the card. */
-function RepliesList({ replies }: { replies: RunReply[] }) {
+function RepliesList({ replies, onChanged }: { replies: RunReply[]; onChanged: () => void }) {
   const tone = { done: "text-success-base", waiting: "text-text-sub-600", you: "text-warning-base", failed: "text-error-base" } as const;
+  const [busy, setBusy] = useState<string | null>(null);
+  async function release(conversationId: string) {
+    setBusy(conversationId);
+    try {
+      await readJson(await fetch(`/api/assistant/conversations/${conversationId}/release`, { method: "POST" }));
+      onChanged();
+    } catch (cause) {
+      console.error(cause);
+    } finally {
+      setBusy(null);
+    }
+  }
   return (
     <div className="mt-3 border-t border-stroke-soft-200 pt-3">
       <p className="text-label-xs text-text-strong-950">Replies</p>
@@ -652,6 +664,11 @@ function RepliesList({ replies }: { replies: RunReply[] }) {
             <p className="text-text-sub-600"><span className="text-label-xs text-text-strong-950">{reply.who}</span> · {CHANNEL_LABEL[reply.channel] ?? reply.channel} · {timeOf(reply.receivedAt)}</p>
             {reply.preview && <p className="mt-0.5 line-clamp-2 border-l-2 border-stroke-sub-300 pl-2 text-text-sub-600">{reply.preview}</p>}
             <p className={cn("mt-0.5", tone[reply.state.tone])}>{reply.state.text}{reply.state.at ? ` ${timeOf(reply.state.at)}` : ""}.</p>
+            {reply.state.release && (
+              <Button.Root variant="primary" mode="filled" size="xsmall" className="mt-1.5" disabled={busy === reply.conversationId} onClick={() => void release(reply.conversationId)}>
+                Let the assistant reply
+              </Button.Root>
+            )}
           </li>
         ))}
       </ul>

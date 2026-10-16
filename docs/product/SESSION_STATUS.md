@@ -342,6 +342,31 @@ Existing handoffs are not automatically closed. The VM diagnostic now prints
 the stored reason, kind and owner question, so the screenshot's exact
 historical handoff can be checked on the server.
 
+### Follow-up: the assistant never goes quiet (2026-10-16)
+
+On the VM a WhatsApp "Hey" got "Waiting for you: you are handling this
+conversation yourself" and an "Interested lead" card. The owner had pressed
+nothing: `settlePersonReplies` created a takeover on its own whenever a
+message went out from the business number after a handoff (the owner had
+typed in WhatsApp on the business phone), the Needs you "Done" button did
+the same, the autopilot stayed quiet while any handoff was open, and an
+unconfirmed "interested" classification was reported as interest. The owner
+wants the assistant to answer everything and only be told.
+
+Changed: no automatic takeover (only "I'll reply myself" creates one);
+"Done" settles the card and nothing else; a new **Let the assistant reply**
+button (`POST /api/assistant/conversations/[id]/release`) removes a takeover
+and queues the waiting answer at once; the "waits for you" gate is gone, so
+the assistant keeps answering while a lead is in Needs you (one card per
+chat and kind, the handover said once; a ready lead who writes again is
+answered when the reply passes the ordinary checks); `isBareGreeting`
+(code, not prompt) keeps a bare "Hey"/"ok" from being applied as
+interested, and interest is reported only from a confirmed classification;
+the per-chat limit is 30 (a loop safety net). `scripts/add-handoff.ts`
+deletes the takeovers the old code created, so the stuck chats answer again
+after the update. Checks: unit 284 (crm + assistant) and the deterministic
+`assistant.ts` suite below; not yet run against the real AI or the VM.
+
 ### Live services vs stand-ins
 
 - **Live, real services:** gosom/google-maps-scraper v1.18.1 against Google

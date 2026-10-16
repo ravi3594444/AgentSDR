@@ -26,7 +26,7 @@ import { isSuppressed } from "@/lib/outreach/suppression";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { openDecision } from "./decisions.server";
 import { handoverMessage, HANDOVER_INTERVAL_MS, NO_ANSWER_NEEDED, tellsTheLead } from "./handoff";
-import { settlePersonReplies, waitsForOwner, writeBrief } from "./handoff.server";
+import { settlePersonReplies, writeBrief } from "./handoff.server";
 import { judgeReply, selfFixableReply, type ModelCheck } from "./replyCheck";
 import { storedReplyConversation, type ReplyConversationMessage } from "@/lib/crm/ai/replyConversation";
 import { checkKnowledge, modelReplyCheck, type ReplyCheckInput } from "./replyCheck.server";
@@ -130,7 +130,6 @@ async function loadState(executor: CrmExecutor, draftId: string, deps: Autopilot
       editedByPerson: Boolean(draft.editedBodyText?.trim()),
       membership: membership ? { runStatus: membership.runStatus, automatic: membership.automatic, leadStatus: membership.leadStatus } : null,
       takeover: Boolean(takeover),
-      waitingForOwner: await waitsForOwner(executor, conversation.id),
       answeredSinceDraft: Number(answered?.n ?? 0) > 0,
       newerInbound,
       doNotContact: await isPersonDoNotContact(executor, record.personId),
@@ -198,6 +197,8 @@ async function recordHold(state: State, reason: string, check: ReplyCheck | null
 async function reportInterest(state: State): Promise<void> {
   const classification = state.facts.classification;
   if (!state.membership || classification?.categoryKey !== "interested") return;
+  // An unsure classification ("proposed") is not interest: a bare "Hey" must not become an Interested card.
+  if (!["auto_applied", "accepted", "overridden"].includes(classification.status)) return;
   const [existing] = await db.select({ id: ownerDecisions.id }).from(ownerDecisions)
     .where(and(inOrg(ownerDecisions), eq(ownerDecisions.kind, "interested"), eq(ownerDecisions.draftId, state.draft.id))).limit(1);
   if (existing) return;
@@ -308,6 +309,10 @@ async function handOff(
   input: { kind: OwnerDecisionKind; reason: string; decision: string; holdReason?: string; check?: ReplyCheck | null },
   deps: AutopilotDependencies,
 ): Promise<AutopilotOutcome> {
+  // The same chat is already in Needs you for this: no second card, no second handover.
+  const [open] = await db.select({ id: ownerDecisions.id }).from(ownerDecisions)
+    .where(and(inOrg(ownerDecisions), eq(ownerDecisions.conversationId, state.conversationId), eq(ownerDecisions.kind, input.kind), eq(ownerDecisions.status, "open"))).limit(1);
+  if (open) return recordHold(state, input.holdReason ?? input.reason, input.check ?? null);
   const decisionId = await openDecision({
     kind: input.kind,
     reason: input.reason,
@@ -366,11 +371,22 @@ export async function runAutopilotForDraft(draftId: string, deps: AutopilotDepen
   }
   const [answered] = await db.select({ n: count() }).from(autopilotReplies)
     .where(and(eq(autopilotReplies.organizationId, currentOrganizationId()), eq(autopilotReplies.conversationId, state.conversationId), eq(autopilotReplies.status, "sent")));
-  const verdict = judgeReply(model, { reply, knowledge, leadName: state.leadName, leadMessage: state.leadMessage, answeredBefore: Number(answered?.n ?? 0) > 0 });
+  let verdict = judgeReply(model, { reply, knowledge, leadName: state.leadName, leadMessage: state.leadMessage, answeredBefore: Number(answered?.n ?? 0) > 0 });
   if (verdict.action === "no_reply") return recordHold(state, `${NO_ANSWER_NEEDED} ${verdict.reason}`, verdict.check);
   if (verdict.action === "opt_out") {
     await setPersonDoNotContact({ personId: state.personId, reason: `${verdict.reason} (read in their reply)`, source: "inbound_request", actorType: "ai", actorRef: AUTOPILOT_ACTOR });
     return recordHold(state, "they asked not to be contacted: all outreach to them stopped", verdict.check);
+  }
+  if (verdict.action === "hold" && (verdict.kind === "ready" || verdict.kind === "person")) {
+    // They were already told a personal reply follows: keep the conversation going with the
+    // drafted answer when it passes the ordinary checks (the handoff card stays in Needs you).
+    const [told] = await db.select({ id: ownerDecisions.id }).from(ownerDecisions)
+      .where(and(inOrg(ownerDecisions), eq(ownerDecisions.conversationId, state.conversationId), gte(ownerDecisions.handoverSentAt, new Date(Date.now() - HANDOVER_INTERVAL_MS)))).limit(1);
+    if (told) {
+      // For a ready lead the model's `escalate` holds what they want, not a reason to stop.
+      const ordinary = judgeReply({ ...model, intent: "question", escalate: "" }, { reply, knowledge, leadName: state.leadName, leadMessage: state.leadMessage, answeredBefore: true });
+      if (ordinary.action === "send") verdict = ordinary;
+    }
   }
   if (verdict.action === "hold") {
     // Correct the writer's unsupported additions once. Missing answers,

@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, asc, desc, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, isNull, lt, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { completeStructured } from "@/lib/ai/server/structuredCompletion";
 import { members, users } from "@/lib/auth/schema";
@@ -9,8 +9,8 @@ import { BRAND } from "@/lib/brand";
 import { crmConversationMessages, crmConversations } from "@/lib/crm/schema";
 import { companies, people } from "@/lib/leads/schema";
 import { currentOrganizationId, inOrg, runInOrganization } from "@/lib/tenancy/scope";
-import { byUrgency, handoffLabel, REMINDER_AFTER_MS, REPORT_KINDS, takesAnAnswer, TELLS_THE_LEAD, waitedFor } from "./handoff";
-import { autopilotReplies, autopilotTakeovers, outreachRuns, ownerDecisions, type OwnerDecisionKind } from "./schema";
+import { byUrgency, handoffLabel, REMINDER_AFTER_MS, REPORT_KINDS, takesAnAnswer, waitedFor } from "./handoff";
+import { autopilotReplies, outreachRuns, ownerDecisions, type OwnerDecisionKind } from "./schema";
 import { recordUsage } from "./usage.server";
 
 /**
@@ -22,28 +22,12 @@ import { recordUsage } from "./usage.server";
 const OPEN_HANDOFF = and(eq(ownerDecisions.status, "open"), sql`${ownerDecisions.kind} NOT IN ('interested', 'opt_out')`);
 
 /**
- * Whether a conversation waits for the owner: a handoff the lead was (or
- * would have been) told about is open. "Take a look" items (an
- * out-of-office, an unclear message) do not silence the chat: the lead's
- * next real message is answered as usual.
- */
-export async function waitsForOwner(executor: Pick<typeof db, "select">, conversationId: string): Promise<boolean> {
-  const [row] = await executor.select({ id: ownerDecisions.id }).from(ownerDecisions)
-    .where(and(
-      inOrg(ownerDecisions),
-      eq(ownerDecisions.conversationId, conversationId),
-      eq(ownerDecisions.status, "open"),
-      inArray(ownerDecisions.kind, TELLS_THE_LEAD),
-    )).limit(1);
-  return Boolean(row);
-}
-
-/**
  * A person replied in the conversation after the handoff opened — from
- * Action required, the Messages tab, or their own phone — so it is settled,
- * and the chat is theirs from now on (the autopilot stays out of it).
- * Messages the autopilot sent (its replies and the handover) and campaign
- * steps do not count. Returns how many were settled.
+ * Action required, the Messages tab, or their own phone — so it is settled.
+ * The assistant keeps answering the lead afterwards: only "I'll reply
+ * myself" takes a chat away from it. Messages the autopilot sent (its
+ * replies and the handover) and campaign steps do not count. Returns how
+ * many were settled.
  */
 export async function settlePersonReplies(conversationId?: string): Promise<number> {
   const organizationId = currentOrganizationId();
@@ -73,12 +57,6 @@ export async function settlePersonReplies(conversationId?: string): Promise<numb
                  and a.provider_message_id is not null
                  and a.provider_message_id = m.provider_message_id))
     returning d.conversation_id`);
-  const conversations = [...new Set([...settled].map((row) => row.conversation_id))];
-  if (conversations.length) {
-    await db.insert(autopilotTakeovers)
-      .values(conversations.map((id) => ({ organizationId, conversationId: id, reason: "You replied to this lead yourself after the handoff." })))
-      .onConflictDoNothing();
-  }
   return [...settled].length;
 }
 

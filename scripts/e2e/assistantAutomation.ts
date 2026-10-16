@@ -13,7 +13,7 @@
  * it, no reply to an "ok", the per-chat limit), and isolation from a second
  * organization.
  */
-import { and, count, eq, inArray, like, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, like, sql } from "drizzle-orm";
 import type { DraftCompletion } from "@/lib/crm/ai/draft";
 import type { ModelCheck } from "@/lib/assistant/replyCheck";
 
@@ -256,10 +256,15 @@ export async function runAutomationChecks(input: {
     !readyOutcome.sent && readyOutcome.handover === true && readyDecision?.status === "open" && Boolean(readyDecision?.handoverSentAt) && sent() === beforeReady + 1
       && /get back to you personally/.test(handoverSend?.body ?? "") && !/Ravi will/.test(handoverSend?.body ?? ""),
     `${readyOutcome.reason} | ${handoverSend?.body ?? ""}`);
-  const waiting = await reply(H[0]!, "Also, do you service autoclaves?", "Yes, we service autoclaves. — Ravi", { thread: "ready" });
+  const waiting = await reply(H[0]!, "Also, do you service autoclaves?", "Yes, we service autoclaves, same-week. — Ravi", { thread: "ready" });
   const beforeWaiting = sent();
-  const waitingOutcome = await run(waiting.draft!);
-  check("while the lead waits for the owner, the assistant stays quiet in that chat (no second message)", !waitingOutcome.sent && /Needs you/.test(waitingOutcome.reason ?? "") && sent() === beforeWaiting, waitingOutcome.reason ?? "");
+  const waitingOutcome = await run(waiting.draft!, async () => ({ intent: "question", questions: [{ question: "Do you service autoclaves?", answered: true, evidence: "Same-week servicing for dental chairs and autoclaves" }], claims: [], commitments: [], missing: "", escalate: "" }));
+  check("while the lead is in Needs you, the assistant still answers their next question (it never goes quiet)", waitingOutcome.sent && sent() === beforeWaiting + 1, waitingOutcome.reason ?? "sent");
+  const stillReady = await reply(H[0]!, "Great, so when can we start? Call me.", "Thanks! Ravi will call you to set it up. — Ravi", { thread: "ready" });
+  const beforeStill = sent();
+  const stillOutcome = await run(stillReady.draft!, async () => ({ intent: "ready", questions: [], claims: [], commitments: [], missing: "", escalate: "wants to start" }));
+  const [readyCards] = await db.select({ n: count() }).from(schema.ownerDecisions).where(and(eq(schema.ownerDecisions.conversationId, readyLead.conversationId), eq(schema.ownerDecisions.kind, "ready"), eq(schema.ownerDecisions.status, "open")));
+  check("a ready lead who writes again is answered, told nothing twice, and gets no second Needs you card", stillOutcome.sent && sent() === beforeStill + 1 && Number(readyCards?.n) === 1, `${stillOutcome.reason ?? "sent"} cards:${readyCards?.n}`);
   const needs = await listNeedsYou();
   const badges = await loadNavBadges();
   check("Needs you lists the ready lead first: the label, the wait, that they were told, their newer message; the menu counts them",
@@ -287,10 +292,23 @@ export async function runAutomationChecks(input: {
   });
   const afterOwner = await listNeedsYou();
   const [settledReady] = await db.select().from(schema.ownerDecisions).where(eq(schema.ownerDecisions.id, readyDecision!.id));
-  const quietAfter = await run(waiting.draft!);
-  check("when the owner replies in the chat (app or phone), the lead leaves Needs you and the chat is theirs",
-    !afterOwner.items.some((item) => item.id === readyDecision!.id) && settledReady?.status === "resolved" && !quietAfter.sent && /yourself/.test(quietAfter.reason ?? ""),
-    `${settledReady?.status} ${quietAfter.reason}`);
+  const [takeovers] = await db.select({ n: count() }).from(schema.autopilotTakeovers).where(eq(schema.autopilotTakeovers.conversationId, readyLead.conversationId));
+  const afterPhone = await reply(H[0]!, "Ok and do you cover Baner?", "Yes, Baner is in Pune, which we cover. — Ravi", { thread: "ready" });
+  const beforePhone = sent();
+  const phoneOutcome = await run(afterPhone.draft!, async () => ({ intent: "question", questions: [{ question: "Do you cover Baner?", answered: true, evidence: "Service area: Pune and Pimpri-Chinchwad" }], claims: [], commitments: [], missing: "", escalate: "" }));
+  check("when the owner replies in the chat (app or phone), the lead leaves Needs you, and the assistant still answers the next message",
+    !afterOwner.items.some((item) => item.id === readyDecision!.id) && settledReady?.status === "resolved" && Number(takeovers?.n) === 0 && phoneOutcome.sent && sent() === beforePhone + 1,
+    `${settledReady?.status} takeovers:${takeovers?.n} ${phoneOutcome.reason ?? "sent"}`);
+  // Only "I'll reply myself" takes a chat away, and "Let the assistant reply" gives it back.
+  const { releaseConversation } = await import("@/lib/assistant/decisions.server");
+  await takeOverConversation(readyLead.conversationId, input.ownerId);
+  const takenReply = await reply(H[0]!, "And autoclaves too?", "Yes, autoclaves too. — Ravi", { thread: "ready" });
+  const takenAgain = await run(takenReply.draft!);
+  const released = await releaseConversation(readyLead.conversationId);
+  const [releaseJob] = await db.select().from(crm.crmJobs).where(and(eq(crm.crmJobs.organizationId, orgId), eq(crm.crmJobs.kind, "auto_send"), eq(crm.crmJobs.entityId, takenReply.draft!.id))).orderBy(desc(crm.crmJobs.createdAt)).limit(1);
+  check("\"I'll reply myself\" is the only thing that stops the assistant, and \"Let the assistant reply\" queues the waiting answer at once",
+    !takenAgain.sent && /yourself/.test(takenAgain.reason ?? "") && released.queued && releaseJob?.status === "queued",
+    `${takenAgain.reason} released:${released.queued} job:${releaseJob?.status}`);
 
   const thanks = await reply(H[1]!, "How much is the maintenance plan?", answer, { thread: "thanks" });
   const thanksAnswered = await run(thanks.draft!);
@@ -300,13 +318,14 @@ export async function runAutomationChecks(input: {
   check("an 'ok, thanks' after an answer gets no reply (the chat ends there)", thanksAnswered.sent && !okOutcome.sent && /^no answer needed/.test(okOutcome.reason ?? "") && sent() === beforeOk, `${thanksAnswered.reason} | ${okOutcome.reason}`);
 
   const chatty = await reply(H[2]!, "How much is the maintenance plan?", answer, { thread: "limit" });
-  const limitFillers = await db.insert(schema.autopilotReplies).values(Array.from({ length: 10 }, () => ({
-    organizationId: orgId, draftId: crypto.randomUUID(), revision: 1, conversationId: chatty.conversationId, status: "sent" as const, reason: "conversation-limit filler",
+  // Older than a day: they count toward this conversation's total, not toward today's 40.
+  const limitFillers = await db.insert(schema.autopilotReplies).values(Array.from({ length: 30 }, () => ({
+    organizationId: orgId, draftId: crypto.randomUUID(), revision: 1, conversationId: chatty.conversationId, status: "sent" as const, reason: "conversation-limit filler", createdAt: new Date(Date.now() - 2 * 24 * 3_600_000),
   }))).returning({ id: schema.autopilotReplies.id });
   const beforeLimit = sent();
   const limitOutcome = await run(chatty.draft!);
   const [limitDecision] = await db.select().from(schema.ownerDecisions).where(and(eq(schema.ownerDecisions.draftId, chatty.draft!.id), eq(schema.ownerDecisions.kind, "limit")));
-  check("after 10 automatic replies in one chat, it is handed to the owner (and the lead told once), never an endless chat",
+  check("after 30 automatic replies in one chat (a loop safety net), it is handed to the owner and the lead told once",
     !limitOutcome.sent && limitDecision?.status === "open" && limitOutcome.handover === true && sent() === beforeLimit + 1,
     `${limitOutcome.reason} ${limitDecision?.kind}`);
   await db.delete(schema.autopilotReplies).where(inArray(schema.autopilotReplies.id, limitFillers.map((row) => row.id)));

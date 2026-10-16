@@ -380,8 +380,8 @@ chat to you when:
 - they ask what your information does not answer (**answer needed**), want
   a discount or price you have not published, a meeting time, or a promise
   it cannot back;
-- the chat reached **10 automatic replies** (a safety net against endless
-  chats);
+- the chat reached **30 automatic replies** (a safety net against two
+  bots talking to each other, not a conversation length);
 - or it is unsure (an auto-reply, someone who left, a message nobody
   understood: "Take a look").
 
@@ -392,7 +392,9 @@ Then, at once:
    personally on this soon." (for a ready lead: "…to take this forward").
    It names no time and promises nothing else. At most one a day per chat;
    none in Review mode, none for "Take a look", none outside production.
-2. The assistant stops replying in that chat until it is settled.
+2. The assistant **keeps answering** the lead in that chat (their next
+   question, a greeting back), in the same way as before; it just does not
+   repeat the handover message and opens no second card for the same thing.
 3. The lead appears in **Needs you** at the top of the Results page, most
    urgent first (Ready to buy, then a person or a complaint, then
    questions, longest wait first), with the label, a short brief written
@@ -405,15 +407,18 @@ Then, at once:
    once, and **one reminder** if it is still open after 3 hours.
 
 It leaves Needs you when you **reply in the chat** — from Action
-required, the Messages tab or your phone (the chat is then yours: the
-assistant stays out of it) — when you **Answer** in the card (saved to the
-knowledge document "Answers you gave the assistant" for every later
-conversation, and a reply with your answer is written and sent
-automatically once it passes the checks), or when you press **Done** (for
-ready, a person, a complaint or the limit, the chat stays yours; otherwise
-the assistant may answer it again). An "ok" or "thanks" after an answer
-gets no reply: the chat simply ends there. Replies of Review-mode runs are
-counted under Needs you with a link to Action required.
+required, the Messages tab or your phone — when you **Answer** in the card
+(saved to the knowledge document "Answers you gave the assistant" for every
+later conversation, and a reply with your answer is written and sent
+automatically once it passes the checks), or when you press **Done**. None
+of these stops the assistant: it keeps answering that lead. **The only
+thing that takes a chat away from the assistant is "I'll reply myself"**
+on a card, and **"Let the assistant reply"** (shown on the plan card under
+that reply) gives it back and answers the latest message at once. An "ok"
+or "thanks" after an answer gets no reply: the chat simply ends there. A
+bare greeting ("Hey", "Hi") is answered as a greeting and is never counted
+as interest, whatever the AI's first reading of it. Replies of Review-mode
+runs are counted under Needs you with a link to Action required.
 
 **Opt-outs.** A reply asking to stop or unsubscribe, a Do Not Contact
 classification, or marking the person Do Not Contact in the CRM suppresses

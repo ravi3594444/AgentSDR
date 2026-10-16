@@ -20,9 +20,6 @@ export type NeedsYouPayload = { items: NeedsYouItem[]; reviewWaiting: number };
 
 const POLL_MS = 30_000;
 
-/** Done on these means the owner handles the chat from now on (the assistant stays out of it). */
-const DONE_TAKES_OVER = new Set(["ready", "person", "complaint", "limit"]);
-
 const CHANNEL: Record<string, string> = { email: "Email", whatsapp: "WhatsApp", linkedin: "LinkedIn" };
 
 function tone(priority: number): "red" | "orange" | "gray" {
@@ -35,7 +32,7 @@ function Item({ item, onChanged }: { item: NeedsYouItem; onChanged: () => void }
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function act(action: "answer" | "resolve" | "takeover") {
+  async function act(action: "answer" | "resolve") {
     setBusy(true);
     setError(null);
     try {
@@ -54,7 +51,6 @@ function Item({ item, onChanged }: { item: NeedsYouItem; onChanged: () => void }
     }
   }
 
-  const done = DONE_TAKES_OVER.has(item.kind) ? "takeover" : "resolve";
   return (
     <li className={cn("rounded-xl border bg-bg-white-0 p-3 sm:p-4", item.priority === 0 ? "border-error-base" : "border-stroke-soft-200")} data-testid="needs-you-item">
       <div className="flex flex-wrap items-center gap-2">
@@ -99,7 +95,7 @@ function Item({ item, onChanged }: { item: NeedsYouItem; onChanged: () => void }
         {answering && (
           <Button.Root variant="primary" mode="filled" size="xsmall" disabled={busy || !answer.trim()} onClick={() => void act("answer")}>Save and reply</Button.Root>
         )}
-        <Button.Root variant="neutral" mode="ghost" size="xsmall" disabled={busy} onClick={() => void act(done)} title={done === "takeover" ? "You handle this chat from now on; the assistant stays out of it." : "Settled; the assistant may answer this chat again."}>
+        <Button.Root variant="neutral" mode="ghost" size="xsmall" disabled={busy} onClick={() => void act("resolve")} title="Settled. The assistant keeps answering this chat.">
           <Button.Icon as={RiCheckLine} /> Done
         </Button.Root>
       </div>

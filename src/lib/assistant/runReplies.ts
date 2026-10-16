@@ -20,6 +20,8 @@ export type ReplyState = {
   text: string;
   /** When the automatic answer is due (the client shows it in local time). */
   at?: string;
+  /** The owner took this chat over; "Let the assistant reply" hands it back. */
+  release?: boolean;
 };
 
 /** A reply with no draft yet is still being read for this long; after that it is shown as not answered. */
@@ -34,6 +36,7 @@ export function replyState(record: ReplyRecord, automatic: boolean, now: Date = 
   if (record.draftStatus === "sent") return { tone: "done", text: "Answered" };
   if (record.autoStatus === "held" && record.autoReason?.startsWith(NO_ANSWER_NEEDED)) return { tone: "done", text: "No answer needed (they only acknowledged the last answer)" };
   if (record.autoStatus === "held" && record.autoReason?.includes("waits for you in Needs you")) return { tone: "you", text: "Waiting for you in Needs you" };
+  if (record.autoStatus === "held" && record.autoReason?.includes("handling this conversation yourself")) return { tone: "you", text: "You took this chat over, so the assistant is not replying", release: true };
   if (record.autoStatus === "held") return { tone: "you", text: `Waiting for you: ${record.autoReason ?? "the answer needs your decision"}` };
   if (record.autoStatus === "failed") return { tone: "failed", text: `The automatic answer failed${record.autoReason ? `: ${record.autoReason}` : ""}` };
   if (record.autoStatus === "reserved") return { tone: "waiting", text: "Sending the answer…" };

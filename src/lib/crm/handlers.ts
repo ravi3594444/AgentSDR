@@ -5,6 +5,7 @@ import { formatAiInstructions } from "./ai/instructions";
 import { db } from "@/lib/db";
 import { companies, people } from "@/lib/leads/schema";
 import { classifyCrmReply } from "./ai/classify";
+import { isBareGreeting } from "./greeting";
 import type {
   ClassificationCompletion,
   ClassificationContextInput,
@@ -80,6 +81,8 @@ async function classificationContext(messageId: string): Promise<{
   expectedContextVersion: number;
   personId: string;
   dncIntent: boolean;
+  /** Only a greeting or an acknowledgement ("Hey", "ok thanks"): never interest, whatever the model says. */
+  greetingOnly: boolean;
   input: Parameters<typeof classifyCrmReply>[0];
 }> {
   const [scope] = await db.select({ message: crmConversationMessages, conversation: crmConversations, record: crmRecords })
@@ -197,6 +200,7 @@ async function classificationContext(messageId: string): Promise<{
     expectedContextVersion: scope.record.contextVersion,
     personId: scope.record.personId,
     dncIntent: detectsExplicitDncIntent(scope.message.bodyText),
+    greetingOnly: isBareGreeting(scope.message.bodyText),
     input: {
       ...contextInput,
       instructions: formatAiInstructions(settings[0]?.classificationInstructions),
@@ -260,12 +264,15 @@ export async function handleClassificationJob(
         recordId: context.recordId,
         messageId: job.entityId,
         expectedContextVersion: context.expectedContextVersion,
-        categoryKey: context.dncIntent ? "not_interested" : result.categoryKey,
-        subcategoryId: context.dncIntent ? null : result.subcategoryId,
-        confidence: context.dncIntent ? 1 : result.confidence,
+        // A bare "Hey" is a reply, not interest: the model's "interested" is not applied to the record.
+        categoryKey: context.dncIntent ? "not_interested" : context.greetingOnly && result.categoryKey === "interested" ? "other" : result.categoryKey,
+        subcategoryId: context.dncIntent ? null : context.greetingOnly && result.categoryKey === "interested" ? null : result.subcategoryId,
+        confidence: context.dncIntent ? 1 : context.greetingOnly ? Math.min(result.confidence, 0.5) : result.confidence,
         reasoning: context.dncIntent
           ? `Explicit do-not-contact request detected. ${result.reasoning}`
-          : result.reasoning,
+          : context.greetingOnly
+            ? `Only a greeting or acknowledgement; it shows a reply, not intent. ${result.reasoning}`
+            : result.reasoning,
         provider: result.provider,
         model: result.model,
         request: result.request,

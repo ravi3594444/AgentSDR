@@ -15,11 +15,10 @@ export const AUTOPILOT_ACTOR = "autopilot";
 export const AUTOPILOT_LIMITS = {
   /**
    * After this many automatic messages in one conversation, a person takes
-   * over (a safety net against loops; the handoff usually comes first: when
-   * the lead is ready, asks for a person, or asks what the owner's
-   * information does not answer).
+   * over. A safety net against two bots talking to each other, not a
+   * conversation length: the assistant answers every reply until then.
    */
-  perConversation: 10,
+  perConversation: 30,
   /** Automatic messages per organization in any 24 hours. */
   perDay: 40,
 } as const;
@@ -57,8 +56,6 @@ export type AutopilotFacts = {
   membership: RunMembershipFacts | null;
   /** The owner said they handle this conversation. */
   takeover: boolean;
-  /** The conversation waits for the owner in Needs you (an open handoff): the autopilot stays quiet until it is settled. */
-  waitingForOwner?: boolean;
   /** An outbound message (a person's or another draft's) went out after this draft was written. */
   answeredSinceDraft: boolean;
   /** The lead wrote again after the message this draft answers. */
@@ -107,7 +104,6 @@ export function autopilotGate(facts: AutopilotFacts): AutopilotGate {
   if (facts.doNotContact) return hold("the person is marked Do Not Contact");
   if (facts.suppressed) return hold("the address unsubscribed or bounced");
   if (facts.takeover) return hold("you are handling this conversation yourself");
-  if (facts.waitingForOwner) return hold("this chat waits for you in Needs you");
   if (facts.editedByPerson) return hold("you edited this reply, so it waits for you to send it");
   if (facts.answeredSinceDraft) return hold("someone already answered after this reply was written");
   if (facts.newerInbound) return hold("a newer message arrived; the reply to it is written next");

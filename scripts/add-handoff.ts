@@ -22,6 +22,13 @@ const STATEMENTS = [
   `ALTER TABLE owner_decisions ADD COLUMN IF NOT EXISTS alerted_at timestamptz`,
   `ALTER TABLE owner_decisions ADD COLUMN IF NOT EXISTS reminded_at timestamptz`,
   `CREATE INDEX IF NOT EXISTS owner_decisions_conversation_idx ON owner_decisions (conversation_id) WHERE status = 'open'`,
+  // Earlier code took a chat away from the assistant on its own whenever a
+  // message went out from the business number after a handoff, and the
+  // Needs you "Done" button did the same. Neither was the owner asking for
+  // it; those takeovers are removed so the assistant answers again. Only
+  // "I'll reply myself" creates one now, and "Let the assistant reply"
+  // undoes it.
+  `DELETE FROM autopilot_takeovers WHERE reason IN ('You replied to this lead yourself after the handoff.', 'The owner is answering this conversation personally.')`,
 ];
 
 async function main() {

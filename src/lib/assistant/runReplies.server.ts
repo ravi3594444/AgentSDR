@@ -5,11 +5,12 @@ import { db } from "@/lib/db";
 import { currentOrganizationId } from "@/lib/tenancy/scope";
 import { replyState, type ReplyState } from "./runReplies";
 
-export type RunReply = { id: string; who: string; channel: string; receivedAt: string; preview: string; state: ReplyState };
+export type RunReply = { id: string; conversationId: string; who: string; channel: string; receivedAt: string; preview: string; state: ReplyState };
 
 type Row = {
   runId: string;
   messageId: string;
+  conversationId: string;
   receivedAt: string;
   channel: string;
   preview: string | null;
@@ -27,7 +28,7 @@ export async function runReplies(runIds: readonly string[], perRun = 5): Promise
   if (!runIds.length) return {};
   const organizationId = currentOrganizationId();
   const rows = await db.execute(sql`
-    select l.run_id::text as "runId", m.id::text as "messageId", to_char(m.sent_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as "receivedAt",
+    select l.run_id::text as "runId", m.id::text as "messageId", c.id::text as "conversationId", to_char(m.sent_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as "receivedAt",
       m.channel, left(m.body_text, 160) as "preview", coalesce(p.full_name, p.phone, p.email) as "who", r.autopilot,
       d.status as "draftStatus", a.status as "autoStatus", a.reason as "autoReason",
       j.status as "jobStatus", to_char(j.run_after at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as "sendAfter"
@@ -50,6 +51,7 @@ export async function runReplies(runIds: readonly string[], perRun = 5): Promise
     if (list.length >= perRun || list.some((item) => item.id === row.messageId)) continue;
     list.push({
       id: row.messageId,
+      conversationId: row.conversationId,
       who: row.who ?? "A lead",
       channel: row.channel,
       receivedAt: row.receivedAt,
