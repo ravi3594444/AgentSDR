@@ -16,7 +16,8 @@
  *   guard lets the loopback server through;
  * - DNS: DISCOVERY_DNS_CHECK=off, and the mail-server check is stubbed
  *   (setWebDiscoveryMailCheck): domains containing "nomail" have no mail
- *   servers, "lotus" and "glow" have them, anything else is unknown.
+ *   servers, "lotus" has MX records, "glow" only an address record,
+ *   anything else is unknown.
  *
  *   bun run --conditions=react-server scripts/e2e/web-discovery.ts
  *
@@ -225,7 +226,7 @@ const { setDiscoveryPageOptions } = await import("@/lib/discovery/discovery.serv
 const { setWebDiscoveryMailCheck, startWebDiscovery, normalizeWebCriteria, WebDiscoveryUnavailableError, INSTAGRAM_ONLY_REASON, INSTAGRAM_PROFILE_ONLY_REASON } = await import("@/lib/discovery/webDiscovery.server");
 
 setDiscoveryPageOptions({ allowPrivate: true });
-setWebDiscoveryMailCheck(async (domain) => (domain.includes("nomail") ? "rejects" : /lotus|glow/.test(domain) ? "accepts" : "unknown"));
+setWebDiscoveryMailCheck(async (domain) => (domain.includes("nomail") ? "rejects" : domain.includes("lotus") ? "mx" : domain.includes("glow") ? "address" : "unknown"));
 registerAssistantJobs();
 
 let failures = 0;
@@ -450,6 +451,8 @@ try {
 
   const glow = byEmail(`hello@${host("glow")}`);
   check("an Instagram profile's listed website is read; the lead keeps the profile as evidence", glow?.status === "eligible" && glow.evidence.some((item) => item.kind === "instagram" && item.value === igProfile(GLOW_IG)) && glow.sourceUrl === igProfile(GLOW_IG), JSON.stringify(glow?.evidence));
+  const glowEmail = glow?.evidence.find((item) => item.kind === "email");
+  check("a domain that passed only by its address record: “can receive mail”, never “MX”", glowEmail?.source === "the business's website · domain can receive mail; mailbox not verified", glowEmail?.source ?? "");
   const quiet = named("Quiet Studio");
   check("an Instagram profile with no website or contact is excluded as Instagram-only", quiet?.status === "excluded" && quiet.reason === INSTAGRAM_PROFILE_ONLY_REASON && quiet.evidence.some((item) => item.kind === "instagram"), quiet?.reason ?? "missing");
 

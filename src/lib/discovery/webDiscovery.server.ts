@@ -16,7 +16,7 @@ import { isPlatformConnected } from "@/lib/platform/credentials";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { getInstagramPost, getInstagramProfile, listInstagramPostComments, unipileFailureStatus } from "@/services/unipile.instagramProfiles";
 import { cleanEmail, extractContacts, ownWebsite, websiteDomain } from "./contacts";
-import { discoveryPageOptions, emailDomainCheck } from "./discovery.server";
+import { discoveryPageOptions, mailDomainCheck, type MailDomainCheck } from "./discovery.server";
 import { cleanBusinessName, rankEmails } from "./mapsResults";
 import {
   buildSearchQueries,
@@ -156,9 +156,9 @@ export class WebDiscoveryUnavailableError extends Error {
 }
 
 /** Test hook: the mail-server check (scripts stand it in; production uses DNS). */
-let mailCheck: (domain: string) => Promise<"accepts" | "rejects" | "unknown"> = emailDomainCheck;
-export function setWebDiscoveryMailCheck(check: ((domain: string) => Promise<"accepts" | "rejects" | "unknown">) | null): void {
-  mailCheck = check ?? emailDomainCheck;
+let mailCheck: (domain: string) => Promise<MailDomainCheck> = (domain) => mailDomainCheck(domain);
+export function setWebDiscoveryMailCheck(check: ((domain: string) => Promise<MailDomainCheck>) | null): void {
+  mailCheck = check ?? ((domain) => mailDomainCheck(domain));
 }
 
 export function normalizeWebCriteria(
@@ -610,8 +610,12 @@ async function stageReading(job: AssistantJob, heartbeat: () => Promise<void>): 
 
 // ── Saving ──────────────────────────────────────────────────────────────────
 
-function mailCheckText(check: "accepts" | "unknown"): string {
-  return check === "accepts" ? "domain has mail servers (MX); mailbox not verified" : "domain's mail servers not checked; mailbox not verified";
+/** What the mail check showed, in the evidence's words; never more than it showed. */
+export function mailCheckText(check: Exclude<MailDomainCheck, "rejects">): string {
+  if (check === "mx") return "domain has mail servers (MX); mailbox not verified";
+  // No MX record, but an address record mail servers fall back to.
+  if (check === "address") return "domain can receive mail; mailbox not verified";
+  return "domain's mail servers not checked; mailbox not verified";
 }
 
 /** The lead's emails that may be used (syntax, junk and the domain's mail servers checked), best first, and whether one was dropped. */
