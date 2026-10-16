@@ -4,6 +4,7 @@ import {
   RiCpuLine,
   RiEqualizerLine,
   RiGroupLine,
+  RiInstagramLine,
   RiTeamLine,
   RiLayoutColumnLine,
   RiLinkedinBoxLine,
@@ -15,11 +16,16 @@ import {
   RiWhatsappLine,
   type RemixiconComponentType,
 } from "@remixicon/react";
+import type { FeatureKey, FeatureState } from "@/lib/features/catalog";
 
 export type SettingsTab = { href: string; label: string; icon: RemixiconComponentType };
 
-/** A row in the settings rail. With `tabs`, it opens the first and stays active on any of them. */
-export type SettingsNavItem = SettingsTab & { tabs?: SettingsTab[] };
+/**
+ * A row in the settings rail. With `tabs`, it opens the first and stays
+ * active on any of them. With `feature`, it is shown only while that
+ * optional feature (src/lib/features/catalog.ts) is on for the organization.
+ */
+export type SettingsNavItem = SettingsTab & { tabs?: SettingsTab[]; feature?: FeatureKey };
 
 /** Every page a row covers: itself, or its tabs. */
 export function itemPages(item: SettingsNavItem): SettingsTab[] {
@@ -75,6 +81,14 @@ export const SETTINGS_NAV: { label: string; items: SettingsNavItem[] }[] = [
           { href: "/settings/whatsapp-rules", label: "Sending rules", icon: RiEqualizerLine },
         ],
       },
+      {
+        // Only for organizations that turned Instagram messages on.
+        href: "/settings/instagram-accounts",
+        label: "Instagram",
+        icon: RiInstagramLine,
+        feature: "instagram",
+        tabs: [{ href: "/settings/instagram-accounts", label: "Accounts", icon: RiInstagramLine }],
+      },
     ],
   },
   {
@@ -97,6 +111,17 @@ export const SETTINGS_NAV: { label: string; items: SettingsNavItem[] }[] = [
     items: [{ href: "/settings/appearance", label: "Appearance", icon: RiPaletteLine }],
   },
 ];
+
+/**
+ * The settings sections this organization sees: every row whose feature is
+ * on, or that needs none. `features` null (not loaded yet) shows only the
+ * rows that need none — exactly the navigation without optional features.
+ */
+export function visibleSettingsNav(features: FeatureState | null): typeof SETTINGS_NAV {
+  return SETTINGS_NAV
+    .map((group) => ({ ...group, items: group.items.filter((item) => !item.feature || Boolean(features?.[item.feature])) }))
+    .filter((group) => group.items.length > 0);
+}
 
 /** Where "Settings" opens. */
 export const SETTINGS_HOME = SETTINGS_NAV[0].items[0].href;
