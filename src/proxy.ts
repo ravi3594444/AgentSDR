@@ -43,6 +43,11 @@ const PUBLIC = [
   // under this prefix authenticates itself with authorizeRecorder() (see
   // src/lib/calls/sessions.ts) — never add a route here that doesn't.
   "/api/call-recorder/",
+  // The website-form webhook owners add to their form tool. It authenticates
+  // itself with the endpoint's secret token (src/app/api/intake/form/route.ts);
+  // the management routes beside it (/api/intake/endpoints, /inquiries) stay
+  // behind sign-in.
+  "/api/intake/form",
 ];
 
 /**

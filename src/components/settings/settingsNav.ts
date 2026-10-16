@@ -11,19 +11,36 @@ import {
   RiPlugLine,
   RiPaletteLine,
   RiPriceTag3Line,
+  RiQuestionAnswerLine,
   RiQuillPenLine,
   RiWhatsappLine,
   type RemixiconComponentType,
 } from "@remixicon/react";
+import type { FeatureKey, FeatureState } from "@/lib/features/catalog";
 
 export type SettingsTab = { href: string; label: string; icon: RemixiconComponentType };
 
-/** A row in the settings rail. With `tabs`, it opens the first and stays active on any of them. */
-export type SettingsNavItem = SettingsTab & { tabs?: SettingsTab[] };
+/**
+ * A row in the settings rail. With `tabs`, it opens the first and stays
+ * active on any of them. With `feature`, it shows only while that optional
+ * feature (src/lib/features/catalog.ts) is on for the organization.
+ */
+export type SettingsNavItem = SettingsTab & { tabs?: SettingsTab[]; feature?: FeatureKey };
 
 /** Every page a row covers: itself, or its tabs. */
 export function itemPages(item: SettingsNavItem): SettingsTab[] {
   return item.tabs ?? [item];
+}
+
+/**
+ * The rail as the organization sees it: rows behind an optional feature only
+ * while it is on. Until the features are known (`null`) they are left out,
+ * so an organization without them sees exactly the rail it always had.
+ */
+export function visibleSettingsNav(features: FeatureState | null): typeof SETTINGS_NAV {
+  return SETTINGS_NAV
+    .map((group) => ({ ...group, items: group.items.filter((item) => !item.feature || features?.[item.feature] === true) }))
+    .filter((group) => group.items.length > 0);
 }
 
 /**
@@ -90,6 +107,7 @@ export const SETTINGS_NAV: { label: string; items: SettingsNavItem[] }[] = [
     items: [
       { href: "/settings/lead-categories", label: "Lead categories", icon: RiPriceTag3Line },
       { href: "/settings/columns", label: "Lead columns", icon: RiLayoutColumnLine },
+      { href: "/settings/inquiries", label: "Inquiries", icon: RiQuestionAnswerLine, feature: "inquiry_intake" },
     ],
   },
   {
