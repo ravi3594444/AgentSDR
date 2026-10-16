@@ -554,8 +554,9 @@ async function opensChatOnUnipile(
   log: ReturnType<typeof logger>,
 ): Promise<boolean> {
   let items: Record<string, unknown>[];
+  let cursor: string | null | undefined;
   try {
-    ({ items } = await listUnipileInstagramMessages(chat.unipileChatId, null, INQUIRY_CHAT_CHECK_LIMIT));
+    ({ items, cursor } = await listUnipileInstagramMessages(chat.unipileChatId, null, INQUIRY_CHAT_CHECK_LIMIT));
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     log.warn(`No person for this chat, and Unipile could not show whether it is a new conversation (${reason}) — not an inquiry, kept in the Instagram inbox only`);
@@ -564,6 +565,7 @@ async function opensChatOnUnipile(
   const check = messageOpensChat({
     items,
     limit: INQUIRY_CHAT_CHECK_LIMIT,
+    hasMore: Boolean(cursor),
     unipileMessageId: event.unipileMessageId,
     sentAt: event.sentAt,
     historyCutoffAt: account.historyCutoffAt,

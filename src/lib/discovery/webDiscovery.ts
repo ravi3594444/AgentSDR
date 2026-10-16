@@ -210,41 +210,67 @@ export function directoryBusinessLinks(html: string, pageUrl: string, limit = 20
   return out;
 }
 
-/** A contact this many times on a directory page, spread across its listings, is the directory's own (a helpline beside each). */
+/** A contact this many times on a directory page is the directory's own (a helpline beside each listing), not a listing's. */
 const REPEATED_CONTACT_MIN = 3;
 const MAX_LINKS_COMPARED = 2_000;
 
 /**
+ * The page without its own chrome — <header>, <nav> and <footer> — except
+ * inside a listing (<article> or <li>), where a card's own header or footer
+ * often carries the listing's phone. Linear: listing blocks are set aside,
+ * the chrome is removed from the rest, and the blocks put back (those inside
+ * removed chrome, such as a footer's link list, go with it).
+ */
+function withoutPageChrome(html: string): string {
+  const blocks: string[] = [];
+  const marked = replaceElements(html, ["article", "li"], (block) => {
+    blocks.push(block);
+    return `\u0000${blocks.length - 1}\u0000`;
+  });
+  return withoutElements(marked, ["header", "nav", "footer"]).replace(/\u0000(\d+)\u0000/g, (_, index: string) => blocks[Number(index)] ?? " ");
+}
+
+/** `html` with each <name>…</name> element (outermost, first closing tag) replaced by `replace(element)`, in one pass. */
+function replaceElements(html: string, names: readonly string[], replace: (element: string) => string): string {
+  const open = new RegExp(`<(${names.join("|")})\\b`, "gi");
+  const unclosedFrom = new Map<string, number>();
+  let out = "";
+  let at = 0;
+  for (let match = open.exec(html); match; match = open.exec(html)) {
+    const name = match[1]!.toLowerCase();
+    if (open.lastIndex >= (unclosedFrom.get(name) ?? Infinity)) continue;
+    const close = new RegExp(`</${name}\\s*>`, "gi");
+    close.lastIndex = open.lastIndex;
+    const end = close.exec(html);
+    if (!end) {
+      unclosedFrom.set(name, open.lastIndex);
+      continue;
+    }
+    out += html.slice(at, match.index) + replace(html.slice(match.index, end.index + end[0].length));
+    at = end.index + end[0].length;
+    open.lastIndex = at;
+  }
+  return out + html.slice(at);
+}
+
+/**
  * The emails and phones on a directory or list page that belong to its
  * listings. Left out: the site's own header, navigation and footer (its
- * helpline, its support address); a number or address shown beside many
- * listings (at least three times, with other listings' contacts between
- * the first and the last); addresses on the directory's own domain; and
- * LinkedIn links.
+ * helpline, its support address) outside the listings; a number or address
+ * shown at least three times on the page (a helpline beside each listing —
+ * also when the directory hides the listings' own numbers); addresses on the
+ * directory's own domain; and LinkedIn links. Chrome built from plain divs
+ * is caught only by the repetition rule.
  */
 export function directoryListingContacts(html: string, pageUrl: string): FoundContact[] {
-  const listings = withoutElements(html, ["header", "nav", "footer"]);
+  const listings = withoutPageChrome(html);
   // The first links are enough to tell (and keep a hostile page cheap).
-  const sequence = contactLinkSequence(listings).slice(0, MAX_LINKS_COMPARED);
-  const positions = new Map<string, number[]>();
-  sequence.forEach((key, index) => {
-    const at = positions.get(key);
-    if (at) at.push(index);
-    else positions.set(key, [index]);
-  });
-  const directoryOwn = new Set<string>();
-  for (const [key, at] of positions) {
-    if (at.length < REPEATED_CONTACT_MIN) continue;
-    const others = new Set<string>();
-    for (let index = at[0]!; index <= at.at(-1)! && others.size < 2; index += 1) {
-      if (sequence[index] !== key) others.add(sequence[index]!);
-    }
-    if (others.size >= 2) directoryOwn.add(key);
-  }
+  const counts = new Map<string, number>();
+  for (const key of contactLinkSequence(html).slice(0, MAX_LINKS_COMPARED)) counts.set(key, (counts.get(key) ?? 0) + 1);
   const pageDomain = websiteDomain(pageUrl);
   return extractContacts(listings, pageUrl).filter((contact) => {
     if (contact.kind === "linkedin") return false;
-    if (directoryOwn.has(`${contact.kind}:${contact.value.toLowerCase()}`)) return false;
+    if ((counts.get(`${contact.kind}:${contact.value.toLowerCase()}`) ?? 0) >= REPEATED_CONTACT_MIN) return false;
     return !(contact.kind === "email" && emailMatchesDomain(contact.value, pageDomain));
   });
 }

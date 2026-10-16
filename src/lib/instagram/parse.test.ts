@@ -13,6 +13,7 @@ import {
   messagePreview,
   parseInstagramWebhook,
   pickPendingSend,
+  clockSkewMs,
 } from "./parse";
 
 const NOW = new Date("2026-10-16T10:00:00.000Z");
@@ -208,6 +209,18 @@ describe("deliveryReceivedAt", () => {
     // A database zone ahead of UTC makes the ledger's createdAt read hours late.
     expect(deliveryReceivedAt(new Date(NOW.getTime() + 5.5 * 3600_000), NOW)).toEqual(NOW);
   });
+
+  test("a database zone behind UTC is corrected, so an old delivery never reads as fresh", () => {
+    // America/New_York: the ledger's createdAt reads 4 h early; the skew is -4 h.
+    const skew = clockSkewMs(new Date(NOW.getTime() - 4 * 3600_000 + 850), NOW);
+    expect(skew).toBe(-4 * 3600_000);
+    const arrived = new Date(NOW.getTime() - 10 * 60_000);
+    const asRead = new Date(arrived.getTime() - 4 * 3600_000);
+    expect(deliveryReceivedAt(asRead, NOW, skew)).toEqual(arrived);
+    // India (+5:30) and latency noise round to the zone's offset.
+    expect(clockSkewMs(new Date(NOW.getTime() + 5.5 * 3600_000 - 1200), NOW)).toBe(5.5 * 3600_000);
+    expect(clockSkewMs(new Date(NOW.getTime() + 300), NOW)).toBe(0);
+  });
 });
 
 describe("messageOpensChat", () => {
@@ -215,7 +228,7 @@ describe("messageOpensChat", () => {
   const cutoff = new Date(NOW.getTime() - 3 * 86400_000);
   const self = { object: "Message", id: "msg_1", text: "Hi, how much is a cake?", timestamp: sentAt.toISOString(), is_sender: 0 };
   const opens = (items: unknown[], historyCutoffAt: Date | null = cutoff) =>
-    messageOpensChat({ items, limit: 10, unipileMessageId: "msg_1", sentAt, historyCutoffAt });
+    messageOpensChat({ items, limit: 10, hasMore: false, unipileMessageId: "msg_1", sentAt, historyCutoffAt });
 
   test("a chat whose only message is this one opens with it", () => {
     expect(opens([self])).toEqual({ opens: true });
@@ -232,10 +245,23 @@ describe("messageOpensChat", () => {
   test("a long-standing chat AgentSDR never imported is not new", () => {
     const older = { id: "msg_0", text: "Thanks for the order!", timestamp: new Date(NOW.getTime() - 30 * 86400_000).toISOString(), is_sender: 1 };
     expect(opens([self, older])).toMatchObject({ opens: false });
-    expect(opens([self, older], null)).toEqual({ opens: false, reason: "the chat has earlier messages" });
-    expect(opens([self, { ...older, timestamp: new Date(NOW.getTime() - 60_000).toISOString() }])).toEqual({ opens: false, reason: "the chat has earlier messages" });
+    expect(opens([self, older], null)).toEqual({ opens: false, reason: "the account has already written in the chat" });
+    expect(opens([self, { ...older, is_sender: 0 }], null)).toEqual({ opens: false, reason: "the chat has earlier messages" });
+    expect(opens([self, { ...older, timestamp: new Date(NOW.getTime() - 60_000).toISOString() }])).toEqual({ opens: false, reason: "the account has already written in the chat" });
     // Even hidden, deleted or event items count as an earlier conversation.
     expect(opens([self, { id: "e", is_event: 1, timestamp: new Date(NOW.getTime() - 60_000).toISOString() }])).toMatchObject({ opens: false });
+  });
+
+  test("two quick messages from the person open the chat together", () => {
+    const hi = { id: "msg_0", text: "Hi", timestamp: new Date(sentAt.getTime() - 1000).toISOString(), is_sender: 0 };
+    expect(opens([self, hi])).toEqual({ opens: true });
+    // …but not a message from them two days ago (an older conversation).
+    expect(opens([self, { ...hi, timestamp: new Date(NOW.getTime() - 2 * 86400_000).toISOString() }])).toEqual({ opens: false, reason: "the chat has earlier messages" });
+  });
+
+  test("an incomplete listing is never taken as the whole chat", () => {
+    expect(messageOpensChat({ items: [self], limit: 10, hasMore: true, unipileMessageId: "msg_1", sentAt, historyCutoffAt: cutoff }))
+      .toEqual({ opens: false, reason: "Unipile has older messages in the chat" });
   });
 
   test("messages from before the history cutoff, the account's own messages, undated ones: not new", () => {

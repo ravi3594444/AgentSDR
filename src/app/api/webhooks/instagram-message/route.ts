@@ -10,7 +10,7 @@ import { instagramAccounts } from "@/lib/instagram/schema";
 import { currentOrganizationId, runInOrganization } from "@/lib/tenancy/scope";
 import { gateUnipileWebhook } from "@/lib/linkedin/organizations.server";
 import { deliveryReceivedAt, instagramWebhookEventKey } from "@/lib/instagram/parse";
-import { processInstagramWebhookDelivery } from "@/lib/instagram/webhookProcessing";
+import { ledgerClockSkewMs, processInstagramWebhookDelivery } from "@/lib/instagram/webhookProcessing";
 
 /**
  * POST /api/webhooks/instagram-message?secret=… — Unipile's messaging webhook
@@ -138,7 +138,7 @@ async function handle(req: NextRequest, payload: Record<string, unknown>, secret
     );
     eventId = delivery.event.id;
     // When the delivery first arrived — what is history is judged from it, also on a retry.
-    receivedAt = delivery.claimed ? new Date() : deliveryReceivedAt(delivery.event.createdAt);
+    receivedAt = delivery.claimed ? new Date() : deliveryReceivedAt(delivery.event.createdAt, new Date(), await ledgerClockSkewMs());
     if (!delivery.claimed) {
       // A retry. Take it up only when the first attempt failed.
       const reclaimed = delivery.event.processingStatus === "error" ? await claimWebhookEvent(eventId) : null;

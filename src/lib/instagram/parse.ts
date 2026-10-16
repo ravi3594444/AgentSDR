@@ -234,14 +234,27 @@ export function instagramWebhookEventKey(payload: unknown): string {
 
 /**
  * When a recorded delivery first reached AgentSDR, for a retry or a replay:
- * its ledger row's creation time — but never later than now. WebhookEvent.
- * createdAt is a `timestamp without time zone` filled by the database's own
- * clock and zone, so on a server whose zone is ahead of UTC it reads as
- * later than it was; taking now then keeps a fresh message from being
- * judged history only because it was replayed.
+ * its ledger row's creation time, corrected by `skewMs` — never later than
+ * now. WebhookEvent.createdAt is a `timestamp without time zone` filled by
+ * the database's clock in the database's zone, and read back as if it were
+ * in the app's zone; `skewMs` (webhookProcessing.ts ledgerClockSkewMs) is
+ * that difference. Without it a database behind UTC makes an old message
+ * read as received hours earlier, i.e. fresh — and answerable.
  */
-export function deliveryReceivedAt(createdAt: Date, now = new Date()): Date {
-  return createdAt.getTime() <= now.getTime() ? createdAt : now;
+export function deliveryReceivedAt(createdAt: Date, now = new Date(), skewMs = 0): Date {
+  const received = createdAt.getTime() - skewMs;
+  return received <= now.getTime() ? new Date(received) : now;
+}
+
+/**
+ * How far the database's local clock, read as the ledger reads it, is from
+ * the real time: `localNow` is `localtimestamp` as the driver returned it.
+ * Rounded to the quarter hour every time zone offset is a multiple of, so
+ * query latency does not leak in.
+ */
+export function clockSkewMs(localNow: Date, now: Date): number {
+  const quarter = 15 * 60 * 1000;
+  return Math.round((localNow.getTime() - now.getTime()) / quarter) * quarter;
 }
 
 // --- history ---------------------------------------------------------------------
@@ -263,20 +276,24 @@ export function isHistoricalMessage(input: { sentAt: Date; receivedAt: Date; his
 export type ChatOpeningCheck = { opens: true } | { opens: false; reason: string };
 
 /**
- * Whether a message opens its chat, judged from Unipile's own listing of the
- * chat's latest messages (GET /chats/{id}/messages, newest first, at most
- * `limit`): AgentSDR's table only knows what it received or imported, so a
- * long-standing chat that was never imported looks new there. It does when
- * Unipile lists the message itself and nothing else but later messages from
- * the other person — no earlier message (hidden, deleted and chat events
- * included), nothing the account sent, nothing from before the account's
- * history cutoff, and fewer than `limit` messages (a full page could hide
- * older ones). Anything unclear says no: the message then stays in the
+ * Whether a message belongs to a NEW conversation, judged from Unipile's own
+ * listing of the chat's latest messages (GET /chats/{id}/messages, newest
+ * first, at most `limit`): AgentSDR's table only knows what it received or
+ * imported, so a long-standing chat that was never imported looks new
+ * there. It does when Unipile lists the message itself, the listing is
+ * complete (no further page, fewer than `limit` messages), and everything in
+ * it was written by the other person after the account's history cutoff:
+ * nothing the account sent, no chat event, hidden or deleted item, and any
+ * earlier message from them at most INSTAGRAM_FRESH_MESSAGE_WINDOW_MS
+ * before this one — two quick messages ("Hi", then the question) open a
+ * chat together. Anything unclear says no: the message then stays in the
  * Instagram inbox instead of becoming an inquiry an inquiry run may answer.
  */
 export function messageOpensChat(input: {
   items: readonly unknown[];
   limit: number;
+  /** Unipile returned a cursor: older messages exist beyond this page. */
+  hasMore: boolean;
   unipileMessageId: string;
   sentAt: Date;
   historyCutoffAt: Date | null;
@@ -284,6 +301,7 @@ export function messageOpensChat(input: {
   const items = input.items.map(asObject).filter((item): item is Json => Boolean(item));
   const isThis = (item: Json) => str(item.id) === input.unipileMessageId || str(item.provider_id) === input.unipileMessageId;
   if (!items.some(isThis)) return { opens: false, reason: "Unipile does not list this message in the chat" };
+  if (input.hasMore) return { opens: false, reason: "Unipile has older messages in the chat" };
   if (items.length >= input.limit) return { opens: false, reason: `the chat has at least ${input.limit} messages` };
   for (const item of items) {
     const at = date(item.timestamp);
@@ -292,8 +310,11 @@ export function messageOpensChat(input: {
     }
     if (isThis(item)) continue;
     if (!at) return { opens: false, reason: "a message in the chat has no time" };
-    if (at.getTime() <= input.sentAt.getTime()) return { opens: false, reason: "the chat has earlier messages" };
     if (flag(item.is_sender)) return { opens: false, reason: "the account has already written in the chat" };
+    if (flag(item.is_event) || flag(item.hidden) || flag(item.deleted)) {
+      return { opens: false, reason: "the chat has events or removed messages" };
+    }
+    if (at.getTime() < input.sentAt.getTime() - INSTAGRAM_FRESH_MESSAGE_WINDOW_MS) return { opens: false, reason: "the chat has earlier messages" };
   }
   return { opens: true };
 }

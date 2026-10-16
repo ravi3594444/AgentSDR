@@ -139,6 +139,24 @@ describe("directoryListingContacts", () => {
   });
 });
 
+describe("directoryListingContacts on harder pages (from the verification round)", () => {
+  const page = "https://www.justdial.example/Pune/Dentists";
+
+  test("a helpline beside every listing is dropped even when the listings' own numbers are hidden", () => {
+    const listing = (name: string) => `<div class="card"><h3>${name}</h3><a href="tel:08888888888">Call now</a></div>`;
+    expect(directoryListingContacts(`<main>${listing("Lotus Dental")}${listing("Smile Care")}${listing("Pearl Dental")}</main>`, page)).toEqual([]);
+  });
+
+  test("a listing card's own header or footer keeps its phone; the page's footer does not", () => {
+    const html = `<main>
+      <article><header><h2>Lotus Dental</h2><a href="tel:+912025531234">Call</a></header><p>Root canals, braces</p></article>
+      <article><h2>Smile Care</h2><footer><a href="mailto:hello@smilecare.example.in">Email</a></footer></article>
+    </main>
+    <footer><ul><li><a href="tel:+912040002222">Customer care</a></li></ul></footer>`;
+    expect(directoryListingContacts(html, page).map((contact) => contact.value)).toEqual(["+912025531234", "hello@smilecare.example.in"]);
+  });
+});
+
 describe("ownerMailDomain", () => {
   test("a business mailbox's domain is the owner's; a free mail provider's is not", () => {
     expect(ownerMailDomain("ravi@lotusdental.example.in")).toBe("lotusdental.example.in");

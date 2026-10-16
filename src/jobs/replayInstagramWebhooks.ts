@@ -3,7 +3,7 @@ import "server-only";
 import { isPlatformConnected } from "@/lib/platform/credentials";
 import { claimWebhookEvent, replayableWebhookEvents, type WebhookReplayScope } from "@/lib/linkedin/webhooks/inbox";
 import { deliveryReceivedAt } from "@/lib/instagram/parse";
-import { processInstagramWebhookDelivery } from "@/lib/instagram/webhookProcessing";
+import { ledgerClockSkewMs, processInstagramWebhookDelivery } from "@/lib/instagram/webhookProcessing";
 import { runInOrganization } from "@/lib/tenancy/scope";
 
 export type InstagramReplaySummary = {
@@ -54,7 +54,7 @@ export async function replayInstagramWebhooks(limit = 100, organizationId?: stri
         const event = await claimWebhookEvent(id);
         if (!event) return;
         summary.claimed += 1;
-        const outcome = await processInstagramWebhookDelivery(event.id, event.rawBody, deliveryReceivedAt(event.createdAt));
+        const outcome = await processInstagramWebhookDelivery(event.id, event.rawBody, deliveryReceivedAt(event.createdAt, new Date(), await ledgerClockSkewMs()));
         if (outcome === "error") summary.failed += 1;
         else summary.succeeded += 1;
       });
