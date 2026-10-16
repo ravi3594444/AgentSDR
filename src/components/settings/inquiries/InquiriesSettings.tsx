@@ -33,7 +33,9 @@ import { cn } from "@/utils/cn";
  * Settings → Inquiries (src/app/settings/inquiries/page.tsx): how a website
  * form reaches AgentSDR, the webhooks (one per form tool), and the latest
  * inquiries. A token is shown once, right after the webhook is made or its
- * token rotated; the list only ever has its last four characters.
+ * token rotated; the list only ever has its last four characters. With the
+ * organization's Inquiry intake off, existing webhooks can still be turned
+ * off, rotated or deleted, but no new one is made and the setup is hidden.
  */
 
 type Revealed = { endpointId: string; token: string };
@@ -55,19 +57,26 @@ function formatWhen(iso: string): string {
   return Number.isNaN(date.getTime()) ? iso : date.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
 }
 
+type Limits = { perHour: number; newContactsPerDay: number };
+
 export function InquiriesSettings({
+  featureOn,
   webhookUrl,
   canManage,
   fields,
+  limits,
   initialEndpoints,
   initialInquiries,
 }: {
+  featureOn: boolean;
   webhookUrl: string;
   canManage: boolean;
   fields: IntakeFieldInfo[];
+  limits: Limits;
   initialEndpoints: IntakeEndpointSummary[];
   initialInquiries: InquirySummary[];
 }) {
+  const canCreate = canManage && featureOn;
   const dialogs = useDialogs();
   const [endpoints, setEndpoints] = useState(initialEndpoints);
   const [inquiries, setInquiries] = useState(initialInquiries);
@@ -186,7 +195,7 @@ export function InquiriesSettings({
 
   return (
     <div className="flex flex-col gap-6">
-      <SetupSteps webhookUrl={webhookUrl} />
+      {featureOn && <SetupSteps webhookUrl={webhookUrl} limits={limits} />}
 
       {error && <Callout tone="error">{error}</Callout>}
 
@@ -194,7 +203,7 @@ export function InquiriesSettings({
         <FrameHeader
           title="Webhooks"
           description="One per form tool, each with its own token, so you can turn one off without touching the others."
-          actions={canManage && !creating && endpoints.length > 0 ? (
+          actions={canCreate && !creating && endpoints.length > 0 ? (
             <Button.Root variant="neutral" mode="stroke" size="xsmall" onClick={() => setCreating(true)}>
               <Button.Icon as={RiAddLine} />
               New webhook
@@ -257,8 +266,8 @@ export function InquiriesSettings({
               compact
               icon={RiWebhookLine}
               title="No webhooks yet"
-              description={canManage ? "Create one, then add its URL and token to your form tool." : "An owner or admin creates them."}
-              action={canManage ? (
+              description={canCreate ? "Create one, then add its URL and token to your form tool." : canManage ? "Turn Inquiry intake on to create one." : "An owner or admin creates them."}
+              action={canCreate ? (
                 <Button.Root variant="primary" mode="filled" size="small" onClick={() => setCreating(true)}>
                   <Button.Icon as={RiAddLine} />
                   Create webhook
@@ -270,7 +279,7 @@ export function InquiriesSettings({
         {!canManage && <FrameFooter>Only owners and admins can add or change webhooks.</FrameFooter>}
       </Frame>
 
-      <Frame>
+      {featureOn && <Frame>
         <FrameHeader
           title="Recent inquiries"
           description="The latest 50, newest first. Historical ones were sent as a backfill and are never acted on."
@@ -295,13 +304,13 @@ export function InquiriesSettings({
             />
           )}
         </FramePanel>
-      </Frame>
+      </Frame>}
     </div>
   );
 }
 
 /** The one-time setup, said plainly: a site's address alone connects nothing. */
-function SetupSteps({ webhookUrl }: { webhookUrl: string }) {
+function SetupSteps({ webhookUrl, limits }: { webhookUrl: string; limits: Limits }) {
   const steps: React.ReactNode[] = [
     <>Create a webhook below. You get a secret token for it, shown once.</>,
     <>
@@ -338,6 +347,11 @@ function SetupSteps({ webhookUrl }: { webhookUrl: string }) {
           A submission with a valid email or phone becomes a contact (the same person if they are already in your contacts). Nothing is sent
           to them and no CRM record is made; what they wrote is kept for the assistant. To bring in old submissions, add{" "}
           <Code>?historical=1</Code> to the URL: they are kept and listed, never acted on.
+        </p>
+        <p className="text-paragraph-xs text-text-sub-600">
+          Each webhook takes up to {limits.perHour.toLocaleString("en-US")} submissions an hour (more are refused with 429, and the form
+          tool can send them again later) and makes up to {limits.newContactsPerDay.toLocaleString("en-US")} new contacts a day; past that,
+          submissions are still kept, marked unusable, without a contact.
         </p>
       </FramePanel>
     </Frame>
@@ -562,7 +576,7 @@ function InquiryRow({ inquiry }: { inquiry: InquirySummary }) {
         {inquiry.reason && <p className="mt-1 text-paragraph-xs text-error-base">{inquiry.reason}</p>}
         {inquiry.status !== "unusable" && inquiry.dropped.map((item) => (
           <p key={item.field} className="mt-1 text-paragraph-xs text-warning-dark">
-            {item.field === "email" ? "Email" : "Phone"} not kept: {item.reason}
+            {item.field === "email" ? "Email" : item.field === "phone" ? "Phone" : "Page URL"} not kept: {item.reason}
           </p>
         ))}
         <p className="mt-1 text-paragraph-xs text-text-soft-400">

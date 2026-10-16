@@ -7,6 +7,7 @@ import {
   LIMITS,
   mapSubmission,
   normalizeFieldName,
+  truncate,
   parseSubmission,
   parseSubmittedAt,
   type FlatField,
@@ -222,7 +223,7 @@ describe("mapSubmission", () => {
       ["first_name", "firstName", "F"], ["last_name", "lastName", "L"],
       ["company", "company", "C"], ["organization", "company", "C"], ["business", "company", "C"],
       ["message", "message", "M"], ["comments", "message", "M"], ["inquiry", "message", "M"], ["enquiry", "message", "M"], ["details", "message", "M"], ["your-message", "message", "M"],
-      ["page_url", "pageUrl", "U"], ["url", "pageUrl", "U"], ["page", "pageUrl", "U"],
+      ["page_url", "pageUrl", "https://u.test/"], ["url", "pageUrl", "https://u.test/"], ["page", "pageUrl", "https://u.test/"],
       ["id", "submissionId", "I"], ["submission_id", "submissionId", "I"], ["entry_id", "submissionId", "I"],
       ["submitted_at", "submittedAtText", "2026-01-01"], ["created_at", "submittedAtText", "2026-01-01"], ["date", "submittedAtText", "2026-01-01"],
     ];
@@ -271,6 +272,16 @@ describe("mapSubmission", () => {
     }
   });
 
+  test("drops an email with a NUL byte or half an emoji instead of stripping it into an address", async () => {
+    for (const bad of ["jane\u0000@acme.io", "jane@acme.io\u0000", "ja\ud83dne@acme.io", "jane\u0007@acme.io"]) {
+      const result = await mapped({ email: bad, phone: "+14155552671" });
+      expect(result.email).toBeNull();
+      expect(result.emailRejected?.reason).toContain("characters an email address cannot have");
+      expect(result.emailRejected?.value.includes("\u0000")).toBe(false);
+      expect(/[\ud800-\udbff](?![\udc00-\udfff])/.test(result.emailRejected!.reason)).toBe(false);
+    }
+  });
+
   test("only trims and lowercases a valid email", async () => {
     expect((await mapped({ email: "  Jane.Doe+Quotes@Acme.IO " })).email).toBe("jane.doe+quotes@acme.io");
   });
@@ -289,11 +300,56 @@ describe("mapSubmission", () => {
     expect(result.extras.note).toHaveLength(LIMITS.value);
   });
 
+  test("strips NUL bytes and lone surrogates from every key and value it returns", async () => {
+    const result = await mapped({ "na\u0000me": "Ada\u0000 L", message: "Hi \ud83d there\u0000", "x\ud800": "y\udc00", phone: "+1 415\u0000555 2671" });
+    const strings = [result.name, result.message, result.phone, ...Object.keys(result.fields), ...Object.values(result.fields), ...Object.keys(result.extras), ...Object.values(result.extras)];
+    for (const value of strings) {
+      expect(value === null || (!value.includes("\u0000") && !/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/.test(value))).toBe(true);
+    }
+    expect(result.name).toBe("Ada L");
+    expect(result.message).toBe("Hi \ufffd there");
+  });
+
+  test("keeps a page URL only when it is an http(s) address", async () => {
+    expect((await mapped({ email: "a@b.co", page_url: "https://shop.in/contact?x=1" })).pageUrl).toBe("https://shop.in/contact?x=1");
+    expect((await mapped({ email: "a@b.co", page_url: "http://shop.in/" })).pageUrlRejected).toBeNull();
+    for (const bad of ["javascript:alert(1)", "/contact", "ftp://shop.in/x", "data:text/html,hi", "shop.in/contact"]) {
+      const result = await mapped({ email: "a@b.co", page_url: bad });
+      expect(result.pageUrl).toBeNull();
+      expect(result.pageUrlRejected).toMatchObject({ field: "pageUrl", value: bad });
+      expect(result.pageUrlRejected?.reason).toContain("not a web address");
+    }
+    const long = await mapped({ email: "a@b.co", page_url: `https://shop.in/${"p".repeat(LIMITS.pageUrl)}` });
+    expect(long.pageUrl).toBeNull();
+    expect(long.pageUrlRejected?.reason).toContain("longer than");
+  });
+
   test("keeps a clashing field name under its path", async () => {
     const result = await mapped({ email: "a@b.co", data: { email: "c@d.co" } });
     expect(result.email).toBe("c@d.co");
     expect(result.fields).toEqual({ email: "a@b.co", "data.email": "c@d.co" });
     expect(result.extras).toEqual({ email: "a@b.co" });
+  });
+});
+
+describe("truncate", () => {
+  test("never splits a surrogate pair at the boundary", () => {
+    const emoji = "😀";
+    const value = `${"a".repeat(8)}${emoji}${"b".repeat(10)}`;
+    // max 10 keeps 9 characters before "…": the 9th would be the emoji's first half.
+    const cut = truncate(value, 10);
+    expect(cut).toBe(`${"a".repeat(8)}…`);
+    expect(/[\ud800-\udbff](?![\udc00-\udfff])/.test(cut)).toBe(false);
+    expect(truncate(`${"a".repeat(7)}${emoji}${"b".repeat(10)}`, 10)).toBe(`${"a".repeat(7)}${emoji}…`);
+    expect(truncate("short", 10)).toBe("short");
+  });
+
+  test("a message cut at an emoji stays valid for jsonb", async () => {
+    const message = `${"m".repeat(LIMITS.message - 2)}😀😀😀`;
+    const result = await mapped({ email: "a@b.co", message });
+    expect(result.message!.length).toBeLessThanOrEqual(LIMITS.message);
+    expect(() => JSON.parse(JSON.stringify({ message: result.message }))).not.toThrow();
+    expect(/[\ud800-\udbff](?![\udc00-\udfff])/.test(result.message!)).toBe(false);
   });
 });
 
@@ -317,15 +373,28 @@ describe("parseSubmittedAt", () => {
 });
 
 describe("inquiryDedupeKey", () => {
-  test("is the form's submission id, namespaced by endpoint", async () => {
+  test("is the form's submission id with a hash of the content, namespaced by endpoint", async () => {
     const result = await mapped({ submission_id: "abc-1", email: "a@b.co" });
-    expect(inquiryDedupeKey(ENDPOINT, result)).toBe(`${ENDPOINT}:id:abc-1`);
+    expect(inquiryDedupeKey(ENDPOINT, result)).toMatch(new RegExp(`^${ENDPOINT}:id:abc-1:[0-9a-f]{64}$`));
     expect(inquiryDedupeKey("22222222-2222-4222-8222-222222222222", result)).not.toBe(inquiryDedupeKey(ENDPOINT, result));
+  });
+
+  test("an exact retry with an id matches; a different submission reusing the id does not", async () => {
+    const body = { submission_id: "abc-1", email: "a@b.co", message: "First question", tool_attempt: "1" };
+    const first = inquiryDedupeKey(ENDPOINT, await mapped(body));
+    expect(inquiryDedupeKey(ENDPOINT, await mapped({ ...body, tool_attempt: "2" }))).toBe(first);
+    expect(inquiryDedupeKey(ENDPOINT, await mapped({ ...body, email: "someone@else.co" }))).not.toBe(first);
+    expect(inquiryDedupeKey(ENDPOINT, await mapped({ ...body, message: "Another question" }))).not.toBe(first);
   });
 
   test("hashes a very long submission id", async () => {
     const key = inquiryDedupeKey(ENDPOINT, await mapped({ submission_id: "x".repeat(400) }));
-    expect(key).toMatch(new RegExp(`^${ENDPOINT}:id:[0-9a-f]{64}$`));
+    expect(key).toMatch(new RegExp(`^${ENDPOINT}:id:[0-9a-f]{64}:[0-9a-f]{64}$`));
+  });
+
+  test("never carries a NUL byte (dedupe_key is a text column)", async () => {
+    const key = inquiryDedupeKey(ENDPOINT, await mapped({ submission_id: "abc\u0000-1", email: "a@b.co" }));
+    expect(key.includes("\u0000")).toBe(false);
   });
 
   test("without one, is a hash of the normalized content, stable for retries", async () => {
@@ -354,9 +423,10 @@ describe("inquiryDedupeKey", () => {
 
 describe("cleanFieldMap", () => {
   test("keeps known keys with a value, trimmed", () => {
-    expect(cleanFieldMap({ email: "  Work Email ", phone: "", message: 4, bogus: "x", name: "n".repeat(300) })).toEqual({
+    expect(cleanFieldMap({ email: "  Work Email ", phone: "", message: 4, bogus: "x", name: "n".repeat(300), company: "Org\u0000" })).toEqual({
       email: "Work Email",
-      name: "n".repeat(LIMITS.fieldMapValue),
+      name: `${"n".repeat(LIMITS.fieldMapValue - 1)}…`,
+      company: "Org",
     });
     expect(cleanFieldMap(null)).toEqual({});
     expect(cleanFieldMap(["email"])).toEqual({});

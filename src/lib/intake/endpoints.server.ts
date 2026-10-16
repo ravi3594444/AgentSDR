@@ -2,6 +2,7 @@ import "server-only";
 
 import { and, count, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
+import { cleanString } from "@/lib/grid/sanitize";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { cleanFieldMap } from "./fields";
 import { inquiries, intakeEndpoints, type InquirySource, type InquiryStatus, type IntakeEndpointRow, type IntakeFieldMap } from "./schema";
@@ -15,7 +16,11 @@ import { generateIntakeToken, hashIntakeToken, looksLikeIntakeToken, secretsMatc
  * webhook finds its organization through the account id.
  *
  * A token is returned only by create and rotate, once; listings carry its
- * last four characters, never the hash.
+ * last four characters, never the hash. Only creating an endpoint needs the
+ * organization's Inquiry intake on (checked by the route): listing, turning
+ * off, rotating and deleting work while it is off, so a leaked token can
+ * always be killed. The feature switch never touches an endpoint's own
+ * on/off, so turning the feature back on revives nothing that was off.
  */
 
 export class IntakeInputError extends Error {
@@ -44,7 +49,7 @@ export const DEFAULT_ENDPOINT_NAME = "Website form";
 function cleanName(value: unknown, fallback?: string): string {
   if (value === undefined && fallback !== undefined) return fallback;
   if (typeof value !== "string") throw new IntakeInputError("Give the webhook a name.");
-  const name = value.trim().replace(/\s+/g, " ");
+  const name = cleanString(value).trim().replace(/\s+/g, " ");
   if (!name) throw new IntakeInputError("Give the webhook a name.");
   if (name.length > NAME_MAX) throw new IntakeInputError(`Keep the name under ${NAME_MAX} characters.`);
   return name;
@@ -168,7 +173,7 @@ export async function findIntakeEndpointByToken(token: string): Promise<IntakeEn
   return row && secretsMatch(hash, row.tokenHash) ? row : null;
 }
 
-export type InquiryDropped = { field: "email" | "phone"; value: string; reason: string };
+export type InquiryDropped = { field: "email" | "phone" | "pageUrl"; value: string; reason: string };
 
 export type InquirySummary = {
   id: string;

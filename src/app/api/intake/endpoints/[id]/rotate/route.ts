@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requirePermission, withOrgContext } from "@/lib/auth/context";
-import { requireFeature } from "@/lib/features/flags.server";
 import { rotateIntakeEndpointToken } from "@/lib/intake/endpoints.server";
 import { intakeFailure, notFound } from "@/lib/intake/http";
+
+// Works while Inquiry intake is off too: a leaked token can always be replaced.
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -12,7 +13,6 @@ export async function POST(req: NextRequest, { params }: Ctx) {
   try {
     return await withOrgContext(req, async (ctx) => {
       requirePermission(ctx, { integrations: ["manage"] });
-      await requireFeature("inquiry_intake");
       const rotated = await rotateIntakeEndpointToken(id);
       return rotated ? NextResponse.json(rotated) : notFound();
     });

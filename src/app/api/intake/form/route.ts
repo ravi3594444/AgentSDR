@@ -2,7 +2,8 @@ import { type NextRequest, NextResponse } from "next/server";
 import { featureEnabled, FeatureDisabledError } from "@/lib/features/flags.server";
 import { findIntakeEndpointByToken } from "@/lib/intake/endpoints.server";
 import { isSupportedContentType, parseSubmission, SUPPORTED_CONTENT_TYPES } from "@/lib/intake/fields";
-import { recordFormInquiry } from "@/lib/intake/inquiries.server";
+import { errorSummary } from "@/lib/intake/http";
+import { INTAKE_SUBMISSIONS_PER_HOUR, intakeRateLimit, recordFormInquiry } from "@/lib/intake/inquiries.server";
 import { looksLikeIntakeToken } from "@/lib/intake/tokens";
 import { runInOrganization } from "@/lib/tenancy/scope";
 
@@ -28,14 +29,20 @@ import { runInOrganization } from "@/lib/tenancy/scope";
  * 202 { ok, inquiryId, duplicate, status } — recorded (or already recorded:
  * a retry is a no-op). 400 no fields / unreadable body, 401 unknown token,
  * 403 endpoint turned off, 409 Inquiry intake off for the organization
- * (nothing stored), 413 too large, 415 other content types, 500 a failure
- * worth retrying.
+ * (nothing stored), 413 too large, 415 other content types, 429 the
+ * endpoint's hourly limit (INTAKE_SUBMISSIONS_PER_HOUR) reached, with
+ * Retry-After, 500 a failure worth retrying. Past the endpoint's daily limit
+ * of new contacts the submission is still 202, stored as unusable with that
+ * reason (inquiries.server.ts).
+ *
+ * Errors are logged by name and code only: a query's message carries the
+ * visitor's details.
  */
 
 const MAX_BODY_BYTES = 64 * 1024;
 
-function fail(status: number, error: string) {
-  return NextResponse.json({ ok: false, error }, { status });
+function fail(status: number, error: string, headers?: HeadersInit) {
+  return NextResponse.json({ ok: false, error }, { status, headers });
 }
 
 function tokenOf(req: NextRequest): string | null {
@@ -91,6 +98,15 @@ export async function POST(req: NextRequest) {
       if (!isSupportedContentType(contentType)) {
         return fail(415, `Send the submission as ${SUPPORTED_CONTENT_TYPES.join(", ")}.`);
       }
+      // Before the body is read: a flood costs one count per request.
+      const limited = await intakeRateLimit(endpoint.id);
+      if (limited) {
+        return fail(
+          429,
+          `This form has sent ${INTAKE_SUBMISSIONS_PER_HOUR} submissions in the last hour. Retry later.`,
+          { "retry-after": String(limited.retryAfterSeconds) },
+        );
+      }
       const body = await readBody(req, MAX_BODY_BYTES);
       if (!body) return fail(413, `The submission is larger than ${MAX_BODY_BYTES / 1024} KB.`);
       const parsed = await parseSubmission(body, contentType);
@@ -104,7 +120,7 @@ export async function POST(req: NextRequest) {
     });
   } catch (error) {
     if (error instanceof FeatureDisabledError) return fail(409, error.message);
-    console.error("[intake/form] could not record a submission", error);
+    console.error(`[intake/form] could not record a submission for endpoint ${endpoint.id}: ${errorSummary(error)}`);
     return fail(500, "The submission could not be recorded. Retry it.");
   }
 }

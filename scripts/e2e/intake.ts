@@ -6,10 +6,13 @@
  *
  *   bun run --conditions=react-server scripts/e2e/intake.ts
  *
- * It creates its own organizations ("Intake check A/B/C …"), turns Inquiry
- * intake on for A and B (setFeature, as Settings → Organization does) and
- * leaves C off, and leaves them behind. Nothing leaves the machine: global
- * fetch is replaced by one that throws. Refuses a non-local DATABASE_URL.
+ * It creates its own organizations ("Intake check A/B/C/M …"), turns Inquiry
+ * intake on for A and B (setFeature, as Settings → Organization does),
+ * leaves C off, and uses M (off, then on) for the management routes, called
+ * with real Better Auth sessions of an owner and a member it signs up. It
+ * leaves them behind. Nothing leaves the machine: global fetch is replaced
+ * by one that throws, and auth email has no RESEND_API_KEY (it is logged).
+ * Refuses a non-local DATABASE_URL.
  *
  * What it cannot prove: that a given form tool (Zapier, Make, Webflow, a
  * WordPress plugin) sends exactly these bodies; the shapes follow their
@@ -23,13 +26,17 @@ if (!/@(localhost|127\.0\.0\.1)[:/]/.test(process.env.DATABASE_URL ?? "")) {
   process.exit(2);
 }
 
+process.env.AUTH_SIGNUP = "open";
+delete process.env.RESEND_API_KEY;
+
 const realFetch = globalThis.fetch;
 globalThis.fetch = (async (input: RequestInfo | URL): Promise<Response> => {
   throw new Error(`No network in this check (${typeof input === "string" ? input : input instanceof URL ? input.href : input.url})`);
 }) as typeof fetch;
 
 const { db } = await import("@/lib/db");
-const { organizations } = await import("@/lib/auth/schema");
+const { members, organizations, users } = await import("@/lib/auth/schema");
+const { auth } = await import("@/lib/auth/server");
 const { companies, people } = await import("@/lib/leads/schema");
 const { inquiries, intakeEndpoints } = await import("@/lib/intake/schema");
 const { instagramAccounts, instagramChats } = await import("@/lib/instagram/schema");
@@ -37,6 +44,7 @@ const { setFeature } = await import("@/lib/features/flags.server");
 const { saveChannelRules } = await import("@/lib/channels/rules.server");
 const { createIntakeEndpoint, deleteIntakeEndpoint, listInquiries, rotateIntakeEndpointToken, updateIntakeEndpoint } = await import("@/lib/intake/endpoints.server");
 const { recordInstagramInquiry } = await import("@/lib/intake/instagram.server");
+const { DAILY_CONTACT_LIMIT_REASON, INTAKE_NEW_CONTACTS_PER_DAY, INTAKE_SUBMISSIONS_PER_HOUR } = await import("@/lib/intake/inquiries.server");
 const { createProvisionalPerson, upsertCompany, upsertPerson, withLeadTransaction } = await import("@/lib/leads/records");
 const { generateIntakeToken } = await import("@/lib/intake/tokens");
 const { runInOrganization } = await import("@/lib/tenancy/scope");
@@ -44,6 +52,9 @@ const { demoRequestBlock } = await import("@/lib/demo/mode");
 const { migrationMutationBlockReason } = await import("@/lib/migration/controls");
 const { proxy } = await import("@/proxy");
 const { POST } = await import("@/app/api/intake/form/route");
+const endpointsRoute = await import("@/app/api/intake/endpoints/route");
+const endpointRoute = await import("@/app/api/intake/endpoints/[id]/route");
+const rotateRoute = await import("@/app/api/intake/endpoints/[id]/rotate/route");
 
 let failures = 0;
 function check(label: string, ok: boolean, detail = "") {
@@ -59,7 +70,7 @@ async function newOrganization(label: string) {
   return org!;
 }
 
-type Reply = { status: number; body: { ok?: boolean; inquiryId?: string; duplicate?: boolean; status?: string; error?: string } };
+type Reply = { status: number; headers: Headers; body: { ok?: boolean; inquiryId?: string; duplicate?: boolean; status?: string; error?: string } };
 
 /** Calls the route handler the way Next does. */
 async function deliver(
@@ -75,7 +86,7 @@ async function deliver(
   if (options.contentType) headers.set("content-type", options.contentType);
   const search = params.toString();
   const response = await POST(new NextRequest(`${URL_BASE}${search ? `?${search}` : ""}`, { method: "POST", headers, body }));
-  return { status: response.status, body: await response.json() };
+  return { status: response.status, headers: response.headers, body: await response.json() };
 }
 
 const json = (value: unknown, token: string, extra: Parameters<typeof deliver>[1] = {}) =>
@@ -107,6 +118,53 @@ async function person(id: string | null | undefined) {
   return row ?? null;
 }
 
+/** `count` inquiries already received by an endpoint, `minutesAgo`, as filler for the limit checks. */
+async function seedInquiries(orgId: string, endpointId: string, total: number, minutesAgo: number, raw: Record<string, unknown> = {}) {
+  const receivedAt = new Date(Date.now() - minutesAgo * 60 * 1000);
+  const rows = Array.from({ length: total }, (_, index) => ({
+    organizationId: orgId,
+    source: "website_form" as const,
+    endpointId,
+    dedupeKey: `${endpointId}:seed:${minutesAgo}:${index}`,
+    status: "unusable" as const,
+    reason: "seeded by scripts/e2e/intake.ts",
+    receivedAt,
+    raw,
+  }));
+  for (let start = 0; start < rows.length; start += 250) await db.insert(inquiries).values(rows.slice(start, start + 250));
+}
+
+const PASSWORD = "intake-check-password-1";
+
+/** A real Better Auth session (its cookie) for a new user who is `role` in `orgId`. */
+async function sessionCookie(email: string, orgId: string, role: "owner" | "admin" | "member"): Promise<string> {
+  await auth.api.signUpEmail({ body: { name: email.split("@")[0]!, email, password: PASSWORD } });
+  const [user] = await db.update(users).set({ emailVerified: true }).where(eq(users.email, email)).returning({ id: users.id });
+  await db.insert(members).values({ organizationId: orgId, userId: user!.id, role });
+  const signedIn = await auth.api.signInEmail({ body: { email, password: PASSWORD }, returnHeaders: true });
+  return signedIn.headers.getSetCookie().map((cookie) => cookie.split(";")[0]).join("; ");
+}
+
+/** Calls a management route handler as a signed-in person. */
+async function manage(
+  handler: (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => Promise<Response>,
+  method: string,
+  path: string,
+  cookie: string,
+  body?: unknown,
+  id = "",
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const response = await handler(
+    new NextRequest(`http://localhost${path}`, {
+      method,
+      headers: { cookie, ...(body === undefined ? {} : { "content-type": "application/json" }) },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    }),
+    { params: Promise.resolve({ id }) },
+  );
+  return { status: response.status, body: (await response.json().catch(() => ({}))) as Record<string, unknown> };
+}
+
 // ------------------------------------------------------------ setup
 const orgA = await newOrganization("A");
 const orgB = await newOrganization("B");
@@ -126,6 +184,9 @@ let tokenA = endpointA.token;
   check("proxy keeps /api/intake/endpoints behind sign-in", privateResponse.status === 401, String(privateResponse.status));
   const inquiriesResponse = proxy(new NextRequest("http://localhost/api/intake/inquiries", { method: "GET" }));
   check("proxy keeps /api/intake/inquiries behind sign-in", inquiriesResponse.status === 401, String(inquiriesResponse.status));
+  const beside = proxy(new NextRequest("http://localhost/api/intake/form-x", { method: "POST" }));
+  const under = proxy(new NextRequest("http://localhost/api/intake/form/x", { method: "POST" }));
+  check("only the exact path is public: /api/intake/form-x and /api/intake/form/x need sign-in", beside.status === 401 && under.status === 401, `${beside.status} ${under.status}`);
   check("the read-only demo refuses the webhook (it never writes)", demoRequestBlock("/api/intake/form", "POST", { DEMO_MODE: "true" })?.kind === "refuse");
   check("the People migration switch leaves the inbound webhook running", migrationMutationBlockReason("/api/intake/form", "POST", { PEOPLE_MIGRATION_MODE: "true" }) === null);
 }
@@ -173,6 +234,7 @@ const janeBody = { data: { name: "Jane Doe", email: janeEmail.toUpperCase(), pho
   check("…keeping the company typed in the form by name", jane?.raw?.companyName === "Acme Events" && jane?.companyId === null, JSON.stringify(jane?.raw));
   const [endpointRow] = await db.select().from(intakeEndpoints).where(eq(intakeEndpoints.id, endpointA.endpoint.id));
   check("…and marks when the endpoint last received", endpointRow?.lastReceivedAt instanceof Date);
+  check("…and flags the inquiry as having made the person (the daily limit counts these)", row?.raw?.createdPerson === true);
 
   const retry = await json(janeBody, tokenA);
   check("the same submission again → 202 duplicate with the original inquiry id", retry.status === 202 && retry.body.duplicate === true && retry.body.inquiryId === first.body.inquiryId, JSON.stringify(retry.body));
@@ -194,6 +256,7 @@ const janeBody = { data: { name: "Jane Doe", email: janeEmail.toUpperCase(), pho
   const after = await person(existing.id);
   check("an existing person with that email (any case) is reused", reply.status === 202 && row?.personId === existing.id && (await peopleCount(orgA.id)) === peopleBefore, JSON.stringify(reply.body));
   check("…and keeps their own name and source", after?.fullName === "Existing Name" && after?.source === "manual", `${after?.fullName} ${after?.source}`);
+  check("…and the inquiry is not flagged as having made a person", row?.raw?.createdPerson === undefined);
 
   const phoneOnly = await inOrg(orgA.id, () => withLeadTransaction((tx) => createProvisionalPerson(tx, { phone: "+16502530000", source: "call-campaign-contact" })));
   const withPhoneOnly = await peopleCount(orgA.id);
@@ -322,6 +385,101 @@ const janeBody = { data: { name: "Jane Doe", email: janeEmail.toUpperCase(), pho
   const foreignDelete = await inOrg(orgB.id, () => deleteIntakeEndpoint(endpointA.endpoint.id));
   const [stillThere] = await db.select().from(intakeEndpoints).where(eq(intakeEndpoints.id, endpointA.endpoint.id));
   check("B cannot change, rotate or delete A's endpoint (not found)", foreignUpdate === null && foreignRotate === null && foreignDelete === false && stillThere?.enabled === true);
+}
+
+// ------------------------------------------------------------ a reused submission id
+{
+  const original = { submission_id: `sub-${stamp}`, email: `first-${stamp}@shop.test`, message: "First question" };
+  const first = await json(original, tokenA);
+  const retry = await json({ ...original, delivery_attempt: "2" }, tokenA);
+  const reused = await json({ submission_id: `sub-${stamp}`, email: `second-${stamp}@shop.test`, message: "A different question" }, tokenA);
+  check("an exact retry of a submission with an id is a duplicate", first.status === 202 && retry.body.duplicate === true && retry.body.inquiryId === first.body.inquiryId, JSON.stringify(retry.body));
+  check("a different submission reusing that id is recorded, not swallowed as a retry", reused.status === 202 && reused.body.duplicate === false && reused.body.inquiryId !== first.body.inquiryId && (await inquiry(reused.body.inquiryId))?.message === "A different question", JSON.stringify(reused.body));
+}
+
+// ------------------------------------------------------------ unsafe characters, page URLs
+{
+  const reply = await json({
+    "na\u0000me": "Nul\u0000 Name",
+    email: `nul\u0000-${stamp}@shop.test`,
+    phone: "+91 98765 43210",
+    message: "Half an emoji \ud83d here\u0000",
+    "no\u0000te": "v\u0000",
+    page_url: "javascript:alert(1)",
+  }, tokenA);
+  const row = await inquiry(reply.body.inquiryId);
+  const dropped = (row?.raw?.dropped ?? []) as { field: string; value: string; reason: string }[];
+  const strings = [row?.name, row?.message, row?.reason, ...Object.keys(row?.fields ?? {}), ...Object.values(row?.fields ?? {}), JSON.stringify(row?.raw ?? {})];
+  check("NUL bytes and half an emoji are stored safely (no 500)", reply.status === 202 && strings.every((value) => !value || (!value.includes("\u0000") && !/[\ud800-\udbff](?![\udc00-\udfff])/.test(value))), JSON.stringify(reply.body));
+  check("…an email with a NUL byte is dropped with its reason, not stripped into an address", row?.email === null && dropped.some((item) => item.field === "email" && /cannot have/.test(item.reason)) && row?.phone === "+919876543210", JSON.stringify(dropped));
+  check("…a javascript: page URL is dropped with its reason", row?.pageUrl === null && dropped.some((item) => item.field === "pageUrl" && item.value === "javascript:alert(1)"), JSON.stringify(dropped));
+  const kept = await json({ email: `page-${stamp}@shop.test`, message: "From the pricing page", page_url: "https://shop.test/pricing?plan=pro" }, tokenA);
+  check("an http(s) page URL is kept as written", (await inquiry(kept.body.inquiryId))?.pageUrl === "https://shop.test/pricing?plan=pro");
+}
+
+// ------------------------------------------------------------ two submissions with one brand-new email at once
+{
+  const email = `race-${stamp}@shop.test`;
+  const replies = await Promise.all([1, 2, 3, 4].map((n) => json({ name: `Racer ${n}`, email, phone: `+1 650 253 000${n}`, message: `Question ${n}` }, tokenA)));
+  const ids = replies.map((reply) => reply.body.inquiryId!);
+  const rows = await db.select().from(inquiries).where(inArray(inquiries.id, ids));
+  const racers = await db.select().from(people).where(and(eq(people.organizationId, orgA.id), sql`lower(${people.email}) = ${email}`));
+  const racer = racers[0];
+  check("concurrent submissions with one new email make one person, all linked to it", replies.every((reply) => reply.status === 202 && reply.body.duplicate === false) && racers.length === 1 && rows.length === 4 && rows.every((row) => row.personId === racer?.id), `${racers.length} people`);
+  check("…the later ones wait and reuse it instead of overwriting it", racer?.updatedAt.getTime() === racer?.createdAt.getTime() && rows.filter((row) => row.raw?.createdPerson === true).length === 1, `${racer?.fullName} ${racer?.phone}`);
+}
+
+// ------------------------------------------------------------ per-endpoint limits
+{
+  const busy = await inOrg(orgA.id, () => createIntakeEndpoint({ name: "Busy form" }, null));
+  await seedInquiries(orgA.id, busy.endpoint.id, INTAKE_SUBMISSIONS_PER_HOUR - 1, 30);
+  const last = await json({ email: `hourly-${stamp}@shop.test`, message: "Just under the limit" }, busy.token);
+  const before = await inquiryCount(orgA.id);
+  const over = await json({ email: `hourly-over-${stamp}@shop.test`, message: "Over the limit" }, busy.token);
+  const retryAfter = Number(over.headers.get("retry-after"));
+  check(`the ${INTAKE_SUBMISSIONS_PER_HOUR}th submission in an hour is taken`, last.status === 202, JSON.stringify(last.body));
+  check("one more → 429 with Retry-After, nothing stored", over.status === 429 && over.body.ok === false && retryAfter > 0 && retryAfter <= 3600 && (await inquiryCount(orgA.id)) === before, `${over.status} retry-after=${over.headers.get("retry-after")}`);
+  check("…Retry-After is when the oldest of the hour leaves the window (~30 min here)", Math.abs(retryAfter - 30 * 60) <= 120, String(retryAfter));
+  const other = await json({ email: `other-endpoint-${stamp}@shop.test`, message: "Another form is not limited" }, tokenA);
+  check("…the limit is per endpoint", other.status === 202);
+
+  const daily = await inOrg(orgA.id, () => createIntakeEndpoint({ name: "Daily-capped form" }, null));
+  await seedInquiries(orgA.id, daily.endpoint.id, INTAKE_NEW_CONTACTS_PER_DAY, 120, { createdPerson: true });
+  const peopleBefore = await peopleCount(orgA.id);
+  const capped = await json({ name: "One Too Many", email: `daily-${stamp}@shop.test`, message: "Please call me" }, daily.token);
+  const cappedRow = await inquiry(capped.body.inquiryId);
+  check(`past ${INTAKE_NEW_CONTACTS_PER_DAY} new contacts in 24 hours a new person is not made, but nothing is lost`, capped.status === 202 && capped.body.status === "unusable" && cappedRow?.reason === DAILY_CONTACT_LIMIT_REASON && cappedRow?.personId === null && cappedRow?.email === `daily-${stamp}@shop.test` && cappedRow?.message === "Please call me" && (await peopleCount(orgA.id)) === peopleBefore, JSON.stringify({ status: capped.body.status, reason: cappedRow?.reason }));
+  const known = await json({ email: `existing-${stamp}@shop.test`, message: "A known person still gets through" }, daily.token);
+  check("…a known person is still matched past it", known.body.status === "received" && Boolean((await inquiry(known.body.inquiryId))?.personId) && (await peopleCount(orgA.id)) === peopleBefore, JSON.stringify(known.body));
+}
+
+// ------------------------------------------------------------ management routes while Inquiry intake is off
+{
+  const orgM = await newOrganization("M");
+  const ownerCookie = await sessionCookie(`intake-owner-${stamp}@example.test`, orgM.id, "owner");
+  const memberCookie = await sessionCookie(`intake-member-${stamp}@example.test`, orgM.id, "member");
+  const leaked = await inOrg(orgM.id, () => createIntakeEndpoint({ name: "Leaked" }, null));
+  const spare = await inOrg(orgM.id, () => createIntakeEndpoint({ name: "Spare" }, null));
+
+  const listed = await manage(endpointsRoute.GET, "GET", "/api/intake/endpoints", ownerCookie);
+  check("with the feature off, endpoints are still listed", listed.status === 200 && listed.body.enabled === false && (listed.body.endpoints as unknown[]).length === 2, JSON.stringify({ status: listed.status, enabled: listed.body.enabled }));
+  const create = await manage(endpointsRoute.POST, "POST", "/api/intake/endpoints", ownerCookie, { name: "New" });
+  check("…but creating one → 409", create.status === 409, JSON.stringify(create.body));
+  const asMember = await manage(endpointRoute.PATCH, "PATCH", `/api/intake/endpoints/${leaked.endpoint.id}`, memberCookie, { enabled: false }, leaked.endpoint.id);
+  check("…a member cannot turn one off (403)", asMember.status === 403, String(asMember.status));
+  const off = await manage(endpointRoute.PATCH, "PATCH", `/api/intake/endpoints/${leaked.endpoint.id}`, ownerCookie, { enabled: false }, leaked.endpoint.id);
+  const rotated = await manage(rotateRoute.POST, "POST", `/api/intake/endpoints/${leaked.endpoint.id}/rotate`, ownerCookie, undefined, leaked.endpoint.id);
+  const removed = await manage(endpointRoute.DELETE, "DELETE", `/api/intake/endpoints/${spare.endpoint.id}`, ownerCookie, undefined, spare.endpoint.id);
+  check("…an owner can turn one off, rotate its token and delete one", off.status === 200 && (off.body.endpoint as { enabled?: boolean })?.enabled === false && rotated.status === 200 && typeof rotated.body.token === "string" && removed.status === 200, `${off.status} ${rotated.status} ${removed.status}`);
+  const foreign = await manage(endpointRoute.PATCH, "PATCH", `/api/intake/endpoints/${endpointA.endpoint.id}`, ownerCookie, { enabled: false }, endpointA.endpoint.id);
+  check("…another organization's endpoint is not found (404)", foreign.status === 404, String(foreign.status));
+
+  await inOrg(orgM.id, () => setFeature("inquiry_intake", true, null));
+  const revived = await json({ email: `revived-${stamp}@shop.test`, message: "Hello?" }, rotated.body.token as string);
+  const oldToken = await json({ email: `revived-${stamp}@shop.test`, message: "Hello?" }, leaked.token);
+  check("turning the feature back on does not revive the endpoint turned off", revived.status === 403 && oldToken.status === 401 && (await inquiryCount(orgM.id)) === 0, `${revived.status} ${oldToken.status}`);
+  const created = await manage(endpointsRoute.POST, "POST", "/api/intake/endpoints", ownerCookie, { name: "New" });
+  check("…and with it on, creating works (201, token shown once)", created.status === 201 && typeof created.body.token === "string", String(created.status));
 }
 
 // ------------------------------------------------------------ Instagram

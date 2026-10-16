@@ -2,6 +2,7 @@ import "server-only";
 
 import { and, eq } from "drizzle-orm";
 import { featureEnabled } from "@/lib/features/flags.server";
+import { cleanJson, cleanString } from "@/lib/grid/sanitize";
 import { createProvisionalPerson, withLeadTransaction } from "@/lib/leads/records";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { LIMITS, truncate } from "./fields";
@@ -21,7 +22,8 @@ import { inquiries } from "./schema";
  * another. The person has no email or phone — Instagram is how to reach
  * them — and is created with createProvisionalPerson (source
  * "intake:instagram", raw.instagram = { username, providerId }). Nothing
- * here calls Unipile or sends anything.
+ * here calls Unipile or sends anything. Every string is stored through
+ * cleanString / cleanJson (no NUL bytes, no lone surrogates).
  */
 
 export const INTAKE_INSTAGRAM_PERSON_SOURCE = "intake:instagram";
@@ -52,10 +54,11 @@ export type InstagramInquiryResult = {
 export async function recordInstagramInquiry(input: InstagramInquiryInput): Promise<InstagramInquiryResult> {
   if (!(await featureEnabled("inquiry_intake"))) return { personId: null, inquiryId: null, duplicate: false };
 
-  const dedupeKey = `${input.unipileAccountId}:${input.providerId}`;
-  const username = input.username?.trim().replace(/^@/, "") || null;
-  const displayName = input.name?.trim() || (username ? `@${username}` : null);
-  const message = input.messageText.trim() ? truncate(input.messageText, LIMITS.message) : null;
+  const providerId = cleanString(input.providerId);
+  const dedupeKey = cleanString(`${input.unipileAccountId}:${input.providerId}`);
+  const username = cleanString(input.username?.trim().replace(/^@/, "") ?? "") || null;
+  const displayName = cleanString(input.name?.trim() ?? "") || (username ? `@${username}` : null);
+  const message = input.messageText.trim() ? cleanString(truncate(input.messageText, LIMITS.message)) : null;
 
   return withLeadTransaction(async (tx): Promise<InstagramInquiryResult> => {
     const [inserted] = await tx.insert(inquiries).values({
@@ -63,17 +66,17 @@ export async function recordInstagramInquiry(input: InstagramInquiryInput): Prom
       source: "instagram",
       instagramChatId: input.chatId,
       dedupeKey,
-      name: displayName ? truncate(displayName, LIMITS.name) : null,
+      name: displayName ? cleanString(truncate(displayName, LIMITS.name)) : null,
       message,
       submittedAt: input.sentAt,
-      raw: {
+      raw: cleanJson({
         instagram: {
           username,
-          providerId: input.providerId,
+          providerId,
           unipileAccountId: input.unipileAccountId,
           unipileMessageId: input.unipileMessageId,
         },
-      },
+      }),
     }).onConflictDoNothing({
       target: [inquiries.organizationId, inquiries.source, inquiries.dedupeKey],
     }).returning({ id: inquiries.id });
@@ -88,7 +91,7 @@ export async function recordInstagramInquiry(input: InstagramInquiryInput): Prom
 
     const person = await createProvisionalPerson(tx, {
       fullName: displayName,
-      raw: { instagram: { username, providerId: input.providerId } },
+      raw: { instagram: { username, providerId } },
       source: INTAKE_INSTAGRAM_PERSON_SOURCE,
     });
     await tx.update(inquiries).set({ personId: person.id }).where(and(inOrg(inquiries), eq(inquiries.id, inserted.id)));
