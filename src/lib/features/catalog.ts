@@ -7,7 +7,7 @@
  * (flags.server.ts).
  */
 
-export const FEATURE_KEYS = ["instagram", "web_discovery", "inquiry_intake"] as const;
+export const FEATURE_KEYS = ["instagram", "web_discovery", "inquiry_intake", "apify_discovery"] as const;
 export type FeatureKey = (typeof FEATURE_KEYS)[number];
 
 export type FeatureInfo = {
@@ -35,6 +35,12 @@ export const FEATURES: Record<FeatureKey, FeatureInfo> = {
     description:
       "Receive inquiries from your website forms (through an authenticated webhook you add to your form tool) and, with Instagram on, new Instagram messages from people you have not talked to before.",
     requires: "A one-time setup in your form tool; see the setup steps on the Inquiries page.",
+  },
+  apify_discovery: {
+    label: "Apify discovery (paid)",
+    description:
+      "Lead searches can use Apify Actors you approve — Google Maps listings, Instagram hashtags and profiles — within a monthly budget you set. When Apify is not set up, over budget or out of credit, searches continue with Google Maps, LinkedIn or website search as before. AgentSDR never tops up or upgrades your Apify account.",
+    requires: "An Apify account and API token, at least one approved Actor, and a monthly budget (set on this page once the feature is on).",
   },
 };
 

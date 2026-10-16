@@ -5,7 +5,7 @@ import { db } from "@/lib/db";
 import { getByokSettings } from "@/lib/ai/byok";
 import { getAiConnection } from "@/lib/ai/connections";
 import { retrieveKnowledge } from "@/lib/crm/knowledge";
-import { discoveryAvailability, DiscoveryUnavailableError, normalizeCriteria, startDiscovery } from "@/lib/discovery/discovery.server";
+import { discoveryAvailability, DiscoveryUnavailableError, normalizeCriteria, startDiscovery, startInstagramProspects } from "@/lib/discovery/discovery.server";
 import { searchAreaProblem } from "@/lib/discovery/geocode";
 import { extractContacts, visibleText } from "@/lib/discovery/contacts";
 import { fetchPublicPage } from "@/lib/discovery/websiteContacts.server";
@@ -261,7 +261,7 @@ export const TOOLS: Record<string, Tool> = {
   },
 
   find_leads: {
-    description: "Search public Google Maps business listings for leads matching the owner's target customers, then read each business's own website for published contact details. Takes a few minutes and runs in the background; the chat shows its progress and announces the result. Costs nothing per search (self-hosted). Only businesses with a public listing are found.",
+    description: "Search public Google Maps business listings for leads matching the owner's target customers, then read each business's own website for published contact details. Takes a few minutes and runs in the background; the chat shows its progress and announces the result. It runs on Apify's Google Maps Scraper when the organization set Apify up (approved, within its budget; paid from the owner's Apify account), otherwise on the self-hosted scraper at no cost per search, and when neither is available, on website search when that is on — the result says which, and what the fallback covers less well. Only businesses with a public listing are found.",
     arguments: "what (kind of business, e.g. 'dental clinics'), where (city/region/country), maxResults (5-200, default 50), language (two letters, optional), contactAfter (true only when the owner asked to contact, email or message the leads found: the outreach plan is then prepared automatically when the search finishes), channels (optional, with contactAfter: array of email|whatsapp|linkedin)",
     run: async (args, context) => {
       const profile = await getBusinessProfile();
@@ -275,10 +275,43 @@ export const TOOLS: Record<string, Tool> = {
       const contactAfter = request ? { channels: channels(args) ?? null, ownerRequest: request, requestId: context.outreachRequestId ?? undefined } : null;
       try {
         const started = await startDiscovery(criteria, context, { contactAfter });
+        const via = started.provider === "apify" ? " on Apify's Google Maps Scraper" : started.provider === "website" ? " on website and directory search (no Google Maps search is available)" : "";
         return {
           ok: true,
-          summary: `Search started for “${started.phrase}” (up to ${criteria.maxResults} businesses); job ${started.jobId}, audience ${started.audienceId}. It runs in the background; results are announced in the chat when done.${contactAfter ? " The outreach plan will be prepared automatically when it finishes." : ""}`,
-          data: { jobId: started.jobId, audienceId: started.audienceId, phrase: started.phrase, criteria },
+          summary: `Search started for “${started.phrase}”${via} (up to ${criteria.maxResults} businesses); job ${started.jobId}, audience ${started.audienceId}. It runs in the background; results are announced in the chat when done.${contactAfter ? " The outreach plan will be prepared automatically when it finishes." : ""}${started.note ? ` ${started.note}` : ""}`,
+          data: { jobId: started.jobId, audienceId: started.audienceId, phrase: started.phrase, criteria, provider: started.provider, note: started.note },
+        };
+      } catch (error) {
+        if (error instanceof DiscoveryUnavailableError) return { ok: false, summary: error.message };
+        throw error;
+      }
+    },
+  },
+
+  find_instagram_prospects: {
+    available: (features) => features.apify_discovery,
+    description: "Find Instagram accounts that post about the owner's kind of customers in a place, through Apify (the organization's approved Instagram Actors, within its budget; paid from the owner's Apify account): public posts under hashtags made from the customer type and place (plus any the owner names), then the accounts' public profiles and the websites they list, for emails and phones they publish. Finding an account is NOT a way to contact it: AgentSDR cannot start Instagram chats, so only accounts that publish an email or phone can be contacted; the rest are listed with the reason. Hashtags do not filter by place: accounts whose post or profile does not name the place are marked location unknown. Without Apify available, website search takes the request when it is on (same request), else it says nothing was searched. Runs in the background and announces the result.",
+    arguments: "what (kind of customer or business, e.g. 'home bakers'), where (city/area), hashtags (optional array of hashtags the owner named), maxResults (5-100 accounts, default 30), contactAfter (true only when the owner asked to contact the people found: the plan then covers those with a published email or phone), channels (optional, with contactAfter: array of email|whatsapp)",
+    run: async (args, context) => {
+      if (!(await featureEnabled("apify_discovery"))) return { ok: false, summary: new FeatureDisabledError("apify_discovery").message };
+      const profile = await getBusinessProfile();
+      const what = text(args, "what") ?? profile.targetCustomers?.trim() ?? null;
+      const where = text(args, "where") ?? profile.locations?.trim() ?? null;
+      if (!what) throw new ToolArgumentError("say what kind of accounts to look for");
+      if (!where) throw new ToolArgumentError("say which place (a city or area)");
+      if (args.contactAfter !== undefined && typeof args.contactAfter !== "boolean") throw new ToolArgumentError("contactAfter must be true or false");
+      const hashtags = Array.isArray(args.hashtags) ? args.hashtags.filter((tag): tag is string => typeof tag === "string").slice(0, 3) : [];
+      const requested = Number(args.maxResults ?? 30);
+      const maxResults = Number.isFinite(requested) ? Math.min(100, Math.max(5, Math.round(requested))) : 30;
+      const request = args.contactAfter === true ? requireOutreachRequest(context) : null;
+      const contactAfter = request ? { channels: channels(args) ?? null, ownerRequest: request, requestId: context.outreachRequestId ?? undefined } : null;
+      try {
+        const started = await startInstagramProspects({ what: what.slice(0, 200), where: where.slice(0, 200), hashtags, maxResults, language: profile.language ?? "en" }, context, { contactAfter });
+        const via = started.provider === "apify" ? `Instagram search started for ${started.phrase} through Apify` : `Instagram search through Apify is not available, so website and directory search started instead for “${what}” in ${where}`;
+        return {
+          ok: true,
+          summary: `${via}; job ${started.jobId}, audience ${started.audienceId}. Results are announced in the chat when done.${contactAfter ? " The outreach plan will be prepared automatically for those who can be contacted." : ""} ${started.note ?? ""}`.trim(),
+          data: { jobId: started.jobId, audienceId: started.audienceId, phrase: started.phrase, provider: started.provider, note: started.note },
         };
       } catch (error) {
         if (error instanceof DiscoveryUnavailableError) return { ok: false, summary: error.message };
@@ -497,7 +530,7 @@ export const TOOLS: Record<string, Tool> = {
     run: async (args) => {
       const jobId = uuid(args, "jobId", false);
       const [job] = await db.select().from(assistantJobs)
-        .where(and(inOrg(assistantJobs), inArray(assistantJobs.kind, ["discovery", "linkedin_search", "web_discovery"]), ...(jobId ? [eq(assistantJobs.id, jobId)] : [])))
+        .where(and(inOrg(assistantJobs), inArray(assistantJobs.kind, ["discovery", "linkedin_search", "web_discovery", "apify_instagram"]), ...(jobId ? [eq(assistantJobs.id, jobId)] : [])))
         .orderBy(desc(assistantJobs.createdAt)).limit(1);
       if (!job) return { ok: false, summary: "No lead search found." };
       if (job.kind === "web_discovery") {

@@ -923,6 +923,48 @@ CREATE TABLE public.accounts (
 );
 
 --
+-- Name: apify_runs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.apify_runs (
+    organization_id uuid NOT NULL,
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    job_id uuid,
+    request_id text,
+    actor_key text NOT NULL,
+    actor_id text NOT NULL,
+    apify_run_id text,
+    dataset_id text,
+    status text DEFAULT 'starting'::text NOT NULL,
+    max_charge_usd double precision NOT NULL,
+    max_items integer NOT NULL,
+    usage_usd double precision,
+    items_read integer DEFAULT 0 NOT NULL,
+    partial boolean DEFAULT false NOT NULL,
+    error text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    finished_at timestamp with time zone,
+    CONSTRAINT apify_runs_status_chk CHECK ((status = ANY (ARRAY['starting'::text, 'running'::text, 'succeeded'::text, 'partial'::text, 'failed'::text, 'refused'::text])))
+);
+
+--
+-- Name: apify_settings; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.apify_settings (
+    organization_id uuid NOT NULL,
+    encrypted_token text,
+    token_hint text,
+    approved_actors text[] DEFAULT '{}'::text[] NOT NULL,
+    monthly_budget_usd double precision DEFAULT 10 NOT NULL,
+    max_charge_per_run_usd double precision DEFAULT 2 NOT NULL,
+    max_results_per_run integer DEFAULT 100 NOT NULL,
+    updated_by uuid,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT apify_settings_limits_chk CHECK (((monthly_budget_usd >= (0)::double precision) AND (max_charge_per_run_usd > (0)::double precision) AND ((max_results_per_run >= 1) AND (max_results_per_run <= 500))))
+);
+
+--
 -- Name: assistant_jobs; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -947,7 +989,7 @@ CREATE TABLE public.assistant_jobs (
     created_by uuid,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     finished_at timestamp with time zone,
-    CONSTRAINT assistant_jobs_kind_chk CHECK ((kind = ANY (ARRAY['discovery'::text, 'outreach_start'::text, 'linkedin_search'::text, 'web_discovery'::text]))),
+    CONSTRAINT assistant_jobs_kind_chk CHECK ((kind = ANY (ARRAY['discovery'::text, 'outreach_start'::text, 'linkedin_search'::text, 'web_discovery'::text, 'apify_instagram'::text]))),
     CONSTRAINT assistant_jobs_status_chk CHECK ((status = ANY (ARRAY['queued'::text, 'running'::text, 'succeeded'::text, 'failed'::text, 'cancelled'::text])))
 );
 
@@ -2505,7 +2547,7 @@ CREATE TABLE public.organization_features (
     enabled boolean DEFAULT false NOT NULL,
     updated_by uuid,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT organization_features_key_chk CHECK ((key = ANY (ARRAY['instagram'::text, 'web_discovery'::text, 'inquiry_intake'::text])))
+    CONSTRAINT organization_features_key_chk CHECK ((key = ANY (ARRAY['instagram'::text, 'web_discovery'::text, 'inquiry_intake'::text, 'apify_discovery'::text])))
 );
 
 --
@@ -3080,6 +3122,27 @@ ALTER TABLE ONLY public."WebhookEvent"
 
 ALTER TABLE ONLY public.accounts
     ADD CONSTRAINT accounts_pkey PRIMARY KEY (id);
+
+--
+-- Name: apify_runs apify_runs_apify_run_id_uq; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.apify_runs
+    ADD CONSTRAINT apify_runs_apify_run_id_uq UNIQUE (apify_run_id);
+
+--
+-- Name: apify_runs apify_runs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.apify_runs
+    ADD CONSTRAINT apify_runs_pkey PRIMARY KEY (id);
+
+--
+-- Name: apify_settings apify_settings_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.apify_settings
+    ADD CONSTRAINT apify_settings_pkey PRIMARY KEY (organization_id);
 
 --
 -- Name: assistant_jobs assistant_jobs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
@@ -4209,6 +4272,12 @@ CREATE INDEX "WebhookEvent_retry_idx" ON public."WebhookEvent" USING btree ("pro
 --
 
 CREATE INDEX accounts_user_id_idx ON public.accounts USING btree (user_id);
+
+--
+-- Name: apify_runs_org_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX apify_runs_org_created_idx ON public.apify_runs USING btree (organization_id, created_at);
 
 --
 -- Name: assistant_jobs_claim_idx; Type: INDEX; Schema: public; Owner: -
@@ -5595,6 +5664,20 @@ ALTER TABLE ONLY public."WebhookEvent"
 
 ALTER TABLE ONLY public.accounts
     ADD CONSTRAINT accounts_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+--
+-- Name: apify_runs apify_runs_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.apify_runs
+    ADD CONSTRAINT apify_runs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
+
+--
+-- Name: apify_settings apify_settings_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.apify_settings
+    ADD CONSTRAINT apify_settings_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
 
 --
 -- Name: assistant_jobs assistant_jobs_audience_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -

@@ -1,0 +1,379 @@
+/**
+ * Apify as an optional discovery provider, end to end against the local
+ * database, with the real discovery stages and a stand-in for Apify's API
+ * (global fetch is intercepted; nothing leaves the machine):
+ *
+ *   bun run --conditions=react-server scripts/e2e/apify.ts
+ *
+ * Checks: Apify used only when on, set up, approved and within allowance;
+ * the run recorded with its Apify run id and the owner's request id and
+ * polled again after a "restart"; a run cut short keeps what it found
+ * (partial); exhausted credit (at start, the account's limit, the owner's
+ * budget) falls back to the scraper, an empty run too, and with no scraper
+ * to website search — always with the same customer type, place and
+ * request id; Instagram accounts found are kept apart from accounts that can
+ * be contacted; nothing ever tops up or raises a limit; a second
+ * organization sees none of it.
+ *
+ * Creates its own organizations ("Apify check A/B …") and leaves them;
+ * removes the AI connection it made. Refuses a non-local DATABASE_URL.
+ */
+import { and, eq } from "drizzle-orm";
+
+if (!/@(localhost|127\.0\.0\.1)[:/]/.test(process.env.DATABASE_URL ?? "")) {
+  console.error("Refusing to run: DATABASE_URL must point at a local, disposable database.");
+  process.exit(2);
+}
+
+const stamp = Date.now();
+const SCRAPER = "http://scraper.apify-check.test";
+const APIFY = "https://apify.check.test/v2";
+process.env.GMAPS_SCRAPER_URL = SCRAPER;
+process.env.DISCOVERY_DNS_CHECK = "off";
+
+// ------------------------------------------------------------ Apify stand-in
+type RunScript = { pollsUntilDone: number; finalStatus: string; statusMessage?: string; items: unknown[]; usage: number };
+type StandInRun = RunScript & { id: string; actorId: string; input: Record<string, unknown>; query: Record<string, string>; polls: number; datasetId: string };
+const apify = {
+  limits: { maxMonthlyUsageUsd: 50 as number | null, monthlyUsageUsd: 5 as number | null },
+  startError: null as { status: number; type: string; message: string } | null,
+  next: new Map<string, RunScript[]>(),
+  runs: new Map<string, StandInRun>(),
+  calls: [] as string[],
+};
+const scraperJobs: string[] = [];
+const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+
+const realFetch = globalThis.fetch;
+globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+  const method = (init?.method ?? "GET").toUpperCase();
+  if (url.href.startsWith(APIFY)) {
+    const path = url.pathname.replace(/^\/v2/, "");
+    apify.calls.push(`${method} ${path}`);
+    const auth = new Headers(init?.headers).get("authorization");
+    if (auth !== "Bearer apify-check-token") return json(401, { error: { type: "token-not-valid", message: "Authentication token is not valid" } });
+    if (method === "GET" && path === "/users/me") return json(200, { data: { username: "check" } });
+    if (method === "GET" && path === "/users/me/limits") return json(200, { data: { limits: { maxMonthlyUsageUsd: apify.limits.maxMonthlyUsageUsd }, current: { monthlyUsageUsd: apify.limits.monthlyUsageUsd } } });
+    const start = path.match(/^\/actors\/([^/]+)\/runs$/);
+    if (method === "POST" && start) {
+      if (apify.startError) return json(apify.startError.status, { error: { type: apify.startError.type, message: apify.startError.message } });
+      const actorId = decodeURIComponent(start[1]!);
+      const script = apify.next.get(actorId)?.shift() ?? { pollsUntilDone: 1, finalStatus: "SUCCEEDED", items: [], usage: 0.01 };
+      const id = `run-${apify.runs.size + 1}-${stamp}`;
+      apify.runs.set(id, { ...script, id, actorId, input: JSON.parse(String(init?.body ?? "{}")), query: Object.fromEntries(url.searchParams), polls: 0, datasetId: `ds-${id}` });
+      return json(201, { data: { id, status: "RUNNING", defaultDatasetId: `ds-${id}`, usageTotalUsd: 0 } });
+    }
+    const runMatch = path.match(/^\/actor-runs\/([^/]+)$/);
+    if (method === "GET" && runMatch) {
+      const run = apify.runs.get(runMatch[1]!);
+      if (!run) return json(404, { error: { type: "record-not-found", message: "Run not found" } });
+      run.polls += 1;
+      const done = run.polls >= run.pollsUntilDone;
+      return json(200, { data: { id: run.id, status: done ? run.finalStatus : "RUNNING", statusMessage: done ? run.statusMessage ?? null : null, defaultDatasetId: run.datasetId, usageTotalUsd: done ? run.usage : 0 } });
+    }
+    const items = path.match(/^\/datasets\/ds-([^/]+)\/items$/);
+    if (method === "GET" && items) {
+      const run = apify.runs.get(items[1]!);
+      const offset = Number(url.searchParams.get("offset") ?? 0);
+      const limit = Number(url.searchParams.get("limit") ?? 1000);
+      return json(200, (run?.items ?? []).slice(offset, offset + limit));
+    }
+    return json(405, { error: { type: "not-in-stand-in", message: `${method} ${path}` } });
+  }
+  if (url.origin === SCRAPER) {
+    if (method === "POST" && url.pathname === "/api/v1/jobs") {
+      scraperJobs.push(String(init?.body ?? ""));
+      return json(201, { id: `scrape-${scraperJobs.length}-${stamp}` });
+    }
+    return json(200, { ID: "x", Status: "working" });
+  }
+  // Nothing else may leave the machine (geocoding, websites…): answer "not found".
+  if (/nominatim|openstreetmap/.test(url.hostname)) return json(200, []);
+  if (url.hostname.endsWith(".test") || url.hostname.endsWith(".example") || url.hostname.endsWith(".example.in")) return new Response("not found", { status: 404 });
+  return realFetch(input, init);
+}) as typeof fetch;
+
+// ------------------------------------------------------------ app modules
+const { db } = await import("@/lib/db");
+const { organizations } = await import("@/lib/auth/schema");
+const { people } = await import("@/lib/leads/schema");
+const { gridProviderCredentials, gridProviders } = await import("@/lib/grid/schema");
+const { encryptIntegrationCredentials } = await import("@/lib/integrations/credentials");
+const { saveByokSettings } = await import("@/lib/ai/byok");
+const { assistantJobs, leadAudienceMembers } = await import("@/lib/assistant/schema");
+const { memberInsights } = await import("@/lib/assistant/audiences.server");
+const { apifyRuns } = await import("@/lib/apify/schema");
+const { apifySettingsView, saveApifySettings, trackedRun } = await import("@/lib/apify/apify.server");
+const { setApifyApiBase } = await import("@/services/apify");
+const { DiscoveryUnavailableError, runDiscoveryStep, setDiscoveryPageOptions, startDiscovery, startInstagramProspects } = await import("@/lib/discovery/discovery.server");
+const { setFeature, clearFeatureCache } = await import("@/lib/features/flags.server");
+const { upsertPerson, withLeadTransaction } = await import("@/lib/leads/records");
+const { saveChannelRules } = await import("@/lib/channels/rules.server");
+const { runInOrganization, currentOrganizationId, inOrg } = await import("@/lib/tenancy/scope");
+type AssistantJob = typeof assistantJobs.$inferSelect;
+
+setApifyApiBase(APIFY);
+setDiscoveryPageOptions({ fetchImpl: (async () => new Response("not found", { status: 404 })) as unknown as typeof fetch });
+
+let failures = 0;
+function check(name: string, ok: boolean, detail = ""): void {
+  if (!ok) failures += 1;
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ` — ${detail}` : ""}`);
+}
+
+/** One worker step, applied to the job row as the worker applies it. */
+async function step(jobId: string): Promise<AssistantJob> {
+  const [job] = await db.select().from(assistantJobs).where(eq(assistantJobs.id, jobId)).limit(1);
+  const outcome = await runDiscoveryStep(job!, async () => {});
+  const merged = "payload" in outcome && outcome.payload ? { ...job!.payload, ...outcome.payload } : job!.payload;
+  const update: Partial<AssistantJob> = outcome.next === "wait"
+    ? { status: "queued", payload: merged }
+    : outcome.next === "stage"
+      ? { status: "queued", stage: outcome.stage, payload: merged, ...(outcome.externalId !== undefined ? { externalId: outcome.externalId } : {}) }
+      : outcome.next === "done"
+        ? { status: "succeeded", stage: "done", result: outcome.result }
+        : { status: "failed", error: outcome.error };
+  const [updated] = await db.update(assistantJobs).set({ ...update, progress: outcome.progress ?? job!.progress }).where(eq(assistantJobs.id, jobId)).returning();
+  return updated!;
+}
+
+async function runToEnd(jobId: string, max = 40): Promise<AssistantJob> {
+  let job = await step(jobId);
+  for (let i = 0; i < max && (job.status === "queued" || job.status === "running") && job.stage !== "searching"; i += 1) job = await step(jobId);
+  return job;
+}
+
+const payloadOf = (job: AssistantJob) => job.payload as Record<string, unknown> & { contactAfter?: { requestId?: string } | null; providerNotes?: string[]; provider?: string };
+const contactAfter = (requestId: string) => ({ channels: null, ownerRequest: "find dentists in Pune and contact them", requestId });
+const criteria = (what = "dentists", where = "Pune, India", maxResults = 20) => ({ what, where, maxResults, language: "en" });
+const context = { threadId: null, userId: null };
+
+const mapsItems = [
+  { title: "Lotus Dental Clinic", placeId: "p1", categoryName: "Dentist", city: "Pune", countryCode: "IN", phone: "020 2553 1234", emails: ["hello@lotusdental.example"], url: "https://maps.google.com/?cid=1" },
+  { title: "Lotus Dental Clinic", placeId: "p1", phone: "020 2553 1234" },
+  { title: "Smile Care", placeId: "p2", countryCode: "IN", phone: "020 2555 0003", url: "https://maps.google.com/?cid=2" },
+  { title: "Smile Care Annexe", placeId: "p3", countryCode: "IN", phone: "020 2555 0003", url: "https://maps.google.com/?cid=3" },
+  { title: "Quiet Dental", placeId: "p4", countryCode: "IN", url: "https://maps.google.com/?cid=4" },
+];
+
+// ------------------------------------------------------------ organizations
+const [orgA] = await db.insert(organizations).values({ name: `Apify check A ${stamp}`, slug: `apify-check-a-${stamp}` }).returning();
+const [orgB] = await db.insert(organizations).values({ name: `Apify check B ${stamp}`, slug: `apify-check-b-${stamp}` }).returning();
+const createdProviders: string[] = [];
+let runOfA = "";
+
+await runInOrganization(orgA!.id, async () => {
+  clearFeatureCache();
+  await saveChannelRules("general", { defaultPhoneCountry: "IN" }, null);
+
+  // ---------------------------------------------------------- off by default
+  const off = await startDiscovery(criteria(), context, { contactAfter: contactAfter("req-off") });
+  check("off by default: the search runs on the scraper and says nothing about Apify", off.provider === "scraper" && off.note === null, `${off.provider} ${off.note}`);
+  check("off by default: Apify is never called", apify.calls.length === 0, apify.calls.join(", "));
+  const offJob = await step(off.jobId);
+  check("off by default: the job starts the scraper search", offJob.stage === "searching" && payloadOf(offJob).provider === "scraper");
+
+  // ---------------------------------------------------------- set up
+  await setFeature("apify_discovery", true, null);
+  clearFeatureCache();
+  const notConnected = await startDiscovery(criteria(), context, {});
+  check("feature on but no token: scraper, and the note says why", notConnected.provider === "scraper" && /no Apify token/.test(notConnected.note ?? ""), notConnected.note ?? "");
+  let refusedToken = "";
+  try {
+    await saveApifySettings({ token: "wrong-token" }, null);
+  } catch (error) {
+    refusedToken = error instanceof Error ? error.message : String(error);
+  }
+  check("a token Apify rejects is not saved", /rejected/.test(refusedToken), refusedToken);
+  const view = await saveApifySettings({ token: "apify-check-token", approvedActors: ["google_maps"], monthlyBudgetUsd: 10, maxChargePerRunUsd: 2, maxResultsPerRun: 50 }, null);
+  check("settings saved: connected, token never returned", view.connected && view.tokenHint === "…oken" && !JSON.stringify(view).includes("apify-check-token"), JSON.stringify(view));
+
+  // ---------------------------------------------------------- an existing lead, to be reused
+  const existing = await withLeadTransaction((tx) => upsertPerson(tx, { email: "hello@lotusdental.example", raw: { note: "already a lead" }, source: "e2e:apify" }));
+
+  // ---------------------------------------------------------- a full Apify run
+  apify.next.set("compass~crawler-google-places", [{ pollsUntilDone: 2, finalStatus: "SUCCEEDED", items: mapsItems, usage: 0.42 }]);
+  const started = await startDiscovery(criteria(), context, { contactAfter: contactAfter("req-apify") });
+  check("set up, approved, allowance left: the search runs on Apify", started.provider === "apify" && started.note === null, `${started.provider} ${started.note}`);
+  let job = await step(started.jobId);
+  const opened = (payloadOf(job).apify ?? null) as { runRowId: string } | null;
+  const row = opened ? await trackedRun(opened.runRowId) : null;
+  runOfA = row?.id ?? "";
+  const run = row?.apifyRunId ? apify.runs.get(row.apifyRunId) : undefined;
+  check("the run is recorded with Apify's run id, its dataset and the owner's request id", Boolean(row?.apifyRunId && row.datasetId && row.status === "running" && row.requestId === "req-apify" && row.jobId === started.jobId), JSON.stringify(row));
+  check("the run is started with hard limits: spending cap, item cap, timeout, memory", run?.query.maxTotalChargeUsd === "2" && run?.query.maxItems === "20" && Boolean(run?.query.timeout) && Boolean(run?.query.memory), JSON.stringify(run?.query));
+  check("the Actor gets the requested customer type and place", run?.input.locationQuery === "Pune, India" && (run?.input.searchStringsArray as string[])?.[0] === "dentists" && run?.input.maxCrawledPlacesPerSearch === 20);
+  check("while the run is open its cap is reserved against the budget", (await apifySettingsView()).reservedUsd === 2);
+
+  // A restart: the job is read back from the database and polls the same run.
+  const pollsBefore = apify.calls.filter((call) => call === `GET /actor-runs/${row?.apifyRunId}`).length;
+  job = await step(started.jobId);
+  check("after a restart the job polls the same recorded Apify run", job.stage === "apify" && apify.calls.filter((call) => call === `GET /actor-runs/${row?.apifyRunId}`).length === pollsBefore + 1);
+  job = await runToEnd(started.jobId);
+  const result = (job.result ?? {}) as Record<string, unknown>;
+  check("the run's businesses are saved: duplicates in the dataset collapse, same-phone businesses are one contact", job.status === "succeeded" && result.found === 4 && result.provider === "apify" && Number(result.duplicates) === 1, JSON.stringify(result));
+  const members = await db.select().from(leadAudienceMembers).where(eq(leadAudienceMembers.audienceId, started.audienceId));
+  check("an existing lead is reused, not duplicated", members.some((member) => member.personId === existing.id));
+  const lotus = await db.select().from(people).where(and(inOrg(people), eq(people.email, "hello@lotusdental.example")));
+  check("no second person for the same email", lotus.length === 1);
+  check("a business with no contact stays excluded with the reason", members.some((member) => member.personId === null && /no email or phone/.test(member.reason ?? "")));
+  const finished = await trackedRun(runOfA);
+  check("the run's row records Apify's reported cost and the items read", finished?.status === "succeeded" && finished.usageUsd === 0.42 && finished.itemsRead === 5 && !finished.partial, JSON.stringify(finished));
+
+  // ---------------------------------------------------------- partial result
+  apify.next.set("compass~crawler-google-places", [{ pollsUntilDone: 1, finalStatus: "ABORTED", statusMessage: "The run reached its maximum total charge (maxTotalChargeUsd)", items: mapsItems.slice(2, 4), usage: 0.3 }]);
+  const partialStart = await startDiscovery(criteria("dentists", "Pune, India", 30), context, { contactAfter: contactAfter("req-partial") });
+  const partialJob = await runToEnd(partialStart.jobId);
+  const partialResult = (partialJob.result ?? {}) as Record<string, unknown>;
+  check("a run cut short by its cap keeps what it found", partialJob.status === "succeeded" && partialResult.found === 2, JSON.stringify(partialResult));
+  check("…and says so: ended early, and AgentSDR never tops up", /ended early/.test(String(partialResult.providerNote)) && /never tops up/.test(String(partialResult.providerNote)), String(partialResult.providerNote));
+  const partialRow = (await db.select().from(apifyRuns).where(and(inOrg(apifyRuns), eq(apifyRuns.jobId, partialStart.jobId))))[0];
+  check("…and the row is marked partial", partialRow?.status === "partial" && partialRow.partial === true && partialRow.itemsRead === 2);
+
+  // ---------------------------------------------------------- an empty run falls back in place
+  apify.next.set("compass~crawler-google-places", [{ pollsUntilDone: 1, finalStatus: "SUCCEEDED", items: [], usage: 0.01 }]);
+  const emptyStart = await startDiscovery(criteria("orthodontists"), context, { contactAfter: contactAfter("req-empty") });
+  const emptyJob = await runToEnd(emptyStart.jobId);
+  check("an Apify run with nothing hands the same job to the scraper, keeping the request id", emptyJob.stage === "searching" && payloadOf(emptyJob).provider === "scraper" && payloadOf(emptyJob).contactAfter?.requestId === "req-empty" && /no businesses/.test((payloadOf(emptyJob).providerNotes ?? []).join(" ")));
+
+  // ---------------------------------------------------------- credits exhausted at start
+  apify.startError = { status: 402, type: "not-enough-usage-to-run-paid-actor", message: "You have exceeded your monthly usage limit" };
+  const exhaustedStart = await startDiscovery(criteria("dental labs"), context, { contactAfter: contactAfter("req-402") });
+  const exhaustedJob = await step(exhaustedStart.jobId);
+  check("credits exhausted at start: the same job falls back to the scraper", exhaustedJob.stage === "searching" && payloadOf(exhaustedJob).provider === "scraper");
+  check("…keeping the customer type, the place and the request id", payloadOf(exhaustedJob).contactAfter?.requestId === "req-402" && (payloadOf(exhaustedJob).criteria as { what: string; where: string }).what === "dental labs" && scraperJobs.at(-1)?.includes("dental labs") === true);
+  check("…and explaining it: not started, never topped up", /did not start/.test((payloadOf(exhaustedJob).providerNotes ?? []).join(" ")) && /never tops up/.test((payloadOf(exhaustedJob).providerNotes ?? []).join(" ")), (payloadOf(exhaustedJob).providerNotes ?? []).join(" "));
+  const refusedRow = (await db.select().from(apifyRuns).where(and(inOrg(apifyRuns), eq(apifyRuns.jobId, exhaustedStart.jobId))))[0];
+  check("…and the refused run is recorded with the reason and no cost", refusedRow?.status === "refused" && refusedRow.usageUsd === 0 && /exceeded/.test(refusedRow.error ?? ""));
+  apify.startError = null;
+
+  // ---------------------------------------------------------- the account's own limit reached
+  apify.limits = { maxMonthlyUsageUsd: 50, monthlyUsageUsd: 50 };
+  const runsBefore = apify.runs.size;
+  const accountFull = await startDiscovery(criteria("pediatric dentists"), context, { contactAfter: contactAfter("req-account") });
+  const accountJob = await step(accountFull.jobId);
+  check("the Apify account's limit reached: scraper, with the reason", accountFull.provider === "scraper" && /usage limit is reached/.test(accountFull.note ?? "") && /never tops up/.test(accountFull.note ?? ""), accountFull.note ?? "");
+  check("…no run is started at Apify", apify.runs.size === runsBefore && accountJob.stage === "searching");
+  apify.limits = { maxMonthlyUsageUsd: 50, monthlyUsageUsd: 5 };
+
+  // ---------------------------------------------------------- the owner's budget used
+  await saveApifySettings({ monthlyBudgetUsd: 0.5 }, null);
+  const overBudget = await startDiscovery(criteria("cosmetic dentists"), context, {});
+  check("this month's spend ($0.72) over the owner's budget ($0.50): scraper, with the reason", overBudget.provider === "scraper" && /budget/.test(overBudget.note ?? ""), overBudget.note ?? "");
+  await saveApifySettings({ monthlyBudgetUsd: 10 }, null);
+
+  // ---------------------------------------------------------- no scraper either: website search takes the request
+  delete process.env.GMAPS_SCRAPER_URL;
+  apify.startError = { status: 402, type: "not-enough-usage-to-run-paid-actor", message: "Not enough usage" };
+  apify.limits = { maxMonthlyUsageUsd: 50, monthlyUsageUsd: 50 };
+  let unavailable = "";
+  try {
+    await startDiscovery(criteria("dentists"), context, { contactAfter: contactAfter("req-none") });
+  } catch (error) {
+    unavailable = error instanceof DiscoveryUnavailableError ? error.message : String(error);
+  }
+  check("nothing available at all: it says so instead of pretending", /GMAPS_SCRAPER_URL/.test(unavailable) && /Apify was not used/.test(unavailable), unavailable);
+  await setFeature("web_discovery", true, null);
+  clearFeatureCache();
+  const [connection] = await db.insert(gridProviders).values({
+    organizationId: currentOrganizationId(),
+    key: `ai-openrouter-apify-check-${stamp}`,
+    name: "openrouter (apify check)",
+    config: { aiProviderKey: "openrouter", verification: { status: "verified", verifiedAt: new Date().toISOString() } },
+    enabled: true,
+  }).returning();
+  await db.insert(gridProviderCredentials).values({ providerId: connection!.id, encryptedPayload: encryptIntegrationCredentials({ apiKey: "sk-or-check", managementKey: "sk-or-mgmt-check" }) });
+  createdProviders.push(connection!.id);
+  await saveByokSettings({ connectionId: connection!.id, providers: ["openai"], modelsByProvider: { openai: ["openai/gpt-5-mini"] }, defaultModel: { provider: "openai", modelId: "openai/gpt-5-mini" }, transcriptionModel: null, researchModel: null, researchDailyLimit: 25, byokOnlyConfirmed: true });
+  const website = await startDiscovery(criteria("dentists", "Pune, India", 20), context, { contactAfter: contactAfter("req-web") });
+  const [webJob] = await db.select().from(assistantJobs).where(eq(assistantJobs.id, website.jobId));
+  const webPayload = (webJob?.payload ?? {}) as { criteria?: { customers?: string; where?: string }; contactAfter?: { requestId?: string } };
+  check("no scraper and Apify exhausted: website search takes the request", website.provider === "website" && webJob?.kind === "web_discovery", `${website.provider} ${webJob?.kind}`);
+  check("…with the same customer type, place and request id (its plan inherits the request's approval)", webPayload.contactAfter?.requestId === "req-web" && webPayload.criteria?.customers === "dentists" && webPayload.criteria?.where === "Pune, India", JSON.stringify(webPayload));
+  check("…and explains the coverage difference", /fewer than a Maps search/.test(website.note ?? "") && /Apify was not used/.test(website.note ?? ""), website.note ?? "");
+  await db.update(assistantJobs).set({ status: "cancelled" }).where(eq(assistantJobs.id, website.jobId));
+  process.env.GMAPS_SCRAPER_URL = SCRAPER;
+  apify.startError = null;
+  apify.limits = { maxMonthlyUsageUsd: 50, monthlyUsageUsd: 5 };
+
+  // ---------------------------------------------------------- Instagram: found is not contactable
+  await setFeature("web_discovery", false, null);
+  clearFeatureCache();
+  let noInstagram = "";
+  try {
+    await startInstagramProspects({ what: "home bakers", where: "Pune", maxResults: 10, language: "en" }, context, {});
+  } catch (error) {
+    noInstagram = error instanceof DiscoveryUnavailableError ? error.message : String(error);
+  }
+  check("Instagram Actor not approved and no website search: nothing is searched, and it says why", /not approved/.test(noInstagram) && /nothing was searched/.test(noInstagram), noInstagram);
+  await saveApifySettings({ approvedActors: ["google_maps", "instagram_hashtags", "instagram_profiles"] }, null);
+  apify.next.set("apify~instagram-hashtag-scraper", [{
+    pollsUntilDone: 1,
+    finalStatus: "SUCCEEDED",
+    usage: 0.05,
+    items: [
+      { ownerUsername: "sweet.treats", url: "https://www.instagram.com/p/a1/", caption: "Custom birthday cakes, delivered across Pune", timestamp: "2026-10-10T10:00:00Z", inputUrl: "https://www.instagram.com/explore/tags/punehomebaker/" },
+      { ownerUsername: "sweet.treats", url: "https://www.instagram.com/p/a2/", caption: "Another cake", timestamp: "2026-10-09T10:00:00Z" },
+      { ownerUsername: "crumbs.and.co", url: "https://www.instagram.com/p/b1/", caption: "Weekend bake sale! 🍰", timestamp: "2026-10-08T10:00:00Z" },
+    ],
+  }]);
+  apify.next.set("apify~instagram-profile-scraper", [{
+    pollsUntilDone: 1,
+    finalStatus: "SUCCEEDED",
+    usage: 0.04,
+    items: [
+      { username: "sweet.treats", fullName: "Sweet Treats", biography: "Home bakery · Pune", businessEmail: "orders@sweettreats.example", businessCategoryName: "Bakery" },
+      { username: "crumbs.and.co", fullName: "Crumbs & Co", biography: "Cakes and cookies" },
+    ],
+  }]);
+  const ig = await startInstagramProspects({ what: "home bakers", where: "Pune", hashtags: ["PuneHomeBaker"], maxResults: 10, language: "en" }, context, { contactAfter: contactAfter("req-ig") });
+  check("Instagram prospect search runs on Apify, and says that finding is not contacting", ig.provider === "apify" && /does not give a way to contact them/.test(ig.note ?? ""), ig.note ?? "");
+  const igJob = await runToEnd(ig.jobId);
+  const igResult = (igJob.result ?? {}) as Record<string, unknown>;
+  const hashtagRun = [...apify.runs.values()].find((entry) => entry.actorId === "apify~instagram-hashtag-scraper");
+  const profileRun = [...apify.runs.values()].find((entry) => entry.actorId === "apify~instagram-profile-scraper");
+  check("hashtags keep the owner's own and the customer type in the place", (hashtagRun?.input.hashtags as string[] | undefined)?.join(",") === "punehomebaker,punehomebaker,homebakerpune,homebaker".split(",").filter((tag, index, all) => all.indexOf(tag) === index).join(","), JSON.stringify(hashtagRun?.input.hashtags));
+  check("profiles are read once per account (posts deduplicated)", JSON.stringify(profileRun?.input.usernames) === JSON.stringify(["sweet.treats", "crumbs.and.co"]), JSON.stringify(profileRun?.input.usernames));
+  check("two accounts found; one contactable by the email its profile publishes; one with no supported channel", igJob.status === "succeeded" && igResult.found === 2 && igResult.eligible === 1 && igResult.withEmail === 1 && igResult.instagramOnly === 1, JSON.stringify(igResult));
+  const igMembers = await memberInsightsOf(ig.audienceId);
+  const contactable = igMembers.find((member) => member.personId);
+  const unreachable = igMembers.find((member) => !member.personId);
+  check("the contactable one's email is sourced to the Instagram profile it was published on", JSON.stringify(contactable?.evidence ?? []).includes("\"source\":\"Instagram profile\"") && JSON.stringify(contactable?.evidence ?? []).includes("instagram.com/sweet.treats"), JSON.stringify(contactable?.evidence));
+  check("the other is excluded: found on Instagram but no supported channel (AgentSDR cannot start Instagram chats)", /no supported channel/.test(unreachable?.reason ?? "") && /cannot start Instagram chats/.test(unreachable?.reason ?? ""), unreachable?.reason ?? "");
+  check("a post is a potential match, not interest; the place is unknown when not named", /potential match, not interest/.test(contactable?.matchReason ?? "") && /Unknown/.test((unreachable?.facts as Record<string, string> | undefined)?.location ?? ""), `${contactable?.matchReason} | ${JSON.stringify(unreachable?.facts)}`);
+  check("a generic post caption is engagement, not a need", (unreachable?.signals ?? []).every((signal) => signal.kind === "engagement"));
+  check("both Instagram runs carry the request id", [...(await db.select().from(apifyRuns).where(and(inOrg(apifyRuns), eq(apifyRuns.jobId, ig.jobId))))].every((entry) => entry.requestId === "req-ig"));
+
+  // ---------------------------------------------------------- never tops up
+  check("nothing ever changed the Apify account: only reads, runs and dataset reads", apify.calls.every((call) => /^(GET \/users\/me(\/limits)?|POST \/actors\/[^/]+\/runs|GET \/actor-runs\/[^/]+|GET \/datasets\/[^/]+\/items)$/.test(call)), apify.calls.filter((call) => !/^(GET|POST \/actors)/.test(call)).join(", "));
+});
+
+async function memberInsightsOf(audienceId: string) {
+  const rows = await db.select().from(leadAudienceMembers).where(eq(leadAudienceMembers.audienceId, audienceId));
+  const insights = await memberInsights(rows.map((row) => row.id));
+  return rows.map((row) => ({ ...row, ...(insights.get(row.id) ?? {}) })) as (typeof rows[number] & { matchReason?: string | null; signals?: { kind: string }[] })[];
+}
+
+// ------------------------------------------------------------ organization B sees nothing of A
+await runInOrganization(orgB!.id, async () => {
+  clearFeatureCache();
+  const view = await apifySettingsView();
+  check("isolation: B has no Apify connection and no spend", !view.connected && view.spentThisMonthUsd === 0 && view.reservedUsd === 0);
+  check("isolation: B cannot read A's run", (await trackedRun(runOfA)) === null);
+  const bRuns = await db.select().from(apifyRuns).where(inOrg(apifyRuns));
+  check("isolation: B counts no Apify runs", bRuns.length === 0);
+  const b = await startDiscovery({ what: "dentists", where: "Pune, India", maxResults: 10, language: "en" }, { threadId: null, userId: null }, {});
+  check("isolation: B's search uses its own (off) settings", b.provider === "scraper" && b.note === null);
+  await db.update(assistantJobs).set({ status: "cancelled" }).where(and(eq(assistantJobs.organizationId, orgB!.id)));
+});
+
+// Leave nothing claimable for another script's worker, and no connection pointing at the stand-ins.
+await db.update(assistantJobs).set({ status: "cancelled", error: "apify check: not run" }).where(eq(assistantJobs.organizationId, orgA!.id));
+for (const id of createdProviders) {
+  await db.delete(gridProviderCredentials).where(eq(gridProviderCredentials.providerId, id));
+  await db.delete(gridProviders).where(eq(gridProviders.id, id));
+}
+
+console.log(failures ? `\n${failures} check(s) FAILED` : "\nAll checks passed.");
+process.exit(failures ? 1 : 0);

@@ -28,10 +28,14 @@ const { leadAudienceMemberInsights, leadAudienceMembers, outreachRuns } = await 
 const { createAudience } = await import("@/lib/assistant/audiences.server");
 const { setFeature } = await import("@/lib/features/flags.server");
 const { runInOrganization } = await import("@/lib/tenancy/scope");
+const { apifyRuns, apifySettings } = await import("@/lib/apify/schema");
+const { encryptIntegrationCredential } = await import("@/lib/integrations/credentials");
 
 const stamp = Date.now();
 await runInOrganization(organizationId, async () => {
-  for (const key of ["instagram", "web_discovery", "inquiry_intake"] as const) await setFeature(key, true, null);
+  for (const key of ["instagram", "web_discovery", "inquiry_intake", "apify_discovery"] as const) await setFeature(key, true, null);
+  await db.insert(apifySettings).values({ organizationId, encryptedToken: encryptIntegrationCredential(`iso-apify-token-${stamp}`), tokenHint: "…iso1", approvedActors: ["google_maps"] }).onConflictDoNothing();
+  await db.insert(apifyRuns).values({ organizationId, actorKey: "google_maps", actorId: "compass~crawler-google-places", apifyRunId: `iso-apify-run-${stamp}`, datasetId: `iso-apify-dataset-${stamp}`, requestId: `iso-request-${stamp}`, status: "succeeded", maxChargeUsd: 2, maxItems: 20, usageUsd: 0.42, itemsRead: 5, finishedAt: new Date() });
   const [person] = await db.insert(people).values({ organizationId, fullName: "Isolation Inquirer", email: `isolation-inquirer-${stamp}@example.test`, source: "intake:website-form" }).returning();
   const [account] = await db.insert(instagramAccounts).values({ organizationId, unipileAccountId: `iso-ig-${stamp}`, username: `iso_account_${stamp}`, name: "Isolation IG", status: "connected", connectedAt: new Date(), historyCutoffAt: new Date(), inquiryIntake: true }).returning();
   const [chat] = await db.insert(instagramChats).values({ accountId: account!.id, unipileChatId: `iso-chat-${stamp}`, providerId: `iso-provider-${stamp}`, username: `iso_lead_${stamp}`, name: "Isolation Lead", personId: person!.id }).returning();
