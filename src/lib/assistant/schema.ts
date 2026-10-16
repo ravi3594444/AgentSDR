@@ -2,6 +2,7 @@ import { boolean, check, index, integer, jsonb, numeric, pgTable, text, timestam
 import { sql } from "drizzle-orm";
 import { organizations } from "@/lib/auth/schema";
 import { companies, people } from "@/lib/leads/schema";
+import type { RequestApproval } from "./requestApproval";
 
 /**
  * The owner's assistant (src/lib/assistant/): a chat that takes the owner's
@@ -266,6 +267,12 @@ export type OutreachPlan = {
   basedOnRunId?: string | null;
   /** The owner's words that asked for this outreach (checked against the chat). */
   ownerRequest?: string | null;
+  /**
+   * Set on a run the owner started with "apply to the rest of this
+   * request": the other plans of the same request start under it
+   * (requestApproval.ts).
+   */
+  requestApproval?: RequestApproval;
   /**
    * Plans written since leads are sorted: the kinds of lead, each with its
    * own messages; how each lead is approached; the first messages written

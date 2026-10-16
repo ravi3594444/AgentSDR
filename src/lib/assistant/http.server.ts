@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { authContextErrorResponse, can, requireOrgContext, type OrgContext } from "@/lib/auth/context";
 import { crmRequestErrorResponse, requireCrmMutationContext } from "@/lib/crm/http";
@@ -74,6 +74,10 @@ export async function assistantState(threadId: string | null, ctx: OrgContext, w
     ? await db.select({ id: outreachRuns.id, status: outreachRuns.status, autopilot: outreachRuns.autopilot, error: outreachRuns.error, campaigns: outreachRuns.campaigns })
       .from(outreachRuns).where(and(inOrg(outreachRuns), inArray(outreachRuns.id, [...new Set(runIds)])))
     : [];
+  // The mode chosen on the latest started run: the next plan card starts with it selected.
+  const [lastStarted] = await db.select({ autopilot: outreachRuns.autopilot }).from(outreachRuns)
+    .where(and(inOrg(outreachRuns), inArray(outreachRuns.status, ["starting", "running", "paused", "stopped", "completed"])))
+    .orderBy(sql`${outreachRuns.approvedAt} desc nulls last`).limit(1);
   // What became of each lead's reply, for the plan card (answered, due at, waiting for the owner and why).
   const started = runs.filter((run) => run.status !== "proposed" && run.status !== "cancelled").map((run) => run.id);
   const [replies, leads] = await Promise.all([runReplies(started), runLeads(started)]);
@@ -97,6 +101,7 @@ export async function assistantState(threadId: string | null, ctx: OrgContext, w
     runs: Object.fromEntries(runs.map((run) => [run.id, { ...run, replies: replies[run.id] ?? [], leads: leads[run.id] ?? [] }])),
     decisions: Object.fromEntries(decisions.map((decision) => [decision.id, { status: decision.status, answer: decision.answer }])),
     setup: withSetup ? { ...(await setupSnapshot()), canManageAutopilot: canManageAutopilot(ctx) } : null,
+    lastReplyMode: lastStarted ? (lastStarted.autopilot ? "automatic" : "review") as "automatic" | "review" : null,
   };
 }
 

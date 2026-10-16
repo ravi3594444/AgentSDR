@@ -13,7 +13,14 @@
  * unknowns unknown; an inquiry run cannot be proposed with the features
  * off, starts only through its own start, covers only people attached while
  * it runs, pauses, resumes and stops, and never takes another run's
- * channel; a second organization sees none of it.
+ * channel; one Start with "apply to the rest of this request" starts the
+ * request's other plans (waiting and prepared later) in the same mode, and
+ * never another request's, a plan on another channel, or anything once the
+ * approving run is stopped; a second organization sees none of it.
+ *
+ * The email channel is made available with a stand-in Unipile connection and
+ * mailbox; Start only queues the launch job, which this script never runs,
+ * so nothing is sent and the stand-in host is never called.
  *
  * Creates two organizations ("Intake check …") and leaves them behind.
  * Refuses a non-local DATABASE_URL.
@@ -40,6 +47,12 @@ const { runMembershipFor } = await import("@/lib/crm/autopilot.server");
 const { setFeature, clearFeatureCache } = await import("@/lib/features/flags.server");
 const { createAudience } = await import("@/lib/assistant/audiences.server");
 const { runInOrganization, currentOrganizationId } = await import("@/lib/tenancy/scope");
+const { recordRequestApproval, applyRequestApproval } = await import("@/lib/assistant/requestApproval.server");
+const { createThread, listMessages } = await import("@/lib/assistant/threads.server");
+const { mailboxes } = await import("@/lib/outreach/schema");
+const { gridProviderCredentials, gridProviders } = await import("@/lib/grid/schema");
+const { encryptIntegrationCredentials } = await import("@/lib/integrations/credentials");
+const { assistantJobs } = await import("@/lib/assistant/schema");
 
 let failures = 0;
 function check(label: string, ok: boolean, detail = "") {
@@ -146,6 +159,46 @@ await runInOrganization(orgA!.id, async () => {
   const stopped = await runMembershipFor(db, inquirer, "instagram");
   check("inquiry run: Stop is final for its members", stopped?.runStatus === "stopped" && stopped.leadStatus === "stopped");
   check("inquiry run: nobody is attached after Stop", (await attachInquiryToRun(listed, "instagram")) === null && (await activeInquiryRun()) === null);
+
+  // ------------------------------------------------------------ one Start for the whole request
+  const [provider] = await db.insert(gridProviders).values({ organizationId: org, key: "platform-unipile", name: "Unipile (stand-in)" }).returning();
+  await db.insert(gridProviderCredentials).values({ providerId: provider!.id, encryptedPayload: encryptIntegrationCredentials({ baseUrl: "https://unipile-intake-check.invalid", apiKey: "stand-in", notifySecret: "stand-in" }) });
+  await db.insert(mailboxes).values({ organizationId: org, emailAddress: `owner-${stamp}@mail.example.test`, provider: "unipile", unipileAccountId: `mail-${stamp}`, status: "connected" });
+  const thread = await createThread(null);
+  const request = "Find dentists in Pune, Mumbai and Nagpur and contact them";
+  const recipients = await Promise.all(Array.from({ length: 5 }, (_, index) => make({ email: `req${index}-${stamp}@clinic.test`, fullName: `Clinic ${index}`, source: "discovery:google-maps" })));
+  const plan = (personIds: string[], ownerRequest: string, channel: "email" | "whatsapp" = "email") => ({
+    ...basePlan,
+    assignments: personIds.map((personId) => ({ personId, channel })),
+    sequences: { [channel]: [{ subject: "Hello", body: "Hello there", waitDays: 0 }] },
+    ownerRequest,
+  });
+  const propose = async (name: string, personIds: string[], ownerRequest: string, channel: "email" | "whatsapp" = "email") => {
+    const audienceId = await createAudience({ name, source: "discovery", threadId: thread.id });
+    const [row] = await db.insert(schema.outreachRuns).values({ organizationId: org, threadId: thread.id, audienceId, name, status: "proposed", channels: [channel], plan: plan(personIds, ownerRequest, channel) }).returning();
+    return row!.id;
+  };
+  const pune = await propose("Dentists — Pune", [recipients[0]!], request);
+  const mumbai = await propose("Dentists — Mumbai", [recipients[1]!], request);
+  const gyms = await propose("Gyms — Pune", [recipients[2]!], "Find gyms in Pune and contact them");
+  const waPlan = await propose("Dentists — Nagpur (WhatsApp)", [recipients[3]!], request, "whatsapp");
+
+  await startOutreachRun(pune, null, { autopilot: true });
+  const applied = await recordRequestApproval(pune, { autopilot: true, approvedBy: null });
+  const statusOf = async (id: string) => (await getRun(id))?.status;
+  check("one Start: the request's waiting plan starts too, in the same mode", (await statusOf(mumbai)) === "starting" && (await getRun(mumbai))?.autopilot === true, JSON.stringify(applied.started));
+  check("one Start: another request's plan keeps waiting", (await statusOf(gyms)) === "proposed");
+  check("one Start: a plan on a channel the approval did not cover keeps waiting, with the reason", (await statusOf(waPlan)) === "proposed" && applied.skipped.some((item) => item.runId === waPlan && /whatsapp/.test(item.reason)), JSON.stringify(applied.skipped));
+  check("one Start: the started plan queued its launch job like a Start press", (await db.select().from(assistantJobs).where(and(eq(assistantJobs.runId, mumbai), eq(assistantJobs.kind, "outreach_start")))).length === 1);
+  const later = await propose("Dentists — Nagpur", [recipients[4]!], request);
+  const laterOutcome = await applyRequestApproval(later);
+  check("one Start: a plan prepared later by the same request starts on its own", laterOutcome.started && (await statusOf(later)) === "starting");
+  const events = (await listMessages(thread.id, 50)).filter((message) => message.role === "event").map((message) => message.content);
+  check("one Start: the chat says each plan started under the approval", events.filter((text) => /started on its own under your approval/.test(text)).length === 2, `${events.length} events`);
+  await stopRun(pune);
+  const afterStop = await propose("Dentists — Thane", [recipients[0]!], request);
+  const stoppedOutcome = await applyRequestApproval(afterStop);
+  check("one Start: stopping the approved run ends the approval", !stoppedOutcome.started && (await statusOf(afterStop)) === "proposed" && /stopped/.test(stoppedOutcome.reason ?? ""), stoppedOutcome.reason ?? "");
 });
 
 // ------------------------------------------------------------ organization B sees nothing of A

@@ -96,6 +96,8 @@ export type AssistantStatePayload = {
   runs: Record<string, Run>;
   decisions: Record<string, DecisionState>;
   setup: Setup | null;
+  /** The reply mode the owner chose on their latest started run: the plan card starts with it selected. */
+  lastReplyMode?: "automatic" | "review" | null;
 };
 
 const ACCEPT = ".pdf,.docx,.txt,.md,.csv,.tsv,.xlsx,.xls";
@@ -344,12 +346,16 @@ type ProposalData = {
     excluded: { reason: string; count: number }[];
     estimate: { aiCalls: number; aiCostUsd: number | null; days: number | null };
     autopilot: boolean;
+    ownerRequest?: string | null;
   };
 };
 
-function ProposalCard({ message, run, canManageAutopilot, onChanged }: { message: Message; run: Run | undefined; canManageAutopilot: boolean; onChanged: () => void }) {
+function ProposalCard({ message, run, canManageAutopilot, lastReplyMode, onChanged }: { message: Message; run: Run | undefined; canManageAutopilot: boolean; lastReplyMode: "automatic" | "review" | null; onChanged: () => void }) {
   const data = message.toolResult?.data as ProposalData | undefined;
-  const [mode, setMode] = useState<"automatic" | "review" | null>(null);
+  // Starts with the mode the owner chose last time (Automatic only for those who may choose it).
+  const [mode, setMode] = useState<"automatic" | "review" | null>(lastReplyMode === "automatic" && !canManageAutopilot ? null : lastReplyMode);
+  // One Start for the whole request: its other plans (more cities, more searches) start under it.
+  const [applyToRequest, setApplyToRequest] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   if (message.status !== "ok" || !data) return <Card title={TOOL_TITLE.prepare_outreach!} status={message.status}><p>{message.content}</p></Card>;
@@ -369,7 +375,7 @@ function ProposalCard({ message, run, canManageAutopilot, onChanged }: { message
       await readJson(await fetch(`/api/assistant/runs/${data!.runId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(action === "start" ? { action, mode } : action === "mode" ? { action, mode: nextMode } : { action }),
+        body: JSON.stringify(action === "start" ? { action, mode, applyToRequest: Boolean(data!.plan.ownerRequest) && applyToRequest } : action === "mode" ? { action, mode: nextMode } : { action }),
       }));
       onChanged();
     } catch (cause) {
@@ -440,6 +446,12 @@ function ProposalCard({ message, run, canManageAutopilot, onChanged }: { message
             <span><span className="text-label-xs text-text-strong-950">Review.</span> The AI drafts every reply; each waits for you in Action required.</span>
           </label>
           <p className="text-paragraph-xs text-text-soft-400">Either way the first messages and follow-ups go out automatically to these {data.plan.assignments.length} leads only, within the limits above. Adding people, channels or higher limits needs a new plan you approve.</p>
+          {data.plan.ownerRequest && (
+            <label className="flex items-start gap-2 rounded-lg p-2 text-paragraph-xs ring-1 ring-inset ring-stroke-soft-200">
+              <input type="checkbox" className="mt-0.5" checked={applyToRequest} disabled={busy} onChange={(event) => setApplyToRequest(event.target.checked)} />
+              <span><span className="text-label-xs text-text-strong-950">Apply to the rest of this request.</span> The other plans this request makes (more cities or searches, including leads found later) start on their own as soon as they are ready, with this reply mode and the same channels and limits; you will not be asked again. Pause or stop any of them on its card; stopping this one ends the approval.</span>
+            </label>
+          )}
           <div className="flex justify-end gap-2">
             <Button.Root variant="neutral" mode="stroke" size="small" disabled={busy} onClick={() => void act("cancel")}>Discard</Button.Root>
             <Button.Root variant="primary" mode="filled" size="small" disabled={busy || !mode} onClick={() => void act("start")}>
@@ -759,14 +771,14 @@ function ActivityRow({ message }: { message: Message }) {
   );
 }
 
-function ToolMessage({ message, jobs, runs, decisions, canManageAutopilot, onChanged }: { message: Message; jobs: Job[]; runs: Record<string, Run>; decisions: Record<string, DecisionState>; canManageAutopilot: boolean; onChanged: () => void }) {
+function ToolMessage({ message, jobs, runs, decisions, canManageAutopilot, lastReplyMode, onChanged }: { message: Message; jobs: Job[]; runs: Record<string, Run>; decisions: Record<string, DecisionState>; canManageAutopilot: boolean; lastReplyMode: "automatic" | "review" | null; onChanged: () => void }) {
   const data = message.toolResult?.data as Record<string, unknown> | undefined;
   if (message.tool === "owner_decision") return <DecisionCard message={message} state={decisions[String(data?.decisionId ?? "")]} onChanged={onChanged} />;
   if (message.tool === "daily_summary") {
     return <Card title={`Daily summary · ${String(data?.day ?? "")}`} status={message.status}><p className="whitespace-pre-wrap text-paragraph-xs">{message.content.split("\n").slice(1).join("\n")}</p></Card>;
   }
   if (message.tool === "find_leads" || message.tool === "find_linkedin_leads" || message.tool === "find_customers_on_web") return <DiscoveryCard message={message} job={jobs.find((job) => job.id === data?.jobId)} />;
-  if (message.tool === "prepare_outreach") return <ProposalCard message={message} run={runs[String(data?.runId ?? "")]} canManageAutopilot={canManageAutopilot} onChanged={onChanged} />;
+  if (message.tool === "prepare_outreach") return <ProposalCard message={message} run={runs[String(data?.runId ?? "")]} canManageAutopilot={canManageAutopilot} lastReplyMode={lastReplyMode} onChanged={onChanged} />;
   if (message.tool === "prepare_inquiry_replies") return <InquiryRunCard message={message} run={runs[String(data?.runId ?? "")]} canManageAutopilot={canManageAutopilot} onChanged={onChanged} />;
   if (message.tool === "report") return <ReportCard message={message} />;
   if (COMPACT_TOOLS.has(message.tool ?? "")) return <ActivityRow message={message} />;
@@ -1109,7 +1121,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
         </div>
       );
     }
-    return <ToolMessage key={message.id} message={message} jobs={state.jobs} runs={state.runs} decisions={state.decisions ?? {}} canManageAutopilot={Boolean(setup?.canManageAutopilot)} onChanged={() => void refresh(true)} />;
+    return <ToolMessage key={message.id} message={message} jobs={state.jobs} runs={state.runs} decisions={state.decisions ?? {}} canManageAutopilot={Boolean(setup?.canManageAutopilot)} lastReplyMode={state.lastReplyMode ?? null} onChanged={() => void refresh(true)} />;
   });
 
   return (

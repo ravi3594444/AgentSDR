@@ -3,6 +3,7 @@ import { actionsProblem, inquiryRepliesRequested } from "./agent";
 import { businessContext, priceDocuments, reusableSender } from "./businessContext";
 import { inquiryFacts, inquirySignal, matchReasonForExisting, peopleSourceLabel } from "./existingLeads";
 import { inquiryRunProblem } from "./inquiryRuns";
+import { approvalProblem, makeRequestApproval, requestKey } from "./requestApproval";
 import { countProspects, derivedMatchReason, prospectStatus, qualifyProspect, UNKNOWN, type ProspectInput } from "./qualification";
 
 function member(overrides: Partial<ProspectInput> = {}): ProspectInput {
@@ -158,5 +159,34 @@ describe("answering inquiries is asked for explicitly and scoped", () => {
     expect(inquiryRunProblem({ features: on, accounts: [{ ...account, inquiryIntake: false }] })).toContain("treats new messages as inquiries");
     expect(inquiryRunProblem({ features: on, accounts: [{ ...account, status: "credentials" }] })).toContain("No Instagram account is connected");
     expect(inquiryRunProblem({ features: on, accounts: [account] })).toBeNull();
+  });
+});
+
+describe("one Start for a whole request", () => {
+  const now = new Date("2026-10-16T10:00:00Z");
+  const plan = (ownerRequest: string | null, leads = 20) => ({ ownerRequest, assignments: Array.from({ length: leads }, (_, index) => ({ personId: `p${index}`, channel: "email" as const })) });
+  const approval = makeRequestApproval(plan("Find dentists in Pune, Mumbai and Nagpur and contact them"), ["email", "whatsapp"], { autopilot: true, approvedBy: "u1", now })!;
+
+  test("an approval needs the owner's request to tie it to", () => {
+    expect(makeRequestApproval(plan(null), ["email"], { autopilot: true, approvedBy: "u1", now })).toBeNull();
+    expect(requestKey("  Find   Dentists ")).toBe("find dentists");
+    expect(approval.maxLeadsPerPlan).toBe(100);
+    expect(approval.expiresAt).toBe("2026-10-17T10:00:00.000Z");
+  });
+
+  test("it covers the same request's other plans within the approved channels and size", () => {
+    expect(approvalProblem(approval, "running", { plan: plan("find dentists in Pune, Mumbai and Nagpur and contact them"), channels: ["email"] }, now)).toBeNull();
+    expect(approvalProblem(approval, "starting", { plan: plan("Find dentists in Pune, Mumbai and Nagpur and contact them"), channels: ["whatsapp"] }, now)).toBeNull();
+  });
+
+  test("it never covers another request, a new channel, a bigger plan, an inquiry run, or a paused, stopped or old approval", () => {
+    const same = "Find dentists in Pune, Mumbai and Nagpur and contact them";
+    expect(approvalProblem(approval, "running", { plan: plan("Find gyms in Pune and contact them"), channels: ["email"] }, now)).toContain("another request");
+    expect(approvalProblem(approval, "running", { plan: plan(same), channels: ["linkedin"] }, now)).toContain("linkedin");
+    expect(approvalProblem(approval, "running", { plan: plan(same, 150), channels: ["email"] }, now)).toContain("150 leads");
+    expect(approvalProblem(approval, "running", { plan: { ...plan(same), kind: "inquiries" as const }, channels: [] }, now)).toContain("inquiry run");
+    expect(approvalProblem(approval, "paused", { plan: plan(same), channels: ["email"] }, now)).toContain("paused");
+    expect(approvalProblem(approval, "stopped", { plan: plan(same), channels: ["email"] }, now)).toContain("stopped");
+    expect(approvalProblem(approval, "running", { plan: plan(same), channels: ["email"] }, new Date("2026-10-17T10:00:01Z"))).toContain("more than a day old");
   });
 });

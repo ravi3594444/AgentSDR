@@ -4,6 +4,7 @@ import { runDiscoveryStep } from "@/lib/discovery/discovery.server";
 import { continueAfterEvent, runToolInThread } from "./agent.server";
 import { runLinkedinSearchStep } from "./linkedinSearch.server";
 import { runOutreachStartStep } from "./outreach.server";
+import { applyRequestApproval } from "./requestApproval.server";
 import { addMessage, claimThread, releaseThread } from "./threads.server";
 import { onAssistantJobFinished, registerAssistantJobHandler, type AssistantJob } from "./worker";
 
@@ -80,7 +81,18 @@ async function followUpSearch(job: AssistantJob, threadId: string, contactAfter:
           { audienceId: job.audienceId, ownerRequest: contactAfter.ownerRequest ?? null, ...(contactAfter.channels?.length ? { channels: contactAfter.channels } : {}) },
         );
         if (prepared.ok) {
-          await addMessage({ threadId, role: "event", content: "The outreach plan for these leads is ready below. Check the audience, the sample messages and the limits, then press Start. Nothing is sent before that." });
+          // Started on its own when the owner already approved this request on another of its plans.
+          const runId = typeof prepared.data?.runId === "string" ? prepared.data.runId : null;
+          const approval = runId ? await applyRequestApproval(runId) : { started: false, reason: null };
+          if (!approval.started) {
+            await addMessage({
+              threadId,
+              role: "event",
+              content: approval.reason
+                ? `The outreach plan for these leads is ready below. It was not started with the rest of your request because ${approval.reason}: check it and press Start. Nothing is sent before that.`
+                : "The outreach plan for these leads is ready below. Check the audience, the sample messages and the limits, then press Start. Nothing is sent before that.",
+            });
+          }
         }
       } finally {
         if (claimed) await releaseThread(threadId);
