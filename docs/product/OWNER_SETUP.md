@@ -317,6 +317,32 @@ myself" on a decision takes the conversation over: the autopilot does not
 reply there again. Editing a draft, or answering the lead yourself, holds
 that reply for you to send.
 
+**The reply agent answers each message in one step.** For a lead of a
+running assistant run, one model call reads the message with your business
+information, your instructions and next step, what is known about the lead
+and the whole conversation, and decides: reply, tell you, stop contacting
+them, or no reply needed. A reply can carry a note for you (ready to buy,
+wants a person, a complaint, a question your information does not answer):
+the lead still gets an answer and you get a card in Needs you. Before
+anything goes out, the app checks the reply for an amount, day, time or
+link your information does not contain, a placeholder, or a claim that
+something was already sent or booked; a problem is handed back to the agent
+to fix, up to three tries. If it still cannot answer without guessing, or
+the AI provider is down, the lead gets a short holding line ("Thanks! Let
+me check on that and get back to you shortly", at most once a day per chat)
+and you get a card. The Replies list shows what happened and how long the
+answer took. Opt-out messages, leads outside a running run, and chats you
+took over with **I'll reply myself** still go through the older steps
+described below. Setting `REPLY_AGENT=off` in the server environment
+switches the agent off.
+
+**Which model answers.** The model you choose as the default in Settings →
+AI provider answers every reply. Measured on AI/ML API with five short
+replies each: Gemini 3.5 Flash Lite answered in about 0.9 s, GLM 5.3 Flash
+in about 4.6 s (slowest 6.4 s) with sensible decisions. Both are in the
+AI/ML catalog with structured output. A faster model gives faster answers;
+the rest of the path adds about one to two seconds.
+
 **What is checked immediately before an automatic reply is sent:** the run
 is still running and Automatic and the lead still in it; nobody took over;
 no newer message came from the lead; the draft is the revision that was
@@ -654,6 +680,11 @@ AI_SOURCE_ORGANIZATION_ID=<org with AI Settings> bun run --conditions=react-serv
 #   stop, takeover, edits, newer messages, concurrent limits, restart
 #   recovery, duplicates, results against recorded events, the daily
 #   summary, and a second organization seeing none of it)
+# The reply agent: a lead's message through the classification job, the agent's
+# loop and the CRM send path, with a stand-in model and a recording sender
+# (sends nothing). With AI_SOURCE_ORGANIZATION_ID it also prints real answers
+# and timings; REPLY_AGENT_E2E_MODEL=<model id> tries another model of it:
+bun run --conditions=react-server scripts/e2e/reply-agent.ts
 # The owner's own conversations against the real model: a greeting, "any city",
 # a WhatsApp number typed in the chat, Instagram, a link (queues searches and
 # cancels them; sends nothing):

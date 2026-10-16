@@ -105,6 +105,7 @@ const OWNED_TABLES = [
   "outreach_runs",
   "outreach_run_leads",
   "autopilot_replies",
+  "reply_agent_runs",
   "owner_decisions",
   "autopilot_takeovers",
   "assistant_usage",

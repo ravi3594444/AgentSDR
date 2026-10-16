@@ -249,7 +249,11 @@ async function recordClassificationFailure(messageId: string, error: unknown) {
 
 export async function handleClassificationJob(
   job: CrmJob,
-  dependencies: { complete?: ClassificationCompletion } = {},
+  dependencies: {
+    complete?: ClassificationCompletion;
+    /** The reply agent's stand-ins (tests); false skips it. A stand-in classifier alone skips it too. */
+    replyAgent?: false | import("@/lib/assistant/replyAgent/agent.server").ReplyAgentDependencies;
+  } = {},
 ): Promise<void> {
   let context: Awaited<ReturnType<typeof classificationContext>>;
   try {
@@ -257,6 +261,16 @@ export async function handleClassificationJob(
     const expected = Number(job.payload.expectedContextVersion ?? context.expectedContextVersion);
     if (expected !== context.expectedContextVersion) {
       throw new PermanentCrmJobError("Classification job context is stale");
+    }
+    // A lead of a running assistant outreach run is answered by the reply
+    // agent in one step (src/lib/assistant/replyAgent/): it reads the
+    // message, replies, tells the owner or stops, and records the
+    // classification itself. Anything else — and every explicit opt-out —
+    // goes through the classifier below, as before. REPLY_AGENT=off turns it off.
+    const agent = dependencies.replyAgent ?? (dependencies.complete ? false : {});
+    if (agent && !context.dncIntent && process.env.REPLY_AGENT !== "off") {
+      const { runReplyAgent } = await import("@/lib/assistant/replyAgent/agent.server");
+      if (await runReplyAgent(job.entityId, agent)) return;
     }
     const result = await classifyCrmReply(context.input, dependencies);
     await withCrmTransaction(async (tx) => {

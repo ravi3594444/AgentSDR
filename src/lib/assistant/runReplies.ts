@@ -13,6 +13,10 @@ export type ReplyRecord = {
   jobStatus: string | null;
   sendAfter: string | null;
   receivedAt: string;
+  /** The reply agent's outcome for this message (reply_agent_runs), when it handled it. */
+  agentStatus?: string | null;
+  agentReason?: string | null;
+  agentMs?: number | null;
 };
 
 export type ReplyState = {
@@ -27,7 +31,34 @@ export type ReplyState = {
 /** A reply with no draft yet is still being read for this long; after that it is shown as not answered. */
 const READING_MS = 5 * 60_000;
 
+function seconds(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined) return "";
+  return ` in ${ms < 10_000 ? (ms / 1_000).toFixed(1) : Math.round(ms / 1_000)} s`;
+}
+
+/** What the reply agent did with the message (replyAgent/agent.server.ts). */
+function agentState(record: ReplyRecord): ReplyState | null {
+  const reason = record.agentReason ?? "";
+  switch (record.agentStatus) {
+    case "running": return { tone: "waiting", text: "Reading the reply and answering…" };
+    case "replied": return { tone: "done", text: `Answered automatically${seconds(record.agentMs)}${reason.includes("the owner was told") ? "; you were told in Needs you" : ""}` };
+    case "drafted":
+      if (record.draftStatus === "sent") return { tone: "done", text: "Answered" };
+      return { tone: "you", text: reason.includes("Review mode") ? "Review mode: the answer waits for you in Action required" : `Answer written, not sent: ${reason}` };
+    case "no_reply": return { tone: "done", text: `No answer needed${reason ? `: ${reason}` : ""}` };
+    case "told_owner": return { tone: "you", text: `Waiting for you in Needs you${reason ? `: ${reason}` : ""}` };
+    case "failed": return { tone: "failed", text: `The automatic answer failed${reason ? `: ${reason}` : ""}` };
+    case "stopped":
+      if (reason.includes("handling this conversation yourself")) return { tone: "you", text: "You took this chat over, so the assistant is not replying", release: true };
+      if (reason.includes("newer message") || reason.includes("already answered")) return { tone: "done", text: `Not answered separately: ${reason}` };
+      return { tone: "you", text: `Not answered: ${reason}` };
+    default: return null;
+  }
+}
+
 export function replyState(record: ReplyRecord, automatic: boolean, now: Date = new Date()): ReplyState {
+  const agent = agentState(record);
+  if (agent) return agent;
   const handover = record.autoReason?.startsWith("handover") ?? false;
   if (handover && (record.autoStatus === "sent" || (record.draftStatus === "sent" && record.autoStatus === "reserved"))) {
     return { tone: "you", text: "Told them you will reply personally; waiting for you in Needs you" };

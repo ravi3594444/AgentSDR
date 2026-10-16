@@ -1,3 +1,4 @@
+import { isAcknowledgementOnly, isBareGreeting } from "@/lib/crm/greeting";
 import type { OwnerDecisionKind, ReplyCheck } from "./schema";
 
 /**
@@ -124,8 +125,14 @@ function quote(value: string, max = 140): string {
   return `“${text.length > max ? `${text.slice(0, max - 1)}…` : text}”`;
 }
 
+/** The lead's words without the "Subject: …" line an email reply carries. */
+function messageBody(leadMessage: string): string {
+  return leadMessage.replace(/^Subject:[^\n]*\n?/i, "").trim();
+}
+
 export function judgeReply(model: ModelCheck, input: { reply: string; knowledge: string; leadName: string; leadMessage?: string; /** The assistant already answered in this conversation. */ answeredBefore?: boolean }): ReplyVerdict {
-  if (input.leadMessage && isGreetingOnly(input.leadMessage)) {
+  const body = input.leadMessage ? messageBody(input.leadMessage) : "";
+  if (input.leadMessage && (isGreetingOnly(input.leadMessage) || (isBareGreeting(body) && !isAcknowledgementOnly(body)))) {
     // Correct an invented question or handoff for "Hey". Claims, amounts,
     // links, times and promises in the drafted answer are still checked.
     model = { ...model, intent: "greeting", questions: [], missing: "", escalate: "" };
@@ -164,7 +171,8 @@ export function judgeReply(model: ModelCheck, input: { reply: string; knowledge:
     problems.push("ready for the next step");
     return { action: "hold", check, kind: "ready", reason: `${who} is ready${model.escalate ? `: ${model.escalate}` : " for the next step"}.`, decision: "Contact them now: call them or reply in the chat. They were told you will." };
   }
-  if (intent === "acknowledgement" && input.answeredBefore) {
+  // Only a real acknowledgement ("ok", "thanks") right after our answer needs no reply; "Hey bro" is a greeting and gets one.
+  if (intent === "acknowledgement" && input.answeredBefore && (!body || isAcknowledgementOnly(body))) {
     return { action: "no_reply", check, reason: `${who} only acknowledged the last answer; nothing to reply` };
   }
   if (intent === "out_of_office") {

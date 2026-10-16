@@ -487,7 +487,56 @@ export const autopilotTakeovers = pgTable(
   ],
 );
 
-export type UsageKind = "assistant" | "outreach_writing" | "personal_lines" | "lead_sorting" | "reply_check" | "handoff_brief" | "linkedin_search";
+export type UsageKind = "assistant" | "outreach_writing" | "personal_lines" | "lead_sorting" | "reply_check" | "handoff_brief" | "linkedin_search" | "reply_agent";
+
+export type ReplyAgentStatus = "running" | "replied" | "drafted" | "no_reply" | "stopped" | "told_owner" | "failed";
+
+/** One step of the reply agent: what the model decided, how long it took, and what the harness found wrong with it. */
+export type ReplyAgentTurn = {
+  turn: number;
+  ms: number;
+  action: string | null;
+  reply: string | null;
+  problems: string[];
+  error: string | null;
+};
+
+/**
+ * The reply agent's work on one incoming message (replyAgent/agent.server.ts):
+ * unique per message, so a retried job never answers twice. Keeps every
+ * turn, the outcome, and how long it took from the message arriving.
+ */
+export const replyAgentRuns = pgTable(
+  "reply_agent_runs",
+  {
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    id: uuid("id").primaryKey().defaultRandom(),
+    messageId: uuid("message_id").notNull(),
+    conversationId: uuid("conversation_id").notNull(),
+    personId: uuid("person_id"),
+    runId: uuid("run_id"),
+    status: text("status").notNull().$type<ReplyAgentStatus>(),
+    action: text("action"),
+    category: text("category"),
+    reply: text("reply"),
+    reason: text("reason"),
+    turns: jsonb("turns").$type<ReplyAgentTurn[]>().notNull().default([]),
+    model: text("model"),
+    draftId: uuid("draft_id"),
+    decisionId: uuid("decision_id"),
+    /** From the lead's message arriving to the reply going out (or the outcome). */
+    totalMs: integer("total_ms"),
+    attempts: integer("attempts").notNull().default(1),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("reply_agent_runs_message_uq").on(t.messageId),
+    index("reply_agent_runs_organization_idx").on(t.organizationId, t.createdAt),
+    index("reply_agent_runs_conversation_idx").on(t.conversationId),
+    check("reply_agent_runs_status_chk", sql`${t.status} IN ('running', 'replied', 'drafted', 'no_reply', 'stopped', 'told_owner', 'failed')`),
+  ],
+);
 
 /**
  * Recorded AI spending of the assistant's own model calls: the provider's

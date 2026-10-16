@@ -18,6 +18,19 @@ const WORDS = new Set([
 /** Words of address that say nothing about intent. */
 const FILLER = new Set(["there", "sir", "madam", "maam", "ma'am", "bro", "ji", "bhai", "dear", "team", "ravi", "friend", "boss", "man", "dude", "guys", "all"]);
 
+const GREETING_WORDS = new Set(["hey", "heyy", "heyyy", "hi", "hii", "hiii", "hello", "helo", "hellooo", "yo", "hola", "namaste", "namaskar", "hy", "morning", "afternoon", "evening"]);
+
+/**
+ * Only an acknowledgement ("ok", "thanks", "noted", 👍), not a greeting: the
+ * one kind of message that needs no answer once we have answered them. A
+ * greeting ("Hey", "Hi bro") always gets a reply.
+ */
+export function isAcknowledgementOnly(text: string): boolean {
+  if (!isBareGreeting(text)) return false;
+  const words = text.toLowerCase().replace(/[^\p{L}\p{N}'\s]/gu, " ").split(/\s+/).filter(Boolean);
+  return !words.some((word) => GREETING_WORDS.has(word));
+}
+
 export function isBareGreeting(text: string): boolean {
   const cleaned = text
     .toLowerCase()

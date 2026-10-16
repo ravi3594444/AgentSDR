@@ -5,6 +5,9 @@
  * limit), a short brief of the conversation, when the lead was told a
  * person takes over, and when the owner was alerted and reminded.
  *
+ * Also creates reply_agent_runs, the reply agent's record of each incoming
+ * message it answered (src/lib/assistant/replyAgent/).
+ *
  * Run with:  bun scripts/add-handoff.ts
  * In Docker: docker compose exec app agentsdr-entrypoint bun scripts/add-handoff.ts
  *
@@ -29,6 +32,33 @@ const STATEMENTS = [
   // "I'll reply myself" creates one now, and "Let the assistant reply"
   // undoes it.
   `DELETE FROM autopilot_takeovers WHERE reason IN ('You replied to this lead yourself after the handoff.', 'The owner is answering this conversation personally.')`,
+  // The reply agent (src/lib/assistant/replyAgent/): one row per incoming
+  // message it handled, with every turn and how long the answer took.
+  `CREATE TABLE IF NOT EXISTS reply_agent_runs (
+    organization_id uuid NOT NULL REFERENCES organizations(id),
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    message_id uuid NOT NULL,
+    conversation_id uuid NOT NULL,
+    person_id uuid,
+    run_id uuid,
+    status text NOT NULL,
+    action text,
+    category text,
+    reply text,
+    reason text,
+    turns jsonb NOT NULL DEFAULT '[]'::jsonb,
+    model text,
+    draft_id uuid,
+    decision_id uuid,
+    total_ms integer,
+    attempts integer NOT NULL DEFAULT 1,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT reply_agent_runs_status_chk CHECK (status IN ('running', 'replied', 'drafted', 'no_reply', 'stopped', 'told_owner', 'failed'))
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS reply_agent_runs_message_uq ON reply_agent_runs (message_id)`,
+  `CREATE INDEX IF NOT EXISTS reply_agent_runs_organization_idx ON reply_agent_runs (organization_id, created_at)`,
+  `CREATE INDEX IF NOT EXISTS reply_agent_runs_conversation_idx ON reply_agent_runs (conversation_id)`,
 ];
 
 async function main() {
@@ -50,7 +80,9 @@ async function main() {
       select count(*)::int as columns from information_schema.columns
       where table_name = 'owner_decisions' and column_name in ('brief', 'handover_sent_at', 'alerted_at', 'reminded_at')`;
     console.log(columns === 4 ? "handoff columns present (4)" : `MISSING handoff columns: ${4 - columns}`);
-    if (columns !== 4) process.exitCode = 1;
+    const [{ agent }] = await sql`select to_regclass('public.reply_agent_runs') is not null as agent`;
+    console.log(agent ? "reply_agent_runs present" : "MISSING reply_agent_runs");
+    if (columns !== 4 || !agent) process.exitCode = 1;
   } finally {
     await sql.close();
   }

@@ -354,6 +354,23 @@ settings; null means transcription is off). Gemini merges audio channels, so the
 recording does not give speaker labels for free there; rep/lead is inferred.
 
 
+## The reply agent
+
+A message from a lead of a running assistant outreach run is answered by
+`src/lib/assistant/replyAgent/`, hooked into the CRM's classification job
+(`handleClassificationJob`): one model call decides reply / tell_owner /
+stop_contact / no_reply (a reply may carry an owner note → Needs you). The
+harness (`agent.ts`, pure and tested) only checks what must never go out —
+unbacked amounts, days, times, links, placeholders, done-claims — and hands
+problems back to the agent for up to `MAX_TURNS`; hard rules (DNC,
+suppression, run state, takeover, newer message, limits) are code, re-read
+under the organization's advisory lock before `sendDraft`. Each message's
+turns, timings and outcome are one `reply_agent_runs` row (unique per
+message). Steer it with the owner's text (profile, instructions,
+knowledge), not with word lists or examples in code. Explicit opt-outs,
+non-members and taken-over chats still use the classifier and
+`autopilotRun.server.ts`; `REPLY_AGENT=off` restores that path for all.
+
 ## WhatsApp messaging (Unipile)
 
 Reps link their WhatsApp number in the Unipile dashboard; AgentSDR reads it

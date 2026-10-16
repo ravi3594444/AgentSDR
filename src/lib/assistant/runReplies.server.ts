@@ -21,6 +21,9 @@ type Row = {
   autoReason: string | null;
   jobStatus: string | null;
   sendAfter: string | null;
+  agentStatus: string | null;
+  agentReason: string | null;
+  agentMs: number | null;
 };
 
 /** The latest replies from each run's leads since it was approved, with what became of each. */
@@ -31,12 +34,14 @@ export async function runReplies(runIds: readonly string[], perRun = 5): Promise
     select l.run_id::text as "runId", m.id::text as "messageId", c.id::text as "conversationId", to_char(m.sent_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as "receivedAt",
       m.channel, left(m.body_text, 160) as "preview", coalesce(p.full_name, p.phone, p.email) as "who", r.autopilot,
       d.status as "draftStatus", a.status as "autoStatus", a.reason as "autoReason",
-      j.status as "jobStatus", to_char(j.run_after at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as "sendAfter"
+      j.status as "jobStatus", to_char(j.run_after at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as "sendAfter",
+      g.status as "agentStatus", g.reason as "agentReason", g.total_ms as "agentMs"
     from outreach_run_leads l
     join outreach_runs r on r.id = l.run_id and r.organization_id = l.organization_id
     join people p on p.id = l.person_id and p.organization_id = l.organization_id
     join crm_conversations c on c.person_id = l.person_id and c.organization_id = l.organization_id
     join crm_conversation_messages m on m.conversation_id = c.id and m.direction = 'inbound' and m.sent_at >= coalesce(r.approved_at, r.created_at)
+    left join reply_agent_runs g on g.message_id = m.id and g.organization_id = l.organization_id
     left join lateral (select id, status, revision from crm_drafts where reply_for_message_id = m.id order by created_at desc limit 1) d on true
     left join lateral (select status, reason from autopilot_replies where draft_id = d.id and revision = d.revision and organization_id = l.organization_id order by created_at desc limit 1) a on true
     left join lateral (select status, run_after from crm_jobs where kind = 'auto_send' and entity_id = d.id and organization_id = l.organization_id order by created_at desc limit 1) j on true

@@ -2786,6 +2786,33 @@ CREATE TABLE public.qualification_jobs (
 );
 
 --
+-- Name: reply_agent_runs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.reply_agent_runs (
+    organization_id uuid NOT NULL,
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    message_id uuid NOT NULL,
+    conversation_id uuid NOT NULL,
+    person_id uuid,
+    run_id uuid,
+    status text NOT NULL,
+    action text,
+    category text,
+    reply text,
+    reason text,
+    turns jsonb DEFAULT '[]'::jsonb NOT NULL,
+    model text,
+    draft_id uuid,
+    decision_id uuid,
+    total_ms integer,
+    attempts integer DEFAULT 1 NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT reply_agent_runs_status_chk CHECK ((status = ANY (ARRAY['running'::text, 'replied'::text, 'drafted'::text, 'no_reply'::text, 'stopped'::text, 'told_owner'::text, 'failed'::text])))
+);
+
+--
 -- Name: scheduled_job_runs; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3969,6 +3996,13 @@ ALTER TABLE ONLY public.people
 
 ALTER TABLE ONLY public.qualification_jobs
     ADD CONSTRAINT qualification_jobs_pkey PRIMARY KEY (id);
+
+--
+-- Name: reply_agent_runs reply_agent_runs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.reply_agent_runs
+    ADD CONSTRAINT reply_agent_runs_pkey PRIMARY KEY (id);
 
 --
 -- Name: scheduled_job_runs scheduled_job_runs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
@@ -5282,6 +5316,24 @@ CREATE INDEX people_organization_idx ON public.people USING btree (organization_
 --
 
 CREATE INDEX people_phone_lookup_idx ON public.people USING btree (phone) WHERE (phone IS NOT NULL);
+
+--
+-- Name: reply_agent_runs_conversation_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX reply_agent_runs_conversation_idx ON public.reply_agent_runs USING btree (conversation_id);
+
+--
+-- Name: reply_agent_runs_message_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX reply_agent_runs_message_uq ON public.reply_agent_runs USING btree (message_id);
+
+--
+-- Name: reply_agent_runs_organization_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX reply_agent_runs_organization_idx ON public.reply_agent_runs USING btree (organization_id, created_at);
 
 --
 -- Name: sessions_user_id_idx; Type: INDEX; Schema: public; Owner: -
@@ -6763,6 +6815,13 @@ ALTER TABLE ONLY public.people
 
 ALTER TABLE ONLY public.qualification_jobs
     ADD CONSTRAINT qualification_jobs_campaign_id_fkey FOREIGN KEY (campaign_id) REFERENCES public.campaigns(id);
+
+--
+-- Name: reply_agent_runs reply_agent_runs_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.reply_agent_runs
+    ADD CONSTRAINT reply_agent_runs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
 
 --
 -- Name: sessions sessions_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -

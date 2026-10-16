@@ -1,11 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { isBareGreeting } from "./greeting";
+import { isAcknowledgementOnly, isBareGreeting } from "./greeting";
 
 describe("a bare greeting or acknowledgement", () => {
   test("greetings, thanks and acknowledgements, in English and Hinglish, are not intent", () => {
     for (const text of ["Hey", "hi", "Hello Ravi", "Hey there!", "Hii 👋", "ok", "Ok thanks", "Thank you", "Yeah thats cool", "theek hai", "Haan ji", "Good morning sir", "👍", "noted.", "Sounds good"]) {
       expect(isBareGreeting(text)).toBe(true);
     }
+  });
+
+  test("an acknowledgement needs no answer after ours; a greeting always does", () => {
+    for (const text of ["ok", "Ok thanks", "Thank you!", "noted", "👍", "theek hai"]) expect(isAcknowledgementOnly(text)).toBe(true);
+    for (const text of ["Hey", "Hey bro", "Hi Ravi", "Hello", "Good morning", "Hi, ok"]) expect(isAcknowledgementOnly(text)).toBe(false);
   });
 
   test("anything that asks or tells is a real message", () => {

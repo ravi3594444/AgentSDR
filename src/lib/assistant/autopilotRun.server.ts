@@ -369,9 +369,11 @@ export async function runAutopilotForDraft(draftId: string, deps: AutopilotDepen
     const message = error instanceof Error ? error.message : String(error);
     return handOff(state, { kind: "uncertain", reason: `The reply to ${state.leadName} could not be checked (${message.slice(0, 200)}).`, decision: "Read it in Action required and send it yourself if it is right.", holdReason: "the reply could not be checked" }, deps);
   }
-  const [answered] = await db.select({ n: count() }).from(autopilotReplies)
-    .where(and(eq(autopilotReplies.organizationId, currentOrganizationId()), eq(autopilotReplies.conversationId, state.conversationId), eq(autopilotReplies.status, "sent")));
-  let verdict = judgeReply(model, { reply, knowledge, leadName: state.leadName, leadMessage: state.leadMessage, answeredBefore: Number(answered?.n ?? 0) > 0 });
+  // "Ok, thanks" needs no answer only when it follows our message directly.
+  const [previous] = await db.select({ direction: crmConversationMessages.direction }).from(crmConversationMessages)
+    .where(and(eq(crmConversationMessages.conversationId, state.conversationId), sql`${crmConversationMessages.sentAt} < (select sent_at from crm_conversation_messages where id = ${state.draft.replyForMessageId ?? state.draft.id})`))
+    .orderBy(desc(crmConversationMessages.sentAt)).limit(1);
+  let verdict = judgeReply(model, { reply, knowledge, leadName: state.leadName, leadMessage: state.leadMessage, answeredBefore: previous?.direction === "outbound" });
   if (verdict.action === "no_reply") return recordHold(state, `${NO_ANSWER_NEEDED} ${verdict.reason}`, verdict.check);
   if (verdict.action === "opt_out") {
     await setPersonDoNotContact({ personId: state.personId, reason: `${verdict.reason} (read in their reply)`, source: "inbound_request", actorType: "ai", actorRef: AUTOPILOT_ACTOR });

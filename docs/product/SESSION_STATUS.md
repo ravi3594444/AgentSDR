@@ -367,6 +367,59 @@ deletes the takeovers the old code created, so the stuck chats answer again
 after the update. Checks: unit 284 (crm + assistant) and the deterministic
 `assistant.ts` suite below; not yet run against the real AI or the VM.
 
+### Follow-up: the reply agent, one loop instead of a pipeline (2026-10-16)
+
+The owner saw slow or missing answers ("Hey bro" marked "No answer
+needed", no answer at all on some days). The old path made three to four
+model calls in a row (classify, draft, check, sometimes a repair) with
+queue hops between them, and decided with word lists and special cases.
+The model was never the slow part: on AI/ML API Gemini 3.5 Flash Lite
+answered in about 0.9 s and GLM 5.3 Flash in about 4.6 s (median of five
+probe calls each).
+
+The **reply agent** (`src/lib/assistant/replyAgent/`) replaces that path for
+leads of a running assistant outreach run, from the CRM's classification
+job, so it starts the moment the message is stored:
+
+- **One model call per message.** The agent gets the business information,
+  the owner's instructions and next step, the lead's facts and the whole
+  conversation, and returns one of four actions: reply, tell the owner,
+  stop contact, or no reply. A reply can carry a note for the owner (ready,
+  wants a person, complaint, a question the information does not answer),
+  which becomes a Needs you card while the lead still gets an answer.
+- **A harness, not rules in prompts.** The harness checks a reply only for
+  what must never go out: an amount, day, time or link not in the
+  business information, a placeholder, talk about instructions, a claim
+  that something was already done. A problem is handed back to the agent
+  with what to fix, up to three turns. After that, or when the model is
+  down, the lead gets an honest holding line (at most once a day per chat)
+  and the owner a card.
+- **Hard rules stay in code:** Do Not Contact, suppression, the run not
+  running, "I'll reply myself", a newer message (that one is answered with
+  the whole conversation), already answered, 30 per chat and 40 per day,
+  read again under the organization's lock before the send. Sends use the
+  same path as Approve & send. Review mode only drafts.
+- **Every step is recorded** in `reply_agent_runs` (unique per message, so a
+  retried job never answers twice): each turn with its time and problems,
+  the outcome, and the time from the message arriving to the answer. The
+  Replies list shows it ("Answered automatically in 4.2 s").
+- The dashboard refreshes every 4 s while a run is live (was 15 s), and
+  Needs you every 10 s (was 30 s).
+
+Explicit opt-outs, leads outside a running run, and chats the owner took
+over still go through the classifier as before. `REPLY_AGENT=off` in the
+environment returns everything to the old path. The table is created by
+`scripts/add-handoff.ts`.
+
+Checks: unit 1,246 (all), the new `scripts/e2e/reply-agent.ts` (23 checks:
+greeting, price from the information, an invented price fixed on the second
+turn, holding line after three unbacked turns, ready lead, stop, an
+acknowledgement, Review mode, retry, newer message, takeover, outsider,
+model outage, the Replies list) and the existing `assistant.ts` suite
+(73 checks). **Not run against the real model:** the AI key saved locally
+now returns 401 and no other key was available in this session. The real
+run is on the VM.
+
 ### Live services vs stand-ins
 
 - **Live, real services:** gosom/google-maps-scraper v1.18.1 against Google

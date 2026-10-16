@@ -1044,11 +1044,12 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
     return () => clearInterval(timer);
   }, [working, refresh]);
 
-  // While a run is live, replies, answers and decisions arrive on their own: show them without a reload.
+  // While a run is live, replies, answers and decisions arrive on their own: show them within seconds
+  // (the reply agent answers in a few seconds; a slower refresh made instant answers look slow).
   const live = Object.values(state.runs).some((run) => run.status === "running" || run.status === "paused");
   useEffect(() => {
     if (working || !live) return;
-    const timer = setInterval(() => void refresh(false), 15_000);
+    const timer = setInterval(() => void refresh(false), 4_000);
     return () => clearInterval(timer);
   }, [working, live, refresh]);
 

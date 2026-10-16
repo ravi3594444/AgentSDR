@@ -18,7 +18,7 @@ import { cn } from "@/utils/cn";
 
 export type NeedsYouPayload = { items: NeedsYouItem[]; reviewWaiting: number };
 
-const POLL_MS = 30_000;
+const POLL_MS = 10_000;
 
 const CHANNEL: Record<string, string> = { email: "Email", whatsapp: "WhatsApp", linkedin: "LinkedIn" };
 

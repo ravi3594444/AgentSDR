@@ -17,4 +17,17 @@ describe("replyState", () => {
     expect(replyState({ ...base, draftStatus: "awaiting_review" }, false, now).text).toContain("Review mode");
     expect(replyState({ ...base, draftStatus: "awaiting_review", autoStatus: "failed", autoReason: "Unipile refused it" }, true, now)).toMatchObject({ tone: "failed" });
   });
+
+  test("the reply agent's outcome comes first, with how long the answer took", () => {
+    expect(replyState({ ...base, agentStatus: "replied", agentMs: 4_230 }, true, now)).toEqual({ tone: "done", text: "Answered automatically in 4.2 s" });
+    expect(replyState({ ...base, agentStatus: "replied", agentMs: 12_400, agentReason: "sent; the owner was told: wants a visit" }, true, now).text)
+      .toBe("Answered automatically in 12 s; you were told in Needs you");
+    expect(replyState({ ...base, agentStatus: "running" }, true, now)).toMatchObject({ tone: "waiting" });
+    expect(replyState({ ...base, agentStatus: "no_reply", agentReason: "they only said thanks" }, true, now)).toEqual({ tone: "done", text: "No answer needed: they only said thanks" });
+    expect(replyState({ ...base, agentStatus: "drafted", agentReason: "the run is in Review mode: the reply waits for you in Action required" }, false, now).text).toContain("Review mode");
+    expect(replyState({ ...base, agentStatus: "drafted", draftStatus: "sent" }, false, now)).toMatchObject({ tone: "done", text: "Answered" });
+    expect(replyState({ ...base, agentStatus: "told_owner", agentReason: "asks about a refund" }, true, now)).toMatchObject({ tone: "you" });
+    expect(replyState({ ...base, agentStatus: "stopped", agentReason: "a newer message arrived; that one is answered instead" }, true, now)).toMatchObject({ tone: "done" });
+    expect(replyState({ ...base, agentStatus: "failed", agentReason: "the send failed: refused" }, true, now)).toMatchObject({ tone: "failed" });
+  });
 });
