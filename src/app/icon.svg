@@ -1,6 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-<!-- The app icon: BRAND.monogram (src/lib/brand.ts) on the tile from components/brand/Logo.tsx. Browsers draw a favicon with system fonts, hence the fallback stack. Change them together. -->
-<defs><linearGradient id="t" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5b7bff"/><stop offset="1" stop-color="#1f3bad"/></linearGradient><clipPath id="c"><rect width="64" height="64" rx="8.96"/></clipPath></defs>
-<g clip-path="url(#c)"><rect width="64" height="64" fill="url(#t)"/><g stroke="#fff" stroke-opacity=".08" stroke-width="1"><path d="M16 0V64M0 16H64"/><path d="M32 0V64M0 32H64"/><path d="M48 0V64M0 48H64"/></g></g>
-<text x="32" y="33" text-anchor="middle" dominant-baseline="central" fill="#fff" font-family="Manrope, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="26" font-weight="800" letter-spacing="-1">22X</text>
+  <!-- Monochrome app tile, matching components/brand/Logo.tsx. -->
+  <rect x=".5" y=".5" width="63" height="63" rx="8.96" fill="#000" stroke="#555"/>
+  <text x="32" y="33" text-anchor="middle" dominant-baseline="central" fill="#fff" font-family="Manrope, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="26" font-weight="800" letter-spacing="-1">22X</text>
 </svg>

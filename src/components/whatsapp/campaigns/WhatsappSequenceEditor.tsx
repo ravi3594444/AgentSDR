@@ -236,7 +236,7 @@ export function WhatsappSequenceEditor({
                       active ? "bg-bg-weak-50" : "hover:bg-bg-weak-50",
                     )}
                   >
-                    <span className={cn("flex size-6 shrink-0 items-center justify-center rounded-md text-label-xs", active ? "bg-primary-base text-static-white" : "bg-bg-weak-50 text-text-sub-600 ring-1 ring-inset ring-stroke-soft-200")}>{i + 1}</span>
+                    <span className={cn("flex size-6 shrink-0 items-center justify-center rounded-md text-label-xs", active ? "bg-primary-base text-primary-contrast" : "bg-bg-weak-50 text-text-sub-600 ring-1 ring-inset ring-stroke-soft-200")}>{i + 1}</span>
                     <span className="min-w-0 flex-1">
                       <span className="block text-label-sm text-text-strong-950">{stepLabel(i)}</span>
                       <span className="mt-0.5 block truncate text-paragraph-xs text-text-sub-600">{written ? candidate.body : "Not written yet"}</span>

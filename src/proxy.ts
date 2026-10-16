@@ -77,6 +77,8 @@ export function proxy(request: NextRequest) {
   if (demo?.kind === "silent") return NextResponse.json({ ok: true });
   if (pathname === "/demo" && isDemoMode()) return NextResponse.next();
   const isPublic =
+    // Only the marketing homepage is public; workspace and API guards stay in place.
+    pathname === "/" ||
     pathname === "/robots.txt" ||
     PUBLIC.some((p) => pathname.startsWith(p)) ||
     pathname.startsWith("/_next") ||

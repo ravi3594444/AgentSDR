@@ -151,7 +151,7 @@ export function CrmDraftCard({
       )}
     >
       <div className="flex min-w-0 items-center gap-2">
-        <span className="flex size-5 shrink-0 items-center justify-center rounded-md bg-primary-base text-static-white">
+        <span className="flex size-5 shrink-0 items-center justify-center rounded-md bg-primary-base text-primary-contrast">
           <RiSparkling2Fill className="size-3" aria-hidden="true" />
         </span>
         <p className="min-w-0 flex-1 truncate text-label-xs text-text-strong-950" title={stepLabel ?? undefined}>

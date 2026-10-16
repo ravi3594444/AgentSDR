@@ -557,7 +557,7 @@ export function ConversationRow({
           <span className="mt-0.5 flex items-center gap-2">
             <span className={cn("min-w-0 flex-1 truncate text-paragraph-xs", unread && !headline ? "text-text-strong-950" : "text-text-soft-400")}>{snippet}</span>
             {count > 0 && (
-              <span className="flex h-[1.125rem] min-w-[1.125rem] shrink-0 items-center justify-center rounded-full bg-primary-base px-1 text-[11px] font-semibold leading-none text-static-white" aria-label={`${count} unread`}>
+              <span className="flex h-[1.125rem] min-w-[1.125rem] shrink-0 items-center justify-center rounded-full bg-primary-base px-1 text-[11px] font-semibold leading-none text-primary-contrast" aria-label={`${count} unread`}>
                 {count > 9 ? "9+" : count}
               </span>
             )}

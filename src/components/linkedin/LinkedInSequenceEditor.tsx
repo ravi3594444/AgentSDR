@@ -181,7 +181,7 @@ export function LinkedInSequenceEditor({
                     >
                       <span className={cn(
                         "flex size-6 shrink-0 items-center justify-center rounded-md text-label-xs",
-                        active ? "bg-primary-base text-static-white" : "bg-bg-weak-50 text-text-sub-600 ring-1 ring-inset ring-stroke-soft-200",
+                        active ? "bg-primary-base text-primary-contrast" : "bg-bg-weak-50 text-text-sub-600 ring-1 ring-inset ring-stroke-soft-200",
                       )}>{index + 1}</span>
                       <span className="min-w-0 flex-1">
                         <span className="block text-label-sm text-text-strong-950">{candidate.shortLabel}</span>

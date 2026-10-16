@@ -1,3 +1,5 @@
+import Link from "next/link";
+import { ArrowLeft } from "lucide-react";
 import { AppIcon } from "@/components/brand/Logo";
 import { AuthShowcase } from "./AuthShowcase";
 
@@ -19,7 +21,8 @@ export function AuthShell({
   footer?: React.ReactNode;
 }) {
   return (
-    <div className="flex min-h-screen bg-[#0b0b0d] text-zinc-100 scheme-dark">
+    <div className="relative flex min-h-screen bg-black text-zinc-100 scheme-dark">
+      <Link href="/" className="absolute left-6 top-6 z-10 inline-flex items-center gap-2 rounded text-xs text-zinc-400 transition hover:text-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white"><ArrowLeft size={14} aria-hidden="true" />Back to website</Link>
       <main className="flex flex-1 items-center justify-center px-4 py-12 sm:px-6">
         <div className="w-full max-w-100">
           <div className="mb-7 flex justify-center">

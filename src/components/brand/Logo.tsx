@@ -14,27 +14,24 @@ import { brandDisplayClass } from "./font";
 export const ICON_RADIUS = "14%";
 
 /**
- * The monogram on a glass app tile. `small` trims the glow for header and
- * footer sizes, where the headline's halo would read as a blur. The letters
- * are SVG text, so they scale with whatever size the tile is given.
+ * The monogram on a black tile. A fine border keeps it visible on both
+ * themes. The SVG lettering scales with the tile.
  */
 export function AppIcon({ className, small = false }: { className?: string; small?: boolean }) {
   return (
     <span
       aria-hidden="true"
       className={cn(
-        "relative inline-flex shrink-0 items-center justify-center overflow-hidden bg-gradient-to-b from-[#5b7bff] to-[#1f3bad]",
+        "relative inline-flex shrink-0 items-center justify-center overflow-hidden border border-white/20 bg-black",
         small
-          ? "shadow-[inset_0_1px_0_rgb(255_255_255/0.35),inset_0_0_0_1px_rgb(255_255_255/0.18),0_2px_8px_-2px_rgb(51_92_255/0.55)]"
-          : "shadow-[inset_0_1px_0_rgb(255_255_255/0.35),inset_0_0_0_1px_rgb(255_255_255/0.18),0_8px_24px_-6px_rgb(51_92_255/0.8)]",
+          ? "shadow-none"
+          : "shadow-[0_8px_20px_-10px_rgb(0_0_0/0.3)]",
         className,
       )}
       // A square tile with gently rounded corners, not an app-store squircle.
       style={{ borderRadius: ICON_RADIUS }}
     >
-      {/* Soft grid on the icon face, like a glass app tile. */}
-      <span className="absolute inset-0 bg-[linear-gradient(rgb(255_255_255/0.08)_1px,transparent_1px),linear-gradient(90deg,rgb(255_255_255/0.08)_1px,transparent_1px)] bg-[size:25%_25%]" />
-      <svg viewBox="0 0 32 32" className="relative size-full text-white drop-shadow-[0_1px_1px_rgb(11_10_26/0.35)]">
+      <svg viewBox="0 0 32 32" className="relative size-full text-white">
         <text
           x="16"
           y="16.5"

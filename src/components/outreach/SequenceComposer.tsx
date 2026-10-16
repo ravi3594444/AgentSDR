@@ -165,7 +165,7 @@ export default function SequenceComposer({
                       className={cn(
                         "flex size-6 shrink-0 items-center justify-center rounded-md text-label-xs",
                         index === i
-                          ? "bg-primary-base text-static-white"
+                          ? "bg-primary-base text-primary-contrast"
                           : "bg-bg-weak-50 text-text-sub-600",
                       )}
                     >
