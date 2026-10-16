@@ -23,6 +23,14 @@
  * Nothing is enabled: every organization starts with every new feature off
  * (organization_features has no rows). Re-runnable: every statement is
  * guarded, and the constraint swaps run in one transaction.
+ *
+ * Locking: each swap adds the wider CHECK as NOT VALID, so the transaction
+ * holds its brief exclusive locks without scanning a table (CRM replies and
+ * sends wait milliseconds, not the length of a scan of
+ * crm_conversation_messages). The constraints are validated afterwards, one
+ * at a time, under a lock that lets reads and writes continue. A wider check
+ * cannot fail on existing rows; if a validation is interrupted, the
+ * constraint still applies to every new row and re-running finishes it.
  */
 import { SQL } from "bun";
 
@@ -187,19 +195,24 @@ async function main() {
     await sql.begin(async (tx) => {
       for (const [table, constraint, definition] of WIDENED) {
         await tx.unsafe(`ALTER TABLE ${table} DROP CONSTRAINT IF EXISTS ${constraint}`);
-        await tx.unsafe(`ALTER TABLE ${table} ADD CONSTRAINT ${constraint} ${definition}`);
+        await tx.unsafe(`ALTER TABLE ${table} ADD CONSTRAINT ${constraint} ${definition} NOT VALID`);
       }
     });
+    // Validation scans each table without blocking its reads and writes; no time limit.
+    await sql.unsafe("SET statement_timeout = 0");
+    for (const [table, constraint] of WIDENED) {
+      await sql.unsafe(`ALTER TABLE ${table} VALIDATE CONSTRAINT ${constraint}`);
+    }
     const present: { name: string }[] = await sql`
       select c.relname as name from pg_class c join pg_namespace n on n.oid = c.relnamespace
       where n.nspname = 'public' and c.relname in ${sql(EXPECTED_TABLES)}`;
     const missing = EXPECTED_TABLES.filter((table) => !present.some((row) => row.name === table));
     console.log(missing.length ? `MISSING: ${missing.join(", ")}` : `present: ${EXPECTED_TABLES.join(", ")}`);
-    const constraints: { conname: string; def: string }[] = await sql`
-      select conname, pg_get_constraintdef(oid) as def from pg_constraint
+    const constraints: { conname: string; def: string; validated: boolean }[] = await sql`
+      select conname, pg_get_constraintdef(oid) as def, convalidated as validated from pg_constraint
       where conname in ${sql(WIDENED.map(([, name]) => name))} order by conname`;
-    for (const row of constraints) console.log(`${row.conname}: ${row.def}`);
-    if (missing.length || constraints.length !== WIDENED.length) process.exitCode = 1;
+    for (const row of constraints) console.log(`${row.conname}: ${row.def}${row.validated ? "" : " (NOT VALIDATED — re-run)"}`);
+    if (missing.length || constraints.length !== WIDENED.length || constraints.some((row) => !row.validated)) process.exitCode = 1;
   } finally {
     await sql.close();
   }
