@@ -11,12 +11,13 @@
  * Additive and backward compatible:
  * - new tables only (organization_features, instagram_accounts,
  *   instagram_chats, instagram_messages, intake_endpoints, inquiries,
- *   lead_audience_member_insights, apify_settings, apify_runs);
+ *   lead_audience_member_insights, apify_settings, apify_runs, treg_settings,
+ *   treg_calls);
  * - CHECK constraints are only widened (a superset of today's values, so
  *   every existing row and every running deployment keeps working):
  *   'instagram' joins the CRM channels and assistant run memberships;
  *   'web_discovery' and 'apify_instagram' join the assistant job kinds,
- *   'apify_discovery' the optional features;
+ *   'apify_discovery' and 'treg' the optional features;
  * - no column is added to an existing table, so the code of this release
  *   also runs before the migration: everything new is behind a feature
  *   switch (off without organization_features) or reads its new table as
@@ -45,7 +46,7 @@ const TABLES = [
      updated_by uuid,
      updated_at timestamptz NOT NULL DEFAULT now(),
      CONSTRAINT organization_features_pkey PRIMARY KEY (organization_id, key),
-     CONSTRAINT organization_features_key_chk CHECK (key IN ('instagram', 'web_discovery', 'inquiry_intake', 'apify_discovery'))
+     CONSTRAINT organization_features_key_chk CHECK (key IN ('instagram', 'web_discovery', 'inquiry_intake', 'apify_discovery', 'treg'))
    )`,
 
   `CREATE TABLE IF NOT EXISTS instagram_accounts (
@@ -201,6 +202,33 @@ const TABLES = [
      CONSTRAINT apify_runs_status_chk CHECK (status IN ('starting', 'running', 'succeeded', 'partial', 'failed', 'refused'))
    )`,
   `CREATE INDEX IF NOT EXISTS apify_runs_org_created_idx ON apify_runs (organization_id, created_at)`,
+  // Treg as an optional, keyed tool source (src/lib/treg/).
+  `CREATE TABLE IF NOT EXISTS treg_settings (
+     organization_id uuid PRIMARY KEY REFERENCES organizations(id),
+     encrypted_key text,
+     key_hint text,
+     team text,
+     daily_cap_usd double precision NOT NULL DEFAULT 2,
+     updated_by uuid,
+     updated_at timestamptz NOT NULL DEFAULT now(),
+     CONSTRAINT treg_settings_cap_chk CHECK (daily_cap_usd >= 0 AND daily_cap_usd <= 100)
+   )`,
+  `CREATE TABLE IF NOT EXISTS treg_calls (
+     organization_id uuid NOT NULL REFERENCES organizations(id),
+     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+     thread_id uuid,
+     endpoint_id text NOT NULL,
+     status text NOT NULL DEFAULT 'calling',
+     ceiling_usd double precision NOT NULL,
+     cost_usd double precision,
+     http_status integer,
+     treg_call_id text,
+     error text,
+     created_at timestamptz NOT NULL DEFAULT now(),
+     finished_at timestamptz,
+     CONSTRAINT treg_calls_status_chk CHECK (status IN ('calling', 'succeeded', 'failed'))
+   )`,
+  `CREATE INDEX IF NOT EXISTS treg_calls_org_created_idx ON treg_calls (organization_id, created_at)`,
 ];
 
 /** [table, constraint, definition]: dropped and added again with the wider set. */
@@ -213,10 +241,10 @@ const WIDENED: [string, string, string][] = [
   ["crm_records", "crm_records_active_channel_chk", `CHECK (active_channel IS NULL OR active_channel IN ${CRM_CHANNELS})`],
   ["outreach_run_leads", "outreach_run_leads_channel_chk", `CHECK (channel IN ('email', 'whatsapp', 'linkedin', 'instagram'))`],
   ["assistant_jobs", "assistant_jobs_kind_chk", `CHECK (kind IN ('discovery', 'outreach_start', 'linkedin_search', 'web_discovery', 'apify_instagram'))`],
-  ["organization_features", "organization_features_key_chk", `CHECK (key IN ('instagram', 'web_discovery', 'inquiry_intake', 'apify_discovery'))`],
+  ["organization_features", "organization_features_key_chk", `CHECK (key IN ('instagram', 'web_discovery', 'inquiry_intake', 'apify_discovery', 'treg'))`],
 ];
 
-const EXPECTED_TABLES = ["organization_features", "instagram_accounts", "instagram_chats", "instagram_messages", "intake_endpoints", "inquiries", "lead_audience_member_insights", "apify_settings", "apify_runs"];
+const EXPECTED_TABLES = ["organization_features", "instagram_accounts", "instagram_chats", "instagram_messages", "intake_endpoints", "inquiries", "lead_audience_member_insights", "apify_settings", "apify_runs", "treg_settings", "treg_calls"];
 
 async function main() {
   const url = process.env.DATABASE_URL;

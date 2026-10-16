@@ -7,7 +7,7 @@
  * (flags.server.ts).
  */
 
-export const FEATURE_KEYS = ["instagram", "web_discovery", "inquiry_intake", "apify_discovery"] as const;
+export const FEATURE_KEYS = ["instagram", "web_discovery", "inquiry_intake", "apify_discovery", "treg"] as const;
 export type FeatureKey = (typeof FEATURE_KEYS)[number];
 
 export type FeatureInfo = {
@@ -41,6 +41,12 @@ export const FEATURES: Record<FeatureKey, FeatureInfo> = {
     description:
       "Lead searches can use Apify Actors you approve — Google Maps listings, Instagram hashtags and profiles — within a monthly budget you set. When Apify is not set up, over budget or out of credit, searches continue with Google Maps, LinkedIn or website search as before. AgentSDR never tops up or upgrades your Apify account.",
     requires: "An Apify account and API token, at least one approved Actor, and a monthly budget (set on this page once the feature is on).",
+  },
+  treg: {
+    label: "Treg tools (beta, paid)",
+    description:
+      "The assistant can use Treg's catalog of paid data tools with your Treg key — find and verify work emails, enrich people and companies, Google Maps and web search, public social profiles — within a daily spend cap you set. Each call is billed by Treg to your prepaid Treg balance; AgentSDR never tops it up.",
+    requires: "A Treg account (treg.to) and its API key, and a daily spend cap (set on this page once the feature is on).",
   },
 };
 

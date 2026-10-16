@@ -502,6 +502,52 @@ them" and with Autonomous mode, and counts toward the daily search cap.
 Checks: unit 1,271 (all), `scripts/e2e/apify.ts` all passed, tsc and lint
 clean.
 
+### Follow-up: Treg tools, beta (2026-10-16)
+
+The owner asked for a source where they can add their Treg API key, used
+when it is available. Treg (treg.to) is one prepaid key for thousands of
+paid data APIs (email find and verify, enrichment, Maps and web search,
+social profiles). Code: `src/lib/treg/`, `src/services/treg.ts`. The
+feature is the optional **Treg tools** switch, plus a **Treg** card in
+Settings → Organization.
+
+- **The key:** checked with Treg (`GET /auth/me`) before it is saved,
+  stored encrypted and never shown again. The card shows its team name
+  and a hint.
+- **The tools:** the assistant has `treg_search` (Treg's public catalog,
+  free) and `treg_call`. A call uses a catalog id only, never a URL. Its
+  price and method come from Treg's own catalog page, not from the model.
+- **Spending:** a call is refused if its endpoint has no published price,
+  costs more than $0.25 a call, or would pass the daily cap (default $2,
+  last 24 hours).
+  - Each call is recorded in `treg_calls` before it is made, under the
+    organization's advisory lock. Its ceiling counts as reserved, so two
+    calls cannot both take the last of the cap.
+  - The ceiling (what is left of the cap, at most $0.25) is also sent as
+    `X-Treg-Route-Max-Cost`. Treg refuses a call above it and charges
+    nothing. That is the hard limit for per-result prices, whose real
+    cost depends on the rows returned.
+  - The cost recorded is the `X-Treg-Cost-Micro` Treg reports. Every
+    call has an Idempotency-Key.
+  - A call whose outcome is unknown (the connection dropped) keeps its
+    ceiling counted.
+- **Contacts:** emails and phones in a successful answer may be added
+  with `add_contacts`.
+- **Top-ups:** AgentSDR never tops up Treg. An empty balance (402) is
+  reported in the chat.
+- **Migration:** the tables `treg_settings` and `treg_calls`, and the
+  `'treg'` feature key, are in `scripts/add-instagram-intake-discovery.ts`,
+  which the update steps already run.
+
+Not run against the real Treg: only against the stand-in in
+`scripts/e2e/treg.ts` (35 checks). The protocol was read from
+https://treg.to/llms.txt on 2026-10-16.
+
+Checks: unit 1,273 (all), `scripts/e2e/treg.ts` all passed, tenancy
+isolation (114 reads, 39 writes, 67 pages as a second organization, no
+findings), `check-organization-scope --contract` passed, tsc and lint
+clean.
+
 ### Live services vs stand-ins
 
 - **Live, real services:** gosom/google-maps-scraper v1.18.1 against Google

@@ -587,6 +587,32 @@ platform whose Actor is not approved, or a used-up budget, is reported in
 the chat and nothing is searched. In Autonomous mode these searches count
 toward the daily search cap.
 
+**Treg tools (beta, paid, off by default).** [Treg](https://treg.to) is
+one key for many paid data APIs. Turn on **Treg tools** under Settings →
+Organization → Optional features. Then paste your Treg API key in the
+**Treg** card on the same page; Treg checks it before it is saved, and
+it is stored encrypted and never shown again. Set a **daily spend cap**
+(default $2).
+
+You can then ask the assistant for lookups its other tools cannot do,
+for example "find Jane Doe's work email at acme.com", "verify this email"
+or "enrich this company". It works in two steps:
+1. It searches Treg's catalog for a fitting tool. This is free.
+2. It calls the tool, and the chat says what each call cost.
+
+Emails and phones in a Treg answer can be added as leads.
+
+Limits:
+- A tool costing more than $0.25 a call, or with no published price, is
+  never called.
+- No call is made once the day's cap is reached (the last 24 hours).
+- Each call carries its own ceiling (what is left of the cap, at most
+  $0.25). Treg itself refuses a call above that ceiling and charges
+  nothing.
+
+Treg bills your prepaid Treg balance. AgentSDR never tops it up. When the
+balance is empty, the chat says so.
+
 **Lists.** CSV and Excel go through the same People import as Leads →
 Import (same column handling, same errors). Leads with no usable contact on
 any connected channel are reported with the reason (for example "reachable
@@ -743,6 +769,11 @@ AI_SOURCE_ORGANIZATION_ID=<org with AI Settings> bun run --conditions=react-serv
 # (sends nothing). With AI_SOURCE_ORGANIZATION_ID it also prints real answers
 # and timings; REPLY_AGENT_E2E_MODEL=<model id> tries another model of it:
 bun run --conditions=react-server scripts/e2e/reply-agent.ts
+# Treg tools (beta) against a stand-in of Treg's API (nothing is charged): the key
+# checked and encrypted, catalog ids only, prices from Treg's catalog, the per-call
+# limit, the daily cap and its X-Treg-Route-Max-Cost ceiling, two calls at once,
+# Treg's refusals, the assistant's tools, a second organization. No server needed:
+bun run --conditions=react-server scripts/e2e/treg.ts
 # Autonomous mode: plans starting on their own in the owner's name, and every cap
 # that makes them wait (sends nothing; the launch job is never run):
 bun run --conditions=react-server scripts/e2e/autonomous.ts

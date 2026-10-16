@@ -13,6 +13,8 @@ import { normalizeWebCriteria, startWebDiscovery, WebDiscoveryUnavailableError }
 import { webSearchAvailability, webSearchAvailabilityFrom } from "@/lib/discovery/webSearch.server";
 import type { FeatureState } from "@/lib/features/catalog";
 import { featureEnabled, FeatureDisabledError } from "@/lib/features/flags.server";
+import { compactResult, describeEndpoint, TREG_LIMITS } from "@/lib/treg/catalog";
+import { callTregEndpoint, searchTreg, TregUnavailableError } from "@/lib/treg/treg.server";
 import type { ImportRow } from "@/lib/leads/importRows";
 import { importPeopleRows } from "@/lib/leads/peopleImport.server";
 import { people } from "@/lib/leads/schema";
@@ -395,8 +397,66 @@ export const TOOLS: Record<string, Tool> = {
     },
   },
 
+  treg_search: {
+    available: (features) => features.treg,
+    description: "Find the right paid tool in Treg's catalog (treg.to; beta) for a lookup the other tools cannot do: a person's work email from their name and company domain, verifying an email, a phone number, enriching a person or company, a public social profile. Free. Returns endpoint ids with their price per unit and parameters (* = required); call one with treg_call.",
+    arguments: "task (what you need, in plain words, e.g. 'find work email from full name and company domain')",
+    run: async (args) => {
+      const task = text(args, "task", true)!;
+      try {
+        const endpoints = await searchTreg(task);
+        if (!endpoints.length) return { ok: true, summary: `Treg's catalog has nothing for “${task}”.`, display: "Nothing found in Treg's catalog." };
+        return {
+          ok: true,
+          summary: `Treg endpoints for “${task}” (call one with treg_call):\n${endpoints.map(describeEndpoint).join("\n")}`,
+          display: endpoints.map((endpoint) => endpoint.summary || endpoint.id).slice(0, 3).join(" · "),
+          data: { endpoints: endpoints.map((endpoint) => ({ id: endpoint.id, summary: endpoint.summary, usd: endpoint.usd, unit: endpoint.unit })) },
+        };
+      } catch (error) {
+        if (error instanceof TregUnavailableError) return { ok: false, summary: error.message };
+        throw error;
+      }
+    },
+  },
+
+  treg_call: {
+    available: (features) => features.treg,
+    description: `Call one Treg catalog endpoint that treg_search returned (beta; paid from the owner's Treg balance, never more than $${TREG_LIMITS.maxUsdPerCall} a call and only within the organization's daily Treg cap). Its price and method are read from Treg's catalog, not from you. Returns the provider's answer and what the call cost. Emails, phones and profiles in a successful answer may then be added with add_contacts.`,
+    arguments: "endpointId (a catalog id from treg_search, e.g. treg.people.email.find), query (object of the endpoint's query parameters; {} for none), body (object of its body parameters, for POST endpoints)",
+    run: async (args, context) => {
+      if (args.query !== undefined && (typeof args.query !== "object" || args.query === null || Array.isArray(args.query))) throw new ToolArgumentError("query must be an object");
+      if (args.body !== undefined && args.body !== null && (typeof args.body !== "object" || Array.isArray(args.body))) throw new ToolArgumentError("body must be an object");
+      const query: Record<string, string | string[]> = {};
+      for (const [name, value] of Object.entries((args.query ?? {}) as Record<string, unknown>)) {
+        const scalar = (item: unknown) => (typeof item === "string" || typeof item === "number" || typeof item === "boolean" ? String(item) : null);
+        const values = Array.isArray(value) ? value.map(scalar) : [scalar(value)];
+        if (values.some((item) => item === null)) throw new ToolArgumentError(`query.${name} must be text, a number or a list of them`);
+        query[name] = Array.isArray(value) ? (values as string[]) : values[0]!;
+      }
+      const body = (args.body ?? null) as Record<string, unknown> | null;
+      if (body && JSON.stringify(body).length > 4_000) throw new ToolArgumentError("body is too large (4,000 characters at most)");
+      try {
+        const outcome = await callTregEndpoint({ endpointId: args.endpointId, query, body, threadId: context.threadId });
+        const id = outcome.endpoint?.id ?? String(args.endpointId ?? "");
+        if (!outcome.ok) {
+          return { ok: false, summary: `Treg ${id} not used: ${outcome.reason}.${outcome.costUsd ? ` Counted: $${outcome.costUsd}.` : ""}`, display: `Not used: ${outcome.reason}` };
+        }
+        const cost = `$${outcome.costUsd.toFixed(4)} ($${outcome.leftTodayUsd.toFixed(3)} left of today's cap)`;
+        return {
+          ok: true,
+          summary: `Treg ${id} answered; charged ${cost}. Answer: ${compactResult(outcome.body)}`,
+          display: `${outcome.endpoint.summary || id} — charged ${cost}`,
+          data: { endpointId: id, costUsd: outcome.costUsd, leftTodayUsd: outcome.leftTodayUsd },
+        };
+      } catch (error) {
+        if (error instanceof TregUnavailableError) return { ok: false, summary: error.message };
+        throw error;
+      }
+    },
+  },
+
   add_contacts: {
-    description: "Add people the owner gave in the chat (phone numbers, emails or LinkedIn profile links, with a name or company when given) as a new lead list, so outreach can be prepared for them (contactAfter true when the owner asked for it: the plan follows automatically). Only contacts the owner wrote, or that are on a page read with read_webpage. A phone number without + and a country code is refused unless the organization has a Default phone country: ask the owner which country, never guess it.",
+    description: "Add people the owner gave in the chat (phone numbers, emails or LinkedIn profile links, with a name or company when given) as a new lead list, so outreach can be prepared for them (contactAfter true when the owner asked for it: the plan follows automatically). Only contacts the owner wrote, that are on a page read with read_webpage, or that a successful treg_call returned. A phone number without + and a country code is refused unless the organization has a Default phone country: ask the owner which country, never guess it.",
     arguments: "contacts (array of objects with name, phone, email, linkedinUrl, company; each needs a phone, email or linkedinUrl; up to 50), listName (optional), contactAfter (true when the owner asked to contact, message or pitch these people: the outreach plan is then prepared right after), channels (optional, with contactAfter: array of email|whatsapp|linkedin)",
     run: async (args, context) => {
       if (!Array.isArray(args.contacts) || !args.contacts.length) throw new ToolArgumentError("contacts must be a non-empty array");

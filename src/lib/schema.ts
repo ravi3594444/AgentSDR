@@ -30,6 +30,7 @@ export * from "./intake/schema";
 // Optional per-organization features, all off by default (src/lib/features/).
 export * from "./features/schema";
 export * from "./apify/schema";
+export * from "./treg/schema";
 
 // Web research about imported companies (src/lib/research/).
 export * from "./research/schema";

@@ -88,6 +88,8 @@ export const SCOPED_TABLES: readonly ScopedTable[] = [
   snake("organization_features"),
   snake("apify_settings"),
   snake("apify_runs"),
+  snake("treg_settings"),
+  snake("treg_calls"),
   // LinkedIn (ex-Prisma, camelCase columns)
   pascal("LinkedInAccount"),
   pascal("Campaign"),

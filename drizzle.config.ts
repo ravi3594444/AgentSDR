@@ -135,6 +135,8 @@ const OWNED_TABLES = [
   "lead_audience_member_insights",
   "apify_settings",
   "apify_runs",
+  "treg_settings",
+  "treg_calls",
 ];
 
 export default {

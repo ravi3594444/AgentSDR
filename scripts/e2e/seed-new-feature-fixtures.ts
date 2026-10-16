@@ -29,11 +29,14 @@ const { createAudience } = await import("@/lib/assistant/audiences.server");
 const { setFeature } = await import("@/lib/features/flags.server");
 const { runInOrganization } = await import("@/lib/tenancy/scope");
 const { apifyRuns, apifySettings } = await import("@/lib/apify/schema");
+const { tregCalls, tregSettings } = await import("@/lib/treg/schema");
 const { encryptIntegrationCredential } = await import("@/lib/integrations/credentials");
 
 const stamp = Date.now();
 await runInOrganization(organizationId, async () => {
-  for (const key of ["instagram", "web_discovery", "inquiry_intake", "apify_discovery"] as const) await setFeature(key, true, null);
+  for (const key of ["instagram", "web_discovery", "inquiry_intake", "apify_discovery", "treg"] as const) await setFeature(key, true, null);
+  await db.insert(tregSettings).values({ organizationId, encryptedKey: encryptIntegrationCredential(`iso-treg-key-${stamp}`), keyHint: "…iso2", team: `Isolation team ${stamp}` }).onConflictDoNothing();
+  await db.insert(tregCalls).values({ organizationId, endpointId: "treg.people.email.find", status: "succeeded", ceilingUsd: 0.25, costUsd: 0.0005, httpStatus: 200, tregCallId: `iso-treg-call-${stamp}`, finishedAt: new Date() });
   await db.insert(apifySettings).values({ organizationId, encryptedToken: encryptIntegrationCredential(`iso-apify-token-${stamp}`), tokenHint: "…iso1", approvedActors: ["google_maps"] }).onConflictDoNothing();
   await db.insert(apifyRuns).values({ organizationId, actorKey: "google_maps", actorId: "compass~crawler-google-places", apifyRunId: `iso-apify-run-${stamp}`, datasetId: `iso-apify-dataset-${stamp}`, requestId: `iso-request-${stamp}`, status: "succeeded", maxChargeUsd: 2, maxItems: 20, usageUsd: 0.42, itemsRead: 5, finishedAt: new Date() });
   const [person] = await db.insert(people).values({ organizationId, fullName: "Isolation Inquirer", email: `isolation-inquirer-${stamp}@example.test`, source: "intake:website-form" }).returning();

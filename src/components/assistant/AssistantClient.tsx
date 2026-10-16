@@ -134,6 +134,8 @@ const TOOL_TITLE: Record<string, string> = {
   find_customers_on_web: "Web search",
   find_instagram_prospects: "Instagram prospects",
   find_social_leads: "Social media search",
+  treg_search: "Treg catalog search",
+  treg_call: "Treg lookup",
   use_existing_leads: "Lead list from your leads",
   list_inquiries: "Inquiries",
   prepare_inquiry_replies: "Answering new inquiries",

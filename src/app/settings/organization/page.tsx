@@ -2,6 +2,7 @@ import { ChannelRulesForm } from "@/components/settings/ChannelRulesForm";
 import { ApifySettings } from "@/components/settings/organization/ApifySettings";
 import { OrgFeatures } from "@/components/settings/organization/OrgFeatures";
 import { OrgGeneral } from "@/components/settings/organization/OrgGeneral";
+import { TregSettings } from "@/components/settings/organization/TregSettings";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import { can, requirePageOrgContext } from "@/lib/auth/context";
 import { channelRulesForSettings } from "@/lib/channels/rules.server";
@@ -26,6 +27,7 @@ export default async function Page() {
         </section>
         <OrgFeatures />
         <ApifySettings />
+        <TregSettings />
       </div>
     </SettingsPage>
   );

@@ -162,6 +162,9 @@ export type TranscriptMessage = {
 };
 
 /** The conversation as the model reads it: newest last, tool results by their summary. */
+/** Tools whose result the model reads at length (the rest are cut to 1,500 characters). */
+const LONG_RESULT_TOOLS = new Set(["read_webpage", "treg_search", "treg_call"]);
+
 export function transcriptText(messages: readonly TranscriptMessage[], maxChars = 24_000): string {
   const lines = messages.map((message) => {
     if (message.role === "user") {
@@ -172,8 +175,8 @@ export function transcriptText(messages: readonly TranscriptMessage[], maxChars 
     if (message.role === "event") return `EVENT: ${message.content}`;
     const summary = typeof message.toolResult?.summary === "string" ? message.toolResult.summary : message.content;
     const args = message.toolInput && Object.keys(message.toolInput).length ? JSON.stringify(message.toolInput).slice(0, 300) : "";
-    // A page the owner asked to read is the model's only copy of it: keep more of it.
-    return `TOOL ${message.tool}(${args}) → ${message.status ?? "?"}: ${summary.slice(0, message.tool === "read_webpage" ? 6_000 : 1_500)}`;
+    // A page the owner asked to read, or a paid Treg answer, is the model's only copy of it: keep more of it.
+    return `TOOL ${message.tool}(${args}) → ${message.status ?? "?"}: ${summary.slice(0, LONG_RESULT_TOOLS.has(message.tool ?? "") ? 6_000 : 1_500)}`;
   });
   let text = lines.join("\n");
   while (text.length > maxChars && lines.length > 4) {
@@ -376,7 +379,7 @@ export function actionsProblem(actions: readonly AgentAction[], input: { smallTa
   for (const action of actions) {
     if (action.tool === "add_contacts") {
       const invented = ungroundedContacts(action.args.contacts, input.ownerCorpus);
-      if (invented.length) return `add_contacts: ${invented.join(", ")} ${invented.length === 1 ? "is" : "are"} not in what the owner wrote. Add only contacts the owner gave, exactly as given.`;
+      if (invented.length) return `add_contacts: ${invented.join(", ")} ${invented.length === 1 ? "is" : "are"} not in what the owner wrote, a page read for them or a Treg answer. Add only those contacts, exactly as given.`;
       continue;
     }
     if (action.tool === "read_webpage") {

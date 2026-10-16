@@ -2550,7 +2550,7 @@ CREATE TABLE public.organization_features (
     enabled boolean DEFAULT false NOT NULL,
     updated_by uuid,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT organization_features_key_chk CHECK ((key = ANY (ARRAY['instagram'::text, 'web_discovery'::text, 'inquiry_intake'::text, 'apify_discovery'::text])))
+    CONSTRAINT organization_features_key_chk CHECK ((key = ANY (ARRAY['instagram'::text, 'web_discovery'::text, 'inquiry_intake'::text, 'apify_discovery'::text, 'treg'::text])))
 );
 
 --
@@ -2897,6 +2897,41 @@ CREATE TABLE public.teams (
     organization_id uuid NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone
+);
+
+--
+-- Name: treg_calls; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.treg_calls (
+    organization_id uuid NOT NULL,
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    thread_id uuid,
+    endpoint_id text NOT NULL,
+    status text DEFAULT 'calling'::text NOT NULL,
+    ceiling_usd double precision NOT NULL,
+    cost_usd double precision,
+    http_status integer,
+    treg_call_id text,
+    error text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    finished_at timestamp with time zone,
+    CONSTRAINT treg_calls_status_chk CHECK ((status = ANY (ARRAY['calling'::text, 'succeeded'::text, 'failed'::text])))
+);
+
+--
+-- Name: treg_settings; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.treg_settings (
+    organization_id uuid NOT NULL,
+    encrypted_key text,
+    key_hint text,
+    team text,
+    daily_cap_usd double precision DEFAULT 2 NOT NULL,
+    updated_by uuid,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT treg_settings_cap_chk CHECK (((daily_cap_usd >= (0)::double precision) AND (daily_cap_usd <= (100)::double precision)))
 );
 
 --
@@ -4055,6 +4090,20 @@ ALTER TABLE ONLY public.team_members
 
 ALTER TABLE ONLY public.teams
     ADD CONSTRAINT teams_pkey PRIMARY KEY (id);
+
+--
+-- Name: treg_calls treg_calls_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treg_calls
+    ADD CONSTRAINT treg_calls_pkey PRIMARY KEY (id);
+
+--
+-- Name: treg_settings treg_settings_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treg_settings
+    ADD CONSTRAINT treg_settings_pkey PRIMARY KEY (organization_id);
 
 --
 -- Name: users users_email_key; Type: CONSTRAINT; Schema: public; Owner: -
@@ -5373,6 +5422,12 @@ CREATE INDEX team_members_user_id_idx ON public.team_members USING btree (user_i
 --
 
 CREATE INDEX teams_organization_id_idx ON public.teams USING btree (organization_id);
+
+--
+-- Name: treg_calls_org_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX treg_calls_org_created_idx ON public.treg_calls USING btree (organization_id, created_at);
 
 --
 -- Name: verifications_identifier_idx; Type: INDEX; Schema: public; Owner: -
@@ -6867,6 +6922,20 @@ ALTER TABLE ONLY public.team_members
 
 ALTER TABLE ONLY public.teams
     ADD CONSTRAINT teams_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id) ON DELETE CASCADE;
+
+--
+-- Name: treg_calls treg_calls_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treg_calls
+    ADD CONSTRAINT treg_calls_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
+
+--
+-- Name: treg_settings treg_settings_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treg_settings
+    ADD CONSTRAINT treg_settings_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
 
 --
 -- Name: whatsapp_accounts whatsapp_accounts_organization_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
