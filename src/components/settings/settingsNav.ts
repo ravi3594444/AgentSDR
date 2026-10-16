@@ -4,6 +4,7 @@ import {
   RiCpuLine,
   RiEqualizerLine,
   RiGroupLine,
+  RiInstagramLine,
   RiTeamLine,
   RiLayoutColumnLine,
   RiLinkedinBoxLine,
@@ -91,6 +92,14 @@ export const SETTINGS_NAV: { label: string; items: SettingsNavItem[] }[] = [
           { href: "/settings/whatsapp-connection", label: "Integrations", icon: RiPlugLine },
           { href: "/settings/whatsapp-rules", label: "Sending rules", icon: RiEqualizerLine },
         ],
+      },
+      {
+        // Only for organizations that turned Instagram messages on.
+        href: "/settings/instagram-accounts",
+        label: "Instagram",
+        icon: RiInstagramLine,
+        feature: "instagram",
+        tabs: [{ href: "/settings/instagram-accounts", label: "Accounts", icon: RiInstagramLine }],
       },
     ],
   },

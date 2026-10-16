@@ -21,6 +21,7 @@ import {
   RiCodeSSlashLine,
   RiDatabase2Line,
   RiGridLine,
+  RiInstagramFill,
   RiLinkedinBoxFill,
   RiMailFill,
   RiRouteLine,
@@ -33,7 +34,8 @@ import {
 } from "@remixicon/react";
 import { HUE } from "@/components/analytics/theme";
 import { APP_VERSION, bugReportUrl, SUPPORT_LINKS } from "@/lib/support";
-import { SETTINGS_HOME, SETTINGS_NAV } from "@/components/settings/settingsNav";
+import { SETTINGS_HOME, visibleSettingsNav } from "@/components/settings/settingsNav";
+import type { FeatureKey, FeatureState } from "@/lib/features/catalog";
 import { isReleased } from "@/lib/release";
 
 /**
@@ -42,7 +44,9 @@ import { isReleased } from "@/lib/release";
  * Shape: a few labelled sections of links and collapsible groups (one group
  * per outreach channel), plus footer entries pinned to the bottom. A link's
  * `match` lists extra path prefixes that should light it up (a record page
- * belongs to Leads).
+ * belongs to Leads). An entry with a `feature` shows only while that
+ * optional feature is on for the organization (GET /api/nav/badges says
+ * which are); without the answer it stays hidden.
  */
 
 /** Live counts from GET /api/nav/badges. */
@@ -57,6 +61,9 @@ export type NavBadges = {
 };
 export type NavBadgeKey = keyof NavBadges;
 
+/** What GET /api/nav/badges answers: the counts, and the organization's optional features. */
+export type NavData = NavBadges & { features: FeatureState };
+
 export type NavLink = {
   kind: "link";
   href: string;
@@ -66,6 +73,7 @@ export type NavLink = {
   /** "count" shows the number; "dot" only flags that something needs a look. */
   badgeStyle?: "count" | "dot";
   match?: string[];
+  feature?: FeatureKey;
 };
 
 export type NavGroup = {
@@ -78,6 +86,7 @@ export type NavGroup = {
   children: NavLink[];
   /** Closed until opened, unless it holds the current page. */
   defaultOpen?: boolean;
+  feature?: FeatureKey;
 };
 
 export type NavEntry = NavLink | NavGroup;
@@ -136,6 +145,16 @@ export const NAV_SECTIONS: NavSection[] = [
           link("/calling/messages", "Messages", RiChat3Line, { badge: "whatsappUnread" }),
         ],
       },
+      {
+        // Only for organizations that turned Instagram messages on.
+        kind: "group",
+        id: "instagram",
+        label: "Instagram",
+        icon: RiInstagramFill,
+        color: HUE.pink,
+        feature: "instagram",
+        children: [link("/instagram/messages", "Messages", RiChat3Line)],
+      },
     ],
   },
   {
@@ -180,6 +199,22 @@ export const NAV_FOOTER: NavEntry[] = [
   link(SETTINGS_HOME, "Settings", RiSettings3Line, { match: ["/settings"], badge: "accountsNeedingAttention", badgeStyle: "dot" }),
 ];
 
+function featureOn(entry: { feature?: FeatureKey }, features: FeatureState | null): boolean {
+  return !entry.feature || Boolean(features?.[entry.feature]);
+}
+
+/** The sections this organization sees: entries whose feature is off (or not known yet) are left out. */
+export function visibleNavSections(features: FeatureState | null): NavSection[] {
+  return NAV_SECTIONS
+    .map((section) => ({
+      ...section,
+      entries: section.entries
+        .filter((entry) => featureOn(entry, features))
+        .map((entry) => (entry.kind === "group" ? { ...entry, children: entry.children.filter((child) => featureOn(child, features)) } : entry)),
+    }))
+    .filter((section) => section.entries.length > 0);
+}
+
 export function allLinks(): NavLink[] {
   const entries = [...NAV_SECTIONS.flatMap((s) => s.entries), ...NAV_FOOTER];
   return entries.flatMap((e) => (e.kind === "group" ? e.children : [e]));
@@ -200,9 +235,9 @@ export function activeHref(pathname: string): string | undefined {
 /** Every destination for the ⌘K palette: nav pages, settings screens, and "create" shortcuts. */
 export type PaletteItem = { href: string; label: string; group: string; icon: RemixiconComponentType; keywords?: string; /** Opens in a new tab instead of navigating in the app. */ external?: boolean };
 
-export function paletteItems(): PaletteItem[] {
+export function paletteItems(features: FeatureState | null = null): PaletteItem[] {
   const items: PaletteItem[] = [];
-  for (const section of NAV_SECTIONS) {
+  for (const section of visibleNavSections(features)) {
     for (const e of section.entries) {
       if (e.kind === "link") items.push({ href: e.href, label: e.label, group: section.label ?? "Pages", icon: e.icon });
       else for (const c of e.children) items.push({ href: c.href, label: `${e.label} · ${c.label}`, group: section.label ?? "Pages", icon: c.icon });
@@ -211,10 +246,8 @@ export function paletteItems(): PaletteItem[] {
   for (const e of NAV_FOOTER) {
     if (e.kind === "group") for (const c of e.children) items.push({ href: c.href, label: c.label, group: e.label, icon: c.icon });
   }
-  for (const g of SETTINGS_NAV) {
+  for (const g of visibleSettingsNav(features)) {
     for (const s of g.items) {
-      // A row behind an optional feature shows only in the settings rail, which knows whether it is on.
-      if (s.feature) continue;
       if (!s.tabs) items.push({ href: s.href, label: s.label, group: "Settings", icon: s.icon, keywords: g.label });
       else for (const t of s.tabs) items.push({ href: t.href, label: `${s.label} · ${t.label}`, group: "Settings", icon: t.icon, keywords: g.label });
     }

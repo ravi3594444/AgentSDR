@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, count, desc, eq, inArray } from "drizzle-orm";
+import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { featureState, isMissingTable } from "@/lib/features/flags.server";
 import { instagramAccounts } from "@/lib/instagram/schema";
@@ -41,11 +41,16 @@ export async function inquiryAccounts(): Promise<InquiryAccount[]> {
 }
 
 /** The organization's inquiry run that is running or paused (at most one), or null. */
-export async function activeInquiryRun() {
-  const rows = await db.select().from(outreachRuns)
-    .where(and(inOrg(outreachRuns), inArray(outreachRuns.status, ["running", "paused"])))
-    .orderBy(desc(outreachRuns.createdAt)).limit(50);
-  return rows.find((run) => run.plan.kind === "inquiries") ?? null;
+export async function activeInquiryRun(executor: Pick<typeof db, "select"> = db) {
+  const [run] = await executor.select().from(outreachRuns)
+    .where(and(inOrg(outreachRuns), inArray(outreachRuns.status, ["running", "paused"]), sql`${outreachRuns.plan} ->> 'kind' = 'inquiries'`))
+    .orderBy(desc(outreachRuns.createdAt)).limit(1);
+  return run ?? null;
+}
+
+/** Serializes proposing and starting inquiry runs in one organization, so at most one is ever active. */
+export function inquiryRunLockSql() {
+  return sql`select pg_advisory_xact_lock(hashtextextended(${`inquiry-run:${currentOrganizationId()}`}, 0))`;
 }
 
 /** Why an inquiry run cannot be proposed or started now, or null. */
@@ -101,9 +106,11 @@ export async function prepareInquiryReplies(input: { autopilot?: boolean; ownerR
  * run id, or null when no inquiry run is active (the reply then waits for
  * review as usual).
  */
-export async function attachInquiryToRun(personId: string, channel: "instagram"): Promise<string | null> {
+export async function attachInquiryToRun(personId: string, channel: "instagram", unipileAccountId: string): Promise<string | null> {
   const run = await activeInquiryRun();
   if (!run || !run.plan.inquiry?.channels.includes(channel)) return null;
+  // Only the accounts the owner saw on the card when starting it.
+  if (!run.plan.inquiry.accounts.some((account) => account.unipileAccountId === unipileAccountId)) return null;
   await db.insert(outreachRunLeads).values({ organizationId: currentOrganizationId(), runId: run.id, personId, channel }).onConflictDoNothing();
   await addAudienceMembers(run.audienceId, [{ personId, source: `inquiry:${channel}` }]);
   return run.id;

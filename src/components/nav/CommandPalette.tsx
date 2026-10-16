@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { RiArrowRightSLine, RiCornerDownLeftLine, RiSearchLine } from "@remixicon/react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { cn } from "@/utils/cn";
+import type { FeatureState } from "@/lib/features/catalog";
 import { paletteItems, type PaletteItem } from "./navConfig";
 
 /**
@@ -12,12 +13,12 @@ import { paletteItems, type PaletteItem } from "./navConfig";
  * filtered as you type. ⌘K / Ctrl+K opens it from anywhere; arrows move,
  * Enter goes, Esc closes.
  */
-export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+export function CommandPalette({ open, onOpenChange, features = null }: { open: boolean; onOpenChange: (open: boolean) => void; /** The organization's optional features: their pages are listed only while on. */ features?: FeatureState | null }) {
   const router = useRouter();
   const [query, setQuery] = useState("");
   const [index, setIndex] = useState(0);
   const listRef = useRef<HTMLUListElement>(null);
-  const items = useMemo(() => paletteItems(), []);
+  const items = useMemo(() => paletteItems(features), [features]);
 
   const matches = useMemo(() => {
     const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);

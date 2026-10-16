@@ -137,7 +137,7 @@ await runInOrganization(orgA!.id, async () => {
   await db.insert(instagramAccounts).values({ organizationId: org, unipileAccountId: `ig-intake-check-${stamp}`, username: "acme.dental", status: "connected", inquiryIntake: true, connectedAt: new Date(), historyCutoffAt: new Date() });
   const proposal = await prepareInquiryReplies({ ownerRequest: "answer my instagram inquiries", threadId: null, userId: null });
   check("inquiry run: proposed, not started", (await getRun(proposal.runId))?.status === "proposed" && proposal.plan.kind === "inquiries");
-  check("inquiry run: nothing is attached before Start", (await attachInquiryToRun(listed, "instagram")) === null);
+  check("inquiry run: nothing is attached before Start", (await attachInquiryToRun(listed, "instagram", `ig-intake-check-${stamp}`)) === null);
   const viaOutreach = await throws(startOutreachRun(proposal.runId, null, { autopilot: true }), OutreachError);
   check("inquiry run: the outreach start refuses it (no campaigns, no job)", Boolean(viaOutreach), viaOutreach ?? "started");
   await startInquiryRun(proposal.runId, null, true);
@@ -146,7 +146,8 @@ await runInOrganization(orgA!.id, async () => {
   check("inquiry run: only one at a time", Boolean(second && /already being answered/.test(second)), second ?? "allowed");
 
   const inquirer = await make({ fullName: "@new.patient", source: "intake:instagram" });
-  check("inquiry run: a fresh inquirer is attached", (await attachInquiryToRun(inquirer, "instagram")) === proposal.runId);
+  check("inquiry run: an inquiry on an account the run does not cover is not attached", (await attachInquiryToRun(inquirer, "instagram", "some-other-account")) === null);
+  check("inquiry run: a fresh inquirer is attached", (await attachInquiryToRun(inquirer, "instagram", `ig-intake-check-${stamp}`)) === proposal.runId);
   const membership = await runMembershipFor(db, inquirer, "instagram");
   check("inquiry run: the autopilot sees them as a running, automatic member on Instagram", membership?.runId === proposal.runId && membership.runStatus === "running" && membership.automatic === true);
   check("inquiry run: no membership on other channels", (await runMembershipFor(db, inquirer, "email")) === null);
@@ -158,7 +159,7 @@ await runInOrganization(orgA!.id, async () => {
   await stopRun(proposal.runId);
   const stopped = await runMembershipFor(db, inquirer, "instagram");
   check("inquiry run: Stop is final for its members", stopped?.runStatus === "stopped" && stopped.leadStatus === "stopped");
-  check("inquiry run: nobody is attached after Stop", (await attachInquiryToRun(listed, "instagram")) === null && (await activeInquiryRun()) === null);
+  check("inquiry run: nobody is attached after Stop", (await attachInquiryToRun(listed, "instagram", `ig-intake-check-${stamp}`)) === null && (await activeInquiryRun()) === null);
 
   // ------------------------------------------------------------ one Start for the whole request
   const [provider] = await db.insert(gridProviders).values({ organizationId: org, key: "platform-unipile", name: "Unipile (stand-in)" }).returning();

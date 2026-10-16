@@ -25,7 +25,7 @@ import { countReasons } from "./audiences";
 import { availableTokens, leadTextKey, MAX_PERSONAL, perLeadSteps, personalizationKey, settleGroups, templateTokens, type LeadApproach } from "./messages";
 import { getBusinessProfile } from "./profile.server";
 import { effectiveBusinessProfile } from "./businessContext.server";
-import { activeInquiryRun, inquiryRunMembers, inquiryRunReadiness } from "./inquiryRuns.server";
+import { activeInquiryRun, inquiryRunLockSql, inquiryRunMembers, inquiryRunReadiness } from "./inquiryRuns.server";
 import { missingForOutreach } from "./profile";
 import {
   assistantJobs,
@@ -465,13 +465,17 @@ export async function startInquiryRun(runId: string, userId: string | null, auto
   if (run.status !== "proposed") throw new OutreachError(`This plan is already ${run.status}.`);
   const problem = await inquiryRunReadiness();
   if (problem) throw new OutreachError(`Cannot start: ${problem}`);
-  const active = await activeInquiryRun();
-  if (active) throw new OutreachError(`New inquiries are already answered by “${active.name}”. Stop it first.`);
-  const claimed = await db.update(outreachRuns)
-    .set({ status: "running", approvedBy: userId, approvedAt: new Date(), autopilot, updatedAt: new Date() })
-    .where(and(inOrg(outreachRuns), eq(outreachRuns.id, run.id), eq(outreachRuns.status, "proposed")))
-    .returning({ id: outreachRuns.id });
-  if (!claimed.length) throw new OutreachError("This plan was started already.");
+  // Checked and claimed under the organization's inquiry-run lock: two Starts at once cannot both win.
+  await db.transaction(async (tx) => {
+    await tx.execute(inquiryRunLockSql());
+    const active = await activeInquiryRun(tx);
+    if (active) throw new OutreachError(`New inquiries are already answered by “${active.name}”. Stop it first.`);
+    const claimed = await tx.update(outreachRuns)
+      .set({ status: "running", approvedBy: userId, approvedAt: new Date(), autopilot, updatedAt: new Date() })
+      .where(and(inOrg(outreachRuns), eq(outreachRuns.id, run.id), eq(outreachRuns.status, "proposed")))
+      .returning({ id: outreachRuns.id });
+    if (!claimed.length) throw new OutreachError("This plan was started already.");
+  });
 }
 
 async function writeLines(runId: string, key: string, personIds: string[], startIndex: number): Promise<number> {
