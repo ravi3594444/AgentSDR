@@ -84,6 +84,9 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     }
     if (chatId.startsWith("ig-chat-busy")) return json(429, { status: 429, type: "errors/too_many_requests", title: "Too many requests", detail: "Slow down." });
     if (chatId.startsWith("ig-chat-flaky")) return json(503, { status: 503, title: "Service unavailable" });
+    if (chatId.startsWith("ig-chat-gone")) {
+      return json(401, { status: 401, type: "errors/disconnected_account", title: "Disconnected account", detail: "The account appears to be disconnected from the provider service." });
+    }
     sendCount += 1;
     // Accepted without naming the message: its echo will.
     if (chatId.startsWith("ig-chat-noid")) return json(201, { object: "MessageSent" });
@@ -187,6 +190,7 @@ const CHAT_REFUSE = `ig-chat-refuse-${stamp}`;
 const CHAT_BUSY = `ig-chat-busy-${stamp}`;
 const CHAT_NOID = `ig-chat-noid-${stamp}`;
 const CHAT_FLAKY = `ig-chat-flaky-${stamp}`;
+const CHAT_GONE = `ig-chat-gone-${stamp}`;
 
 const igAccount = (id: string, status: string, im: Record<string, unknown> = {}, name: string | null = null) =>
   ({ object: "Account", type: "INSTAGRAM", id, name, connection_params: { im }, sources: [{ id: `${id}-src`, status }] });
@@ -400,6 +404,8 @@ try {
   await db.insert(instagramChats).values({ accountId: a1Row.id, unipileChatId: CHAT_BUSY, providerId: LEAD1, personId: asha!.id });
   await db.insert(instagramChats).values({ accountId: a1Row.id, unipileChatId: CHAT_NOID, providerId: LEAD1 });
   await db.insert(instagramChats).values({ accountId: a1Row.id, unipileChatId: CHAT_FLAKY, providerId: LEAD1 });
+  const a3Row = (await inA(() => accountsLib.findInstagramAccountByUnipileId(A3)))!;
+  await db.insert(instagramChats).values({ accountId: a3Row.id, unipileChatId: CHAT_GONE, providerId: LEAD1 });
 
   // ============================================================ webhook gate
   const wrongSecret = await messageHook(A, "not-the-secret", delivery({ chatId: CHAT1, messageId: `ig-x-${stamp}`, text: "x", lead: LEAD1 }));
@@ -786,6 +792,27 @@ try {
       && flakyChat?.lastMessagePreview === flakyText && flakyChat.lastDirection === "outbound",
     JSON.stringify({ rows: flakyAfter.map((row) => [row.origin, row.unipileMessageId]), preview: flakyChat?.lastMessagePreview }),
   );
+
+  // Unipile says the account is disconnected: the account is marked, so the
+  // page shows it and the next send is refused before Unipile is called.
+  const goneRequest = crmRequest({ accountRef: A3, providerThreadId: CHAT_GONE, bodyText: "Hello from the cakes account" });
+  const gonePostsBefore = posts(CHAT_GONE).length;
+  const gone = await inA(() => sendThroughCrmProvider(goneRequest)).then(() => null, (error: unknown) => error as Error & { status?: number });
+  const a3AfterGone = (await inA(() => accountsLib.listInstagramAccounts())).find((account) => account.unipileAccountId === A3);
+  check(
+    "a send Unipile answers 'disconnected account': a definite failure, nothing kept, and the account is marked disconnected",
+    gone instanceof DefiniteCrmSendError && /reconnected/.test(gone.message) && a3AfterGone?.status === "disconnected" && (await chatRows(CHAT_GONE)).length === 0,
+    `${String(gone)} → ${a3AfterGone?.status}`,
+  );
+  const goneAgain = await inA(() => performInstagramReply({ unipileAccountId: A3, unipileChatId: CHAT_GONE, text: "Hello again", personId: null })).then(() => null, (error: unknown) => error);
+  check(
+    "the next send from that account is refused before Unipile is called",
+    goneAgain instanceof InstagramSendRefusedError && goneAgain.reason === "not_connected" && posts(CHAT_GONE).length === gonePostsBefore + 1,
+    String(goneAgain),
+  );
+  const resynced = await inA(() => accountsLib.syncInstagramAccounts());
+  check("Sync from Unipile reads the account's status again (Unipile lists it OK)", resynced.find((account) => account.unipileAccountId === A3)?.status === "connected");
+
   check("no new chat is ever started", !requests.some((r) => r.method === "POST" && r.path === "/api/v1/chats"));
 
   // ============================================================ organization B sees none of A

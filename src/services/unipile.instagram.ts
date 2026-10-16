@@ -28,11 +28,16 @@ export type UnipileInstagramAccount = {
   status: InstagramAccountStatus;
 };
 
-/** A Unipile call that failed; `status` is the HTTP status Unipile reported (null when it never answered). */
+/**
+ * A Unipile call that failed; `status` is the HTTP status Unipile reported
+ * (null when it never answered), `type` its problem type
+ * ("errors/disconnected_account"…) when it said one.
+ */
 export class UnipileInstagramError extends Error {
   constructor(
     readonly status: number | null,
     message: string,
+    readonly type: string | null = null,
   ) {
     super(message);
     this.name = "UnipileInstagramError";
@@ -45,6 +50,30 @@ export function instagramUnipileErrorStatus(error: unknown): number | null {
   const value = error as { status?: unknown; body?: { status?: unknown }; response?: { status?: unknown } } | null;
   const status = Number(value?.body?.status ?? value?.status ?? value?.response?.status);
   return Number.isInteger(status) && status > 0 ? status : null;
+}
+
+/** Unipile's problem type ("errors/…") from our error or an SDK problem body, when it says one. */
+export function instagramUnipileErrorType(error: unknown): string | null {
+  if (error instanceof UnipileInstagramError) return error.type;
+  const type = (error as { body?: { type?: unknown } } | null)?.body?.type;
+  return typeof type === "string" && type.trim() ? type.trim() : null;
+}
+
+/**
+ * What a failed call says about the account itself, from Unipile's problem
+ * type: only the two that unambiguously mean the account (not the API key,
+ * the chat or the recipient) can no longer send — "disconnected_account"
+ * and "expired_credentials". Null for anything else. Exported for tests.
+ */
+export function instagramAccountStatusFromError(error: unknown): Extract<InstagramAccountStatus, "disconnected" | "credentials"> | null {
+  switch (instagramUnipileErrorType(error)) {
+    case "errors/disconnected_account":
+      return "disconnected";
+    case "errors/expired_credentials":
+      return "credentials";
+    default:
+      return null;
+  }
 }
 
 /** Unipile's reason for a refusal ("title: detail"), when its problem body says one. */
@@ -63,7 +92,7 @@ async function call<T>(what: string, run: () => Promise<T>): Promise<T> {
     if (isPlatformNotConnectedError(error)) throw error;
     const status = instagramUnipileErrorStatus(error);
     const reason = unipileReason(error) ?? (error instanceof Error && error.message ? error.message : null);
-    throw new UnipileInstagramError(status, `Unipile could not ${what}${status ? ` (HTTP ${status})` : ""}${reason ? `: ${reason}` : ""}`);
+    throw new UnipileInstagramError(status, `Unipile could not ${what}${status ? ` (HTTP ${status})` : ""}${reason ? `: ${reason}` : ""}`, instagramUnipileErrorType(error));
   }
 }
 

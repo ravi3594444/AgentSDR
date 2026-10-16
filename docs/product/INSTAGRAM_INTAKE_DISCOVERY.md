@@ -36,7 +36,7 @@ format is read or written anywhere.
 | --- | --- | --- | --- |
 | Connect an account (hosted sign-in) | Yes | `POST /hosted/accounts/link` with `providers: ["INSTAGRAM"]`, `notify_url` → `{status: CREATION_SUCCESS\|RECONNECTED, account_id, name}` | Yes |
 | Connect with password / session cookie, 2FA checkpoint | Yes | `POST /accounts`, `POST /accounts/checkpoint` | No (hosted sign-in keeps passwords out of AgentSDR) |
-| Account status webhook | Yes | `source: account_status` | Yes (existing `unipile-account` route syncs Instagram too) |
+| Account status webhook | Yes | `source: account_status` | No — only the hosted sign-in's `notify_url` (`CREATION_SUCCESS`/`RECONNECTED`, the existing `unipile-account` route) syncs Instagram; see "Account changes" in section 6 |
 | List chats | Yes | `GET /chats?account_type=INSTAGRAM&account_id=` | Yes (history import) |
 | List messages of a chat | Yes | `GET /chats/{chat_id}/messages` | Yes (history import; the new-chat check before an inquiry) |
 | Send in an existing chat | Yes | `POST /chats/{chat_id}/messages` | Yes (replies) |
@@ -394,9 +394,15 @@ than resent, and an echo arriving up to 24 h later attaches to the reserved
 row instead of being stored again as typed in the app. A 2xx without a
 message id counts as sent; the row gets its id from the echo.
 
-Account changes: the existing `unipile-account` webhook now also syncs
-Instagram accounts, so a disconnected or credential-expired account shows
-as such and stops sending immediately. Disconnecting never deletes chats.
+Account changes: the existing `unipile-account` webhook (the hosted
+sign-in's `notify_url`) also syncs Instagram accounts when a sign-in
+finishes or an account is reconnected. No account-status webhook is
+registered, so an account whose session ends stays "connected" until
+**Sync from Unipile** — or until a send fails with Unipile's
+`errors/disconnected_account` or `errors/expired_credentials`: the account
+is then marked disconnected / needs sign-in on the accounts page, and later
+sends are refused before Unipile is called. Reconnecting it (or a sync that
+finds it OK) makes it connected again. Disconnecting never deletes chats.
 
 Not built: Instagram unread count in the sidebar badge, group chats (skipped
 on import), attachments sending, comment replies, and any cold Instagram

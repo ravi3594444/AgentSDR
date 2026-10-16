@@ -146,6 +146,24 @@ export async function findInstagramAccountByUnipileId(unipileAccountId: string):
   return row ?? null;
 }
 
+/**
+ * A send told us the account can no longer send (Unipile: disconnected, or
+ * its credentials expired). Unipile has no account-status webhook here, so
+ * the account would otherwise stay "connected": it is marked now, the
+ * Instagram accounts page shows it needs reconnecting, and later sends are
+ * refused before Unipile is called. Only a connected account changes;
+ * reconnecting it (the hosted sign-in's RECONNECTED, or Sync from Unipile)
+ * reads its status from Unipile again. True when it changed.
+ */
+export async function markInstagramAccountUnusable(id: string, status: "disconnected" | "credentials"): Promise<boolean> {
+  const updated = await db
+    .update(instagramAccounts)
+    .set({ status, updatedAt: new Date() })
+    .where(and(inOrg(instagramAccounts), eq(instagramAccounts.id, id), eq(instagramAccounts.status, "connected")))
+    .returning({ id: instagramAccounts.id });
+  return updated.length > 0;
+}
+
 /** Whether new messages from people AgentSDR does not know become inquiries on this account. */
 export async function setInstagramInquiryIntake(id: string, enabled: boolean): Promise<InstagramAccountSummary> {
   const [row] = await db

@@ -6,8 +6,8 @@ import { isPersonDoNotContact } from "@/lib/crm/policies";
 import { featureEnabled } from "@/lib/features/flags.server";
 import { isPlatformNotConnectedError } from "@/lib/platform/credentials";
 import { inOrg } from "@/lib/tenancy/scope";
-import { instagramUnipileErrorStatus, sendUnipileInstagramMessage } from "@/services/unipile.instagram";
-import { findInstagramAccountByUnipileId } from "./accounts";
+import { instagramAccountStatusFromError, instagramUnipileErrorStatus, sendUnipileInstagramMessage } from "@/services/unipile.instagram";
+import { findInstagramAccountByUnipileId, markInstagramAccountUnusable } from "./accounts";
 import {
   INSTAGRAM_MAX_MESSAGE_LENGTH,
   InstagramDeliveryError,
@@ -43,7 +43,9 @@ import { instagramAccounts, instagramChats, instagramMessages, type InstagramMes
  * attach to it (parse.ts ECHO_MATCH_WINDOW_MS) — and the CRM marks the
  * delivery uncertain. If it answers 2xx without naming the message, the
  * message was sent: the send succeeds without an id and the row waits for
- * its echo.
+ * its echo. When Unipile says the account itself is disconnected or its
+ * credentials expired, the account is marked so (accounts.ts
+ * markInstagramAccountUnusable): later sends are refused before Unipile.
  */
 
 function sendLockKey(accountId: string): string {
@@ -120,9 +122,18 @@ export async function performInstagramReply(input: DeliverInstagramInput): Promi
       await db.delete(instagramMessages).where(and(messageInOrg(), eq(instagramMessages.id, reserved.id)));
     }
     if (isPlatformNotConnectedError(error)) throw error;
+    const accountProblem = instagramAccountStatusFromError(error);
+    if (accountProblem) {
+      const marked = await markInstagramAccountUnusable(account.id, accountProblem).catch((markError: unknown) => {
+        console.error("[instagram/send] could not mark the account", markError);
+        return false;
+      });
+      if (marked) console.warn(`[instagram/send] Unipile says account ${account.unipileAccountId} is ${accountProblem === "credentials" ? "out of valid credentials" : "disconnected"} — marked ${accountProblem}`);
+    }
     if (refusedByUnipile(status)) {
       const detail = error instanceof Error ? error.message : String(error);
-      throw new InstagramDeliveryError(status, `Instagram (Unipile) did not accept the message — ${detail}`, true);
+      const reconnect = accountProblem ? " — the Instagram account needs to be reconnected (Settings → Instagram accounts)" : "";
+      throw new InstagramDeliveryError(status, `Instagram (Unipile) did not accept the message — ${detail}${reconnect}`, true);
     }
     console.error("[instagram/send] Unipile send failed", error);
     throw new InstagramDeliveryError(status, "Instagram (Unipile) could not be reached to send the message; it may or may not have been sent");
