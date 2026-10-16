@@ -396,7 +396,7 @@ export default function CrmSequenceEditor({ sequenceId }: { sequenceId: string }
               {steps.map((step, index) => (
                 <li key={step.clientId} className="relative flex gap-3 py-3">
                   {index < steps.length - 1 && <span aria-hidden="true" className="absolute left-3 top-10 -bottom-3 w-px bg-stroke-soft-200" />}
-                  <span className={cn("relative flex size-6 shrink-0 items-center justify-center rounded-full text-label-xs", index === 0 ? "bg-primary-base text-static-white" : "bg-bg-weak-50 text-text-sub-600 ring-1 ring-inset ring-stroke-soft-200")}>
+                  <span className={cn("relative flex size-6 shrink-0 items-center justify-center rounded-full text-label-xs", index === 0 ? "bg-primary-base text-primary-contrast" : "bg-bg-weak-50 text-text-sub-600 ring-1 ring-inset ring-stroke-soft-200")}>
                     {index + 1}
                   </span>
                   <div className="min-w-0 flex-1">
@@ -507,7 +507,7 @@ function StepEditor({
     <Frame>
       <FrameHeader
         title={<span className="flex items-center gap-2">
-          <span className={cn("flex size-5 items-center justify-center rounded-full text-label-xs", index === 0 ? "bg-primary-base text-static-white" : "bg-bg-white-0 text-text-sub-600 ring-1 ring-inset ring-stroke-soft-200")}>{index + 1}</span>
+          <span className={cn("flex size-5 items-center justify-center rounded-full text-label-xs", index === 0 ? "bg-primary-base text-primary-contrast" : "bg-bg-white-0 text-text-sub-600 ring-1 ring-inset ring-stroke-soft-200")}>{index + 1}</span>
           {label}
         </span>}
         description={index === 0 ? "Created as soon as a reply is classified." : "Prepared only when there is no newer inbound reply."}

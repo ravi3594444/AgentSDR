@@ -1,10 +1,12 @@
-import { redirect } from "next/navigation";
+import type { Metadata } from "next";
+import LandingPage from "@/components/landing/LandingPage";
+import { BRAND } from "@/lib/brand";
 
-/**
- * The app has no landing page: "/" opens the owner's assistant (proxy.ts
- * sends a visitor without a session to sign-in first). The website lives in
- * its own repository and is not part of a self-hosted install.
- */
+export const metadata: Metadata = {
+  title: { absolute: `${BRAND.name} — Make the next connection` },
+  description: "Find the right leads, shape your outreach, and keep the conversation moving. Your AI outreach workspace for email, LinkedIn, and WhatsApp.",
+};
+
 export default function Home() {
-  redirect("/assistant");
+  return <LandingPage />;
 }

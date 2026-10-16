@@ -35,14 +35,14 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
-  --font-sans: var(--font-sans-inter), Inter, Arial, Helvetica, sans-serif;
+  --font-sans: var(--font-landing-display), Manrope, Arial, Helvetica, sans-serif;
   --font-instrument-serif: var(--font-instrument-serif-next), Georgia, "Times New Roman", serif;
 
   /* AlignUI Raw Colors */
-  --color-gray-950: oklch(20.46% 0.0000 0);
-  --color-gray-900: oklch(22.64% 0.0000 0);
-  --color-gray-800: oklch(26.86% 0.0000 0);
-  --color-gray-700: oklch(32.11% 0.0000 0);
+  --color-gray-950: #000000;
+  --color-gray-900: #0a0a0a;
+  --color-gray-800: #171717;
+  --color-gray-700: #262626;
   --color-gray-600: oklch(47.48% 0.0000 0);
   --color-gray-500: oklch(58.29% 0.0000 0);
   --color-gray-400: oklch(71.55% 0.0000 0);
@@ -215,31 +215,32 @@
   --color-black-alpha-10: oklch(20.46% 0.0000 0 / 10%);
 
   /* AlignUI Dynamic Neutral Colors */
-  --color-neutral-950: var(--color-slate-950);
-  --color-neutral-900: var(--color-slate-900);
-  --color-neutral-800: var(--color-slate-800);
-  --color-neutral-700: var(--color-slate-700);
-  --color-neutral-600: var(--color-slate-600);
-  --color-neutral-500: var(--color-slate-500);
-  --color-neutral-400: var(--color-slate-400);
-  --color-neutral-300: var(--color-slate-300);
-  --color-neutral-200: var(--color-slate-200);
-  --color-neutral-100: var(--color-slate-100);
-  --color-neutral-50: var(--color-slate-50);
-  --color-neutral-0: var(--color-slate-0);
-  --color-neutral-alpha-24: var(--color-slate-alpha-24);
-  --color-neutral-alpha-16: var(--color-slate-alpha-16);
-  --color-neutral-alpha-10: var(--color-slate-alpha-10);
+  --color-neutral-950: var(--color-gray-950);
+  --color-neutral-900: var(--color-gray-900);
+  --color-neutral-800: var(--color-gray-800);
+  --color-neutral-700: var(--color-gray-700);
+  --color-neutral-600: var(--color-gray-600);
+  --color-neutral-500: var(--color-gray-500);
+  --color-neutral-400: var(--color-gray-400);
+  --color-neutral-300: var(--color-gray-300);
+  --color-neutral-200: var(--color-gray-200);
+  --color-neutral-100: var(--color-gray-100);
+  --color-neutral-50: var(--color-gray-50);
+  --color-neutral-0: var(--color-gray-0);
+  --color-neutral-alpha-24: var(--color-gray-alpha-24);
+  --color-neutral-alpha-16: var(--color-gray-alpha-16);
+  --color-neutral-alpha-10: var(--color-gray-alpha-10);
 
-  /* AlignUI Dynamic Primary Colors */
-  --color-primary-dark: var(--color-blue-800);
-  --color-primary-darker: var(--color-blue-700);
-  --color-primary-base: var(--color-blue-500);
-  --color-primary-light: var(--color-blue-100);
-  --color-primary-lighter: var(--color-blue-50);
-  --color-primary-alpha-24: var(--color-blue-alpha-24);
-  --color-primary-alpha-16: var(--color-blue-alpha-16);
-  --color-primary-alpha-10: var(--color-blue-alpha-10);
+  /* Monochrome primary controls; status and chart colours retain their meaning. */
+  --color-primary-contrast: #ffffff;
+  --color-primary-dark: #262626;
+  --color-primary-darker: #262626;
+  --color-primary-base: #000000;
+  --color-primary-light: #eeeeee;
+  --color-primary-lighter: #f5f5f5;
+  --color-primary-alpha-24: rgb(0 0 0 / 24%);
+  --color-primary-alpha-16: rgb(0 0 0 / 16%);
+  --color-primary-alpha-10: rgb(0 0 0 / 6%);
 
   /* AlignUI Social Colors */
   --color-social-apple: oklch(0.00% 0.0000 0);
@@ -540,7 +541,7 @@
   
   --shadow-custom-input-4: 0 3px 3px -1.5px rgba(23, 23, 23, 0.06),\n    0 1px 1px -0.5px rgba(23, 23, 23, 0.06),\n    0 0 0 1px rgba(23, 23, 23, 0.02);
   
-  --shadow-custom-input-active: 0 6px 6px -3px rgba(23, 23, 23, 0.02),\n    0 3px 3px -1.5px rgba(23, 23, 23, 0.04),\n    0 1px 1px -0.5px rgba(23, 23, 23, 0.04),\n    0 0 0 1.4px #335cff;
+  --shadow-custom-input-active: 0 6px 6px -3px rgba(23, 23, 23, 0.02),\n    0 3px 3px -1.5px rgba(23, 23, 23, 0.04),\n    0 1px 1px -0.5px rgba(23, 23, 23, 0.04),\n    0 0 0 1.4px var(--color-primary-base);
   
   --shadow-gray-shadow: 0 0 0 1px rgba(23, 23, 23, 0.08);
   
@@ -634,9 +635,15 @@
     --color-stable-light: var(--color-teal-alpha-24);
     --color-stable-lighter: var(--color-teal-alpha-16);
 
-    --color-primary-base: var(--color-blue-400);
-    --color-primary-light: var(--color-blue-alpha-16);
-    --color-primary-lighter: var(--color-blue-alpha-10);
+    --color-primary-base: #ffffff;
+    --color-primary-contrast: #000000;
+    --color-primary-dark: #d4d4d4;
+    --color-primary-darker: #d4d4d4;
+    --color-primary-alpha-24: rgb(255 255 255 / 24%);
+    --color-primary-alpha-16: rgb(255 255 255 / 16%);
+    --color-primary-alpha-10: rgb(255 255 255 / 8%);
+    --color-primary-light: rgb(255 255 255 / 12%);
+    --color-primary-lighter: rgb(255 255 255 / 6%);
 
     --color-overlay-gray: oklch(32.11% 0.0000 0 / 56%);
     --color-overlay-slate: oklch(30.90% 0.0210 265.90 / 56%);
@@ -665,7 +672,7 @@
     
     --shadow-complex-6: 0 40px 40px -20px rgba(23, 23, 23, 0.04),\n      0 10px 10px -5px rgba(23, 23, 23, 0.04),\n      0 6px 6px -3px rgba(23, 23, 23, 0),\n      0 3px 3px -1.5px rgba(23, 23, 23, 0),\n      0 1px 1px -0.5px rgba(23, 23, 23, 0),\n      0 0 6px 0 rgba(255, 255, 255, 0.24) inset;
     
-    --shadow-complex-7: 0 1px 2px 0 rgba(14, 18, 27, 0.24),\n      0 0 0 1px #4d82ff;
+    --shadow-complex-7: 0 1px 2px 0 rgba(14, 18, 27, 0.24),\n      0 0 0 1px var(--color-primary-base);
     
     --shadow-complex-8: 0 20px 20px -10px rgba(23, 23, 23, 0.04),\n      0 10px 10px -5px rgba(23, 23, 23, 0.04),\n      0 6px 6px -3px rgba(23, 23, 23, 0.04),\n      0 3px 3px -1.5px rgba(23, 23, 23, 0.04),\n      0 1px 1px -0.5px rgba(23, 23, 23, 0.04),\n      0 0 0 1px rgba(23, 23, 23, 0.08),\n      0 -1px 1px -0.5px rgba(23, 23, 23, 0.06) inset;
     
@@ -683,7 +690,7 @@
     
     --shadow-custom-input-4: 0 3px 3px -1.5px rgba(23, 23, 23, 0.04),\n      0 1px 1px -0.5px rgba(23, 23, 23, 0.04),\n      0 0 0 1px rgba(23, 23, 23, 0);
     
-    --shadow-custom-input-active: 0 6px 6px -3px rgba(23, 23, 23, 0.02),\n      0 3px 3px -1.5px rgba(23, 23, 23, 0.04),\n      0 1px 1px -0.5px rgba(23, 23, 23, 0.04),\n      0 0 0 1.4px #335cff;
+    --shadow-custom-input-active: 0 6px 6px -3px rgba(23, 23, 23, 0.02),\n      0 3px 3px -1.5px rgba(23, 23, 23, 0.04),\n      0 1px 1px -0.5px rgba(23, 23, 23, 0.04),\n      0 0 0 1.4px var(--color-primary-base);
     
     --shadow-gray-shadow: 0 0 0 1px #262626;
     
@@ -763,9 +770,15 @@
   --color-stable-light: var(--color-teal-alpha-24);
   --color-stable-lighter: var(--color-teal-alpha-16);
 
-  --color-primary-base: var(--color-blue-400);
-  --color-primary-light: var(--color-blue-alpha-16);
-  --color-primary-lighter: var(--color-blue-alpha-10);
+  --color-primary-base: #ffffff;
+    --color-primary-contrast: #000000;
+    --color-primary-dark: #d4d4d4;
+    --color-primary-darker: #d4d4d4;
+    --color-primary-alpha-24: rgb(255 255 255 / 24%);
+    --color-primary-alpha-16: rgb(255 255 255 / 16%);
+    --color-primary-alpha-10: rgb(255 255 255 / 8%);
+  --color-primary-light: rgb(255 255 255 / 12%);
+  --color-primary-lighter: rgb(255 255 255 / 6%);
 
   --color-overlay-gray: oklch(32.11% 0.0000 0 / 56%);
   --color-overlay-slate: oklch(30.90% 0.0210 265.90 / 56%);
@@ -794,7 +807,7 @@
   
   --shadow-complex-6: 0 40px 40px -20px rgba(23, 23, 23, 0.04),\n    0 10px 10px -5px rgba(23, 23, 23, 0.04),\n    0 6px 6px -3px rgba(23, 23, 23, 0),\n    0 3px 3px -1.5px rgba(23, 23, 23, 0),\n    0 1px 1px -0.5px rgba(23, 23, 23, 0),\n    0 0 6px 0 rgba(255, 255, 255, 0.24) inset;
   
-  --shadow-complex-7: 0 1px 2px 0 rgba(14, 18, 27, 0.24),\n    0 0 0 1px #4d82ff;
+  --shadow-complex-7: 0 1px 2px 0 rgba(14, 18, 27, 0.24),\n    0 0 0 1px var(--color-primary-base);
   
   --shadow-complex-8: 0 20px 20px -10px rgba(23, 23, 23, 0.04),\n    0 10px 10px -5px rgba(23, 23, 23, 0.04),\n    0 6px 6px -3px rgba(23, 23, 23, 0.04),\n    0 3px 3px -1.5px rgba(23, 23, 23, 0.04),\n    0 1px 1px -0.5px rgba(23, 23, 23, 0.04),\n    0 0 0 1px rgba(23, 23, 23, 0.08),\n    0 -1px 1px -0.5px rgba(23, 23, 23, 0.06) inset;
   
@@ -812,7 +825,7 @@
   
   --shadow-custom-input-4: 0 3px 3px -1.5px rgba(23, 23, 23, 0.04),\n    0 1px 1px -0.5px rgba(23, 23, 23, 0.04),\n    0 0 0 1px rgba(23, 23, 23, 0);
   
-  --shadow-custom-input-active: 0 6px 6px -3px rgba(23, 23, 23, 0.02),\n    0 3px 3px -1.5px rgba(23, 23, 23, 0.04),\n    0 1px 1px -0.5px rgba(23, 23, 23, 0.04),\n    0 0 0 1.4px #335cff;
+  --shadow-custom-input-active: 0 6px 6px -3px rgba(23, 23, 23, 0.02),\n    0 3px 3px -1.5px rgba(23, 23, 23, 0.04),\n    0 1px 1px -0.5px rgba(23, 23, 23, 0.04),\n    0 0 0 1.4px var(--color-primary-base);
   
   --shadow-gray-shadow: 0 0 0 1px #262626;
   
@@ -909,7 +922,7 @@ body {
 /* Vertical rules between cells, slightly lighter than the header/row borders. */
 .grid-clay .ag-cell,
 .grid-clay .ag-header-cell {
-  border-right: 1px solid #e5e7eb;
+  border-right: 1px solid var(--color-stroke-soft-200);
 }
 
 .grid-clay .ag-header-cell:last-child,
@@ -921,7 +934,7 @@ body {
    its last child. Restore that boundary rule after the general last-child rule. */
 .grid-clay .ag-header-cell.ag-header-cell-last-left-pinned,
 .grid-clay .ag-cell.ag-cell-last-left-pinned {
-  border-right: 1px solid #e5e7eb;
+  border-right: 1px solid var(--color-stroke-soft-200);
 }
 
 /* Keep column resizing, but hide AG Grid's decorative short grip. */
@@ -935,26 +948,26 @@ body {
   align-items: center;
   justify-content: center;
   padding: 0;
-  background: #fcfcfd;
+  background: var(--color-bg-weak-50);
 }
 
 /* Checkbox selection is managed outside AG Grid so it can span server-side
    pages. Paint every cell from that state, including the pinned gutter. */
 .grid-clay .ag-row.grid-row-selected .ag-cell {
-  background-color: #eff6ff;
+  background-color: var(--color-primary-alpha-10);
 }
 
 .grid-clay .ag-row.grid-row-selected:hover .ag-cell {
-  background-color: #dbeafe;
+  background-color: var(--color-primary-alpha-16);
 }
 
 /* The "%" coverage row pinned above the data. */
 .grid-clay .ag-floating-top .ag-row {
-  background: #fcfcfd;
+  background: var(--color-bg-weak-50);
 }
 
 .grid-clay .grid-coverage-cell {
-  color: #94a3b8;
+  color: var(--color-text-soft-400);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
@@ -966,7 +979,7 @@ body {
 }
 
 .grid-clay .grid-cell-running {
-  color: #94a3b8;
+  color: var(--color-text-soft-400);
   font-style: italic;
 }
 
@@ -974,23 +987,23 @@ body {
    selection: a user can copy a cell range while exporting a different set of
    complete rows. */
 .grid-clay .grid-cell-range {
-  background-color: #eff6ff !important;
+  background-color: var(--color-primary-alpha-10) !important;
 }
 
 .grid-clay .grid-cell-range-top {
-  border-top: 2px solid #2563eb !important;
+  border-top: 2px solid var(--color-primary-base) !important;
 }
 
 .grid-clay .grid-cell-range-bottom {
-  border-bottom: 2px solid #2563eb !important;
+  border-bottom: 2px solid var(--color-primary-base) !important;
 }
 
 .grid-clay .grid-cell-range-left {
-  border-left: 2px solid #2563eb !important;
+  border-left: 2px solid var(--color-primary-base) !important;
 }
 
 .grid-clay .grid-cell-range-right {
-  border-right: 2px solid #2563eb !important;
+  border-right: 2px solid var(--color-primary-base) !important;
 }
 
 .grid-clay .grid-fill-handle {
@@ -1012,14 +1025,14 @@ body {
   height: 10px;
   border: 2px solid #fff;
   border-radius: 9999px;
-  background: #2563eb;
+  background: var(--color-primary-base);
   content: "";
 }
 
 .grid-clay .grid-cell-fill-preview {
   position: absolute;
-  background-color: #dbeafe !important;
-  box-shadow: inset 0 0 0 1px #60a5fa;
+  background-color: var(--color-primary-alpha-16) !important;
+  box-shadow: inset 0 0 0 1px var(--color-primary-base);
   color: transparent !important;
 }
 
@@ -1033,7 +1046,7 @@ body {
   display: flex;
   align-items: center;
   padding: 0 12px;
-  color: #94a3b8;
+  color: var(--color-text-soft-400);
   font-size: 12px;
   font-style: italic;
   font-weight: 500;

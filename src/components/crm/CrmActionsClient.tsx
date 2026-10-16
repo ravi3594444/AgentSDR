@@ -258,7 +258,7 @@ export function CrmActionsClient() {
             <Popover.Trigger asChild>
               <Button.Root variant="neutral" mode="stroke" size="xsmall" className={cn(secondaryFilterCount > 0 && "text-text-strong-950")}>
                 <Button.Icon as={RiEqualizer2Line} />More filters
-                {secondaryFilterCount > 0 && <span className="flex size-4 items-center justify-center rounded-full bg-primary-base text-label-xs text-static-white">{secondaryFilterCount}</span>}
+                {secondaryFilterCount > 0 && <span className="flex size-4 items-center justify-center rounded-full bg-primary-base text-label-xs text-primary-contrast">{secondaryFilterCount}</span>}
               </Button.Root>
             </Popover.Trigger>
             <Popover.Content align="start" showArrow={false} sideOffset={8} className="w-80 max-w-[calc(100vw-2rem)] p-4">

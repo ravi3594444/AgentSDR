@@ -37,7 +37,7 @@ function StepDot({ index, active, done }: { index: number; active: boolean; done
         done
           ? "bg-success-lighter text-success-base"
           : active
-            ? "bg-primary-base text-static-white shadow-regular-xs"
+            ? "bg-primary-base text-primary-contrast shadow-regular-xs"
             : "bg-bg-weak-50 text-text-soft-400",
       )}
     >

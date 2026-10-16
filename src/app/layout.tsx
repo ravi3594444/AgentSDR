@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { connection } from "next/server";
-import { Instrument_Serif, Inter as FontSans } from "next/font/google";
+import { Instrument_Serif } from "next/font/google";
 import AppShell from "@/components/AppShell";
 import DialogProvider from "@/components/DialogProvider";
 import { DemoProvider } from "@/components/demo/DemoProvider";
@@ -9,11 +9,6 @@ import { THEME_INIT_SCRIPT, ThemeProvider } from "@/components/theme/ThemeProvid
 import { isDemoMode } from "@/lib/demo/mode";
 import "./globals.css";
 import { BRAND } from "@/lib/brand";
-
-const fontSans = FontSans({
-  subsets: ["latin"],
-  variable: "--font-sans-inter",
-});
 
 const fontSerif = Instrument_Serif({
   subsets: ["latin"],
@@ -60,7 +55,7 @@ export default async function RootLayout({
       lang="en"
       data-theme="light"
       suppressHydrationWarning
-      className={`${fontSans.variable} ${fontSerif.variable} ${brandDisplay.variable} h-full antialiased`}
+      className={`${fontSerif.variable} ${brandDisplay.variable} h-full antialiased`}
     >
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />

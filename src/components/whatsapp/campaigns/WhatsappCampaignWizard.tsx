@@ -38,7 +38,7 @@ function StepDot({ index, active, done }: { index: number; active: boolean; done
     <div
       className={cn(
         "flex size-7 shrink-0 items-center justify-center rounded-lg text-label-xs transition",
-        done ? "bg-success-lighter text-success-base" : active ? "bg-primary-base text-static-white shadow-regular-xs" : "bg-bg-weak-50 text-text-soft-400",
+        done ? "bg-success-lighter text-success-base" : active ? "bg-primary-base text-primary-contrast shadow-regular-xs" : "bg-bg-weak-50 text-text-soft-400",
       )}
     >
       {done ? <RiCheckLine className="size-4" /> : index + 1}

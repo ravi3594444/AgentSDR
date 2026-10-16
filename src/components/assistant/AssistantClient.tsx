@@ -631,7 +631,7 @@ function RichText({ text }: { text: string }) {
 
 function AssistantAvatar({ size = "sm" }: { size?: "sm" | "lg" }) {
   return (
-    <span className={cn("flex shrink-0 items-center justify-center rounded-full bg-primary-base text-static-white shadow-regular-xs", size === "lg" ? "size-12" : "size-7")} aria-hidden="true">
+    <span className={cn("flex shrink-0 items-center justify-center rounded-full bg-primary-base text-primary-contrast shadow-regular-xs", size === "lg" ? "size-12" : "size-7")} aria-hidden="true">
       <RiSparkling2Fill className={size === "lg" ? "size-6" : "size-3.5"} />
     </span>
   );
@@ -752,19 +752,19 @@ type BusinessProfileSummary = { businessName?: string; offer?: string; targetCus
 
 function Welcome({ firstName, profile, onStarter }: { firstName: string | null; profile: BusinessProfileSummary | undefined; onStarter: (starter: Starter) => void }) {
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-col items-center pt-[6vh] text-center">
-      <AssistantAvatar size="lg" />
-      <h2 className="mt-4 text-title-h5 text-text-strong-950">{firstName ? `Hi ${firstName}, what should we work on?` : "What should we work on?"}</h2>
-      <p className="mt-2 max-w-lg text-paragraph-sm text-text-sub-600">
+    <div className="assistant-welcome mx-auto flex w-full max-w-2xl flex-col items-center pt-[5vh] text-center">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-soft-400">{firstName ? `Your workspace, ${firstName}` : "Your outreach workspace"}</p>
+      <h2 className="mt-5 text-[clamp(30px,3.5vw,46px)] font-medium leading-[1.1] tracking-[-0.045em] text-text-strong-950">Let’s make your next<br /><span className="font-instrument-serif text-[1.15em] italic font-normal">connection.</span></h2>
+      <p className="mt-4 max-w-lg text-paragraph-sm leading-relaxed text-text-sub-600">
         I find customers{profile?.businessName ? ` for ${profile.businessName}` : ""}, write the outreach you approve, answer routine replies from your information, and bring you anything that needs a decision.
       </p>
-      <div className="mt-6 grid w-full gap-2 text-left sm:grid-cols-2">
+      <div className="mt-8 grid w-full gap-3 text-left sm:grid-cols-2">
         {starters(profile).map((starter) => (
-          <button key={starter.title} type="button" onClick={() => onStarter(starter)} className="group flex items-start gap-3 rounded-xl p-3 text-left ring-1 ring-inset ring-stroke-soft-200 transition hover:bg-bg-weak-50 hover:ring-stroke-sub-300">
-            <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary-alpha-10 text-primary-base"><starter.icon className="size-4" /></span>
+          <button key={starter.title} type="button" onClick={() => onStarter(starter)} className="group flex items-start gap-3 rounded-xl bg-bg-white-0 p-4 text-left ring-1 ring-inset ring-stroke-soft-200 transition duration-200 hover:bg-bg-weak-50 hover:ring-stroke-sub-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-base">
+            <span className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-stroke-soft-200 text-text-strong-950 transition group-hover:bg-bg-strong-950 group-hover:text-text-white-0"><starter.icon className="size-4" /></span>
             <span className="min-w-0">
               <span className="block text-label-sm text-text-strong-950">{starter.title}</span>
-              <span className="mt-0.5 block text-paragraph-xs text-text-sub-600">{starter.description}</span>
+              <span className="mt-1 block text-paragraph-xs leading-relaxed text-text-sub-600">{starter.description}</span>
             </span>
           </button>
         ))}
@@ -1001,7 +1001,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
       <div className="shrink-0 px-3 pb-3 pt-1 sm:px-6 sm:pb-4">
         <div className="mx-auto max-w-3xl">
           {error && <p role="alert" className="mb-2 text-paragraph-xs text-error-base">{error}</p>}
-          <div className="rounded-2xl bg-bg-white-0 shadow-regular-sm ring-1 ring-inset ring-stroke-soft-200 focus-within:ring-stroke-sub-300">
+          <div className="rounded-2xl bg-bg-weak-25 shadow-regular-xs ring-1 ring-inset ring-stroke-soft-200 transition focus-within:bg-bg-white-0 focus-within:ring-primary-base">
             {files.length > 0 && (
               <div className="flex flex-wrap gap-1.5 px-3 pt-3">
                 {files.map((file) => (
