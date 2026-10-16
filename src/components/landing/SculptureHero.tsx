@@ -448,7 +448,7 @@ class LiquidEngine {
     this.canvas = canvas
     this.opts = opts
     this.onFail = onFail
-    // alpha: an unpresented canvas stays transparent, so the static image under it shows
+    // Keep the page visible around the sculpture; reveal the canvas after its first draw.
     const gl = canvas.getContext("webgl2", {
       alpha: true,
       antialias: false,
@@ -842,8 +842,8 @@ class LiquidEngine {
     if (this.onFirstFrame) {
       const cb = this.onFirstFrame
       this.onFirstFrame = null
-      // one more frame so the compositor has presented the canvas
-      requestAnimationFrame(() => cb())
+      // The draw and the visibility change are presented together in this frame.
+      cb()
     }
   }
 
@@ -1190,12 +1190,10 @@ const CSS = `
   touch-action:pan-y;display:flex;flex-direction:column;box-sizing:border-box}
 .sh-root *,.sh-root *::before,.sh-root *::after{box-sizing:border-box}
 .sh-stage{position:absolute;inset:0;z-index:0;pointer-events:none}
-.sh-canvas{position:absolute;inset:0;width:100%;height:100%;display:block;opacity:0;transition:opacity .5s ease}
-.sh-fallback{position:absolute;left:0;top:12%;width:100%;height:auto;display:block;max-width:none;user-select:none;-webkit-user-drag:none;transition:opacity .5s ease}
+.sh-canvas{position:absolute;inset:0;width:100%;height:100%;display:block;opacity:0}
+.sh-fallback{position:absolute;left:0;top:12%;width:100%;height:auto;display:block;max-width:none;user-select:none;-webkit-user-drag:none;opacity:0}
 .sh-root[data-gl="on"] .sh-canvas{opacity:1}
-.sh-root[data-gl="on"] .sh-fallback{opacity:0}
-.sh-root[data-swap="1"] .sh-canvas{opacity:0;transition-duration:.25s}
-.sh-root[data-swap="1"] .sh-fallback{opacity:0;transition-duration:.25s}
+.sh-root[data-gl="off"] .sh-fallback{opacity:1}
 .sh-backdrop{position:absolute;left:50%;z-index:0;transform:translate(-50%,-50%);white-space:nowrap;pointer-events:none;user-select:none;
   font-family:var(--sh-head);font-weight:600;letter-spacing:-.06em;line-height:.8;color:color-mix(in srgb,var(--sh-fg) 5%,transparent)}
 .sh-nav{position:relative;z-index:2;display:flex;align-items:center;justify-content:space-between;gap:24px;
@@ -1419,14 +1417,10 @@ export default function SculptureHero(props: SculptureHeroProps) {
     () => (imageBackground ? hexToRgb(imageBackground, [0.918, 0.914, 0.906]) : null),
     [imageBackground]
   )
-  const [isMobile, setIsMobile] = React.useState(false)
-  const mobileRef = React.useRef(false)
-  // pick the image for the current theme and layout, falling back sensibly
-  const activeSrc =
-    (isMobile && mode === "dark" && (mobileDarkSrc || darkSrc)) ||
-    (isMobile && mode === "light" && mobileSrc) ||
-    (mode === "dark" && darkSrc) ||
-    src
+  // Let <picture> choose the phone asset before hydration. Loading the desktop
+  // image first and changing it in a layout effect wastes a download on phones.
+  const desktopSrc = (mode === "dark" && darkSrc) || src
+  const phoneSrc = (mode === "dark" ? mobileDarkSrc || darkSrc : mobileSrc) || src
 
   const engineOpts = (rm: boolean): EngineOptions => ({
     interactive,
@@ -1463,10 +1457,6 @@ export default function SculptureHero(props: SculptureHeroProps) {
     const w = root.clientWidth
     const h = root.clientHeight
     const mob = w < 640
-    if (mob !== mobileRef.current) {
-      mobileRef.current = mob
-      setIsMobile(mob)
-    }
     const nav = navRef.current
     const content = contentRef.current
     const band = {
@@ -1499,7 +1489,7 @@ export default function SculptureHero(props: SculptureHeroProps) {
     engineRef.current?.resize(w, h, rect)
   }, [])
 
-  // engine lifecycle (re-created only when the image changes)
+  // One engine per mount; image changes reuse its WebGL context.
   React.useEffect(() => {
     const root = rootRef.current
     const stage = stageRef.current
@@ -1514,7 +1504,6 @@ export default function SculptureHero(props: SculptureHeroProps) {
     let engine: LiquidEngine | null = null
     const fail = () => {
       root.dataset.gl = "off"
-      delete root.dataset.swap
     }
     try {
       engine = new LiquidEngine(canvas, optsRef.current(mq.matches), fail)
@@ -1595,48 +1584,61 @@ export default function SculptureHero(props: SculptureHeroProps) {
     }
   }, [relayout])
 
-  // (re)load the sculpture whenever the theme or layout asks for another image;
-  // the canvas dips out while the static image covers the swap
+  // Upload the same responsive image the browser already fetched. Keep the
+  // previous canvas visible during theme/size changes instead of flashing a
+  // placeholder, and ignore decodes superseded by a newer source or unmount.
   React.useEffect(() => {
     const root = rootRef.current
     const engine = engineRef.current
-    if (!root) return
+    const image = imgRef.current
+    if (!root || !image) return
     let cancelled = false
-    const image = new Image()
-    image.crossOrigin = "anonymous"
-    image.decoding = "async"
-    const swapping = root.dataset.gl === "on"
-    if (swapping) root.dataset.swap = "1"
-    image.onload = () => {
-      if (cancelled) return
+    let loadVersion = 0
+    let uploadedSrc = ""
+    const selectedSrc = () => image.currentSrc || image.src
+    const onError = () => {
+      loadVersion++
+      // If a replacement fails, the last successful canvas is still useful.
+      if (root.dataset.gl !== "on") root.dataset.gl = "off"
+    }
+    const onLoad = async () => {
+      const source = selectedSrc()
+      if (!image.complete || !image.naturalWidth || source === uploadedSrc) return
+      const version = ++loadVersion
+      try {
+        await image.decode()
+      } catch {
+        if (!cancelled && version === loadVersion && source === selectedSrc()) onError()
+        return
+      }
+      if (cancelled || version !== loadVersion || source !== selectedSrc() || !image.complete) return
       aspectRef.current = image.naturalWidth / image.naturalHeight || aspectRef.current
       relayout()
-      if (engine && root.dataset.gl !== "off") {
+      if (engine) {
         try {
           engine.onFirstFrame = () => {
-            if (cancelled) return
+            if (cancelled || version !== loadVersion || source !== selectedSrc()) return
             root.dataset.gl = "on"
-            delete root.dataset.swap
           }
           engine.setImage(image)
+          uploadedSrc = source
           relayout()
         } catch {
           root.dataset.gl = "off"
         }
-      } else delete root.dataset.swap
+      }
     }
-    image.onerror = () => {
-      delete root.dataset.swap
-    }
-    // let the fade-out start before the GPU upload
-    const t = window.setTimeout(() => (image.src = activeSrc), swapping ? 280 : 0)
+    image.addEventListener("load", onLoad)
+    image.addEventListener("error", onError)
+    // The server-rendered image may have finished before the effects mounted.
+    void onLoad()
     return () => {
       cancelled = true
-      window.clearTimeout(t)
-      image.onload = null
-      image.onerror = null
+      image.removeEventListener("load", onLoad)
+      image.removeEventListener("error", onError)
+      if (engine) engine.onFirstFrame = null
     }
-  }, [activeSrc, relayout])
+  }, [relayout])
 
   // live option updates without re-creating the engine
   React.useEffect(() => {
@@ -1665,13 +1667,18 @@ export default function SculptureHero(props: SculptureHeroProps) {
   return (
     <section ref={rootRef} data-mode={mode} className={"sh-root" + (className ? " " + className : "")} style={{ ...vars, ...style }}>
       <style>{CSS}</style>
+      <noscript><style>{`.sh-root .sh-fallback{opacity:1}`}</style></noscript>
       {backdropText ? (
         <div ref={backdropRef} className="sh-backdrop" aria-hidden="true">
           {backdropText}
         </div>
       ) : null}
       <div ref={stageRef} className="sh-stage" aria-hidden="true">
-        <img ref={imgRef} className="sh-fallback" src={activeSrc} alt="" crossOrigin="anonymous" draggable={false} />
+        <picture>
+          <source media="(width < 640px)" srcSet={phoneSrc} />
+          {/* The decoded image is also the WebGL texture; keep its URL and pixels intact. */}
+          <img ref={imgRef} className="sh-fallback" src={desktopSrc} alt="" crossOrigin="anonymous" draggable={false} loading="eager" fetchPriority="high" decoding="async" />
+        </picture>
       </div>
       <span style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)" }}>{imageAlt}</span>
 
