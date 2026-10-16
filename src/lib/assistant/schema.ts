@@ -75,6 +75,8 @@ export type BusinessProfile = {
   problemsSolved?: string;
   /** What an interested lead is offered next ("a 10-minute call with Ravi", "a free visit", "a quote"); default: a short call with the sender. */
   nextStep?: string;
+  /** Prices, packages or rates, in the owner's words (a price list document works too). */
+  prices?: string;
   /** Who the customers are: kinds of businesses or roles, sizes, signals. */
   targetCustomers?: string;
   /** Cities, regions or countries to look in. */
@@ -236,6 +238,16 @@ export type PlannedStep = { subject: string | null; body: string; waitDays: numb
 
 /** What the owner approves: audience, channels, messages, limits and what it costs. */
 export type OutreachPlan = {
+  /**
+   * "outreach" (absent on every plan written before inquiry runs): first
+   * messages and follow-ups to an audience. "inquiries": no first message
+   * at all — the run only answers people whose fresh inquiry arrives while
+   * it runs (see inquiryRuns.server.ts); its members are added as they
+   * write in, never from imported history.
+   */
+  kind?: "outreach" | "inquiries";
+  /** For an inquiry run: which inbound channels and accounts it answers. */
+  inquiry?: { channels: "instagram"[]; accounts: { unipileAccountId: string; username: string | null }[] };
   /** The people the run will contact, per channel (each person gets one channel). */
   assignments: { personId: string; channel: AudienceChannel }[];
   sequences: Partial<Record<AudienceChannel, PlannedStep[]>>;

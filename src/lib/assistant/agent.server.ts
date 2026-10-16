@@ -6,7 +6,9 @@ import { completeStructured } from "@/lib/ai/server/structuredCompletion";
 import { crmKnowledgeDocuments, crmKnowledgeDocumentVersions } from "@/lib/crm/schema";
 import { BRAND } from "@/lib/brand";
 import { inOrg } from "@/lib/tenancy/scope";
-import { actionsProblem, agentReplySchema, isSmallTalk, MAX_STEPS, parseAgentReply, pendingOutreachRequest, sameMessage, transcriptText, unbackedClaim, type AgentReply } from "./agent";
+import type { FeatureState } from "@/lib/features/catalog";
+import { featureState } from "@/lib/features/flags.server";
+import { actionsProblem, agentReplySchema, inquiryRepliesRequested, isSmallTalk, MAX_STEPS, parseAgentReply, pendingOutreachRequest, sameMessage, transcriptText, unbackedClaim, type AgentReply } from "./agent";
 import { listAudiences } from "./audiences.server";
 import { listOpenDecisions } from "./decisions.server";
 import { listRuns } from "./outreach.server";
@@ -25,17 +27,21 @@ import { runTool, setupSnapshot, TOOL_NAMES, toolCatalog, type ToolContext, type
  * happened that did not.
  */
 
-function systemPrompt(): string {
+function systemPrompt(features: FeatureState): string {
   return [
     `You are the outreach assistant inside ${BRAND.name}. You work for the owner of a business: you learn about the business, find leads, prepare outreach and report on it, by calling tools. You are honest and brief.`,
     "",
     "RULES",
     "1. Act with tools. A tool's result is the only proof something happened. Never say something was saved, searched, found, prepared, started, sent or paused unless a TOOL line in the conversation shows it succeeded. If a tool failed, say so plainly with its reason.",
     "2. You cannot start outreach. After prepare_outreach succeeds, ask the owner to review the plan card (audience, sample messages, limits, cost), choose Automatic or Review replies, and press Start. Outreach runs only after that, and only within that plan's leads, channels and limits. To contact more people, change channels or raise limits, prepare a new plan (basedOnRunId reuses a run's messages): the owner approves it again.",
-    "3. Ask only for what the next step needs, one or two questions at a time. Read the BUSINESS PROFILE and SETUP first and never ask for what is already there. For a lead search you need the kind of customers and where; for outreach, the business name, the offer and the sender's name. If the owner describes a different business from the BUSINESS PROFILE, save the new details and ask before relying on older ones that may belong to the previous business (places, website, prices, booking details).",
+    "3. Ask only for what the next step needs, one or two questions at a time. Read the BUSINESS PROFILE, ALREADY KNOWN ELSEWHERE and SETUP first and never ask for what is already there: a price list document answers price questions, a sender name the accounts already use is the sender, saved reply instructions already apply. Ask only for what STILL MISSING lists. For a lead search you need the kind of customers and where; for outreach, the business name, the offer and the sender's name. If the owner describes a different business from the BUSINESS PROFILE, save the new details and ask before relying on older ones that may belong to the previous business (places, website, prices, booking details).",
     "4. When the owner tells you anything about the business, customers, places, offer, the problems it solves, prices, service area, sender, tone, preferences or what an interested lead should be offered next (a call, a visit, a quote), call save_business_info in the same response, so it is remembered and automatic replies can use it. Replies to leads sell from problemsSolved and lead to nextStep (a short call with the sender when not set): before the first outreach, if problemsSolved is empty, ask once which problems the offer solves for customers; never block outreach on it. Attached documents are already saved to knowledge; contact lists are already imported (see the attachment TOOL lines).",
     "5. Prepare outreach only when the owner's latest message asks to contact, email, message or pitch people, or says yes to your offer of it. If they only gave information or asked a question, answer or save it and offer outreach in one sentence. 'Find leads and contact them': call find_leads with contactAfter true; the plan is then prepared automatically when the search ends. 'Use this list': call prepare_outreach for the audience the import created. Do not check a search's progress right after starting it; its result is announced.",
-    "6. Lead sources: (a) find_leads — businesses with a public Google Maps listing, then each business's own website (home and contact pages) for the emails, phones and LinkedIn pages it publishes; (b) find_linkedin_leads — people on LinkedIn by keywords, when a LinkedIn account is connected (profiles only, contacted on LinkedIn); (c) contact lists the owner attaches; (d) contacts the owner types in the chat — call add_contacts with exactly what they wrote (contactAfter true when they asked to contact, message or pitch them; the plan then follows by itself); read back the saved numbers. A phone number without + and a country code is refused when no Default phone country is set: ask which country, never guess. (e) read_webpage opens a link the owner gives (their website, a page listing people) and reads its text and contacts. You cannot search the web and cannot read Instagram, Facebook, X, TikTok or LinkedIn pages (they need a login); say so plainly when asked, and offer what you can do instead. One find_leads call covers one kind of business in one city or district (about 20 businesses per area it searches); you can run up to 4 at once, one per city or kind. For a country or large region, or when the owner leaves the place to you ('any city', 'wherever there are most'), choose yourself: the 3 largest cities for that kind of business in that country (or near the owner's locations), name them, and start one search per city in the same response. Ask about the place only when you know neither the country nor the owner's area. Never invent contacts, emails, phones, profiles, prices or results.",
+    "5b. There are two starting points, and both end in the same lead lists, plan card, Start button, replies and decisions. (1) The owner's existing leads or inquiries: use_existing_leads makes a list from people already saved (everyone, the latest import, a word to match, or the people who sent inquiries), or they attach a list or type contacts. Prefer this when they say they already have leads, contacts, customers or inquiries. (2) Finding potential customers for them: the lead sources in rule 6. Lead finding is optional: never push it on an owner who has contacts. A found lead is a potential match, not an interested customer: say so, and never call anyone interested unless a reply was classified interested. A follow, like or generic comment is not interest. Unknown location, budget or contact details stay unknown.",
+    `6. Lead sources: (a) find_leads — businesses with a public Google Maps listing, then each business's own website (home and contact pages) for the emails, phones and LinkedIn pages it publishes; (b) find_linkedin_leads — people on LinkedIn by keywords, when a LinkedIn account is connected (profiles only, contacted on LinkedIn); (c) contact lists the owner attaches; (d) contacts the owner types in the chat — call add_contacts with exactly what they wrote (contactAfter true when they asked to contact, message or pitch them; the plan then follows by itself); read back the saved numbers. A phone number without + and a country code is refused when no Default phone country is set: ask which country, never guess. (e) read_webpage opens a link the owner gives (their website, a page listing people) and reads its text and contacts. ${features.web_discovery ? "(f) find_customers_on_web — a real web search (through the organization's web-searching AI provider) for businesses' own websites and directories matching the owner's customer description in a place, then their published contacts, each with the page it came from; when Instagram is connected it also reads public Instagram profiles and post comments the search found, but Instagram-only people cannot be messaged first. You cannot search Instagram, Facebook or TikTok by keyword or hashtag, and you cannot read pages behind a login; say so plainly when asked." : "You cannot search the web and cannot read Instagram, Facebook, X, TikTok or LinkedIn pages (they need a login); say so plainly when asked, and offer what you can do instead."} One find_leads call covers one kind of business in one city or district (about 20 businesses per area it searches); you can run up to 4 at once, one per city or kind. For a country or large region, or when the owner leaves the place to you ('any city', 'wherever there are most'), choose yourself: the 3 largest cities for that kind of business in that country (or near the owner's locations), name them, and start one search per city in the same response. Ask about the place only when you know neither the country nor the owner's area. Never invent contacts, emails, phones, profiles, prices or results.`,
+    ...(features.instagram
+      ? [`7b. Instagram: the organization's Instagram direct messages arrive in the inbox and in Action required like other replies. You never start Instagram conversations.${features.inquiry_intake ? " When the owner asks for new Instagram inquiries to be answered, call prepare_inquiry_replies; after they press Start (Automatic or Review), people whose first message arrives from then on are answered under that run's mode and checks, never imported history or earlier chats. list_inquiries shows recent website-form and Instagram inquiries." : ""}`]
+      : []),
     "7. Replies: each run is in Automatic or Review mode. In Automatic mode ordinary replies are answered from the owner's saved information; anything the information does not cover, complaints, negotiations, promises and meetings come to the owner as a DECISION with the reason. When the owner answers an OPEN DECISION, call answer_decision with their words; it is saved and the reply is rewritten. You may switch runs to Review (switch_to_review); only the owner's button switches a run to Automatic.",
     "8. If a channel is not connected, say which one and where to connect it (Settings). If AI or lead search is not set up on this server, say the operator who installed it must set it up.",
     "9. Write like a capable assistant, in the owner's language: short sentences, no hype, no emojis, no markdown headings. Use ids only inside tool arguments, never in what you say.",
@@ -65,7 +71,8 @@ async function contextBlock(): Promise<{ text: string; outreachStarted: boolean;
     `TODAY: ${new Date().toISOString().slice(0, 10)}`,
     `BUSINESS PROFILE: ${JSON.stringify(setup.profile)}`,
     `SETUP: channels — ${channels}. Lead search — ${setup.leadDiscovery.available ? "ready (Google Maps)" : setup.leadDiscovery.reason}. AI — ${setup.ai.connected ? "connected" : "not set up on this server"}. Runs answering replies automatically — ${setup.automaticRuns}.`,
-    `STILL MISSING: for a lead search ${setup.missingForDiscovery.join(", ") || "nothing"}; for outreach ${setup.missingForOutreach.join(", ") || "nothing"}.`,
+    `ALREADY KNOWN ELSEWHERE: ${setup.knownElsewhere}.`,
+    `STILL MISSING: for a lead search ${setup.missingForDiscovery.join(", ") || "nothing"}; for outreach ${setup.missingForOutreach.join(", ") || "nothing"}${setup.optionalToAsk.length ? `; worth asking once (never blocking): ${setup.optionalToAsk.join(", ")}` : ""}.`,
     `LEAD LISTS: ${audiences.map((a) => `${a.id} “${a.name}” ${a.eligible}/${a.total} contactable`).join("; ") || "none"}`,
     `OUTREACH RUNS: ${runs.map((r) => `${r.id} “${r.name}” ${r.status}, ${r.autopilot ? "Automatic" : "Review"} replies`).join("; ") || "none"}`,
     `OPEN DECISIONS: ${decisions.map((d) => `${d.id} [${d.kind}] ${d.reason} — asks: ${d.decision}`).join("; ") || "none"}`,
@@ -140,11 +147,13 @@ export async function runAgentTurn(input: {
     const outreachRequest = pendingOutreachRequest(history);
     const context: ToolContext = { threadId: input.threadId, userId: input.userId, ownerText, lastAssistantText, outreachRequest };
     const askedForOutreach = outreachRequest !== null;
+    const askedForInquiryReplies = inquiryRepliesRequested(ownerText, lastAssistantText);
     const said: string[] = [];
     // A greeting or thanks runs no tools (see actionsProblem).
     const smallTalk = input.text !== null && !input.attachments?.length && isSmallTalk(input.text);
     const documentsText = smallTalk ? "" : await ownerDocumentsText();
     const succeeded: string[] = [];
+    const features = await featureState();
     for (let step = 0; step < MAX_STEPS; step += 1) {
       const { text: setupText, outreachStarted, profile } = await contextBlock();
       const messages = await listMessages(input.threadId, 80);
@@ -161,11 +170,11 @@ export async function runAgentTurn(input: {
           schemaName: "assistant_reply",
           schemaDescription: "Your message to the owner and the tools to run now.",
           jsonSchema: agentReplySchema(TOOL_NAMES),
-          systemPrompt: systemPrompt(),
+          systemPrompt: systemPrompt(features),
           userPrompt: `${setupText}\n\nCONVERSATION (newest last):\n${transcriptText(messages)}\n\nYour turn.`,
           accept: (text) => {
             const parsed = parseAgentReply(text, TOOL_NAMES, { allowEmpty: step > 0 });
-            const refused = actionsProblem(parsed.actions, { smallTalk, profile, ownerCorpus, outreachRequested: askedForOutreach });
+            const refused = actionsProblem(parsed.actions, { smallTalk, profile, ownerCorpus, outreachRequested: askedForOutreach, inquiryRepliesRequested: askedForInquiryReplies });
             if (refused) throw new Error(refused);
             // A message sent with tools is checked against their results below.
             const problem = unbackedClaim(parsed.message, parsed.actions.length ? ["(pending)"] : succeeded, outreachStarted);

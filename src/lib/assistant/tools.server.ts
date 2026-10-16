@@ -16,14 +16,21 @@ import { geocoderUrl, lookupPlace } from "@/lib/discovery/geocode.server";
 import { linkedinSearchAvailability, startLinkedinSearch } from "./linkedinSearch.server";
 import { inOrg } from "@/lib/tenancy/scope";
 import { addAudienceMembers, createAudience, listAudiences, summarizeAudience } from "./audiences.server";
-import { outreachRequested, outreachRequestProblem } from "./agent";
+import { inquiryRepliesRequested, outreachRequested, outreachRequestProblem } from "./agent";
 import { answerDecision, DecisionError, listOpenDecisions } from "./decisions.server";
 import { channelAvailability, listRuns, OutreachError, prepareOutreach, reportRun, setRunPaused, setRunReplyMode, stopRun } from "./outreach.server";
-import { mergeProfile, missingForDiscovery, missingForOutreach, PROFILE_LABELS, profileChanges } from "./profile";
+import { mergeProfile, PROFILE_LABELS, profileChanges } from "./profile";
+import { businessContext } from "./businessContext";
+import { businessSources } from "./businessContext.server";
 import { getBusinessProfile, updateBusinessProfile } from "./profile.server";
 import { PERIOD_KINDS, type PeriodKind } from "./results";
 import { results, resultsText } from "./results.server";
 import { assistantJobs, outreachRuns, type AudienceChannel } from "./schema";
+import { featureState } from "@/lib/features/flags.server";
+import { createExistingLeadsAudience, inquiryOverview, MAX_EXISTING_LEADS } from "./existingLeads.server";
+import { isExistingLeadsFrom } from "./existingLeads";
+import { inquiryRunReadiness, InquiryRunError, prepareInquiryReplies } from "./inquiryRuns.server";
+import { audienceProspects } from "./qualification.server";
 
 /**
  * What the assistant can do, and nothing else. Each tool is a call into an
@@ -131,10 +138,14 @@ async function setupSnapshot() {
   ]);
   const connection = byok.connectionId ? await getAiConnection(byok.connectionId) : null;
   const discovery = discoveryAvailability();
+  const known = businessContext(profile, await businessSources());
   return {
     profile,
-    missingForDiscovery: missingForDiscovery(profile),
-    missingForOutreach: missingForOutreach(profile),
+    missingForDiscovery: known.missingForDiscovery,
+    missingForOutreach: known.missingForOutreach,
+    /** What is already known outside the profile (documents, prices, sender, instructions), and what is worth asking once. */
+    knownElsewhere: known.summary,
+    optionalToAsk: known.optional,
     channels: {
       email: availability.email,
       whatsapp: availability.whatsapp,
@@ -142,10 +153,15 @@ async function setupSnapshot() {
     },
     leadDiscovery: discovery,
     ai: { connected: Boolean(connection?.verified), defaultModel: byok.defaultModel?.modelId ?? null },
+    /** Optional features (Settings → Organization), all off by default, and whether new inquiries can be answered. */
+    features: await featureState(),
+    inquiryReplies: { problem: await inquiryRunReadiness() },
     /** Running runs in Automatic reply mode (each answers only its own conversations). */
     automaticRuns: automaticRuns.length,
   };
 }
+
+const AUDIENCE_SOURCE_WORD: Record<string, string> = { discovery: "found", list: "uploaded", existing: "from your leads", inquiries: "inquiries" };
 
 export const TOOLS: Record<string, Tool> = {
   check_setup: {
@@ -158,7 +174,7 @@ export const TOOLS: Record<string, Tool> = {
         .join("; ");
       return {
         ok: true,
-        summary: `${channelLine}. Lead discovery: ${setup.leadDiscovery.available ? "Google Maps ready" : setup.leadDiscovery.reason}. AI: ${setup.ai.connected ? "connected" : "not connected"}. Runs answering replies automatically: ${setup.automaticRuns}. Profile missing for discovery: ${setup.missingForDiscovery.join(", ") || "nothing"}; for outreach: ${setup.missingForOutreach.join(", ") || "nothing"}.`,
+        summary: `${channelLine}. Lead discovery: ${setup.leadDiscovery.available ? "Google Maps ready" : setup.leadDiscovery.reason}. AI: ${setup.ai.connected ? "connected" : "not connected"}. Runs answering replies automatically: ${setup.automaticRuns}. Profile missing for discovery: ${setup.missingForDiscovery.join(", ") || "nothing"}; for outreach: ${setup.missingForOutreach.join(", ") || "nothing"}. Known elsewhere: ${setup.knownElsewhere}. Optional features on: ${Object.entries(setup.features).filter(([, on]) => on).map(([key]) => key).join(", ") || "none"}.${setup.features.instagram || setup.features.inquiry_intake ? ` Answering new inquiries: ${setup.inquiryReplies.problem ?? "ready"}.` : ""}`,
         data: setup as unknown as Record<string, unknown>,
       };
     },
@@ -166,7 +182,7 @@ export const TOOLS: Record<string, Tool> = {
 
   save_business_info: {
     description: "Remember what the owner said about the business, customers, places, offer, sender or preferences. Saved for every later conversation and used by every message the AI writes. Call it as soon as the owner gives such information.",
-    arguments: "any of: businessName, website, offer, problemsSolved (the problems the offer solves and how), nextStep (what an interested lead is offered next: a call, a visit, a quote), targetCustomers, locations, outreachInstructions, senderName, senderRole, bookingDetails, language (two letters), notes (all text); preferredChannels (array of email|whatsapp|linkedin). An empty string clears a field.",
+    arguments: "any of: businessName, website, offer, problemsSolved (the problems the offer solves and how), nextStep (what an interested lead is offered next: a call, a visit, a quote), prices (prices, packages or rates as the owner gave them), targetCustomers, locations, outreachInstructions, senderName, senderRole, bookingDetails, language (two letters), notes (all text); preferredChannels (array of email|whatsapp|linkedin). An empty string clears a field.",
     run: async (args, context) => {
       const current = await getBusinessProfile();
       // Bad values are reported below; a save of valid values that changes nothing is refused.
@@ -259,6 +275,75 @@ export const TOOLS: Record<string, Tool> = {
         display: `${saved}${failures.length ? `. Not added: ${failures.join(" ")}` : ""}`,
         data: { audienceId, audience: await summarizeAudience(audienceId) },
       };
+    },
+  },
+
+  use_existing_leads: {
+    description: "Make a lead list from people already in the lead database: everyone, the latest import, people matching a word (name, company, title, email or details such as a city), or the people who sent inquiries (website forms, Instagram). It only prepares the list, with why each person is on it and what they wrote when they inquired; nobody is contacted. Then call prepare_outreach for it when the owner asked to contact them (they press Start). People already in a running or paused outreach run are left out, and Do Not Contact or unsubscribed people are excluded with the reason. Imported (historical) inquiries are left out unless the owner asks for them.",
+    arguments: "from (all | latest_import | inquiries; default all), search (optional word to match), maxLeads (1-500, default 100), includeHistorical (optional true: inquiries from imported history too), listName (optional)",
+    run: async (args, context) => {
+      const from = args.from === undefined ? "all" : args.from;
+      if (!isExistingLeadsFrom(from)) throw new ToolArgumentError("from must be all, latest_import or inquiries");
+      if (args.includeHistorical !== undefined && typeof args.includeHistorical !== "boolean") throw new ToolArgumentError("includeHistorical must be true or false");
+      const maxLeads = args.maxLeads === undefined ? undefined : Number(args.maxLeads);
+      if (maxLeads !== undefined && (!Number.isFinite(maxLeads) || maxLeads < 1 || maxLeads > MAX_EXISTING_LEADS)) throw new ToolArgumentError(`maxLeads must be between 1 and ${MAX_EXISTING_LEADS}`);
+      const result = await createExistingLeadsAudience({
+        from,
+        search: text(args, "search")?.slice(0, 120) ?? null,
+        maxLeads,
+        includeHistorical: args.includeHistorical === true,
+        listName: text(args, "listName") ?? null,
+        threadId: context.threadId,
+        userId: context.userId,
+      });
+      if (!result.audienceId || !result.audience) {
+        const why = result.alreadyInRuns ? ` ${result.alreadyInRuns} matching ${result.alreadyInRuns === 1 ? "person is" : "people are"} already in a running or paused outreach run.` : "";
+        return { ok: false, summary: `No one in the lead database matches that.${why}` };
+      }
+      const a = result.audience;
+      return {
+        ok: true,
+        summary: `Lead list ${a.id} “${a.name}”: ${a.eligible} contactable of ${a.total} (email ${a.byChannel.email}, WhatsApp ${a.byChannel.whatsapp}, LinkedIn ${a.byChannel.linkedin}).${a.excluded.length ? ` Left out: ${a.excluded.map((e) => `${e.count} × ${e.reason}`).join("; ")}.` : ""}${result.alreadyInRuns ? ` ${result.alreadyInRuns} already in a running outreach run were not added.` : ""} Nobody was contacted.`,
+        display: `“${a.name}”: ${a.eligible} of ${a.total} can be contacted${result.alreadyInRuns ? `; ${result.alreadyInRuns} already in a running outreach run were left out` : ""}.`,
+        data: { audienceId: a.id, audience: a },
+      };
+    },
+  },
+
+  list_inquiries: {
+    description: "The inquiries received in the last 30 days (website forms, Instagram): how many are new, how many came from imported history, and the latest few with what they wrote.",
+    arguments: "none",
+    run: async () => {
+      const overview = await inquiryOverview(30);
+      const latest = overview.latest.map((item) => `${item.at.slice(0, 10)} ${item.source === "instagram" ? "Instagram" : "website form"}: ${item.name ?? "someone"}${item.message ? ` — “${item.message}”` : ""}`).join("\n");
+      return {
+        ok: true,
+        summary: `Last 30 days: ${overview.fresh} new inquiries (${overview.bySource.map((item) => `${item.source === "instagram" ? "Instagram" : "website form"} ${item.count}`).join(", ") || "none"}), ${overview.historical} from imported history, ${overview.unusable} without a usable email or phone.${latest ? `\n${latest}` : ""}`,
+        data: overview as unknown as Record<string, unknown>,
+      };
+    },
+  },
+
+  prepare_inquiry_replies: {
+    description: "Propose answering new Instagram inquiries: from when the owner presses Start, people whose first message arrives on an Instagram account that treats new messages as inquiries get replies drafted from the owner's saved information — sent automatically in Automatic mode, or waiting in Action required in Review mode — with every existing check, limit and handoff. It never answers imported history, earlier chats or anyone else, and sends nothing first. Only when the owner asked for their inquiries or Instagram messages to be answered.",
+    arguments: "autopilot (optional true/false: propose Automatic replies)",
+    run: async (args, context) => {
+      if (!inquiryRepliesRequested(context.ownerText, context.lastAssistantText)) {
+        throw new ToolArgumentError("the owner has not asked for their inquiries to be answered; offer it and wait for a yes");
+      }
+      const request = context.ownerText;
+      if (args.autopilot !== undefined && typeof args.autopilot !== "boolean") throw new ToolArgumentError("autopilot must be true or false");
+      try {
+        const proposal = await prepareInquiryReplies({ autopilot: args.autopilot as boolean | undefined, ownerRequest: request, threadId: context.threadId, userId: context.userId });
+        return {
+          ok: true,
+          summary: `Inquiry plan ${proposal.runId} ready: “${proposal.name}”, answering new Instagram inquiries on ${proposal.accounts.filter((account) => account.inquiryIntake && account.status === "connected").map((account) => account.username ? `@${account.username}` : "an account").join(", ")}. It is shown to the owner with a Start button and a choice of Automatic or Review; nothing happens until they press Start.`,
+          data: { runId: proposal.runId, name: proposal.name, plan: proposal.plan },
+        };
+      } catch (error) {
+        if (error instanceof InquiryRunError) return { ok: false, summary: error.message };
+        throw error;
+      }
     },
   },
 
@@ -357,7 +442,7 @@ export const TOOLS: Record<string, Tool> = {
       return {
         ok: true,
         summary: audiences.length ? audiences.map((a) => `${a.id}: “${a.name}” (${a.source}) ${a.eligible} contactable of ${a.total}`).join("\n") : "No lead lists yet.",
-        display: audiences.length ? audiences.map((a) => `“${a.name}” (${a.source === "discovery" ? "found" : "uploaded"}): ${a.eligible} of ${a.total} can be contacted`).join("\n") : "No lead lists yet.",
+        display: audiences.length ? audiences.map((a) => `“${a.name}” (${AUDIENCE_SOURCE_WORD[a.source] ?? a.source}): ${a.eligible} of ${a.total} can be contacted`).join("\n") : "No lead lists yet.",
         data: { audiences },
       };
     },
@@ -367,12 +452,18 @@ export const TOOLS: Record<string, Tool> = {
     description: "One lead list in detail: how many leads per channel, who was left out and why, and a few examples with where their contact details came from.",
     arguments: "audienceId",
     run: async (args) => {
-      const summary = await summarizeAudience(uuid(args, "audienceId")!);
+      const audienceId = uuid(args, "audienceId")!;
+      const summary = await summarizeAudience(audienceId);
       if (!summary) return { ok: false, summary: "No such lead list." };
+      const qualified = await audienceProspects(audienceId);
+      const counts = qualified?.counts;
+      const qualification = counts
+        ? ` Qualification: ${counts.potential_match} potential matches (not yet interested), ${counts.inquired} inquired, ${counts.replied} replied, ${counts.interested} interested; ${counts.withNeedEvidence} with words of their own showing a need. Location and budget stay unknown unless the source stated them.`
+        : "";
       return {
         ok: true,
-        summary: `“${summary.name}”: ${summary.eligible} contactable of ${summary.total} (email ${summary.byChannel.email}, WhatsApp ${summary.byChannel.whatsapp}, LinkedIn ${summary.byChannel.linkedin}). Left out: ${summary.excluded.map((e) => `${e.count} × ${e.reason}`).join("; ") || "none"}.`,
-        data: summary as unknown as Record<string, unknown>,
+        summary: `“${summary.name}”: ${summary.eligible} contactable of ${summary.total} (email ${summary.byChannel.email}, WhatsApp ${summary.byChannel.whatsapp}, LinkedIn ${summary.byChannel.linkedin}). Left out: ${summary.excluded.map((e) => `${e.count} × ${e.reason}`).join("; ") || "none"}.${qualification}`,
+        data: { ...summary, ...(counts ? { qualification: counts } : {}) } as unknown as Record<string, unknown>,
       };
     },
   },

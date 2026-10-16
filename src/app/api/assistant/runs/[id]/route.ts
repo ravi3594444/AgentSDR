@@ -2,7 +2,7 @@ import type { NextRequest } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { assistantRoute, canManageAutopilot } from "@/lib/assistant/http.server";
-import { getRun, OutreachError, setRunPaused, setRunReplyMode, startOutreachRun, stopRun } from "@/lib/assistant/outreach.server";
+import { getRun, OutreachError, setRunPaused, setRunReplyMode, startInquiryRun, startOutreachRun, stopRun } from "@/lib/assistant/outreach.server";
 import { AUTOPILOT_LIMITS } from "@/lib/crm/autopilot";
 import { outreachRuns } from "@/lib/assistant/schema";
 import { addMessage } from "@/lib/assistant/threads.server";
@@ -30,6 +30,19 @@ export async function POST(request: NextRequest, { params }: Ctx) {
         const autopilot = requestedMode;
         if (autopilot && !canManageAutopilot(ctx)) {
           return Response.json({ error: "Only an owner or admin can let the assistant answer replies automatically. Start in Review mode, or ask one of them." }, { status: 403 });
+        }
+        if (run.plan.kind === "inquiries") {
+          await startInquiryRun(id, ctx.userId, autopilot);
+          if (run.threadId) {
+            await addMessage({
+              threadId: run.threadId,
+              role: "event",
+              content: `${ctx.userName || "The owner"} started answering new Instagram inquiries (“${run.name}”) in ${autopilot ? "Automatic" : "Review"} mode. Only people whose first message arrives from now on, on the accounts that treat new messages as inquiries, are covered; imported history and earlier chats are never answered by it. ${autopilot
+                ? `Ordinary questions are answered from your saved information once the answer is written and checked, at most ${AUTOPILOT_LIMITS.perConversation} per conversation and ${AUTOPILOT_LIMITS.perDay} in 24 hours; anything else comes to you as a decision.`
+                : "Every reply waits for you in Action required."}`,
+            });
+          }
+          return Response.json({ ok: true, jobId: null });
         }
         const started = await startOutreachRun(id, ctx.userId, { autopilot });
         if (run.threadId) {
