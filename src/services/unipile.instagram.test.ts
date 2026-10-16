@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
   instagramAccountStatus,
+  instagramAccountStatusFromError,
+  instagramUnipileErrorType,
   instagramHostedAuthName,
   instagramUnipileErrorStatus,
   mapUnipileInstagramAccount,
@@ -76,5 +78,24 @@ describe("instagramUnipileErrorStatus", () => {
     expect(instagramUnipileErrorStatus({ response: { status: 503 } })).toBe(503);
     expect(instagramUnipileErrorStatus(new Error("network"))).toBeNull();
     expect(instagramUnipileErrorStatus(null)).toBeNull();
+  });
+});
+
+describe("account problems on a failed call", () => {
+  test("reads Unipile's problem type from our error or an SDK problem body", () => {
+    expect(instagramUnipileErrorType(new UnipileInstagramError(401, "x", "errors/disconnected_account"))).toBe("errors/disconnected_account");
+    expect(instagramUnipileErrorType({ body: { status: 401, type: "errors/expired_credentials" } })).toBe("errors/expired_credentials");
+    expect(instagramUnipileErrorType(new UnipileInstagramError(500, "x"))).toBeNull();
+    expect(instagramUnipileErrorType(new Error("network"))).toBeNull();
+  });
+
+  test("only a disconnected account or expired credentials say the account cannot send", () => {
+    expect(instagramAccountStatusFromError(new UnipileInstagramError(401, "x", "errors/disconnected_account"))).toBe("disconnected");
+    expect(instagramAccountStatusFromError({ body: { type: "errors/expired_credentials" } })).toBe("credentials");
+    // The recipient, the chat, rate limits, an unclear 401: the account is not marked.
+    expect(instagramAccountStatusFromError(new UnipileInstagramError(422, "x", "errors/cannot_resend_yet"))).toBeNull();
+    expect(instagramAccountStatusFromError(new UnipileInstagramError(429, "x", "errors/too_many_requests"))).toBeNull();
+    expect(instagramAccountStatusFromError(new UnipileInstagramError(401, "x", "errors/missing_credentials"))).toBeNull();
+    expect(instagramAccountStatusFromError(new UnipileInstagramError(401, "x"))).toBeNull();
   });
 });

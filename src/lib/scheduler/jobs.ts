@@ -3,6 +3,7 @@ import "server-only";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { pruneJobHistory } from "@/jobs/resetDailyLimits";
+import { replayInstagramWebhooks } from "@/jobs/replayInstagramWebhooks";
 import { replayLinkedinWebhooks } from "@/jobs/replayLinkedinWebhooks";
 import { runOutreach } from "@/jobs/runOutreach";
 import { runSearchQueue } from "@/jobs/runSearchQueue";
@@ -47,10 +48,22 @@ export async function startPlatformJob(name: PlatformJobName): Promise<StartedJo
     }
     case "linkedin-replay-webhooks": {
       let summary: Awaited<ReturnType<typeof replayLinkedinWebhooks>> | null = null;
+      let instagram: Awaited<ReturnType<typeof replayInstagramWebhooks>> | null = null;
       const { runId, done } = await startTrackedJob("replay-linkedin-webhooks", async () => {
-        summary = await replayLinkedinWebhooks(100, undefined);
+        // LinkedIn exactly as before; then the Instagram deliveries of the
+        // same ledger (Unipile never retries them: their route answers 200
+        // first). A LinkedIn failure does not keep Instagram from running,
+        // and is still the job's outcome.
+        let linkedinError: unknown = null;
+        try {
+          summary = await replayLinkedinWebhooks(100, undefined);
+        } catch (error) {
+          linkedinError = error;
+        }
+        instagram = await replayInstagramWebhooks(100, undefined);
+        if (linkedinError) throw linkedinError;
       });
-      return { body: { ok: true, runId, summary }, done };
+      return { body: { ok: true, runId, summary, instagram }, done };
     }
     case "history-prune": {
       // Shared history, once a day for the whole platform (it used to ride

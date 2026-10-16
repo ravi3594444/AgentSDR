@@ -70,14 +70,26 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   const messagesMatch = path.match(/^\/chats\/([^/]+)\/messages$/);
   if (method === "GET" && messagesMatch) {
-    return json(200, { object: "MessageList", items: messagesByChat.get(decodeURIComponent(messagesMatch[1]!)) ?? [], cursor: null });
+    const chatId = decodeURIComponent(messagesMatch[1]!);
+    if (chatId.startsWith("ig-chat-unreadable")) return json(503, { status: 503, type: "errors/service_unavailable", title: "Service unavailable" });
+    const limit = Number(url.searchParams.get("limit") ?? 100);
+    // Newest first, as Unipile lists them.
+    const items = [...(messagesByChat.get(chatId) ?? [])].sort((left, right) => String(right.timestamp).localeCompare(String(left.timestamp)));
+    return json(200, { object: "MessageList", items: items.slice(0, limit), cursor: items.length > limit ? "next-page" : null });
   }
   if (method === "POST" && messagesMatch) {
     const chatId = decodeURIComponent(messagesMatch[1]!);
     if (chatId.startsWith("ig-chat-refuse")) {
       return json(422, { status: 422, type: "errors/cannot_resend_yet", title: "Recipient cannot be reached", detail: "The user does not accept messages." });
     }
+    if (chatId.startsWith("ig-chat-busy")) return json(429, { status: 429, type: "errors/too_many_requests", title: "Too many requests", detail: "Slow down." });
+    if (chatId.startsWith("ig-chat-flaky")) return json(503, { status: 503, title: "Service unavailable" });
+    if (chatId.startsWith("ig-chat-gone")) {
+      return json(401, { status: 401, type: "errors/disconnected_account", title: "Disconnected account", detail: "The account appears to be disconnected from the provider service." });
+    }
     sendCount += 1;
+    // Accepted without naming the message: its echo will.
+    if (chatId.startsWith("ig-chat-noid")) return json(201, { object: "MessageSent" });
     const messageId = `ig-sent-${stamp}-${sendCount}`;
     await beforeSendAnswer.get(chatId)?.(messageId, form.text ?? "");
     return json(201, { object: "MessageSent", message_id: messageId });
@@ -114,6 +126,7 @@ const { setPersonDoNotContact } = await import("@/lib/crm/policies");
 const { crmConversationMessages, crmConversations, crmDrafts, crmJobs, crmRecords, crmSendAttempts } = await import("@/lib/crm/schema");
 const { webhookEvents } = await import("@/lib/linkedin/schema");
 const { replayableWebhookEvents } = await import("@/lib/linkedin/webhooks/inbox");
+const { replayInstagramWebhooks } = await import("@/jobs/replayInstagramWebhooks");
 const { POST: unipileMessageWebhook } = await import("@/app/api/webhooks/unipile-message/route");
 const { POST: unipileAccountWebhook } = await import("@/app/api/webhooks/unipile-account/route");
 
@@ -160,6 +173,8 @@ const LEAD3 = `178414${stamp}13`;
 const LEAD4 = `178414${stamp}14`;
 const LEAD5 = `178414${stamp}15`;
 const LEAD6 = `178414${stamp}16`;
+const LEAD7 = `178414${stamp}17`;
+const LEAD8 = `178414${stamp}18`;
 const A1 = `ig-a1-${stamp}`;
 const A2 = `ig-a2-${stamp}`;
 const A3 = `ig-a3-${stamp}`;
@@ -168,8 +183,14 @@ const CHAT1 = `ig-chat-1-${stamp}`;
 const CHAT_IMP = `ig-chat-imp-${stamp}`;
 const CHAT_U = `ig-chat-u-${stamp}`;
 const CHAT_V = `ig-chat-v-${stamp}`;
+const CHAT_W = `ig-chat-w-${stamp}`;
+const CHAT_UNREADABLE = `ig-chat-unreadable-${stamp}`;
 const CHAT_DNC = `ig-chat-dnc-${stamp}`;
 const CHAT_REFUSE = `ig-chat-refuse-${stamp}`;
+const CHAT_BUSY = `ig-chat-busy-${stamp}`;
+const CHAT_NOID = `ig-chat-noid-${stamp}`;
+const CHAT_FLAKY = `ig-chat-flaky-${stamp}`;
+const CHAT_GONE = `ig-chat-gone-${stamp}`;
 
 const igAccount = (id: string, status: string, im: Record<string, unknown> = {}, name: string | null = null) =>
   ({ object: "Account", type: "INSTAGRAM", id, name, connection_params: { im }, sources: [{ id: `${id}-src`, status }] });
@@ -329,6 +350,15 @@ try {
   const offAccountHook = await accountHook(A, SECRET_A, { status: "CREATION_SUCCESS", account_id: A3, name: instagramHostedAuthName(A, userA!.id) });
   const a3WhileOff = await inA(() => accountsLib.findInstagramAccountByUnipileId(A3));
   check("account webhook with the feature off: no Instagram sync", offAccountHook.status === 200 && a3WhileOff === null, String(offAccountHook.status));
+  // A1 is linked now, so the delivery reaches the route's own feature check.
+  const offMessageId = `ig-off3-${stamp}`;
+  const offLinked = await messageHook(A, SECRET_A, delivery({ chatId: CHAT1, messageId: offMessageId, text: "Is anyone there?", lead: LEAD1 }));
+  const offLinkedBody = await offLinked.json() as { skipped?: boolean };
+  check(
+    "feature off, account linked: the delivery is acknowledged and nothing of it is recorded in the ledger or stored",
+    offLinked.status === 200 && offLinkedBody.skipped === true && (await ledgerRow(`instagram:message_received:v1:${A1}:${offMessageId}`)) === null && (await countA()).messages === 0,
+    JSON.stringify({ status: offLinked.status, body: offLinkedBody }),
+  );
   await inA(() => setFeature("instagram", true, userA!.id));
   const onAccountHook = await accountHook(A, SECRET_A, { status: "CREATION_SUCCESS", account_id: A3, name: instagramHostedAuthName(A, userA!.id) });
   const a3 = await inA(() => accountsLib.findInstagramAccountByUnipileId(A3));
@@ -371,6 +401,11 @@ try {
   await db.insert(instagramChats).values({ accountId: a2Row.id, unipileChatId: `ig-chat-old-${stamp}`, providerId: LEAD1, username: "asha.rao", personId: asha!.id });
   await db.insert(instagramChats).values({ accountId: a1Row.id, unipileChatId: CHAT_DNC, providerId: LEAD6, personId: vikram!.id });
   await db.insert(instagramChats).values({ accountId: a1Row.id, unipileChatId: CHAT_REFUSE, providerId: LEAD6 });
+  await db.insert(instagramChats).values({ accountId: a1Row.id, unipileChatId: CHAT_BUSY, providerId: LEAD1, personId: asha!.id });
+  await db.insert(instagramChats).values({ accountId: a1Row.id, unipileChatId: CHAT_NOID, providerId: LEAD1 });
+  await db.insert(instagramChats).values({ accountId: a1Row.id, unipileChatId: CHAT_FLAKY, providerId: LEAD1 });
+  const a3Row = (await inA(() => accountsLib.findInstagramAccountByUnipileId(A3)))!;
+  await db.insert(instagramChats).values({ accountId: a3Row.id, unipileChatId: CHAT_GONE, providerId: LEAD1 });
 
   // ============================================================ webhook gate
   const wrongSecret = await messageHook(A, "not-the-secret", delivery({ chatId: CHAT1, messageId: `ig-x-${stamp}`, text: "x", lead: LEAD1 }));
@@ -430,6 +465,57 @@ try {
     JSON.stringify({ status: retriedLedger?.processingStatus, attempt: retriedLedger?.processingAttempt }),
   );
 
+  // ============================================================ a CRM failure after the message is stored: the replay job
+  // Unipile never retries a delivery answered 200, so this one only reaches
+  // the CRM through the replay. The failure is injected with a trigger on
+  // this local, disposable database, for this one message only.
+  const m4 = `ig-m4-${stamp}`;
+  const m4Key = `instagram:message_received:v1:${A1}:${m4}`;
+  const failCrm = `ig_check_fail_crm_${stamp}`;
+  await db.execute(sql.raw(`create function ${failCrm}() returns trigger language plpgsql as $$ begin if new.idempotency_key = 'instagram:${m4}' then raise exception 'injected CRM failure (instagram check)'; end if; return new; end $$`));
+  await db.execute(sql.raw(`create trigger ${failCrm} before insert on crm_conversation_messages for each row execute function ${failCrm}()`));
+  const beforeCrmFail = await countA();
+  let crmFailHook: Response;
+  console.log("      (the CRM forwarding error printed next is expected)");
+  try {
+    crmFailHook = await messageHook(A, SECRET_A, delivery({ chatId: CHAT1, messageId: m4, text: "And can you write a name on the cake?", lead: LEAD1 }));
+  } finally {
+    await db.execute(sql.raw(`drop trigger if exists ${failCrm} on crm_conversation_messages`));
+    await db.execute(sql.raw(`drop function if exists ${failCrm}()`));
+  }
+  const crmFailLedger = await ledgerRow(m4Key);
+  const [m4Stored] = await messageRows(m4);
+  const afterCrmFail = await countA();
+  check(
+    "a delivery whose CRM forward fails: answered 200, the message kept (unread counted), not on the CRM, and the delivery errored",
+    crmFailHook.status === 200 && crmFailLedger?.processingStatus === "error" && Boolean(m4Stored) && !m4Stored!.crmConversationMessageId
+      && afterCrmFail.messages === beforeCrmFail.messages + 1 && afterCrmFail.unread === beforeCrmFail.unread + 1 && afterCrmFail.crm === beforeCrmFail.crm,
+    JSON.stringify({ status: crmFailLedger?.processingStatus, beforeCrmFail, afterCrmFail }),
+  );
+  check("the LinkedIn replay job never picks it", !(await replayableWebhookEvents(500, new Date(Date.now() + 60 * 60_000), A)).some((row) => row.id === crmFailLedger?.id));
+  const notYet = await replayInstagramWebhooks(100, A);
+  check("the Instagram replay waits for the ledger's backoff", notYet.claimed === 0 && (await ledgerRow(m4Key))?.processingAttempt === 1, JSON.stringify(notYet));
+  await new Promise((resolve) => setTimeout(resolve, 5_300)); // the ledger's first retry delay
+  const replayed = await replayInstagramWebhooks(100, A);
+  const replayedLedger = await ledgerRow(m4Key);
+  const [m4Replayed] = await messageRows(m4);
+  const afterReplay = await countA();
+  check(
+    "the replay forwards it to the CRM exactly once, without storing it again or counting it unread twice",
+    replayed.claimed === 1 && replayed.succeeded === 1 && replayedLedger?.processingStatus === "ok" && replayedLedger.processingAttempt === 2
+      && Boolean(m4Replayed?.crmConversationMessageId) && (await messageRows(m4)).length === 1
+      && afterReplay.crm === afterCrmFail.crm + 1 && afterReplay.jobs === afterCrmFail.jobs + 1 && afterReplay.messages === afterCrmFail.messages && afterReplay.unread === afterCrmFail.unread,
+    JSON.stringify({ replayed, status: replayedLedger?.processingStatus, attempt: replayedLedger?.processingAttempt, afterCrmFail, afterReplay }),
+  );
+  const replayedAgain = await replayInstagramWebhooks(100, A);
+  const redelivered = await messageHook(A, SECRET_A, delivery({ chatId: CHAT1, messageId: m4, text: "And can you write a name on the cake?", lead: LEAD1 }));
+  const redeliveredBody = await redelivered.json() as { duplicate?: boolean };
+  check(
+    "after that, neither the replay nor Unipile's retry adds anything",
+    replayedAgain.claimed === 0 && redeliveredBody.duplicate === true && (await countA()).crm === afterReplay.crm,
+    JSON.stringify(replayedAgain),
+  );
+
   // ============================================================ history
   const beforeHistory = await countA();
   const h1 = `ig-h1-${stamp}`;
@@ -464,8 +550,12 @@ try {
   await inA(async () => {
     await setFeature("inquiry_intake", true, userA!.id);
     await accountsLib.setInstagramInquiryIntake(a1Row.id, true);
+    // Unipile's copy of the chat holds this one message: a new conversation.
+    messagesByChat.set(CHAT_V, [{ object: "Message", id: `ig-v1-${stamp}`, chat_id: CHAT_V, text: "Hello! Do you cater weddings?", timestamp: new Date().toISOString(), is_sender: 0, attachments: [] }]);
+    const readsBefore = requests.filter((r) => r.method === "GET" && r.path === `/api/v1/chats/${CHAT_V}/messages`).length;
     const log1: WebhookLog = [];
     await messagesLib.ingestInstagramWebhook(delivery({ chatId: CHAT_V, messageId: `ig-v1-${stamp}`, text: "Hello! Do you cater weddings?", lead: LEAD5, leadName: "New Person", leadUsername: "new.person" }), log1);
+    check("before making an inquiry, the chat is read from Unipile", requests.filter((r) => r.method === "GET" && r.path === `/api/v1/chats/${CHAT_V}/messages`).length === readsBefore + 1);
     const chatV = (await db.select().from(instagramChats).where(and(messagesLib.chatInOrg(), eq(instagramChats.unipileChatId, CHAT_V))))[0];
     const inquiriesV = chatV ? await db.select().from(inquiries).where(eq(inquiries.instagramChatId, chatV.id)) : [];
     check(
@@ -481,6 +571,37 @@ try {
       inquiriesV2.length === 1 && !log2.some((entry) => /New inquiry/.test(entry.message)) && log2.some((entry) => /Recorded on the CRM/.test(entry.message)),
       log2.map((entry) => entry.message).join(" | "),
     );
+
+    // A long-standing customer whose chat was never imported: new to AgentSDR, not to Unipile.
+    const w1 = `ig-w1-${stamp}`;
+    messagesByChat.set(CHAT_W, [
+      { object: "Message", id: w1, chat_id: CHAT_W, text: "Hi again! Same order as last month?", timestamp: new Date().toISOString(), is_sender: 0, attachments: [] },
+      { object: "Message", id: `ig-w0-${stamp}`, chat_id: CHAT_W, text: "Your cake is ready for pickup!", timestamp: new Date(Date.now() - 30 * 86400_000).toISOString(), is_sender: 1, attachments: [] },
+    ]);
+    const beforeW = await countA();
+    const logW: WebhookLog = [];
+    await messagesLib.ingestInstagramWebhook(delivery({ chatId: CHAT_W, messageId: w1, text: "Hi again! Same order as last month?", lead: LEAD7, leadName: "Old Customer", leadUsername: "old.customer" }), logW);
+    const chatW = (await db.select().from(instagramChats).where(and(messagesLib.chatInOrg(), eq(instagramChats.unipileChatId, CHAT_W))))[0];
+    const inquiriesW = chatW ? await db.select().from(inquiries).where(eq(inquiries.instagramChatId, chatW.id)) : [];
+    const afterW = await countA();
+    check(
+      "a first message in a chat that Unipile shows has earlier messages is not an inquiry: kept in the Instagram inbox only",
+      chatW?.personId === null && chatW.unreadCount === 1 && inquiriesW.length === 0 && afterW.messages === beforeW.messages + 1 && afterW.crm === beforeW.crm && afterW.jobs === beforeW.jobs
+        && logW.some((entry) => /Unipile shows it is not a new conversation/.test(entry.message)),
+      logW.map((entry) => entry.message).join(" | "),
+    );
+
+    // Unipile cannot show the chat: fail closed.
+    const logX: WebhookLog = [];
+    await messagesLib.ingestInstagramWebhook(delivery({ chatId: CHAT_UNREADABLE, messageId: `ig-x1-${stamp}`, text: "Hello, are you open today?", lead: LEAD8, leadName: "Someone New", leadUsername: "someone.new" }), logX);
+    const chatX = (await db.select().from(instagramChats).where(and(messagesLib.chatInOrg(), eq(instagramChats.unipileChatId, CHAT_UNREADABLE))))[0];
+    const inquiriesX = chatX ? await db.select().from(inquiries).where(eq(inquiries.instagramChatId, chatX.id)) : [];
+    check(
+      "when Unipile cannot show the chat, no inquiry: the message is kept in the inbox and the reason logged",
+      chatX?.personId === null && chatX.unreadCount === 1 && inquiriesX.length === 0 && logX.some((entry) => /could not show whether it is a new conversation/.test(entry.message)),
+      logX.map((entry) => entry.message).join(" | "),
+    );
+
     await accountsLib.setInstagramInquiryIntake(a1Row.id, false);
     await setFeature("inquiry_intake", false, userA!.id);
   });
@@ -494,6 +615,7 @@ try {
   messagesByChat.set(CHAT1, [
     { object: "Message", id: m1, chat_id: CHAT1, text: "Do you deliver to Baner on Saturday?", timestamp: m1Row!.sentAt.toISOString(), is_sender: 0, attachments: [] },
     { object: "Message", id: `ig-old1-${stamp}`, chat_id: CHAT1, text: "Loved the croissants!", timestamp: new Date(Date.now() - 3 * 86400_000).toISOString(), is_sender: 0, attachments: [] },
+    { object: "Message", id: `ig-oldout-${stamp}`, chat_id: CHAT1, text: "Thank you, see you soon!", timestamp: new Date(Date.now() - 3 * 86400_000 + 60_000).toISOString(), is_sender: 1, attachments: [] },
   ]);
   messagesByChat.set(CHAT_IMP, [
     { object: "Message", id: `ig-i1-${stamp}`, chat_id: CHAT_IMP, text: "Are you open on Sunday?", timestamp: new Date(Date.now() - 2 * 86400_000).toISOString(), is_sender: 0, attachments: [] },
@@ -503,12 +625,12 @@ try {
   const beforeImport = await countA();
   const imported = await inA(() => messagesLib.importInstagramHistory(a1Row.id));
   const afterImport = await countA();
-  const importedIds = [`ig-old1-${stamp}`, `ig-i1-${stamp}`, `ig-i2-${stamp}`];
+  const importedIds = [`ig-old1-${stamp}`, `ig-oldout-${stamp}`, `ig-i1-${stamp}`, `ig-i2-${stamp}`];
   const importedRows = await inA(() => db.select().from(instagramMessages).where(and(messagesLib.messageInOrg(), inArray(instagramMessages.unipileMessageId, importedIds))));
   const chatImp = (await inA(() => db.select().from(instagramChats).where(and(messagesLib.chatInOrg(), eq(instagramChats.unipileChatId, CHAT_IMP)))))[0];
   check(
     "import brings in chats and their latest messages, skipping groups and chat events",
-    imported.importedChats === 2 && imported.importedMessages === 3 && imported.skippedGroups === 1 && importedRows.length === 3,
+    imported.importedChats === 2 && imported.importedMessages === 4 && imported.skippedGroups === 1 && importedRows.length === 4,
     JSON.stringify(imported),
   );
   check(
@@ -522,6 +644,21 @@ try {
   const afterReImport = await countA();
   check("importing again imports nothing new", reImport.importedChats === 0 && reImport.importedMessages === 0 && afterReImport.messages === afterImport.messages, JSON.stringify(reImport));
   check("the account remembers when history was imported", Boolean((await inA(() => accountsLib.findInstagramAccountByUnipileId(A1)))?.lastImportedAt));
+
+  // The next fresh reply backfills what the owner sent in the chat — but
+  // never imported history (ig-oldout, sent from the app three days ago).
+  const freshOut = `ig-fresh-out-${stamp}`;
+  await db.insert(instagramMessages).values({ chatId: chat1!.id, unipileMessageId: freshOut, direction: "outbound", origin: "phone", body: "Our Saturday slots are 9 to 12.", sentAt: new Date(Date.now() - 60_000), historical: false });
+  const beforeBackfill = await countA();
+  const m3 = `ig-m3-${stamp}`;
+  await inA(() => messagesLib.ingestInstagramWebhook(delivery({ chatId: CHAT1, messageId: m3, text: "Great, 10 o'clock then?", lead: LEAD1 }), []));
+  const afterBackfill = await countA();
+  const backfillKeys = (await db.select({ key: crmConversationMessages.idempotencyKey }).from(crmConversationMessages).where(eq(crmConversationMessages.conversationId, conversation!.id))).map((row) => row.key);
+  check(
+    "a fresh reply backfills the fresh outbound message but never imported history",
+    afterBackfill.crm === beforeBackfill.crm + 2 && backfillKeys.includes(`instagram:${freshOut}`) && backfillKeys.includes(`instagram:${m3}`) && !backfillKeys.includes(`instagram:ig-oldout-${stamp}`),
+    JSON.stringify({ beforeBackfill, afterBackfill, backfillKeys }),
+  );
 
   // ============================================================ a CRM reply, sent through the real dispatcher
   const [record] = await inA(() => db.select().from(crmRecords).where(and(eq(crmRecords.organizationId, A), eq(crmRecords.id, conversation!.crmRecordId))));
@@ -583,11 +720,99 @@ try {
   });
   check("no refusal reached Unipile", posts().length === postsBeforeRefusals, `${posts().length - postsBeforeRefusals} posts`);
   const rejected = await inA(() => sendThroughCrmProvider(crmRequest({ providerThreadId: CHAT_REFUSE, providerContactId: LEAD6 })).then(() => null, (error: unknown) => error as Error & { status?: number }));
-  const refuseRows = await inA(async () => {
-    const [chat] = await db.select({ id: instagramChats.id }).from(instagramChats).where(and(messagesLib.chatInOrg(), eq(instagramChats.unipileChatId, CHAT_REFUSE)));
+  const chatRows = (unipileChatId: string) => inA(async () => {
+    const [chat] = await db.select({ id: instagramChats.id }).from(instagramChats).where(and(messagesLib.chatInOrg(), eq(instagramChats.unipileChatId, unipileChatId)));
     return db.select().from(instagramMessages).where(and(messagesLib.messageInOrg(), eq(instagramMessages.chatId, chat!.id)));
   });
-  check("a send Unipile refuses (422) fails with its status and leaves no stored message", rejected?.status === 422 && refuseRows.length === 0, `${rejected?.status} ${rejected?.message}`);
+  const refuseRows = await chatRows(CHAT_REFUSE);
+  check("a send Unipile refuses (422) fails definitely with its status and leaves no stored message", rejected instanceof DefiniteCrmSendError && (rejected as { status?: number }).status === 422 && refuseRows.length === 0, `${rejected?.status} ${rejected?.message}`);
+
+  // 429 is Unipile refusing too: the reservation is removed, so the draft
+  // fails — it must not sit as "delivery uncertain" when nothing was sent.
+  await inA(() => messagesLib.ingestInstagramWebhook(delivery({ chatId: CHAT_BUSY, messageId: `ig-busy-in-${stamp}`, text: "Can I order three cakes?", lead: LEAD1 }), []));
+  const [busyConversation] = await inA(() => db.select().from(crmConversations).where(and(eq(crmConversations.organizationId, A), eq(crmConversations.channel, "instagram"), eq(crmConversations.providerThreadId, CHAT_BUSY))));
+  const [busyRecord] = await inA(() => db.select().from(crmRecords).where(and(eq(crmRecords.organizationId, A), eq(crmRecords.id, busyConversation!.crmRecordId))));
+  const [busyDraft] = await inA(() => db.insert(crmDrafts).values({
+    crmRecordId: busyRecord!.id,
+    conversationId: busyConversation!.id,
+    expectedContextVersion: busyRecord!.contextVersion,
+    channel: "instagram",
+    editedBodyText: "Yes, three cakes are fine!",
+    status: "awaiting_review",
+  }).returning());
+  const busyPostsBefore = posts(CHAT_BUSY).length;
+  const busySend = await inA(() => sendDraft({ draftId: busyDraft!.id, revision: 1, idempotencyKey: `ig-check-${stamp}-busy`, requestId: `ig-check-${stamp}-busy` }))
+    .then(() => null, (error: unknown) => error as Error & { status?: number });
+  const [busyAttempt] = await db.select().from(crmSendAttempts).where(eq(crmSendAttempts.draftId, busyDraft!.id));
+  const [busyDraftAfter] = await db.select().from(crmDrafts).where(eq(crmDrafts.id, busyDraft!.id));
+  const busyOwnRows = (await chatRows(CHAT_BUSY)).filter((row) => row.origin === "agentsdr");
+  check(
+    "429 from Unipile is a definite failure: one request, the draft and its attempt failed (not uncertain), nothing reserved",
+    busySend instanceof DefiniteCrmSendError && (busySend as { status?: number }).status === 429 && busyAttempt?.status === "failed" && busyDraftAfter?.status === "failed"
+      && posts(CHAT_BUSY).length === busyPostsBefore + 1 && busyOwnRows.length === 0,
+    JSON.stringify({ error: String(busySend), attempt: busyAttempt?.status, draft: busyDraftAfter?.status, rows: busyOwnRows.length }),
+  );
+
+  // 2xx without a message id: sent, not uncertain; the echo names it later.
+  const noIdText = "Noted — your order is in.";
+  const noIdResult = await inA(() => sendThroughCrmProvider(crmRequest({ providerThreadId: CHAT_NOID, bodyText: noIdText })));
+  const noIdRows = await chatRows(CHAT_NOID);
+  check(
+    "a send Unipile accepts without an id succeeds (no provider id yet) and keeps its reserved row",
+    noIdResult.providerMessageId === null && noIdRows.length === 1 && noIdRows[0]!.origin === "agentsdr" && noIdRows[0]!.unipileMessageId === null,
+    JSON.stringify({ providerMessageId: noIdResult.providerMessageId, rows: noIdRows.map((row) => [row.origin, row.unipileMessageId]) }),
+  );
+  const noIdEcho = `ig-noid-echo-${stamp}`;
+  await messageHook(A, SECRET_A, delivery({ chatId: CHAT_NOID, messageId: noIdEcho, text: noIdText, lead: LEAD1, echo: true }));
+  const noIdAfter = await chatRows(CHAT_NOID);
+  check(
+    "its echo names it: the id lands on the same row, nothing is stored as typed in the app",
+    noIdAfter.length === 1 && noIdAfter[0]!.id === noIdRows[0]!.id && noIdAfter[0]!.unipileMessageId === noIdEcho && noIdAfter[0]!.origin === "agentsdr",
+    JSON.stringify(noIdAfter.map((row) => [row.origin, row.unipileMessageId])),
+  );
+
+  // 503: may have gone. The reservation stays, and an echo arriving well
+  // after the send (here ten minutes) still attaches to it.
+  const flakyText = "We will call you tomorrow morning.";
+  const flaky = await inA(() => sendThroughCrmProvider(crmRequest({ providerThreadId: CHAT_FLAKY, bodyText: flakyText }))).then(() => null, (error: unknown) => error as Error & { status?: number });
+  const flakyRows = await chatRows(CHAT_FLAKY);
+  check(
+    "a 503 from Unipile stays uncertain (not definite) and keeps the reserved row for its echo",
+    flaky instanceof Error && !(flaky instanceof DefiniteCrmSendError) && flaky.status === 503 && flakyRows.length === 1 && flakyRows[0]!.unipileMessageId === null,
+    `${String(flaky)} ${flakyRows.length}`,
+  );
+  await db.update(instagramMessages).set({ sentAt: new Date(Date.now() - 10 * 60_000) }).where(eq(instagramMessages.id, flakyRows[0]!.id));
+  const flakyEcho = `ig-flaky-echo-${stamp}`;
+  await messageHook(A, SECRET_A, delivery({ chatId: CHAT_FLAKY, messageId: flakyEcho, text: flakyText, lead: LEAD1, echo: true }));
+  const flakyAfter = await chatRows(CHAT_FLAKY);
+  const [flakyChat] = await inA(() => db.select().from(instagramChats).where(and(messagesLib.chatInOrg(), eq(instagramChats.unipileChatId, CHAT_FLAKY))));
+  check(
+    "a late echo attaches to its reservation (no second row as typed in the app) and becomes the chat's last message",
+    flakyAfter.length === 1 && flakyAfter[0]!.id === flakyRows[0]!.id && flakyAfter[0]!.unipileMessageId === flakyEcho && flakyAfter[0]!.origin === "agentsdr"
+      && flakyChat?.lastMessagePreview === flakyText && flakyChat.lastDirection === "outbound",
+    JSON.stringify({ rows: flakyAfter.map((row) => [row.origin, row.unipileMessageId]), preview: flakyChat?.lastMessagePreview }),
+  );
+
+  // Unipile says the account is disconnected: the account is marked, so the
+  // page shows it and the next send is refused before Unipile is called.
+  const goneRequest = crmRequest({ accountRef: A3, providerThreadId: CHAT_GONE, bodyText: "Hello from the cakes account" });
+  const gonePostsBefore = posts(CHAT_GONE).length;
+  const gone = await inA(() => sendThroughCrmProvider(goneRequest)).then(() => null, (error: unknown) => error as Error & { status?: number });
+  const a3AfterGone = (await inA(() => accountsLib.listInstagramAccounts())).find((account) => account.unipileAccountId === A3);
+  check(
+    "a send Unipile answers 'disconnected account': a definite failure, nothing kept, and the account is marked disconnected",
+    gone instanceof DefiniteCrmSendError && /reconnected/.test(gone.message) && a3AfterGone?.status === "disconnected" && (await chatRows(CHAT_GONE)).length === 0,
+    `${String(gone)} → ${a3AfterGone?.status}`,
+  );
+  const goneAgain = await inA(() => performInstagramReply({ unipileAccountId: A3, unipileChatId: CHAT_GONE, text: "Hello again", personId: null })).then(() => null, (error: unknown) => error);
+  check(
+    "the next send from that account is refused before Unipile is called",
+    goneAgain instanceof InstagramSendRefusedError && goneAgain.reason === "not_connected" && posts(CHAT_GONE).length === gonePostsBefore + 1,
+    String(goneAgain),
+  );
+  const resynced = await inA(() => accountsLib.syncInstagramAccounts());
+  check("Sync from Unipile reads the account's status again (Unipile lists it OK)", resynced.find((account) => account.unipileAccountId === A3)?.status === "connected");
+
   check("no new chat is ever started", !requests.some((r) => r.method === "POST" && r.path === "/api/v1/chats"));
 
   // ============================================================ organization B sees none of A

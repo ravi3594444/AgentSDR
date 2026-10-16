@@ -17,7 +17,13 @@ import {
 } from "@/lib/whatsapp/delivery";
 import { whatsappMessages } from "@/lib/whatsapp/schema";
 import { instagramMessages } from "@/lib/instagram/schema";
-import { deliverInstagramFromCrm, InstagramSendRefusedError, type DeliverInstagramInput, type DeliverInstagramResult } from "@/lib/instagram/delivery";
+import {
+  deliverInstagramFromCrm,
+  InstagramDeliveryError,
+  InstagramSendRefusedError,
+  type DeliverInstagramInput,
+  type DeliverInstagramResult,
+} from "@/lib/instagram/delivery";
 import { crmChannelSendProvider } from "./channels";
 import { insertConversationMessageInTransaction } from "./conversations";
 import { appendCrmEvent } from "./events";
@@ -266,7 +272,12 @@ export async function sendWhatsappThroughCrm(
  * The Instagram branch of sendThroughCrmProvider, with the delivery
  * injectable for tests. A reply into the chat the lead wrote in, never a new
  * chat; a refusal (no chat, account not connected, Do Not Contact, feature
- * off) is definite: nothing reached Instagram.
+ * off) is definite: nothing reached Instagram. So is Unipile refusing the
+ * request (`InstagramDeliveryError.definite`, any 4xx but a timeout, 409
+ * and 429 included): send.server.ts removed the reserved message, so
+ * nothing can still arrive, and an "uncertain" draft would only wait for a
+ * reconciliation that has nothing to find. Other channels keep
+ * providerErrorIsDefinite's classification.
  */
 export async function sendInstagramThroughCrm(
   input: CrmSendAdapterInput,
@@ -284,10 +295,15 @@ export async function sendInstagramThroughCrm(
     });
   } catch (error) {
     if (error instanceof InstagramSendRefusedError) throw new DefiniteCrmSendError(error.message);
+    if (error instanceof InstagramDeliveryError && error.definite) {
+      throw Object.assign(new DefiniteCrmSendError(error.message), { status: error.status });
+    }
     throw error;
   }
   return {
     provider: "unipile",
+    // Null when Unipile accepted the message without naming it (sent; the
+    // stored row gets the id from its echo).
     providerMessageId: result.unipileMessageId,
     providerThreadId: result.unipileChatId,
     rfcMessageId: null,

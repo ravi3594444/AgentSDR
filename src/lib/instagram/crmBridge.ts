@@ -23,8 +23,10 @@ import { INSTAGRAM_NO_TEXT_BODY } from "./contract";
  *
  * Called by src/lib/instagram/messages.ts after a message is stored in
  * instagram_messages — never for history. Never throws: a CRM failure must
- * not lose the message or fail Unipile's webhook; it is logged, and the
- * message stays in the Instagram inbox.
+ * not lose the message; it is logged and returned as `error`, the message
+ * stays in the Instagram inbox, and the webhook delivery is marked errored so
+ * the replay (src/jobs/replayInstagramWebhooks.ts) forwards it again — the
+ * idempotency key below makes that safe.
  *
  * CRM identity: accountRef is the Unipile account id, providerThreadId the
  * Unipile chat id, providerContactId the person's Instagram id, and every
@@ -81,10 +83,18 @@ function auditPayload(input: InstagramCrmMessageInput): Record<string, unknown> 
   };
 }
 
-/** A reply → the CRM. Returns the CRM message id when it was recorded. */
+/**
+ * What became of a message on the CRM: its CRM message id when it was
+ * recorded; `error` when recording failed (worth retrying). Both null means
+ * it was deliberately left out (no record for an outbound message, or the
+ * person was quarantined for identity review).
+ */
+export type InstagramCrmResult = { crmConversationMessageId: string | null; error: string | null };
+
+/** A reply → the CRM. */
 export async function forwardInstagramInboundToCrm(
   input: InstagramCrmMessageInput,
-): Promise<{ crmConversationMessageId: string | null }> {
+): Promise<InstagramCrmResult> {
   const log = createStepLogger();
   const payload = auditPayload(input);
   let eventId: string | null = null;
@@ -115,7 +125,7 @@ export async function forwardInstagramInboundToCrm(
       log.warn(`Person ${input.personId} not found — quarantined for identity review`);
       log.finish("skipped");
       await finishAudit(eventId, log);
-      return { crmConversationMessageId: null };
+      return { crmConversationMessageId: null, error: null };
     }
 
     const result = await ingestInboundReply({
@@ -134,14 +144,14 @@ export async function forwardInstagramInboundToCrm(
     log.info(result.duplicate ? "CRM already stored this Instagram reply" : "Instagram reply routed to CRM");
     log.finish(result.duplicate ? "skipped" : "ok");
     await finishAudit(eventId, log);
-    return { crmConversationMessageId: result.message.id };
+    return { crmConversationMessageId: result.message.id, error: null };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error("[instagram/crmBridge] inbound CRM forwarding failed:", message);
     log.error(message);
     log.finish("error");
     await finishAudit(eventId, log, message);
-    return { crmConversationMessageId: null };
+    return { crmConversationMessageId: null, error: message };
   }
 }
 
@@ -197,11 +207,11 @@ async function recordForOutbound(tx: CrmTransaction, input: InstagramCrmMessageI
  */
 export async function recordInstagramOutboundInCrm(
   input: InstagramCrmMessageInput & { origin: "agentsdr" | "phone" },
-): Promise<{ crmConversationMessageId: string | null }> {
+): Promise<InstagramCrmResult> {
   try {
     return await withCrmTransaction(async (tx) => {
       const recordId = await recordForOutbound(tx, input);
-      if (!recordId) return { crmConversationMessageId: null };
+      if (!recordId) return { crmConversationMessageId: null, error: null };
       const result = await recordManualOutboundInTransaction(tx, {
         recordId,
         personId: input.personId,
@@ -219,13 +229,11 @@ export async function recordInstagramOutboundInCrm(
         actorRef: "unipile",
         meta: { origin: input.origin },
       });
-      return { crmConversationMessageId: result.message.id };
+      return { crmConversationMessageId: result.message.id, error: null };
     });
   } catch (error) {
-    console.error(
-      "[instagram/crmBridge] outbound CRM recording failed:",
-      error instanceof Error ? error.message : error,
-    );
-    return { crmConversationMessageId: null };
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("[instagram/crmBridge] outbound CRM recording failed:", message);
+    return { crmConversationMessageId: null, error: message };
   }
 }

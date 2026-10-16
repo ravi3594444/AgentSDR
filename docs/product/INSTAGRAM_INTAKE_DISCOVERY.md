@@ -36,9 +36,9 @@ format is read or written anywhere.
 | --- | --- | --- | --- |
 | Connect an account (hosted sign-in) | Yes | `POST /hosted/accounts/link` with `providers: ["INSTAGRAM"]`, `notify_url` → `{status: CREATION_SUCCESS\|RECONNECTED, account_id, name}` | Yes |
 | Connect with password / session cookie, 2FA checkpoint | Yes | `POST /accounts`, `POST /accounts/checkpoint` | No (hosted sign-in keeps passwords out of AgentSDR) |
-| Account status webhook | Yes | `source: account_status` | Yes (existing `unipile-account` route syncs Instagram too) |
+| Account status webhook | Yes | `source: account_status` | No — only the hosted sign-in's `notify_url` (`CREATION_SUCCESS`/`RECONNECTED`, the existing `unipile-account` route) syncs Instagram; see "Account changes" in section 6 |
 | List chats | Yes | `GET /chats?account_type=INSTAGRAM&account_id=` | Yes (history import) |
-| List messages of a chat | Yes | `GET /chats/{chat_id}/messages` | Yes (history import) |
+| List messages of a chat | Yes | `GET /chats/{chat_id}/messages` | Yes (history import; the new-chat check before an inquiry) |
 | Send in an existing chat | Yes | `POST /chats/{chat_id}/messages` | Yes (replies) |
 | Start a new chat | Yes (`attendees_ids` = the profile's `provider_messaging_id`) | `POST /chats` | **No** — no cold Instagram outreach in this release |
 | Message webhook | Yes; `account_type: "INSTAGRAM"`; the account's own sends also arrive as `message_received` (tell them apart by `is_sender` or `account_info.user_id` = `sender.attendee_provider_id`) | `source: messaging` | Yes |
@@ -363,18 +363,27 @@ What arrives and what happens:
 | Webhook message sent before the account's history cutoff (first time it was seen connected) or more than 6 h old on arrival | Yes, `historical` | No | No | No | Never |
 | Fresh reply from someone AgentSDR knows (the chat is linked to a person) | Yes | Yes | Inbound on an `instagram` conversation: classified, drafted, in Action required | No | After the owner's review, or by an inquiry run in Automatic |
 | Fresh first message of a new chat from someone unknown, account treats new messages as inquiries | Yes | Yes | Yes (as above) | Yes (`intake:instagram`, one per sender per account) | Only inside a running inquiry run (section 3); otherwise reviewed |
+| The same, but Unipile's copy of the chat has earlier messages (a customer whose chat was never imported), something the account sent, or cannot be read | Yes | Yes | No | No | No (Instagram inbox only) |
 | Fresh first message, inquiries off for the account | Yes | Yes | No | No | No (Instagram inbox only) |
 | The account's own message typed in the Instagram app (echo) | Yes, origin `phone` | No | Recorded as outbound: the person was answered | No | — |
 | AgentSDR's own send (echo) | Attached to the reserved row, origin `agentsdr` | No | — | — | — |
 
 Webhook handling: every delivery is written raw to the existing webhook
-ledger first (account type `INSTAGRAM`, so the LinkedIn replay job ignores
-it), keyed so Unipile's retries collapse into one; a message is stored once
-by its Unipile id. The route answers 200 as soon as the delivery is
-recorded and processes it afterwards; only a failure to record answers 500,
-so Unipile retries. The organization comes from the payload's account
-(`gateUnipileWebhook`, `org=` and the secret); with the feature off the
-delivery is recorded and skipped.
+ledger first (account type `INSTAGRAM`), keyed so Unipile's retries
+collapse into one; a message is stored once by its Unipile id. The route
+answers 200 as soon as the delivery is recorded and processes it
+afterwards; only a failure to record answers 500, so Unipile retries.
+Unipile never retries a 200, so a delivery whose processing fails — a
+database error, or the CRM not recording a stored message — is marked
+errored and taken up again by the webhook replay job
+(`src/jobs/replayInstagramWebhooks.ts`, run every 10 minutes with the
+LinkedIn replay; the ledger's backoff, 8 attempts, then `dead`), as is one
+left `processing` past the ledger's 5-minute lease. Processing again is
+safe: a stored message is not stored twice, and a fresh one not yet on the
+CRM is forwarded again under the same idempotency key. The organization
+comes from the payload's account (`gateUnipileWebhook`, `org=` and the
+secret); with the feature off the delivery is acknowledged and nothing of
+it is recorded.
 
 Sending: a reply only, into the chat the person wrote in, from the account
 that chat is on — AgentSDR never starts an Instagram chat (no cold
@@ -384,13 +393,23 @@ protection, stale-draft checks and limits). Refused before Unipile is
 called when the feature is off, the account is unknown or not connected,
 the chat is not that account's, the person is Do Not Contact, or the text is
 empty or over 1,000 characters. The message row is reserved before the
-Unipile call so an early echo is recognised; a 4xx from Unipile removes it,
-a timeout or 5xx keeps it (the message may have gone) and the attempt is
-reconciled rather than resent.
+Unipile call so an early echo is recognised. A 4xx from Unipile (other than
+a 408 timeout; 409 and 429 included) removes it and fails the draft
+definitely — nothing was sent. A timeout or 5xx keeps it (the message may
+have gone): the attempt is marked delivery-uncertain and reconciled rather
+than resent, and an echo arriving up to 24 h later attaches to the reserved
+row instead of being stored again as typed in the app. A 2xx without a
+message id counts as sent; the row gets its id from the echo.
 
-Account changes: the existing `unipile-account` webhook now also syncs
-Instagram accounts, so a disconnected or credential-expired account shows
-as such and stops sending immediately. Disconnecting never deletes chats.
+Account changes: the existing `unipile-account` webhook (the hosted
+sign-in's `notify_url`) also syncs Instagram accounts when a sign-in
+finishes or an account is reconnected. No account-status webhook is
+registered, so an account whose session ends stays "connected" until
+**Sync from Unipile** — or until a send fails with Unipile's
+`errors/disconnected_account` or `errors/expired_credentials`: the account
+is then marked disconnected / needs sign-in on the accounts page, and later
+sends are refused before Unipile is called. Reconnecting it (or a sync that
+finds it OK) makes it connected again. Disconnecting never deletes chats.
 
 Not built: Instagram unread count in the sidebar badge, group chats (skipped
 on import), attachments sending, comment replies, and any cold Instagram

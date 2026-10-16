@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { InstagramSendRefusedError, type DeliverInstagramInput, type DeliverInstagramResult } from "@/lib/instagram/delivery";
+import { InstagramDeliveryError, InstagramSendRefusedError, type DeliverInstagramInput, type DeliverInstagramResult } from "@/lib/instagram/delivery";
 import { draftChannelConstraints, draftJsonSchema, validateDraftOutput } from "./ai/draft";
 import { crmChannelHasSubject, crmChannelLabel, crmChannelSendProvider, isCrmChannel } from "./channels";
 import { identityExceptionReplayInput } from "./identity";
@@ -103,6 +103,32 @@ describe("CRM send over Instagram", () => {
       throw new InstagramSendRefusedError("do_not_contact", "This person is marked Do Not Contact");
     };
     await expect(sendInstagramThroughCrm(request(), deliver)).rejects.toThrow(DefiniteCrmSendError);
+  });
+
+  test("Unipile refusing the request (429 or 409 included) is definite; a timeout or 5xx stays uncertain", async () => {
+    for (const status of [409, 422, 429]) {
+      const deliver = async (): Promise<DeliverInstagramResult> => {
+        throw new InstagramDeliveryError(status, `Instagram (Unipile) did not accept the message — HTTP ${status}`, true);
+      };
+      const error = await sendInstagramThroughCrm(request(), deliver).then(() => null, (cause: unknown) => cause);
+      expect(error).toBeInstanceOf(DefiniteCrmSendError);
+      expect((error as { status?: number }).status).toBe(status);
+    }
+    const uncertain = new InstagramDeliveryError(503, "could not be reached");
+    const error = await sendInstagramThroughCrm(request(), async () => { throw uncertain; }).then(() => null, (cause: unknown) => cause);
+    expect(error).toBe(uncertain);
+    expect(error).not.toBeInstanceOf(DefiniteCrmSendError);
+  });
+
+  test("a message Unipile accepted without an id is sent, with no provider id yet", async () => {
+    const deliver = async (input: DeliverInstagramInput): Promise<DeliverInstagramResult> => ({ unipileChatId: input.unipileChatId!, unipileMessageId: null, instagramMessageId: "ig-row-2" });
+    expect(await sendInstagramThroughCrm(request(), deliver)).toEqual({
+      provider: "unipile",
+      providerMessageId: null,
+      providerThreadId: "ig-chat-1",
+      rfcMessageId: null,
+      response: { messageId: null, chatId: "ig-chat-1", instagramMessageId: "ig-row-2" },
+    });
   });
 
   test("the provider dispatcher never sends an Instagram reply as a LinkedIn message", async () => {
