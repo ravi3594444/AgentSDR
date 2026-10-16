@@ -110,7 +110,7 @@ async function loadState(executor: CrmExecutor, draftId: string, deps: Autopilot
     .where(eq(crmClassifications.crmRecordId, record.id))
     .orderBy(desc(crmClassifications.createdAt))
     .limit(1);
-  const membership = await runMembershipFor(executor, record.personId, conversation.channel);
+  const membership = await runMembershipFor(executor, record.personId, conversation.channel, conversation.id);
   const [takeover] = await executor.select({ id: autopilotTakeovers.id }).from(autopilotTakeovers)
     .where(and(inOrg(autopilotTakeovers), eq(autopilotTakeovers.conversationId, conversation.id))).limit(1);
   const readyAt = deps.readyAt ?? draft.updatedAt;

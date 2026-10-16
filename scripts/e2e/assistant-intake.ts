@@ -35,7 +35,8 @@ if (!/@(localhost|127\.0\.0\.1)[:/]/.test(process.env.DATABASE_URL ?? "")) {
 const { db } = await import("@/lib/db");
 const { organizations } = await import("@/lib/auth/schema");
 const { people } = await import("@/lib/leads/schema");
-const { crmPersonContactPolicies } = await import("@/lib/crm/schema");
+const { crmConversations, crmPersonContactPolicies, crmRecords } = await import("@/lib/crm/schema");
+const { ensureCrmDefaults } = await import("@/lib/crm/defaults");
 const { inquiries } = await import("@/lib/intake/schema");
 const { instagramAccounts } = await import("@/lib/instagram/schema");
 const schema = await import("@/lib/assistant/schema");
@@ -154,16 +155,26 @@ await runInOrganization(orgA!.id, async () => {
   const inquirer = await make({ fullName: "@new.patient", source: "intake:instagram" });
   check("inquiry run: an inquiry on an account the run does not cover is not attached", (await attachInquiryToRun(inquirer, "instagram", "some-other-account")) === null);
   check("inquiry run: a fresh inquirer is attached", (await attachInquiryToRun(inquirer, "instagram", `ig-intake-check-${stamp}`)) === proposal.runId);
-  const membership = await runMembershipFor(db, inquirer, "instagram");
+  // Their conversations: one on the account the run covers, one on another of the organization's accounts.
+  const { pipelineId } = await ensureCrmDefaults();
+  const [inquirerRecord] = await db.insert(crmRecords).values({ organizationId: org, personId: inquirer, pipelineId }).returning({ id: crmRecords.id });
+  const [covered, elsewhere] = await db.insert(crmConversations).values([
+    { organizationId: org, crmRecordId: inquirerRecord!.id, personId: inquirer, channel: "instagram", accountRef: `ig-intake-check-${stamp}`, providerThreadId: `chat-a-${stamp}` },
+    { organizationId: org, crmRecordId: inquirerRecord!.id, personId: inquirer, channel: "instagram", accountRef: `ig-other-${stamp}`, providerThreadId: `chat-b-${stamp}` },
+  ]).returning({ id: crmConversations.id });
+  const conversation = covered!.id;
+  check("inquiry run: the same person writing to an account the run does not list is not covered there", (await runMembershipFor(db, inquirer, "instagram", elsewhere!.id)) === null);
+  check("inquiry run: without the conversation nothing is covered on Instagram (fail closed)", (await runMembershipFor(db, inquirer, "instagram")) === null);
+  const membership = await runMembershipFor(db, inquirer, "instagram", conversation);
   check("inquiry run: the autopilot sees them as a running, automatic member on Instagram", membership?.runId === proposal.runId && membership.runStatus === "running" && membership.automatic === true);
   check("inquiry run: no membership on other channels", (await runMembershipFor(db, inquirer, "email")) === null);
-  check("inquiry run: people never attached are not covered", (await runMembershipFor(db, listed, "instagram")) === null);
+  check("inquiry run: people never attached are not covered", (await runMembershipFor(db, listed, "instagram", conversation)) === null);
   await setRunPaused(proposal.runId, true);
-  check("inquiry run: Pause holds it (the gate reads 'paused')", (await runMembershipFor(db, inquirer, "instagram"))?.runStatus === "paused");
+  check("inquiry run: Pause holds it (the gate reads 'paused')", (await runMembershipFor(db, inquirer, "instagram", conversation))?.runStatus === "paused");
   await setRunPaused(proposal.runId, false);
-  check("inquiry run: Resume runs it again", (await runMembershipFor(db, inquirer, "instagram"))?.runStatus === "running");
+  check("inquiry run: Resume runs it again", (await runMembershipFor(db, inquirer, "instagram", conversation))?.runStatus === "running");
   await stopRun(proposal.runId);
-  const stopped = await runMembershipFor(db, inquirer, "instagram");
+  const stopped = await runMembershipFor(db, inquirer, "instagram", conversation);
   check("inquiry run: Stop is final for its members", stopped?.runStatus === "stopped" && stopped.leadStatus === "stopped");
   check("inquiry run: nobody is attached after Stop", (await attachInquiryToRun(listed, "instagram", `ig-intake-check-${stamp}`)) === null && (await activeInquiryRun()) === null);
 
