@@ -7,11 +7,16 @@ COPY vendor ./vendor
 RUN bun install --frozen-lockfile
 
 # Stage 2: Build the Next.js app
+# `next build` runs under Node, not Bun. Measured on this app (17 Oct 2026),
+# Turbopack's build peaked at 9.4 GB of memory under Bun and 5.9 GB under
+# Node; under Bun it ran an 8 GB server out of memory beside the running app.
+# Bun still installs the packages and builds the call recorder.
 FROM oven/bun:1-alpine AS builder
 WORKDIR /app
+RUN apk add --no-cache nodejs
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-RUN bun run build
+RUN bun run package:recorder && node node_modules/next/dist/bin/next build
 
 # Stage 3: Lean production image
 FROM oven/bun:1-alpine AS runner
