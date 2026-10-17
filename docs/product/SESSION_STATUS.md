@@ -583,6 +583,32 @@ turn failed on the VM with "actions[0].arguments must be a JSON object
 written as a string"; the cause will be read from that log before
 anything is changed.
 
+### Follow-up: Claude and other tool-calling models on AI/ML API (2026-10-17)
+
+The model picker for AI/ML API listed only models that AI/ML's catalog
+tags `structured_output`. AI/ML gives that tag to no Claude model and no
+Grok. Now:
+- **The list:** models tagged `structured_output` **or** `tools` are listed
+  (`selectableAimlModels`).
+- **How each is asked:** a model with the `structured_output` tag still
+  answers strict JSON. A model tagged only `tools` answers with one function
+  call, as every OpenRouter model does (`aimlStructuredMode`).
+- **Where the tags come from:** the runtime reads them from AI/ML's catalog,
+  cached 10 minutes. If the catalog can't be read within 5 s, it keeps
+  strict JSON.
+
+Live check with the owner's AI/ML key on 17 Oct 2026, model
+`anthropic/claude-haiku-5-5`, the assistant's real prompt, schema and
+parser:
+- **Both methods work:** strict JSON and the function call each gave a
+  valid answer to the turn that had failed on the VM.
+- **Through the app's own code:** six of seven turns were accepted first
+  time; one was accepted on its retry. Each took 3–8 s and cost
+  $0.0013–0.0017.
+- **What it did:** it read the owner's site first, and for "find 20 real
+  estate agencies in Dubai and pitch them" it started a 20-result search
+  with email and WhatsApp.
+
 ### Live services vs stand-ins
 
 - **Live, real services:** gosom/google-maps-scraper v1.18.1 against Google

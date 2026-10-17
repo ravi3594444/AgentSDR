@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { selectableAimlModels } from "./aimlapi-types";
+import { aimlStructuredMode, selectableAimlModels } from "./aimlapi-types";
 import type { ByokSettings } from "./openrouter-types";
 import { planAiRuntime } from "./runtimePlan";
 
@@ -83,7 +83,7 @@ describe("planAiRuntime with OpenRouter (unchanged rules)", () => {
 });
 
 describe("selectableAimlModels", () => {
-  test("keeps chat models with structured output only, named and sorted", () => {
+  test("keeps chat models with structured output or tools, named and sorted", () => {
     const models = selectableAimlModels({
       data: [
         { id: "z/chat-structured", type: "openai/chat-completions", info: { name: "Zeta", contextLength: 128000 }, capabilities: ["tools", "structured_output"] },
@@ -94,8 +94,8 @@ describe("selectableAimlModels", () => {
         { id: 42, type: "openai/chat-completions", capabilities: ["structured_output"] },
       ],
     });
-    expect(models.map((model) => model.id)).toEqual(["a/chat-structured", "z/chat-structured"]);
-    expect(models[1]).toEqual({
+    expect(models.map((model) => model.id)).toEqual(["a/chat-structured", "chat-tools-only", "z/chat-structured"]);
+    expect(models[2]).toEqual({
       id: "z/chat-structured",
       name: "Zeta",
       developer: undefined,
@@ -104,6 +104,12 @@ describe("selectableAimlModels", () => {
       capabilities: ["tools", "structured_output"],
       outputModalities: ["text"],
     });
+  });
+
+  test("a model tagged structured_output is asked for strict JSON, one tagged only tools for a function call", () => {
+    expect(aimlStructuredMode(["tools", "structured_output"])).toBe("json_schema");
+    // AI/ML lists every Claude model like this (17 Oct 2026).
+    expect(aimlStructuredMode(["reasoning", "streaming", "tools", "vision", "web_search"])).toBe("tool_call");
   });
 
   test("an unexpected body is an empty list, not a crash", () => {

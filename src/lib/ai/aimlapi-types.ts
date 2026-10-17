@@ -34,11 +34,24 @@ export type AimlModelSummary = {
 };
 
 /**
+ * How a model is asked for a structured answer: a strict JSON schema when
+ * AI/ML marks it `structured_output`, else one function call (`tools`).
+ * AI/ML's tags are incomplete: every Claude model lacks `structured_output`
+ * although Claude Haiku 5.5 answered strict JSON correctly on 17 Oct 2026;
+ * the function call worked for it too and is what OpenRouter uses for every
+ * model, so it is the safe way for a model only tagged `tools`.
+ */
+export function aimlStructuredMode(capabilities: readonly string[]): "json_schema" | "tool_call" {
+  return capabilities.includes("structured_output") ? "json_schema" : "tool_call";
+}
+
+/**
  * The models every AI feature here can use: chat-completion models that
- * AI/ML marks `structured_output`, because classification, drafts and
- * table columns all ask for a strict JSON-schema answer. Anything else
- * (image, video, speech, embeddings, chat models without structured output)
- * is left out rather than offered and failing on the first call.
+ * AI/ML marks `structured_output` or `tools`, because classification, drafts
+ * and table columns all need an answer of an exact shape (aimlStructuredMode
+ * says how each is asked). Anything else (image, video, speech, embeddings,
+ * chat models with neither) is left out rather than offered and failing on
+ * the first call.
  */
 export function selectableAimlModels(body: unknown): AimlModelSummary[] {
   const entries = Array.isArray((body as { data?: unknown } | null)?.data) ? (body as { data: unknown[] }).data : [];
@@ -49,7 +62,7 @@ export function selectableAimlModels(body: unknown): AimlModelSummary[] {
     const capabilities = Array.isArray(entry.capabilities)
       ? entry.capabilities.filter((value): value is string => typeof value === "string")
       : [];
-    if (!capabilities.includes("structured_output")) continue;
+    if (!capabilities.includes("structured_output") && !capabilities.includes("tools")) continue;
     const info = entry.info ?? {};
     models.set(entry.id, {
       id: entry.id,
