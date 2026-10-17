@@ -19,6 +19,9 @@ Work on `claude/new-session-g5hljn`; leave `main` unchanged.
   replies. Account gates, DNC/opt-out and uncertain-delivery protections apply.
 - Maps, web, LinkedIn and Apify discovery paths already exist. The app does
   not yet reliably pursue one buyer objective across those sources.
+- `read_webpage` currently fetches public HTML from supplied/known links;
+  it is not a general search-and-read browser loop. Adding that web access
+  is essential scope, not an optional extra discovery vendor.
 - Existing `assistant_jobs` has stages, progress, claims and heartbeats.
   Chat job cards, audiences, People, outreach plans and delivery ledgers exist.
 - Docker builds use Node/Webpack with a 4 GiB heap; production still uses Bun.
@@ -74,16 +77,37 @@ Keep current provider connections working. No removal or migration of them
 is authorized by this plan. New integrations must fix an observed gap in the
 working flow rather than merely add another vendor to Settings.
 
-## One primary search provider
+## Core web access: search and read
 
-First reproduce the owner's buyer queries with the existing configured web
-search path and measure qualified results, cost and waiting/failure reasons.
+Owner clarification, 17 October: the agent needs useful free web access with
+generous allowances. Google, Bing and TinyFish were examples of that missing
+capability. Provide a working search-and-read loop as a required first step;
+do not leave it conditional merely because specialized discovery exists.
+
+Use one integration with two capabilities:
+
+- A general `web_search(query)` tool returns real candidate URLs, titles and
+  snippets. The model can refine its query within the task's remaining budget.
+- Extend `read_webpage(url)` to read pages found by a successful search and
+  follow extracted public links. Update URL/contact grounding to trust only
+  recorded owner input or successful scoped search/read results. Keep public
+  network/URL protections, evidence URLs and contact validation in place.
+
+TinyFish Search/Fetch is the first implementation candidate: one API key,
+ordinary search plus clean page content/links, with JavaScript rendering when
+needed by Fetch. Use the existing encrypted credentials mechanism and small
+API adapters, without another agent framework. Test the buyer queries and
+actual returned pages before selecting it as the default. Existing configured
+providers remain usable, with paid fallback explicitly selected by the owner.
 A saved Tavily key must not force that provider for every objective.
 
-Evaluate TinyFish Search/Fetch as the first replacement candidate, as the
-owner requested. Promote it only after it works on the buyer examples and
-handles missing results, refusals and quotas correctly. Choose one primary
-provider; existing alternatives remain optional, owner-selected fallbacks.
+The documented free allowances are listed below. Search/Fetch can operate at
+a zero Wallet balance. Full click/type/login automation is a different
+capability: TinyFish Browser and Agent are metered products. Do not present
+free Search/Fetch as a free unrestricted interactive browser, or promise it
+can read private/login-walled social content. Reuse existing authorized social
+adapters for such supported operations. No new paid browser is required for
+this first public-web research flow.
 
 If a tested need for Google results remains, evaluate
 `apify/google-search-scraper` using the existing Apify credentials and budget.
@@ -160,9 +184,11 @@ job finishing does not finish the whole objective.
 
 1. Verify the deployed username fix and reproduce the real research failure.
    Record what already works and the smallest cause of missing/poor leads.
-2. Complete the first path using existing services: search, qualification,
-   canonical leads, approved outreach, progress and completion report. Change
-   the primary provider only when the comparison demonstrates a benefit.
+2. Deliver general search-and-read access first, using the TinyFish candidate
+   above and real returned URLs without an owner-supplied seed link. Complete
+   the path through existing qualification, canonical leads, approved
+   outreach, progress and completion reporting. Verify the provider works
+   before making it the default; the missing web access remains core scope.
 3. Test the full path with fake providers, including continuation beyond eight
    actions, full slots, restart, duplicate events, concurrent budget claims,
    cancellation, provider refusal/outage and lost responses. Preserve org
