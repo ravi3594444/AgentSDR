@@ -17,7 +17,6 @@ import {
   RiFileTextLine,
   RiInformationLine,
   RiHistoryLine,
-  RiChat3Line,
   RiLoader4Line,
   RiPauseLine,
   RiPlayLine,
@@ -1047,46 +1046,6 @@ function Welcome({ firstName, profile, onStarter }: { firstName: string | null; 
   );
 }
 
-function WorkspaceContext({ state, profile, setup, disabled, onOpen, onEdit }: {
-  state: AssistantStatePayload;
-  profile: BusinessProfileSummary | undefined;
-  setup: Setup | null;
-  disabled: boolean;
-  onOpen: (id: string) => void;
-  onEdit: () => void;
-}) {
-  const active = Object.values(state.runs).filter((run) => run.status === "running" || run.status === "starting").length;
-  return (
-    <aside aria-label="Workspace context" className="hidden w-60 shrink-0 flex-col gap-8 overflow-y-auto border-l border-stroke-soft-200 bg-bg-weak-50/50 px-4 py-6 xl:flex">
-      <section aria-labelledby="recent-chats-title">
-        <h2 id="recent-chats-title" className="mb-3 px-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-text-soft-400">Recent chats</h2>
-        <div className="space-y-1">
-          {state.threads.slice(0, 6).map((thread) => (
-            <button key={thread.id} type="button" disabled={disabled} onClick={() => onOpen(thread.id)} aria-current={thread.id === state.thread.id ? "true" : undefined}
-              className={cn("flex w-full items-start gap-2.5 rounded-xl px-3 py-3 text-left outline-none transition focus-visible:ring-2 focus-visible:ring-primary-base disabled:opacity-50", thread.id === state.thread.id ? "bg-bg-white-0 ring-1 ring-inset ring-stroke-soft-200" : "hover:bg-bg-weak-50")}>
-              <RiChat3Line className="mt-0.5 size-4 shrink-0 text-text-sub-600" aria-hidden="true" />
-              <span className="min-w-0"><span className="block truncate text-label-xs text-text-strong-950">{displayThreadTitle(thread.title)}</span><span className="mt-1 block text-[11px] text-text-soft-400" suppressHydrationWarning>{relativeTime(thread.updatedAt)}</span></span>
-            </button>
-          ))}
-        </div>
-      </section>
-      <section aria-labelledby="business-context-title" className="px-2">
-        <h2 id="business-context-title" className="text-[11px] font-semibold uppercase tracking-[0.1em] text-text-soft-400">Business context</h2>
-        <p className="mt-4 text-label-sm text-text-strong-950">{profile?.businessName || "Make it personal"}</p>
-        <p className="mt-2 line-clamp-4 text-paragraph-xs leading-5 text-text-sub-600">{profile?.offer || "Add your offer and ideal customer so each conversation starts with the right context."}</p>
-        {profile?.targetCustomers && <p className="mt-3 text-paragraph-xs leading-5 text-text-sub-600"><span className="block text-[11px] text-text-soft-400">Your audience</span>{profile.targetCustomers}</p>}
-        <button type="button" onClick={onEdit} disabled={disabled} className="mt-4 text-label-xs text-text-strong-950 underline decoration-stroke-sub-300 underline-offset-4 outline-none hover:decoration-text-strong-950 focus-visible:ring-2 focus-visible:ring-primary-base">{profile?.businessName ? "Update business details" : "Add business details"}</button>
-      </section>
-      {setup && <section className="mt-auto border-t border-stroke-soft-200 px-2 pt-5" aria-label="Connected channels">
-        <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-text-soft-400">Connected channels</p>
-        <div className="flex flex-wrap gap-2">{Object.entries(setup.channels).filter(([, channel]) => channel.available).map(([key]) => <span key={key} className="inline-flex items-center gap-1.5 text-paragraph-xs text-text-sub-600"><span className="size-1.5 rounded-full bg-success-base" />{CHANNEL_LABEL[key]}</span>)}</div>
-        {!Object.values(setup.channels).some((channel) => channel.available) && <Link href="/getting-started" className="text-paragraph-xs text-text-sub-600 underline underline-offset-4">Connect a sending account</Link>}
-        {active > 0 && <Link href="/assistant/results" className="mt-4 block text-paragraph-xs text-text-sub-600 hover:underline">{active} active {active === 1 ? "run" : "runs"} · View results ↗</Link>}
-      </section>}
-    </aside>
-  );
-}
-
 /** Groups the thread into the owner's messages and the assistant's turns (its words, actions and cards together). */
 function groupTurns(messages: Message[]): { owner: Message | null; items: Message[] }[] {
   const turns: { owner: Message | null; items: Message[] }[] = [];
@@ -1382,7 +1341,6 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
       </div>
 
       </div>
-      <WorkspaceContext state={state} profile={profile} setup={setup} disabled={sending} onOpen={(id) => void openThread(id)} onEdit={() => pickStarter(starters(profile)[0]!)} />
       </div>
 
       {dragging && (
