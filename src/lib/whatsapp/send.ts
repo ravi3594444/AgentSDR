@@ -26,6 +26,7 @@ import {
 } from "./accounts";
 import { recordWhatsappOutboundInCrm } from "./crmBridge";
 import { WhatsappApiError, WhatsappSendRefusedError } from "./errors";
+import { isRecipientNotOnWhatsapp } from "./refusal";
 import { NEW_CHAT_WINDOW_MS, newChatRefusalDetail, secondsUntilNextSend, whatsappGuardrails } from "./guardrails";
 import { channelRules } from "@/lib/channels/rules.server";
 import {
@@ -222,6 +223,17 @@ function unipileSendError(error: unknown): Error {
   const reason = typeof detail?.detail === "string" ? detail.detail : typeof detail?.title === "string" ? detail.title : null;
   if (status === 429) return new WhatsappSendRefusedError(`WhatsApp is rate-limiting this number${reason ? `: ${reason}` : ""}. Try again later.`, 429, 60, "rate_limited");
   if (status && status >= 400 && status < 500) {
+    // WhatsApp refused the recipient, not the request: the number has no
+    // WhatsApp account (a Maps landline, a wrong number) or a locked profile.
+    // Nothing was sent, and sending it again would be refused the same way.
+    if (isRecipientNotOnWhatsapp(reason)) {
+      return new WhatsappSendRefusedError(
+        "This number is not on WhatsApp — WhatsApp refused the recipient, so nothing was sent",
+        400,
+        null,
+        "not_on_whatsapp",
+      );
+    }
     // 401/403 is Unipile refusing the account or key, not this message.
     const cause = status === 401 || status === 403 ? "unauthorized" : "rejected";
     return new WhatsappSendRefusedError(`WhatsApp did not accept the message${reason ? `: ${reason}` : ` (${status})`}`, 400, null, cause);

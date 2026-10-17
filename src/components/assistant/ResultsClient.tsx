@@ -18,7 +18,7 @@ import {
 import { EmptyState } from "@/components/page/EmptyState";
 import { KpiCell, KpiStrip } from "@/components/analytics/kit/KpiStrip";
 import NeedsYouList, { type NeedsYouPayload } from "@/components/assistant/NeedsYouList";
-import { figure, money, PERIOD_KINDS, type PeriodKind } from "@/lib/assistant/results";
+import { describeChannelSending, figure, money, PERIOD_KINDS, type PeriodKind } from "@/lib/assistant/results";
 import type { Results } from "@/lib/assistant/results.server";
 import { cn } from "@/utils/cn";
 
@@ -119,6 +119,8 @@ export default function ResultsClient({ initial }: { initial: ResultsPayload }) 
         </Section>
         <Section title="Still to send">
           <p className="text-paragraph-xs">{r.pending.emailFollowUps} email leads, {r.pending.whatsappFollowUps} WhatsApp leads and {r.pending.linkedinSteps} LinkedIn leads are still in their sequences (active campaigns, now).</p>
+          <p className="mt-1 text-paragraph-xs text-text-soft-400">Email {describeChannelSending(r.sending.email)}.</p>
+          <p className="text-paragraph-xs text-text-soft-400">WhatsApp {describeChannelSending(r.sending.whatsapp)}.</p>
         </Section>
         <Section title="Stopped and held">
           <List

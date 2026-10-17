@@ -23,7 +23,9 @@ export type WhatsappSendRefusalReason =
   | "rate_limited"
   | "rejected"
   | "unauthorized"
-  | "invalid_number";
+  | "invalid_number"
+  /** WhatsApp refused the recipient itself: the number has no WhatsApp account, or its profile is locked. */
+  | "not_on_whatsapp";
 
 export class WhatsappSendRefusedError extends Error {
   constructor(

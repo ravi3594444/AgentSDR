@@ -1,14 +1,18 @@
 import "server-only";
 
-import { sql, type SQL } from "drizzle-orm";
+import { and, eq, sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { getByokSettings } from "@/lib/ai/byok";
 import { AUTOPILOT_LIMITS } from "@/lib/crm/autopilot";
 import { channelRules } from "@/lib/channels/rules.server";
+import { describeOpening, describeWeeklyHours, describeWorkingHours, sendingWindow, workingWindow } from "@/lib/channels/sendingWindow";
+import { isMigrationControlPaused } from "@/lib/migration/controls";
+import { mailboxProviderConnected } from "@/lib/outreach/mailboxProviders";
+import { mailboxes, type MailboxProvider } from "@/lib/outreach/schema";
 import { resolveTimeZone } from "@/lib/timeZone";
-import { currentOrganizationId } from "@/lib/tenancy/scope";
+import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { listRuns, reportRun } from "./outreach.server";
-import { figure, money, periodFor, type Period, type PeriodKind } from "./results";
+import { describeChannelSending, figure, money, periodFor, type ChannelSending, type Period, type PeriodKind } from "./results";
 
 /**
  * The owner's results for a period, from what the app recorded: sends from
@@ -39,6 +43,8 @@ export type Results = {
   interestedPeople: { name: string; what: string | null; at: string }[];
   attention: { repliesWaiting: number; openDecisions: number; byKind: { kind: string; count: number }[]; heldByAutopilot: { reason: string; count: number }[] };
   pending: { emailFollowUps: number; whatsappFollowUps: number; linkedinSteps: number };
+  /** Whether each channel can send right now, and why not when it cannot. */
+  sending: { email: ChannelSending; whatsapp: ChannelSending };
   stopped: { optedOut: number; suppressed: { reason: string; count: number }[]; runLeadsStopped: number };
   failures: { channel: string; reason: string; count: number }[];
   spending: { aiRecordedUsd: number; aiCalls: number; aiCallsWithoutCost: number; byKind: { kind: string; usd: number; calls: number }[]; researchUsd: number; dataSources: string };
@@ -139,12 +145,89 @@ export async function results(kind: PeriodKind, now = new Date()): Promise<Resul
 
   // Limits now.
   const dayStart = periodFor("today", period.timeZone, now).from!;
-  const [autopilotUsed, mailboxRoom, researchToday, byok] = await Promise.all([
+  const [autopilotUsed, mailboxRows, emailQueue, researchToday, byok, whatsappRules] = await Promise.all([
     one(sql`SELECT count(*)::int AS n FROM autopilot_replies WHERE organization_id = ${org} AND status IN ('reserved', 'sent', 'failed') AND created_at >= ${ts(new Date(now.getTime() - 24 * 3_600_000))}`),
-    one(sql`SELECT count(*)::int AS mailboxes, coalesce(sum(greatest(daily_send_limit - today_emails_sent, 0)), 0)::int AS room FROM outreach_mailboxes WHERE organization_id = ${org} AND status = 'connected'`),
+    db
+      .select({
+        provider: mailboxes.provider,
+        workingHours: mailboxes.workingHours,
+        dailySendLimit: mailboxes.dailySendLimit,
+        todayEmailsSent: mailboxes.todayEmailsSent,
+      })
+      .from(mailboxes)
+      .where(and(inOrg(mailboxes), eq(mailboxes.status, "connected"))),
+    one(sql`SELECT count(*)::int AS n FROM outreach_mailbox_queue q JOIN outreach_mailboxes m ON m.id = q.mailbox_id WHERE m.organization_id = ${org}`),
     one(sql`SELECT count(*)::int AS n FROM lead_research WHERE organization_id = ${org} AND created_at >= ${ts(dayStart)}`).catch(() => null),
     getByokSettings().catch(() => null),
+    channelRules("whatsapp"),
   ]);
+  const mailboxRoom = { mailboxes: mailboxRows.length, room: mailboxRows.reduce((sum, row) => sum + Math.max(0, row.dailySendLimit - row.todayEmailsSent), 0) };
+
+  // Whether each channel can send now, from the same gates its engine uses:
+  // the working-hours window, the provider connection, the daily room and a
+  // built queue (email), or the campaign sending hours and the pause switch
+  // (WhatsApp). This is what lets the assistant answer "why nothing sent"
+  // with the reason instead of a guess.
+  const emailWindows = mailboxRows.map((row) => ({ row, window: workingWindow(row.workingHours, now) }));
+  const emailOpen = emailWindows.find((entry) => entry.window.open) ?? null;
+  const emailNext =
+    emailWindows
+      .flatMap((entry) => (entry.window.opensAt ? [entry.window.opensAt] : []))
+      .sort((a, b) => a.getTime() - b.getTime())[0] ?? null;
+  const emailGoverning =
+    emailOpen ??
+    emailWindows.find((entry) => entry.window.opensAt?.getTime() === emailNext?.getTime()) ??
+    emailWindows[0] ??
+    null;
+  const providerConnected = new Map<MailboxProvider, boolean>();
+  let emailSendable = 0;
+  for (const { row } of emailWindows) {
+    if (!providerConnected.has(row.provider)) providerConnected.set(row.provider, await mailboxProviderConnected(row.provider));
+    if (providerConnected.get(row.provider)) emailSendable += 1;
+  }
+  const emailBlockedBy: ChannelSending["blockedBy"] = isMigrationControlPaused("emailOutbound")
+    ? "paused"
+    : emailSendable === 0
+      ? "no_sender"
+      : !emailOpen
+        ? "outside_hours"
+        : mailboxRoom.room <= 0
+          ? "daily_limit"
+          : n(emailQueue.n) <= 0
+            ? "nothing_queued"
+            : null;
+  const emailSending: ChannelSending = {
+    open: emailBlockedBy === null,
+    blockedBy: emailBlockedBy,
+    nextOpenAt: !emailOpen && emailNext ? emailNext.toISOString() : null,
+    nextOpenLabel:
+      !emailOpen && emailNext
+        ? describeOpening(emailNext, emailGoverning?.row.workingHours.timezone ?? period.timeZone)
+        : null,
+    hours: emailGoverning ? describeWorkingHours(emailGoverning.row.workingHours) : null,
+    queued: n(pending.email),
+  };
+
+  const whatsappHours = whatsappRules.sendingHours;
+  const whatsappWindow = sendingWindow(whatsappHours, now);
+  const whatsappBlockedBy: ChannelSending["blockedBy"] = isMigrationControlPaused("whatsappOutbound")
+    ? "paused"
+    : !whatsappWindow.open
+      ? "outside_hours"
+      : n(pending.whatsapp) <= 0
+        ? "nothing_queued"
+        : null;
+  const whatsappSending: ChannelSending = {
+    open: whatsappBlockedBy === null,
+    blockedBy: whatsappBlockedBy,
+    nextOpenAt: whatsappWindow.opensAt?.toISOString() ?? null,
+    nextOpenLabel:
+      whatsappWindow.opensAt && whatsappHours
+        ? describeOpening(whatsappWindow.opensAt, whatsappHours.timezone)
+        : null,
+    hours: describeWeeklyHours(whatsappHours),
+    queued: n(pending.whatsapp),
+  };
 
   const runList = await listRuns(10);
   const runs: Results["runs"] = [];
@@ -189,6 +272,7 @@ export async function results(kind: PeriodKind, now = new Date()): Promise<Resul
       heldByAutopilot: held.map((row) => ({ reason: String(row.reason), count: n(row.n) })),
     },
     pending: { emailFollowUps: n(pending.email), whatsappFollowUps: n(pending.whatsapp), linkedinSteps: n(pending.linkedin) },
+    sending: { email: emailSending, whatsapp: whatsappSending },
     stopped: {
       optedOut: n(optedOut.n),
       suppressed: suppressed.map((row) => ({ reason: String(row.reason), count: n(row.n) })),
@@ -228,5 +312,11 @@ export function resultsText(r: Results): string {
     `AI spending recorded: ${money(r.spending.aiRecordedUsd)} over ${r.spending.aiCalls} assistant calls${r.spending.aiCallsWithoutCost ? ` (${r.spending.aiCallsWithoutCost} without a reported cost)` : ""}; research ${money(r.spending.researchUsd)}.`,
     `Limits left: ${r.limits.automaticRepliesLeft24h} automatic replies in the next 24 hours; ${figure(r.limits.emailsLeftToday)} emails today; WhatsApp new chats ${figure(r.limits.whatsappNewChatsLeftToday)}.`,
   ];
+  // Why a channel with leads left is not sending, in the engine's own terms.
+  if (r.pending.emailFollowUps + r.pending.whatsappFollowUps > 0) {
+    lines.push(
+      `Sending now: email ${describeChannelSending(r.sending.email)}; WhatsApp ${describeChannelSending(r.sending.whatsapp)}.`,
+    );
+  }
   return lines.join("\n");
 }

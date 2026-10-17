@@ -53,6 +53,21 @@ Each release lists the database migrations it needs; see
     inquiries. Inquiries are answered automatically only inside an inquiry
     run the owner started.
 
+### Changed
+
+- **The Results page says why a channel is not sending.** When leads are
+  waiting, it names the gate the engine itself applies: outside the mailbox
+  sending hours (with the next opening, e.g. "Monday 19 Oct at 09:00"), a
+  paused outbound switch, no connected sending account, the daily allowance
+  used, or a queue that has not been built yet. The assistant's results
+  answer and the daily summary carry the same line, so "0 emails sent today"
+  arrives with its reason instead of a guess.
+- **A number that is not on WhatsApp is named as such.** Unipile's
+  "recipient ID is valid / profile is not locked" refusal now records
+  "This number is not on WhatsApp — WhatsApp refused the recipient, so
+  nothing was sent", and fails that lead once instead of reading like a
+  provider fault.
+
 ### Migrations
 
 - `bun scripts/add-instagram-intake-discovery.ts` — additive and re-runnable:

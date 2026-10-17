@@ -67,6 +67,13 @@ export function classifySendError(error: unknown): SendFailureAction {
         return { kind: "skip_account" };
       case "do_not_contact":
         return { kind: "stop_lead", error: "Do Not Contact" };
+      case "not_on_whatsapp":
+        // A fact about the recipient: fail this lead once, do not retry, and
+        // do not let one bad number stop the rest of the campaign.
+        return {
+          kind: "fail_lead",
+          error: "This number is not on WhatsApp — WhatsApp refused the recipient, so nothing was sent",
+        };
       default:
         // A refusal with no reason is a 409/429 we cannot interpret: wait, do not fail the lead.
         if (error.status === 400) return { kind: "fail_lead", error: error.message };

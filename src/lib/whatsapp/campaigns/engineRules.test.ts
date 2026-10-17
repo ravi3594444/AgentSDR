@@ -50,6 +50,11 @@ describe("classifySendError", () => {
   test("Do Not Contact stops the lead", () => {
     expect(classifySendError(refused("do_not_contact"))).toEqual({ kind: "stop_lead", error: "Do Not Contact" });
   });
+  test("a number that is not on WhatsApp fails the lead with a plain reason", () => {
+    const action = classifySendError(refused("not_on_whatsapp", 400));
+    expect(action.kind).toBe("fail_lead");
+    expect(action.kind === "fail_lead" && action.error).toContain("not on WhatsApp");
+  });
   test("definite 400s fail the lead with the message", () => {
     for (const reason of ["rejected", "invalid_number", "no_phone", "empty", "too_long"] as const) {
       expect(classifySendError(refused(reason, 400))).toEqual({ kind: "fail_lead", error: "x" });
