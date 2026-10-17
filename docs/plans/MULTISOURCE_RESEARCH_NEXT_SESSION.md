@@ -14,8 +14,10 @@ next session; this document does not implement or deploy them.
 Deploy from `claude/new-session-g5hljn`; leave `main` unchanged. Preserve the
 existing product, connected providers, organization isolation, approval modes,
 Do Not Contact, opt-out handling and delivery uncertainty rules.
-The verified integration baseline is commit `a5ec1e7`; VM acceptance is still
-required before the research redesign.
+The combined implementation baseline is commit `a5ec1e7`; the direct Instagram
+username repair is `d832a8c` (1,368 tests, 27 simulated-provider database
+scenarios, TypeScript and production build passed). VM acceptance is still
+required before the research redesign. These checks do not confirm live DMs.
 
 Implemented in the current work:
 
@@ -118,6 +120,54 @@ Make provider ordering an explicit organization setting with capabilities,
 timeouts and cost expectations. A saved Tavily key must not force Tavily for
 every objective. Existing provider choices must remain supported. Verify
 current official provider contracts before changing adapters or quoting limits.
+
+### Google/Bing-backed web search
+
+Owner question on 17 October: the agent should be able to find public social
+profiles and websites through ordinary web search, as another agent does.
+This is supported as an integration goal. Register a real search adapter in
+the harness; a model prompt or saved API key alone does not expose additional
+tools. The current Apify catalog includes Maps and social Actors, but not the
+Google Search Results Scraper. Keep Maps and organic web search distinct.
+
+Evaluate these options without changing the TinyFish-first evaluation below:
+
+- **Google results through the existing Apify account:** add an adapter for
+  Apify's maintained `apify/google-search-scraper` Actor. It accepts search
+  queries and returns organic search results, with country/language controls.
+  Reuse organization credentials, explicit Actor approval and the task's
+  Apify budget/concurrency queue. Start with ordinary organic results; paid
+  enrichment, AI answers and other add-ons must stay off unless selected and
+  budgeted. A saved Apify key does not mean this adapter already exists.
+- **Google's older official JSON API:** as checked on 17 October 2026, Custom
+  Search JSON API is closed to new customers and existing customers must
+  transition by 1 January 2027. Do not choose it as a new long-term dependency.
+- **Bing:** the old Bing Search APIs retired on 11 August 2025. Microsoft's
+  current Foundry search/grounding tools are a separate integration with
+  project/model requirements. Bing grounding returns model output and
+  citations rather than exposing raw search content. Evaluate compatibility
+  and result usability before choosing this path; do not treat it as a
+  drop-in replacement for a raw search-results API.
+
+Return structured candidate URLs, titles/snippets, query, provider, geography,
+check time and recorded cost to the durable research task. Extract canonical
+social handles from those results, verify fit/profile evidence, then dedupe
+before outreach. A query such as "real estate agents Miami Instagram" must
+work without the owner supplying any profile URL or username. Search snippets
+alone do not establish identity, buyer interest or messaging permission.
+
+The owner can select a supported search provider and fallback order. Label
+the provider/engine actually used; generic TinyFish or Tavily search must not
+be presented as Google or Bing unless that engine contract is verified.
+Free-only tasks cannot switch to paid Apify or other paid search silently.
+
+Official references checked 17 October 2026:
+
+- https://apify.com/apify/google-search-scraper
+- https://developers.google.com/custom-search/v1/overview
+- https://learn.microsoft.com/en-us/lifecycle/announcements/bing-search-api-retirement
+- https://learn.microsoft.com/en-us/azure/foundry/agents/how-to/tools/bing-tools
+- https://learn.microsoft.com/en-us/azure/foundry/agents/how-to/tools/web-search
 
 ### Instagram candidate discovery and verification
 
