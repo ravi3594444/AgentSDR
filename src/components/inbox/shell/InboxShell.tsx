@@ -44,7 +44,7 @@ export function InboxLayout({ header, threadOpen = false, children }: { header: 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className={cn("mb-4", threadOpen && "hidden md:block")}>{header}</div>
-      <div className="flex min-h-0 flex-1 overflow-hidden rounded-2xl border border-stroke-soft-200 bg-bg-white-0 shadow-regular-xs">
+      <div className="flex min-h-0 flex-1 overflow-hidden rounded-2xl border border-stroke-soft-200 bg-bg-white-0">
         {children}
       </div>
     </div>
@@ -87,13 +87,13 @@ export function ListPane({
         className,
       )}
     >
-      {toolbar && <div className="shrink-0 space-y-2 px-3 pb-2 pt-3">{toolbar}</div>}
+      {toolbar && <div className="shrink-0 space-y-3 p-4 pb-3">{toolbar}</div>}
       {tabs && <div className="shrink-0 border-b border-stroke-soft-200">{tabs}</div>}
       {!tabs && toolbar && <div className="h-px shrink-0 bg-stroke-soft-200" />}
       <div
         ref={scrollRef}
         aria-busy={busy || undefined}
-        className={cn("relative min-h-0 flex-1 overflow-y-auto px-1.5 pb-1.5 transition-opacity", busy && "opacity-60")}
+        className={cn("relative min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-2 transition-opacity", busy && "opacity-60")}
       >
         {children}
       </div>
@@ -475,8 +475,8 @@ function AvatarInner({ name, src, size, className }: { name: string; src?: strin
 
 /**
  * One conversation in the list. Name and time; for email a subject line; a
- * one-line preview; and at most a couple of quiet chips. Unread reads as a
- * blue dot in the gutter and heavier text — nothing else changes colour. A
+ * two-line preview; and at most a couple of quiet chips. Unread reads as a
+ * dot in the gutter and heavier text — nothing else changes colour. A
  * real <button> marked `data-inbox-row`, so Tab, Enter and j/k all reach it.
  */
 export function ConversationRow({
@@ -523,11 +523,12 @@ export function ConversationRow({
       aria-current={selected ? "true" : undefined}
       title={hint}
       className={cn(
-        "group relative mt-0.5 flex w-full items-start gap-3 rounded-xl py-2.5 pl-4 pr-3 text-left outline-none transition-colors",
+        "group relative mt-1 flex w-full items-start gap-3 rounded-xl py-3.5 pl-4 pr-3 text-left outline-none transition-colors",
         "focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-base",
-        selected ? "bg-bg-weak-50 ring-1 ring-inset ring-stroke-soft-200" : "hover:bg-bg-weak-50",
+        selected ? "bg-bg-weak-50 ring-1 ring-inset ring-stroke-sub-300" : "hover:bg-bg-weak-50",
       )}
     >
+      {selected && <span aria-hidden="true" className="absolute bottom-4 left-0 top-4 w-0.5 rounded-full bg-text-strong-950" />}
       {unread && <span aria-hidden="true" className="absolute left-1.5 top-[1.3rem] size-1.5 rounded-full bg-primary-base" />}
       <span className="relative shrink-0">
         {avatar}
@@ -555,7 +556,7 @@ export function ConversationRow({
         {headline && <span className={cn("mt-0.5 truncate text-paragraph-xs", unread ? "font-medium text-text-strong-950" : "text-text-sub-600")}>{headline}</span>}
         {(snippet || count > 0) && (
           <span className="mt-0.5 flex items-center gap-2">
-            <span className={cn("min-w-0 flex-1 truncate text-paragraph-xs", unread && !headline ? "text-text-strong-950" : "text-text-soft-400")}>{snippet}</span>
+            <span className={cn("min-w-0 flex-1 line-clamp-2 text-paragraph-xs leading-5 [overflow-wrap:anywhere]", unread && !headline ? "text-text-strong-950" : "text-text-sub-600")}>{snippet}</span>
             {count > 0 && (
               <span className="flex h-[1.125rem] min-w-[1.125rem] shrink-0 items-center justify-center rounded-full bg-primary-base px-1 text-[11px] font-semibold leading-none text-primary-contrast" aria-label={`${count} unread`}>
                 {count > 9 ? "9+" : count}
@@ -703,7 +704,7 @@ export function ThreadHeader({
 }) {
   return (
     <header className="shrink-0 border-b border-stroke-soft-200 bg-bg-white-0">
-      <div className="flex items-center gap-3 px-3 py-2.5 sm:px-5 sm:py-3">
+      <div className="flex items-center gap-3 px-3 py-3 sm:px-5 sm:py-4">
         <Button.Root variant="neutral" mode="ghost" size="xsmall" onClick={onBack} aria-label={backLabel} className="-ml-1 shrink-0 md:hidden">
           <Button.Icon as={RiArrowLeftLine} />
         </Button.Root>
