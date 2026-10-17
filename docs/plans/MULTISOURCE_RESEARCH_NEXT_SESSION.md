@@ -39,10 +39,10 @@ information and an optional website. Ask one focused question only when an
 essential buyer/geography choice cannot be inferred. The owner should not
 have to supply usernames or URLs for ordinary prospecting.
 
-1. **Find candidates.** Search for the buyer objective using one primary web
-   search provider. Read business sites/directories and extract published
-   social profile links. Use existing Maps, LinkedIn or social search when
-   they fit the objective; do not launch every source for every request.
+1. **Find candidates.** Let the existing agent choose available search,
+   browser, Maps, LinkedIn or Apify tools for the buyer objective. Read sites,
+   directories and suitable public social evidence. Keep one implementation
+   per capability; do not run every tool for every request or force Maps first.
 2. **Verify and save.** Keep evidence URLs, fit/location/role and check time.
    For social profiles, verify identity and available public information using
    existing supported adapters, including Apify when needed. Unknown fields
@@ -77,7 +77,7 @@ Keep current provider connections working. No removal or migration of them
 is authorized by this plan. New integrations must fix an observed gap in the
 working flow rather than merely add another vendor to Settings.
 
-## Core web access: search and read
+## Core web access: search, read and interact
 
 Owner clarification, 17 October: the agent needs useful free web access with
 generous allowances. Google, Bing and TinyFish were examples of that missing
@@ -101,13 +101,43 @@ actual returned pages before selecting it as the default. Existing configured
 providers remain usable, with paid fallback explicitly selected by the owner.
 A saved Tavily key must not force that provider for every objective.
 
-The documented free allowances are listed below. Search/Fetch can operate at
-a zero Wallet balance. Full click/type/login automation is a different
-capability: TinyFish Browser and Agent are metered products. Do not present
-free Search/Fetch as a free unrestricted interactive browser, or promise it
-can read private/login-walled social content. Reuse existing authorized social
-adapters for such supported operations. No new paid browser is required for
-this first public-web research flow.
+### Recommended interactive browser: pilot KERNEL first
+
+The owner wants the agent to operate pages as well as read them. Add small
+browser tools for open, observe/read, click, fill, scroll and close to the
+existing harness. The model chooses actions from observed page state; do not
+build a separate agent framework or a hardcoded script for every website.
+
+Use KERNEL as the first interactive-browser pilot. It provides remote Chromium
+with Playwright/CDP and computer controls, so the additional browser workload
+does not share this VM's memory with the app, database and Maps Chromium.
+This recommendation reflects the VM's earlier OOM incidents; it is not a
+claim that KERNEL has already passed our workload tests.
+
+KERNEL's Developer plan currently includes $5 monthly usage credits and five
+concurrent browsers; further usage is metered and model tokens are separate.
+Set an explicit pilot spending/session allowance, use one active session to
+start, and measure actual runtime/cost. Free-only tasks must wait or report
+partial results when credits/allowances are exhausted, not incur silent spend.
+
+Reuse encrypted credentials, task claims and progress records. Keep browser
+session state isolated by organization/task, release sessions on completion,
+failure or timeout, and retain evidence and actual errors. Browser research
+must preserve the existing outreach authorization and send boundaries.
+
+Keep the browser tools independent of the remote connection detail so local
+Playwright/Chromium can replace the backend later if measured volume/cost
+justifies it. Self-hosting avoids the browser-service bill but uses VM memory,
+CPU and operator time; model costs remain. Do not implement two browser
+backends now or add another Chromium to the current VM without measuring
+capacity. Check VM memory alongside the existing Maps browser during any
+local pilot. A browser/provider never guarantees access to every website.
+
+TinyFish Search/Fetch can operate at a zero Wallet balance. Its separately
+metered Browser/Agent products are not needed in this design; KERNEL supplies
+interactive browsing within its own credit/spend allowance. Do not describe
+either service as a free unrestricted browser or promise access to private
+social content. Reuse existing authorized social adapters where appropriate.
 
 If a tested need for Google results remains, evaluate
 `apify/google-search-scraper` using the existing Apify credentials and budget.
@@ -127,12 +157,33 @@ called Google/Bing results without a verified engine contract. Free-only work
 cannot silently switch to a paid source. Self-hosting Treg, adding
 PhantomBuster or building a browser fleet is outside this first delivery.
 
+## Source choice follows the buyer objective
+
+Make all connected, authorized capabilities available through the existing
+tool catalog, with honest availability, cost and input/output descriptions.
+The agent chooses a useful source, inspects its actual yield and changes
+queries/sources as necessary. A key being present or a tool being listed
+first must not set the prospecting strategy. A default search transport is
+different from forcing every task through that source.
+
+Maps stays available for suitable local businesses. For decision-maker or
+social-profile research, websites, LinkedIn or Apify may fit better. Preserve
+those options without a fixed per-industry source script. A listing confirms
+a business record, not buying intent or the right recipient. Low replies
+alone do not establish that Maps caused the problem: verify qualification,
+recipient/channel, confirmed delivery and message relevance separately.
+
+Measure qualified people and contactability per source; evaluate confirmed
+sends/replies over an appropriate response window. Preserve multiple source
+attributions while counting one person once. Do not adapt to delayed replies
+as though they were immediate search failures or promise a reply rate.
+
 ## Enough research, with clear controls
 
 Separate model action batches, worker concurrency, research budget and
 outreach sending limits. Eight actions is one model batch, not a chat-wide
-allowance. The current six-step normal and sixteen-step Autonomous chat loops are not
-a durable task runner.
+allowance. The current six-step normal and sixteen-step Autonomous chat loops
+are not a durable task runner.
 
 Current web jobs have three-query/40-page bounds, daily usage caps and two
 open slots; Apify also has two open slots. Continue the objective across
@@ -184,11 +235,12 @@ job finishing does not finish the whole objective.
 
 1. Verify the deployed username fix and reproduce the real research failure.
    Record what already works and the smallest cause of missing/poor leads.
-2. Deliver general search-and-read access first, using the TinyFish candidate
-   above and real returned URLs without an owner-supplied seed link. Complete
-   the path through existing qualification, canonical leads, approved
-   outreach, progress and completion reporting. Verify the provider works
-   before making it the default; the missing web access remains core scope.
+2. Deliver TinyFish search/read plus the KERNEL browser pilot through the
+   existing harness. Demonstrate a prompt without seed URLs, reading returned
+   pages and following links/pagination through real browser actions when
+   needed. Let the agent choose fitting sources and complete qualification,
+   canonical leads, approved outreach, progress and reporting. Verify actual
+   provider behavior before production defaults; web access remains core scope.
 3. Test the full path with fake providers, including continuation beyond eight
    actions, full slots, restart, duplicate events, concurrent budget claims,
    cancellation, provider refusal/outage and lost responses. Preserve org
@@ -214,6 +266,10 @@ LLM costs are separate. Do not interpret free service as unlimited.
 - https://docs.tinyfish.ai/api-reference/search-the-web
 - https://docs.tinyfish.ai/api-reference/fetch-and-extract-content-from-urls
 - https://www.tinyfish.ai/pricing
+- https://www.kernel.sh/pricing
+- https://www.kernel.sh/docs/info/pricing
+- https://kernel.sh/docs/introduction/control.md
+- https://playwright.dev/docs/library
 - https://apify.com/apify/google-search-scraper
 - https://apify.com/apify/instagram-profile-scraper
 - https://developers.google.com/custom-search/v1/overview
