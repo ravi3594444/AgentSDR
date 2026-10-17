@@ -1,14 +1,21 @@
-# Next session: buyer-aware research across sources
+# Next session: buyer-aware research and live activity
 
 Status: implementation plan only. The next session starts after the owner tests
 the combined Claude branch on the VM. Do not begin this redesign as part of the
 Instagram outbound merge.
+
+Owner additions on 17 October: evaluate TinyFish as the first web-search and
+page-reading provider, and include a live Activity panel plus reliable chat
+completion reports in this implementation. These are requirements for the
+next session; this document does not implement or deploy them.
 
 ## Current baseline
 
 Deploy from `claude/new-session-g5hljn`; leave `main` unchanged. Preserve the
 existing product, connected providers, organization isolation, approval modes,
 Do Not Contact, opt-out handling and delivery uncertainty rules.
+The verified integration baseline is commit `a5ec1e7`; VM acceptance is still
+required before the research redesign.
 
 Implemented in the current work:
 
@@ -36,6 +43,11 @@ should research suitable buyers using appropriate sources until its agreed
 target or budget is reached. A real estate agency search and a wholesaler's
 buyer search must use the same system without hardcoded industry templates.
 Maps is one useful source, not the default answer to every buyer objective.
+
+The owner also cannot reliably tell whether a chat request is still being
+worked on, which agent/task owns it, how many people have been contacted, or
+when the work has finished. Visible progress and automatic reports are part
+of the complete research flow, not a later cosmetic improvement.
 
 Current limits that must become explicit rather than mysterious failures:
 
@@ -103,6 +115,42 @@ timeouts and cost expectations. A saved Tavily key must not force Tavily for
 every objective. Existing provider choices must remain supported. Verify
 current official provider contracts before changing adapters or quoting limits.
 
+### TinyFish evaluation and provider choices
+
+Evaluate a direct TinyFish Search/Fetch adapter first, using the existing
+encrypted integration-credential system and organization scope. Select it as
+the default only if it meets the buyer examples' relevance, contact coverage,
+error-handling and response-time needs. A prompt without a seed URL must work.
+
+As checked on 17 October 2026, TinyFish documents free Search at 30 requests
+per minute and 500 per hour, and free Fetch at 150 URLs per minute and 1,000
+per day. An API key is required. Recheck the official contract before coding;
+queue work within account quotas and the task's remaining time rather than
+treating free service as unlimited. LLM calls and other sources have separate
+budgets. References:
+
+- https://www.tinyfish.ai/pricing
+- https://docs.tinyfish.ai/api-reference/search-the-web
+- https://docs.tinyfish.ai/api-reference/fetch-and-extract-content-from-urls
+
+Keep Tavily, existing AI search paths and Treg optional. The owner chooses
+provider order and whether paid fallback is allowed within a task's budget.
+Treg documents free TinyFish routes that can fall back to paid vendors;
+preferring a free vendor alone is not a free-only policy. Test zero-budget
+tasks and paid-fallback refusal explicitly. Preserve cost provenance and
+report unknown costs honestly.
+
+The current Treg integration targets hosted `treg.to`, defaults to $2 per
+rolling day, caps each call at $0.25 and instructs the assistant to use it for
+a handful of lookups. These are current app choices, not the new research
+task budget. Treg self-hosting is a separate option, not a prerequisite for
+TinyFish. Its current LICENSE allows internal organizational use and restricts
+hosted/embedded services to third parties without written authorization;
+resolve that scope before choosing it for a customer-facing deployment.
+
+- https://github.com/superdesigndev/treg/blob/main/skills/web-access/SKILL.md
+- https://github.com/superdesigndev/treg/blob/main/LICENSE
+
 ## Qualification and identity
 
 Keep a canonical person/company with multiple source attributions and evidence
@@ -130,24 +178,165 @@ outreach. Preserve DNC, opt-out, reply detection, account restrictions and the
 rule against automatic resends of uncertain Instagram deliveries. Do not
 promise unsolicited Instagram follow-up sequences or unsupported DM channels.
 
+### Instagram username requests and capability consistency
+
+The owner's 17 October screenshot shows a request to contact one supplied
+Instagram username being answered with an absolute claim that AgentSDR never
+starts Instagram conversations. That is inconsistent with the merged outbound
+backend. The screenshot does not establish which image the VM is running.
+
+Verified source gaps in the baseline:
+
+- `add_contacts` accepts phone, email and LinkedIn inputs, but does not accept
+  an Instagram username or profile URL. Outbound Instagram audiences currently
+  come from discovered/saved profiles; there is no complete direct-handle
+  contact-entry tool path for this owner request.
+- The Instagram accounts page still contains a description saying new chats
+  are never started. Older contract/service comments and intake documentation
+  also retain the inbox-only scope, although the assistant's current system
+  instructions and outreach backend support approved initial DMs.
+
+Repair this before relying on the broader research workflow:
+
+1. Accept an explicitly supplied Instagram handle/profile URL through an
+   appropriate typed contact/recipient tool. Normalize it, preserve meaningful
+   characters such as repeated underscores, and use the existing
+   organization-scoped canonical-profile dedupe. Do not invent email or phone
+   identities. Adding a known recipient needs no city, seed website or broad
+   paid discovery search.
+2. Feed the recipient into an Instagram outreach plan using the existing
+   approval/autonomy authorization, account, DNC, limits and uncertain-delivery
+   controls. Lookup/import must not itself send a DM. Resolve the provider's
+   messaging identity through the established delivery boundary.
+3. Align tool descriptions, current capability instructions, settings copy and
+   documentation with the actual feature. An old assistant refusal in chat
+   history must not override current capabilities. When unavailable, give the
+   measured gate (feature off, no connected account, account restriction,
+   waiting hours or approval), not an invented permanent prohibition.
+4. Expose the running artifact's revision in owner-facing support/settings
+   diagnostics so Git checkout and the deployed app image can be distinguished.
+   Use build provenance, not the local checkout's current HEAD, as evidence.
+
+Acceptance: simulate the exact shape of the screenshot's username-only
+request, including a username with repeated underscores, in Review and
+Autonomous modes. Cover existing and new recipients, stale inbox-only chat
+history, disconnected accounts, hours, refusal, confirmed send and uncertain
+delivery. The flow must prepare or authorize the correct scoped plan, show
+its real Activity state and report the result without claiming a DM was sent
+before confirmation. A live check remains limited to an owner-approved test
+recipient after VM deployment is verified.
+
+## Live Activity panel and automatic reports
+
+### What the owner sees
+
+Provide an Activity view across the organization's accessible chats and runs,
+plus an inline task card in the originating chat. On desktop the current
+request can have a side panel; on mobile use an accessible drawer or tab that
+preserves the draft and chat position. Keep the existing product navigation,
+styling and approval controls.
+
+Each task card shows:
+
+- The owner's objective, originating chat and task/run identity.
+- The actual assigned agent when one exists, otherwise the owning task or
+  worker, plus its current action. Use readable labels such as researching,
+  checking leads, writing messages, sending or handling replies only when
+  backed by real work. Sequential stages must not appear as several agents
+  simultaneously working. Show idle explicitly when nothing is active.
+- The source/provider or sending channel/account relevant to that action,
+  start time, last meaningful update and elapsed time. Do not invent an ETA.
+- Separate counts for records found, unique qualified people, duplicates,
+  excluded people, awaiting approval, queued messages, attempts, confirmed
+  sends, unique people contacted, replies, failures and uncertain delivery.
+  Provide per-task/agent and per-channel breakdowns where attribution exists;
+  show unattributed activity honestly instead of assigning it to an agent.
+- A readable status: queued, working, waiting for a provider, waiting for a
+  sending window, needs approval, retrying, paused, completed, partial,
+  failed or cancelled. Show the reason, next permitted time with timezone
+  when known, and the owner's next action when one is required.
+- Open chat, view leads/results and role-authorized pause/resume/cancel
+  controls, with clear scope. Do not offer a send retry for uncertain
+  delivery or imply that stopping can recall an already submitted message.
+
+Use recorded job progress, events, fresh execution heartbeats and delivery
+ledgers. A stored `running` campaign is not proof an agent is currently
+executing or a sender is delivering messages. Distinguish stale execution
+from a disconnected UI: show the last known update and verify before claiming
+failure. Updates must persist when the owner switches chats, reloads or
+returns later. Do not invent percentages from elapsed time.
+
+Add a concise chronological activity trail: for example, a search started,
+pages were read, qualified leads were saved, a plan needs approval or a send
+was confirmed. These are action summaries from real events, not hidden model
+reasoning or a stream of internal implementation details. Use incremental
+updates or bounded polling, with reconnect/backoff and restrained accessible
+announcements; viewing progress must not launch provider calls or overload
+the existing VM.
+
+### Chat acknowledgement and completion reports
+
+Once a task has been persisted successfully, acknowledge it in chat with the
+objective, current status and a link to its Activity card. If it is queued or
+waiting for approval, say that instead of claiming execution has started.
+Publish useful milestones without flooding the chat on every heartbeat.
+
+Automatically post a durable report in the originating chat and Activity
+history when research completes, partially completes, fails or is cancelled.
+Include what was searched, sources used, unique qualified leads, contact
+routes, duplicates/exclusions, recorded spending, remaining target, exact stop
+reason and links to results. An outreach report additionally shows attempted
+and confirmed messages, unique people contacted, replies, queued work,
+failures and uncertain deliveries by channel/attributable agent.
+
+Research completion and outreach completion are different milestones. A
+research report must state when approved messages remain queued or scheduled;
+an ongoing outreach run stays visible until its own terminal state. Finishing
+one child job does not finish the owner's entire request.
+
+Persist report delivery as part of terminal-event bookkeeping, with an
+idempotent report key/outbox or equivalent reconciliation. A process restart,
+closed browser, failed callback or duplicate terminal event must not lose or
+duplicate the report. If AI report wording fails, a ledger-based fallback
+still delivers the actual results. Unknown metrics remain unmeasured.
+
+### Existing foundations to extend
+
+`assistant_jobs` already records stage, progress, claim owner and heartbeat;
+the chat polls job cards and active run/lead status. Reuse these records and
+the existing channel send ledgers rather than building a second source of
+counts. The current finish callback runs after the terminal job write and
+logs reporting errors; make report delivery recoverable instead of relying
+on that callback alone. All Activity reads, event subscriptions, attribution,
+reports and controls must enforce organization and user permissions.
+
 ## Implementation order and acceptance
 
-1. **Task foundation.** Add schema, migration, task service, leases, events,
-   usage reservations and cancellation. Demonstrate resume after a process
+1. **Baseline and direct-recipient repair.** Verify the VM artifact revision;
+   repair the Instagram username-entry path and conflicting capability copy,
+   and test the screenshot's single-recipient request through plan, delivery
+   state and reporting before adding the wider research redesign.
+2. **Task and reporting foundation.** Add schema, migration, task service,
+   leases, activity/attribution events, usage reservations, cancellation and
+   recoverable completion-report delivery. Demonstrate resume after a process
    restart and duplicate dispatch without duplicate charges or lead writes.
-2. **A complete research path.** Connect existing web discovery to durable
-   tasks and progress. Allow more than three queries and forty pages across
-   child jobs when the selected task budget allows it; do not lift limits
-   globally or bypass organization caps.
-3. **Additional sources.** Wrap existing Maps, LinkedIn and Apify adapters,
+3. **A complete visible research path.** Evaluate TinyFish on the buyer
+   examples, connect the selected web adapter to durable tasks, and deliver
+   the live Activity card/panel plus automatic chat report in the same slice.
+   Allow more than three queries and forty pages across child jobs when the
+   selected task budget allows it; make research allowances configurable
+   without bypassing organization budgets or provider account quotas.
+4. **Additional sources.** Wrap existing Maps, LinkedIn and Apify adapters,
    queue work behind their concurrency limits, then add source selection and
    adaptation based on qualification yield and budget remaining.
-4. **Qualification and handoff.** Persist evidence and canonical dedupe,
+5. **Qualification and handoff.** Persist evidence and canonical dedupe,
    distinguish fit from contactability, and prepare an outreach plan through
    existing approval controls.
-5. **Owner controls.** Add task budget, source/provider choices, progress,
-   pause/resume/cancel, partial results and exact stop reasons to the UI.
-6. **Evaluation and VM pilot.** Run deterministic fake-provider cases first,
+6. **Owner controls and activity across channels.** Extend Activity to the
+   existing outreach/reply engines and organization-wide view, including
+   per-agent/task delivery counts, history, budget/source choices,
+   pause/resume/cancel, partial results and exact waiting/stop reasons.
+7. **Evaluation and VM pilot.** Run deterministic fake-provider cases first,
    then a small owner-selected live research task inside an agreed spend cap.
    Live messaging requires an explicitly approved recipient and message.
 
@@ -166,6 +355,23 @@ Required evaluation scenarios:
 - Source counts distinguish source records from unique qualified buyers;
   contact routes, confirmed sends and replies are separate measurements.
 - Cross-organization isolation and existing DNC/opt-out/approval tests pass.
+- TinyFish's relevance, contact coverage, latency, refusals and rate-limit
+  behavior are evaluated on both buyer examples. Free-only tasks cannot
+  silently switch to a paid provider; paid fallback respects the agreed cap.
+- Starting work from chat creates a visible, truthful task card. The owner
+  can identify the actual assigned agent/task, current action and last update
+  across chat navigation, browser reload and reconnect.
+- One multi-stage worker does not appear as several active agents. Queued,
+  provider-waiting, outside-hours, approval-waiting, paused and stale tasks
+  are distinguishable from active execution and from disconnected UI updates.
+- Per-agent/task and channel counts reconcile with the send ledgers. Queued,
+  attempted and uncertain messages do not inflate confirmed sends; one person
+  appearing in multiple sources/worker stages does not inflate unique totals.
+- Every terminal request produces one report with results or partial results
+  and the exact stop reason, even after a restart, duplicate event, closed
+  browser, report-generation error or temporary report-write failure.
+- Research completion with remaining outreach clearly reports both states;
+  the UI never presents pending scheduled sends as completed delivery.
 
 Measure unique qualified leads, qualified yield per query/page and per dollar,
 evidence coverage, duplicate rate, completion time and exact stop reasons.
