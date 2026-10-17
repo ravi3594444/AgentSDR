@@ -40,7 +40,7 @@ format is read or written anywhere.
 | List chats | Yes | `GET /chats?account_type=INSTAGRAM&account_id=` | Yes (history import) |
 | List messages of a chat | Yes | `GET /chats/{chat_id}/messages` | Yes (history import; the new-chat check before an inquiry) |
 | Send in an existing chat | Yes | `POST /chats/{chat_id}/messages` | Yes (replies) |
-| Start a new chat | Yes (`attendees_ids` = the profile's `provider_messaging_id`) | `POST /chats` | **No** — no cold Instagram outreach in this release |
+| Start a new chat | Yes (`attendees_ids` = the profile's `provider_messaging_id`) | `POST /chats` | Yes — one initial DM from an approved plan; see [Instagram outbound](INSTAGRAM_OUTBOUND.md) |
 | Message webhook | Yes; `account_type: "INSTAGRAM"`; the account's own sends also arrive as `message_received` (tell them apart by `is_sender` or `account_info.user_id` = `sender.attendee_provider_id`) | `source: messaging` | Yes |
 | Webhook delivery | 200 within 30 s, else up to 5 retries; dedupe on `message_id` | docs/webhooks-2 | Ledger key + unique message id |
 | Retrieve a profile | Yes | `GET /users/{username\|provider_id}?account_id=` | Yes (discovery) |
@@ -429,9 +429,9 @@ comes from the payload's account (`gateUnipileWebhook`, `org=` and the
 secret); with the feature off the delivery is acknowledged and nothing of
 it is recorded.
 
-Sending: a reply only, into the chat the person wrote in, from the account
-that chat is on — AgentSDR never starts an Instagram chat (no cold
-Instagram outreach). Through the CRM's existing send path
+Reply sending goes into the chat the person wrote in, from the account that
+chat is on. Approved initial DMs use the separate durable queue described in
+[Instagram outbound](INSTAGRAM_OUTBOUND.md). Replies use the CRM's existing send path
 (`sendInstagramThroughCrm`, the send attempt ledger and its duplicate-send
 protection, stale-draft checks and limits). Refused before Unipile is
 called when the feature is off, the account is unknown or not connected,

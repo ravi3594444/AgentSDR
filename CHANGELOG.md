@@ -11,6 +11,11 @@ Each release lists the database migrations it needs; see
 
 ### Added
 
+- Direct Instagram recipient input in Assistant: usernames, `@handles` and
+  profile URLs become a lead list and, when requested, an Instagram plan
+  using the existing Review/Autonomous approval controls. No discovery search
+  is needed. Exact handles are preserved and old inbox-only capability copy
+  is corrected.
 - Instagram outbound from approved assistant plans: one initial DM per
   assigned profile through Unipile, organization sending rules, durable
   attempt tracking, opt-out checks and reply handling under the run's mode.

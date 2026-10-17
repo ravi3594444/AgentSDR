@@ -1,3 +1,4 @@
+import { ungroundedInstagramContacts } from "./instagramContacts";
 import { mergeProfile, profileChanges, ungroundedProfileValues } from "./profile";
 import type { AssistantRole, BusinessProfile } from "./schema";
 
@@ -14,6 +15,7 @@ export const MAX_ACTIONS_PER_STEP = 8;
 export const MAX_ACTIONS_PER_REPLY = 32;
 
 export const MAX_SUGGESTIONS = 3;
+export const DIRECT_CONTACT_TOOLS = new Set(["add_contacts", "add_instagram_contacts"]);
 
 export function agentReplySchema(toolNames: readonly string[]) {
   return {
@@ -239,7 +241,7 @@ export function transcriptText(messages: readonly TranscriptMessage[], maxChars 
 /** Words that ask for outreach, in English and common Hinglish; matched with typo tolerance. Words a business uses to describe itself ("we sell", "we connect") are left out. */
 const OUTREACH_WORDS = [
   "contact", "email", "emails", "mail", "message", "messages", "msg", "reach", "outreach", "campaign", "campaigns",
-  "pitch", "send", "whatsapp", "linkedin",
+  "pitch", "send", "dm", "dms", "whatsapp", "linkedin",
   "followup", "follow", "bhejo", "bhej", "sampark",
 ];
 
@@ -421,12 +423,17 @@ export function actionsProblem(actions: readonly AgentAction[], input: { smallTa
   if (input.smallTalk && actions.length) {
     return "The owner only greeted or thanked you. Run no tools: answer in one or two friendly sentences and offer the next useful step.";
   }
-  const contacts = actions.some((action) => action.tool === "prepare_outreach" || ((CONTACT_AFTER_TOOLS.has(action.tool) || action.tool === "add_contacts") && action.args.contactAfter === true));
+  const contacts = actions.some((action) => action.tool === "prepare_outreach" || ((CONTACT_AFTER_TOOLS.has(action.tool) || DIRECT_CONTACT_TOOLS.has(action.tool)) && action.args.contactAfter === true));
   if (contacts && !input.outreachRequested) return outreachRequestProblem("", null);
   if (actions.some((action) => action.tool === "prepare_inquiry_replies") && !input.inquiryRepliesRequested) {
     return "The owner has not asked for their inquiries to be answered. Offer it in one sentence and wait for them to say yes.";
   }
   for (const action of actions) {
+    if (action.tool === "add_instagram_contacts") {
+      const invented = ungroundedInstagramContacts(action.args.usernames, input.ownerCorpus);
+      if (invented.length) return `add_instagram_contacts: ${invented.join(", ")} is not an exact Instagram recipient supplied by the owner or a read source. Preserve the given username; do not invent or shorten it.`;
+      continue;
+    }
     if (action.tool === "add_contacts") {
       const invented = ungroundedContacts(action.args.contacts, input.ownerCorpus);
       if (invented.length) return `add_contacts: ${invented.join(", ")} ${invented.length === 1 ? "is" : "are"} not in what the owner wrote, a page read for them or a Treg answer. Add only those contacts, exactly as given.`;

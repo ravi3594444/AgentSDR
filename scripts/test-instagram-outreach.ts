@@ -4,6 +4,7 @@ import { mock } from "bun:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
 import postgres from "postgres";
 const root = join(import.meta.dir, "..");
 // Always use an empty disposable database, never a deployment's DATABASE_URL.
@@ -15,18 +16,27 @@ if (pgliteModule) {
   const { PGlite } = await import(pgliteModule);
   const { drizzle } = await import("drizzle-orm/pglite");
   pg = new PGlite();
-  const adapt = (database: any): any =>
+  // PGlite has one connection. App services that read through `db` from
+  // inside a transaction must share that transaction in this test transport.
+  const transactionScope = new AsyncLocalStorage<any>();
+  const adapt = (database: any, isRoot = false): any =>
     new Proxy(database, {
       get(target, key) {
+        const scoped = isRoot ? transactionScope.getStore() : null;
+        if (scoped) return Reflect.get(scoped, key);
         if (key === "execute")
           return async (...args: any[]) => (await target.execute(...args)).rows;
         if (key === "transaction")
-          return (fn: any) => target.transaction((tx: any) => fn(adapt(tx)));
+          return (fn: any) =>
+            target.transaction((tx: any) => {
+              const wrapped = adapt(tx);
+              return transactionScope.run(wrapped, () => fn(wrapped));
+            });
         const value = Reflect.get(target, key, target);
         return typeof value === "function" ? value.bind(target) : value;
       },
     });
-  db = adapt(drizzle(pg));
+  db = adapt(drizzle(pg), true);
   mock.module(root + "/src/lib/db.ts", () => ({ db }));
 } else {
   const url = process.env.INSTAGRAM_TEST_DATABASE_URL;
@@ -65,6 +75,57 @@ let posts: number = 0;
 let resolveHook: (() => Promise<void>) | null = null;
 let postHook: (() => Promise<void>) | null = null;
 let sendError: any = null;
+let replyPosts = 0;
+const instagramService = await import(
+  root + "/src/services/unipile.instagram.ts"
+);
+mock.module(root + "/src/services/unipile.instagram.ts", () => ({
+  ...instagramService,
+  sendUnipileInstagramMessage: async () => ({
+    messageId: `reply-${++replyPosts}`,
+  }),
+}));
+// The real chat, contact, approval and worker paths run below. Only AI output
+// and the two provider send boundaries are simulated, with no external calls.
+let assistantModel: ((input: any) => string) | null = null;
+mock.module(root + "/src/lib/ai/server/structuredCompletion.ts", () => ({
+  completeStructured: async (input: any) => {
+    assert.equal(input.schemaName, "assistant_reply");
+    assert.ok(assistantModel, "Unexpected model call outside a chat test");
+    const text = assistantModel(input);
+    input.accept(text);
+    return { text, model: "fixture", response: {}, usage: {} };
+  },
+}));
+mock.module(root + "/src/lib/assistant/writer.server.ts", () => ({
+  businessContext: async (profile: any) => JSON.stringify(profile),
+  sortLeads: async ({ leads }: any) =>
+    new Map(
+      leads.map((lead: any) => [
+        lead.index,
+        {
+          group: "Selected contacts",
+          approach: "standard",
+          reason: "Selected by the owner",
+        },
+      ]),
+    ),
+  writeSequences: async ({ channels }: any) =>
+    Object.fromEntries(
+      channels.map((channel: string) => [
+        channel,
+        [
+          {
+            subject: null,
+            body: "Hi, we help with AI automations. Would you like details? Ravi",
+            waitDays: 0,
+          },
+        ],
+      ]),
+    ),
+  writePersonalLines: async () => new Map(),
+  writePersonalMessages: async () => new Map(),
+}));
 mock.module(root + "/src/services/unipile.instagram-outreach.ts", () => ({
   resolveInstagramOutreachRecipient: async (
     _account: string,
@@ -102,7 +163,7 @@ const { diagnoseDelivery } = await import(
   root + "/src/lib/assistant/deliveryDiagnostics.server.ts"
 );
 const { results } = await import(root + "/src/lib/assistant/results.server.ts");
-const { reportRun } = await import(
+const { reportRun, startOutreachRun, runOutreachStartStep } = await import(
   root + "/src/lib/assistant/outreach.server.ts"
 );
 const { runLeads } = await import(
@@ -112,6 +173,22 @@ const { saveChannelRules } = await import(
   root + "/src/lib/channels/rules.server.ts"
 );
 const { setFeature } = await import(root + "/src/lib/features/flags.server.ts");
+const { runAgentTurn } = await import(
+  root + "/src/lib/assistant/agent.server.ts"
+);
+const { runTool, toolNamesFor } = await import(
+  root + "/src/lib/assistant/tools.server.ts"
+);
+const { featureState } = await import(
+  root + "/src/lib/features/flags.server.ts"
+);
+const { registerAssistantJobHandler, runOneAssistantStep } = await import(
+  root + "/src/lib/assistant/worker.ts"
+);
+const { runReplyAgent } = await import(
+  root + "/src/lib/assistant/replyAgent/agent.server.ts"
+);
+registerAssistantJobHandler("outreach_start", runOutreachStartStep);
 let cases = 0;
 async function fixture(
   name: string,
@@ -204,6 +281,205 @@ async function fixture(
   };
   return { ...ids, leads, scope, status, finish };
 }
+async function chatFixture(name: string, autonomous = false, role = "owner") {
+  const org = crypto.randomUUID();
+  const user = crypto.randomUUID();
+  const thread = crypto.randomUUID();
+  const account = crypto.randomUUID();
+  await pg.query("insert into organizations(id,name,slug) values($1,$2,$3)", [
+    org,
+    name,
+    org,
+  ]);
+  await pg.query("insert into users(id,name,email) values($1,'Ravi',$2)", [
+    user,
+    `${user}@example.test`,
+  ]);
+  await pg.query(
+    "insert into members(organization_id,user_id,role) values($1,$2,$3)",
+    [org, user, role],
+  );
+  await pg.query(
+    "insert into organization_features(organization_id,key,enabled) values($1,'instagram',true)",
+    [org],
+  );
+  await pg.query(
+    "insert into channel_settings(organization_id,channel,values) values($1,'instagram',$2)",
+    [org, { newChatsPerDay: 10, sendGapMinutes: [1, 1], sendingHours: null }],
+  );
+  await pg.query(
+    "insert into instagram_accounts(id,organization_id,unipile_account_id,username,status) values($1,$2,$3,'sender','connected')",
+    [account, org, account],
+  );
+  await pg.query(
+    "insert into assistant_profiles(organization_id,profile) values($1,$2)",
+    [
+      org,
+      {
+        businessName: "Test Studio",
+        senderName: "Ravi",
+        offer: "AI automations",
+        problemsSolved: "Repetitive manual work",
+      },
+    ],
+  );
+  await pg.query(
+    "insert into assistant_threads(id,organization_id,created_by,autonomous,autonomous_by) values($1,$2,$3,$4,$3)",
+    [thread, org, user, autonomous],
+  );
+  const scope = (fn: () => any) => runInOrganization(org, fn);
+  const context = {
+    threadId: thread,
+    userId: user,
+    ownerText: "Save @dev__ravi_35",
+    lastAssistantText: null,
+  };
+  const run = async () =>
+    (
+      await pg.query(
+        "select * from outreach_runs where thread_id=$1 order by created_at desc limit 1",
+        [thread],
+      )
+    ).rows[0];
+  const chat = async (
+    username: string,
+    text: string,
+    rejectOldDenial = false,
+  ) => {
+    let calls = 0;
+    assistantModel = (input) => {
+      assert.match(input.systemPrompt, /add_instagram_contacts/);
+      assert.match(input.systemPrompt, /preserve underscores/);
+      if (calls++ === 0) {
+        if (rejectOldDenial)
+          assert.throws(
+            () =>
+              input.accept(
+                JSON.stringify({
+                  message: "AgentSDR never starts Instagram conversations.",
+                  actions: [],
+                  suggestions: [],
+                }),
+              ),
+            /approved initial DMs/,
+          );
+        return JSON.stringify({
+          message: "",
+          actions: [
+            {
+              tool: "add_instagram_contacts",
+              arguments: JSON.stringify({
+                usernames: [username],
+                contactAfter: true,
+              }),
+            },
+          ],
+          suggestions: [],
+        });
+      }
+      return JSON.stringify({ message: "", actions: [], suggestions: [] });
+    };
+    await scope(() => runAgentTurn({ threadId: thread, userId: user, text }));
+    assistantModel = null;
+    assert.equal(calls, 2);
+  };
+  const launch = async (runId: string) => {
+    for (let step = 0; step < 2; step++)
+      assert.equal(await runOneAssistantStep(), true);
+    const jobs = (
+      await pg.query(
+        "select status,error from assistant_jobs where run_id=$1",
+        [runId],
+      )
+    ).rows;
+    assert.equal(jobs[0].status, "succeeded", JSON.stringify(jobs));
+    assert.equal((await run()).status, "running");
+    await runInstagramOutreachTick();
+    const queue = (
+      await pg.query("select * from instagram_outreach_queue where run_id=$1", [
+        runId,
+      ])
+    ).rows;
+    assert.equal(queue.length, 1);
+    assert.equal(queue[0].status, "sent", JSON.stringify(queue));
+    return queue[0];
+  };
+  const reply = async (username: string, runId: string) => {
+    await scope(() => ensureCrmDefaults());
+    const at = new Date();
+    const sender = {
+      attendee_provider_id: `dm-${username}`,
+      attendee_public_identifier: username,
+    };
+    const payload = {
+      event: "message_received",
+      account_type: "INSTAGRAM",
+      account_id: account,
+      chat_id: `chat-dm-${username}`,
+      message_id: `inbound-${thread}`,
+      message: "Please send details",
+      timestamp: at.toISOString(),
+      is_sender: false,
+      sender,
+      attendees: [sender],
+    };
+    const entries: any[] = [];
+    assert.equal(
+      await scope(() => ingestInstagramWebhook(payload, entries, at)),
+      "ok",
+      JSON.stringify(entries),
+    );
+    await scope(() => ingestInstagramWebhook(payload, entries, at));
+    const messages = (
+      await pg.query(
+        "select m.id from crm_conversation_messages m join crm_conversations c on c.id=m.conversation_id where c.organization_id=$1 and m.direction='inbound'",
+        [org],
+      )
+    ).rows;
+    assert.equal(messages.length, 1);
+    assert.equal((await scope(() => reportRun(runId)))!.channels[0].replied, 1);
+    const outcome = await scope(() =>
+      runReplyAgent(messages[0].id, {
+        allowNonProduction: true,
+        brief: false,
+        model: async () => ({
+          text: JSON.stringify({
+            action: "reply",
+            reply:
+              "We help with AI automations. What would you like to automate?",
+            ownerNote: null,
+            category: "interested",
+            confidence: 0.9,
+            reasoning: "The lead asked for details about the saved offer.",
+          }),
+        }),
+      }),
+    );
+    return { outcome, messageId: messages[0].id };
+  };
+  const finish = async () => {
+    await pg.query(
+      "update outreach_runs set status='stopped' where organization_id=$1",
+      [org],
+    );
+    cases++;
+    console.log("PASS", name);
+  };
+  return {
+    org,
+    user,
+    thread,
+    account,
+    scope,
+    context,
+    run,
+    chat,
+    launch,
+    reply,
+    finish,
+  };
+}
+
 try {
   const success = await fixture("success");
   await runInstagramOutreachTick();
@@ -556,11 +832,210 @@ try {
     ),
   );
   await identity.finish();
+
+  const direct = await chatFixture("direct_handle_review");
+  await pg.query(
+    "insert into assistant_messages(organization_id,thread_id,role,content) values($1,$2,'assistant','AgentSDR never starts Instagram conversations.')",
+    [direct.org, direct.thread],
+  );
+  const beforeDirect = posts;
+  await direct.chat(
+    "dev__ravi_35",
+    "hey cna u contact dev__ravi_35 via instagrma and try to sell our services",
+    true,
+  );
+  const directRun = await direct.run();
+  assert.equal(directRun.status, "proposed");
+  assert.deepEqual(directRun.channels, ["instagram"]);
+  assert.equal(posts, beforeDirect);
+  assert.equal(
+    (
+      await pg.query(
+        "select count(*)::int n from instagram_outreach_queue where run_id=$1",
+        [directRun.id],
+      )
+    ).rows[0].n,
+    0,
+  );
+  const contacts = (
+    await pg.query("select * from people where organization_id=$1", [
+      direct.org,
+    ])
+  ).rows;
+  assert.equal(contacts.length, 1);
+  assert.equal(contacts[0].raw.instagram.username, "dev__ravi_35");
+  assert.equal(contacts[0].email, null);
+  assert.equal(contacts[0].phone, null);
+  const tools = (
+    await pg.query(
+      "select tool,status from assistant_messages where thread_id=$1 and role='tool' order by created_at",
+      [direct.thread],
+    )
+  ).rows;
+  assert.deepEqual(
+    tools.map((row: any) => row.tool),
+    ["add_instagram_contacts", "prepare_outreach"],
+  );
+  assert.ok(tools.every((row: any) => row.status === "ok"));
+  await direct.scope(() =>
+    startOutreachRun(directRun.id, direct.user, { autopilot: false }),
+  );
+  await direct.launch(directRun.id);
+  assert.equal(posts, beforeDirect + 1);
+  const repliesBeforeReview = replyPosts;
+  const reviewReply = await direct.reply("dev__ravi_35", directRun.id);
+  assert.equal(
+    reviewReply.outcome?.status,
+    "drafted",
+    JSON.stringify(reviewReply),
+  );
+  assert.equal(replyPosts, repliesBeforeReview);
+  // Re-importing an owner-supplied handle preserves the canonical identity.
+  const savedAgain = await direct.scope(() =>
+    runTool(
+      "add_instagram_contacts",
+      { usernames: ["@DEV__RAVI_35", "https://instagram.com/dev__ravi_35/"] },
+      direct.context,
+    ),
+  );
+  assert.equal(savedAgain.ok, true, savedAgain.summary);
+  assert.equal(
+    (
+      await pg.query(
+        "select count(*)::int n from people where organization_id=$1",
+        [direct.org],
+      )
+    ).rows[0].n,
+    1,
+  );
+  await direct.finish();
+
+  const auto = await chatFixture("direct_profile_autonomous", true);
+  const beforeAuto = posts;
+  await auto.chat(
+    "https://www.instagram.com/owner__test/?igsh=example",
+    "DM https://www.instagram.com/owner__test/?igsh=example and offer our services",
+  );
+  const autoRun = await auto.run();
+  assert.equal(autoRun.status, "starting");
+  assert.equal(autoRun.approved_by, auto.user);
+  assert.equal(autoRun.autopilot, true);
+  await auto.launch(autoRun.id);
+  assert.equal(posts, beforeAuto + 1);
+  const beforeReply = replyPosts;
+  const automaticReply = await auto.reply("owner__test", autoRun.id);
+  assert.equal(
+    automaticReply.outcome?.status,
+    "replied",
+    JSON.stringify(automaticReply),
+  );
+  assert.equal(replyPosts, beforeReply + 1);
+  await auto.scope(() =>
+    runReplyAgent(automaticReply.messageId, { allowNonProduction: true }),
+  );
+  assert.equal(replyPosts, beforeReply + 1);
+  await runInstagramOutreachTick();
+  assert.equal(posts, beforeAuto + 1);
+  await auto.finish();
+
+  const save = await chatFixture("direct_save_and_validation");
+  const beforeSave = posts;
+  for (const args of [
+    { usernames: ["valid_handle", "not a handle"] },
+    { usernames: ["dev__ravi_35"], contactAfter: true },
+  ]) {
+    const result = await save.scope(() =>
+      runTool("add_instagram_contacts", args, save.context),
+    );
+    assert.equal(result.ok, false);
+    assert.equal(result.refused, true);
+    assert.equal(
+      (
+        await pg.query(
+          "select count(*)::int n from people where organization_id=$1",
+          [save.org],
+        )
+      ).rows[0].n,
+      0,
+    );
+  }
+  const saveResult = await save.scope(() =>
+    runTool(
+      "add_instagram_contacts",
+      { usernames: ["dev__ravi_35"] },
+      save.context,
+    ),
+  );
+  assert.equal(saveResult.ok, true, saveResult.summary);
+  assert.equal(await save.run(), undefined);
+  await runInstagramOutreachTick();
+  assert.equal(posts, beforeSave);
+  await save.finish();
+
+  const disconnected = await chatFixture("direct_disconnected_account");
+  await pg.query(
+    "update instagram_accounts set status='disconnected' where id=$1",
+    [disconnected.account],
+  );
+  await disconnected.chat(
+    "disconnected_recipient",
+    "DM @disconnected_recipient our offer on Instagram",
+  );
+  assert.equal(await disconnected.run(), undefined);
+  const failedPlan = (
+    await pg.query(
+      "select content from assistant_messages where thread_id=$1 and tool='prepare_outreach'",
+      [disconnected.thread],
+    )
+  ).rows[0];
+  assert.match(failedPlan.content, /no Instagram account is connected/);
+  await disconnected.finish();
+
+  const nonAdmin = await chatFixture(
+    "direct_autonomous_member_cannot_approve",
+    true,
+    "member",
+  );
+  await nonAdmin.chat(
+    "member_recipient",
+    "Contact @member_recipient on Instagram",
+  );
+  assert.equal((await nonAdmin.run()).status, "proposed");
+  await nonAdmin.finish();
+
+  const off = await chatFixture("direct_feature_off");
+  await off.scope(() => setFeature("instagram", false, off.user));
+  assert.equal(
+    (await off.scope(async () => toolNamesFor(await featureState()))).includes(
+      "add_instagram_contacts",
+    ),
+    false,
+  );
+  const offResult = await off.scope(() =>
+    runTool(
+      "add_instagram_contacts",
+      { usernames: ["dev__ravi_35"] },
+      off.context,
+    ),
+  );
+  assert.equal(offResult.ok, false);
+  assert.equal(
+    (
+      await pg.query(
+        "select count(*)::int n from people where organization_id=$1",
+        [off.org],
+      )
+    ).rows[0].n,
+    0,
+  );
+  await off.finish();
   console.log(
     "Integration cases passed:",
     cases,
     "Provider POST attempts:",
     posts,
+    "Reply POST attempts:",
+    replyPosts,
     "(all simulated)",
   );
 } finally {

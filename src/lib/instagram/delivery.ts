@@ -2,8 +2,8 @@ import "server-only";
 
 /**
  * The CRM's way to send an Instagram reply (src/lib/crm/send.ts). Replies
- * only: into the chat the lead wrote in. AgentSDR never starts a new
- * Instagram chat. A refusal (`InstagramSendRefusedError`), or Unipile
+ * only: into the chat the lead wrote in. Approved initial DMs use the
+ * separate outreach queue. A refusal (`InstagramSendRefusedError`), or Unipile
  * refusing the request (`InstagramDeliveryError` with `definite`), means
  * nothing reached Instagram, so the CRM fails the draft instead of marking
  * the delivery uncertain.

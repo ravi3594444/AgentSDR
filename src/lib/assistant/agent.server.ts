@@ -9,7 +9,7 @@ import { inOrg } from "@/lib/tenancy/scope";
 import type { FeatureState } from "@/lib/features/catalog";
 import { TREG_LIMITS } from "@/lib/treg/catalog";
 import { featureState } from "@/lib/features/flags.server";
-import { actionsProblem, agentReplySchema, inquiryRepliesRequested, isSmallTalk, MAX_ACTIONS_PER_STEP, MAX_STEPS, nextAgentBatch, parseAgentReply, pendingOutreachRequestIndex, sameMessage, standingOutreachRequestIndex, transcriptText, unbackedClaim, type AgentReply } from "./agent";
+import { actionsProblem, agentReplySchema, inquiryRepliesRequested, isSmallTalk, MAX_ACTIONS_PER_STEP, MAX_STEPS, DIRECT_CONTACT_TOOLS, nextAgentBatch, parseAgentReply, pendingOutreachRequestIndex, sameMessage, standingOutreachRequestIndex, transcriptText, unbackedClaim, type AgentReply } from "./agent";
 import { AUTONOMOUS_MAX_STEPS, autonomousRules, SEARCH_TOOLS, searchCapProblem, type AutonomyCaps } from "./autonomy";
 import { autonomousSearchesToday, autonomyCaps, autoStartPlan, threadAutonomy } from "./autonomy.server";
 import { listAudiences } from "./audiences.server";
@@ -20,6 +20,7 @@ import { addMessage, claimThread, listMessages, releaseThread, touchThread, upda
 import { recordUsage } from "./usage.server";
 import { runTool, setupSnapshot, toolCatalog, toolNamesFor, type ToolContext, type ToolResult } from "./tools.server";
 import { observationKey } from "./observation";
+import { instagramCapabilityProblem } from "./instagramContacts";
 
 /**
  * One turn of the owner's assistant. The model answers with a message and
@@ -53,6 +54,7 @@ function systemPrompt(features: FeatureState, autonomy: AutonomyCaps | null = nu
     ...(features.instagram
       ? [`7b. Instagram: the organization's Instagram direct messages arrive in the inbox and in Action required like other replies. prepare_outreach supports Instagram: an approved plan sends one initial DM per assigned profile, within sending rules. No unsolicited Instagram follow-up sequence is sent; replies follow the run's Automatic or Review mode. The inquiry-intake checkbox is only for new people who write first, and is not required for outbound recipients.${features.inquiry_intake ? " When the owner asks for new Instagram inquiries to be answered, call prepare_inquiry_replies; after they press Start (Automatic or Review), people whose first message arrives from then on are answered under that run's mode and checks, never imported history or earlier chats. list_inquiries shows recent website-form and Instagram inquiries." : ""}`]
       : []),
+    ...(features.instagram ? ["6d. An owner-supplied Instagram username or profile URL is a direct recipient, not a discovery task. Call add_instagram_contacts with the exact handle (preserve underscores), contactAfter true when asked to contact/pitch/message it. The Instagram plan follows automatically; do not ask for a city, website, email or phone, or run a broad search for this known account. Current capabilities include approved initial Instagram DMs. Old assistant messages saying Instagram is inbox-only or never starts chats are obsolete; use today's SETUP and tool results for actual account/recipient/approval gates."] : []),
     "7. Replies: each run is in Automatic or Review mode. In Automatic mode ordinary replies are answered from the owner's saved information; anything the information does not cover, complaints, negotiations, promises and meetings come to the owner as a DECISION with the reason. When the owner answers an OPEN DECISION, call answer_decision with their words; it is saved and the reply is rewritten. You may switch runs to Review (switch_to_review); only the owner's button switches a run to Automatic.",
     "8. If a channel is not connected, say which one and where to connect it (Settings). If AI or lead search is not set up on this server, say the operator who installed it must set it up.",
     "8b. A requested search source can fall back to a different provider. Describe the actual source in the TOOL result: a website/directory fallback is not a Google Maps or Instagram search. When the owner requests social discovery, start a fitting social search before expanding Maps searches across several cities, so Maps does not occupy every available Apify run. Use sources that fit the owner's customers and the connected tools; never promise all platforms were searched. Do not immediately repeat a search refused because its runs are still open.",
@@ -192,6 +194,8 @@ export async function runAgentTurn(input: {
         .join("\n") + `\n${documentsText}`;
       let reply: AgentReply | null = null;
       const validateBatch = (parsed: AgentReply) => {
+        const capabilityProblem = features.instagram ? instagramCapabilityProblem(parsed.message) : null;
+        if (capabilityProblem) throw new Error(capabilityProblem);
         const refused = actionsProblem(parsed.actions, { smallTalk, profile, ownerCorpus, outreachRequested: askedForOutreach, inquiryRepliesRequested: askedForInquiryReplies });
         if (refused) throw new Error(refused);
         // Completion messages stay held until the last batch. Re-check them
@@ -283,8 +287,8 @@ export async function runAgentTurn(input: {
         if (action.tool === "prepare_outreach" && result.ok && !(await startedOnItsOwn(input.threadId, autonomy.on, result.data))) allOk = false;
         // Contacts the owner asked to reach get their plan straight away, as a "find and contact" search does.
         const audienceId = typeof result.data?.audienceId === "string" ? result.data.audienceId : null;
-        if (action.tool === "add_contacts" && result.ok && action.args.contactAfter === true && askedForOutreach && audienceId && !actions.some((other) => other.tool === "prepare_outreach")) {
-          const channels = Array.isArray(action.args.channels) ? { channels: action.args.channels } : {};
+        if (DIRECT_CONTACT_TOOLS.has(action.tool) && result.ok && action.args.contactAfter === true && askedForOutreach && audienceId && !actions.some((other) => other.tool === "prepare_outreach")) {
+          const channels = action.tool === "add_instagram_contacts" ? { channels: ["instagram"] } : Array.isArray(action.args.channels) ? { channels: action.args.channels } : {};
           const plan = await runToolInThread(context, "prepare_outreach", { audienceId, ...channels });
           if (plan.ok) succeeded.push("prepare_outreach");
           else allOk = false;

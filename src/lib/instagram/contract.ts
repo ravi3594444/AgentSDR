@@ -19,8 +19,9 @@
  *     forwarded to the CRM, never counted as unread and never answered.
  *     A webhook message older than the account's history cutoff is
  *     historical too.
- *   - Sending is a reply into an existing chat. AgentSDR does not start new
- *     Instagram chats (no cold Instagram outreach in this release).
+ *   - Replies use existing chats. Approved outreach plans can start a chat
+ *     with one initial DM through the durable Instagram outbound queue
+ *     (docs/product/INSTAGRAM_OUTBOUND.md); replies follow the run’s mode.
  *
  * Only the organization's Instagram feature switch (Settings →
  * Organization) makes any of this run; it is off by default.

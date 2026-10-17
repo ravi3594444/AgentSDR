@@ -21,8 +21,8 @@ import { instagramAccounts, instagramChats, instagramMessages, type InstagramMes
 /**
  * Sends one Instagram reply through Unipile — the CRM's delivery
  * (delivery.ts → src/lib/crm/send.ts). A reply only: into the chat the
- * person wrote in, from the account that chat is on. AgentSDR never starts
- * an Instagram chat.
+ * person wrote in, from the account that chat is on. Approved initial DMs
+ * use the separate outreach queue in outreach.server.ts.
  *
  * Refused (InstagramSendRefusedError, nothing reaches Instagram) when the
  * organization's Instagram feature is off, the account is unknown here or

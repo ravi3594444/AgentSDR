@@ -337,6 +337,30 @@ describe("contacts and links from the chat", () => {
     expect(actionsProblem([{ tool: "read_webpage", args: { url: "https://www.sparklehome.example/team" } }], input)).toBeNull();
     expect(actionsProblem([{ tool: "read_webpage", args: { url: "https://example.org" } }], input)).toContain("only links the owner gave");
   });
+
+  test("a supplied Instagram handle needs no URL, city or other contact identity", () => {
+    const prompt = "hey cna u contact dev__ravi_35 via instagrma and try to sell our services";
+    const action = { tool: "add_instagram_contacts", args: { usernames: ["dev__ravi_35"], contactAfter: true } };
+    const input = { smallTalk: false, profile: {}, ownerCorpus: prompt, outreachRequested: outreachRequested(prompt) };
+    expect(input.outreachRequested).toBe(true);
+    expect(actionsProblem([action], input)).toBeNull();
+    expect(actionsProblem([{ ...action, args: { ...action.args, usernames: ["dev_ravi_35"] } }], input)).toContain("do not invent or shorten");
+    expect(actionsProblem([{ ...action, args: { ...action.args, usernames: ["ravi"] } }], input)).toContain("not an exact Instagram recipient");
+  });
+
+  test("saving an Instagram handle is distinct from requesting outreach", () => {
+    const input = { smallTalk: false, profile: {}, ownerCorpus: "Save @dev__ravi_35", outreachRequested: false };
+    const action = { tool: "add_instagram_contacts", args: { usernames: ["@dev__ravi_35"], contactAfter: false } };
+    expect(actionsProblem([action], input)).toBeNull();
+    expect(actionsProblem([{ ...action, args: { ...action.args, contactAfter: true } }], input)).toContain("has not asked");
+  });
+
+  test("DM requests and revocations use the same outreach authorization as message requests", () => {
+    expect(outreachRequested("DM @dev__ravi_35 on Instagram")).toBe(true);
+    expect(outreachRequested("Please send DMs to these Instagram accounts")).toBe(true);
+    expect(outreachRequested("Don't DM @dev__ravi_35 yet")).toBe(false);
+    expect(outreachRevoked("Don't DM @dev__ravi_35 yet")).toBe(true);
+  });
 });
 
 describe("Autonomous mode: the owner's standing request", () => {

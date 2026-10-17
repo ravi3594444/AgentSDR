@@ -197,7 +197,7 @@ export function InstagramMessagesClient({ initialChatId = null }: { initialChatI
       header={
         <PageHeader
           title="Instagram messages"
-          description={`Direct messages on your linked Instagram accounts. Replies are drafted for review in Action required and sent from there; ${BRAND.shortName} never starts a chat.`}
+          description="Direct messages on your linked Instagram accounts. Approved Assistant plans can send an initial DM; replies follow the run’s Automatic or Review mode."
           actions={
             <>
               <Button.Root variant="neutral" mode="stroke" size="small" asChild>

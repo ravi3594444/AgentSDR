@@ -9,8 +9,8 @@ import type { InstagramAccountStatus } from "@/lib/instagram/contract";
  * unipile.service.ts (type LINKEDIN) and unipile.whatsapp.ts (type
  * WHATSAPP), so each provider syncs on its own.
  *
- * There is deliberately no "start a new chat" here: AgentSDR only answers
- * people who wrote first (no cold Instagram outreach in this release).
+ * Initial DMs for approved outreach plans use the separate transport in
+ * unipile.instagram-outreach.ts; this module handles inbox and reply calls.
  *
  * Every call runs with the organization's own Unipile credentials
  * (getUnipileClient throws PlatformNotConnectedError when it has none). A

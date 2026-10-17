@@ -43,7 +43,6 @@ import {
 } from "@/lib/instagram/client";
 import type { InstagramAccountStatus, InstagramAccountSummary } from "@/lib/instagram/contract";
 import { cn } from "@/utils/cn";
-import { BRAND } from "@/lib/brand";
 
 const STATUS_LABEL: Record<InstagramAccountStatus, string> = {
   connected: "Connected",
@@ -210,7 +209,7 @@ export function InstagramAccountsClient({ inquiryIntakeOn }: { inquiryIntakeOn: 
   return (
     <SettingsPage
       title="Instagram accounts"
-      description={`The Instagram accounts ${BRAND.shortName} reads direct messages from, linked through Unipile. Replies are drafted for review in Action required; ${BRAND.shortName} never starts a new Instagram chat.`}
+      description={`Link Instagram accounts through Unipile to send an initial DM from an approved Assistant plan and handle replies. Replies follow the run’s Automatic or Review mode.`}
       actions={canManage ? <>{syncAction}{connectAction}</> : undefined}
     >
       <div className="space-y-5">

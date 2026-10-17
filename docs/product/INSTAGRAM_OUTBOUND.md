@@ -28,6 +28,23 @@ contactAfter and no channel choice prefers Instagram, then email and WhatsApp.
 Other searches keep their normal channel preference. Each person gets one
 assigned channel in a plan.
 
+For a known recipient, type a username, `@handle` or Instagram profile URL
+directly into the Assistant. For example: “Contact dev__ravi_35 on Instagram
+and offer our services.” `add_instagram_contacts` saves the exact handle,
+including repeated underscores, reuses an existing matching Person and prepares
+an Instagram plan when outreach was requested. No city, website, email, phone,
+Apify or web-search connection is needed. Saving a handle without a request to
+contact it sends nothing. Missing business information and real account gates
+are still reported; the plan follows the existing Start/Autonomous controls.
+
+To test with an account you control, use its exact username in a new chat.
+With Autonomous off, review the plan and press Start; with it on, an authorized
+owner/admin's plan may start within the daily caps. Choose Automatic replies
+if you want AgentSDR to answer a reply sent back from that test account. Review
+mode leaves a draft for approval. Check the sending rules first: weekends and
+times outside the configured window leave the initial DM queued. Provider
+acceptance, webhook delivery and the actual reply still need a deployed test.
+
 Settings → Instagram → Sending rules controls the initial DM cap, send gap and
 hours. Defaults are 10 attempts per account in a rolling 24 hours, 5–10 minutes
 between attempts, and Monday–Friday 09:00–17:00 UTC. **These are application
@@ -83,7 +100,8 @@ promise delivery. A lead's city never selects a sender's timezone.
 Backend checks use simulated provider responses, including refusal, timeout,
 post-send persistence failure, changed approval and identity checks. Database
 replays cover fresh schema, queue deduplication, pause/stop, DNC/opt-out,
-disconnection, restart and early webhook reconciliation. Live Unipile
+disconnection, restart, early webhook reconciliation and the direct-handle chat
+path through plan approval, simulated delivery and inbound CRM recording. Live Unipile
 permissions and recipient acceptance still need verification on the deployed
 installation with an owner-selected test recipient.
 

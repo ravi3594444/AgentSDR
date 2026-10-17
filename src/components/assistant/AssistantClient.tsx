@@ -134,6 +134,7 @@ const TOOL_TITLE: Record<string, string> = {
   read_document: "Document",
   import_contacts: "Contact list",
   add_contacts: "Added contacts",
+  add_instagram_contacts: "Saved Instagram contacts",
   read_webpage: "Read a web page",
   find_customers_on_web: "Web search",
   find_instagram_prospects: "Instagram prospects",
@@ -865,14 +866,14 @@ function ToolMessage({ message, jobs, runs, decisions, canManageAutopilot, lastR
   const title = message.tool === "read_document" || message.tool === "import_contacts"
     ? `${TOOL_TITLE[message.tool]}: ${String(message.toolInput?.file ?? "")}`
     : TOOL_TITLE[message.tool ?? ""] ?? message.tool ?? "Action";
-  const audience = message.tool === "import_contacts" || message.tool === "add_contacts" || message.tool === "use_existing_leads" ? (data?.audience as AudienceData | undefined) : message.tool === "describe_audience" ? (data as AudienceData | undefined) : undefined;
+  const audience = message.tool === "import_contacts" || message.tool === "add_contacts" || message.tool === "add_instagram_contacts" || message.tool === "use_existing_leads" ? (data?.audience as AudienceData | undefined) : message.tool === "describe_audience" ? (data as AudienceData | undefined) : undefined;
   const audienceId = typeof data?.audienceId === "string" ? data.audienceId : message.tool === "describe_audience" && typeof data?.id === "string" ? data.id : null;
   return (
     <Card title={title} status={message.status}>
       {message.status === "running" ? null : audience && message.status === "ok" ? (
         <>
           {message.tool === "import_contacts" && <p className="text-paragraph-xs">{message.content.split(". Lead list")[0]}.</p>}
-          {(message.tool === "add_contacts" || message.tool === "use_existing_leads") && message.toolResult?.display && <p className="text-paragraph-xs">{message.toolResult.display}</p>}
+          {(message.tool === "add_contacts" || message.tool === "add_instagram_contacts" || message.tool === "use_existing_leads") && message.toolResult?.display && <p className="text-paragraph-xs">{message.toolResult.display}</p>}
           <AudienceSummary audience={audience} />
           {audienceId && <ProspectsList audienceId={audienceId} />}
         </>

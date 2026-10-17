@@ -39,6 +39,8 @@ import { isExistingLeadsFrom } from "./existingLeads";
 import { inquiryRunReadiness, InquiryRunError, prepareInquiryReplies } from "./inquiryRuns.server";
 import { audienceProspects } from "./qualification.server";
 import { diagnoseDelivery } from "./deliveryDiagnostics.server";
+import { parseInstagramContacts } from "./instagramContacts";
+import { createInstagramContactsAudience } from "./instagramContacts.server";
 
 /**
  * What the assistant can do, and nothing else. Each tool is a call into an
@@ -455,6 +457,28 @@ export const TOOLS: Record<string, Tool> = {
         if (error instanceof TregUnavailableError) return { ok: false, summary: error.message };
         throw error;
       }
+    },
+  },
+
+  add_instagram_contacts: {
+    available: (features) => features.instagram,
+    description: "Save the Instagram usernames or profile URLs the owner supplied as a lead list, without a search or a message. Use this for a named Instagram recipient instead of asking for an email, phone, city or website. Keeps the exact username, including underscores. No Apify or web-search connection is needed. Set contactAfter true only when the owner asked to message/contact/pitch these accounts: an Instagram outreach plan follows using the normal Start or Autonomous mode controls. Account, recipient, opt-out and sending-hour checks still apply.",
+    arguments: "usernames (array of 1-50 owner-supplied usernames, @handles or Instagram profile URLs); listName (optional); contactAfter (optional boolean, true when the owner asked to contact these recipients on Instagram)",
+    run: async (args, context) => {
+      if (!(await featureEnabled("instagram"))) return { ok: false, summary: new FeatureDisabledError("instagram").message };
+      if (args.contactAfter !== undefined && typeof args.contactAfter !== "boolean") throw new ToolArgumentError("contactAfter must be true or false");
+      if (args.contactAfter === true) requireOutreachRequest(context);
+      let usernames: string[];
+      try { usernames = parseInstagramContacts(args.usernames); }
+      catch (error) { throw new ToolArgumentError(error instanceof Error ? error.message : String(error)); }
+      const saved = await createInstagramContactsAudience({ usernames, listName: text(args, "listName"), threadId: context.threadId, userId: context.userId });
+      const names = saved.usernames.map((username) => `@${username}`).join(", ");
+      return {
+        ok: true,
+        summary: `Saved ${names} as lead list ${saved.audienceId}. No message was sent. ${args.contactAfter === true ? "The Instagram outreach plan is prepared next; sending still requires the normal approval or Autonomous authorization and delivery checks." : "Prepare an Instagram outreach plan only when the owner asks."}`,
+        display: `Saved ${names}. No message sent yet.`,
+        data: saved,
+      };
     },
   },
 

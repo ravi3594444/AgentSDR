@@ -29,6 +29,10 @@ Implemented in the current work:
   This is not yet a persistent, adaptive research planner.
 - Approved initial Instagram DMs through Unipile, configurable account rules,
   a durable delivery queue, CRM reply handling and delivery diagnostics.
+- Direct Instagram username/profile input in chat through
+  `add_instagram_contacts`, with exact-handle validation and the existing
+  Review/Autonomous plan controls. Settings and inbox capability copy now
+  describe approved initial DMs. Test this repair on the VM before redesign.
 - Source counts and recorded sending blockers in Results. A saved contact
   route is not verified deliverability, interest or revenue.
 
@@ -114,6 +118,48 @@ Make provider ordering an explicit organization setting with capabilities,
 timeouts and cost expectations. A saved Tavily key must not force Tavily for
 every objective. Existing provider choices must remain supported. Verify
 current official provider contracts before changing adapters or quoting limits.
+
+### Instagram candidate discovery and verification
+
+Owner addition on 17 October: keep discovery separate from profile
+verification. Evaluate this pipeline inside the task's existing budget:
+
+1. Search for the buyer niche and geography, including Instagram profile
+   results. Extract only canonical profile URLs/handles, with their source
+   page and query; a search snippet alone does not verify the business.
+2. When Maps fits the objective, enrich its business candidates with published
+   social links or targeted business-name searches. Reuse the existing Maps
+   adapters; PhantomBuster is not a required additional dependency.
+3. Use available social-search/Apify adapters for relevant accounts, hashtags
+   or public posts. `social.search` and `instagram-cli` in another agent's
+   environment are not capabilities this installation automatically has.
+4. Verify candidates through a supported profile adapter: account resolves,
+   business/buyer fit, public/private state, activity and available contact
+   routes. Record the check time, evidence and unknown/unavailable fields.
+   Follower thresholds and recency are objective-specific preferences, not a
+   universal minimum of 100 followers. A small relevant account may qualify.
+   Owner-supplied test recipients bypass discovery/ranking; the sender still
+   resolves their exact identity and enforces delivery rules.
+5. Deduplicate against canonical People, active/previous outreach and DNC or
+   opt-out history before enrollment. Preserve exclusion reasons and do not
+   silently recontact an already messaged person. Explicit later recontact
+   requires a new approved plan within the existing rules.
+
+Apify's maintained profile scraper accepts usernames/profile URLs and returns
+public profile metadata, bio links, follower counts and recent posts. Evaluate
+that adapter with the owner's connected Apify account and explicit run/spend
+allowances. Meta's Business Discovery API describes other professional
+accounts (Business/Creator); it is not a general username lookup for every
+personal account. Verify permissions and supported account types before
+choosing it. Profile verification never guarantees a DM will be accepted.
+The suggested yields (10–20 candidates per query, one-third rejected) are
+unmeasured for AgentSDR and must not become promised results or fixed limits.
+
+References checked 17 October 2026:
+
+- https://apify.com/apify/instagram-profile-scraper
+- https://developers.facebook.com/documentation/instagram-platform/instagram-api-with-facebook-login/business-discovery
+- https://developers.facebook.com/documentation/instagram-platform/instagram-graph-api/reference/ig-user/business_discovery
 
 ### TinyFish evaluation and provider choices
 
@@ -312,10 +358,11 @@ reports and controls must enforce organization and user permissions.
 
 ## Implementation order and acceptance
 
-1. **Baseline and direct-recipient repair.** Verify the VM artifact revision;
-   repair the Instagram username-entry path and conflicting capability copy,
-   and test the screenshot's single-recipient request through plan, delivery
-   state and reporting before adding the wider research redesign.
+1. **Baseline and VM acceptance.** Verify the VM artifact revision and test the
+   implemented Instagram username-entry repair with the screenshot's
+   single-recipient request through plan, delivery state, inbound reply and
+   reporting before adding the wider research redesign. Build provenance
+   diagnostics remain part of this baseline work.
 2. **Task and reporting foundation.** Add schema, migration, task service,
    leases, activity/attribution events, usage reservations, cancellation and
    recoverable completion-report delivery. Demonstrate resume after a process
