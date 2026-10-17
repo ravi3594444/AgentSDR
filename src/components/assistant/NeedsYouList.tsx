@@ -136,12 +136,13 @@ export default function NeedsYouList({ initial, compact = false }: { initial: Ne
     const ready = items.filter((item) => item.priority === 0).length;
     return (
       <Link href="/assistant/results#needs-you" data-testid="needs-you-banner"
-        className="flex items-center gap-2 rounded-xl border border-warning-base bg-bg-white-0 px-3 py-2 text-paragraph-sm text-text-strong-950 hover:bg-bg-weak-50">
-        <RiFireLine className={cn("size-4 shrink-0", ready ? "text-error-base" : "text-warning-base")} aria-hidden />
-        <span className="min-w-0 flex-1 truncate">
-          {items.length} {items.length === 1 ? "lead needs" : "leads need"} you{ready ? ` (${ready} ready to buy)` : ""}: {items.slice(0, 2).map((item) => item.leadName).join(", ")}{items.length > 2 ? "…" : ""}
+        className="mx-auto flex max-w-3xl items-center gap-3 rounded-xl border border-stroke-soft-200 bg-bg-weak-50/60 px-3.5 py-3 text-paragraph-sm text-text-strong-950 outline-none transition hover:bg-bg-weak-50 focus-visible:ring-2 focus-visible:ring-primary-base">
+        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-bg-white-0 ring-1 ring-inset ring-stroke-soft-200"><RiFireLine className={cn("size-4", ready ? "text-error-base" : "text-warning-base")} aria-hidden /></span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-label-xs">{items.length} {items.length === 1 ? "conversation needs" : "conversations need"} you{ready ? ` · ${ready} ready to buy` : ""}</span>
+          <span className="mt-0.5 block truncate text-paragraph-xs text-text-sub-600">{items.slice(0, 2).map((item) => item.leadName).join(", ")}{items.length > 2 ? ` and ${items.length - 2} more` : ""}</span>
         </span>
-        <span className="text-label-xs text-primary-base">Open</span>
+        <span className="shrink-0 text-label-xs text-primary-base">Review <span aria-hidden="true">↗</span></span>
       </Link>
     );
   }

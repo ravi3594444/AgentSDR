@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { RiAttachment2, RiCheckDoubleLine, RiCheckLine } from "@remixicon/react";
-import { ChatComposer } from "@/components/inbox/shell/Conversation";
+import { Bubble, ChatComposer, DaySeparator, MessageCaption } from "@/components/inbox/shell/Conversation";
 import { ChannelTag } from "@/components/inbox/shell/InboxShell";
 import type { WhatsappMessage } from "@/lib/whatsapp/contract";
 import { cn } from "@/utils/cn";
@@ -15,21 +15,6 @@ function dayKey(iso: string): string {
 
 export function formatMessageTime(iso: string): string {
   return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date(iso));
-}
-
-function dayLabel(iso: string): string {
-  const date = new Date(iso);
-  const now = new Date();
-  const yesterday = new Date();
-  yesterday.setDate(now.getDate() - 1);
-  if (dayKey(iso) === dayKey(now.toISOString())) return "Today";
-  if (dayKey(iso) === dayKey(yesterday.toISOString())) return "Yesterday";
-  return new Intl.DateTimeFormat(undefined, {
-    weekday: "short",
-    day: "numeric",
-    month: "short",
-    year: date.getFullYear() === now.getFullYear() ? undefined : "numeric",
-  }).format(date);
 }
 
 const ORIGIN_LABEL = {
@@ -85,7 +70,7 @@ export function WhatsappMessageList({
   const firstName = leadName?.trim().split(/\s+/)[0];
 
   return (
-    <div ref={scrollRef} className={cn("min-h-0 flex-1 overflow-y-auto px-4 py-4", className)}>
+    <div ref={scrollRef} className={cn("min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-5 sm:px-6", className)}>
       {messages.length === 0 ? (
         <p className="py-8 text-center text-paragraph-sm text-text-soft-400">{emptyText}</p>
       ) : (
@@ -102,28 +87,13 @@ export function WhatsappMessageList({
           const who = outbound ? "You" : firstName;
           return (
             <div key={message.id}>
-              {newDay && (
-                <div className="my-4 flex items-center gap-3 first:mt-0" role="separator" aria-label={dayLabel(message.sentAt)}>
-                  <span className="h-px flex-1 bg-stroke-soft-200" />
-                  <span className="text-label-xs text-text-soft-400" suppressHydrationWarning>
-                    {dayLabel(message.sentAt)}
-                  </span>
-                  <span className="h-px flex-1 bg-stroke-soft-200" />
-                </div>
-              )}
-              <div className={cn("flex flex-col", outbound ? "items-end" : "items-start", groupStart ? "mt-3" : "mt-1")}>
+              {newDay && <DaySeparator date={new Date(message.sentAt)} />}
+              <div className={cn("flex flex-col", outbound ? "items-end" : "items-start", groupStart ? "mt-5" : "mt-1")}>
                 {groupStart && (who || label) && (
-                  <div className={cn("mb-1 flex items-baseline gap-1.5 px-1 text-paragraph-xs", outbound ? "justify-end" : "justify-start")}>
-                    {who && <span className="text-label-xs text-text-strong-950">{who}</span>}
-                    {label && <span className="text-text-soft-400">{who ? "· " : ""}{label}</span>}
-                  </div>
+                  <MessageCaption outbound={outbound} who={who} detail={label} />
                 )}
-                <div
-                  className={cn(
-                    "max-w-[min(36rem,85%)] rounded-2xl px-3.5 py-2 text-paragraph-sm text-text-strong-950 ring-1 ring-inset",
-                    outbound ? "bg-primary-alpha-10 ring-primary-alpha-16" : "bg-bg-weak-50 ring-stroke-soft-200",
-                    outbound ? [!groupStart && "rounded-tr-md", !groupEnd && "rounded-br-md"] : [!groupStart && "rounded-tl-md", !groupEnd && "rounded-bl-md"],
-                  )}
+                <Bubble outbound={outbound} first={groupStart} last={groupEnd}
+                  footer={<><span className="tabular-nums" suppressHydrationWarning>{formatMessageTime(message.sentAt)}</span><Ticks message={message} /></>}
                 >
                   {message.attachments.map((attachment, attachmentIndex) => (
                     <p key={attachment.id ?? attachmentIndex} className="mb-1 flex items-center gap-1 text-paragraph-xs text-text-sub-600">
@@ -132,11 +102,7 @@ export function WhatsappMessageList({
                     </p>
                   ))}
                   {message.body && <p className="whitespace-pre-wrap break-words">{message.body}</p>}
-                  <div className="mt-0.5 flex items-center justify-end gap-1 text-[11px] leading-4 text-text-soft-400">
-                    <span className="tabular-nums" suppressHydrationWarning>{formatMessageTime(message.sentAt)}</span>
-                    <Ticks message={message} />
-                  </div>
-                </div>
+                </Bubble>
               </div>
             </div>
           );

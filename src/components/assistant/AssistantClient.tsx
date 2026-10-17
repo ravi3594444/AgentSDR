@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import Link from "next/link";
 import {
   RiAddLine,
+  RiArrowDownLine,
   RiArrowDownSLine,
   RiArrowUpLine,
   RiAttachment2,
@@ -15,6 +16,8 @@ import {
   RiFileList3Line,
   RiFileTextLine,
   RiInformationLine,
+  RiHistoryLine,
+  RiChat3Line,
   RiLoader4Line,
   RiPauseLine,
   RiPlayLine,
@@ -34,6 +37,7 @@ import type { OwnerDecisionKind } from "@/lib/assistant/schema";
 import { AUTOPILOT_LIMITS } from "@/lib/crm/autopilot";
 import * as Button from "@/components/alignui/button";
 import NeedsYouList from "@/components/assistant/NeedsYouList";
+import { useChatScroll } from "./useChatScroll";
 import { cn } from "@/utils/cn";
 
 /**
@@ -155,8 +159,8 @@ function StatusIcon({ status }: { status: Message["status"] | Job["status"] }) {
 
 function Card({ title, status, children }: { title: string; status: Message["status"] | Job["status"]; children?: React.ReactNode }) {
   return (
-    <div className="w-full max-w-2xl rounded-xl border border-stroke-soft-200 bg-bg-white-0 p-3 shadow-regular-xs">
-      <div className="flex items-center gap-2">
+    <div className="w-full max-w-2xl overflow-hidden rounded-2xl border border-stroke-soft-200 bg-bg-white-0 p-4">
+      <div className="flex items-center gap-2.5">
         <StatusIcon status={status} />
         <p className="min-w-0 flex-1 truncate text-label-sm text-text-strong-950">{title}</p>
       </div>
@@ -392,11 +396,11 @@ function AutonomousSwitch({ thread, canManage, onChanged }: { thread: AssistantS
     : locked ? "Only an owner or admin can turn on Autonomous mode." : "Let the assistant work without asking: plans start on their own in Automatic mode, within your daily caps.";
   return (
     <button type="button" role="switch" aria-checked={on} aria-label="Autonomous mode" title={title} disabled={busy || locked} onClick={() => void toggle()} data-testid="autonomous-switch"
-      className={cn("inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-label-xs ring-1 ring-inset transition-colors", on ? "bg-primary-base text-static-white ring-primary-base" : "text-text-sub-600 ring-stroke-soft-200 hover:bg-bg-weak-50", (busy || locked) && "opacity-60")}>
+      className={cn("inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-label-xs ring-1 ring-inset transition-colors", on ? "bg-primary-base text-primary-contrast ring-primary-base" : "text-text-sub-600 ring-stroke-soft-200 hover:bg-bg-weak-50", (busy || locked) && "opacity-60")}>
       {busy ? <RiLoader4Line className="size-4 animate-spin" aria-hidden="true" /> : <RiRobot2Line className="size-4" aria-hidden="true" />}
-      <span className="hidden sm:inline">Autonomous</span>
-      <span aria-hidden="true" className={cn("relative h-4 w-7 shrink-0 rounded-full", on ? "bg-static-white/40" : "bg-bg-soft-200")}>
-        <span className={cn("absolute top-0.5 size-3 rounded-full bg-static-white shadow-sm transition-all", on ? "left-3.5" : "left-0.5")} />
+      <span>Autonomous</span>
+      <span aria-hidden="true" className={cn("relative h-4 w-7 shrink-0 rounded-full", on ? "bg-primary-contrast/30" : "bg-bg-soft-200")}>
+        <span className={cn("absolute top-0.5 size-3 rounded-full shadow-sm transition-all", on ? "left-3.5 bg-primary-contrast" : "left-0.5 bg-static-white")} />
       </span>
     </button>
   );
@@ -882,7 +886,7 @@ function RichText({ text }: { text: string }) {
     return <span key={`${key}-${index}`}>{part}</span>;
   });
   return (
-    <div className="space-y-2">
+    <div className="space-y-3 leading-7 [overflow-wrap:anywhere]">
       {text.trim().split(/\n{2,}/).map((block, blockIndex) => {
         const lines = block.split("\n");
         const listItem = /^\s*(?:[-•*]|\d+[.)])\s+/;
@@ -967,17 +971,14 @@ function ReadinessMenu({ setup }: { setup: Setup | null }) {
   );
 }
 
-function ConversationMenu({ current, threads, onOpen, onNew }: { current: { id: string; title: string }; threads: AssistantStatePayload["threads"]; onOpen: (id: string) => void; onNew: () => void }) {
+function ConversationMenu({ current, threads, onOpen, onNew, disabled }: { current: { id: string; title: string }; threads: AssistantStatePayload["threads"]; onOpen: (id: string) => void; onNew: () => void; disabled: boolean }) {
   return (
     <Dropdown.Root>
       <Dropdown.Trigger asChild>
-        <button type="button" className="flex min-w-0 items-center gap-2 rounded-lg px-1.5 py-1 text-left hover:bg-bg-weak-50">
-          <AssistantAvatar />
-          <span className="min-w-0">
-            <span className="block text-label-sm text-text-strong-950">Assistant</span>
-            <span className="block max-w-[11rem] truncate text-paragraph-xs text-text-soft-400 sm:max-w-xs">{displayThreadTitle(current.title)}</span>
-          </span>
-          <RiArrowDownSLine className="size-4 shrink-0 text-text-soft-400" aria-hidden="true" />
+        <button type="button" disabled={disabled} aria-label="Conversation history" className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-label-xs text-text-sub-600 hover:bg-bg-weak-50 disabled:opacity-50">
+          <RiHistoryLine className="size-4" aria-hidden="true" />
+          <span>History</span>
+          <RiArrowDownSLine className="size-3.5 shrink-0 text-text-soft-400" aria-hidden="true" />
         </button>
       </Dropdown.Trigger>
       <Dropdown.Content align="start" className="w-72 max-w-[calc(100vw-2rem)]">
@@ -1024,11 +1025,11 @@ type BusinessProfileSummary = { businessName?: string; offer?: string; targetCus
 
 function Welcome({ firstName, profile, onStarter }: { firstName: string | null; profile: BusinessProfileSummary | undefined; onStarter: (starter: Starter) => void }) {
   return (
-    <div className="assistant-welcome mx-auto flex w-full max-w-2xl flex-col items-center pt-[5vh] text-center">
+    <div className="assistant-welcome mx-auto flex w-full max-w-2xl flex-col items-center py-4 text-center sm:pt-[4vh]">
       <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-soft-400">{firstName ? `Your workspace, ${firstName}` : "Your outreach workspace"}</p>
       <h2 className="mt-5 text-[clamp(30px,3.5vw,46px)] font-medium leading-[1.1] tracking-[-0.045em] text-text-strong-950">Let’s make your next<br /><span className="font-instrument-serif text-[1.15em] italic font-normal">connection.</span></h2>
       <p className="mt-4 max-w-lg text-paragraph-sm leading-relaxed text-text-sub-600">
-        I find customers{profile?.businessName ? ` for ${profile.businessName}` : ""}, write the outreach you approve, answer routine replies from your information, and bring you anything that needs a decision.
+        Find the right people{profile?.businessName ? ` for ${profile.businessName}` : ""}, shape your outreach, and keep conversations moving. What would you like to work on?
       </p>
       <div className="mt-8 grid w-full gap-3 text-left sm:grid-cols-2">
         {starters(profile).map((starter) => (
@@ -1043,6 +1044,46 @@ function Welcome({ firstName, profile, onStarter }: { firstName: string | null; 
       </div>
       {!profile?.businessName && <p className="mt-4 text-paragraph-xs text-text-soft-400">Start by telling me about your business, or attach a brochure or price list. I remember it for every conversation.</p>}
     </div>
+  );
+}
+
+function WorkspaceContext({ state, profile, setup, disabled, onOpen, onEdit }: {
+  state: AssistantStatePayload;
+  profile: BusinessProfileSummary | undefined;
+  setup: Setup | null;
+  disabled: boolean;
+  onOpen: (id: string) => void;
+  onEdit: () => void;
+}) {
+  const active = Object.values(state.runs).filter((run) => run.status === "running" || run.status === "starting").length;
+  return (
+    <aside aria-label="Workspace context" className="hidden w-60 shrink-0 flex-col gap-8 overflow-y-auto border-l border-stroke-soft-200 bg-bg-weak-50/50 px-4 py-6 xl:flex">
+      <section aria-labelledby="recent-chats-title">
+        <h2 id="recent-chats-title" className="mb-3 px-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-text-soft-400">Recent chats</h2>
+        <div className="space-y-1">
+          {state.threads.slice(0, 6).map((thread) => (
+            <button key={thread.id} type="button" disabled={disabled} onClick={() => onOpen(thread.id)} aria-current={thread.id === state.thread.id ? "true" : undefined}
+              className={cn("flex w-full items-start gap-2.5 rounded-xl px-3 py-3 text-left outline-none transition focus-visible:ring-2 focus-visible:ring-primary-base disabled:opacity-50", thread.id === state.thread.id ? "bg-bg-white-0 ring-1 ring-inset ring-stroke-soft-200" : "hover:bg-bg-weak-50")}>
+              <RiChat3Line className="mt-0.5 size-4 shrink-0 text-text-sub-600" aria-hidden="true" />
+              <span className="min-w-0"><span className="block truncate text-label-xs text-text-strong-950">{displayThreadTitle(thread.title)}</span><span className="mt-1 block text-[11px] text-text-soft-400" suppressHydrationWarning>{relativeTime(thread.updatedAt)}</span></span>
+            </button>
+          ))}
+        </div>
+      </section>
+      <section aria-labelledby="business-context-title" className="px-2">
+        <h2 id="business-context-title" className="text-[11px] font-semibold uppercase tracking-[0.1em] text-text-soft-400">Business context</h2>
+        <p className="mt-4 text-label-sm text-text-strong-950">{profile?.businessName || "Make it personal"}</p>
+        <p className="mt-2 line-clamp-4 text-paragraph-xs leading-5 text-text-sub-600">{profile?.offer || "Add your offer and ideal customer so each conversation starts with the right context."}</p>
+        {profile?.targetCustomers && <p className="mt-3 text-paragraph-xs leading-5 text-text-sub-600"><span className="block text-[11px] text-text-soft-400">Your audience</span>{profile.targetCustomers}</p>}
+        <button type="button" onClick={onEdit} disabled={disabled} className="mt-4 text-label-xs text-text-strong-950 underline decoration-stroke-sub-300 underline-offset-4 outline-none hover:decoration-text-strong-950 focus-visible:ring-2 focus-visible:ring-primary-base">{profile?.businessName ? "Update business details" : "Add business details"}</button>
+      </section>
+      {setup && <section className="mt-auto border-t border-stroke-soft-200 px-2 pt-5" aria-label="Connected channels">
+        <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-text-soft-400">Connected channels</p>
+        <div className="flex flex-wrap gap-2">{Object.entries(setup.channels).filter(([, channel]) => channel.available).map(([key]) => <span key={key} className="inline-flex items-center gap-1.5 text-paragraph-xs text-text-sub-600"><span className="size-1.5 rounded-full bg-success-base" />{CHANNEL_LABEL[key]}</span>)}</div>
+        {!Object.values(setup.channels).some((channel) => channel.available) && <Link href="/getting-started" className="text-paragraph-xs text-text-sub-600 underline underline-offset-4">Connect a sending account</Link>}
+        {active > 0 && <Link href="/assistant/results" className="mt-4 block text-paragraph-xs text-text-sub-600 hover:underline">{active} active {active === 1 ? "run" : "runs"} · View results ↗</Link>}
+      </section>}
+    </aside>
   );
 }
 
@@ -1069,7 +1110,6 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
   const [error, setError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
-  const scroller = useRef<HTMLDivElement>(null);
   const threadId = state.thread.id;
 
   const refresh = useCallback(async (withSetup = false) => {
@@ -1100,10 +1140,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
 
   const showPending = pending !== null && !state.messages.slice(pending.baseline).some((message) => message.role === "user");
   const count = state.messages.length + (showPending ? 1 : 0);
-  useEffect(() => {
-    const element = scroller.current;
-    if (element) element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
-  }, [count, state.thread.id, state.busy]);
+  const { scroller, content, showLatest, updatePosition, jumpToLatest } = useChatScroll(threadId, count);
 
   // The message box grows with what is typed, up to about eight lines.
   useLayoutEffect(() => {
@@ -1120,6 +1157,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
   async function send(value = text) {
     const message = value.trim();
     if ((!message && !files.length) || sending) return;
+    jumpToLatest();
     setSending(true);
     setError(null);
     setPending({ text: message, files: files.map((file) => file.name), baseline: state.messages.length });
@@ -1203,34 +1241,44 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
       onDragLeave={(event) => { if (event.currentTarget === event.target) setDragging(false); }}
       onDrop={(event) => { event.preventDefault(); setDragging(false); addFiles(Array.from(event.dataTransfer.files)); }}
     >
-      <header className="flex h-14 shrink-0 items-center gap-2 border-b border-stroke-soft-200 px-3 sm:px-5">
-        <ConversationMenu current={state.thread} threads={state.threads} onOpen={(id) => void openThread(id)} onNew={() => void newThread()} />
-        <div className="ml-auto flex items-center gap-1.5">
-          <AutonomousSwitch thread={state.thread} canManage={Boolean(setup?.canManageAutopilot)} onChanged={(next) => setState(next)} />
-          <ReadinessMenu setup={setup} />
-          <Link href="/assistant/results" className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-label-xs text-text-sub-600 ring-1 ring-inset ring-stroke-soft-200 hover:bg-bg-weak-50">
+      <header className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-3 border-b border-stroke-soft-200 px-4 py-3 sm:px-6">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          <AssistantAvatar />
+          <div className="min-w-0"><h1 className="text-label-md text-text-strong-950">Assistant</h1><p className="mt-0.5 truncate text-paragraph-xs text-text-soft-400">{displayThreadTitle(state.thread.title)}</p></div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5 sm:order-last">
+          <Button.Root variant="neutral" mode="stroke" size="xsmall" onClick={() => void newThread()} disabled={sending} aria-label="New conversation" className="h-9">
+            <Button.Icon as={RiAddLine} />New chat
+          </Button.Root>
+          <Link href="/assistant/results" aria-label="Outreach results" title="Outreach results" className="inline-flex h-9 items-center gap-1.5 rounded-lg px-2.5 text-label-xs text-text-sub-600 hover:bg-bg-weak-50">
             <RiBarChartBoxLine className="size-4" aria-hidden="true" /><span className="hidden sm:inline">Results</span>
           </Link>
-          <Button.Root variant="neutral" mode="stroke" size="xsmall" onClick={() => void newThread()} disabled={sending} aria-label="New conversation" className="h-8">
-            <Button.Icon as={RiAddLine} /><span className="hidden sm:inline">New chat</span>
-          </Button.Root>
+        </div>
+        <div className="flex w-full flex-wrap items-center gap-1.5 border-t border-stroke-soft-200 pt-2 sm:ml-auto sm:w-auto sm:border-0 sm:pt-0">
+          <ConversationMenu current={state.thread} threads={state.threads} onOpen={(id) => void openThread(id)} onNew={() => void newThread()} disabled={sending} />
+          <AutonomousSwitch thread={state.thread} canManage={Boolean(setup?.canManageAutopilot)} onChanged={(next) => setState(next)} />
+          <ReadinessMenu setup={setup} />
         </div>
       </header>
 
-      <div className="shrink-0 px-3 pt-2 empty:hidden sm:px-5">
+      <div className="flex min-h-0 flex-1">
+      <div className="relative flex min-w-0 flex-1 flex-col">
+      <div className="shrink-0 px-4 pt-3 empty:hidden sm:px-6">
         <NeedsYouList initial={null} compact />
       </div>
 
-      <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-6">
+      <div ref={scroller} onScroll={updatePosition} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-6 sm:px-8" aria-label="Assistant conversation">
+        <div ref={content}>
         {empty ? (
           <Welcome firstName={state.viewer?.firstName ?? null} profile={profile} onStarter={pickStarter} />
         ) : (
-          <div role="log" aria-live="polite" className="mx-auto flex max-w-3xl flex-col gap-5">
+          <div role="log" aria-live="polite" className="mx-auto flex max-w-3xl flex-col gap-8">
             {turns.map((turn, index) => (
               <div key={turn.owner?.id ?? `turn-${index}`} className="flex flex-col gap-3">
                 {turn.owner && (
-                  <div className="flex flex-col items-end gap-1">
-                    {turn.owner.content && <div className="max-w-[min(36rem,85%)] whitespace-pre-wrap rounded-2xl rounded-br-md bg-bg-weak-50 px-3.5 py-2 text-paragraph-sm text-text-strong-950">{turn.owner.content}</div>}
+                  <div className="flex flex-col items-end gap-2">
+                    <span className="px-1 text-[11px] text-text-soft-400" suppressHydrationWarning>You · {new Date(turn.owner.createdAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
+                    {turn.owner.content && <div className="max-w-[min(36rem,90%)] whitespace-pre-wrap rounded-2xl rounded-br-md bg-bg-weak-50 px-4 py-3 text-paragraph-sm leading-6 text-text-strong-950 [overflow-wrap:anywhere]">{turn.owner.content}</div>}
                     {turn.owner.attachments.map((file) => (
                       <span key={file.name} className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-paragraph-xs text-text-sub-600 ring-1 ring-inset ring-stroke-soft-200">
                         {file.kind === "contacts" ? <RiTableLine className="size-3.5" /> : <RiFileTextLine className="size-3.5" />}
@@ -1243,6 +1291,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
                   <div className="flex gap-3">
                     <AssistantAvatar />
                     <div className="flex min-w-0 flex-1 flex-col gap-2.5 pt-0.5">
+                      <span className="text-label-xs text-text-sub-600">Assistant</span>
                       {assistantItems(turn.items)}
                       {thinking && index === turns.length - 1 && !showPending && <ThinkingIndicator label={thinkingLabel} />}
                     </div>
@@ -1253,7 +1302,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
             {showPending && pending && (
               <div className="flex flex-col gap-3">
                 <div className="flex flex-col items-end gap-1">
-                  {pending.text && <div className="max-w-[min(36rem,85%)] whitespace-pre-wrap rounded-2xl rounded-br-md bg-bg-weak-50 px-3.5 py-2 text-paragraph-sm text-text-strong-950">{pending.text}</div>}
+                  {pending.text && <div className="max-w-[min(36rem,90%)] whitespace-pre-wrap rounded-2xl rounded-br-md bg-bg-weak-50 px-4 py-3 text-paragraph-sm leading-6 text-text-strong-950 [overflow-wrap:anywhere]">{pending.text}</div>}
                   {pending.files.map((name) => <span key={name} className="text-paragraph-xs text-text-sub-600">{name}</span>)}
                 </div>
                 <div className="flex gap-3"><AssistantAvatar /><div className="pt-1.5"><ThinkingIndicator label={pending.files.length ? "Reading your files…" : "Thinking…"} /></div></div>
@@ -1270,12 +1319,14 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
             )}
           </div>
         )}
+        </div>
       </div>
 
-      <div className="shrink-0 px-3 pb-3 pt-1 sm:px-6 sm:pb-4">
+      <div className="relative shrink-0 px-3 pb-[max(12px,env(safe-area-inset-bottom))] pt-3 sm:px-6 sm:pb-4">
+        {showLatest && <button type="button" onClick={jumpToLatest} className="absolute -top-11 left-1/2 inline-flex -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded-full border border-stroke-soft-200 bg-bg-white-0 px-3.5 py-2 text-label-xs text-text-strong-950 shadow-regular-sm outline-none hover:bg-bg-weak-50 focus-visible:ring-2 focus-visible:ring-primary-base"><RiArrowDownLine className="size-4" aria-hidden="true" />Jump to latest</button>}
         <div className="mx-auto max-w-3xl">
           {error && <p role="alert" className="mb-2 text-paragraph-xs text-error-base">{error}</p>}
-          <div className="rounded-2xl bg-bg-weak-25 shadow-regular-xs ring-1 ring-inset ring-stroke-soft-200 transition focus-within:bg-bg-white-0 focus-within:ring-primary-base">
+          <div className="rounded-[20px] bg-bg-white-0 shadow-[0_4px_24px_-10px_rgba(0,0,0,0.15)] ring-1 ring-inset ring-stroke-sub-300 transition focus-within:ring-primary-base">
             {files.length > 0 && (
               <div className="flex flex-wrap gap-1.5 px-3 pt-3">
                 {files.map((file) => (
@@ -1302,10 +1353,10 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
                 if (pasted.length) { event.preventDefault(); addFiles(pasted); }
               }}
               rows={1}
-              placeholder={empty ? "Describe your business, or ask for leads…" : "Reply to the assistant…"}
+              placeholder={empty ? "What would you like to work on?" : "Ask a follow-up, or give the next instruction…"}
               aria-label="Message the assistant"
               disabled={sending}
-              className="block max-h-52 min-h-11 w-full resize-none bg-transparent px-4 pb-1 pt-3 text-paragraph-sm text-text-strong-950 outline-none placeholder:text-text-soft-400"
+              className="block max-h-52 min-h-[72px] w-full resize-none bg-transparent px-4 pb-2 pt-4 text-[16px] leading-6 text-text-strong-950 outline-none placeholder:text-text-soft-400 sm:text-paragraph-sm"
             />
             <div className="flex items-center gap-2 px-2 pb-2">
               <input ref={fileInput} type="file" multiple accept={ACCEPT} className="hidden" onChange={(event) => {
@@ -1315,8 +1366,8 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
               <button type="button" onClick={() => fileInput.current?.click()} disabled={sending} title="Attach a PDF, Word or text document, or a CSV/Excel contact list" className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-label-xs text-text-sub-600 hover:bg-bg-weak-50 disabled:opacity-50">
                 <RiAttachment2 className="size-4" aria-hidden="true" /><span>Attach</span>
               </button>
-              <span className="hidden flex-1 truncate text-paragraph-xs text-text-soft-400 sm:block">Documents, price lists or a contact list (CSV, Excel)</span>
-              <Button.Root variant="primary" mode="filled" size="small" onClick={() => void send()} disabled={sending || (!text.trim() && !files.length)} aria-label="Send" className="ml-auto size-8 rounded-lg p-0">
+              <span className="hidden flex-1 truncate text-[11px] text-text-soft-400 sm:block">Enter to send · Shift + Enter for a new line</span>
+              <Button.Root variant="primary" mode="filled" size="small" onClick={() => void send()} disabled={sending || (!text.trim() && !files.length)} aria-label="Send" className="ml-auto size-9 rounded-xl p-0">
                 {sending ? <Button.Icon as={RiLoader4Line} className="animate-spin" /> : <Button.Icon as={RiArrowUpLine} />}
               </Button.Root>
             </div>
@@ -1328,6 +1379,10 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
             <span className="hidden sm:inline"> Replies waiting for you are in <Link href="/crm/actions" className="underline underline-offset-2 hover:text-text-sub-600">Action required</Link>.</span>
           </p>
         </div>
+      </div>
+
+      </div>
+      <WorkspaceContext state={state} profile={profile} setup={setup} disabled={sending} onOpen={(id) => void openThread(id)} onEdit={() => pickStarter(starters(profile)[0]!)} />
       </div>
 
       {dragging && (

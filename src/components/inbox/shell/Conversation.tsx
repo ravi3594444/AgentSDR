@@ -9,9 +9,8 @@ import { Kbd, dayHeading } from "./InboxShell";
 
 /**
  * The pieces a chat-style thread (LinkedIn, WhatsApp) is drawn from, and the
- * composer both use. Outbound messages sit on a light tint of the brand blue,
- * inbound on the soft grey surface — direction is clear without a wall of
- * solid colour, and both surfaces re-tone in dark mode.
+ * composer both use. Neutral surfaces keep the message readable in both
+ * themes; alignment, grouped corners and captions show who is speaking.
  */
 
 /** A centred date between messages ("Today", "Mon, Sep 12"). */
@@ -19,7 +18,7 @@ export function DaySeparator({ date }: { date: Date }) {
   return (
     <div className="my-5 flex items-center gap-3 first:mt-1" role="separator" aria-label={dayHeading(date)}>
       <span className="h-px flex-1 bg-stroke-soft-200" />
-      <span className="text-label-xs text-text-soft-400" suppressHydrationWarning>
+      <span className="rounded-full bg-bg-weak-50 px-3 py-1 text-[11px] font-medium text-text-sub-600" suppressHydrationWarning>
         {dayHeading(date)}
       </span>
       <span className="h-px flex-1 bg-stroke-soft-200" />
@@ -67,15 +66,15 @@ export function Bubble({
     <div
       title={title}
       className={cn(
-        "max-w-[min(40rem,85%)] px-3.5 py-2 text-paragraph-sm text-text-strong-950",
-        outbound ? "bg-primary-alpha-10 ring-1 ring-inset ring-primary-alpha-16" : "bg-bg-weak-50 ring-1 ring-inset ring-stroke-soft-200",
+        "max-w-[min(40rem,90%)] px-4 py-3 text-paragraph-sm leading-6 text-text-strong-950 [overflow-wrap:anywhere] sm:max-w-[min(40rem,85%)]",
+        outbound ? "bg-bg-weak-50 ring-1 ring-inset ring-stroke-soft-200" : "bg-bg-white-0 ring-1 ring-inset ring-stroke-soft-200",
         "rounded-2xl",
         outbound ? [!first && "rounded-tr-md", !last && "rounded-br-md"] : [!first && "rounded-tl-md", !last && "rounded-bl-md"],
         className,
       )}
     >
       {children}
-      {footer && <div className="mt-0.5 flex items-center justify-end gap-1 text-[11px] leading-4 text-text-soft-400">{footer}</div>}
+      {footer && <div className="mt-1.5 flex items-center justify-end gap-1 text-[11px] leading-4 text-text-soft-400">{footer}</div>}
     </div>
   );
 }
@@ -185,7 +184,7 @@ export function ChatComposer({
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-2xl bg-bg-white-0 shadow-regular-xs ring-1 ring-inset transition focus-within:ring-stroke-strong-950",
+        "overflow-hidden rounded-2xl bg-bg-white-0 ring-1 ring-inset transition focus-within:ring-stroke-strong-950",
         tone === "draft" ? "ring-primary-alpha-24" : "ring-stroke-soft-200",
         disabled && "opacity-70",
         className,
@@ -206,14 +205,14 @@ export function ChatComposer({
         disabled={disabled}
         placeholder={placeholder}
         aria-label={ariaLabel}
-        className="block max-h-60 w-full resize-none bg-transparent px-4 pb-1 pt-3 text-paragraph-sm text-text-strong-950 outline-none placeholder:text-text-soft-400 disabled:cursor-not-allowed"
+        className="block max-h-60 min-h-[76px] w-full resize-none bg-transparent px-4 pb-2 pt-4 text-[16px] leading-6 text-text-strong-950 outline-none placeholder:text-text-soft-400 disabled:cursor-not-allowed sm:text-paragraph-sm"
       />
       <div className="flex items-center gap-2 px-3 pb-2.5 pt-1">
         <div className="min-w-0 flex-1 truncate text-paragraph-xs text-text-soft-400">{meta}</div>
         <span className="hidden shrink-0 items-center gap-1 text-paragraph-xs text-text-soft-400 @3xl:inline-flex">
           <Kbd>Enter</Kbd> to send · <Kbd>Shift</Kbd>+<Kbd>Enter</Kbd> new line
         </span>
-        <Button.Root variant="primary" mode="filled" size="xsmall" onClick={onSubmit} disabled={!canSend} className="shrink-0" title="Send (Enter)">
+        <Button.Root variant="primary" mode="filled" size="xsmall" onClick={onSubmit} disabled={!canSend} className="h-9 shrink-0 rounded-lg px-3" title="Send (Enter)">
           {sending ? <Button.Icon as={RiLoader4Line} className="animate-spin" /> : <Button.Icon as={RiSendPlane2Fill} />}
           {sending ? "Sending…" : submitLabel}
         </Button.Root>
@@ -224,7 +223,7 @@ export function ChatComposer({
 
 /** The dock the composer sits in, pinned under the thread. */
 export function ComposerDock({ children, className }: { children: ReactNode; className?: string }) {
-  return <div className={cn("shrink-0 space-y-2 border-t border-stroke-soft-200 bg-bg-white-0 px-3 py-3 sm:px-5", className)}>{children}</div>;
+  return <div className={cn("shrink-0 space-y-2 border-t border-stroke-soft-200 bg-bg-weak-50/50 px-3 pb-[max(12px,env(safe-area-inset-bottom))] pt-3 sm:px-5 sm:py-4", className)}>{children}</div>;
 }
 
 /** Inside the composer while an AI draft is loaded: what it is, and a way to stop using it. */
