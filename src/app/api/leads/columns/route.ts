@@ -1,27 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { authContextErrorResponse, withOrgContext } from "@/lib/auth/context";
-import { ColumnError, addColumn, listColumns } from "@/lib/leads/columns";
+import { withOrgContext } from "@/lib/auth/context";
+import { addColumn, listColumns } from "@/lib/leads/columns";
+import { columnErrorResponse } from "@/lib/leads/columnErrorResponse";
 import {
   isLeadEntity,
   PG_TYPE_FOR_COLUMN_TYPE,
   type LeadColumnType,
   type LeadEntity,
 } from "@/lib/leads/types";
-
-/**
- * A ColumnError is a message written for the user — a name collision, a busy
- * table, a protected core column. Anything else is a bug and must not have
- * its message forwarded, because driver errors inline the failing SQL.
- */
-export function columnErrorResponse(err: unknown) {
-  const auth = authContextErrorResponse(err);
-  if (auth) return auth;
-  if (err instanceof ColumnError) {
-    return NextResponse.json({ error: err.message }, { status: 400 });
-  }
-  console.error("[leads/columns]", err);
-  return NextResponse.json({ error: "Something went wrong" }, { status: 500 });
-}
 
 // GET /api/leads/columns?entity=person&includeArchived=true
 export async function GET(req: NextRequest) {
