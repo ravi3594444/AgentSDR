@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { completeStructured, isStrictJsonSchema, type StructuredCompletionRuntime } from "./structuredCompletion";
 import { actionsProblem, agentReplySchema, nextAgentBatch, outreachRequested, parseAgentReply, type AgentReply } from "@/lib/assistant/agent";
+import { parseWriterReply, writerReplyInstructions, WRITER_REPLY_SCHEMAS } from "@/lib/assistant/writerReply";
 
 type Reply = { toolArgs?: string; content?: string; throws?: Error; error?: unknown };
 
@@ -282,6 +283,63 @@ describe("assistant completion recovery", () => {
     assert.ok(repair.startsWith(plainPrompt));
     assert.ok(repair.includes('"actions":[{"tool":"TOOL_NAME","arguments":"{}"}]'));
     assert.ok(repair.includes("do not omit actions"));
+  });
+});
+
+describe("outreach response recovery through the provider transport", () => {
+  const sorted = { leads: [{ index: 25, group: "Real estate agencies", approach: "standard", reason: "The business publishes a Chicago office." }] };
+
+  for (const mode of ["tool_call", "json_schema"] as const) {
+    test(`${mode}: repairs the missing-leads response from the planning failure`, async () => {
+      const invalid = '{"message":"I sorted your leads."}';
+      const valid = JSON.stringify({ lead_sorting: sorted });
+      const { runtime, requests } = mode === "tool_call"
+        ? scripted([{ toolArgs: invalid }, { toolArgs: valid }], "lead_sorting")
+        : jsonSchemaRuntime([{ content: invalid }, { content: valid }]);
+      let accepted: ReturnType<typeof parseWriterReply<"lead_sorting">> | undefined;
+      const result = await completeStructured({
+        ...input, schemaName: "lead_sorting", jsonSchema: WRITER_REPLY_SCHEMAS.lead_sorting,
+        userPrompt: `${writerReplyInstructions("lead_sorting")}\nSort lead 25 from its public facts.`,
+        accept: (text) => { accepted = parseWriterReply(text, "lead_sorting"); },
+      }, { runtime, sleep: noSleep });
+      assert.equal(result.attempts, 2);
+      assert.deepEqual(accepted, sorted);
+      const retry = requests[1] as { messages: Array<{ role: string; content: string }> };
+      const repair = retry.messages.find((message) => message.role === "user")!.content;
+      assert.ok(repair.includes("lead_sorting.leads is required"));
+      assert.ok(repair.includes('"leads" as an array'));
+      assert.ok(!repair.includes("undefined is not an object"));
+    });
+  }
+
+  test("sorting, sequences, reviews, opening lines and personal messages all pass through their real schemas", async () => {
+    const stages = {
+      lead_sorting: sorted,
+      outreach_sequences: { channels: [{ channel: "linkedin", messages: [{ subject: "", body: "How do you handle new inquiries?", waitDays: 0 }] }] },
+      first_message_review: { messages: [{ channel: "linkedin", wouldReply: 4, reasons: [] }] },
+      opening_lines: { lines: [{ index: 25, line: "I saw your Chicago office listed." }] },
+      personal_messages: { messages: [{ index: 25, subject: "", body: "How does your Chicago office handle inquiries?" }] },
+    };
+    for (const name of Object.keys(stages) as (keyof typeof stages)[]) {
+      const key = WRITER_REPLY_SCHEMAS[name].required[0]!;
+      const rows = Object.values(stages[name])[0];
+      const { runtime } = scripted([{ toolArgs: JSON.stringify({ [key]: rows[0] }) }], name);
+      let accepted: unknown;
+      const result = await completeStructured({
+        ...input, schemaName: name, jsonSchema: WRITER_REPLY_SCHEMAS[name],
+        accept: (text) => { accepted = parseWriterReply(text, name); },
+      }, { runtime, sleep: noSleep });
+      assert.equal(result.attempts, 1);
+      assert.deepEqual(accepted, stages[name]);
+    }
+  });
+
+  test("persistent malformed sorting is refused with a field-level reason instead of fake successful output", async () => {
+    const { runtime } = scripted([{ toolArgs: '{}' }, { toolArgs: '{"leads":null}' }], "lead_sorting");
+    await assert.rejects(completeStructured({
+      ...input, schemaName: "lead_sorting", jsonSchema: WRITER_REPLY_SCHEMAS.lead_sorting, maxAttempts: 2,
+      accept: (text) => { parseWriterReply(text, "lead_sorting"); },
+    }, { runtime, sleep: noSleep }), /lead_sorting failed after 2 attempts: lead_sorting.leads must be an array/);
   });
 });
 

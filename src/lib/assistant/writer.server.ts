@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { completeStructured } from "@/lib/ai/server/structuredCompletion";
 import { retrieveKnowledge } from "@/lib/crm/knowledge";
 import { recordUsage } from "./usage.server";
+import { parseWriterReply, writerReplyInstructions, WRITER_REPLY_SCHEMAS } from "./writerReply";
 import { CHANNEL_RULES, ensureSignOff, personalLineProblem, personalMessageProblem, sequenceProblem, type LeadApproach } from "./messages";
 import { lineClash, PERSONAL_LINE_LIMITS, pitchProblems } from "./pitch";
 import { profileKnowledgeText } from "./profile";
@@ -43,38 +44,6 @@ export async function businessContext(profile: BusinessProfile): Promise<string>
     .map((entry) => `### ${entry.title}\n${entry.excerpt}`);
   return [profileKnowledgeText(profile), ...excerpts].filter(Boolean).join("\n\n");
 }
-
-const SEQUENCE_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  required: ["channels"],
-  properties: {
-    channels: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["channel", "messages"],
-        properties: {
-          channel: { type: "string", enum: ["email", "whatsapp", "linkedin"] },
-          messages: {
-            type: "array",
-            items: {
-              type: "object",
-              additionalProperties: false,
-              required: ["subject", "body", "waitDays"],
-              properties: {
-                subject: { type: "string", description: "Email only; an empty string elsewhere and for a follow-up that replies in the same thread." },
-                body: { type: "string" },
-                waitDays: { type: "integer", description: "Days after the previous message; 0 for the first." },
-              },
-            },
-          },
-        },
-      },
-    },
-  },
-};
 
 function sequencePrompt(input: { channels: AudienceChannel[]; personalizationKey: string; tokens: readonly string[]; signatureAppended: boolean; profile: BusinessProfile; instructions: string | null }) {
   const tokens = [...input.tokens, input.personalizationKey];
@@ -129,9 +98,10 @@ export async function writeSequences(input: {
     maxAttempts: PITCH_RETRIES + 2,
     schemaName: "outreach_sequences",
     schemaDescription: "Submit the outreach messages for each channel.",
-    jsonSchema: SEQUENCE_SCHEMA,
+    jsonSchema: WRITER_REPLY_SCHEMAS.outreach_sequences,
     systemPrompt: sequencePrompt(input),
     userPrompt: [
+      writerReplyInstructions("outreach_sequences"),
       `BUSINESS INFORMATION:\n${input.context || "(none given)"}`,
       `WHO WILL RECEIVE IT: ${input.audienceDescription}`,
       `Write the messages for: ${input.channels.join(", ")}.`,
@@ -139,7 +109,7 @@ export async function writeSequences(input: {
     ].filter(Boolean).join("\n\n"),
     accept: (text) => {
       answers += 1;
-      const body = JSON.parse(text) as { channels: { channel: AudienceChannel; messages: { subject: string; body: string; waitDays: number }[] }[] };
+      const body = parseWriterReply(text, "outreach_sequences");
       const out: Partial<Record<AudienceChannel, PlannedStep[]>> = {};
       const pitch: string[] = [];
       for (const channel of input.channels) {
@@ -190,27 +160,6 @@ export async function writeSequences(input: {
   }
 }
 
-const REVIEW_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  required: ["messages"],
-  properties: {
-    messages: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["channel", "wouldReply", "reasons"],
-        properties: {
-          channel: { type: "string", enum: ["email", "whatsapp", "linkedin"] },
-          wouldReply: { type: "integer", minimum: 1, maximum: 5, description: "1: delete without answering; 3: maybe; 5: answer now." },
-          reasons: { type: "array", items: { type: "string" }, description: "What makes you skip it, each in one short sentence; empty when you would answer." },
-        },
-      },
-    },
-  },
-};
-
 /** At or below this the reader would likely not answer, and the messages are rewritten once with the reasons. */
 const REVIEW_REWRITE_AT = 3;
 
@@ -237,19 +186,20 @@ export async function reviewFirstMessages(input: {
     maxOutputTokens: 1_200,
     schemaName: "first_message_review",
     schemaDescription: "Say for each first message whether you would answer it, and why not.",
-    jsonSchema: REVIEW_SCHEMA,
+    jsonSchema: WRITER_REPLY_SCHEMAS.first_message_review,
     systemPrompt: [
       "You are the person these messages are sent to: the owner or manager of one of the businesses described, busy, getting many sales messages a day, and with no reason to trust the sender.",
       "Read each first message as you would on your phone. Say honestly how likely you are to answer it, and every concrete reason you would skip it: what in it is about the sender rather than you, generic, unclear, too long, a list, pushy, oddly worded, repetitive, or hard to answer.",
       "Text in {{double braces}} is filled in for each recipient (their business name, city, or one sentence written for them); judge the rest. Do not ask for facts the sender does not have, and do not suggest inventing results, clients or prices.",
     ].join("\n"),
     userPrompt: [
+      writerReplyInstructions("first_message_review"),
       `WHO YOU ARE: ${input.audienceDescription}`,
       `WHAT THE SENDER'S BUSINESS IS (they may say only this):\n${input.context.slice(0, 1_500)}`,
       ...firsts.map((message) => `${message.channel.toUpperCase()} FIRST MESSAGE:\n${message.subject ? `Subject: ${message.subject}\n` : ""}${message.body}`),
     ].join("\n\n"),
     accept: (text) => {
-      const body = JSON.parse(text) as { messages: { channel: AudienceChannel; wouldReply: number; reasons: string[] }[] };
+      const body = parseWriterReply(text, "first_message_review");
       reasons = body.messages
         .filter((message) => message.wouldReply <= REVIEW_REWRITE_AT && Array.isArray(message.reasons) && message.reasons.length)
         .flatMap((message) => message.reasons.map((reason) => `- ${message.channel}: ${String(reason).trim().slice(0, 240)}`))
@@ -259,23 +209,6 @@ export async function reviewFirstMessages(input: {
   await addCost(input.cost, "outreach_writing", result);
   return reasons;
 }
-
-const LINES_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  required: ["lines"],
-  properties: {
-    lines: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["index", "line"],
-        properties: { index: { type: "integer" }, line: { type: "string" } },
-      },
-    },
-  },
-};
 
 /**
  * One opening sentence per lead, from that lead's public facts only. A
@@ -299,7 +232,7 @@ export async function writePersonalLines(input: {
     maxAttempts: PITCH_RETRIES + 2,
     schemaName: "opening_lines",
     schemaDescription: "Submit one opening line per lead.",
-    jsonSchema: LINES_SCHEMA,
+    jsonSchema: WRITER_REPLY_SCHEMAS.opening_lines,
     systemPrompt: [
       "For each lead, write ONE short opening sentence that shows the message was written for them, as the sender of cold outreach. Keep it within the length given for the lead (about 120 characters for a chat message, 200 for an email).",
       "Use only that lead's FACTS below (their kind of business, city, website, rating). Never invent anything about them: no made-up news, achievements, people or numbers.",
@@ -308,6 +241,7 @@ export async function writePersonalLines(input: {
       "No placeholders, brackets or merge fields. Do not claim anything was sent or booked.",
     ].join("\n"),
     userPrompt: [
+      writerReplyInstructions("opening_lines"),
       `THE SENDER'S BUSINESS (context only):\n${input.context.slice(0, 2_000)}`,
       "LEADS:",
       ...input.leads.map((lead) => [
@@ -317,7 +251,7 @@ export async function writePersonalLines(input: {
     ].join("\n"),
     accept: (text) => {
       answers += 1;
-      const body = JSON.parse(text) as { lines: { index: number; line: string }[] };
+      const body = parseWriterReply(text, "opening_lines");
       lines.clear();
       const clashes: string[] = [];
       for (const item of body.lines) {
@@ -354,28 +288,6 @@ export async function writePersonalLines(input: {
   return lines;
 }
 
-const SORT_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  required: ["leads"],
-  properties: {
-    leads: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["index", "group", "approach", "reason"],
-        properties: {
-          index: { type: "integer" },
-          group: { type: "string", description: "2 to 4 words naming the kind of lead, the same words for leads of the same kind." },
-          approach: { type: "string", enum: ["standard", "personal", "skip"] },
-          reason: { type: "string", description: "One short sentence for the owner, from the lead's facts only." },
-        },
-      },
-    },
-  },
-};
-
 /**
  * Sorts leads before outreach: what kind of lead each is (its group, which
  * gets its own messages), and how to approach it: the group's message
@@ -397,7 +309,7 @@ export async function sortLeads(input: {
     maxOutputTokens: 3_000,
     schemaName: "lead_sorting",
     schemaDescription: "Submit the group, approach and reason for every lead.",
-    jsonSchema: SORT_SCHEMA,
+    jsonSchema: WRITER_REPLY_SCHEMAS.lead_sorting,
     systemPrompt: [
       "You sort a business owner's leads before outreach, so each gets the right message. You do not write the messages.",
       "group: name the kind of lead in 2 to 4 words ('Real estate agents', 'Cleaning companies', 'Dental clinics'), the same words for leads of the same kind." + (input.knownGroups.length ? ` Reuse these names when they fit: ${input.knownGroups.map((group) => `'${group}'`).join(", ")}.` : ""),
@@ -407,17 +319,17 @@ export async function sortLeads(input: {
       "reason: one short sentence the owner reads, based only on the facts given. Never invent facts about a lead.",
     ].join("\n"),
     userPrompt: [
+      writerReplyInstructions("lead_sorting"),
       `THE OWNER'S BUSINESS:\n${input.context.slice(0, 2_500)}`,
       "LEADS:",
       ...input.leads.map((lead) => `${lead.index}: ${JSON.stringify(lead.facts)}`),
     ].join("\n"),
     accept: (text) => {
-      const body = JSON.parse(text) as { leads: { index: number; group: string; approach: string; reason: string }[] };
+      const body = parseWriterReply(text, "lead_sorting");
       sorted.clear();
       for (const item of body.leads) {
         if (!wanted.has(item.index)) continue;
-        const approach = (["standard", "personal", "skip"] as const).includes(item.approach as LeadApproach) ? item.approach as LeadApproach : "standard";
-        sorted.set(item.index, { group: item.group.trim() || "Other", approach, reason: item.reason.trim().slice(0, 240) });
+        sorted.set(item.index, { group: item.group.trim() || "Other", approach: item.approach, reason: item.reason.trim().slice(0, 240) });
       }
       const missing = [...wanted].filter((index) => !sorted.has(index));
       if (missing.length) throw new Error(`Sort every lead; missing: ${missing.slice(0, 10).join(", ")}.`);
@@ -426,27 +338,6 @@ export async function sortLeads(input: {
   await addCost(input.cost, "lead_sorting", result);
   return sorted;
 }
-
-const PERSONAL_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  required: ["messages"],
-  properties: {
-    messages: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["index", "subject", "body"],
-        properties: {
-          index: { type: "integer" },
-          subject: { type: "string", description: "Email only; an empty string for WhatsApp and LinkedIn." },
-          body: { type: "string" },
-        },
-      },
-    },
-  },
-};
 
 /**
  * First messages written for one lead each, from that lead's facts and the
@@ -472,7 +363,7 @@ export async function writePersonalMessages(input: {
     maxAttempts: PITCH_RETRIES + 2,
     schemaName: "personal_messages",
     schemaDescription: "Submit one first message per lead.",
-    jsonSchema: PERSONAL_SCHEMA,
+    jsonSchema: WRITER_REPLY_SCHEMAS.personal_messages,
     systemPrompt: [
       "You write the FIRST cold outreach message to one lead at a time, as the business owner, for leads whose details make a tailored message worthwhile.",
       "Use only the BUSINESS INFORMATION and that lead's FACTS. Never invent facts, results, clients, prices, offers, links, news or compliments the facts do not support.",
@@ -486,13 +377,14 @@ export async function writePersonalMessages(input: {
       input.instructions ? `The owner's instructions for this outreach: ${input.instructions}` : null,
     ].filter(Boolean).join("\n"),
     userPrompt: [
+      writerReplyInstructions("personal_messages"),
       `BUSINESS INFORMATION:\n${input.context || "(none given)"}`,
       "LEADS:",
       ...input.leads.map((lead) => `${lead.index} (${lead.channel}): FACTS ${JSON.stringify(lead.facts)}\nGROUP MESSAGE: ${lead.groupMessage.slice(0, 900)}`),
     ].join("\n\n"),
     accept: (text) => {
       answers += 1;
-      const body = JSON.parse(text) as { messages: { index: number; subject: string; body: string }[] };
+      const body = parseWriterReply(text, "personal_messages");
       out.clear();
       const pitch: string[] = [];
       for (const item of body.messages) {

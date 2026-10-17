@@ -948,7 +948,7 @@ function ReadinessMenu({ setup }: { setup: Setup | null }) {
       <Popover.Trigger asChild>
         <button type="button" className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 text-label-xs text-text-sub-600 ring-1 ring-inset ring-stroke-soft-200 hover:bg-bg-weak-50">
           <span className={cn("size-2 rounded-full", missing ? "bg-warning-base" : "bg-success-base")} aria-hidden="true" />
-          {missing ? `${missing} to set up` : "Ready"}
+          {missing ? `${missing} to set up` : "Setup ready"}
         </button>
       </Popover.Trigger>
       <Popover.Content align="end" showArrow={false} sideOffset={8} className="w-80 max-w-[calc(100vw-2rem)] p-3">
@@ -1115,7 +1115,8 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
 
   async function send(value = text) {
     const message = value.trim();
-    if ((!message && !files.length) || sending) return;
+    if ((!message && !files.length) || sending || state.busy) return;
+    const submittedFiles = files;
     jumpToLatest();
     setSending(true);
     setError(null);
@@ -1127,7 +1128,17 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
     setText("");
     setFiles([]);
     try {
-      const next = await readJson<AssistantStatePayload>(await fetch("/api/assistant/messages", { method: "POST", body: form }));
+      const response = await fetch("/api/assistant/messages", { method: "POST", body: form });
+      if (response.status === 409) {
+        // A background turn can claim the thread between polling and Send.
+        // Keep the unsent draft; a busy thread is ordinary progress.
+        setText(message);
+        setFiles(submittedFiles);
+        setState((previous) => ({ ...previous, busy: true }));
+        await refresh(false);
+        return;
+      }
+      const next = await readJson<AssistantStatePayload>(response);
       setState((previous) => ({ ...next, setup: previous.setup }));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -1285,6 +1296,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
         {showLatest && <button type="button" onClick={jumpToLatest} className="absolute -top-11 left-1/2 inline-flex -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded-full border border-stroke-soft-200 bg-bg-white-0 px-3.5 py-2 text-label-xs text-text-strong-950 shadow-regular-sm outline-none hover:bg-bg-weak-50 focus-visible:ring-2 focus-visible:ring-primary-base"><RiArrowDownLine className="size-4" aria-hidden="true" />Jump to latest</button>}
         <div className="mx-auto max-w-3xl">
           {error && <p role="alert" className="mb-2 text-paragraph-xs text-error-base">{error}</p>}
+          {state.busy && !sending && <p role="status" className="mb-2 text-paragraph-xs text-text-sub-600">Working on the previous step. You can draft your next message here.</p>}
           <div className="rounded-[20px] bg-bg-white-0 shadow-[0_4px_24px_-10px_rgba(0,0,0,0.15)] ring-1 ring-inset ring-stroke-sub-300 transition focus-within:ring-primary-base">
             {files.length > 0 && (
               <div className="flex flex-wrap gap-1.5 px-3 pt-3">
@@ -1326,7 +1338,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
                 <RiAttachment2 className="size-4" aria-hidden="true" /><span>Attach</span>
               </button>
               <span className="hidden flex-1 truncate text-[11px] text-text-soft-400 sm:block">Enter to send · Shift + Enter for a new line</span>
-              <Button.Root variant="primary" mode="filled" size="small" onClick={() => void send()} disabled={sending || (!text.trim() && !files.length)} aria-label="Send" className="ml-auto size-9 rounded-xl p-0">
+              <Button.Root variant="primary" mode="filled" size="small" onClick={() => void send()} disabled={thinking || (!text.trim() && !files.length)} aria-label="Send" className="ml-auto size-9 rounded-xl p-0">
                 {sending ? <Button.Icon as={RiLoader4Line} className="animate-spin" /> : <Button.Icon as={RiArrowUpLine} />}
               </Button.Root>
             </div>
