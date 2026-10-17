@@ -317,6 +317,8 @@ export async function completeStructured(
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       rejected = { text, reason };
+      // Diagnostics: what the model actually sent, so a rejection can be explained from the server log.
+      console.warn(`[ai/structured] ${input.schemaName} answer rejected (${selection.provider} ${selection.modelId}): ${reason}\n--- model answer (first 3000 chars) ---\n${text.slice(0, 3000)}\n--- end ---`);
       throw new RejectedAttemptError(reason);
     }
     return {
