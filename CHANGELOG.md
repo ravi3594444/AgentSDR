@@ -53,6 +53,14 @@ Each release lists the database migrations it needs; see
     inquiries. Inquiries are answered automatically only inside an inquiry
     run the owner started.
 
+### Added
+
+- **A "Where leads came from" table in Results:** each source's found,
+  contactable and left-out counts side by side, so the owner can ask for
+  more of the source that actually yields reachable people instead of the
+  one that is easiest to run. Google Maps is the default only because it
+  needs no setup; it is not the best source for every kind of customer.
+
 ### Changed
 
 - **The Results page says why a channel is not sending.** When leads are

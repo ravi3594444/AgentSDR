@@ -12,7 +12,17 @@ import { mailboxes, type MailboxProvider } from "@/lib/outreach/schema";
 import { resolveTimeZone } from "@/lib/timeZone";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { listRuns, reportRun } from "./outreach.server";
-import { describeChannelSending, figure, money, periodFor, type ChannelSending, type Period, type PeriodKind } from "./results";
+import {
+  describeChannelSending,
+  figure,
+  money,
+  periodFor,
+  summarizeSources,
+  type ChannelSending,
+  type Period,
+  type PeriodKind,
+  type SourceYield,
+} from "./results";
 
 /**
  * The owner's results for a period, from what the app recorded: sends from
@@ -27,7 +37,16 @@ import { describeChannelSending, figure, money, periodFor, type ChannelSending, 
 
 export type Results = {
   period: Period;
-  leads: { discovered: number; imported: number; duplicates: number; usable: number; leftOut: number; leftOutReasons: { reason: string; count: number }[] };
+  leads: {
+    discovered: number;
+    imported: number;
+    duplicates: number;
+    usable: number;
+    leftOut: number;
+    leftOutReasons: { reason: string; count: number }[];
+    /** What each source produced, and how much of it can be reached. */
+    bySource: SourceYield[];
+  };
   outreach: {
     peopleContacted: number;
     emailsSent: number;
@@ -251,6 +270,9 @@ export async function results(kind: PeriodKind, now = new Date()): Promise<Resul
       usable: memberCount((row) => row.status === "eligible"),
       leftOut: memberCount((row) => row.status === "excluded"),
       leftOutReasons: reasons.map((row) => ({ reason: String(row.reason ?? "unknown"), count: n(row.n) })),
+      bySource: summarizeSources(
+        members.map((row) => ({ source: String(row.source ?? "unknown"), status: String(row.status ?? ""), count: n(row.n) })),
+      ),
     },
     outreach: {
       peopleContacted: n(contacted.n),
@@ -303,6 +325,9 @@ export function resultsText(r: Results): string {
   const lines = [
     `Results for ${r.period.label} (${r.period.timeZone}):`,
     `Leads: ${r.leads.discovered} found by search, ${r.leads.imported} from your lists, ${r.leads.duplicates} duplicates merged, ${r.leads.usable} contactable, ${r.leads.leftOut} left out${r.leads.leftOutReasons.length ? ` (${r.leads.leftOutReasons.slice(0, 3).map((x) => `${x.count} × ${x.reason}`).join("; ")})` : ""}.`,
+    ...(r.leads.bySource.length > 1
+      ? [`Sources: ${r.leads.bySource.map((s) => `${s.label} ${s.contactable}/${s.found} contactable`).join("; ")}.`]
+      : []),
     `Outreach: ${o.peopleContacted} people contacted; ${o.emailsSent} emails, ${o.whatsappSent} WhatsApp messages, ${o.linkedinInvitations} LinkedIn connection requests and ${o.linkedinMessages} LinkedIn messages sent.`,
     `Replies: ${o.repliesReceived} received from ${o.peopleReplied} people; ${o.interested} interested${r.interestedPeople.length ? ` (${r.interestedPeople.slice(0, 5).map((p) => p.name).join(", ")})` : ""}. Answered: ${o.automaticReplies} automatically, ${o.repliesByYou} by you.`,
     `Waiting for you: ${r.attention.repliesWaiting} replies to review, ${r.attention.openDecisions} decisions${r.attention.byKind.length ? ` (${r.attention.byKind.map((x) => `${x.count} ${x.kind.replace(/_/g, " ")}`).join(", ")})` : ""}.`,

@@ -117,6 +117,37 @@ export default function ResultsClient({ initial }: { initial: ResultsPayload }) 
         <Section title="Interested people">
           <List items={r.interestedPeople.map((p) => `${p.name}${p.what ? ` — ${p.what}` : ""} (${new Date(p.at).toLocaleString()})`)} empty="No interested replies in this period." />
         </Section>
+        <Section title="Where leads came from">
+          {r.leads.bySource.length ? (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[24rem] text-left text-paragraph-xs">
+                <thead>
+                  <tr className="text-text-soft-400">
+                    <th className="py-1 pr-3 font-normal">Source</th>
+                    <th className="pr-3 text-right font-normal">Found</th>
+                    <th className="pr-3 text-right font-normal">Contactable</th>
+                    <th className="text-right font-normal">Left out</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {r.leads.bySource.map((s) => (
+                    <tr key={s.source} className="border-t border-stroke-soft-200 text-text-strong-950">
+                      <td className="py-1.5 pr-3">{s.label}</td>
+                      <td className="pr-3 text-right tabular-nums">{s.found}</td>
+                      <td className="pr-3 text-right tabular-nums">{s.contactable}</td>
+                      <td className="text-right tabular-nums">{s.leftOut}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="mt-1 text-paragraph-xs text-text-soft-400">
+                Ask for more of the source with the best contactable rate, not just the most leads.
+              </p>
+            </div>
+          ) : (
+            <p className="text-paragraph-xs text-text-soft-400">No leads were found or imported in this period.</p>
+          )}
+        </Section>
         <Section title="Still to send">
           <p className="text-paragraph-xs">{r.pending.emailFollowUps} email leads, {r.pending.whatsappFollowUps} WhatsApp leads and {r.pending.linkedinSteps} LinkedIn leads are still in their sequences (active campaigns, now).</p>
           <p className="mt-1 text-paragraph-xs text-text-soft-400">Email {describeChannelSending(r.sending.email)}.</p>

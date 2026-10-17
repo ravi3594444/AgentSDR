@@ -1,4 +1,5 @@
 import { latestDailySlot, wallTime } from "@/lib/scheduler/slots";
+import { sourceLabel } from "./qualification";
 
 /**
  * Reporting periods in the business's own time zone, and how results are
@@ -98,4 +99,40 @@ export function describeChannelSending(sending: ChannelSending): string {
     default:
       return "is sending";
   }
+}
+
+/**
+ * How many leads each source produced, and how many of them can be reached.
+ * The question this answers is which source is worth asking for more of:
+ * Google Maps is the default only because it needs no setup, not because it
+ * is the best for every kind of customer. Sorted by how many were found.
+ */
+export type SourceYield = {
+  source: string;
+  /** How the source reads to the owner: "Google Maps listing", "Web search". */
+  label: string;
+  found: number;
+  contactable: number;
+  leftOut: number;
+};
+
+export function summarizeSources(
+  rows: readonly { source: string; status: string; count: number }[],
+): SourceYield[] {
+  const bySource = new Map<string, SourceYield>();
+  for (const row of rows) {
+    const source = row.source || "unknown";
+    const entry = bySource.get(source) ?? {
+      source,
+      label: sourceLabel(source),
+      found: 0,
+      contactable: 0,
+      leftOut: 0,
+    };
+    entry.found += row.count;
+    if (row.status === "eligible") entry.contactable += row.count;
+    if (row.status === "excluded") entry.leftOut += row.count;
+    bySource.set(source, entry);
+  }
+  return [...bySource.values()].sort((a, b) => b.found - a.found || a.label.localeCompare(b.label));
 }
