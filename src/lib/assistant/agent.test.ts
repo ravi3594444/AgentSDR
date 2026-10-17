@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { actionsProblem, agentReplySchema, cleanSuggestions, displayThreadTitle, isSmallTalk, MAX_ACTIONS_PER_STEP, outreachIntent, outreachRequested, outreachRequestProblem, parseAgentReply, pendingOutreachRequest, sameMessage, standingOutreachRequestIndex, outreachRevoked, threadTitleFrom, transcriptText, unbackedClaim, ungroundedContacts, urlGiven, type TranscriptMessage } from "./agent";
+import { actionsProblem, agentReplySchema, cleanSuggestions, displayThreadTitle, isSmallTalk, MAX_ACTIONS_PER_REPLY, MAX_ACTIONS_PER_STEP, nextAgentBatch, outreachIntent, outreachRequested, outreachRequestProblem, parseAgentReply, pendingOutreachRequest, sameMessage, standingOutreachRequestIndex, outreachRevoked, threadTitleFrom, transcriptText, unbackedClaim, ungroundedContacts, urlGiven, type AgentReply, type TranscriptMessage } from "./agent";
 
 const TOOLS = ["find_leads", "save_business_info", "prepare_outreach"];
 
@@ -14,6 +14,7 @@ describe("parseAgentReply", () => {
 
   test("empty arguments mean no arguments", () => {
     expect(parseAgentReply(JSON.stringify({ message: "", actions: [{ tool: "prepare_outreach", arguments: "" }] }), TOOLS).actions[0]!.args).toEqual({});
+    expect(parseAgentReply(JSON.stringify({ message: "", actions: [{ tool: "prepare_outreach", arguments: "  " }] }), TOOLS).actions[0]!.args).toEqual({});
   });
 
   test("rejects unknown tools, bad JSON, arrays and too many actions with a fixable reason", () => {
@@ -21,7 +22,7 @@ describe("parseAgentReply", () => {
     expect(() => parseAgentReply(JSON.stringify({ message: "x", actions: [{ tool: "send_everything", arguments: "{}" }] }), TOOLS)).toThrow("does not exist");
     expect(() => parseAgentReply(JSON.stringify({ message: "x", actions: [{ tool: "find_leads", arguments: "{oops" }] }), TOOLS)).toThrow("JSON object written as a string");
     expect(() => parseAgentReply(JSON.stringify({ message: "x", actions: [{ tool: "find_leads", arguments: "[1]" }] }), TOOLS)).toThrow("must be a JSON object");
-    const many = Array.from({ length: MAX_ACTIONS_PER_STEP + 1 }, () => ({ tool: "find_leads", arguments: "{}" }));
+    const many = Array.from({ length: MAX_ACTIONS_PER_REPLY + 1 }, () => ({ tool: "find_leads", arguments: "{}" }));
     expect(() => parseAgentReply(JSON.stringify({ message: "x", actions: many }), TOOLS)).toThrow("at most");
     expect(() => parseAgentReply(JSON.stringify({ message: "  ", actions: [] }), TOOLS)).toThrow("Say something");
   });
@@ -35,6 +36,118 @@ describe("parseAgentReply", () => {
     expect(schema.required).toEqual(["message", "actions", "suggestions"]);
     expect(schema.properties.actions.items.properties.tool.enum).toEqual(TOOLS);
     expect(schema.properties.actions.items.required).toEqual(["tool", "arguments"]);
+    expect(schema.properties.actions.maxItems).toBe(MAX_ACTIONS_PER_STEP);
+  });
+
+  test("normalizes recognizable tool-call formats without dropping calls", () => {
+    const action = { tool: "find_leads", arguments: '{"what":"dentists","where":"Pune"}' };
+    const native = { type: "function", function: { name: action.tool, arguments: action.arguments } };
+    for (const body of [
+      { actions: action },
+      { actions: JSON.stringify([action]) },
+      { actions: JSON.stringify(action) },
+      { tool_calls: [native] },
+      { actions: native },
+      { tool: "find_leads", args: { what: "dentists", where: "Pune" } },
+      { name: "find_leads", arguments: action.arguments },
+      { assistant_reply: { actions: [action] } },
+    ]) {
+      expect(parseAgentReply(JSON.stringify(body), TOOLS)).toEqual({
+        message: "", actions: [{ tool: "find_leads", args: { what: "dentists", where: "Pune" } }], suggestions: [],
+      });
+    }
+  });
+
+  test("missing or unsupported actions require repair instead of silently doing nothing", () => {
+    for (const body of [{ message: "Searching now" }, { message: "Searching now", actions: null }, { actions: "find_leads" }, { actions: { arbitrary: [] } }]) {
+      expect(() => parseAgentReply(JSON.stringify(body), TOOLS, { allowEmpty: true })).toThrow('"actions":[{"tool":"TOOL_NAME"');
+    }
+    for (const body of [null, [], "text", 7]) {
+      expect(() => parseAgentReply(JSON.stringify(body), TOOLS)).toThrow("JSON object only");
+    }
+  });
+
+  test("normalized calls still reject unknown tools and invalid arguments", () => {
+    expect(() => parseAgentReply(JSON.stringify({ tool_calls: [{ function: { name: "send_everything", arguments: "{}" } }] }), TOOLS)).toThrow("does not exist");
+    for (const args of ["[1]", "null", "{oops", [1], false, 7]) {
+      expect(() => parseAgentReply(JSON.stringify({ actions: { name: "find_leads", args } }), TOOLS)).toThrow("JSON object");
+    }
+  });
+});
+
+describe("nextAgentBatch", () => {
+  const plan = (count: number): AgentReply => parseAgentReply(JSON.stringify({
+    message: "Searches queued.", suggestions: ["Show results"],
+    actions: Array.from({ length: count }, (_, index) => ({ tool: "find_leads", arguments: JSON.stringify({ what: "dentists", where: `City ${index}` }) })),
+  }), TOOLS);
+
+  test("five actions no longer hit the old four-action rejection", () => {
+    const result = nextAgentBatch(plan(5));
+    expect(result.batch.actions).toHaveLength(5);
+    expect(result.pending).toBeNull();
+  });
+
+  test("larger plans keep every action in order and show the message only after the last batch", () => {
+    for (const count of [9, 17, MAX_ACTIONS_PER_REPLY]) {
+      const reply = plan(count);
+      let pending: AgentReply | null = reply;
+      const executed = [];
+      let batches = 0;
+      while (pending) {
+        const result = nextAgentBatch(pending);
+        expect(result.batch.actions.length).toBeLessThanOrEqual(MAX_ACTIONS_PER_STEP);
+        expect(result.replanAfterRead).toBe(false);
+        expect(result.batch.message).toBe(result.pending ? "" : reply.message);
+        expect(result.batch.suggestions).toEqual(result.pending ? [] : reply.suggestions);
+        executed.push(...result.batch.actions);
+        pending = result.pending;
+        batches += 1;
+      }
+      expect(executed).toEqual(reply.actions);
+      expect(batches).toBe(Math.ceil(count / MAX_ACTIONS_PER_STEP));
+    }
+  });
+
+  test("a webpage read waits for its real results before saving details or searching", () => {
+    const reply: AgentReply = { message: "Website read and leads found.", suggestions: ["Show results"], actions: [
+      { tool: "read_webpage", args: { url: "https://agency.example" } },
+      { tool: "save_business_info", args: { offer: "Guessed from the unread website" } },
+      { tool: "find_leads", args: { what: "dentists", where: "Pune" } },
+    ] };
+    const result = nextAgentBatch(reply);
+    expect(result.batch.actions).toEqual(reply.actions.slice(0, 1));
+    expect(result.batch.message).toBe("");
+    expect(result.batch.suggestions).toEqual([]);
+    expect(result.pending).toBeNull();
+    expect(result.replanAfterRead).toBe(true);
+  });
+
+  test("a read in a later batch still stops speculative following actions", () => {
+    const reply = plan(10);
+    reply.actions[8] = { tool: "read_webpage", args: { url: "https://agency.example" } };
+    const first = nextAgentBatch(reply);
+    expect(first.batch.actions).toHaveLength(8);
+    expect(first.pending).not.toBeNull();
+    const second = nextAgentBatch(first.pending!);
+    expect(second.batch.actions).toEqual([reply.actions[8]!]);
+    expect(second.pending).toBeNull();
+    expect(second.replanAfterRead).toBe(true);
+  });
+
+  test("all actions are syntactically validated before any batch is accepted", () => {
+    const actions = Array.from({ length: 10 }, () => ({ tool: "find_leads", arguments: "{}" }));
+    actions[9]!.tool = "unknown_tool";
+    expect(() => parseAgentReply(JSON.stringify({ actions }), TOOLS)).toThrow('actions[9].tool');
+    actions[9] = { tool: "find_leads", arguments: "[1]" };
+    expect(() => parseAgentReply(JSON.stringify({ actions }), TOOLS)).toThrow('actions[9].arguments');
+  });
+
+  test("queued batches are checked again against current business information", () => {
+    const reply = plan(8);
+    reply.actions.push({ tool: "save_business_info", args: { businessName: "Bright Path" } });
+    const queued = nextAgentBatch(reply).pending!;
+    const batch = nextAgentBatch(queued).batch;
+    expect(actionsProblem(batch.actions, { smallTalk: false, profile: { businessName: "Bright Path" }, ownerCorpus: "We are Bright Path", outreachRequested: true })).toContain("change nothing");
   });
 });
 
@@ -84,6 +197,22 @@ describe("transcriptText", () => {
 });
 
 describe("outreachRequested", () => {
+  test("the reported prompts work with or without a website URL", () => {
+    const plain = "hey find leads for our agency find and reach otu them in every ay possible insta email linked ai whastapp find leads to sell our ai aautomations any locatiosn i ned leads that si s liek active";
+    const withUrl = "hey find leads for our agency first visit our site 22nd-x-ai-studio.vercel.app find and reach otu them in every ay possible insta email linked ai whastapp find leads to sell our ai aautomations";
+    for (const prompt of [plain, withUrl]) {
+      expect(outreachRequested(prompt)).toBe(true);
+      expect(actionsProblem([{ tool: "find_leads", args: { what: "dental clinics", where: "Pune", contactAfter: true } }], {
+        smallTalk: isSmallTalk(prompt), profile: { businessName: "Our Agency", offer: "AI automations", locations: "Pune" },
+        ownerCorpus: prompt, outreachRequested: outreachRequested(prompt),
+      })).toBeNull();
+    }
+    expect(urlGiven("https://22nd-x-ai-studio.vercel.app", withUrl)).toBe(true);
+    expect(actionsProblem([{ tool: "read_webpage", args: { url: "https://22nd-x-ai-studio.vercel.app" } }], {
+      smallTalk: false, profile: {}, ownerCorpus: withUrl, outreachRequested: true,
+    })).toBeNull();
+  });
+
   test("the owner's latest message asking to contact people counts, typos and Hinglish included", () => {
     expect(outreachRequested("do outreach")).toBe(true);
     expect(outreachRequested("Find dental clinics in Pune and email them.")).toBe(true);

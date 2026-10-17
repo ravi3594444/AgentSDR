@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { completeStructured, isStrictJsonSchema, type StructuredCompletionRuntime } from "./structuredCompletion";
+import { actionsProblem, agentReplySchema, nextAgentBatch, outreachRequested, parseAgentReply, type AgentReply } from "@/lib/assistant/agent";
 
 type Reply = { toolArgs?: string; content?: string; throws?: Error; error?: unknown };
 
 /** A runtime whose client answers each call from the scripted list, in order. */
-function scripted(replies: Reply[]) {
+function scripted(replies: Reply[], schemaName = "submit") {
   const requests: unknown[] = [];
   const runtime: StructuredCompletionRuntime = async () => ({
     providerKey: "openrouter",
@@ -24,7 +25,7 @@ function scripted(replies: Reply[]) {
           content: reply.content ?? null,
           tool_calls: reply.toolArgs === undefined
             ? []
-            : [{ type: "function", function: { name: "submit", arguments: reply.toolArgs } }],
+            : [{ type: "function", function: { name: schemaName, arguments: reply.toolArgs } }],
         } }],
         usage: { prompt_tokens: 10, completion_tokens: 5 },
       };
@@ -222,6 +223,65 @@ describe("completeStructured with AI/ML API (JSON schema)", () => {
       /Web search runs through OpenRouter/,
     );
     assert.equal(requests.length, 0);
+  });
+});
+
+describe("assistant completion recovery", () => {
+  const tools = ["find_leads", "read_webpage"];
+  const plainPrompt = "hey find leads for our agency find and reach otu them in every ay possible insta email linked ai whastapp find leads to sell our ai aautomations any locatiosn i ned leads that si s liek active";
+  const websitePrompt = "hey find leads for our agency first visit our site 22nd-x-ai-studio.vercel.app find and reach otu them in every ay possible insta email linked ai whastapp find leads to sell our ai aautomations";
+
+  for (const mode of ["tool_call", "json_schema"] as const) {
+    for (const prompt of [plainPrompt, websitePrompt]) {
+      const websiteFirst = prompt === websitePrompt;
+      test(`${mode}: accepts a larger plan ${websiteFirst ? "with a webpage read" : "without a URL"} on the first attempt`, async () => {
+        const actions = Array.from({ length: 9 }, (_, index) => ({ tool: "find_leads", arguments: JSON.stringify({ what: "dental clinics", where: `City ${index}`, contactAfter: true }) }));
+        if (websiteFirst) actions.unshift({ tool: "read_webpage", arguments: JSON.stringify({ url: "https://22nd-x-ai-studio.vercel.app" }) });
+        const text = JSON.stringify({ message: "Searches queued.", actions, suggestions: [] });
+        const { runtime, requests } = mode === "tool_call"
+          ? scripted([{ toolArgs: text }], "assistant_reply")
+          : jsonSchemaRuntime([{ content: text }]);
+        let accepted: AgentReply | undefined;
+        const result = await completeStructured({
+          ...input, schemaName: "assistant_reply", jsonSchema: agentReplySchema(tools), userPrompt: prompt,
+          accept: (text) => {
+            accepted = parseAgentReply(text, tools);
+            const staged = nextAgentBatch(accepted);
+            const problem = actionsProblem(staged.batch.actions, { smallTalk: false, profile: {}, ownerCorpus: prompt, outreachRequested: outreachRequested(prompt) });
+            if (problem) throw new Error(problem);
+          },
+        }, { runtime, sleep: noSleep });
+        assert.equal(result.attempts, 1);
+        assert.equal(requests.length, 1);
+        assert.ok(accepted);
+        const staged = nextAgentBatch(accepted);
+        assert.equal(staged.batch.message, "");
+        if (websiteFirst) {
+          assert.equal(staged.batch.actions.length, 1);
+          assert.equal(staged.replanAfterRead, true);
+          assert.equal(staged.pending, null);
+        } else {
+          assert.equal(staged.batch.actions.length, 8);
+          assert.equal(staged.pending?.actions.length, 1);
+          assert.deepEqual([...staged.batch.actions, ...staged.pending!.actions], accepted.actions);
+        }
+      });
+    }
+  }
+
+  test("a missing actions field gets a concrete repair instruction and retains the owner's plain prompt", async () => {
+    const valid = { message: "Searching now.", actions: [{ tool: "find_leads", arguments: '{"what":"dentists","where":"Pune"}' }], suggestions: [] };
+    const { runtime, requests } = scripted([{ toolArgs: '{"message":"Searching now."}' }, { toolArgs: JSON.stringify(valid) }], "assistant_reply");
+    const result = await completeStructured({
+      ...input, schemaName: "assistant_reply", jsonSchema: agentReplySchema(tools), userPrompt: plainPrompt,
+      accept: (text) => { parseAgentReply(text, tools); },
+    }, { runtime, sleep: noSleep });
+    assert.equal(result.attempts, 2);
+    const retry = requests[1] as { messages: Array<{ role: string; content: string }> };
+    const repair = retry.messages.find((message) => message.role === "user")!.content;
+    assert.ok(repair.startsWith(plainPrompt));
+    assert.ok(repair.includes('"actions":[{"tool":"TOOL_NAME","arguments":"{}"}]'));
+    assert.ok(repair.includes("do not omit actions"));
   });
 });
 

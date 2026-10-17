@@ -8,7 +8,10 @@ import type { AssistantRole, BusinessProfile } from "./schema";
  */
 
 export const MAX_STEPS = 6;
-export const MAX_ACTIONS_PER_STEP = 4;
+export const MAX_ACTIONS_PER_STEP = 8;
+// Some providers ignore the schema's batch size. Validate a bounded plan in
+// full, then stage it across steps instead of rejecting otherwise valid work.
+export const MAX_ACTIONS_PER_REPLY = 32;
 
 export const MAX_SUGGESTIONS = 3;
 
@@ -26,7 +29,8 @@ export function agentReplySchema(toolNames: readonly string[]) {
       },
       actions: {
         type: "array",
-        description: "Tools to run now, in order. Empty when there is nothing to do until the owner answers.",
+        maxItems: MAX_ACTIONS_PER_STEP,
+        description: `At most ${MAX_ACTIONS_PER_STEP} total tool actions for this step, in order, including reads and saves. Put actions that need these results in the next step. Empty when waiting for the owner or a background job.`,
         items: {
           type: "object",
           additionalProperties: false,
@@ -43,6 +47,26 @@ export function agentReplySchema(toolNames: readonly string[]) {
 
 export type AgentAction = { tool: string; args: Record<string, unknown> };
 export type AgentReply = { message: string; actions: AgentAction[]; suggestions: string[] };
+
+/**
+ * Keep oversized but valid plans in order across steps. A webpage read ends
+ * the batch: later actions may have guessed its contents, so re-plan from
+ * the actual result instead of executing those guesses or showing their
+ * completion message. The owner's request remains in the conversation.
+ */
+export function nextAgentBatch(reply: AgentReply): { batch: AgentReply; pending: AgentReply | null; replanAfterRead: boolean } {
+  const pageIndex = reply.actions.findIndex((action) => action.tool === "read_webpage");
+  const replanAfterRead = pageIndex >= 0 && pageIndex < MAX_ACTIONS_PER_STEP;
+  const count = replanAfterRead ? pageIndex + 1 : MAX_ACTIONS_PER_STEP;
+  const actions = reply.actions.slice(0, count);
+  const remaining = reply.actions.slice(count);
+  const holdMessage = remaining.length > 0 || replanAfterRead;
+  return {
+    batch: { ...reply, actions, message: holdMessage ? "" : reply.message, suggestions: holdMessage ? [] : reply.suggestions },
+    pending: remaining.length && !replanAfterRead ? { ...reply, actions: remaining } : null,
+    replanAfterRead,
+  };
+}
 
 /** The model's suggested replies, cleaned: short, distinct, at most three. */
 export function cleanSuggestions(raw: unknown): string[] {
@@ -66,28 +90,54 @@ export function cleanSuggestions(raw: unknown): string[] {
  * over with nothing new to say.
  */
 export function parseAgentReply(text: string, toolNames: readonly string[], options: { allowEmpty?: boolean } = {}): AgentReply {
-  let body: { message?: unknown; actions?: unknown; suggestions?: unknown };
+  let parsed: unknown;
   try {
-    body = JSON.parse(text) as typeof body;
+    parsed = JSON.parse(text);
   } catch {
     throw new Error("Answer with the JSON object only.");
   }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Answer with the JSON object only.");
+  let body = parsed as Record<string, unknown>;
+  // A function-call provider can wrap the named result once more. Unwrap
+  // only this explicit envelope, never arbitrary fields or message text.
+  if (body.actions === undefined && body.assistant_reply && typeof body.assistant_reply === "object" && !Array.isArray(body.assistant_reply)) {
+    body = body.assistant_reply as Record<string, unknown>;
+  }
   const message = typeof body.message === "string" ? body.message.trim() : "";
-  if (!Array.isArray(body.actions)) throw new Error("actions must be an array (empty for none).");
-  if (body.actions.length > MAX_ACTIONS_PER_STEP) throw new Error(`Run at most ${MAX_ACTIONS_PER_STEP} tools at once.`);
-  const actions: AgentAction[] = body.actions.map((raw, index) => {
-    const item = (raw ?? {}) as { tool?: unknown; arguments?: unknown };
-    const tool = typeof item.tool === "string" ? item.tool : "";
+  // Accept unambiguous encodings of actual calls, while still validating
+  // every tool name and argument below. Missing/null actions are NOT turned
+  // into []: that would turn failed work into a successful-looking no-op.
+  let rawActions = body.actions ?? body.tool_calls;
+  if (rawActions === undefined && (typeof body.tool === "string" || typeof body.name === "string")) rawActions = body;
+  if (typeof rawActions === "string") {
+    try { rawActions = JSON.parse(rawActions); } catch { /* use the repair instruction below */ }
+  }
+  if (rawActions && typeof rawActions === "object" && !Array.isArray(rawActions)) {
+    const action = rawActions as Record<string, unknown>;
+    if (typeof action.tool === "string" || typeof action.name === "string" || (action.function && typeof action.function === "object")) rawActions = [action];
+  }
+  if (!Array.isArray(rawActions)) {
+    throw new Error('actions must be an array, including for one tool: {"message":"","actions":[{"tool":"TOOL_NAME","arguments":"{}"}],"suggestions":[]}. Use actions: [] only when asking a question or finished; do not omit actions.');
+  }
+  if (rawActions.length > MAX_ACTIONS_PER_REPLY) {
+    throw new Error(`Plan at most ${MAX_ACTIONS_PER_REPLY} actions in one answer; return only the next ${MAX_ACTIONS_PER_STEP} and continue after their results.`);
+  }
+  const actions: AgentAction[] = rawActions.map((raw, index) => {
+    const outer = (raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>;
+    const item = outer.function && typeof outer.function === "object" && !Array.isArray(outer.function)
+      ? outer.function as Record<string, unknown> : outer;
+    const tool = typeof item.tool === "string" ? item.tool : typeof item.name === "string" ? item.name : "";
     if (!toolNames.includes(tool)) throw new Error(`actions[${index}].tool "${tool}" does not exist; use one of ${toolNames.join(", ")}.`);
+    const rawArgs = item.arguments === undefined ? item.args : item.arguments;
     let args: unknown = {};
-    if (typeof item.arguments === "string" && item.arguments.trim()) {
+    if (typeof rawArgs === "string" && rawArgs.trim()) {
       try {
-        args = JSON.parse(item.arguments);
+        args = JSON.parse(rawArgs);
       } catch {
         throw new Error(`actions[${index}].arguments must be a JSON object written as a string, e.g. "{\\"audienceId\\":\\"…\\"}".`);
       }
-    } else if (item.arguments && typeof item.arguments === "object") {
-      args = item.arguments;
+    } else if (rawArgs !== undefined && rawArgs !== null && typeof rawArgs !== "string") {
+      args = rawArgs;
     }
     if (!args || typeof args !== "object" || Array.isArray(args)) throw new Error(`actions[${index}].arguments must be a JSON object.`);
     return { tool, args: args as Record<string, unknown> };

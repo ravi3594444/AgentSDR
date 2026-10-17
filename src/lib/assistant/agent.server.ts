@@ -9,7 +9,7 @@ import { inOrg } from "@/lib/tenancy/scope";
 import type { FeatureState } from "@/lib/features/catalog";
 import { TREG_LIMITS } from "@/lib/treg/catalog";
 import { featureState } from "@/lib/features/flags.server";
-import { actionsProblem, agentReplySchema, inquiryRepliesRequested, isSmallTalk, MAX_STEPS, parseAgentReply, pendingOutreachRequestIndex, sameMessage, standingOutreachRequestIndex, transcriptText, unbackedClaim, type AgentReply } from "./agent";
+import { actionsProblem, agentReplySchema, inquiryRepliesRequested, isSmallTalk, MAX_ACTIONS_PER_STEP, MAX_STEPS, nextAgentBatch, parseAgentReply, pendingOutreachRequestIndex, sameMessage, standingOutreachRequestIndex, transcriptText, unbackedClaim, type AgentReply } from "./agent";
 import { AUTONOMOUS_MAX_STEPS, autonomousRules, SEARCH_TOOLS, searchCapProblem, type AutonomyCaps } from "./autonomy";
 import { autonomousSearchesToday, autonomyCaps, autoStartPlan, threadAutonomy } from "./autonomy.server";
 import { listAudiences } from "./audiences.server";
@@ -33,11 +33,12 @@ import { runTool, setupSnapshot, toolCatalog, toolNamesFor, type ToolContext, ty
 function systemPrompt(features: FeatureState, autonomy: AutonomyCaps | null = null): string {
   return [
     `You are the outreach assistant inside ${BRAND.name}. You work for the owner of a business: you learn about the business, find leads, prepare outreach and report on it, by calling tools. You are honest and brief.`,
+    'Your structured answer always has these three fields: {"message":"...","actions":[],"suggestions":[]}. actions is an array even for one tool, e.g. {"message":"","actions":[{"tool":"report","arguments":"{}"}],"suggestions":[]}. Each arguments value is a JSON object written as a string. Never omit actions or put prose in it. Use [] when asking a question or finished.',
     "",
     "RULES",
     "1. Act with tools. A tool's result is the only proof something happened. Never say something was saved, searched, found, prepared, started, sent or paused unless a TOOL line in the conversation shows it succeeded. If a tool failed, say so plainly with its reason.",
     "2. You cannot start outreach. After prepare_outreach succeeds, ask the owner to review the plan card (audience, sample messages, limits, cost), choose Automatic or Review replies, and press Start. Outreach runs only after that, and only within that plan's leads, channels and limits. To contact more people, change channels or raise limits, prepare a new plan (basedOnRunId reuses a run's messages): the owner approves it again. One Start can cover a whole request: when one request makes several plans (for example one search per city with contactAfter), the plan card offers \"apply to the rest of this request\"; with it, the request's other plans start on their own as they are ready, in the same reply mode and within the same channels and limits, so the owner does not approve each one. Tell the owner this once when you start several searches for one request.",
-    "3. Ask only for what the next step needs, one or two questions at a time. Read the BUSINESS PROFILE, ALREADY KNOWN ELSEWHERE and SETUP first and never ask for what is already there: a price list document answers price questions, a sender name the accounts already use is the sender, saved reply instructions already apply. Ask only for what STILL MISSING lists. For a lead search you need the kind of customers and where; for outreach, the business name, the offer and the sender's name. If the owner describes a different business from the BUSINESS PROFILE, save the new details and ask before relying on older ones that may belong to the previous business (places, website, prices, booking details).",
+    "3. Ask only for what the next step needs, one or two questions at a time. Read the BUSINESS PROFILE, ALREADY KNOWN ELSEWHERE and SETUP first and never ask for what is already there: a price list document answers price questions, a sender name the accounts already use is the sender, saved reply instructions already apply. Ask only for what STILL MISSING lists. A website URL is optional: a plain request uses the saved business details and connected channels; never require a URL to find leads or prepare outreach. For a lead search you need the kind of customers and where; for outreach, the business name, the offer and the sender's name. If the owner describes a different business from the BUSINESS PROFILE, save the new details and ask before relying on older ones that may belong to the previous business (places, website, prices, booking details).",
     "4. When the owner tells you anything about the business, customers, places, offer, the problems it solves, prices, service area, sender, tone, preferences or what an interested lead should be offered next (a call, a visit, a quote), call save_business_info in the same response, so it is remembered and automatic replies can use it. Replies to leads sell from problemsSolved and lead to nextStep (a short call with the sender when not set): before the first outreach, if problemsSolved is empty, ask once which problems the offer solves for customers; never block outreach on it. Attached documents are already saved to knowledge; contact lists are already imported (see the attachment TOOL lines).",
     "5. Prepare outreach only when the owner's latest message asks to contact, email, message or pitch people, or says yes to your offer of it. If they only gave information or asked a question, answer or save it and offer outreach in one sentence. 'Find leads and contact them': call find_leads with contactAfter true; the plan is then prepared automatically when the search ends. 'Use this list': call prepare_outreach for the audience the import created. Do not check a search's progress right after starting it; its result is announced.",
     "5b. There are two starting points, and both end in the same lead lists, plan card, Start button, replies and decisions. (1) The owner's existing leads or inquiries: use_existing_leads makes a list from people already saved (everyone, the latest import, a word to match, or the people who sent inquiries), or they attach a list or type contacts. Prefer this when they say they already have leads, contacts, customers or inquiries. (2) Finding potential customers for them: the lead sources in rule 6. Lead finding is optional: never push it on an owner who has contacts. A found lead is a potential match, not an interested customer: say so, and never call anyone interested unless a reply was classified interested. A follow, like or generic comment is not interest. Unknown location, budget or contact details stay unknown.",
@@ -54,7 +55,7 @@ function systemPrompt(features: FeatureState, autonomy: AutonomyCaps | null = nu
     "7. Replies: each run is in Automatic or Review mode. In Automatic mode ordinary replies are answered from the owner's saved information; anything the information does not cover, complaints, negotiations, promises and meetings come to the owner as a DECISION with the reason. When the owner answers an OPEN DECISION, call answer_decision with their words; it is saved and the reply is rewritten. You may switch runs to Review (switch_to_review); only the owner's button switches a run to Automatic.",
     "8. If a channel is not connected, say which one and where to connect it (Settings). If AI or lead search is not set up on this server, say the operator who installed it must set it up.",
     "9. Write like a capable assistant, in the owner's language: short sentences, no hype, no emojis, no markdown headings. Use ids only inside tool arguments, never in what you say.",
-    "10. You may run several tools at once; you will then see their results and can continue. Return no actions when you are waiting for the owner or for a background job.",
+    `10. Return at most ${MAX_ACTIONS_PER_STEP} total tool actions in one step, including read_webpage and save_business_info as well as searches. You can continue in the next step after seeing their results; a larger task does not have to fit in one response. Batch only actions whose arguments you already know. If the owner asks you to visit their website first, call read_webpage first and wait for its result before saving facts from it or choosing lead searches. Never guess a returned id or repeat an action whose TOOL line already shows success. Return no actions when you are waiting for the owner or a background job.`,
     "11. A message sent together with tools is shown after they run (and dropped if one fails); do not ask permission for what you are already doing. After the results, say only what is new; never repeat your earlier message. If there is nothing new to say or do, return an empty message and no actions.",
     "12. For results (leads found, messages sent, replies, interested people, what waits for the owner, spending), call report; never estimate figures yourself.",
     "13. When the owner greets you, thanks you or chats, answer in one or two warm, natural sentences and offer the one next step that fits them: with an empty BUSINESS PROFILE, ask what the business sells and to whom (or to attach a brochure or a contact list); with a complete one, offer to find customers or show results. Run no tools for small talk, and never save information the owner did not give.",
@@ -174,6 +175,8 @@ export async function runAgentTurn(input: {
     const features = await featureState();
     const toolNames = toolNamesFor(features);
     const maxSteps = autonomy.on ? AUTONOMOUS_MAX_STEPS : MAX_STEPS;
+    let pendingReply: AgentReply | null = null;
+    let replanReason: string | null = null;
     // A long turn keeps the thread claimed: one step (writing a plan) can take minutes.
     heartbeat = setInterval(() => void touchThread(input.threadId).catch(() => undefined), 60_000);
     for (let step = 0; step < maxSteps; step += 1) {
@@ -185,28 +188,44 @@ export async function runAgentTurn(input: {
         .map((message) => `${message.content} ${typeof message.toolResult?.summary === "string" ? message.toolResult.summary : ""}`)
         .join("\n") + `\n${documentsText}`;
       let reply: AgentReply | null = null;
+      const validateBatch = (parsed: AgentReply) => {
+        const refused = actionsProblem(parsed.actions, { smallTalk, profile, ownerCorpus, outreachRequested: askedForOutreach, inquiryRepliesRequested: askedForInquiryReplies });
+        if (refused) throw new Error(refused);
+        // Completion messages stay held until the last batch. Re-check them
+        // and every queued batch against the latest results and profile.
+        const startsNow = autonomy.on && parsed.actions.some((action) => action.tool === "prepare_outreach");
+        const problem = unbackedClaim(parsed.message, parsed.actions.length ? ["(pending)"] : succeeded, outreachStarted || startsNow);
+        if (problem) throw new Error(problem);
+      };
       try {
-        const completion = await completeStructured({
-          timeoutMs: 90_000,
-          maxOutputTokens: 1_500,
-          schemaName: "assistant_reply",
-          schemaDescription: "Your message to the owner and the tools to run now.",
-          jsonSchema: agentReplySchema(toolNames),
-          systemPrompt: systemPrompt(features, caps),
-          userPrompt: `${setupText}\n\nCONVERSATION (newest last):\n${transcriptText(messages)}\n\nYour turn.`,
-          accept: (text) => {
-            const parsed = parseAgentReply(text, toolNames, { allowEmpty: step > 0 });
-            const refused = actionsProblem(parsed.actions, { smallTalk, profile, ownerCorpus, outreachRequested: askedForOutreach, inquiryRepliesRequested: askedForInquiryReplies });
-            if (refused) throw new Error(refused);
-            // A message sent with tools is checked against their results below.
-            // In Autonomous mode a plan prepared in this step starts on its own; if it does not, the message is not shown (below).
-            const startsNow = autonomy.on && parsed.actions.some((action) => action.tool === "prepare_outreach");
-            const problem = unbackedClaim(parsed.message, parsed.actions.length ? ["(pending)"] : succeeded, outreachStarted || startsNow);
-            if (problem) throw new Error(problem);
-            reply = parsed;
-          },
-        });
-        await recordUsage("assistant", completion);
+        if (pendingReply) {
+          try {
+            validateBatch(nextAgentBatch(pendingReply).batch);
+            reply = pendingReply;
+          } catch (error) {
+            // Earlier results may make the old plan invalid. Ask for a new
+            // plan instead of running it unchecked or failing the chat.
+            pendingReply = null;
+            replanReason = error instanceof Error ? error.message : String(error);
+          }
+        }
+        if (!reply) {
+          const completion = await completeStructured({
+            timeoutMs: 90_000,
+            maxOutputTokens: 1_500,
+            schemaName: "assistant_reply",
+            schemaDescription: "Your message to the owner and the tools to run now.",
+            jsonSchema: agentReplySchema(toolNames),
+            systemPrompt: systemPrompt(features, caps),
+            userPrompt: `${setupText}\n\nCONVERSATION (newest last):\n${transcriptText(messages)}${replanReason ? `\n\nRe-plan the remaining work: ${replanReason.slice(0, 600)}. Use the latest TOOL results and do not repeat successful actions.` : ""}\n\nYour turn.`,
+            accept: (text) => {
+              const parsed = parseAgentReply(text, toolNames, { allowEmpty: step > 0 });
+              validateBatch(nextAgentBatch(parsed).batch);
+              reply = parsed;
+            },
+          });
+          await recordUsage("assistant", completion);
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         await addMessage({
@@ -218,7 +237,9 @@ export async function runAgentTurn(input: {
         });
         return;
       }
-      const { message, actions, suggestions } = reply as unknown as AgentReply;
+      const staged = nextAgentBatch(reply as unknown as AgentReply);
+      pendingReply = staged.pending;
+      const { message, actions, suggestions } = staged.batch;
       if (!actions.length) {
         // The suggested replies ride on the turn's last message (shown as buttons).
         if (message && !said.some((earlier) => sameMessage(earlier, message))) {
@@ -252,6 +273,14 @@ export async function runAgentTurn(input: {
           else allOk = false;
           if (plan.ok && !(await startedOnItsOwn(input.threadId, autonomy.on, plan.data))) allOk = false;
         }
+      }
+      if (!allOk) {
+        pendingReply = null;
+        replanReason = "A tool in the previous batch failed or was refused. Its result explains why; reconsider the remaining actions before continuing";
+      } else if (staged.replanAfterRead) {
+        replanReason = "The webpage has now been read. Actions proposed after that read were held; use its actual contents to decide what to save and which searches to start";
+      } else {
+        replanReason = null;
       }
       // Shown only when every tool in this step worked: after a failure the
       // next step says what happened instead of what was hoped for.
