@@ -25,6 +25,8 @@ export async function register() {
     startInternalOutreachScheduler();
     const { startInternalWhatsappCampaignScheduler } = await import("./lib/whatsapp/campaigns/internalScheduler");
     startInternalWhatsappCampaignScheduler();
+    const { startInstagramOutreachWorker } = await import("./lib/instagram/outreach.server");
+    startInstagramOutreachWorker();
   }
 
   // Scheduled jobs; INTERNAL_SCHEDULER=false leaves them to an external cron.

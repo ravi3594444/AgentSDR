@@ -10,6 +10,7 @@ import { checkPhone } from "@/lib/calls/phone";
 import { organizationPhoneCountry } from "@/lib/calls/phone.server";
 import { upsertPerson, withLeadTransaction } from "@/lib/leads/records";
 import { people } from "@/lib/leads/schema";
+import { upsertInstagramProspect } from "@/lib/instagram/prospects.server";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { apifyReadiness, pollTrackedRun, startTrackedRun } from "@/lib/apify/apify.server";
 import { APIFY_ACTORS, APIFY_LIMITS, type ApifyActorKey } from "@/lib/apify/catalog";
@@ -124,7 +125,7 @@ type DiscoveryPayload = {
   saveIndex?: number;
   seenEmails?: string[];
   seenPhones?: string[];
-  tally?: { eligible: number; excluded: number; duplicates: number; withEmail: number; withPhoneOnly: number };
+  tally?: { eligible: number; excluded: number; duplicates: number; withEmail: number; withPhoneOnly: number; withInstagram?: number };
   /** The owner asked to contact what is found: plan the outreach when the search is done. */
   contactAfter?: { channels: AudienceChannel[] | null; ownerRequest?: string; requestId?: string } | null;
   /** Google Maps businesses (default), Instagram accounts (job kind apify_instagram), or Facebook / LinkedIn pages (Apify). */
@@ -737,7 +738,7 @@ function factsOf(place: EnrichedPlace): Record<string, string> {
     if (place.origin.hashtag) facts.hashtag = `#${place.origin.hashtag}`;
     if (place.origin.postedAt) facts.postedAt = place.origin.postedAt;
     if (!place.origin.placeNamed) facts.location = "Unknown (the post and profile do not name the place)";
-    facts.contactRoute = place.origin.profileEmail || place.origin.profilePhone || place.website ? "what the profile or its website publishes" : "none supported: AgentSDR cannot start Instagram chats";
+    facts.contactRoute = place.origin.profileEmail || place.origin.profilePhone || place.website ? "what the profile or its website publishes" : "Instagram DM after plan approval";
   }
   if (place.displayName !== place.name) facts.listingName = place.name;
   if (place.category) facts.category = place.category;
@@ -767,6 +768,7 @@ export function placeEvidence(place: EnrichedPlace): ContactEvidence[] {
   for (const phone of place.websitePhones) {
     if (phone.value !== place.phone) evidence.push({ kind: "phone", value: phone.value, sourceUrl: phone.sourceUrl, source: "the business's website" });
   }
+  if (place.origin) evidence.push({ kind: "instagram", value: `https://www.instagram.com/${place.origin.username}/`, sourceUrl: listing, source: listingLabel });
   if (place.companyLinkedin) evidence.push({ kind: "linkedin", value: place.companyLinkedin, sourceUrl: place.website, source: "the business's website" });
   return evidence;
 }
@@ -786,7 +788,7 @@ function matchReasonOf(place: EnrichedPlace, payload: DiscoveryPayload): string 
   return `Posted on Instagram under ${place.origin.hashtag ? `#${place.origin.hashtag}` : payload.phrase}${place.origin.postedAt ? ` on ${place.origin.postedAt.slice(0, 10)}` : ""}; the post or profile ${where}. A post is a potential match, not interest.`;
 }
 
-async function savePlace(place: EnrichedPlace, payload: DiscoveryPayload): Promise<{ member: NewMember | null; outcome: "eligible" | "excluded" | "duplicate"; email: boolean }> {
+async function savePlace(place: EnrichedPlace, payload: DiscoveryPayload): Promise<{ member: NewMember | null; outcome: "eligible" | "excluded" | "duplicate"; email: boolean; phone?: boolean; instagram?: boolean }> {
   const evidence = placeEvidence(place);
   const facts = factsOf(place);
   const base = { source: place.origin ? "apify_instagram" : place.listing ? SOCIAL[place.listing].source : DISCOVERY_SOURCE, sourceUrl: place.mapsUrl, evidence, facts, matchReason: matchReasonOf(place, payload), signals: instagramSignals(place) };
@@ -807,12 +809,7 @@ async function savePlace(place: EnrichedPlace, payload: DiscoveryPayload): Promi
     break;
   }
   const phone = place.phone ?? place.websitePhones[0]?.value ?? null;
-  if (!email && !phone && place.origin) {
-    // Discovered is not contactable: no published email or phone, and AgentSDR starts no Instagram chats.
-    const reason = `found on Instagram (@${place.origin.username}) but no supported channel to contact them: no email or phone on the profile${place.website ? place.websiteError ? ` (its website could not be read: ${place.websiteError})` : " or its website" : ""}, and AgentSDR cannot start Instagram chats — open the profile to message them yourself`;
-    return { member: { personId: null, name: place.displayName, reason, ...base }, outcome: "excluded", email: false };
-  }
-  if (!email && !phone) {
+  if (!email && !phone && !place.origin) {
     const reason = emailRejected
       ? "its published email's domain does not receive mail, and it lists no phone"
       : place.website
@@ -842,6 +839,7 @@ async function savePlace(place: EnrichedPlace, payload: DiscoveryPayload): Promi
   };
   const personSource = place.origin ? "discovery:apify-instagram" : place.listing ? SOCIAL[place.listing].personSource : payload.provider === "apify" ? "discovery:apify-google-maps" : "discovery:google-maps";
   const person = await withLeadTransaction(async (tx) => {
+    if (place.origin) return upsertInstagramProspect(tx, place.origin.username, { email, phone, fullName: place.displayName, raw, source: personSource, company: { name: place.displayName, domain: place.domain, linkedinUrl: place.companyLinkedin } });
     if (email) {
       return upsertPerson(tx, {
         email,
@@ -864,14 +862,14 @@ async function savePlace(place: EnrichedPlace, payload: DiscoveryPayload): Promi
       .where(and(inOrg(people), eq(people.id, created.id)));
     return created;
   });
-  return { member: { personId: person.id, ...base }, outcome: "eligible", email: Boolean(email) };
+  return { member: { personId: person.id, ...base }, outcome: "eligible", email: Boolean(email), phone: Boolean(phone), instagram: Boolean(place.origin) };
 }
 
 async function stageSaving(job: AssistantJob, heartbeat: () => Promise<void>): Promise<StepOutcome> {
   const payload = payloadOf(job);
   const places = payload.places ?? [];
   const start = payload.saveIndex ?? 0;
-  const tally = payload.tally ?? { eligible: 0, excluded: 0, duplicates: 0, withEmail: 0, withPhoneOnly: 0 };
+  const tally = payload.tally ?? { eligible: 0, excluded: 0, duplicates: 0, withEmail: 0, withPhoneOnly: 0, withInstagram: 0 };
   const members: NewMember[] = [];
   for (const place of places.slice(start, start + SAVE_BATCH)) {
     const saved = await savePlace(place, payload);
@@ -879,7 +877,8 @@ async function stageSaving(job: AssistantJob, heartbeat: () => Promise<void>): P
     if (saved.member) members.push(saved.member);
     if (saved.outcome === "eligible") {
       if (saved.email) tally.withEmail += 1;
-      else tally.withPhoneOnly += 1;
+      else if (saved.phone) tally.withPhoneOnly += 1;
+      if (saved.instagram) tally.withInstagram = (tally.withInstagram ?? 0) + 1;
     }
   }
   await heartbeat();

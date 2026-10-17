@@ -5,10 +5,25 @@ import { db } from "@/lib/db";
 import { getByokSettings } from "@/lib/ai/byok";
 import { AUTOPILOT_LIMITS } from "@/lib/crm/autopilot";
 import { channelRules } from "@/lib/channels/rules.server";
+import { describeOpening, describeWeeklyHours, sendingWindow } from "@/lib/channels/sendingWindow";
+import { isMigrationControlPaused } from "@/lib/migration/controls";
+import { mailboxProviderConnected } from "@/lib/outreach/mailboxProviders";
+import { mailboxes } from "@/lib/outreach/schema";
 import { resolveTimeZone } from "@/lib/timeZone";
-import { currentOrganizationId } from "@/lib/tenancy/scope";
+import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
+import { emailSendingStatus, mailboxDailyRoom } from "./sendingStatus";
 import { listRuns, reportRun } from "./outreach.server";
-import { figure, money, periodFor, type Period, type PeriodKind } from "./results";
+import {
+  describeChannelSending,
+  figure,
+  money,
+  periodFor,
+  summarizeSources,
+  type ChannelSending,
+  type Period,
+  type PeriodKind,
+  type SourceYield,
+} from "./results";
 
 /**
  * The owner's results for a period, from what the app recorded: sends from
@@ -23,11 +38,21 @@ import { figure, money, periodFor, type Period, type PeriodKind } from "./result
 
 export type Results = {
   period: Period;
-  leads: { discovered: number; imported: number; duplicates: number; usable: number; leftOut: number; leftOutReasons: { reason: string; count: number }[] };
+  leads: {
+    discovered: number;
+    imported: number;
+    duplicates: number;
+    usable: number;
+    leftOut: number;
+    leftOutReasons: { reason: string; count: number }[];
+    /** What each source produced, and how much of it can be reached. */
+    bySource: SourceYield[];
+  };
   outreach: {
     peopleContacted: number;
     emailsSent: number;
     whatsappSent: number;
+    instagramSent: number;
     linkedinInvitations: number;
     linkedinMessages: number;
     repliesReceived: number;
@@ -38,7 +63,9 @@ export type Results = {
   };
   interestedPeople: { name: string; what: string | null; at: string }[];
   attention: { repliesWaiting: number; openDecisions: number; byKind: { kind: string; count: number }[]; heldByAutopilot: { reason: string; count: number }[] };
-  pending: { emailFollowUps: number; whatsappFollowUps: number; linkedinSteps: number };
+  pending: { emailFollowUps: number; whatsappFollowUps: number; linkedinSteps: number; instagramDms: number };
+  /** Snapshot of recorded sending gates, not worker liveness. */
+  sending: { email: ChannelSending; whatsapp: ChannelSending };
   stopped: { optedOut: number; suppressed: { reason: string; count: number }[]; runLeadsStopped: number };
   failures: { channel: string; reason: string; count: number }[];
   spending: { aiRecordedUsd: number; aiCalls: number; aiCallsWithoutCost: number; byKind: { kind: string; usd: number; calls: number }[]; researchUsd: number; dataSources: string };
@@ -88,11 +115,14 @@ export async function results(kind: PeriodKind, now = new Date()): Promise<Resul
     WHERE m."organizationId" = ${org} AND m."linkedinMessageId" IS NOT NULL AND m."duplicateOfMessageId" IS NULL
       AND m.type IN ('INVITATION', 'ACCEPTANCE', 'FOLLOW_UP_1', 'FOLLOW_UP_2', 'FOLLOW_UP_3') AND ${inRange(utc(sql`m."createdAt"`))}`;
 
-  const [email, whatsapp, linkedin, contacted, crmSends, inbound, interested, interestedPeople] = await Promise.all([
+  const instagramSends = sql`SELECT q.person_id FROM instagram_outreach_queue q WHERE q.organization_id=${org} AND q.status='sent' AND ${inRange(sql`q.sent_at`)}`;
+
+  const [email, whatsapp, instagram, linkedin, contacted, crmSends, inbound, interested, interestedPeople] = await Promise.all([
     one(sql`SELECT count(*)::int AS n FROM (${emailSends}) x`),
     one(sql`SELECT count(*)::int AS n FROM (${whatsappSends}) x`),
+    one(sql`SELECT count(*)::int AS n FROM (${instagramSends}) x`),
     one(sql`SELECT count(*) FILTER (WHERE type = 'INVITATION')::int AS invitations, count(*) FILTER (WHERE type <> 'INVITATION')::int AS messages FROM (${linkedinSends}) x`),
-    one(sql`SELECT count(DISTINCT person_id)::int AS n FROM (${emailSends} UNION ALL ${whatsappSends} UNION ALL SELECT person_id FROM (${linkedinSends}) li) x`),
+    one(sql`SELECT count(DISTINCT person_id)::int AS n FROM (${emailSends} UNION ALL ${whatsappSends} UNION ALL ${instagramSends} UNION ALL SELECT person_id FROM (${linkedinSends}) li) x`),
     one(sql`SELECT count(*) FILTER (WHERE a.idempotency_key LIKE 'autopilot:%')::int AS auto, count(*) FILTER (WHERE a.idempotency_key NOT LIKE 'autopilot:%')::int AS manual
       FROM crm_send_attempts a JOIN crm_drafts d ON d.id = a.draft_id JOIN crm_records r ON r.id = d.crm_record_id
       WHERE r.organization_id = ${org} AND a.status IN ('sent', 'reconciled') AND ${inRange(sql`a.created_at`)}`),
@@ -114,7 +144,8 @@ export async function results(kind: PeriodKind, now = new Date()): Promise<Resul
         (SELECT count(*) FROM outreach_leads l JOIN outreach_campaigns c ON c.id = l.campaign_id WHERE c.organization_id = ${org} AND c.status = 'active' AND l.sequence_status IN ('pending', 'initial_sent', 'in_follow_up'))::int AS email,
         (SELECT count(*) FROM whatsapp_campaign_leads l JOIN whatsapp_campaigns c ON c.id = l.campaign_id WHERE c.organization_id = ${org} AND c.status = 'active' AND l.status IN ('queued', 'in_sequence'))::int AS whatsapp,
         (SELECT count(*) FROM "Lead" l JOIN "Campaign" c ON c.id = l."campaignId" WHERE l."organizationId" = ${org} AND c.status = 'ACTIVE'
-           AND l.status IN ('PENDING', 'REQUEST_SENT', 'CONNECTED', 'ACCEPT_MESSAGE_SENT', 'FOLLOW_UP_1_SENT', 'FOLLOW_UP_2_SENT'))::int AS linkedin`),
+           AND l.status IN ('PENDING', 'REQUEST_SENT', 'CONNECTED', 'ACCEPT_MESSAGE_SENT', 'FOLLOW_UP_1_SENT', 'FOLLOW_UP_2_SENT'))::int AS linkedin,
+        (SELECT count(*) FROM instagram_outreach_queue q JOIN outreach_runs r ON r.id=q.run_id WHERE q.organization_id=${org} AND r.status='running' AND q.status IN ('queued','resolving','sending'))::int AS instagram`),
     one(sql`SELECT count(*)::int AS n FROM crm_person_contact_policies cp JOIN people p ON p.id = cp.person_id WHERE p.organization_id = ${org} AND cp.do_not_contact AND ${inRange(sql`cp.set_at`)}`),
     rows(sql`SELECT reason, count(*)::int AS n FROM outreach_suppression_list WHERE organization_id = ${org} AND ${inRange(sql`created_at`)} GROUP BY reason ORDER BY n DESC`),
     one(sql`SELECT count(*)::int AS n FROM outreach_run_leads WHERE organization_id = ${org} AND status <> 'active' AND ${inRange(sql`updated_at`)}`),
@@ -126,6 +157,8 @@ export async function results(kind: PeriodKind, now = new Date()): Promise<Resul
         WHERE c.organization_id = ${org} AND s.status = 'failed' AND ${inRange(sql`s.created_at`)} GROUP BY 1, 2
       UNION ALL
       SELECT 'linkedin', 'failed (the LinkedIn engine records no reason)', count(*)::int FROM "Lead" l WHERE l."organizationId" = ${org} AND l.status = 'FAILED' AND ${inRange(utc(sql`l."updatedAt"`))} HAVING count(*) > 0
+      UNION ALL
+      SELECT 'instagram', coalesce(q.error,q.status), count(*)::int FROM instagram_outreach_queue q WHERE q.organization_id=${org} AND q.status IN ('failed','uncertain') AND ${inRange(sql`q.updated_at`)} GROUP BY 1,2
       UNION ALL
       SELECT 'replies', coalesce(a.error, a.status), count(*)::int FROM crm_send_attempts a JOIN crm_drafts d ON d.id = a.draft_id JOIN crm_records r ON r.id = d.crm_record_id
         WHERE r.organization_id = ${org} AND a.status IN ('failed', 'delivery_uncertain') AND ${inRange(sql`a.created_at`)} GROUP BY 1, 2
@@ -139,12 +172,52 @@ export async function results(kind: PeriodKind, now = new Date()): Promise<Resul
 
   // Limits now.
   const dayStart = periodFor("today", period.timeZone, now).from!;
-  const [autopilotUsed, mailboxRoom, researchToday, byok] = await Promise.all([
+  const [autopilotUsed, mailboxRows, emailQueue, researchToday, byok, whatsappRules, whatsappSenders, googleConnected, unipileConnected] = await Promise.all([
     one(sql`SELECT count(*)::int AS n FROM autopilot_replies WHERE organization_id = ${org} AND status IN ('reserved', 'sent', 'failed') AND created_at >= ${ts(new Date(now.getTime() - 24 * 3_600_000))}`),
-    one(sql`SELECT count(*)::int AS mailboxes, coalesce(sum(greatest(daily_send_limit - today_emails_sent, 0)), 0)::int AS room FROM outreach_mailboxes WHERE organization_id = ${org} AND status = 'connected'`),
+    db.select().from(mailboxes).where(inOrg(mailboxes)),
+    rows(sql`SELECT q.mailbox_id, count(*)::int AS n FROM outreach_mailbox_queue q
+      JOIN outreach_leads l ON l.id=q.lead_id JOIN outreach_campaigns c ON c.id=l.campaign_id
+      WHERE c.organization_id=${org} AND c.status='active' GROUP BY q.mailbox_id`),
     one(sql`SELECT count(*)::int AS n FROM lead_research WHERE organization_id = ${org} AND created_at >= ${ts(dayStart)}`).catch(() => null),
     getByokSettings().catch(() => null),
+    channelRules("whatsapp"),
+    one(sql`SELECT count(DISTINCT a.id)::int AS n FROM whatsapp_accounts a
+      JOIN whatsapp_campaign_accounts ca ON ca.account_id=a.id JOIN whatsapp_campaigns c ON c.id=ca.campaign_id
+      WHERE a.organization_id=${org} AND c.organization_id=${org} AND a.status='connected' AND a.unipile_account_id<>''
+        AND c.status='active' AND c.archived_at IS NULL`),
+    mailboxProviderConnected("google"),
+    mailboxProviderConnected("unipile"),
   ]);
+  const connectedMailboxes = mailboxRows.filter((row) => row.status === "connected");
+  const mailboxRoom = { mailboxes: connectedMailboxes.length, room: connectedMailboxes.reduce((sum, row) => sum + mailboxDailyRoom(row, now), 0) };
+  const emailSending = emailSendingStatus(mailboxRows.map((row) => ({
+    ...row,
+    activeQueue: n(emailQueue.find((q) => q.mailbox_id === row.id)?.n),
+    providerConnected: row.provider === "google" ? googleConnected : unipileConnected,
+  })), { now, paused: isMigrationControlPaused("emailOutbound") });
+
+  // The snapshot measures connection and campaign windows; the worker still
+  // checks due leads, per-account gaps, warm-up and new-chat limits before POST.
+  const whatsappHours = whatsappRules.sendingHours;
+  const whatsappWindow = sendingWindow(whatsappHours, now);
+  const whatsappBlockedBy: ChannelSending["blockedBy"] = isMigrationControlPaused("whatsappOutbound")
+    ? "paused"
+    : !unipileConnected || !n(whatsappSenders.n)
+      ? "no_sender"
+      : !whatsappWindow.open
+        ? "outside_hours"
+        : n(pending.whatsapp) <= 0
+          ? "nothing_queued"
+          : null;
+  const whatsappSending: ChannelSending = {
+    open: whatsappBlockedBy === null,
+    blockedBy: whatsappBlockedBy,
+    nextOpenAt: whatsappWindow.opensAt?.toISOString() ?? null,
+    nextOpenLabel: whatsappWindow.opensAt && whatsappHours ? describeOpening(whatsappWindow.opensAt, whatsappHours.timezone) : null,
+    hours: describeWeeklyHours(whatsappHours),
+    queued: n(pending.whatsapp),
+    detail: "the sender still checks due times, account gaps, warm-up and new-chat limits",
+  };
 
   const runList = await listRuns(10);
   const runs: Results["runs"] = [];
@@ -168,11 +241,15 @@ export async function results(kind: PeriodKind, now = new Date()): Promise<Resul
       usable: memberCount((row) => row.status === "eligible"),
       leftOut: memberCount((row) => row.status === "excluded"),
       leftOutReasons: reasons.map((row) => ({ reason: String(row.reason ?? "unknown"), count: n(row.n) })),
+      bySource: summarizeSources(
+        members.map((row) => ({ source: String(row.source ?? "unknown"), status: String(row.status ?? ""), count: n(row.n) })),
+      ),
     },
     outreach: {
       peopleContacted: n(contacted.n),
       emailsSent: n(email.n),
       whatsappSent: n(whatsapp.n),
+      instagramSent: n(instagram.n),
       linkedinInvitations: n(linkedin.invitations),
       linkedinMessages: n(linkedin.messages),
       repliesReceived: n(inbound.messages),
@@ -188,7 +265,8 @@ export async function results(kind: PeriodKind, now = new Date()): Promise<Resul
       byKind: decisions.map((row) => ({ kind: String(row.kind), count: n(row.n) })),
       heldByAutopilot: held.map((row) => ({ reason: String(row.reason), count: n(row.n) })),
     },
-    pending: { emailFollowUps: n(pending.email), whatsappFollowUps: n(pending.whatsapp), linkedinSteps: n(pending.linkedin) },
+    pending: { emailFollowUps: n(pending.email), whatsappFollowUps: n(pending.whatsapp), linkedinSteps: n(pending.linkedin), instagramDms: n(pending.instagram) },
+    sending: { email: emailSending, whatsapp: whatsappSending },
     stopped: {
       optedOut: n(optedOut.n),
       suppressed: suppressed.map((row) => ({ reason: String(row.reason), count: n(row.n) })),
@@ -219,14 +297,23 @@ export function resultsText(r: Results): string {
   const lines = [
     `Results for ${r.period.label} (${r.period.timeZone}):`,
     `Leads: ${r.leads.discovered} found by search, ${r.leads.imported} from your lists, ${r.leads.duplicates} duplicates merged, ${r.leads.usable} contactable, ${r.leads.leftOut} left out${r.leads.leftOutReasons.length ? ` (${r.leads.leftOutReasons.slice(0, 3).map((x) => `${x.count} × ${x.reason}`).join("; ")})` : ""}.`,
-    `Outreach: ${o.peopleContacted} people contacted; ${o.emailsSent} emails, ${o.whatsappSent} WhatsApp messages, ${o.linkedinInvitations} LinkedIn connection requests and ${o.linkedinMessages} LinkedIn messages sent.`,
+    ...(r.leads.bySource.length
+      ? [`Sources: ${r.leads.bySource.map((s) => `${s.label} ${s.contactable}/${s.found} with a contact route`).join("; ")}.`]
+      : []),
+    `Outreach: ${o.peopleContacted} people contacted; ${o.emailsSent} emails, ${o.whatsappSent} WhatsApp messages, ${o.linkedinInvitations} LinkedIn connection requests, ${o.linkedinMessages} LinkedIn messages and ${o.instagramSent} initial Instagram DMs confirmed sent.`,
     `Replies: ${o.repliesReceived} received from ${o.peopleReplied} people; ${o.interested} interested${r.interestedPeople.length ? ` (${r.interestedPeople.slice(0, 5).map((p) => p.name).join(", ")})` : ""}. Answered: ${o.automaticReplies} automatically, ${o.repliesByYou} by you.`,
     `Waiting for you: ${r.attention.repliesWaiting} replies to review, ${r.attention.openDecisions} decisions${r.attention.byKind.length ? ` (${r.attention.byKind.map((x) => `${x.count} ${x.kind.replace(/_/g, " ")}`).join(", ")})` : ""}.`,
-    `Still to send: ${r.pending.emailFollowUps} email leads, ${r.pending.whatsappFollowUps} WhatsApp leads, ${r.pending.linkedinSteps} LinkedIn leads in sequence.`,
+    `Still to send: ${r.pending.emailFollowUps} email leads, ${r.pending.whatsappFollowUps} WhatsApp leads, ${r.pending.linkedinSteps} LinkedIn leads in sequence, ${r.pending.instagramDms} initial Instagram DMs.`,
     `Stopped: ${r.stopped.optedOut} opted out${r.stopped.suppressed.length ? `, ${r.stopped.suppressed.map((x) => `${x.count} ${x.reason}`).join(", ")}` : ""}.`,
     r.failures.length ? `Failures: ${r.failures.slice(0, 4).map((f) => `${f.count} ${f.channel} (${f.reason})`).join("; ")}.` : "Failures: none recorded.",
     `AI spending recorded: ${money(r.spending.aiRecordedUsd)} over ${r.spending.aiCalls} assistant calls${r.spending.aiCallsWithoutCost ? ` (${r.spending.aiCallsWithoutCost} without a reported cost)` : ""}; research ${money(r.spending.researchUsd)}.`,
     `Limits left: ${r.limits.automaticRepliesLeft24h} automatic replies in the next 24 hours; ${figure(r.limits.emailsLeftToday)} emails today; WhatsApp new chats ${figure(r.limits.whatsappNewChatsLeftToday)}.`,
   ];
+  // Why a channel with leads left is not sending, in the engine's own terms.
+  if (r.pending.emailFollowUps + r.pending.whatsappFollowUps > 0) {
+    lines.push(
+      `Sending checks: email ${describeChannelSending(r.sending.email)}; WhatsApp ${describeChannelSending(r.sending.whatsapp)}.`,
+    );
+  }
   return lines.join("\n");
 }

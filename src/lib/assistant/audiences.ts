@@ -1,4 +1,5 @@
 import { isValidEmail } from "@/lib/email/recipients";
+import { instagramUsername } from "@/lib/instagram/parse";
 import type { AudienceChannel } from "./schema";
 
 /**
@@ -12,6 +13,7 @@ export type ContactFacts = {
   email: string | null;
   phone: string | null;
   linkedinUrl: string | null;
+  instagramUsername?: string | null;
   doNotContact: boolean;
   /** On the email suppression list (unsubscribed, bounced, complaint, manual). */
   emailSuppressed: boolean;
@@ -27,8 +29,9 @@ export function contactChannels(facts: ContactFacts): { channels: AudienceChanne
   }
   if (facts.phone && /^\+\d{7,15}$/.test(facts.phone)) channels.push("whatsapp");
   if (facts.linkedinUrl) channels.push("linkedin");
+  if (instagramUsername(facts.instagramUsername)) channels.push("instagram");
   if (channels.length) return { channels, reason: null };
-  return { channels, reason: notes[0] ?? "no email, phone or LinkedIn profile" };
+  return { channels, reason: notes[0] ?? "no email, phone, LinkedIn or Instagram profile" };
 }
 
 /** Exclusion reasons counted, largest first: "12 × no public email or phone". */

@@ -8,6 +8,7 @@ import { people } from "@/lib/leads/schema";
 import { pickRepresentativeRecord } from "@/lib/calls/leadStageRules";
 import { featureEnabled } from "@/lib/features/flags.server";
 import { recordInstagramInquiry } from "@/lib/intake/instagram.server";
+import { attachInitialInstagramEcho } from "./outreachEcho.server";
 import { attachInquiryToRun } from "@/lib/assistant/inquiryRuns.server";
 import { isPlatformNotConnectedError } from "@/lib/platform/credentials";
 import { inOrg } from "@/lib/tenancy/scope";
@@ -101,7 +102,10 @@ async function personForProviderId(providerId: string | null, executor: CrmExecu
     .where(and(chatInOrg(), eq(instagramChats.providerId, providerId), isNotNull(instagramChats.personId)))
     .orderBy(desc(instagramChats.updatedAt), desc(instagramChats.id))
     .limit(1);
-  return row?.personId ?? null;
+  if (row?.personId) return row.personId;
+  const matches = await executor.select({ id: people.id }).from(people)
+    .where(and(inOrg(people), sql`${people.raw}->'instagram'->>'providerId' = ${providerId}`)).limit(2);
+  return matches.length === 1 ? matches[0]!.id : null;
 }
 
 async function loadPersonRefs(personIds: string[]): Promise<Map<string, InstagramPersonRef>> {
@@ -400,6 +404,7 @@ async function ingestMessageEvent(
   });
   log.info(`Chat ${chat.id} (${chat.username ? `@${chat.username}` : event.counterpartyProviderId})${chat.personId ? ` → person ${chat.personId}` : " — no person linked"}`);
 
+  if (await attachInitialInstagramEcho(account, chat, event)) return "ok";
   const pendingMatch = event.isSender ? pickPendingSend(await pendingSends(chat.id, receivedAt), event, receivedAt) : null;
   const decision = decideIngest({ isSender: event.isSender, alreadyStored: false, pendingMatch });
 

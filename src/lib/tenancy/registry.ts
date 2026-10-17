@@ -38,6 +38,7 @@ export const SCOPED_TABLES: readonly ScopedTable[] = [
   snake("lead_audiences"),
   snake("lead_audience_members"),
   snake("assistant_jobs"),
+  snake("instagram_outreach_queue"),
   snake("outreach_runs"),
   snake("outreach_run_leads"),
   snake("autopilot_replies"),

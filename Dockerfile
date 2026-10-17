@@ -59,6 +59,7 @@ COPY --from=builder --chown=nextjs:nodejs /app/scripts/create-assistant-tables.t
 COPY --from=builder --chown=nextjs:nodejs /app/scripts/add-assistant-automation.ts ./scripts/add-assistant-automation.ts
 COPY --from=builder --chown=nextjs:nodejs /app/scripts/add-handoff.ts ./scripts/add-handoff.ts
 COPY --from=builder --chown=nextjs:nodejs /app/scripts/add-instagram-intake-discovery.ts ./scripts/add-instagram-intake-discovery.ts
+COPY --from=builder --chown=nextjs:nodejs /app/scripts/add-instagram-outreach.ts ./scripts/add-instagram-outreach.ts
 
 # Entrypoint: maps APP_URL, builds DATABASE_URL for the bundled database,
 # refuses placeholder secrets on a public address and creates the schema in an

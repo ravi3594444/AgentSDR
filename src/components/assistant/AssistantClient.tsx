@@ -81,11 +81,12 @@ type DecisionState = { status: "open" | "answered" | "resolved"; answer: string 
 type ChannelStatus = { available: boolean; reason: string | null; senders: number };
 
 type Setup = {
-  channels: Record<"email" | "whatsapp" | "linkedin", ChannelStatus>;
+  channels: Record<"email" | "whatsapp" | "linkedin" | "instagram", ChannelStatus>;
   leadDiscovery: { available: boolean; reason: string | null };
   ai: { connected: boolean };
   automaticRuns: number;
   canManageAutopilot: boolean;
+  features?: { instagram?: boolean };
   missingForDiscovery: string[];
   missingForOutreach: string[];
 };
@@ -309,7 +310,7 @@ function ProspectsList({ audienceId }: { audienceId: string }) {
 function DiscoveryCard({ message, job }: { message: Message; job: Job | undefined }) {
   const data = message.toolResult?.data as { phrase?: string; keywords?: string } | undefined;
   const linkedin = message.tool === "find_linkedin_leads";
-  const instagram = message.tool === "find_instagram_prospects" && job?.kind === "apify_instagram";
+  const instagram = job?.kind === "apify_instagram";
   // Facebook, LinkedIn or Instagram search through Apify (find_social_leads).
   const social = message.tool === "find_social_leads";
   // A search handed to website search (no Google Maps or Apify available) shows as one.
@@ -331,8 +332,8 @@ function DiscoveryCard({ message, job }: { message: Message; job: Job | undefine
         <p role="status">{stageText[job.stage] ?? "Working…"}{typeof progress.found === "number" && job.stage !== "searching" ? ` ${progress.found} businesses found.` : ""}</p>
       ) : job.status === "succeeded" && result ? (
         <p>
-          {result.found ?? 0} {linkedin ? "profiles" : instagram ? "Instagram accounts" : "businesses"} found{instagram ? " (potential matches, not interest)" : ""} · <span className="text-label-sm text-text-strong-950">{result.eligible ?? 0} contactable</span>{linkedin ? " on LinkedIn" : ` (${result.withEmail ?? 0} by email, ${result.withPhoneOnly ?? 0} by phone only)`}
-          {instagram && Number(result.instagramOnly ?? 0) > 0 && ` · ${result.instagramOnly} found on Instagram only — no supported channel to contact them`}
+          {result.found ?? 0} {linkedin ? "profiles" : instagram ? "Instagram accounts" : "businesses"} found{instagram ? " (potential matches, not interest)" : ""} · <span className="text-label-sm text-text-strong-950">{result.eligible ?? 0} contactable</span>{linkedin ? " on LinkedIn" : ` (${result.withEmail ?? 0} by email, ${result.withPhoneOnly ?? 0} by phone only, ${result.withInstagram ?? 0} with Instagram profiles)`}
+          {instagram && Number(result.instagramOnly ?? 0) > 0 && ` · ${result.instagramOnly} found on Instagram only — approved DM plan and connected sender required`}
           {Number(result.excluded ?? 0) > 0 && ` · ${result.excluded} left out with reasons`}
           {Number(result.duplicates ?? 0) > 0 && ` · ${result.duplicates} duplicates skipped`}
           {Number(result.alreadyKnown ?? 0) > 0 && ` · ${result.alreadyKnown} already in your leads (not duplicated)`}
@@ -357,7 +358,7 @@ type ProposalData = {
     groups?: { id: string; label: string; count: number }[];
     personal?: { personId: string; name: string }[];
     skipped?: { personId: string; name: string; reason: string }[];
-    limits: { maxLeads: number; emailPerMailboxPerDay: number | null; whatsappNewChatsPerDay: number | null };
+    limits: { maxLeads: number; emailPerMailboxPerDay: number | null; whatsappNewChatsPerDay: number | null; instagramNewChatsPerDay?: number | null };
     excluded: { reason: string; count: number }[];
     estimate: { aiCalls: number; aiCostUsd: number | null; days: number | null };
     autopilot: boolean;
@@ -467,7 +468,12 @@ function ProposalCard({ message, run, canManageAutopilot, lastReplyMode, onChang
         <div><dt className="text-paragraph-xs text-text-soft-400">AI cost</dt><dd className="text-label-sm text-text-strong-950">{data.plan.estimate.aiCostUsd === null ? `${data.plan.estimate.aiCalls} calls` : data.plan.estimate.aiCostUsd < 0.01 ? "< $0.01" : `≈ $${data.plan.estimate.aiCostUsd.toFixed(2)}`}</dd></div>
       </dl>
       <p className="mt-2 text-paragraph-xs text-text-sub-600">
-        Daily limits: {data.plan.limits.emailPerMailboxPerDay ? `${data.plan.limits.emailPerMailboxPerDay} emails per mailbox` : ""}{data.plan.limits.emailPerMailboxPerDay && data.plan.limits.whatsappNewChatsPerDay ? ", " : ""}{data.plan.limits.whatsappNewChatsPerDay ? `${data.plan.limits.whatsappNewChatsPerDay} new WhatsApp chats per number` : ""}. Sending rules, sending hours and Do Not Contact apply. Sending costs nothing extra beyond your own accounts.
+        Daily limits: {[
+          data.plan.limits.emailPerMailboxPerDay ? `${data.plan.limits.emailPerMailboxPerDay} emails per mailbox` : null,
+          data.plan.limits.whatsappNewChatsPerDay ? `${data.plan.limits.whatsappNewChatsPerDay} new WhatsApp chats per number` : null,
+          data.plan.limits.instagramNewChatsPerDay ? `${data.plan.limits.instagramNewChatsPerDay} initial Instagram DMs per account in 24 hours` : null,
+        ].filter(Boolean).join(", ") || "the connected channels' limits"}. Sending rules, sending hours and Do Not Contact apply. Sending uses your own accounts.
+        {perChannel.instagram ? " Instagram sends one initial DM; replies follow the reply mode you choose." : ""}
       </p>
       {data.plan.excluded.length > 0 && (
         <p className="mt-1 text-paragraph-xs text-text-sub-600">Left out: {data.plan.excluded.slice(0, 3).map((e) => `${e.count} × ${e.reason}`).join("; ")}.</p>
@@ -929,11 +935,11 @@ function setupItems(setup: Setup): SetupItem[] {
   return [
     { label: "AI", ok: setup.ai.connected, detail: setup.ai.connected ? "Connected" : "Not set up on this server yet", href: "/settings/ai", operator: true },
     { label: "Lead search", ok: setup.leadDiscovery.available, detail: setup.leadDiscovery.available ? "Google Maps ready" : "Not enabled on this server; contact lists still work", href: "/getting-started", operator: true },
-    ...(["email", "whatsapp", "linkedin"] as const).map((channel) => ({
+    ...(["email", "whatsapp", "linkedin", ...(setup.features?.instagram ? ["instagram" as const] : [])] as const).map((channel) => ({
       label: CHANNEL_LABEL[channel]!,
       ok: setup.channels[channel].available,
       detail: setup.channels[channel].available ? `${setup.channels[channel].senders} connected` : setup.channels[channel].reason ?? "Not connected",
-      href: channel === "email" ? "/settings/email-accounts" : channel === "whatsapp" ? "/settings/whatsapp-accounts" : "/settings/linkedin-accounts",
+      href: channel === "email" ? "/settings/email-accounts" : channel === "whatsapp" ? "/settings/whatsapp-accounts" : channel === "linkedin" ? "/settings/linkedin-accounts" : "/settings/instagram-accounts",
       operator: false,
     })),
   ];

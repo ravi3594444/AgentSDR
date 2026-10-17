@@ -273,6 +273,12 @@ export function InstagramAccountsClient({ inquiryIntakeOn }: { inquiryIntakeOn: 
               never reach Action required and never get a reply. Only new messages are drafted for.
             </Callout>
 
+            <p className="mt-3 text-paragraph-xs text-text-sub-600">
+              Start an Instagram outreach plan in the <Link href="/assistant" className="underline">Assistant</Link>.
+              Each approved recipient gets one initial DM. Set daily limits and hours in <Link href="/settings/instagram-rules" className="underline">Sending rules</Link>.
+              The inquiry checkbox below applies to new people who write first; outbound replies follow their run.
+            </p>
+
             <AccountsFrame
               title="Accounts"
               description="Each account's direct messages reach the CRM for people you already have; replies go out from the account the person wrote to."

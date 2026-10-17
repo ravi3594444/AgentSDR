@@ -25,7 +25,7 @@
 
 import { resolveTimeZone } from "@/lib/timeZone";
 
-export const CHANNELS = ["email", "linkedin", "whatsapp", "general"] as const;
+export const CHANNELS = ["email", "linkedin", "whatsapp", "instagram", "general"] as const;
 export type Channel = (typeof CHANNELS)[number];
 
 export type WeeklyHours = {
@@ -273,6 +273,11 @@ export const CHANNEL_RULES = {
       safe: { below: 10 },
       warning: "Messages sent faster than every 10 seconds look automated.",
     },
+  ],
+  instagram: [
+    { key: "newChatsPerDay", kind: "number", label: "New conversations per account", help: "Initial outreach DMs one connected Instagram account may attempt in a rolling 24 hours. Replies use the run's reply limits.", unit: "new chats / 24 hours", default: 10, min: 1, max: 100 },
+    { key: "sendGapMinutes", kind: "range", label: "Time between initial DMs", help: "Wait between initial outreach messages from the same account.", unit: "minutes", default: [5, 10], min: 1, max: 1440 },
+    { key: "sendingHours", kind: "hours", label: "Sending hours", help: "Initial DMs wait outside these hours. The time zone is explicit; replies follow their run's controls.", default: { timezone: "UTC", days: [1, 2, 3, 4, 5], start: "09:00", end: "17:00" }, optional: true },
   ],
   general: [
     {

@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { crmPersonContactPolicies } from "@/lib/crm/schema";
 import { companies, people } from "@/lib/leads/schema";
 import { suppressionList } from "@/lib/outreach/schema";
+import { instagramUsername } from "@/lib/instagram/parse";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { contactChannels, countReasons } from "./audiences";
 import { randomUUID } from "node:crypto";
@@ -54,6 +55,7 @@ type PersonFacts = {
   email: string | null;
   phone: string | null;
   linkedinUrl: string | null;
+  instagramUsername: string | null;
   name: string;
   companyId: string | null;
   doNotContact: boolean;
@@ -69,6 +71,7 @@ export async function loadPersonFacts(personIds: readonly string[]): Promise<Map
     email: people.email,
     phone: people.phone,
     linkedinUrl: people.linkedinUrl,
+    raw: people.raw,
     firstName: people.firstName,
     lastName: people.lastName,
     fullName: people.fullName,
@@ -91,12 +94,15 @@ export async function loadPersonFacts(personIds: readonly string[]): Promise<Map
       || row.companyName?.trim()
       || row.email
       || row.phone
+      || (typeof row.raw.businessName === "string" ? row.raw.businessName : null)
+      || instagramUsername((row.raw.instagram as { username?: unknown } | undefined)?.username)
       || "Unnamed lead";
     facts.set(row.id, {
       id: row.id,
       email: row.email,
       phone: row.phone,
       linkedinUrl: row.linkedinUrl ? `https://www.linkedin.com/in/${row.linkedinUrl.replace(/^.*\/in\//, "")}` : null,
+      instagramUsername: instagramUsername((row.raw.instagram as { username?: unknown } | undefined)?.username),
       name,
       companyId: row.companyId,
       doNotContact: dnc.has(row.id),
@@ -254,7 +260,7 @@ export async function summarizeAudience(audienceId: string): Promise<AudienceSum
   }).from(leadAudienceMembers)
     .where(and(inOrg(leadAudienceMembers), eq(leadAudienceMembers.audienceId, audienceId)))
     .orderBy(asc(leadAudienceMembers.createdAt));
-  const byChannel: Record<AudienceChannel, number> = { email: 0, whatsapp: 0, linkedin: 0 };
+  const byChannel: Record<AudienceChannel, number> = { email: 0, whatsapp: 0, linkedin: 0, instagram: 0 };
   for (const member of members) for (const channel of member.channels) byChannel[channel] += 1;
   const eligibleMembers = members.filter((member) => member.status === "eligible");
   return {

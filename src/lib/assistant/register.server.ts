@@ -26,12 +26,12 @@ function webDiscoveryMessage(job: AssistantJob): string {
   const count = (key: string) => Number(result[key] ?? 0);
   const extra: string[] = [];
   if (count("excluded")) extra.push(`${count("excluded")} left out with the reason recorded`);
-  if (count("instagramOnly")) extra.push(`${count("instagramOnly")} of them reachable only on Instagram (open their post or profile to reply yourself)`);
+  if (count("instagramOnly")) extra.push(`${count("instagramOnly")} of them reachable only on Instagram (a connected sender and approved DM plan are required)`);
   if (count("needSignals")) extra.push(`${count("needSignals")} asked for something like this in their own words`);
   if (count("alreadyKnown")) extra.push(`${count("alreadyKnown")} already in your leads (reused, not duplicated)`);
   if (count("duplicates")) extra.push(`${count("duplicates")} duplicates skipped`);
   const cost = typeof result.costUsd === "number" ? ` Search cost $${result.costUsd.toFixed(4)}.` : "";
-  return `The web search for “${String(result.phrase ?? "")}” finished: ${found} found on business websites, directories and public pages, ${count("eligible")} can be contacted (${count("withEmail")} by email, ${count("withPhoneOnly")} by phone only)${extra.length ? `; ${extra.join(", ")}` : ""}.${result.note ? ` ${String(result.note)}` : ""}${cost}`;
+  return `The web search for “${String(result.phrase ?? "")}” finished: ${found} found on business websites, directories and public pages, ${count("eligible")} can be contacted (${count("withEmail")} by email, ${count("withPhoneOnly")} by phone only, ${count("withInstagram")} with Instagram profiles)${extra.length ? `; ${extra.join(", ")}` : ""}.${result.note ? ` ${String(result.note)}` : ""}${cost}`;
 }
 
 /** A finished Instagram prospect search (Apify): who was found, and who can actually be contacted. */
@@ -42,7 +42,7 @@ function instagramProspectMessage(job: AssistantJob): string {
   const providerNote = typeof result.providerNote === "string" && result.providerNote ? ` ${result.providerNote}` : "";
   if (!found) return `${String(result.note ?? "The Instagram prospect search found no accounts.")}${providerNote}`;
   const count = (key: string) => Number(result[key] ?? 0);
-  return `The Instagram prospect search for ${String(result.phrase ?? "")} (through Apify) finished: ${found} accounts found — potential matches, not interested customers. ${count("eligible")} can be contacted through an email or phone they publish (${count("withEmail")} by email, ${count("withPhoneOnly")} by phone only); ${count("excluded")} have no supported channel (AgentSDR cannot start Instagram chats) or were left out with the reason recorded${count("duplicates") ? `; ${count("duplicates")} duplicates skipped` : ""}.${providerNote}`;
+  return `The Instagram prospect search for ${String(result.phrase ?? "")} (through Apify) finished: ${found} accounts found — potential matches, not interested customers. ${count("eligible")} have a contact route for an approved plan (${count("withEmail")} by email, ${count("withPhoneOnly")} by phone only, ${count("withInstagram")} with Instagram profiles); ${count("excluded")} were left out with the reason recorded${count("duplicates") ? `; ${count("duplicates")} duplicates skipped` : ""}.${providerNote}`;
 }
 
 function discoveryMessage(job: AssistantJob): string {
@@ -54,10 +54,11 @@ function discoveryMessage(job: AssistantJob): string {
   const providerNote = typeof result.providerNote === "string" && result.providerNote ? ` ${result.providerNote}` : "";
   if (!found) return `${String(result.note ?? "The lead search found no businesses.")}${result.note ? "" : providerNote}`;
   const eligible = Number(result.eligible ?? 0);
+  const source = result.target === "facebook" ? "Facebook pages" : result.target === "linkedin" ? "LinkedIn company pages" : "Google Maps";
   const parts = [
     job.kind === "linkedin_search"
       ? `The LinkedIn search for “${String(result.phrase ?? "")}” finished: ${found} profiles found, ${eligible} can be contacted on LinkedIn`
-      : `The lead search for “${String(result.phrase ?? "")}” finished: ${found} businesses found on Google Maps${result.provider === "apify" ? " (through Apify)" : ""}, ${eligible} can be contacted`,
+      : `The lead search for “${String(result.phrase ?? "")}” finished: ${found} businesses found on ${source}${result.provider === "apify" ? " (through Apify)" : ""}, ${eligible} can be contacted`,
     job.kind === "linkedin_search" ? "" : `(${Number(result.withEmail ?? 0)} by email, ${Number(result.withPhoneOnly ?? 0)} by phone only)`,
   ];
   const extra: string[] = [];

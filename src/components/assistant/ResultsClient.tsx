@@ -18,7 +18,7 @@ import {
 import { EmptyState } from "@/components/page/EmptyState";
 import { KpiCell, KpiStrip } from "@/components/analytics/kit/KpiStrip";
 import NeedsYouList, { type NeedsYouPayload } from "@/components/assistant/NeedsYouList";
-import { figure, money, PERIOD_KINDS, type PeriodKind } from "@/lib/assistant/results";
+import { describeChannelSending, figure, money, PERIOD_KINDS, type PeriodKind } from "@/lib/assistant/results";
 import type { Results } from "@/lib/assistant/results.server";
 import { cn } from "@/utils/cn";
 
@@ -99,16 +99,17 @@ export default function ResultsClient({ initial }: { initial: ResultsPayload }) 
 
       <KpiStrip columns={5}>
         <KpiCell icon={RiSearchLine} label="Leads found" value={String(r.leads.discovered)} context={`${r.leads.imported} from your lists · ${r.leads.duplicates} duplicates merged`} hint="Businesses found by lead search, and people imported from lists, in this period." />
-        <KpiCell icon={RiCheckboxCircleLine} label="Contactable" value={String(r.leads.usable)} context={`${r.leads.leftOut} left out with a reason`} hint="Leads with a usable, permitted email, phone or LinkedIn profile." />
-        <KpiCell icon={RiUserFollowLine} label="People contacted" value={String(o.peopleContacted)} context="had at least one message sent" hint="Distinct people with a sent email, WhatsApp message or LinkedIn request/message in this period, from each channel's send records. Unsubscribing later does not remove them." />
+        <KpiCell icon={RiCheckboxCircleLine} label="Contactable" value={String(r.leads.usable)} context={`${r.leads.leftOut} left out with a reason`} hint="Leads with a usable, permitted email, phone, LinkedIn or Instagram profile." />
+        <KpiCell icon={RiUserFollowLine} label="People contacted" value={String(o.peopleContacted)} context="had at least one message sent" hint="Distinct people with a sent email, WhatsApp message , LinkedIn request/message or initial Instagram DM in this period, from each channel's send records. Unsubscribing later does not remove them." />
         <KpiCell icon={RiChat3Line} label="Replies" value={String(o.repliesReceived)} context={`from ${o.peopleReplied} people`} hint="Inbound replies recorded by the CRM in this period." />
         <KpiCell icon={RiStarLine} label="Interested" value={String(o.interested)} context="classified interested; not a sale" hint="Conversations whose reply was classified Interested (applied automatically or by you). Interest is not a closed sale." />
       </KpiStrip>
 
-      <KpiStrip columns={5}>
+      <KpiStrip columns={6}>
         <KpiCell icon={RiMailSendLine} label="Emails sent" value={String(o.emailsSent)} hint="Campaign emails with status sent (first messages and follow-ups). Drafts are never counted." />
         <KpiCell icon={RiWhatsappLine} label="WhatsApp sent" value={String(o.whatsappSent)} hint="WhatsApp campaign messages confirmed sent." />
         <KpiCell icon={RiLinkedinBoxLine} label="LinkedIn requests" value={String(o.linkedinInvitations)} context={`${o.linkedinMessages} LinkedIn messages`} hint="Connection requests confirmed by LinkedIn, counted apart from messages (acceptance and follow-ups)." />
+        <KpiCell icon={RiChat3Line} label="Instagram DMs" value={String(o.instagramSent)} hint="Initial Instagram DMs confirmed sent. Uncertain deliveries are excluded." />
         <KpiCell icon={RiChat3Line} label="Replies answered" value={String(o.automaticReplies + o.repliesByYou)} context={`${o.automaticReplies} automatically · ${o.repliesByYou} by you`} hint="CRM replies sent: by the reply autopilot or by a person." />
         <KpiCell icon={RiErrorWarningLine} label="Waiting for you" value={String(r.attention.repliesWaiting + r.attention.openDecisions)} context={`${r.attention.openDecisions} ${r.attention.openDecisions === 1 ? "decision" : "decisions"} · ${r.attention.repliesWaiting} ${r.attention.repliesWaiting === 1 ? "reply" : "replies"} to review`} hint="Open decisions from the assistant and AI reply drafts waiting in Action required (now, not just this period)." />
       </KpiStrip>
@@ -117,8 +118,41 @@ export default function ResultsClient({ initial }: { initial: ResultsPayload }) 
         <Section title="Interested people">
           <List items={r.interestedPeople.map((p) => `${p.name}${p.what ? ` — ${p.what}` : ""} (${new Date(p.at).toLocaleString()})`)} empty="No interested replies in this period." />
         </Section>
+        <Section title="Where leads came from">
+          {r.leads.bySource.length ? (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[24rem] text-left text-paragraph-xs">
+                <thead>
+                  <tr className="text-text-soft-400">
+                    <th className="py-1 pr-3 font-normal">Source</th>
+                    <th className="pr-3 text-right font-normal">Found</th>
+                    <th className="pr-3 text-right font-normal">Contactable</th>
+                    <th className="text-right font-normal">Left out</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {r.leads.bySource.map((s) => (
+                    <tr key={s.source} className="border-t border-stroke-soft-200 text-text-strong-950">
+                      <td className="py-1.5 pr-3">{s.label}</td>
+                      <td className="pr-3 text-right tabular-nums">{s.found}</td>
+                      <td className="pr-3 text-right tabular-nums">{s.contactable}</td>
+                      <td className="text-right tabular-nums">{s.leftOut}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="mt-1 text-paragraph-xs text-text-soft-400">
+                Counts show saved audience records with an available contact route. They do not confirm delivery or interest.
+              </p>
+            </div>
+          ) : (
+            <p className="text-paragraph-xs text-text-soft-400">No leads were found or imported in this period.</p>
+          )}
+        </Section>
         <Section title="Still to send">
-          <p className="text-paragraph-xs">{r.pending.emailFollowUps} email leads, {r.pending.whatsappFollowUps} WhatsApp leads and {r.pending.linkedinSteps} LinkedIn leads are still in their sequences (active campaigns, now).</p>
+          <p className="text-paragraph-xs">{r.pending.emailFollowUps} email leads, {r.pending.whatsappFollowUps} WhatsApp leads and {r.pending.linkedinSteps} LinkedIn leads are still in their sequences (active campaigns, now). {r.pending.instagramDms} initial Instagram DMs are queued or being submitted.</p>
+          <p className="mt-1 text-paragraph-xs text-text-soft-400">Email {describeChannelSending(r.sending.email)}.</p>
+          <p className="text-paragraph-xs text-text-soft-400">WhatsApp {describeChannelSending(r.sending.whatsapp)}.</p>
         </Section>
         <Section title="Stopped and held">
           <List

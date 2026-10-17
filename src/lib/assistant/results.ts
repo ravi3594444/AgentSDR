@@ -1,4 +1,5 @@
 import { latestDailySlot, wallTime } from "@/lib/scheduler/slots";
+import { sourceLabel } from "./qualification";
 
 /**
  * Reporting periods in the business's own time zone, and how results are
@@ -60,4 +61,84 @@ export function money(value: number | null | undefined): string {
   if (value === null || value === undefined) return "not recorded";
   if (value > 0 && value < 0.01) return "< $0.01";
   return `$${value.toFixed(2)}`;
+}
+
+/**
+ * Whether a channel can send at the moment the results were read, and why
+ * not when it cannot. Computed from the same working-hours rules the send
+ * engines gate on, so "outside its sending hours" here is the scheduler's
+ * `skippedOutsideHours`, not a guess (results.server.ts).
+ */
+export type ChannelSending = {
+  /** No measured gate is blocking queued work; does not prove the worker is sending. */
+  open: boolean;
+  blockedBy: "paused" | "no_sender" | "outside_hours" | "daily_limit" | "nothing_queued" | "throttled" | "sender_checks" | null;
+  /** Additional recorded blockers, or checks this snapshot does not measure. */
+  detail?: string;
+  /** ISO instant of the next opening, when the window is what blocks it. */
+  nextOpenAt: string | null;
+  /** The same instant written in the window's own time zone, e.g. "Monday 19 Oct at 09:00". */
+  nextOpenLabel: string | null;
+  /** The window that governs, e.g. "Mon–Fri 09:00–18:00 (Asia/Kolkata)"; null is any time. */
+  hours: string | null;
+  /** Leads waiting to send on this channel right now. */
+  queued: number;
+};
+
+/** A channel's sending state in words, without repeating the channel's name. */
+export function describeChannelSending(sending: ChannelSending): string {
+  switch (sending.blockedBy) {
+    case "paused":
+      return "is paused by an operations switch";
+    case "no_sender":
+      return "has no connected sending account";
+    case "outside_hours":
+      return `is outside its sending hours${sending.hours ? ` (${sending.hours})` : ""}${sending.nextOpenLabel ? ` — next window ${sending.nextOpenLabel}` : ""}${sending.detail ? `; ${sending.detail}` : ""}`;
+    case "daily_limit":
+      return "has used the queued mailboxes' daily allowance; counters use each mailbox's timezone";
+    case "nothing_queued":
+      return "has no work in a connected sender's active queue";
+    case "throttled":
+      return "is waiting for the configured gap between sends";
+    case "sender_checks":
+      return `has queued work blocked by sender checks${sending.detail ? `: ${sending.detail}` : ""}`;
+    default:
+      return `has queued work for the next send check${sending.detail ? `; ${sending.detail}` : ""}`;
+  }
+}
+
+/**
+ * How many leads each source produced, and how many of them can be reached.
+ * The question this answers is which source is worth asking for more of:
+ * Google Maps is the default only because it needs no setup, not because it
+ * is the best for every kind of customer. Sorted by how many were found.
+ */
+export type SourceYield = {
+  source: string;
+  /** How the source reads to the owner: "Google Maps listing", "Web search". */
+  label: string;
+  found: number;
+  contactable: number;
+  leftOut: number;
+};
+
+export function summarizeSources(
+  rows: readonly { source: string; status: string; count: number }[],
+): SourceYield[] {
+  const bySource = new Map<string, SourceYield>();
+  for (const row of rows) {
+    const source = row.source || "unknown";
+    const entry = bySource.get(source) ?? {
+      source,
+      label: sourceLabel(source),
+      found: 0,
+      contactable: 0,
+      leftOut: 0,
+    };
+    entry.found += row.count;
+    if (row.status === "eligible") entry.contactable += row.count;
+    if (row.status === "excluded") entry.leftOut += row.count;
+    bySource.set(source, entry);
+  }
+  return [...bySource.values()].sort((a, b) => b.found - a.found || a.label.localeCompare(b.label));
 }

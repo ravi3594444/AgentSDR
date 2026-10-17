@@ -46,6 +46,14 @@ export const CHANNEL_RULES: Record<AudienceChannel, { steps: number; maxBody: nu
     defaultWaits: [0, 0, 4],
     describe: "LinkedIn: a connection invitation note under 280 characters, a message sent when they accept, and one follow-up, each under 500 characters, no subject.",
   },
+  instagram: {
+    steps: 1,
+    maxBody: 600,
+    subject: false,
+    waitUnit: "days",
+    defaultWaits: [0],
+    describe: "Instagram: one initial direct message under 400 characters, conversational, no subject or formatting, one clear question. Do not write unsolicited follow-ups; replies use the run's Automatic or Review mode.",
+  },
 };
 
 /** Tokens written as {{name}} in a template. */

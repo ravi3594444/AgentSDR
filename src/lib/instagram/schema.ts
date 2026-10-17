@@ -3,6 +3,7 @@ import { boolean, check, foreignKey, index, integer, jsonb, pgTable, text, times
 import { organizations } from "@/lib/auth/schema";
 import { crmConversationMessages } from "@/lib/crm/schema";
 import { people } from "@/lib/leads/schema";
+import { outreachRuns } from "@/lib/assistant/schema";
 import type {
   InstagramAccountStatus,
   InstagramAttachment,
@@ -40,6 +41,7 @@ export const instagramAccounts = pgTable(
     inquiryIntake: boolean("inquiry_intake").notNull().default(false),
     lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
     lastImportedAt: timestamp("last_imported_at", { withTimezone: true }),
+    outreachNextSendAt: timestamp("outreach_next_send_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -116,3 +118,30 @@ export const instagramMessages = pgTable(
 export type InstagramAccountRow = typeof instagramAccounts.$inferSelect;
 export type InstagramChatRow = typeof instagramChats.$inferSelect;
 export type InstagramMessageRow = typeof instagramMessages.$inferSelect;
+
+/** A single approved initial DM. Sending/uncertain reservations never auto-send again. */
+export const instagramOutreachQueue = pgTable("instagram_outreach_queue", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+  runId: uuid("run_id").notNull().references(() => outreachRuns.id, { onDelete: "cascade" }),
+  personId: uuid("person_id").notNull().references(() => people.id, { onDelete: "cascade" }),
+  accountId: uuid("account_id").notNull().references(() => instagramAccounts.id),
+  username: text("username").notNull(),
+  messagingId: text("messaging_id"),
+  body: text("body").notNull(),
+  status: text("status").notNull().default("queued").$type<"queued" | "resolving" | "sending" | "sent" | "failed" | "uncertain" | "cancelled">(),
+  lockedUntil: timestamp("locked_until", { withTimezone: true }),
+  lockedBy: text("locked_by"),
+  attemptedAt: timestamp("attempted_at", { withTimezone: true }),
+  sentAt: timestamp("sent_at", { withTimezone: true }),
+  chatId: text("chat_id"),
+  messageId: text("message_id"),
+  error: text("error"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  unique("instagram_outreach_run_person_uq").on(t.runId, t.personId),
+  index("instagram_outreach_due_idx").on(t.status, t.createdAt),
+  index("instagram_outreach_org_account_idx").on(t.organizationId, t.accountId, t.attemptedAt),
+  check("instagram_outreach_status_chk", sql`${t.status} IN ('queued','resolving','sending','sent','failed','uncertain','cancelled')`),
+]);

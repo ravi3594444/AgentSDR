@@ -23,7 +23,9 @@ export type WhatsappSendRefusalReason =
   | "rate_limited"
   | "rejected"
   | "unauthorized"
-  | "invalid_number";
+  | "invalid_number"
+  /** Provider refused the recipient; registration status is not known. */
+  | "recipient_unreachable";
 
 export class WhatsappSendRefusedError extends Error {
   constructor(

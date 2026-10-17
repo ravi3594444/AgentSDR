@@ -19,6 +19,10 @@ import { isPlatformConnected } from "@/lib/platform/credentials";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { addPeopleToWhatsappCampaign, createWhatsappCampaign, getWhatsappCampaignDetail, updateWhatsappCampaign } from "@/lib/whatsapp/campaigns/campaigns.server";
 import { whatsappAccounts, whatsappCampaignLeads } from "@/lib/whatsapp/schema";
+import { instagramAccounts, instagramOutreachQueue } from "@/lib/instagram/schema";
+import { instagramOutreachReady, queueInstagramOutreach } from "@/lib/instagram/outreach.server";
+import { instagramUsername } from "@/lib/instagram/parse";
+import { featureEnabled } from "@/lib/features/flags.server";
 import { requeueRunAutopilot } from "./autopilotRun.server";
 import { eligibleAudienceMembers, summarizeAudience } from "./audiences.server";
 import { countReasons } from "./audiences";
@@ -57,7 +61,7 @@ const PERSONALIZE_BATCH = 10;
 /** Leads sorted per model call, and first messages written per call. */
 const SORT_BATCH = 25;
 const PERSONAL_BATCH = 5;
-const CHANNEL_ORDER: AudienceChannel[] = ["email", "whatsapp", "linkedin"];
+const CHANNEL_ORDER: AudienceChannel[] = ["email", "whatsapp", "linkedin", "instagram"];
 
 export class OutreachError extends Error {
   constructor(message: string) {
@@ -69,7 +73,7 @@ export class OutreachError extends Error {
 export type ChannelStatus = { available: boolean; reason: string | null; senders: number; perSenderPerDay: number | null };
 
 /** Which channels can send right now, how many senders each has, and their daily allowance. */
-export async function channelAvailability(): Promise<Record<AudienceChannel, ChannelStatus> & { signatureAppended: boolean; whatsappAccountIds: string[]; linkedinAccountIds: string[] }> {
+export async function channelAvailability(): Promise<Record<AudienceChannel, ChannelStatus> & { signatureAppended: boolean; whatsappAccountIds: string[]; linkedinAccountIds: string[]; instagramAccountIds: string[] }> {
   const connectedMailboxes = await db.select({ provider: mailboxes.provider, limit: mailboxes.dailySendLimit, signature: mailboxes.signatureHtml })
     .from(mailboxes).where(and(inOrg(mailboxes), eq(mailboxes.status, "connected")));
   const sendable = [];
@@ -81,7 +85,11 @@ export async function channelAvailability(): Promise<Record<AudienceChannel, Cha
   const linkedin = unipile
     ? await db.select({ id: linkedInAccounts.id }).from(linkedInAccounts).where(and(inOrg(linkedInAccounts), eq(linkedInAccounts.status, "CONNECTED")))
     : [];
-  const [whatsappRules, linkedinRules] = await Promise.all([channelRules("whatsapp"), channelRules("linkedin")]);
+  const instagramEnabled = await featureEnabled("instagram");
+  const instagramReady = instagramEnabled && await instagramOutreachReady();
+  const instagram = unipile && instagramReady
+    ? await db.select({ id: instagramAccounts.id }).from(instagramAccounts).where(and(inOrg(instagramAccounts), eq(instagramAccounts.status, "connected"))) : [];
+  const [whatsappRules, linkedinRules, instagramRules] = await Promise.all([channelRules("whatsapp"), channelRules("linkedin"), channelRules("instagram")]);
   return {
     email: {
       available: sendable.length > 0,
@@ -102,8 +110,11 @@ export async function channelAvailability(): Promise<Record<AudienceChannel, Cha
       perSenderPerDay: linkedin.length ? Number(linkedinRules.invitesPerDayFree ?? 20) : null,
     },
     signatureAppended: sendable.some((mailbox) => Boolean(mailbox.signature?.trim())),
+    instagram: { available: instagram.length > 0, senders: instagram.length, perSenderPerDay: instagram.length ? Number(instagramRules.newChatsPerDay) : null,
+      reason: !instagramEnabled ? "Instagram is off in Settings → Organization" : !instagramReady ? "Apply the Instagram outbound migration" : !unipile ? "Unipile is not connected" : instagram.length ? null : "no Instagram account is connected (Settings → Instagram accounts)" },
     whatsappAccountIds: whatsapp.map((row) => row.id),
     linkedinAccountIds: linkedin.map((row) => row.id),
+    instagramAccountIds: instagram.map((row) => row.id),
   };
 }
 
@@ -393,6 +404,7 @@ export async function prepareOutreach(input: PrepareInput): Promise<Proposal> {
       maxLeads,
       emailPerMailboxPerDay: availability.email.available ? availability.email.perSenderPerDay : null,
       whatsappNewChatsPerDay: availability.whatsapp.available ? availability.whatsapp.perSenderPerDay : null,
+      instagramNewChatsPerDay: channels.includes("instagram") && availability.instagram.available ? availability.instagram.perSenderPerDay : null,
     },
     excluded: [...audience.excluded, ...countReasons(unassigned)],
     estimate: {
@@ -661,7 +673,7 @@ export async function runOutreachStartStep(job: AssistantJob, heartbeat: () => P
   if (!job.runId) return { next: "failed", error: "The job lost its run." };
   const run = await getRun(job.runId);
   if (!run) return { next: "failed", error: "The run no longer exists." };
-  if (run.status === "cancelled") return { next: "failed", error: "The run was cancelled before it started." };
+  if (run.status !== "starting") return { next: "failed", error: `The run is ${run.status}; its launch job cannot continue.` };
   const plan = run.plan;
 
   if (job.stage === "personalizing") {
@@ -683,13 +695,24 @@ export async function runOutreachStartStep(job: AssistantJob, heartbeat: () => P
     const availability = await channelAvailability();
     const launches: ChannelLaunch[] = [];
     for (const channel of run.channels) {
+      if ((await getRun(run.id))?.status !== "starting") return { next: "failed", error: "The owner stopped or changed this run while it was starting." };
       const personIds = plan.assignments.filter((assignment) => assignment.channel === channel).map((assignment) => assignment.personId);
       const steps = plan.sequences[channel] ?? [];
       if (!personIds.length || !steps.length) continue;
       try {
         if (channel === "email") launches.push(await launchEmail(run.name, steps, personIds));
         else if (channel === "whatsapp") launches.push(await launchWhatsapp(run.name, steps, personIds, availability.whatsappAccountIds));
-        else launches.push(await launchLinkedin(run.name, steps, personIds, availability.linkedinAccountIds));
+        else if (channel === "linkedin") launches.push(await launchLinkedin(run.name, steps, personIds, availability.linkedinAccountIds));
+        else {
+          const rows = await loadPeople(personIds);
+          const leads = personIds.flatMap((personId) => {
+            const row = rows.get(personId);
+            const username = instagramUsername((row?.person.raw.instagram as { username?: unknown } | undefined)?.username);
+            return row && username ? [{ personId, username, body: render(steps[0]!, leadVariables(row, plan.personalizationKey, "")).body }] : [];
+          });
+          const added = await queueInstagramOutreach(run.id, leads, availability.instagramAccountIds);
+          launches.push({ channel, campaignId: run.id, added, skipped: personIds.length - added, problem: added ? null : "No approved lead has an Instagram username" });
+        }
       } catch (error) {
         launches.push({ channel, campaignId: null, added: 0, skipped: personIds.length, problem: error instanceof Error ? error.message : String(error) });
       }
@@ -697,12 +720,13 @@ export async function runOutreachStartStep(job: AssistantJob, heartbeat: () => P
     }
     const launched = launches.filter((launch) => launch.campaignId && !launch.problem);
     const campaigns = Object.fromEntries(launches.filter((launch) => launch.campaignId).map((launch) => [launch.channel, launch.campaignId!]));
-    await db.update(outreachRuns).set({
+    const updated = await db.update(outreachRuns).set({
       status: launched.length ? "running" : "failed",
       campaigns,
       error: launches.filter((launch) => launch.problem).map((launch) => `${launch.channel}: ${launch.problem}`).join(" ") || null,
       updatedAt: new Date(),
-    }).where(and(inOrg(outreachRuns), eq(outreachRuns.id, run.id)));
+    }).where(and(inOrg(outreachRuns), eq(outreachRuns.id, run.id), eq(outreachRuns.status, "starting"))).returning({ id: outreachRuns.id });
+    if (!updated.length) return { next: "failed", error: "The run changed during launch; it was not restarted." };
     return {
       next: launched.length ? "done" : "failed",
       ...(launched.length
@@ -747,7 +771,7 @@ export async function setRunPaused(runId: string, paused: boolean): Promise<{ st
         if (!paused) await buildMailboxQueues({ organizationIds: [currentOrganizationId()] }).catch(() => undefined);
       } else if (channel === "whatsapp") {
         await updateWhatsappCampaign(campaignId, { status: paused ? "paused" : "active" });
-      } else {
+      } else if (channel === "linkedin") {
         await db.update(linkedinCampaigns).set({ status: paused ? "PAUSED" : "ACTIVE", updatedAt: new Date() })
           .where(and(inOrg(linkedinCampaigns), eq(linkedinCampaigns.id, campaignId)));
       }
@@ -791,6 +815,9 @@ export async function stopRun(runId: string): Promise<{ stopped: AudienceChannel
         await updateWhatsappCampaign(campaignId, { status: "paused" });
         await db.update(whatsappCampaignLeads).set({ status: "stopped", nextSendAt: null, updatedAt: now })
           .where(and(eq(whatsappCampaignLeads.campaignId, campaignId), inArray(whatsappCampaignLeads.status, ["queued", "in_sequence"])));
+      } else if (channel === "instagram") {
+        await db.update(instagramOutreachQueue).set({ status: "cancelled", error: "The owner stopped this run", lockedBy: null, lockedUntil: null, updatedAt: now })
+          .where(and(inOrg(instagramOutreachQueue), eq(instagramOutreachQueue.runId, run.id), inArray(instagramOutreachQueue.status, ["queued", "resolving"])));
       } else {
         await db.update(linkedinCampaigns).set({ status: "PAUSED", updatedAt: now }).where(and(inOrg(linkedinCampaigns), eq(linkedinCampaigns.id, campaignId)));
         await db.update(linkedinLeads).set({ status: "CANCELLED", updatedAt: now })
@@ -845,6 +872,15 @@ export async function reportRun(runId: string): Promise<RunReport | null> {
     } else if (channel === "whatsapp") {
       const { stats } = await getWhatsappCampaignDetail(campaignId);
       channels.push({ channel, campaignId, contacted: stats.in_sequence + stats.replied + stats.completed, messagesSent: stats.messagesSent, replied: stats.replied, finished: stats.completed, stopped: stats.failed + stats.stopped });
+    } else if (channel === "instagram") {
+      const statuses = await db.select({ status: instagramOutreachQueue.status, n: count() }).from(instagramOutreachQueue)
+        .where(and(inOrg(instagramOutreachQueue), eq(instagramOutreachQueue.runId, run.id))).groupBy(instagramOutreachQueue.status);
+      const by = (names: string[]) => statuses.filter((row) => names.includes(row.status)).reduce((sum, row) => sum + Number(row.n), 0);
+      const replies = await db.execute<{ n: number }>(sql`select count(distinct q.person_id)::int as n from instagram_outreach_queue q
+        join instagram_chats c on c.person_id=q.person_id and c.account_id=q.account_id
+        join instagram_messages m on m.chat_id=c.id and m.direction='inbound' and m.sent_at>=q.created_at
+        where q.organization_id=${currentOrganizationId()} and q.run_id=${run.id}`);
+      channels.push({ channel, campaignId, contacted: by(["sent"]), messagesSent: by(["sent"]), replied: Number(replies[0]?.n ?? 0), finished: by(["sent"]), stopped: by(["failed", "uncertain", "cancelled"]) });
     } else {
       const statuses = await db.select({ status: linkedinLeads.status, n: count() }).from(linkedinLeads)
         .where(and(inOrg(linkedinLeads), eq(linkedinLeads.campaignId, campaignId))).groupBy(linkedinLeads.status);

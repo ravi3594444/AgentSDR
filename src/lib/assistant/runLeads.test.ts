@@ -4,6 +4,16 @@ import { leadProgress, type LeadProgressInput } from "./runLeads";
 const base: LeadProgressInput = { channel: "whatsapp", runStatus: "active", emailStatus: null, whatsappStatus: null, whatsappSentAt: null, whatsappError: null, linkedinStatus: null, category: null, subcategory: null };
 
 describe("leadProgress", () => {
+  test("Instagram outbound and inquiries keep distinct delivery states", () => {
+    const input = { ...base, channel: "instagram" };
+    expect(leadProgress(input).text).toBe("Wrote in on Instagram");
+    expect(leadProgress({ ...input, instagramStatus: "queued" }).tone).toBe("waiting");
+    expect(leadProgress({ ...input, instagramStatus: "sent" }).tone).toBe("sent");
+    expect(leadProgress({ ...input, instagramStatus: "replied" }).text).toBe("Replied");
+    expect(leadProgress({ ...input, instagramStatus: "uncertain" }).text).toContain("no automatic resend");
+    expect(leadProgress({ ...input, instagramStatus: "failed", instagramError: "Recipient restricted" }).text).toContain("Recipient restricted");
+    expect(leadProgress({ ...input, instagramStatus: "sent", category: "interested" }).tone).toBe("good");
+  });
   test("says where each lead stands, per channel", () => {
     expect(leadProgress({ ...base, whatsappStatus: "queued" })).toEqual({ tone: "waiting", text: "Waiting to send" });
     expect(leadProgress({ ...base, whatsappStatus: "in_sequence", whatsappSentAt: "2026-10-15" })).toMatchObject({ tone: "sent" });

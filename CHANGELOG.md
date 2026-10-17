@@ -11,6 +11,16 @@ Each release lists the database migrations it needs; see
 
 ### Added
 
+- Instagram outbound from approved assistant plans: one initial DM per
+  assigned profile through Unipile, organization sending rules, durable
+  attempt tracking, opt-out checks and reply handling under the run's mode.
+  Instagram-only discovery profiles can enter these plans. Existing installs
+  must run `bun scripts/add-instagram-outreach.ts` before starting the updated
+  app. See [Instagram outbound](docs/product/INSTAGRAM_OUTBOUND.md).
+- The assistant's `diagnose_delivery` tool reports stored email and Instagram
+  sending gates and recent failures. Repeated identical status reads within
+  a turn reuse the result and end the loop.
+
 - **Two starting points in the assistant:** "Use my existing leads or
   inquiries" (a lead list from people already in AgentSDR, the latest
   import, a search, or the people who sent inquiries) and "Find potential
@@ -35,8 +45,8 @@ Each release lists the database migrations it needs; see
   turns them on** (Settings → Organization → Optional features):
   - *Instagram messages* through Unipile (API v1, the existing connection):
     hosted sign-in, history import (kept as history, never answered),
-    Instagram inbox, replies drafted and sent through the CRM. No cold
-    Instagram outreach.
+    Instagram inbox and replies through the CRM. Approved assistant plans
+    can send an initial Instagram DM under Settings → Instagram → Sending rules.
   - *Website and directory search*: finds businesses from a description
     through the organization's web-searching AI provider (OpenRouter web
     plugin or AI/ML API research model), reads their published contacts,
@@ -46,12 +56,31 @@ Each release lists the database migrations it needs; see
     budget and per-run caps; when Apify is not set up, over budget or out of
     credit, searches fall back to the scraper or website search with the
     same request (so one Start still covers it). Never tops up or upgrades.
-    An Instagram account found is not a contact route: only published
-    emails and phones are.
+    An Instagram username can be proposed as a DM route; the sender resolves
+    a messaging identity and applies account rules before attempting delivery.
   - *Inquiry intake*: an authenticated website-form webhook with field
     mapping (Settings → Inquiries) and Instagram first messages as
     inquiries. Inquiries are answered automatically only inside an inquiry
     run the owner started.
+
+- **A "Where leads came from" table in Results:** each source's found,
+  available-contact-route and left-out counts side by side. These are saved
+  audience records, not verified deliverability or interest.
+
+### Changed
+
+- **The Results page says why a channel is not sending.** When leads are
+  waiting, it names the gate the engine itself applies: outside the mailbox
+  sending hours (with the next opening, e.g. "Monday 19 Oct at 09:00"), a
+  paused outbound switch, no connected sending account, the daily allowance
+  used, send gaps, or a queue that has not been built yet. Readiness is not
+  presented as proof of sending. The assistant's results
+  answer and the daily summary carry the same line, so "0 emails sent today"
+  arrives with its reason instead of a guess.
+- **WhatsApp recipient refusals have a readable reason.** Invalid-recipient
+  refusals fail that lead once, without claiming the number has no WhatsApp
+  account. Authentication and rate-limit responses retain their account-level
+  meaning; registration status is not inferred from a generic provider error.
 
 ### Migrations
 

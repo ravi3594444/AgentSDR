@@ -465,6 +465,7 @@ environment they take effect without a restart. All are read in
 | `PEOPLE_MIGRATION_MODE` | Master switch. Turns on every pause below, and answers `503` to campaign, import and manual-send changes (`POST`, `PUT`, `PATCH`, `DELETE` under `/api/grid/tables/`, `/api/linkedin/{campaigns,jobs,leads,messages/send,search}`, `/api/outreach/{campaigns,inbox/,mailboxes/}`). Inbound webhooks, unsubscribe links and reads keep working. |
 | `PAUSE_CAMPAIGN_MUTATIONS` | Only the `503` on those routes. |
 | `PAUSE_EMAIL_OUTBOUND` | Stops outgoing email. |
+| `PAUSE_INSTAGRAM_OUTBOUND` | Stops initial Instagram outreach DMs. Replies keep their existing run and draft controls. |
 | `PAUSE_LINKEDIN_OUTBOUND` | Stops LinkedIn invitations and messages. |
 | `PAUSE_WHATSAPP_OUTBOUND` | Stops WhatsApp messages. |
 | `PAUSE_LINKEDIN_RESOLUTION` | Stops LinkedIn profile resolution. |

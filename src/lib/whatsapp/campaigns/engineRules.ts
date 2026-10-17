@@ -2,6 +2,7 @@
  * The decisions of the WhatsApp campaign sender, kept pure so they can be
  * tested without a database or a send. See docs/whatsapp-campaigns/plan.md.
  */
+import { WHATSAPP_RECIPIENT_REFUSAL } from "../refusal";
 import type { WeeklyHours } from "@/lib/channels/rules";
 import { isWithinWorkingHours, mailboxHoursFromWeekly } from "@/lib/outreach/workingHours";
 import { isPlatformNotConnectedError } from "@/lib/platform/credentials";
@@ -67,6 +68,13 @@ export function classifySendError(error: unknown): SendFailureAction {
         return { kind: "skip_account" };
       case "do_not_contact":
         return { kind: "stop_lead", error: "Do Not Contact" };
+      case "recipient_unreachable":
+        // A definite recipient refusal: fail this lead once, do not retry, and
+        // do not let one bad number stop the rest of the campaign.
+        return {
+          kind: "fail_lead",
+          error: WHATSAPP_RECIPIENT_REFUSAL,
+        };
       default:
         // A refusal with no reason is a 409/429 we cannot interpret: wait, do not fail the lead.
         if (error.status === 400) return { kind: "fail_lead", error: error.message };

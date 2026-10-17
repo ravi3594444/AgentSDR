@@ -42,7 +42,7 @@ export const PROFILE_LABELS: Record<(typeof PROFILE_TEXT_FIELDS)[number] | "pref
 };
 
 const MAX_FIELD = 4_000;
-const CHANNELS = new Set(["email", "whatsapp", "linkedin"]);
+const CHANNELS = new Set(["email", "whatsapp", "linkedin", "instagram"]);
 
 /**
  * `current` with `patch` applied: a text field replaces the old one, an

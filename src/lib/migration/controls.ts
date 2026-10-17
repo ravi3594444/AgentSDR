@@ -17,6 +17,7 @@ export type MigrationControl =
   | "emailOutbound"
   | "linkedinOutbound"
   | "whatsappOutbound"
+  | "instagramOutbound"
   | "linkedinResolution"
   | "linkedinSearch"
   | "gridWorker";
@@ -25,6 +26,7 @@ const CONTROL_ENV: Record<MigrationControl, string> = {
   emailOutbound: "PAUSE_EMAIL_OUTBOUND",
   linkedinOutbound: "PAUSE_LINKEDIN_OUTBOUND",
   whatsappOutbound: "PAUSE_WHATSAPP_OUTBOUND",
+  instagramOutbound: "PAUSE_INSTAGRAM_OUTBOUND",
   linkedinResolution: "PAUSE_LINKEDIN_RESOLUTION",
   linkedinSearch: "PAUSE_LINKEDIN_SEARCH",
   gridWorker: "PAUSE_GRID_WORKER",

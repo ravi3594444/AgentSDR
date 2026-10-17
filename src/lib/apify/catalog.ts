@@ -42,7 +42,7 @@ export const APIFY_ACTORS: Record<ApifyActorKey, ApifyActorInfo> = {
     actorId: "apify~instagram-hashtag-scraper",
     label: "Instagram Hashtag Scraper (apify/instagram-hashtag-scraper)",
     purpose: "Public Instagram posts under hashtags made from the customer type and place, to find accounts that post about them.",
-    limitation: "Hashtags do not filter by place: a post that does not name the place is kept with its location unknown. Finding someone on Instagram does not give a way to contact them — AgentSDR cannot start Instagram chats.",
+    limitation: "Hashtags do not filter by place: a post that does not name the place is kept with its location unknown. Instagram DMs require a connected Instagram sender and an approved outreach plan; delivery remains subject to recipient restrictions.",
     storeUrl: "https://apify.com/apify/instagram-hashtag-scraper",
   },
   instagram_profiles: {
@@ -58,7 +58,7 @@ export const APIFY_ACTORS: Record<ApifyActorKey, ApifyActorInfo> = {
     actorId: "apify~instagram-search-scraper",
     label: "Instagram Search Scraper (apify/instagram-search-scraper)",
     purpose: "Instagram accounts found by Instagram's own search for the customer type and place (not only hashtags); their profiles are then read with the Profile Scraper.",
-    limitation: "Instagram's search ranks accounts by name and popularity, not by location: an account that does not name the place keeps its location unknown. Finding someone on Instagram does not give a way to contact them — AgentSDR cannot start Instagram chats.",
+    limitation: "Instagram's search ranks accounts by name and popularity, not by location: an account that does not name the place keeps its location unknown. Instagram DMs require a connected Instagram sender and an approved outreach plan; delivery remains subject to recipient restrictions.",
     storeUrl: "https://apify.com/apify/instagram-search-scraper",
   },
   facebook_pages: {

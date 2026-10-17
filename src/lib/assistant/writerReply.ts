@@ -110,7 +110,7 @@ const SEQUENCE_SCHEMA = {
         additionalProperties: false,
         required: ["channel", "messages"],
         properties: {
-          channel: { type: "string", enum: ["email", "whatsapp", "linkedin"] },
+          channel: { type: "string", enum: ["email", "whatsapp", "linkedin", "instagram"] },
           messages: {
             type: "array",
             items: {
@@ -142,7 +142,7 @@ const REVIEW_SCHEMA = {
         additionalProperties: false,
         required: ["channel", "wouldReply", "reasons"],
         properties: {
-          channel: { type: "string", enum: ["email", "whatsapp", "linkedin"] },
+          channel: { type: "string", enum: ["email", "whatsapp", "linkedin", "instagram"] },
           wouldReply: { type: "integer", minimum: 1, maximum: 5, description: "1: delete without answering; 3: maybe; 5: answer now." },
           reasons: { type: "array", items: { type: "string" }, description: "What makes you skip it, each in one short sentence; empty when you would answer." },
         },

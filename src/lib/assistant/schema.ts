@@ -99,7 +99,7 @@ export type BusinessProfile = {
   /** How a meeting gets booked (a calendar link, a phone number). */
   bookingDetails?: string;
   /** Preferred channels, in order. */
-  preferredChannels?: ("email" | "whatsapp" | "linkedin")[];
+  preferredChannels?: AudienceChannel[];
   /** Two-letter language for discovery and messages, e.g. "en". */
   language?: string;
   /** Anything else worth remembering, as the owner said it. */
@@ -142,7 +142,7 @@ export const leadAudiences = pgTable(
   ],
 );
 
-export type AudienceChannel = "email" | "whatsapp" | "linkedin";
+export type AudienceChannel = "email" | "whatsapp" | "linkedin" | "instagram";
 
 /** Where a contact detail came from: the page or listing a person can open to check it. */
 export type ContactEvidence = { kind: "email" | "phone" | "linkedin" | "website" | "instagram"; value: string; sourceUrl: string | null; source: string };
@@ -286,7 +286,7 @@ export type OutreachPlan = {
   personalizationKey: string;
   /** A few leads' messages as they will be sent, for the owner to read. */
   samples: { personId: string; name: string; channel: AudienceChannel; groupId?: string; approach?: "standard" | "personal"; messages: { subject: string | null; body: string }[] }[];
-  limits: { maxLeads: number; emailPerMailboxPerDay: number | null; whatsappNewChatsPerDay: number | null };
+  limits: { maxLeads: number; emailPerMailboxPerDay: number | null; whatsappNewChatsPerDay: number | null; instagramNewChatsPerDay?: number | null };
   /** Leads left out and why, counted by reason. */
   excluded: { reason: string; count: number }[];
   estimate: { aiCalls: number; aiCostUsd: number | null; days: number | null };
@@ -358,11 +358,10 @@ export const outreachRuns = pgTable(
 export type RunLeadStatus = "active" | "stopped" | "opted_out";
 
 /**
- * The channel a run member is answered on: the outreach channels, plus
- * "instagram" for an inquiry run (plan.kind "inquiries"), which only answers
- * people who wrote in on Instagram and never starts a conversation.
+ * The channel a run member is answered on. Instagram supports an approved
+ * initial DM, or an inquiry run that answers only people who write first.
  */
-export type RunLeadChannel = AudienceChannel | "instagram";
+export type RunLeadChannel = AudienceChannel;
 
 /**
  * Who a started run covers, on which channel: the approved audience. The

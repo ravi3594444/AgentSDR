@@ -15,10 +15,16 @@ export async function runLeads(runIds: readonly string[], perRun = 200): Promise
   const organizationId = currentOrganizationId();
   const rows = await db.execute(sql`
     select l.run_id::text as "runId", l.person_id::text as "personId", l.channel, l.status as "runStatus",
-      coalesce(p.full_name, p.phone, p.email) as "who",
+      coalesce(p.full_name, p.phone, p.email, p.raw->'instagram'->>'username') as "who",
       e.sequence_status as "emailStatus",
       w.status as "whatsappStatus", w.last_sent_at::text as "whatsappSentAt", left(w.last_error, 120) as "whatsappError",
       li.status::text as "linkedinStatus",
+      case when ig.status='sent' and exists (
+        select 1 from instagram_messages im join instagram_chats ic on ic.id=im.chat_id
+        join instagram_accounts ia on ia.id=ic.account_id
+        where ia.organization_id=l.organization_id and ic.person_id=l.person_id
+          and im.direction='inbound' and not im.historical and im.sent_at>=ig.attempted_at
+      ) then 'replied' else ig.status end as "instagramStatus", left(ig.error, 160) as "instagramError",
       rec.category_key as "category", sc.name as "subcategory"
     from outreach_run_leads l
     join outreach_runs r on r.id = l.run_id and r.organization_id = l.organization_id
@@ -26,6 +32,7 @@ export async function runLeads(runIds: readonly string[], perRun = 200): Promise
     left join outreach_leads e on l.channel = 'email' and e.person_id = l.person_id and e.campaign_id::text = r.campaigns ->> 'email'
     left join whatsapp_campaign_leads w on l.channel = 'whatsapp' and w.person_id = l.person_id and w.campaign_id::text = r.campaigns ->> 'whatsapp'
     left join "Lead" li on l.channel = 'linkedin' and li."personId" = l.person_id and li."campaignId" = r.campaigns ->> 'linkedin'
+    left join instagram_outreach_queue ig on l.channel = 'instagram' and ig.person_id=l.person_id and ig.run_id=r.id and ig.organization_id=l.organization_id
     left join lateral (
       select category_key, subcategory_id from crm_records
       where person_id = l.person_id and organization_id = l.organization_id and last_inbound_at >= coalesce(r.approved_at, r.created_at)

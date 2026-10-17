@@ -12,6 +12,8 @@ export type LeadProgressInput = {
   whatsappSentAt: string | null;
   whatsappError: string | null;
   linkedinStatus: string | null;
+  instagramStatus?: string | null;
+  instagramError?: string | null;
   category: string | null;
   subcategory: string | null;
 };
@@ -29,6 +31,17 @@ function replied(input: LeadProgressInput): LeadProgress {
 export function leadProgress(input: LeadProgressInput): LeadProgress {
   if (input.runStatus === "opted_out") return { tone: "stopped", text: "Asked not to be contacted" };
   if (input.category) return replied(input);
+  if (input.channel === "instagram" && input.instagramStatus) {
+    switch (input.instagramStatus) {
+      case "queued": case "resolving": return { tone: "waiting", text: "Waiting to send the Instagram DM" };
+      case "sending": return { tone: "waiting", text: "Submitting the Instagram DM" };
+      case "sent": return { tone: "sent", text: "Instagram DM sent, waiting for a reply" };
+      case "replied": return replied(input);
+      case "failed": return { tone: "failed", text: `Could not send${input.instagramError ? `: ${input.instagramError}` : ""}` };
+      case "uncertain": return { tone: "failed", text: "Delivery uncertain; no automatic resend" };
+      case "cancelled": return { tone: "stopped", text: "Instagram DM cancelled" };
+    }
+  }
   if (input.channel === "email") {
     switch (input.emailStatus) {
       case "pending": return { tone: "waiting", text: "Waiting to send" };

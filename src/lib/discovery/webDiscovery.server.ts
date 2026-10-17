@@ -14,6 +14,8 @@ import { checkPhone } from "@/lib/calls/phone";
 import { organizationPhoneCountry } from "@/lib/calls/phone.server";
 import { featureEnabled, FeatureDisabledError } from "@/lib/features/flags.server";
 import { instagramAccounts } from "@/lib/instagram/schema";
+import { instagramUsername } from "@/lib/instagram/parse";
+import { upsertInstagramProspect } from "@/lib/instagram/prospects.server";
 import { upsertPerson, withLeadTransaction } from "@/lib/leads/records";
 import { people } from "@/lib/leads/schema";
 import { mailboxes } from "@/lib/outreach/schema";
@@ -57,11 +59,11 @@ import { collectWebsiteContacts, fetchPublicPage } from "./websiteContacts.serve
  * guessed: a business that publishes no contact is kept in the audience as
  * excluded, with the reason.
  *
- * Instagram is read, never acted on: a profile (its listed website and
+ * Instagram discovery reads a profile (its listed website and
  * public contact buttons) and a post's comments, each commenter kept with
  * what they wrote as a signal ("need" only for an explicit ask). Nobody is
- * contacted on Instagram in this release, so an Instagram-only lead stays
- * excluded with a reason that tells the owner to open the post themselves.
+ * contacted until an outreach plan is approved. Instagram-only profiles
+ * stay eligible for that channel without inventing email or phone details.
  *
  * Runs as an assistant job (worker.ts) in stages, each step bounded so a
  * restart resumes where it stopped:
@@ -89,8 +91,8 @@ export const MAX_OPEN_WEB_DISCOVERIES = 2;
 /** Website searches an organization may start in 24 hours (each is up to 3 paid provider searches). */
 export const MAX_WEB_DISCOVERIES_PER_DAY = 10;
 
-export const INSTAGRAM_ONLY_REASON = "reachable only on Instagram; Instagram outreach is not available — open the post to reply yourself";
-export const INSTAGRAM_PROFILE_ONLY_REASON = "reachable only on Instagram; Instagram outreach is not available — open the profile to message them yourself";
+export const INSTAGRAM_ONLY_REASON = "no usable Instagram username, email or phone was returned; open the source post to check the profile";
+export const INSTAGRAM_PROFILE_ONLY_REASON = "no usable Instagram username, email or phone was returned; open the source profile to check it";
 
 export type WebDiscoveryCriteria = {
   /** Who the customers are, in the owner's words: "dental clinics", "families renovating a flat". */
@@ -150,7 +152,7 @@ type FoundLead = {
 };
 
 type SearchRecord = { query: string; sources: number; provider: string | null; model: string | null; costUsd: number | null; error: string | null };
-type Tally = { eligible: number; excluded: number; duplicates: number; alreadyKnown: number; withEmail: number; withPhoneOnly: number; instagramOnly: number; needSignals: number; ownBusiness?: number };
+type Tally = { eligible: number; excluded: number; duplicates: number; alreadyKnown: number; withEmail: number; withPhoneOnly: number; withInstagram: number; instagramOnly: number; needSignals: number; ownBusiness?: number };
 
 type Payload = {
   criteria: WebDiscoveryCriteria;
@@ -859,7 +861,7 @@ function ownersLead(lead: FoundLead, owner: OwnerIdentity): boolean {
   return ownsDomain(owner, lead.domain) || Boolean(lead.instagram && owner.instagram.has(lead.instagram.username.toLowerCase()));
 }
 
-type SaveOutcome = { member: NewMember | null; outcome: "eligible" | "excluded" | "duplicate" | "own"; known: boolean; email: boolean; instagramOnly: boolean };
+type SaveOutcome = { member: NewMember | null; outcome: "eligible" | "excluded" | "duplicate" | "own"; known: boolean; email: boolean; phone?: boolean; instagramOnly: boolean };
 
 async function saveLead(lead: FoundLead, payload: Payload, context: { job: AssistantJob; index: number; owner: OwnerIdentity }): Promise<SaveOutcome> {
   const { owner } = context;
@@ -874,7 +876,9 @@ async function saveLead(lead: FoundLead, payload: Payload, context: { job: Assis
   const base = { id, source: WEB_DISCOVERY_SOURCE, sourceUrl: lead.sourceUrl, evidence, facts: lead.facts, matchReason: lead.matchReason, signals: lead.signals };
   const email = emails[0]?.value ?? null;
   const phone = phones[0]?.value ?? null;
-  if (!email && !phone) {
+  // A comment's fallback key may be a numeric provider ID, not a username.
+  const username = lead.kind === "instagram_commenter" && !lead.facts.instagramUsername ? null : instagramUsername(lead.instagram?.username);
+  if (!email && !phone && !username) {
     const { reason, instagramOnly } = noContactReason(lead, rejected, ownContacts);
     return { member: { personId: null, name: lead.name, reason, ...base }, outcome: "excluded", known: false, email: false, instagramOnly };
   }
@@ -887,22 +891,25 @@ async function saveLead(lead: FoundLead, payload: Payload, context: { job: Assis
   let hasEmail: boolean;
   let known: boolean;
   if (existing) {
-    // Someone the owner already has: used as they are, nothing about them is changed. A person
-    // this discovery created in an attempt of this step that did not finish is not "already known".
-    personId = existing.id;
+    // Reuse the canonical person; a newly observed Instagram route is attached.
+    // A person created by this job before a retry is not counted as already known.
+    personId = username ? (await withLeadTransaction((tx) => upsertInstagramProspect(tx, username, {
+      email, phone, raw: { instagram: { username, profileUrl: lead.instagram!.url } }, source: PERSON_SOURCE,
+    }))).id : existing.id;
     hasEmail = Boolean(existing.email);
     known = !(existing.source === PERSON_SOURCE && existing.createdAt >= context.job.createdAt);
   } else {
     const raw = {
       businessName: lead.name,
       ...(lead.website ? { website: lead.website } : {}),
-      ...(lead.instagram ? { instagram: lead.instagram.url } : {}),
+      ...(username && lead.instagram ? { instagram: { username, profileUrl: lead.instagram.url } } : {}),
       sourcePage: lead.sourceUrl,
       searchQuery: lead.facts.searchQuery ?? "",
       discoveredVia: "web search",
     };
     const company = lead.kind === "directory_contact" ? null : { name: lead.name, domain: lead.domain, linkedinUrl: lead.companyLinkedin };
     const person = await withLeadTransaction(async (tx) => {
+      if (username) return upsertInstagramProspect(tx, username, { email, phone, company, raw, source: PERSON_SOURCE });
       if (email) return upsertPerson(tx, { email, phone, company, raw, source: PERSON_SOURCE });
       const created = await findOrCreateContactPerson(tx, {
         fullName: null,
@@ -923,13 +930,14 @@ async function saveLead(lead: FoundLead, payload: Payload, context: { job: Assis
     createdIds.add(personId);
     payload.createdIds = [...createdIds];
   }
+  if (memberIds.has(personId)) return { member: null, outcome: "duplicate", known: false, email: false, instagramOnly: false };
   memberIds.add(personId);
   payload.memberIds = [...memberIds];
-  return { member: { personId, ...base }, outcome: "eligible", known, email: hasEmail, instagramOnly: false };
+  return { member: { personId, ...base }, outcome: "eligible", known, email: hasEmail, phone: Boolean(phone), instagramOnly: Boolean(username && !email && !phone) };
 }
 
 function emptyTally(): Tally {
-  return { eligible: 0, excluded: 0, duplicates: 0, alreadyKnown: 0, withEmail: 0, withPhoneOnly: 0, instagramOnly: 0, needSignals: 0, ownBusiness: 0 };
+  return { eligible: 0, excluded: 0, duplicates: 0, alreadyKnown: 0, withEmail: 0, withPhoneOnly: 0, withInstagram: 0, instagramOnly: 0, needSignals: 0, ownBusiness: 0 };
 }
 
 /** Eligible and excluded members of the audience as stored: right even when a step ran twice. */
@@ -962,7 +970,8 @@ async function stageSaving(job: AssistantJob, heartbeat: () => Promise<void>): P
     if (saved.member) tally.needSignals += lead.signals.some((signal) => signal.kind === "need") ? 1 : 0;
     if (saved.outcome === "eligible") {
       if (saved.email) tally.withEmail += 1;
-      else tally.withPhoneOnly += 1;
+      else if (saved.phone) tally.withPhoneOnly += 1;
+      if (instagramUsername(lead.instagram?.username)) tally.withInstagram += 1;
     }
     // A lead can take several DNS checks: keep the step from looking stalled (3 minutes) and being taken over.
     await heartbeat();

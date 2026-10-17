@@ -42,7 +42,7 @@ describe("contactChannels", () => {
   test("Do Not Contact, suppression and missing contacts give a reason", () => {
     expect(contactChannels({ ...none, email: "a@acme.com", doNotContact: true })).toEqual({ channels: [], reason: "marked Do Not Contact" });
     expect(contactChannels({ ...none, email: "a@acme.com", emailSuppressed: true })).toEqual({ channels: [], reason: "email unsubscribed or bounced" });
-    expect(contactChannels({ ...none, phone: "98765" })).toEqual({ channels: [], reason: "no email, phone or LinkedIn profile" });
+    expect(contactChannels({ ...none, phone: "98765" })).toEqual({ channels: [], reason: "no email, phone, LinkedIn or Instagram profile" });
     expect(contactChannels({ ...none, email: "a@acme.com", emailSuppressed: true, phone: "+14155550100" })).toEqual({ channels: ["whatsapp"], reason: null });
   });
 

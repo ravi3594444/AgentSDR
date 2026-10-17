@@ -2373,6 +2373,7 @@ CREATE TABLE public.instagram_accounts (
     last_imported_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    outreach_next_send_at timestamp with time zone,
     CONSTRAINT instagram_accounts_status_chk CHECK ((status = ANY (ARRAY['connected'::text, 'disconnected'::text, 'credentials'::text, 'error'::text])))
 );
 
@@ -2420,6 +2421,32 @@ CREATE TABLE public.instagram_messages (
     CONSTRAINT instagram_messages_direction_chk CHECK ((direction = ANY (ARRAY['inbound'::text, 'outbound'::text]))),
     CONSTRAINT instagram_messages_origin_chk CHECK ((origin = ANY (ARRAY['lead'::text, 'agentsdr'::text, 'phone'::text]))),
     CONSTRAINT instagram_messages_origin_direction_chk CHECK (((direction = 'inbound'::text) = (origin = 'lead'::text)))
+);
+
+--
+-- Name: instagram_outreach_queue; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.instagram_outreach_queue (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    organization_id uuid NOT NULL,
+    run_id uuid NOT NULL,
+    person_id uuid NOT NULL,
+    account_id uuid NOT NULL,
+    username text NOT NULL,
+    messaging_id text,
+    body text NOT NULL,
+    status text DEFAULT 'queued'::text NOT NULL,
+    locked_until timestamp with time zone,
+    locked_by text,
+    attempted_at timestamp with time zone,
+    sent_at timestamp with time zone,
+    chat_id text,
+    message_id text,
+    error text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT instagram_outreach_status_chk CHECK ((status = ANY (ARRAY['queued'::text, 'resolving'::text, 'sending'::text, 'sent'::text, 'failed'::text, 'uncertain'::text, 'cancelled'::text])))
 );
 
 --
@@ -3882,6 +3909,20 @@ ALTER TABLE ONLY public.instagram_messages
     ADD CONSTRAINT instagram_messages_pkey PRIMARY KEY (id);
 
 --
+-- Name: instagram_outreach_queue instagram_outreach_queue_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.instagram_outreach_queue
+    ADD CONSTRAINT instagram_outreach_queue_pkey PRIMARY KEY (id);
+
+--
+-- Name: instagram_outreach_queue instagram_outreach_run_person_uq; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.instagram_outreach_queue
+    ADD CONSTRAINT instagram_outreach_run_person_uq UNIQUE (run_id, person_id);
+
+--
 -- Name: intake_endpoints intake_endpoints_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5173,6 +5214,18 @@ CREATE INDEX instagram_messages_chat_sent_idx ON public.instagram_messages USING
 --
 
 CREATE UNIQUE INDEX instagram_messages_unipile_message_uq ON public.instagram_messages USING btree (unipile_message_id) WHERE (unipile_message_id IS NOT NULL);
+
+--
+-- Name: instagram_outreach_due_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX instagram_outreach_due_idx ON public.instagram_outreach_queue USING btree (status, created_at);
+
+--
+-- Name: instagram_outreach_org_account_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX instagram_outreach_org_account_idx ON public.instagram_outreach_queue USING btree (organization_id, account_id, attempted_at);
 
 --
 -- Name: intake_endpoints_organization_idx; Type: INDEX; Schema: public; Owner: -
@@ -6649,6 +6702,34 @@ ALTER TABLE ONLY public.instagram_messages
 
 ALTER TABLE ONLY public.instagram_messages
     ADD CONSTRAINT instagram_messages_crm_message_fk FOREIGN KEY (crm_conversation_message_id) REFERENCES public.crm_conversation_messages(id) ON DELETE SET NULL;
+
+--
+-- Name: instagram_outreach_queue instagram_outreach_queue_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.instagram_outreach_queue
+    ADD CONSTRAINT instagram_outreach_queue_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.instagram_accounts(id);
+
+--
+-- Name: instagram_outreach_queue instagram_outreach_queue_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.instagram_outreach_queue
+    ADD CONSTRAINT instagram_outreach_queue_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
+
+--
+-- Name: instagram_outreach_queue instagram_outreach_queue_person_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.instagram_outreach_queue
+    ADD CONSTRAINT instagram_outreach_queue_person_id_fkey FOREIGN KEY (person_id) REFERENCES public.people(id) ON DELETE CASCADE;
+
+--
+-- Name: instagram_outreach_queue instagram_outreach_queue_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.instagram_outreach_queue
+    ADD CONSTRAINT instagram_outreach_queue_run_id_fkey FOREIGN KEY (run_id) REFERENCES public.outreach_runs(id) ON DELETE CASCADE;
 
 --
 -- Name: intake_endpoints intake_endpoints_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -

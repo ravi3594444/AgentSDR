@@ -99,7 +99,7 @@ export const SETTINGS_NAV: { label: string; items: SettingsNavItem[] }[] = [
         label: "Instagram",
         icon: RiInstagramLine,
         feature: "instagram",
-        tabs: [{ href: "/settings/instagram-accounts", label: "Accounts", icon: RiInstagramLine }],
+        tabs: [{ href: "/settings/instagram-accounts", label: "Accounts", icon: RiInstagramLine }, { href: "/settings/instagram-rules", label: "Sending rules", icon: RiEqualizerLine }],
       },
     ],
   },

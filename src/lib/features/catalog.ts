@@ -21,7 +21,7 @@ export const FEATURES: Record<FeatureKey, FeatureInfo> = {
   instagram: {
     label: "Instagram messages",
     description:
-      "Link Instagram accounts through Unipile, see their direct messages next to your other conversations, and answer them with drafts you review.",
+      "Link Instagram accounts through Unipile, send one initial DM per lead in an approved outreach plan, and handle replies in the inbox under the run's reply mode.",
     requires: "Unipile connected, and an Instagram account linked in it.",
   },
   web_discovery: {
