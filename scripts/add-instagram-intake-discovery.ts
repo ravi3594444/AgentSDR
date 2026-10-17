@@ -12,7 +12,7 @@
  * - new tables only (organization_features, instagram_accounts,
  *   instagram_chats, instagram_messages, intake_endpoints, inquiries,
  *   lead_audience_member_insights, apify_settings, apify_runs, treg_settings,
- *   treg_calls);
+ *   treg_calls, tavily_settings);
  * - CHECK constraints are only widened (a superset of today's values, so
  *   every existing row and every running deployment keeps working):
  *   'instagram' joins the CRM channels and assistant run memberships;
@@ -229,6 +229,16 @@ const TABLES = [
      CONSTRAINT treg_calls_status_chk CHECK (status IN ('calling', 'succeeded', 'failed'))
    )`,
   `CREATE INDEX IF NOT EXISTS treg_calls_org_created_idx ON treg_calls (organization_id, created_at)`,
+  // Tavily as the web search behind website searches (src/lib/tavily/).
+  `CREATE TABLE IF NOT EXISTS tavily_settings (
+     organization_id uuid PRIMARY KEY REFERENCES organizations(id),
+     encrypted_key text,
+     key_hint text,
+     daily_searches integer NOT NULL DEFAULT 100,
+     updated_by uuid,
+     updated_at timestamptz NOT NULL DEFAULT now(),
+     CONSTRAINT tavily_settings_daily_chk CHECK (daily_searches BETWEEN 1 AND 2000)
+   )`,
 ];
 
 /** [table, constraint, definition]: dropped and added again with the wider set. */
@@ -244,7 +254,7 @@ const WIDENED: [string, string, string][] = [
   ["organization_features", "organization_features_key_chk", `CHECK (key IN ('instagram', 'web_discovery', 'inquiry_intake', 'apify_discovery', 'treg'))`],
 ];
 
-const EXPECTED_TABLES = ["organization_features", "instagram_accounts", "instagram_chats", "instagram_messages", "intake_endpoints", "inquiries", "lead_audience_member_insights", "apify_settings", "apify_runs", "treg_settings", "treg_calls"];
+const EXPECTED_TABLES = ["organization_features", "instagram_accounts", "instagram_chats", "instagram_messages", "intake_endpoints", "inquiries", "lead_audience_member_insights", "apify_settings", "apify_runs", "treg_settings", "treg_calls", "tavily_settings"];
 
 async function main() {
   const url = process.env.DATABASE_URL;

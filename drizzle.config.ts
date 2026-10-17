@@ -137,6 +137,7 @@ const OWNED_TABLES = [
   "apify_runs",
   "treg_settings",
   "treg_calls",
+  "tavily_settings",
 ];
 
 export default {

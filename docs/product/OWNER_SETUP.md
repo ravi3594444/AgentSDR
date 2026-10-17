@@ -564,6 +564,25 @@ web.
 yourself: they need a login and do not allow automated reading. On
 LinkedIn it can search people (below) but cannot open LinkedIn pages.
 
+**Web search through Tavily.** "Find customers on the web" needs a web
+search. Your AI provider can do it (OpenRouter, or AI/ML API with a web
+research model such as Perplexity Sonar), but a Tavily key is simpler and
+returns real result pages:
+1. Turn on **Website and directory search** (Settings → Organization →
+   Optional features).
+2. Paste your Tavily key in the **Tavily web search** card on the same page.
+   Tavily checks the key before it is saved, and the key is stored encrypted.
+3. Set the most searches a day (default 100).
+
+While a key is saved, website searches always use Tavily.
+- **Usage:** one website search is 2–3 Tavily searches of about 20 pages
+  each.
+- **Cost:** Tavily's free plan includes 1,000 searches a month; after that,
+  pay-as-you-go is about $0.008 a search. AgentSDR never changes your Tavily
+  plan.
+- **Limits:** past your cap, or when the plan's credits are used up, a new
+  website search is refused, and the chat says why.
+
 **Social media search through Apify (beta, paid, off by default).** With
 the **Apify discovery (paid)** feature on and an Apify token saved
 (Settings → Organization → Apify), "find real estate agencies in Austin

@@ -2,6 +2,7 @@ import { ChannelRulesForm } from "@/components/settings/ChannelRulesForm";
 import { ApifySettings } from "@/components/settings/organization/ApifySettings";
 import { OrgFeatures } from "@/components/settings/organization/OrgFeatures";
 import { OrgGeneral } from "@/components/settings/organization/OrgGeneral";
+import { TavilySettings } from "@/components/settings/organization/TavilySettings";
 import { TregSettings } from "@/components/settings/organization/TregSettings";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import { can, requirePageOrgContext } from "@/lib/auth/context";
@@ -26,6 +27,7 @@ export default async function Page() {
           <ChannelRulesForm channel="general" initialValues={values} canEdit={can(ctx, { integrations: ["manage"] })} />
         </section>
         <OrgFeatures />
+        <TavilySettings />
         <ApifySettings />
         <TregSettings />
       </div>

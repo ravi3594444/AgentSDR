@@ -31,6 +31,7 @@ export * from "./intake/schema";
 export * from "./features/schema";
 export * from "./apify/schema";
 export * from "./treg/schema";
+export * from "./tavily/schema";
 
 // Web research about imported companies (src/lib/research/).
 export * from "./research/schema";

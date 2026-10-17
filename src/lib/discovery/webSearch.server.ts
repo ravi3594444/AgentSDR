@@ -11,10 +11,19 @@ import { responseCostUsd } from "@/lib/assistant/usage.server";
 import { researchSources } from "@/lib/research/research";
 import { askWithSearch, researchRuntime, type SearchCompletionsClient } from "@/lib/research/research.server";
 import type { ResearchSource } from "@/lib/research/schema";
+import { TAVILY_LIMITS, tavilySources } from "@/lib/tavily/catalog";
+import { tavilyConnection } from "@/lib/tavily/tavily.server";
+import { tavilySearch, TavilyError } from "@/services/tavily";
 
 /**
- * One web search for website and directory discovery, through the
- * organization's own AI provider when it can search the web:
+ * One web search for website and directory discovery:
+ *
+ * - Tavily, whenever the organization saved a Tavily key (Settings →
+ *   Organization → Tavily): a search API returning real result pages, so
+ *   it is preferred over a model's web search;
+ *
+ * otherwise through the organization's own AI provider when it can search
+ * the web:
  *
  * - OpenRouter: the selected default model with OpenRouter's `web` plugin
  *   (Exa for Google models, as the table runner does — see webPlugins in
@@ -33,7 +42,10 @@ import type { ResearchSource } from "@/lib/research/schema";
  * provider reports is returned to the caller, which keeps it with the job.
  */
 
-export type WebSearchProvider = "openrouter" | typeof AIML_PROVIDER_KEY;
+export type WebSearchProvider = "openrouter" | typeof AIML_PROVIDER_KEY | "tavily";
+
+/** Tavily's searches, as a model name in reports. */
+export const TAVILY_SEARCH_MODEL = "tavily-search-basic";
 
 export type WebSearchAvailability = {
   available: boolean;
@@ -72,7 +84,7 @@ export const WEB_SEARCH_SYSTEM_PROMPT = [
   "Do not write email addresses, phone numbers or personal details, and do not describe private individuals.",
 ].join("\n");
 
-const NO_PROVIDER = "Website and directory search needs an AI provider that searches the web: connect OpenRouter, or AI/ML API with a web research model, in Settings → AI provider.";
+const NO_PROVIDER = "Website and directory search needs a web search: save a Tavily key in Settings → Organization → Tavily, or connect an AI provider that searches the web (OpenRouter, or AI/ML API with a web research model) in Settings → AI provider.";
 
 /**
  * Whether the organization's AI settings can run a web search, and with
@@ -81,8 +93,9 @@ const NO_PROVIDER = "Website and directory search needs an AI provider that sear
  * (runtimePlan.ts); AI/ML API needs its research model, because only its
  * search models (e.g. Perplexity Sonar) return sources.
  */
-export function webSearchAvailabilityFrom(settings: ByokSettings, connection: Pick<AiConnection, "providerKey" | "verified"> | null): WebSearchAvailability {
+export function webSearchAvailabilityFrom(settings: ByokSettings, connection: Pick<AiConnection, "providerKey" | "verified"> | null, tavily: { connected: boolean } | null = null): WebSearchAvailability {
   const unavailable = (reason: string): WebSearchAvailability => ({ available: false, provider: null, model: null, reason });
+  if (tavily?.connected) return { available: true, provider: "tavily", model: TAVILY_SEARCH_MODEL, reason: null };
   if (!settings.connectionId || !connection) return unavailable(NO_PROVIDER);
   if (!connection.verified) return unavailable(`The AI connection in Settings → AI provider is not verified. ${NO_PROVIDER}`);
   if (connection.providerKey === "openrouter") {
@@ -103,21 +116,33 @@ export function webSearchAvailabilityFrom(settings: ByokSettings, connection: Pi
 export async function webSearchAvailability(): Promise<WebSearchAvailability> {
   const settings = await getByokSettings();
   const connection = settings.connectionId ? await getAiConnection(settings.connectionId) : null;
-  return webSearchAvailabilityFrom(settings, connection);
+  return webSearchAvailabilityFrom(settings, connection, { connected: Boolean(await tavilyConnection()) });
 }
 
 /** What searchWeb needs from the provider; tests substitute a stand-in client. */
-export type WebSearchRuntime = {
-  provider: WebSearchProvider;
-  model: string;
-  client: SearchCompletionsClient;
-  /** OpenRouter's strict provider routing; nothing for AI/ML API. */
-  routing: Record<string, unknown>;
-};
+export type WebSearchRuntime =
+  | {
+      provider: "openrouter" | typeof AIML_PROVIDER_KEY;
+      model: string;
+      client: SearchCompletionsClient;
+      /** OpenRouter's strict provider routing; nothing for AI/ML API. */
+      routing: Record<string, unknown>;
+    }
+  | { provider: "tavily"; model: string; key: string };
 
-async function loadRuntime(): Promise<WebSearchRuntime> {
+/** The runtime of the provider a search must use: the one its website search started with, when given. */
+async function loadRuntime(expected?: WebSearchProvider | null): Promise<WebSearchRuntime> {
   const availability = await webSearchAvailability();
   if (!availability.available) throw new WebSearchUnavailableError(availability.reason ?? NO_PROVIDER);
+  if (expected && availability.provider !== expected) {
+    // Never switch providers inside one search: its limits were checked against the one it started with.
+    throw new WebSearchUnavailableError(`The web search provider changed since this website search started (${expected} → ${availability.provider}); ask again to search with the new one.`);
+  }
+  if (availability.provider === "tavily") {
+    const tavily = await tavilyConnection();
+    if (!tavily) throw new WebSearchUnavailableError(NO_PROVIDER);
+    return { provider: "tavily", model: TAVILY_SEARCH_MODEL, key: tavily.key };
+  }
   if (availability.provider === "openrouter") {
     const runtime = await getAiRuntime(undefined, WEB_SEARCH_TIMEOUT_MS);
     return { provider: "openrouter", model: runtime.selection.modelId, client: runtime.client, routing: runtime.routing };
@@ -149,17 +174,30 @@ export function openRouterSearchRequest(model: string, routing: Record<string, u
  */
 export async function searchWeb(
   query: string,
-  dependencies: { runtime?: () => Promise<WebSearchRuntime>; sleep?: (ms: number) => Promise<void> } = {},
+  dependencies: { runtime?: () => Promise<WebSearchRuntime>; sleep?: (ms: number) => Promise<void>; provider?: WebSearchProvider | null } = {},
 ): Promise<WebSearchResult> {
   const question = query.replace(/\s+/g, " ").trim().slice(0, MAX_QUERY_LENGTH);
   if (!question) throw new Error("Nothing to search for.");
-  const runtime = await (dependencies.runtime ?? loadRuntime)();
+  const runtime = await (dependencies.runtime ?? (() => loadRuntime(dependencies.provider)))();
+  const sleep = dependencies.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  if (runtime.provider === "tavily") {
+    let body: unknown;
+    try {
+      body = await tavilySearch(runtime.key, question, TAVILY_LIMITS.resultsPerSearch);
+    } catch (error) {
+      // One retry, only when Tavily said it is busy (a rate limit is not billed).
+      if (!(error instanceof TavilyError && error.status === 429)) throw error;
+      await sleep(RETRY_DELAY_MS);
+      body = await tavilySearch(runtime.key, question, TAVILY_LIMITS.resultsPerSearch);
+    }
+    // The price depends on the Tavily plan (free credits first), so it is not guessed here.
+    return { query: question, sources: tavilySources(body), costUsd: null, provider: "tavily", model: runtime.model };
+  }
   let response: unknown;
   if (runtime.provider === AIML_PROVIDER_KEY) {
     response = await askWithSearch(runtime.client, runtime.model, question, { systemPrompt: WEB_SEARCH_SYSTEM_PROMPT, maxTokens: MAX_OUTPUT_TOKENS });
   } else {
     const request = openRouterSearchRequest(runtime.model, runtime.routing, question);
-    const sleep = dependencies.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
     try {
       response = await runtime.client.chat.completions.create(request as never);
     } catch (error) {

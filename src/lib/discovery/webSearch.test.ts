@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ByokSettings } from "@/lib/ai/openrouter-types";
-import { openRouterSearchRequest, searchWeb, webSearchAvailabilityFrom, type WebSearchRuntime } from "./webSearch.server";
+import { setTavilyApiBase } from "@/services/tavily";
+import { openRouterSearchRequest, searchWeb, TAVILY_SEARCH_MODEL, webSearchAvailabilityFrom, type WebSearchRuntime } from "./webSearch.server";
 
 // Response shapes as the providers document them (trimmed): OpenRouter's web
 // plugin returns url_citation annotations, Perplexity on AI/ML API returns
@@ -30,7 +31,7 @@ const sonarAnswer = {
 const memoryOnly = { choices: [{ message: { content: "Try https://lotus.example.in and https://smile.example.in" } }] };
 
 type Sent = Record<string, unknown>;
-function standIn(provider: WebSearchRuntime["provider"], answers: (() => unknown)[], sent: Sent[]): () => Promise<WebSearchRuntime> {
+function standIn(provider: "openrouter" | "aimlapi", answers: (() => unknown)[], sent: Sent[]): () => Promise<WebSearchRuntime> {
   let call = 0;
   return async () => ({
     provider,
@@ -148,7 +149,57 @@ describe("webSearchAvailabilityFrom", () => {
   });
 
   test("no connection, or an unverified one, cannot search", () => {
-    expect(webSearchAvailabilityFrom({ ...base, connectionId: null }, null).reason).toContain("needs an AI provider that searches the web");
+    expect(webSearchAvailabilityFrom({ ...base, connectionId: null }, null).reason).toContain("an AI provider that searches the web");
     expect(webSearchAvailabilityFrom(base, { providerKey: "openrouter", verified: false }).available).toBe(false);
+  });
+});
+
+describe("Tavily", () => {
+  test("a saved Tavily key is used before any AI provider", () => {
+    const settings = { connectionId: null } as unknown as Parameters<typeof webSearchAvailabilityFrom>[0];
+    expect(webSearchAvailabilityFrom(settings, null, { connected: true })).toEqual({ available: true, provider: "tavily", model: TAVILY_SEARCH_MODEL, reason: null });
+    expect(webSearchAvailabilityFrom(settings, null, { connected: false }).reason).toContain("Tavily key");
+  });
+
+  test("a search sends the key as a Bearer header, asks for a basic search of 20 results, and keeps only Tavily's result pages", async () => {
+    const realFetch = globalThis.fetch;
+    const sent: { url: string; headers: Headers; body: Record<string, unknown> }[] = [];
+    let calls = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls += 1;
+      sent.push({ url: String(input), headers: new Headers(init?.headers), body: JSON.parse(String(init?.body)) });
+      // The first answer is a rate limit (retried once); the second the results.
+      if (calls === 1) return new Response(JSON.stringify({ detail: { error: "rate limited" } }), { status: 429 });
+      return new Response(JSON.stringify({ results: [{ title: "Lotus Dental", url: "https://lotus.example.in/", content: "Dentist in Baner" }], usage: { credits: 1 } }), { status: 200 });
+    }) as typeof fetch;
+    setTavilyApiBase("https://tavily.test");
+    try {
+      const result = await searchWeb("  dental clinics   Baner Pune ", { runtime: async () => ({ provider: "tavily", model: TAVILY_SEARCH_MODEL, key: "tvly-test-key" }), sleep: async () => undefined });
+      expect(result).toEqual({ query: "dental clinics Baner Pune", sources: [{ url: "https://lotus.example.in/", title: "Lotus Dental", snippet: "Dentist in Baner" }], costUsd: null, provider: "tavily", model: TAVILY_SEARCH_MODEL });
+      expect(sent).toHaveLength(2);
+      expect(sent[1]!.url).toBe("https://tavily.test/search");
+      expect(sent[1]!.headers.get("authorization")).toBe("Bearer tvly-test-key");
+      expect(sent[1]!.body).toMatchObject({ query: "dental clinics Baner Pune", search_depth: "basic", max_results: 20, include_answer: false });
+    } finally {
+      globalThis.fetch = realFetch;
+      setTavilyApiBase(null);
+    }
+  });
+
+  test("a used-up plan is not retried and says so", async () => {
+    const realFetch = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response(JSON.stringify({ detail: { error: "This request exceeds your plan's set usage limit." } }), { status: 432 });
+    }) as unknown as typeof fetch;
+    setTavilyApiBase("https://tavily.test");
+    try {
+      await expect(searchWeb("dentists Pune", { runtime: async () => ({ provider: "tavily", model: TAVILY_SEARCH_MODEL, key: "k" }), sleep: async () => undefined })).rejects.toThrow("credits are used up");
+      expect(calls).toBe(1);
+    } finally {
+      globalThis.fetch = realFetch;
+      setTavilyApiBase(null);
+    }
   });
 });

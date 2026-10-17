@@ -28,7 +28,7 @@ export const FEATURES: Record<FeatureKey, FeatureInfo> = {
     label: "Website and directory search",
     description:
       "When you ask the assistant to find customers, it can also search the web for businesses and directories that match your customer description, then read their published contact details.",
-    requires: "An AI provider that searches the web (OpenRouter, or AI/ML API with a web research model).",
+    requires: "A web search: a Tavily key (set on this page once the feature is on), or an AI provider that searches the web (OpenRouter, or AI/ML API with a web research model).",
   },
   inquiry_intake: {
     label: "Inquiry intake",

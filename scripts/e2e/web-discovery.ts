@@ -52,6 +52,9 @@ const tag = stamp.toString(36);
 const host = (slug: string) => `${slug}-${tag}.test`;
 const site = (slug: string) => `https://${host(slug)}/`;
 const UNIPILE = "https://unipile-web-check.invalid";
+const TAVILY = "https://tavily-web-check.invalid";
+const TAVILY_KEY = `tvly-check-${tag}`;
+const tavilyCalls: { path: string; auth: string | null; body: Record<string, unknown> }[] = [];
 const IG_ACCOUNT = `ig-acc-${tag}`;
 const SHORTCODE = `Cw${tag}Post`;
 const POST_PROVIDER_ID = `3170_${tag}`;
@@ -236,6 +239,25 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return aimlAnswer();
   }
   if (url.origin === UNIPILE) return unipileAnswer(method, url);
+  if (url.origin === TAVILY) {
+    const auth = new Headers(init?.headers).get("authorization");
+    const body = method === "POST" ? JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown> : {};
+    tavilyCalls.push({ path: url.pathname, auth, body });
+    if (auth !== `Bearer ${TAVILY_KEY}`) return new Response(JSON.stringify({ detail: { error: "Unauthorized: missing or invalid API key." } }), { status: 401 });
+    if (method === "GET" && url.pathname === "/usage") return new Response(JSON.stringify({ key: { usage: 3 }, account: { current_plan: "Researcher", plan_usage: 3, plan_limit: 1000 } }), { status: 200 });
+    if (method === "POST" && url.pathname === "/search") {
+      return new Response(JSON.stringify({
+        query: body.query,
+        results: [
+          { title: "Lotus Dental Care", url: site("lotus"), content: "Dentist in Baner, Pune" },
+          { title: "Top 10 dentists in Pune", url: DIRECTORY, content: "A list of dentists" },
+          { title: "Lotus Dental Care", url: site("lotus"), content: "the same page again" },
+        ],
+        usage: { credits: 1 },
+      }), { status: 200 });
+    }
+    return new Response("{}", { status: 404 });
+  }
   // Anything else would leave the machine: refused and reported.
   blocked.push(`${method} ${url.href}`);
   return new Response("blocked by the web discovery check", { status: 599 });
@@ -262,9 +284,13 @@ const { registerAssistantJobs } = await import("@/lib/assistant/register.server"
 const { createThread, claimThread, releaseThread } = await import("@/lib/assistant/threads.server");
 const { listAudiences, summarizeAudience } = await import("@/lib/assistant/audiences.server");
 const { setDiscoveryPageOptions } = await import("@/lib/discovery/discovery.server");
+const { setTavilyApiBase } = await import("@/services/tavily");
+const { saveTavilySettings, tavilySettingsView, TavilySettingsError } = await import("@/lib/tavily/tavily.server");
+const { webSearchAvailability } = await import("@/lib/discovery/webSearch.server");
 const { setWebDiscoveryMailCheck, startWebDiscovery, normalizeWebCriteria, WebDiscoveryUnavailableError, INSTAGRAM_ONLY_REASON, INSTAGRAM_PROFILE_ONLY_REASON, MAX_OPEN_WEB_DISCOVERIES, MAX_WEB_DISCOVERIES_PER_DAY } = await import("@/lib/discovery/webDiscovery.server");
 
 setDiscoveryPageOptions({ allowPrivate: true });
+setTavilyApiBase(TAVILY);
 setWebDiscoveryMailCheck(async (domain) => (domain.includes("nomail") ? "rejects" : domain.includes("lotus") ? "mx" : domain.includes("glow") ? "address" : "unknown"));
 registerAssistantJobs();
 
@@ -351,9 +377,9 @@ try {
 
     await setFeature("web_discovery", true, null);
     const noProvider = await runTool("find_customers_on_web", { customers: "dental clinics", where: "Baner, Pune" }, ctx(thread.id));
-    check("no AI provider: the tool says web search is unavailable and why", !noProvider.ok && /needs an AI provider that searches the web/.test(noProvider.summary), noProvider.summary);
+    check("no AI provider: the tool says web search is unavailable and why", !noProvider.ok && /needs a web search: save a Tavily key .* or connect an AI provider that searches the web/.test(noProvider.summary), noProvider.summary);
     const setup = await runTool("check_setup", {}, ctx(thread.id));
-    check("check_setup reports website and directory search as not ready", /Website and directory search: not ready — .*needs an AI provider/.test(setup.summary), setup.summary);
+    check("check_setup reports website and directory search as not ready", /Website and directory search: not ready — .*needs a web search/.test(setup.summary), setup.summary);
     const after = await db.select({ id: assistantJobs.id }).from(assistantJobs).where(inOrg(assistantJobs));
     check("no provider: still no job", after.length === 0);
   });
@@ -644,6 +670,49 @@ try {
     const refused = await runTool("find_customers_on_web", { customers: "dental clinics", where: "Baner, Pune" }, ctx(thread.id));
     check("AI/ML API: website searches count toward the daily research limit", !refused.ok && /web research limit on AI\/ML API \(3, Settings → AI provider\) leaves 1 search; this request needs 2/.test(refused.summary), refused.summary);
   });
+
+  // ------------------------------------------------------------ E: Tavily as the web search
+  const [orgE] = await db.insert(organizations).values({ name: `Web discovery check E ${stamp}`, slug: `web-discovery-e-${stamp}` }).returning();
+  checkOrganizations.push(orgE!.id);
+  let tavilyJob = "";
+  await runInOrganization(orgE!.id, async () => {
+    await setFeature("web_discovery", true, null);
+    check("Tavily: without a key or an AI provider, website search says what it needs", !(await webSearchAvailability()).available && /Tavily key/.test((await webSearchAvailability()).reason ?? ""));
+    let refusedKey = "";
+    try {
+      await saveTavilySettings({ key: "tvly-wrong" }, null);
+    } catch (error) {
+      refusedKey = error instanceof TavilySettingsError ? error.message : String(error);
+    }
+    check("Tavily: a key Tavily rejects is not saved", refusedKey === "Tavily rejected this key." && !(await tavilySettingsView()).connected, refusedKey);
+    const view = await saveTavilySettings({ key: TAVILY_KEY, dailySearches: 3 }, null);
+    check("Tavily: a good key is saved (hint only) with the plan's credits read from Tavily", view.connected && view.keyHint === `…${TAVILY_KEY.slice(-4)}` && view.plan?.used === 3 && view.plan.limit === 1000 && !JSON.stringify(view).includes(TAVILY_KEY), JSON.stringify(view));
+    const availability = await webSearchAvailability();
+    check("Tavily: with a key saved, website searches use Tavily", availability.available && availability.provider === "tavily", JSON.stringify(availability));
+    const thread = await createThread(null);
+    const started = await runTool("find_customers_on_web", { customers: "dental clinics", where: "Baner, Pune" }, ctx(thread.id));
+    tavilyJob = String((started.data as { jobId?: string } | undefined)?.jobId ?? "");
+    check("Tavily: the assistant's website search starts on Tavily", started.ok && Boolean(tavilyJob), started.summary);
+  });
+  const searchCallsBefore = tavilyCalls.filter((call) => call.path === "/search").length;
+  const aiBefore = aiCalls.length;
+  const runE = await runJob(tavilyJob);
+  const searchesE = ((runE.job.result ?? {}) as { searches?: { provider: string | null; sources: number }[] }).searches ?? [];
+  const sent = tavilyCalls.filter((call) => call.path === "/search").slice(searchCallsBefore);
+  check("Tavily: each planned search is one basic Tavily search of 20 results with the key as a Bearer header, and no AI search", runE.job.status === "succeeded" && sent.length === searchesE.length && sent.length >= 2 && sent.every((call) => call.auth === `Bearer ${TAVILY_KEY}` && call.body.search_depth === "basic" && call.body.max_results === 20) && aiCalls.length === aiBefore, JSON.stringify({ status: runE.job.status, error: runE.job.error, sent: sent.length, searchesE }));
+  check("Tavily: the searches are recorded as Tavily's, with the pages it returned (each page once)", searchesE.every((search) => search.provider === "tavily" && search.sources === 2), JSON.stringify(searchesE));
+  await runInOrganization(orgE!.id, async () => {
+    const saved = await db.select({ email: people.email }).from(people).where(inOrg(people));
+    const emails = saved.map((person) => person.email);
+    check("Tavily: businesses from Tavily's pages are read and saved with the contacts their own websites publish", emails.includes(`hello@${host("lotus")}`) && emails.includes(`care@${host("orchid")}`), JSON.stringify(emails));
+    const thread = await createThread(null);
+    const refused = await runTool("find_customers_on_web", { customers: "dental clinics", where: "Baner, Pune" }, ctx(thread.id));
+    check("Tavily: past the owner's daily cap a new website search is refused with the reason", !refused.ok && /daily Tavily cap \(3 searches/.test(refused.summary), refused.summary);
+    check("Tavily: the settings count the day's searches", (await tavilySettingsView()).searchesToday === sent.length);
+  });
+  await runInOrganization(orgs.A, async () => {
+    check("Tavily: another organization's key is never used (A keeps its own AI search)", (await webSearchAvailability()).provider === "openrouter");
+  });
 } catch (error) {
   console.error(error);
   failures += 1;
@@ -652,6 +721,7 @@ try {
   if (createdMailboxes.length) await db.delete(mailboxes).where(inArray(mailboxes.id, createdMailboxes));
   if (placeholderJobs.length) await db.delete(assistantJobs).where(inArray(assistantJobs.id, placeholderJobs));
   server.stop(true);
+  setTavilyApiBase(null);
 }
 
 console.log(`\n${failures ? `${failures} check(s) FAILED` : "All web discovery checks passed"}. Fixture pages read: ${new Set(pageRequests).size}; AI calls: ${aiCalls.length}; Unipile calls: ${unipileRequests.length}.`);

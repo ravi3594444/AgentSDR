@@ -2875,6 +2875,20 @@ CREATE TABLE public.targeted_domains (
 );
 
 --
+-- Name: tavily_settings; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.tavily_settings (
+    organization_id uuid NOT NULL,
+    encrypted_key text,
+    key_hint text,
+    daily_searches integer DEFAULT 100 NOT NULL,
+    updated_by uuid,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT tavily_settings_daily_chk CHECK (((daily_searches >= 1) AND (daily_searches <= 2000)))
+);
+
+--
 -- Name: team_members; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4069,6 +4083,13 @@ ALTER TABLE ONLY public.sessions
 
 ALTER TABLE ONLY public.targeted_domains
     ADD CONSTRAINT targeted_domains_pkey PRIMARY KEY (id);
+
+--
+-- Name: tavily_settings tavily_settings_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.tavily_settings
+    ADD CONSTRAINT tavily_settings_pkey PRIMARY KEY (organization_id);
 
 --
 -- Name: team_members team_members_membership_key_key; Type: CONSTRAINT; Schema: public; Owner: -
@@ -6901,6 +6922,13 @@ ALTER TABLE ONLY public.targeted_domains
 
 ALTER TABLE ONLY public.targeted_domains
     ADD CONSTRAINT targeted_domains_organization_fk FOREIGN KEY (organization_id) REFERENCES public.organizations(id) ON DELETE RESTRICT;
+
+--
+-- Name: tavily_settings tavily_settings_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.tavily_settings
+    ADD CONSTRAINT tavily_settings_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
 
 --
 -- Name: team_members team_members_team_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -

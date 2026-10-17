@@ -38,7 +38,9 @@ import {
   unusableReason,
   type MatchRelation,
 } from "./webDiscovery";
-import { searchWeb, webSearchAvailability, WebSearchUnavailableError } from "./webSearch.server";
+import { tavilyCapProblem } from "@/lib/tavily/catalog";
+import { tavilyConnection, tavilySearchesToday } from "@/lib/tavily/tavily.server";
+import { searchWeb, webSearchAvailability, WebSearchUnavailableError, type WebSearchProvider } from "./webSearch.server";
 import { collectWebsiteContacts, fetchPublicPage } from "./websiteContacts.server";
 
 /**
@@ -269,7 +271,7 @@ export async function startWebDiscovery(
 ): Promise<{ jobId: string; audienceId: string; phrase: string; queries: string[]; provider: string; model: string; instagram: { usable: boolean; reason: string | null } }> {
   if (!(await featureEnabled("web_discovery"))) throw new WebDiscoveryUnavailableError(new FeatureDisabledError("web_discovery").message);
   const availability = await webSearchAvailability();
-  if (!availability.available) throw new WebDiscoveryUnavailableError(availability.reason ?? "No web-searching AI provider is set up.");
+  if (!availability.available) throw new WebDiscoveryUnavailableError(availability.reason ?? "No web search is set up.");
   const readiness = await instagramReadiness();
   const instagram = { usable: readiness.usable, reason: readiness.reason };
   const queries = buildSearchQueries({ customers: criteria.customers, offer: criteria.offer, where: criteria.where, language: criteria.language, instagram: instagram.usable });
@@ -287,7 +289,12 @@ export async function startWebDiscovery(
     if (open >= MAX_OPEN_WEB_DISCOVERIES) {
       throw new WebDiscoveryLimitError(`${open} website search${open === 1 ? " is" : "es are"} already running for this organization (at most ${MAX_OPEN_WEB_DISCOVERIES} at a time). Ask again when one has finished; lead_search_status shows their progress.`);
     }
-    if (recent >= MAX_WEB_DISCOVERIES_PER_DAY) {
+    if (availability.provider === "tavily") {
+      // Tavily: the owner's own daily cap of searches (Settings → Organization → Tavily) replaces the fixed one.
+      const tavily = await tavilyConnection();
+      const problem = tavily ? tavilyCapProblem(await tavilySearchesToday(tx), queries.length, tavily.dailySearches) : "no Tavily key is saved";
+      if (problem) throw new WebDiscoveryLimitError(`Not started: ${problem}. It frees up as the last 24 hours pass; owners and admins can raise it.`);
+    } else if (recent >= MAX_WEB_DISCOVERIES_PER_DAY) {
       throw new WebDiscoveryLimitError(`This organization has started ${recent} website searches in the last 24 hours, the most allowed (${MAX_WEB_DISCOVERIES_PER_DAY}; each is up to ${MAX_SEARCH_QUERIES} paid web searches). Ask again later, or use Google Maps search, which has no per-search fee.`);
     }
     if (availability.provider === AIML_PROVIDER_KEY) {
@@ -418,7 +425,7 @@ async function stageSearching(job: AssistantJob, heartbeat: () => Promise<void>)
     // Saved before the call: if this step dies after paying, the retry sees it (above).
     await savePayload(job, { searchStarted: index });
     try {
-      const result = await searchWeb(query);
+      const result = await searchWeb(query, { provider: (payload.searchProvider ?? null) as WebSearchProvider | null });
       searches.push({ query, sources: result.sources.length, provider: result.provider, model: result.model, costUsd: result.costUsd, error: result.sources.length ? null : "the provider returned no web sources" });
       for (const source of result.sources) {
         const origin: Origin = { query, url: source.url, title: source.title, snippet: source.snippet };

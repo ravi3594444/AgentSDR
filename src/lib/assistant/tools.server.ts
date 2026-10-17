@@ -15,6 +15,7 @@ import type { FeatureState } from "@/lib/features/catalog";
 import { featureEnabled, FeatureDisabledError } from "@/lib/features/flags.server";
 import { compactResult, describeEndpoint, TREG_LIMITS } from "@/lib/treg/catalog";
 import { callTregEndpoint, searchTreg, TregUnavailableError } from "@/lib/treg/treg.server";
+import { tavilyConnection } from "@/lib/tavily/tavily.server";
 import type { ImportRow } from "@/lib/leads/importRows";
 import { importPeopleRows } from "@/lib/leads/peopleImport.server";
 import { people } from "@/lib/leads/schema";
@@ -179,8 +180,8 @@ async function setupSnapshot() {
       linkedin: availability.linkedin,
     },
     leadDiscovery: discovery,
-    /** Website and directory search: the optional feature, and the organization's web-searching AI provider. */
-    webDiscovery: { enabled: webDiscoveryOn, ...webSearchAvailabilityFrom(byok, connection) },
+    /** Website and directory search: the optional feature, and its web search (Tavily, else the organization's web-searching AI provider). */
+    webDiscovery: { enabled: webDiscoveryOn, ...webSearchAvailabilityFrom(byok, connection, { connected: Boolean(await tavilyConnection()) }) },
     ai: { connected: Boolean(connection?.verified), defaultModel: byok.defaultModel?.modelId ?? null },
     /** Optional features (Settings → Organization), all off by default, and whether new inquiries can be answered. */
     features: await featureState(),
@@ -361,7 +362,7 @@ export const TOOLS: Record<string, Tool> = {
 
   find_customers_on_web: {
     available: (features) => features.web_discovery,
-    description: "Find customers matching the owner's description of them with a real web search provider (the organization's OpenRouter connection with its web plugin, or AI/ML API's web research model; never a model answering from memory): only the pages the provider returned are used. It reads the businesses' own websites and the local directories or lists the search returned (and the business websites those directories link to) for the emails and phones they publish, and keeps each contact with the page it came from; it never guesses an email, phone, person or page, and people already in the leads are reused, not duplicated. Public Instagram profiles and posts the search returns are read (a profile's website, a post's comments) only when Instagram is connected (the Instagram feature on and an account linked); otherwise they are skipped. People found only on Instagram are listed but cannot be contacted from here. Up to 3 paid searches; runs in the background and announces the result in the chat. Needs the Website and directory search feature.",
+    description: "Find customers matching the owner's description of them with a real web search provider (Tavily when the organization saved a Tavily key, else its OpenRouter connection with its web plugin, or AI/ML API's web research model; never a model answering from memory): only the pages the provider returned are used. It reads the businesses' own websites and the local directories or lists the search returned (and the business websites those directories link to) for the emails and phones they publish, and keeps each contact with the page it came from; it never guesses an email, phone, person or page, and people already in the leads are reused, not duplicated. Public Instagram profiles and posts the search returns are read (a profile's website, a post's comments) only when Instagram is connected (the Instagram feature on and an account linked); otherwise they are skipped. People found only on Instagram are listed but cannot be contacted from here. Up to 3 paid searches; runs in the background and announces the result in the chat. Needs the Website and directory search feature.",
     arguments: "customers (who the customers are, from the owner's words or the business profile), where (city/area/region), maxResults (5-40 business websites to read, default 20), contactAfter (true only when the owner asked to contact, email or message the leads found: the outreach plan is then prepared automatically when the search finishes), channels (optional, with contactAfter: array of email|whatsapp|linkedin)",
     run: async (args, context) => {
       if (!(await featureEnabled("web_discovery"))) return { ok: false, summary: new FeatureDisabledError("web_discovery").message };

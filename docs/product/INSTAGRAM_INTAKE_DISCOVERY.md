@@ -70,6 +70,7 @@ ignored), exactly as the existing company research does
 | --- | --- | --- |
 | OpenRouter | `plugins: [{ id: "web" }]` (returns `url_citation` annotations) | Yes: the organization's AI connection |
 | AI/ML API | a research model with `web_search_options` (Perplexity Sonar was verified live on 13 Oct 2026 for company research) | Yes: Settings → AI provider → research model |
+| Tavily (added 2026-10-17) | a search API: `POST https://api.tavily.com/search`, basic depth, 20 results, `Authorization: Bearer tvly-…` | Yes: Settings → Organization → Tavily (shown while Website and directory search is on). **Used before any AI provider whenever a key is saved.** The key is checked with `GET /usage` (no credits) and stored encrypted. The owner's "searches a day" cap (default 100) replaces the fixed 10 website searches a day. Searches are counted from the website-search jobs that ran on Tavily. A job keeps the provider it started with and never switches mid-run. 401/429/432/433 are reported as a bad key, busy (one retry), plan credits used up, and pay-as-you-go limit. Code: `src/lib/tavily/`, `src/services/tavily.ts`; table `tavily_settings`. Tested only against a stand-in of Tavily's API (`scripts/e2e/web-discovery.ts`, organization E). |
 
 ### Optional adapter for Instagram hashtag discovery
 

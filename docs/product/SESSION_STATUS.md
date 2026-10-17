@@ -548,6 +548,41 @@ isolation (114 reads, 39 writes, 67 pages as a second organization, no
 findings), `check-organization-scope --contract` passed, tsc and lint
 clean.
 
+### Follow-up: Tavily as the web search for website searches (2026-10-17)
+
+Website and directory search used to need an AI provider that searches
+the web: OpenRouter, or AI/ML API with a web research model (Perplexity
+Sonar). Measured on 13 Oct 2026, one Sonar search through AI/ML API cost
+$0.0068 for 10 sources.
+
+An organization can now save a Tavily key instead (Settings → Organization
+→ Tavily web search, shown while the feature is on). Code:
+`src/lib/tavily/`, `src/services/tavily.ts`; `webSearch.server.ts` prefers
+it.
+- **What a search returns:** one basic search (1 Tavily credit) returns up
+  to 20 real result pages. Only those URLs are used.
+- **The cap:** the owner's "searches a day" cap (default 100) replaces the
+  fixed 10 website searches a day while Tavily is the provider. It is
+  counted from the website-search jobs that ran on Tavily in the last 24
+  hours.
+- **Provider changes:** a job never switches provider mid-run; if the key
+  is removed meanwhile, its next search stops with the reason.
+- **Errors:** a busy answer (429) is retried once. A used-up plan (432) or
+  pay-as-you-go limit (433) is reported, never retried.
+- **Migration:** the table `tavily_settings` is in
+  `scripts/add-instagram-intake-discovery.ts`.
+
+Not run against the real Tavily API: only against the stand-in in
+`scripts/e2e/web-discovery.ts` (organization E: key refused and accepted,
+plan credits read, provider chosen, searches sent, businesses read and
+saved, the cap, another organization unaffected).
+
+Also in this round: every rejected model answer is now logged with its
+model and the first 3,000 characters (`[ai/structured]`). An assistant
+turn failed on the VM with "actions[0].arguments must be a JSON object
+written as a string"; the cause will be read from that log before
+anything is changed.
+
 ### Live services vs stand-ins
 
 - **Live, real services:** gosom/google-maps-scraper v1.18.1 against Google
