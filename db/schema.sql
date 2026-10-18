@@ -2883,6 +2883,19 @@ CREATE TABLE public.reply_agent_runs (
 );
 
 --
+-- Name: research_settings; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.research_settings (
+    organization_id uuid NOT NULL,
+    reddit_approval_recorded_at timestamp with time zone,
+    reddit_approval_note text,
+    reddit_client_hint text,
+    updated_by uuid,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+--
 -- Name: scheduled_job_runs; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4166,6 +4179,13 @@ ALTER TABLE ONLY public.qualification_jobs
 
 ALTER TABLE ONLY public.reply_agent_runs
     ADD CONSTRAINT reply_agent_runs_pkey PRIMARY KEY (id);
+
+--
+-- Name: research_settings research_settings_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.research_settings
+    ADD CONSTRAINT research_settings_pkey PRIMARY KEY (organization_id);
 
 --
 -- Name: scheduled_job_runs scheduled_job_runs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
@@ -7072,6 +7092,13 @@ ALTER TABLE ONLY public.qualification_jobs
 
 ALTER TABLE ONLY public.reply_agent_runs
     ADD CONSTRAINT reply_agent_runs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
+
+--
+-- Name: research_settings research_settings_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.research_settings
+    ADD CONSTRAINT research_settings_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
 
 --
 -- Name: sessions sessions_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -

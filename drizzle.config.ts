@@ -142,6 +142,7 @@ const OWNED_TABLES = [
   "tinyfish_settings",
   "provider_quota_state",
   "provider_usage",
+  "research_settings",
 ];
 
 export default {

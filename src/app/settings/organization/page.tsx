@@ -2,6 +2,7 @@ import { ChannelRulesForm } from "@/components/settings/ChannelRulesForm";
 import { ApifySettings } from "@/components/settings/organization/ApifySettings";
 import { OrgFeatures } from "@/components/settings/organization/OrgFeatures";
 import { OrgGeneral } from "@/components/settings/organization/OrgGeneral";
+import { ResearchSourcesSettings } from "@/components/settings/organization/ResearchSourcesSettings";
 import { TavilySettings } from "@/components/settings/organization/TavilySettings";
 import { TinyfishSettings } from "@/components/settings/organization/TinyfishSettings";
 import { TregSettings } from "@/components/settings/organization/TregSettings";
@@ -28,6 +29,7 @@ export default async function Page() {
           <ChannelRulesForm channel="general" initialValues={values} canEdit={can(ctx, { integrations: ["manage"] })} />
         </section>
         <TinyfishSettings />
+        <ResearchSourcesSettings />
         <OrgFeatures />
         <TavilySettings />
         <ApifySettings />
