@@ -15,6 +15,11 @@ import { normalizeWebCriteria, startWebDiscovery, WebDiscoveryUnavailableError }
 import { generalWebSearch, webSearchAvailability, webSearchAvailabilityFrom, webSearchProviderName, WebSearchUnavailableError } from "@/lib/discovery/webSearch.server";
 import { fetchFailureText } from "@/lib/tinyfish/catalog";
 import { fetchWithTinyfish, tinyfishConnection, TinyfishWaitError } from "@/lib/tinyfish/tinyfish.server";
+import type { ResearchEvidence } from "@/lib/research/sources/catalog";
+import { readResearchSource } from "@/lib/research/sources/read.server";
+import { isRedditHost, redditRefusal } from "@/lib/research/sources/reddit";
+import { redditApprovalRecorded } from "@/lib/research/sources/settings.server";
+import { discussionNote } from "@/lib/research/sources/sources";
 import type { FeatureState } from "@/lib/features/catalog";
 import { featureEnabled, FeatureDisabledError } from "@/lib/features/flags.server";
 import { compactResult, describeEndpoint, TREG_LIMITS } from "@/lib/treg/catalog";
@@ -240,16 +245,28 @@ async function requestCoverageLine(context: ToolContext): Promise<string | null>
   return id ? coverageLine(await requestCoverageFor(id)) : null;
 }
 
-/** A page read for the model: text, contacts and the links it may follow next. */
-function pageResult(page: { url: string; title: string; body: string; contacts: { kind: string; value: string }[]; links: string[]; via: string }): ToolResult {
+/**
+ * A page read for the model: text, contacts and the links it may follow
+ * next. A page on a discussion site (Hacker News, Stack Exchange) carries
+ * its evidence rule instead of contacts: its authors are pseudonymous and
+ * are not leads.
+ */
+function pageResult(page: { url: string; title: string; body: string; contacts: { kind: string; value: string }[]; links: string[]; via: string; evidence?: ResearchEvidence[] }): ToolResult {
   const title = page.title.slice(0, 200);
   const host = new URL(page.url).hostname.replace(/^www\./, "");
-  const links = page.links.filter((link) => !LOGIN_WALLED.test(new URL(link).hostname)).slice(0, 40);
+  const links = page.links.filter((link) => {
+    const linkHost = new URL(link).hostname;
+    return !LOGIN_WALLED.test(linkHost) && !isRedditHost(linkHost);
+  }).slice(0, 40);
+  const note = discussionNote(new URL(page.url).hostname);
+  const contacts = note ? [] : page.contacts;
   return {
     ok: true,
-    summary: `Read ${page.url}${title ? ` “${title}”` : ""} via ${page.via} (${page.body.length.toLocaleString("en-US")} characters). Contacts on the page: ${page.contacts.map((contact) => `${contact.kind} ${contact.value}`).join(", ") || "none"}. Links on the page: ${links.join(" ") || "none"}. Text: ${page.body.slice(0, 6_000)}`,
-    display: `${host}${title ? ` · ${title}` : ""} · ${page.contacts.length} contact${page.contacts.length === 1 ? "" : "s"} found`,
-    data: { url: page.url, title, contacts: page.contacts, links },
+    summary: `Read ${page.url}${title ? ` “${title}”` : ""} via ${page.via} (${page.body.length.toLocaleString("en-US")} characters).${note ? ` ${note}` : ""} Contacts on the page: ${contacts.map((contact) => `${contact.kind} ${contact.value}`).join(", ") || "none"}. Links on the page: ${links.join(" ") || "none"}. Text: ${page.body.slice(0, 6_000)}`,
+    display: note
+      ? `${host}${title ? ` · ${title}` : ""} · evidence of a stated need or problem; authors are pseudonymous, not leads`
+      : `${host}${title ? ` · ${title}` : ""} · ${contacts.length} contact${contacts.length === 1 ? "" : "s"} found`,
+    data: { url: page.url, title, contacts, links, ...(page.evidence?.length ? { evidence: page.evidence } : {}) },
   };
 }
 
@@ -660,7 +677,7 @@ export const TOOLS: Record<string, Tool> = {
   },
 
   read_webpage: {
-    description: "Open one public web page and read its text, the emails, phones and LinkedIn links on it, and the links it contains (which you may open next): a link the owner gave, a result of web_search, or a link on a page already read. Read through TinyFish when it is connected (it renders pages that need JavaScript), else directly. It cannot log in, so Instagram, Facebook, X, TikTok and LinkedIn pages cannot be read.",
+    description: "Open one public web page and read its text, the emails, phones and LinkedIn links on it, and the links it contains (which you may open next): a link the owner gave, a result of web_search, or a link on a page already read. Read through TinyFish when it is connected (it renders pages that need JavaScript), else directly. Hacker News threads (news.ycombinator.com/item?id=…) and Stack Exchange questions (Stack Overflow, Super User, Server Fault, Ask Ubuntu, *.stackexchange.com) are read through their public APIs, with authors and dates, as evidence of a stated need or problem: never buying intent, and their pseudonymous authors are not leads. It cannot log in, so Instagram, Facebook, X, TikTok and LinkedIn pages cannot be read, and Reddit cannot be read at all.",
     arguments: "url",
     run: async (args, context) => {
       const raw = text(args, "url", true)!.trim();
@@ -673,30 +690,39 @@ export const TOOLS: Record<string, Tool> = {
       if (LOGIN_WALLED.test(url.hostname)) {
         return { ok: false, summary: `${url.hostname} needs a login and does not allow automated reading, so it cannot be opened. LinkedIn people can be found with find_linkedin_leads; other networks are not supported.` };
       }
+      // No Reddit reader and no workaround (src/lib/research/sources/reddit.ts): refused before anything is looked up or sent.
+      if (isRedditHost(url.hostname)) return { ok: false, summary: redditRefusal(await redditApprovalRecorded()) };
       // A private or internal address is refused before anything leaves the server, TinyFish included.
       try {
         await assertPublicPageUrl(url.toString());
       } catch (error) {
         return { ok: false, summary: `Could not open ${url.toString()}: ${error instanceof Error ? error.message : String(error)}` };
       }
-      let note = "";
+      // Why the usual reader was not used, said in "via" so the model knows which source read the page.
+      const notes: string[] = [];
+      const source = await readResearchSource(url, { threadId: context.threadId });
+      if (source?.kind === "page") return pageResult({ ...source.page, contacts: [] });
+      if (source?.kind === "missing") return { ok: false, summary: `Could not open ${url.toString()}: ${source.summary}` };
+      if (source?.kind === "fallback") notes.push(source.note);
+      const via = (reader: "TinyFish" | "direct") => (notes.length ? `${reader} (${notes.join("; ")}; read ${reader === "TinyFish" ? "through TinyFish" : "directly"} instead)` : reader);
       if (await tinyfishConnection()) {
         try {
           const { pages, failures } = await fetchWithTinyfish([url.toString()], { threadId: context.threadId });
           const page = pages[0];
           if (page) {
             const contacts = extractContacts(`${page.contactLinks.map((link) => `<a href="${link.replace(/"/g, "")}"></a>`).join("")}${page.text}`, page.finalUrl).slice(0, 60);
-            return pageResult({ url: page.finalUrl, title: page.title ?? "", body: page.text, contacts, links: page.links, via: "TinyFish" });
+            return pageResult({ url: page.finalUrl, title: page.title ?? "", body: page.text, contacts, links: page.links, via: via("TinyFish") });
           }
-          note = failures[0] ? ` (TinyFish: ${fetchFailureText(failures[0])}; read directly instead)` : "";
           if (failures[0] && ["page_not_found", "login_required", "invalid_url", "invalid_redirect_url"].includes(failures[0].code)) {
             return { ok: false, summary: `Could not open ${url.toString()}: ${fetchFailureText(failures[0])}.` };
           }
+          if (failures[0]) notes.push(`TinyFish: ${fetchFailureText(failures[0])}`);
         } catch (error) {
           if (!(error instanceof TinyfishWaitError)) throw error;
-          note = ` (TinyFish is waiting: ${error.reason}; read directly instead)`;
+          notes.push(`TinyFish is waiting: ${error.reason}`);
         }
       }
+      const note = notes.length ? ` (${notes.join("; ")})` : "";
       let page: { url: string; html: string } | null;
       try {
         page = await fetchPublicPage(url.toString());
@@ -710,7 +736,7 @@ export const TOOLS: Record<string, Tool> = {
         body: visibleText(page.html).trim(),
         contacts: extractContacts(page.html, page.url).slice(0, 60),
         links: publicLinks(page.html, page.url, 40),
-        via: `direct${note}`,
+        via: via("direct"),
       });
     },
   },

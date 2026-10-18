@@ -37,6 +37,8 @@ export * from "./quota/schema";
 
 // Web research about imported companies (src/lib/research/).
 export * from "./research/schema";
+// Research sources (Hacker News, Stack Exchange; the Reddit approval record).
+export * from "./research/sourcesSchema";
 
 // The owner's assistant: chat, business profile, audiences, jobs, outreach runs (src/lib/assistant/).
 export * from "./assistant/schema";
