@@ -9,7 +9,7 @@ import { inOrg } from "@/lib/tenancy/scope";
 import type { FeatureState } from "@/lib/features/catalog";
 import { TREG_LIMITS } from "@/lib/treg/catalog";
 import { featureState } from "@/lib/features/flags.server";
-import { actionsProblem, agentReplySchema, inquiryRepliesRequested, isSmallTalk, MAX_ACTIONS_PER_STEP, MAX_STEPS, DIRECT_CONTACT_TOOLS, nextAgentBatch, parseAgentReply, pendingOutreachRequestIndex, sameMessage, standingOutreachRequestIndex, transcriptText, unbackedClaim, type AgentReply } from "./agent";
+import { actionsProblem, agentReplySchema, groundingCorpus, inquiryRepliesRequested, isSmallTalk, MAX_ACTIONS_PER_STEP, MAX_STEPS, DIRECT_CONTACT_TOOLS, nextAgentBatch, parseAgentReply, pendingOutreachRequestIndex, sameMessage, standingOutreachRequestIndex, transcriptText, unbackedClaim, type AgentReply } from "./agent";
 import { AUTONOMOUS_MAX_STEPS, autonomousRules, SEARCH_TOOLS, searchCapProblem, type AutonomyCaps } from "./autonomy";
 import { autonomousSearchesToday, autonomyCaps, autoStartPlan, threadAutonomy } from "./autonomy.server";
 import { listAudiences } from "./audiences.server";
@@ -197,10 +197,7 @@ export async function runAgentTurn(input: {
       const { text: setupText, outreachStarted, profile } = await contextBlock();
       const messages = await listMessages(input.threadId, 80);
       // What the owner wrote or attached: business information is saved only from it.
-      const ownerCorpus = messages
-        .filter((message) => message.role === "user" || (message.role === "tool" && (message.tool === "read_document" || message.tool === "import_contacts" || ((message.tool === "read_webpage" || message.tool === "web_search" || message.tool === "treg_call" || message.tool?.startsWith("browser_")) && message.status === "ok"))))
-        .map((message) => `${message.content} ${typeof message.toolResult?.summary === "string" ? message.toolResult.summary : ""}`)
-        .join("\n") + `\n${documentsText}`;
+      const ownerCorpus = groundingCorpus(messages, documentsText);
       let reply: AgentReply | null = null;
       const validateBatch = (parsed: AgentReply) => {
         const capabilityProblem = features.instagram ? instagramCapabilityProblem(parsed.message) : null;

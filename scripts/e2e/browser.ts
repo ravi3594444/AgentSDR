@@ -7,7 +7,8 @@
  * idle sessions swept and ended at TinyFish; a 402 asks for Wallet funds and
  * charges nothing; private, login-walled and Reddit addresses refused before
  * any session; passwords never typed; a click landing on a login wall
- * reported; a second organization's browser independent.
+ * reported, and the page it left open never read or scrolled afterwards; a
+ * second organization's browser independent.
  *
  *   bun run --conditions=react-server scripts/e2e/browser.ts
  *
@@ -142,6 +143,10 @@ await runInOrganization(a.org.id, async () => {
   check("a password field is never typed into", !secret.ok && /never types credentials/.test(secret.summary) && !pageLog.some((line) => line.startsWith("fill 4")));
   const walled = await runTool("browser_click", { n: 3 }, ctx(thread.id));
   check("a click that lands on a login wall is reported and its content not used", !walled.ok && /needs a login/.test(walled.summary), walled.summary);
+  // The browser stays on the refused page: reading or scrolling it next is refused the same way.
+  const reread = await runTool("browser_read", {}, ctx(thread.id));
+  const rescrolled = await runTool("browser_scroll", { direction: "down" }, ctx(thread.id));
+  check("reading or scrolling the refused page returns none of it", [reread, rescrolled].every((step) => !step.ok && /needs a login/.test(step.summary) && !/Shah Homes/.test(step.summary)), `${reread.summary.slice(0, 120)} | ${rescrolled.summary.slice(0, 120)}`);
 
   const closed = await runTool("browser_close", {}, ctx(thread.id));
   const [settled] = await db.select().from(providerUsage).where(eq(providerUsage.id, reserved!.id));

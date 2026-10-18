@@ -6,7 +6,9 @@
  * limits without calling, an SE backoff and a throttle violation become
  * waits that fall back to TinyFish (a stand-in) and say so, identical SE
  * requests are answered from memory, Reddit is refused with nothing
- * fetched, recording Reddit's approval does not enable reading, and a
+ * fetched, a public link that redirects to Reddit or a login wall is
+ * refused with nothing of the page used (through TinyFish and read
+ * directly), recording Reddit's approval does not enable reading, and a
  * second organization sees none of the first's settings or use.
  *
  *   bun run --conditions=react-server scripts/e2e/research-sources.ts
@@ -45,8 +47,10 @@ let seAnswer: (id: number) => Response = (id) => json(200, {
   items: [{ question_id: id, title: `How do I automate &quot;invoice&quot; reminders? (${id})`, body: "<p>We send 200 invoices a month by hand.</p>", tags: ["automation", "email"], owner: { display_name: "Dana K" }, creation_date: t, link: `https://stackoverflow.com/questions/${id}/how-do-i-automate`, score: 4, answer_count: 1, is_answered: false }],
   has_more: false, quota_max: 300, quota_remaining: 250,
 });
+// Public links that redirect elsewhere (a shortener or an /out?url= link), followed by TinyFish and by the direct reader alike.
+const redirects = new Map<string, string>();
 // The TinyFish stand-in reads any page.
-const tinyfishFetch = (urls: string[]) => json(200, { results: urls.map((url) => ({ url, final_url: url, title: "Read by TinyFish", text: "Thread text as TinyFish saw it. Mail ops@acme-agency.example", links: [] })), errors: [] });
+const tinyfishFetch = (urls: string[]) => json(200, { results: urls.map((url) => ({ url, final_url: redirects.get(url) ?? url, title: "Read by TinyFish", text: "Thread text as TinyFish saw it. Mail ops@acme-agency.example", links: [] })), errors: [] });
 
 const realFetch = globalThis.fetch;
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -59,6 +63,10 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.hostname === "api.stackexchange.com") return seAnswer(Number(/\/questions\/(\d+)$/.exec(url.pathname)?.[1]));
   if (url.hostname === "search.tf.test") return json(200, { query: "q", results: [], total_results: 0, page: 0 });
   if (url.hostname === "fetch.tf.test") return tinyfishFetch((JSON.parse(String(init?.body)) as { urls: string[] }).urls);
+  // The direct reader (no TinyFish): the redirect, then the page it leads to.
+  const redirect = redirects.get(url.toString());
+  if (redirect) return new Response(null, { status: 301, headers: { location: redirect } });
+  if ([...redirects.values()].includes(url.toString())) return new Response(`<html><title>Elsewhere</title><body>Thread text as read directly. Mail ops@acme-agency.example</body></html>`, { status: 200, headers: { "content-type": "text/html" } });
   // Anything else (Reddit included) must never be asked for.
   return json(599, { error: `unexpected request to ${url.hostname}` });
 }) as typeof fetch;
@@ -202,6 +210,15 @@ await runInOrganization(a.org.id, async () => {
   check("a note over 500 characters is refused", tooLong instanceof settings.ResearchSourcesSettingsError);
   const kept = await settings.saveResearchSources({ redditApprovalNote: "still approved" }, a.owner.id);
   check("saving the note alone keeps the original approval time", kept.reddit.approvalRecordedAt === view.reddit.approvalRecordedAt);
+
+  // A public link that redirects to Reddit or a login wall is refused like a link to one: nothing of the page is returned.
+  redirects.set("https://example.com/go/thread", "https://www.reddit.com/r/smallbusiness/comments/abc/invoicing/");
+  redirects.set("https://example.com/go/profile", "https://www.linkedin.com/in/someone");
+  const redirectRefused = (result: { ok: boolean; summary: string }, host: RegExp, reason: RegExp) => !result.ok && host.test(result.summary) && reason.test(result.summary) && !/Thread text|ops@acme-agency/.test(result.summary);
+  const tfReddit = await runTool("read_webpage", { url: "https://example.com/go/thread" }, context);
+  const tfWalled = await runTool("read_webpage", { url: "https://example.com/go/profile" }, context);
+  check("a link TinyFish followed to Reddit is refused, its page unused", redirectRefused(tfReddit, /www\.reddit\.com/, /Nothing was read from Reddit/), tfReddit.summary.slice(0, 200));
+  check("a link TinyFish followed to a login wall is refused, its page unused", redirectRefused(tfWalled, /www\.linkedin\.com/, /needs a login/), tfWalled.summary.slice(0, 200));
   const aView = await settings.researchSourcesView();
   check("A's view shows its own use today", aView.hackerNews.usedToday === 5 && aView.stackExchange.usedToday === 3 && aView.hackerNews.perMinute === 60 && aView.stackExchange.perDay === 300, `${aView.hackerNews.usedToday} ${aView.stackExchange.usedToday}`);
 });
@@ -217,6 +234,21 @@ await runInOrganization(b.org.id, async () => {
   const before = calls.length;
   const refused = await runTool("read_webpage", { url: "https://www.reddit.com/r/sales/" }, { threadId: thread.id, userId: b.owner.id, ownerText: "x" });
   check("for B, Reddit's approval is not recorded", !refused.ok && /that approval is not recorded/.test(refused.summary) && calls.length === before);
+
+  // B has no TinyFish, so read_webpage reads directly and follows the redirect itself. The direct
+  // reader fetches through fetch (intercepted here) when a proxy is configured; make sure it is.
+  const proxy = process.env.HTTPS_PROXY;
+  process.env.HTTPS_PROXY = proxy || "http://proxy.invalid:1";
+  try {
+    const directReddit = await runTool("read_webpage", { url: "https://example.com/go/thread" }, { threadId: thread.id, userId: b.owner.id, ownerText: "x" });
+    const directWalled = await runTool("read_webpage", { url: "https://example.com/go/profile" }, { threadId: thread.id, userId: b.owner.id, ownerText: "x" });
+    const followed = calls.slice(before).some((call) => call.host === "example.com");
+    check("a link read directly that redirects to Reddit is refused, its page unused", followed && !directReddit.ok && /www\.reddit\.com/.test(directReddit.summary) && /that approval is not recorded/.test(directReddit.summary) && !/Thread text|ops@acme-agency/.test(directReddit.summary), directReddit.summary.slice(0, 200));
+    check("a link read directly that redirects to a login wall is refused, its page unused", !directWalled.ok && /www\.linkedin\.com needs a login|leads to www\.linkedin\.com/.test(directWalled.summary) && !/Thread text|ops@acme-agency/.test(directWalled.summary), directWalled.summary.slice(0, 200));
+  } finally {
+    if (proxy === undefined) delete process.env.HTTPS_PROXY;
+    else process.env.HTTPS_PROXY = proxy;
+  }
 });
 
 await runInOrganization(a.org.id, async () => {

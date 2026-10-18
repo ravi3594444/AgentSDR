@@ -41,7 +41,7 @@ import { mergeProfile, PROFILE_LABELS, profileChanges } from "./profile";
 import { businessContext } from "./businessContext";
 import { businessSources } from "./businessContext.server";
 import { getBusinessProfile, updateBusinessProfile } from "./profile.server";
-import { ORGANIZATION_SCOPE, PERIOD_KINDS, RESULTS_SCOPE_KINDS, type PeriodKind, type ResultsScopeKind } from "./results";
+import { ORGANIZATION_SCOPE, PERIOD_KINDS, RESULTS_SCOPE_KINDS, scopeIsEmpty, type PeriodKind, type ResultsScopeKind } from "./results";
 import { requestScope, results, resultsText, runScope, threadScope } from "./results.server";
 import { assistantJobs, outreachRuns, type AudienceChannel } from "./schema";
 import { featureState } from "@/lib/features/flags.server";
@@ -297,6 +297,23 @@ function elementNumber(args: Record<string, unknown>): number {
 async function requestCoverageLine(context: ToolContext): Promise<string | null> {
   const id = searchRequestId(context);
   return id ? coverageLine(await requestCoverageFor(id)) : null;
+}
+
+/**
+ * Why a page that ended somewhere other than the link may not be used, or
+ * null: a redirect to Reddit or to a login-walled site is refused like a link
+ * to one, whoever followed it (TinyFish or the direct reader).
+ */
+async function redirectRefusal(requested: URL, finalUrl: string): Promise<ToolResult | null> {
+  let host: string;
+  try {
+    host = new URL(finalUrl).hostname;
+  } catch {
+    return null;
+  }
+  if (isRedditHost(host)) return { ok: false, summary: `${requested.toString()} leads to ${host}. ${redditRefusal(await redditApprovalRecorded())}` };
+  if (LOGIN_WALLED.test(host)) return { ok: false, summary: `${requested.toString()} leads to ${host}, which needs a login and does not allow automated reading, so it cannot be opened. LinkedIn people can be found with find_linkedin_leads; other networks are not supported.` };
+  return null;
 }
 
 /**
@@ -764,6 +781,8 @@ export const TOOLS: Record<string, Tool> = {
           const { pages, failures } = await fetchWithTinyfish([url.toString()], { threadId: context.threadId });
           const page = pages[0];
           if (page) {
+            const refused = await redirectRefusal(url, page.finalUrl);
+            if (refused) return refused;
             const contacts = extractContacts(`${page.contactLinks.map((link) => `<a href="${link.replace(/"/g, "")}"></a>`).join("")}${page.text}`, page.finalUrl).slice(0, 60);
             return pageResult({ url: page.finalUrl, title: page.title ?? "", body: page.text, contacts, links: page.links, via: via("TinyFish") });
           }
@@ -784,6 +803,8 @@ export const TOOLS: Record<string, Tool> = {
         return { ok: false, summary: `Could not open ${url.toString()}${note}: ${error instanceof Error ? error.message : String(error)}` };
       }
       if (!page) return { ok: false, summary: `${url.toString()} is not a readable web page${note}.` };
+      const refused = await redirectRefusal(url, page.url);
+      if (refused) return refused;
       return pageResult({
         url: page.url,
         title: visibleText(pageTitle(page.html)).trim(),
@@ -1017,21 +1038,27 @@ export const TOOLS: Record<string, Tool> = {
   },
 
   report: {
-    description: "Results from what was recorded: leads found and imported, duplicates, people contacted, emails/WhatsApp/LinkedIn requests and messages sent, replies, interested people, what waits for the owner (replies to review, reply decisions, and plans waiting for Start, counted apart), pending follow-ups, stopped and failed sends, AI spending and remaining limits. scope says whose work is counted: request (the plans and searches of the owner's request this turn serves; the default when it serves one), thread (this chat), run (one plan; needs runId) or organization (everything; the default otherwise). Say which scope the figures cover. With runId, also that run's per-channel counts.",
+    description: "Results from what was recorded: leads found and imported, duplicates, people contacted, emails/WhatsApp/LinkedIn requests and messages sent, replies, interested people, what waits for the owner (replies to review, reply decisions, and plans waiting for Start, counted apart), pending follow-ups, stopped and failed sends, AI spending and remaining limits. scope says whose work is counted: request (the plans and searches of the owner's request this turn serves; the default when it serves one that has any recorded), thread (this chat), run (one plan; needs runId) or organization (everything; the default otherwise). Say which scope the figures cover. With runId, also that run's per-channel counts.",
     arguments: "period (optional: today | yesterday | last_7_days | last_30_days | all_time; default last_7_days, all_time for one run); scope (optional: request | thread | run | organization); runId (optional)",
     run: async (args, context) => {
       const runId = uuid(args, "runId", false);
       const requested = (RESULTS_SCOPE_KINDS as readonly string[]).includes(String(args.scope)) ? args.scope as ResultsScopeKind : null;
       const requestId = searchRequestId(context);
       // The request this turn serves, by default; else (or asked) the whole organization.
-      const scopeKind: ResultsScopeKind = runId ? "run" : requested ?? (context.outreachRequestId ? "request" : "organization");
+      let scopeKind: ResultsScopeKind = runId ? "run" : requested ?? (context.outreachRequestId ? "request" : "organization");
       if (scopeKind === "run" && !runId) return { ok: false, summary: "scope run needs a runId (list_runs shows them)." };
       if (scopeKind === "request" && !requestId) return { ok: false, summary: "This turn serves no request to report on; use scope thread or organization." };
-      const scope = scopeKind === "run" ? await runScope(runId!)
+      let scope = scopeKind === "run" ? await runScope(runId!)
         : scopeKind === "request" ? await requestScope(context.outreachRequestId ?? requestId!)
           : scopeKind === "thread" ? await threadScope(context.threadId)
             : ORGANIZATION_SCOPE;
       if (!scope) return { ok: false, summary: "No such run." };
+      // The default request with nothing of it recorded: often the results question itself ("how many did we
+      // send?" reads as a request to contact). The organization's figures answer it; asked for, the request is kept.
+      if (!requested && !runId && scopeKind === "request" && scopeIsEmpty(scope)) {
+        scope = ORGANIZATION_SCOPE;
+        scopeKind = "organization";
+      }
       const period = (PERIOD_KINDS as readonly string[]).includes(String(args.period)) ? args.period as PeriodKind : scopeKind === "run" ? "all_time" : "last_7_days";
       const r = await results(period, new Date(), scope);
       if (runId) {

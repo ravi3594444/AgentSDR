@@ -155,13 +155,17 @@ export async function requestScope(requestId: string): Promise<ResultsScope> {
   return withLaunchJobs({ kind: "request", runIds: runs.map((run) => run.id), audienceIds: [...runs.map((run) => run.audienceId), ...searches.flatMap((job) => (job.audienceId ? [job.audienceId] : []))], jobIds: searches.map((job) => job.id) });
 }
 
-/** One chat's scope: its plans (by thread, or shown in it), its jobs and the lead lists they used. */
+/**
+ * One chat's scope: its plans (by thread, or shown in it as a plan card),
+ * its jobs and the lead lists they used. A tool that only looked at another
+ * chat's plan (a run report) does not make that plan this chat's.
+ */
 export async function threadScope(threadId: string): Promise<ResultsScope> {
   const [runs, shown, jobs] = await Promise.all([
     db.select({ id: outreachRuns.id, audienceId: outreachRuns.audienceId }).from(outreachRuns)
       .where(and(inOrg(outreachRuns), eq(outreachRuns.threadId, threadId))),
     db.selectDistinct({ runId: sql<string>`${assistantMessages.toolResult} -> 'data' ->> 'runId'` }).from(assistantMessages)
-      .where(and(inOrg(assistantMessages), eq(assistantMessages.threadId, threadId), sql`${assistantMessages.toolResult} -> 'data' ->> 'runId' is not null`)),
+      .where(and(inOrg(assistantMessages), eq(assistantMessages.threadId, threadId), inArray(assistantMessages.tool, ["prepare_outreach", "prepare_inquiry_replies"]), sql`${assistantMessages.toolResult} -> 'data' ->> 'runId' is not null`)),
     db.select({ id: assistantJobs.id, audienceId: assistantJobs.audienceId }).from(assistantJobs)
       .where(and(inOrg(assistantJobs), eq(assistantJobs.threadId, threadId))),
   ]);
