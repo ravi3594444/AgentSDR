@@ -144,6 +144,7 @@ const OWNED_TABLES = [
   "provider_quota_state",
   "provider_usage",
   "browser_sessions",
+  "activity_seen",
   "research_settings",
 ];
 

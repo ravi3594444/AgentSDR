@@ -96,6 +96,7 @@ export const SCOPED_TABLES: readonly ScopedTable[] = [
   snake("tinyfish_settings"),
   snake("provider_usage"),
   snake("browser_sessions"),
+  snake("activity_seen"),
   snake("research_settings"),
   // LinkedIn (ex-Prisma, camelCase columns)
   pascal("LinkedInAccount"),

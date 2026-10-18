@@ -49,3 +49,13 @@ test("reporting bookmarks share Overview, while lead records and contacts keep t
   expect(activeHref("/crm/records/example")).toBe("/crm/pipeline");
   expect(activeHref("/crm/actions")).toBe("/crm/actions");
 });
+
+test("Activity is reachable from every page, with the new-replies badge, whatever features are on", () => {
+  for (const features of [null, instagramOn]) {
+    const entries = visibleNavSections(features).flatMap((section) => section.entries);
+    const activity = entries.flatMap((entry) => (entry.kind === "group" ? [] : [entry])).find((entry) => entry.href === "/activity");
+    expect(activity?.badge).toBe("newReplies");
+  }
+  expect(activeHref("/activity")).toBe("/activity");
+  expect(paletteItems().map((item) => item.href)).toContain("/activity");
+});

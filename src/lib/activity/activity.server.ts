@@ -1,0 +1,220 @@
+import "server-only";
+
+import { and, desc, eq, gte, inArray, or, sql } from "drizzle-orm";
+import { db } from "@/lib/db";
+import { assistantJobs, assistantThreads, outreachRuns } from "@/lib/assistant/schema";
+import { displayThreadTitle } from "@/lib/assistant/agent";
+import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
+import { activitySeen } from "./schema";
+import { jobState, OPEN_STATES, REPLY_STATE_LABELS, replyState, runState, WORK_STATE_LABELS, type ReplyState, type WorkState } from "./status";
+
+/**
+ * Activity: the organization's background work and the replies it brought,
+ * across every chat — read-only views of the records the work already
+ * keeps (assistant_jobs, outreach_runs, CRM conversations). Looking at them
+ * never starts, approves, answers or sends anything; the only writes here
+ * are a person's "replies seen" time and cancelling a job on request.
+ */
+
+const WINDOW_DAYS = 7;
+
+export type WorkItem = {
+  id: string;
+  type: "job" | "plan";
+  kind: string;
+  title: string;
+  source: string | null;
+  state: WorkState;
+  stateLabel: string;
+  reason: string | null;
+  open: boolean;
+  threadId: string | null;
+  threadTitle: string | null;
+  startedAt: string;
+  updatedAt: string | null;
+  found: number | null;
+  eligible: number | null;
+  /** Plans: the existing run controls apply (POST /api/assistant/runs/[id]). */
+  runId: string | null;
+  canCancel: boolean;
+};
+
+const JOB_TITLES: Record<string, string> = {
+  discovery: "Lead search",
+  web_discovery: "Website and directory search",
+  linkedin_search: "LinkedIn people search",
+  apify_instagram: "Instagram search",
+  outreach_start: "Starting outreach",
+};
+
+function iso(value: Date | null | undefined): string | null {
+  return value ? value.toISOString() : null;
+}
+
+/** Open work first, then the last week's finished work, newest first. */
+export async function listWork(now = new Date()): Promise<WorkItem[]> {
+  const since = new Date(now.getTime() - WINDOW_DAYS * 86_400_000);
+  const jobs = await db.select({ job: assistantJobs, threadTitle: assistantThreads.title }).from(assistantJobs)
+    .leftJoin(assistantThreads, and(eq(assistantThreads.id, assistantJobs.threadId), eq(assistantThreads.organizationId, assistantJobs.organizationId)))
+    .where(and(inOrg(assistantJobs), or(inArray(assistantJobs.status, ["queued", "running"]), gte(assistantJobs.createdAt, since))))
+    .orderBy(desc(assistantJobs.createdAt)).limit(80);
+  const runs = await db.select({ run: outreachRuns, threadTitle: assistantThreads.title }).from(outreachRuns)
+    .leftJoin(assistantThreads, and(eq(assistantThreads.id, outreachRuns.threadId), eq(assistantThreads.organizationId, outreachRuns.organizationId)))
+    .where(and(inOrg(outreachRuns), or(inArray(outreachRuns.status, ["proposed", "starting", "running", "paused"]), gte(outreachRuns.createdAt, since))))
+    .orderBy(desc(outreachRuns.createdAt)).limit(40);
+  const items: WorkItem[] = [];
+  for (const { job, threadTitle } of jobs) {
+    const { state, reason } = jobState(job, now);
+    const payload = (job.payload ?? {}) as { phrase?: unknown; criteria?: { customers?: unknown; where?: unknown } };
+    const progress = (job.progress ?? {}) as { source?: unknown };
+    const result = (job.result ?? {}) as { found?: unknown; eligible?: unknown };
+    const phrase = typeof payload.phrase === "string" ? payload.phrase : null;
+    items.push({
+      id: job.id,
+      type: "job",
+      kind: job.kind,
+      title: `${JOB_TITLES[job.kind] ?? job.kind}${phrase ? `: ${phrase}` : ""}`,
+      source: typeof progress.source === "string" ? progress.source : null,
+      state,
+      stateLabel: WORK_STATE_LABELS[state],
+      reason: reason ?? (job.status === "failed" ? job.error : null),
+      open: OPEN_STATES.has(state),
+      threadId: job.threadId,
+      threadTitle: job.threadId ? displayThreadTitle(threadTitle) : null,
+      startedAt: job.createdAt.toISOString(),
+      updatedAt: iso(job.finishedAt ?? job.heartbeatAt),
+      found: typeof result.found === "number" ? result.found : null,
+      eligible: typeof result.eligible === "number" ? result.eligible : null,
+      runId: null,
+      canCancel: job.status === "queued" || job.status === "running",
+    });
+  }
+  for (const { run, threadTitle } of runs) {
+    const state = runState(run.status);
+    items.push({
+      id: run.id,
+      type: "plan",
+      kind: "outreach",
+      title: `Outreach plan: ${run.name}`,
+      source: null,
+      state,
+      stateLabel: WORK_STATE_LABELS[state],
+      reason: run.status === "running" ? "sending within each channel's hours and daily limits; sent messages show in Replies and Overview" : run.error ?? null,
+      open: OPEN_STATES.has(state),
+      threadId: run.threadId,
+      threadTitle: run.threadId ? displayThreadTitle(threadTitle) : null,
+      startedAt: run.createdAt.toISOString(),
+      updatedAt: null,
+      found: null,
+      eligible: null,
+      runId: run.id,
+      canCancel: false,
+    });
+  }
+  return items.sort((a, b) => Number(b.open) - Number(a.open) || b.startedAt.localeCompare(a.startedAt));
+}
+
+/** Cancels a queued or running job: no further step runs; a step already under way has its outcome discarded. */
+export async function cancelJob(jobId: string): Promise<boolean> {
+  const [row] = await db.update(assistantJobs)
+    .set({ status: "cancelled", lockedBy: null, heartbeatAt: null, finishedAt: new Date(), error: "Cancelled by the owner" })
+    .where(and(inOrg(assistantJobs), eq(assistantJobs.id, jobId), inArray(assistantJobs.status, ["queued", "running"])))
+    .returning({ id: assistantJobs.id });
+  return Boolean(row);
+}
+
+export type ReplyItem = {
+  messageId: string;
+  recordId: string;
+  personName: string;
+  channel: string;
+  account: string;
+  receivedAt: string;
+  preview: string;
+  state: ReplyState;
+  stateLabel: string;
+  isNew: boolean;
+  runId: string | null;
+  runName: string | null;
+  threadId: string | null;
+};
+
+type ReplyRow = {
+  id: string; channel: string; account_ref: string; sent_at: Date | string; preview: string; crm_record_id: string;
+  workflow_state: string | null; name: string; answered: boolean; latest: boolean; run_id: string | null; run_name: string | null; thread_id: string | null;
+};
+
+/** Recorded incoming messages on every channel, newest first, with where each stands. */
+export async function listReplies(input: { userId: string | null; channel?: string | null; limit?: number }): Promise<{ replies: ReplyItem[]; seenAt: string | null }> {
+  const org = currentOrganizationId();
+  const seen = input.userId ? await repliesSeenAt(input.userId) : null;
+  const rows = await db.execute<ReplyRow>(sql`
+    SELECT m.id, m.channel, m.account_ref, m.sent_at, left(m.body_text, 240) AS preview, c.crm_record_id, r.workflow_state,
+      coalesce(nullif(p.full_name, ''), nullif(trim(concat_ws(' ', p.first_name, p.last_name)), ''), p.email, p.phone, 'Unknown contact') AS name,
+      EXISTS (SELECT 1 FROM crm_conversation_messages o WHERE o.conversation_id = m.conversation_id AND o.direction = 'outbound' AND o.sent_at > m.sent_at) AS answered,
+      NOT EXISTS (SELECT 1 FROM crm_conversation_messages n WHERE n.conversation_id = m.conversation_id AND n.direction = 'inbound' AND n.sent_at > m.sent_at) AS latest,
+      run.id AS run_id, run.name AS run_name, run.thread_id
+    FROM crm_conversation_messages m
+    JOIN crm_conversations c ON c.id = m.conversation_id AND c.organization_id = ${org}
+    JOIN crm_records r ON r.id = c.crm_record_id AND r.organization_id = ${org}
+    JOIN people p ON p.id = m.person_id AND p.organization_id = ${org}
+    LEFT JOIN LATERAL (
+      SELECT o.id, o.name, o.thread_id FROM outreach_run_leads l JOIN outreach_runs o ON o.id = l.run_id AND o.organization_id = ${org}
+      WHERE l.person_id = m.person_id AND l.organization_id = ${org} AND o.created_at <= m.sent_at
+      ORDER BY o.created_at DESC LIMIT 1
+    ) run ON true
+    WHERE m.direction = 'inbound' ${input.channel ? sql`AND m.channel = ${input.channel}` : sql``}
+    ORDER BY m.sent_at DESC
+    LIMIT ${Math.min(Math.max(input.limit ?? 60, 1), 200)}`);
+  const replies = rows.map((row): ReplyItem => {
+    const receivedAt = new Date(row.sent_at);
+    const state = replyState({ answered: Boolean(row.answered), latest: Boolean(row.latest), workflowState: row.workflow_state });
+    return {
+      messageId: row.id,
+      recordId: row.crm_record_id,
+      personName: row.name,
+      channel: row.channel,
+      account: row.account_ref,
+      receivedAt: receivedAt.toISOString(),
+      preview: row.preview.replace(/\s+/g, " ").trim(),
+      state,
+      stateLabel: REPLY_STATE_LABELS[state],
+      isNew: !seen || receivedAt.getTime() > seen.getTime(),
+      runId: row.run_id,
+      runName: row.run_name,
+      threadId: row.thread_id,
+    };
+  });
+  return { replies, seenAt: seen?.toISOString() ?? null };
+}
+
+async function repliesSeenAt(userId: string): Promise<Date | null> {
+  const [row] = await db.select({ at: activitySeen.repliesSeenAt }).from(activitySeen)
+    .where(and(inOrg(activitySeen), eq(activitySeen.userId, userId))).limit(1);
+  return row?.at ?? null;
+}
+
+/** The person has looked at the replies list: what arrived until now is no longer new to them. */
+export async function markRepliesSeen(userId: string, at = new Date()): Promise<void> {
+  await db.insert(activitySeen).values({ organizationId: currentOrganizationId(), userId, repliesSeenAt: at })
+    .onConflictDoUpdate({ target: [activitySeen.organizationId, activitySeen.userId], set: { repliesSeenAt: at } });
+}
+
+/** Replies that arrived since the person last looked (or in the last week, if never), for the navigation badge. */
+export async function newRepliesCount(userId: string | null): Promise<number> {
+  if (!userId) return 0;
+  const org = currentOrganizationId();
+  const seen = (await repliesSeenAt(userId)) ?? new Date(Date.now() - WINDOW_DAYS * 86_400_000);
+  const [row] = await db.execute<{ n: number }>(sql`
+    SELECT count(*)::int AS n FROM crm_conversation_messages m
+    JOIN crm_conversations c ON c.id = m.conversation_id AND c.organization_id = ${org}
+    WHERE m.direction = 'inbound' AND m.sent_at > ${seen.toISOString()}::timestamptz`);
+  return Number(row?.n ?? 0);
+}
+
+/** Background work still open, for the navigation badge. */
+export async function openWorkCount(): Promise<number> {
+  const [row] = await db.select({ n: sql<number>`count(*)::int` }).from(assistantJobs)
+    .where(and(inOrg(assistantJobs), inArray(assistantJobs.status, ["queued", "running"])));
+  return Number(row?.n ?? 0);
+}

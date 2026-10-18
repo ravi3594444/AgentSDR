@@ -923,6 +923,16 @@ CREATE TABLE public.accounts (
 );
 
 --
+-- Name: activity_seen; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.activity_seen (
+    organization_id uuid NOT NULL,
+    user_id uuid NOT NULL,
+    replies_seen_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+--
 -- Name: apify_runs; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3346,6 +3356,13 @@ ALTER TABLE ONLY public."WebhookEvent"
 
 ALTER TABLE ONLY public.accounts
     ADD CONSTRAINT accounts_pkey PRIMARY KEY (id);
+
+--
+-- Name: activity_seen activity_seen_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.activity_seen
+    ADD CONSTRAINT activity_seen_pkey PRIMARY KEY (organization_id, user_id);
 
 --
 -- Name: apify_runs apify_runs_apify_run_id_uq; Type: CONSTRAINT; Schema: public; Owner: -
@@ -6038,6 +6055,13 @@ ALTER TABLE ONLY public."WebhookEvent"
 
 ALTER TABLE ONLY public.accounts
     ADD CONSTRAINT accounts_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+--
+-- Name: activity_seen activity_seen_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.activity_seen
+    ADD CONSTRAINT activity_seen_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
 
 --
 -- Name: apify_runs apify_runs_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -

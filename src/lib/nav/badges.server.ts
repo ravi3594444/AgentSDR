@@ -4,14 +4,16 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentOrganizationId } from "@/lib/tenancy/scope";
 import type { NavBadges } from "@/components/nav/navConfig";
+import { newRepliesCount, openWorkCount } from "@/lib/activity/activity.server";
 
 /**
  * The sidebar's live counts for the current organization, in one statement so
  * the sidebar's poll costs a single pooled connection for a moment. Shared by
  * GET /api/nav/badges and the Getting Started page.
  */
-export async function loadNavBadges(): Promise<NavBadges> {
+export async function loadNavBadges(userId: string | null = null): Promise<NavBadges> {
   const org = currentOrganizationId();
+  const [newReplies, openWork] = await Promise.all([newRepliesCount(userId), openWorkCount()]);
   const [row] = await db.execute<Record<string, number>>(sql`
     SELECT
       (SELECT count(*) FROM crm_records WHERE organization_id = ${org} AND workflow_state = 'action_required')::int AS action_required,
@@ -31,5 +33,7 @@ export async function loadNavBadges(): Promise<NavBadges> {
     draftsAwaitingReview: n(row?.drafts),
     accountsNeedingAttention: n(row?.accounts),
     needsYou: n(row?.needs_you),
+    newReplies,
+    openWork,
   };
 }

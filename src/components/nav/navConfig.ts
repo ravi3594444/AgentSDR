@@ -1,5 +1,6 @@
 import {
   RiRobot2Line,
+  RiPulseLine,
   RiBarChartBoxLine,
   RiBookOpenLine,
   RiBugLine,
@@ -58,6 +59,10 @@ export type NavBadges = {
   accountsNeedingAttention: number;
   /** Leads waiting for a person: the assistant's open handoffs (Needs you). */
   needsYou: number;
+  /** Incoming replies since the person last opened Activity → Replies (any chat, any channel). */
+  newReplies: number;
+  /** Background searches still queued or running. */
+  openWork: number;
 };
 export type NavBadgeKey = keyof NavBadges;
 
@@ -101,6 +106,7 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     entries: [
       link("/assistant", "Assistant", RiRobot2Line),
+      link("/activity", "Activity", RiPulseLine, { badge: "newReplies" }),
       link("/assistant/results", "Overview", RiBarChartBoxLine, { badge: "needsYou", match: ["/analytics"] }),
       link("/crm/actions", "Action required", RiTodoLine, { badge: "actionRequired" }),
       link("/crm/pipeline", "Leads & replies", RiUserSearchLine, { match: ["/crm/records", "/leads"] }),

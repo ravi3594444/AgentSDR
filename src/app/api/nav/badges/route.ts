@@ -13,9 +13,9 @@ export const dynamic = "force-dynamic";
  */
 export async function GET(request: Request) {
   try {
-    return await withOrgContext(request, async () => {
+    return await withOrgContext(request, async (ctx) => {
       // The counts never depend on the optional features: if their switches cannot be read, they read as off.
-      const [badges, features] = await Promise.all([loadNavBadges(), featureState().catch(() => defaultFeatureState())]);
+      const [badges, features] = await Promise.all([loadNavBadges(ctx.userId), featureState().catch(() => defaultFeatureState())]);
       return Response.json({ ...badges, features } satisfies NavData, { headers: { "Cache-Control": "no-store" } });
     });
   } catch (error) {
