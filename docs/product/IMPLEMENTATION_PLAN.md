@@ -5,6 +5,12 @@
 **Upstream:** `https://github.com/Kandid-ai/AgentSDR.git`  
 **Reviewed baseline:** v0.3.1 / `bdbf5efd2017347181f5bf549b54d89c1ae6e5f5`
 
+**Current next-session plan (updated 18 October 2026):**
+[Multi-source research, browser tools and visible agent activity](../plans/MULTISOURCE_RESEARCH_NEXT_SESSION.md).
+Use that plan for the upcoming research/browser work and its provider decisions.
+The Session 1 instructions below remain the original setup milestone; check the
+current baseline before repeating completed work.
+
 ## 1. What to do first: fork, then clone
 
 **Recommended default:** the owner forks AgentSDR on GitHub, then the implementation agent clones the owner's fork.

@@ -2,7 +2,9 @@
 
 Status: plan only. Start after the owner tests the current Claude branch on
 the VM. Owner direction, 17 October 2026: prioritize useful, working behavior
-and small changes. Provider options are choices, not a bundle to implement.
+and small changes. Pilot one web provider for search, page reading and browser
+control: TinyFish. Select it for normal web work only after the pilot passes;
+keep existing connections and avoid adding overlapping providers.
 
 ## Current baseline
 
@@ -11,6 +13,10 @@ Work on `claude/new-session-g5hljn`; leave `main` unchanged.
 - Combined implementation: `a5ec1e7`. Direct Instagram username repair:
   `d832a8c`; 1,368 tests, 27 simulated-provider database scenarios, TypeScript
   and Node/Webpack production build passed. Live VM delivery remains untested.
+- The combined baseline includes outreach AI-response validation (`c47faef`).
+  Before new research work, verify the running image includes this fix and
+  `d832a8c`. The reported unchecked `lead_sorting` error and obsolete Instagram
+  refusal match older code; check deployed code before adding another provider.
 - Chat accepts supplied Instagram usernames/profile URLs and prepares an
   Instagram plan through the existing Review/Autonomous controls. Repeated
   underscores are preserved; old inbox-only capability wording was corrected.
@@ -46,7 +52,10 @@ have to supply usernames or URLs for ordinary prospecting.
 2. **Verify and save.** Keep evidence URLs, fit/location/role and check time.
    For social profiles, verify identity and available public information using
    existing supported adapters, including Apify when needed. Unknown fields
-   stay unknown. Small accounts may qualify; no universal follower minimum.
+   stay unknown. For a city-specific objective, verify location before treating
+   a profile as a qualified local lead; a hashtag alone is insufficient. Keep
+   unknown-location accounts for further research. Small accounts may qualify;
+   no universal follower minimum.
 3. **Deduplicate and qualify.** Reuse canonical People/company matching and
    organization scope. Check DNC, opt-out, active/previous outreach and source
    history. One person from several sources counts once. Recontact needs the
@@ -84,7 +93,7 @@ generous allowances. Google, Bing and TinyFish were examples of that missing
 capability. Provide a working search-and-read loop as a required first step;
 do not leave it conditional merely because specialized discovery exists.
 
-Use one integration with two capabilities:
+Use one TinyFish integration and API key for three capabilities:
 
 - A general `web_search(query)` tool returns real candidate URLs, titles and
   snippets. The model can refine its query within the task's remaining budget.
@@ -92,52 +101,60 @@ Use one integration with two capabilities:
   follow extracted public links. Update URL/contact grounding to trust only
   recorded owner input or successful scoped search/read results. Keep public
   network/URL protections, evidence URLs and contact validation in place.
+- Small browser tools for open, observe/read, click, fill, scroll and close.
+  The existing agent chooses actions from observed page state and uses the
+  remote Browser API through Playwright/CDP when interaction is useful.
 
-TinyFish Search/Fetch is the first implementation candidate: one API key,
-ordinary search plus clean page content/links, with JavaScript rendering when
-needed by Fetch. Use the existing encrypted credentials mechanism and small
-API adapters, without another agent framework. Test the buyer queries and
-actual returned pages before selecting it as the default. Existing configured
-providers remain usable, with paid fallback explicitly selected by the owner.
-A saved Tavily key must not force that provider for every objective.
+### Provider roles after a successful pilot
 
-### Recommended interactive browser: pilot KERNEL first
+| Role | Proposed provider and scope |
+| --- | --- |
+| Reasoning and tool selection | The existing configured AI provider and agent harness. |
+| General web search, page reading and interaction | TinyFish Search, Fetch and Browser through one connection. |
+| Connected messaging | Existing Unipile and channel senders, with current authorization. |
+| Specialized social data | Existing Apify adapters when the task needs their structured data. |
+| Treg's existing feature | Optional specialized work, outside the normal research dependency path. |
 
-The owner wants the agent to operate pages as well as read them. Add small
-browser tools for open, observe/read, click, fill, scroll and close to the
-existing harness. The model chooses actions from observed page state; do not
-build a separate agent framework or a hardcoded script for every website.
+TinyFish would replace Tavily's role in normal generic search after passing
+real buyer-query and page-reading tests. Preserve the existing Tavily adapter,
+credentials and jobs; an explicitly selected fallback may still use it. Do
+not invoke both providers routinely or silently incur paid fallback charges.
+A saved key alone must not determine the source strategy.
 
-Use KERNEL as the first interactive-browser pilot. It provides remote Chromium
-with Playwright/CDP and computer controls, so the additional browser workload
-does not share this VM's memory with the app, database and Maps Chromium.
-This recommendation reflects the VM's earlier OOM incidents; it is not a
-claim that KERNEL has already passed our workload tests.
+Use the existing encrypted credential store and small API adapters. TinyFish
+is a pilot candidate, not a proven deployment. If it fails the real workload,
+record the specific gap and compare one alternative before expanding the
+provider set. Apify and Treg remain available for their existing specialized
+uses rather than becoming required steps for every objective.
 
-KERNEL's Developer plan currently includes $5 monthly usage credits and five
-concurrent browsers; further usage is metered and model tokens are separate.
-Set an explicit pilot spending/session allowance, use one active session to
-start, and measure actual runtime/cost. Free-only tasks must wait or report
-partial results when credits/allowances are exhausted, not incur silent spend.
+### Interactive browser through the same TinyFish connection
+
+Use TinyFish's direct Browser API and returned `cdp_url` with Playwright/CDP.
+The existing AgentSDR model decides the actions; TinyFish hosts the browser.
+Its separately billed Agent product is not required. Do not add a second
+agent framework or hardcoded scripts for every website.
+
+Remote Chromium keeps the additional browser workload off the VM that already
+runs the app, database and Maps Chromium. Measure pilot behavior and cost;
+the earlier VM OOM incidents make another local browser a poor starting point.
+Kernel and a second browser backend are outside this delivery. Local hosting
+can be reconsidered only if measured volume, cost and VM capacity justify it.
+
+Search/Fetch operate within their free quotas even at a zero Wallet balance.
+Interactive Browser sessions are metered, and the existing model has its own
+cost. Prefer search/read for content and use the browser when the task benefits
+from interaction. Set an explicit browser spending/time allowance, begin with
+one active session and queue further work. Free-only work must wait or report
+partial results when a required quota or paid capability is unavailable.
 
 Reuse encrypted credentials, task claims and progress records. Keep browser
 session state isolated by organization/task, release sessions on completion,
-failure or timeout, and retain evidence and actual errors. Browser research
-must preserve the existing outreach authorization and send boundaries.
-
-Keep the browser tools independent of the remote connection detail so local
-Playwright/Chromium can replace the backend later if measured volume/cost
-justifies it. Self-hosting avoids the browser-service bill but uses VM memory,
-CPU and operator time; model costs remain. Do not implement two browser
-backends now or add another Chromium to the current VM without measuring
-capacity. Check VM memory alongside the existing Maps browser during any
-local pilot. A browser/provider never guarantees access to every website.
-
-TinyFish Search/Fetch can operate at a zero Wallet balance. Its separately
-metered Browser/Agent products are not needed in this design; KERNEL supplies
-interactive browsing within its own credit/spend allowance. Do not describe
-either service as a free unrestricted browser or promise access to private
-social content. Reuse existing authorized social adapters where appropriate.
+failure, cancellation or timeout, and retain evidence and actual errors.
+Apply public URL/network protections and grounding to browser navigation too.
+Browser research preserves the existing outreach authorization and send
+boundaries; messaging still goes through the approved channel adapters.
+Do not promise unrestricted site access or private social content. Reuse
+existing authorized social adapters where appropriate.
 
 If a tested need for Google results remains, evaluate
 `apify/google-search-scraper` using the existing Apify credentials and budget.
@@ -233,18 +250,25 @@ job finishing does not finish the whole objective.
 
 ## Implementation and acceptance
 
-1. Verify the deployed username fix and reproduce the real research failure.
-   Record what already works and the smallest cause of missing/poor leads.
-2. Deliver TinyFish search/read plus the KERNEL browser pilot through the
-   existing harness. Demonstrate a prompt without seed URLs, reading returned
-   pages and following links/pagination through real browser actions when
-   needed. Let the agent choose fitting sources and complete qualification,
-   canonical leads, approved outreach, progress and reporting. Verify actual
-   provider behavior before production defaults; web access remains core scope.
+1. Verify the running image contains the outreach-response validation and
+   Instagram username/outbound fixes; a Git pull or container restart alone
+   does not deploy source changes. Record image/build details, test the current
+   capability in a new chat and distinguish old failed cards from new attempts.
+   Verify Instagram-only Apify prospects can reach an approved Instagram plan
+   without a published email or phone. Reproduce any remaining failure before
+   adding research capabilities.
+2. Deliver TinyFish Search/Fetch/Browser as one integration through the existing
+   harness. Demonstrate a prompt without seed URLs, reading returned pages and
+   following links/pagination through real browser actions when needed. Let the
+   agent choose fitting sources and complete qualification, canonical leads,
+   approved outreach, progress and reporting. Verify provider behavior before
+   replacing Tavily's normal role; retain its existing connection. Web access
+   remains core scope, with no Kernel integration in this delivery.
 3. Test the full path with fake providers, including continuation beyond eight
    actions, full slots, restart, duplicate events, concurrent budget claims,
-   cancellation, provider refusal/outage and lost responses. Preserve org
-   isolation, approval, DNC/opt-out and delivery uncertainty behavior.
+   cancellation, provider refusal/outage and lost responses. Include browser
+   session cleanup, quota exhaustion and metered-browser spending controls.
+   Preserve org isolation, approval, DNC/opt-out and delivery uncertainty.
 4. Run a small owner-approved live research pilot on both buyer examples with
    an agreed spend cap. Live messaging uses an explicitly approved recipient
    and message within the app's existing authorization. Verify a real inbound
@@ -260,15 +284,16 @@ provider only if those results show a specific coverage/reliability gap.
 
 Checked 17 October 2026; provider prices, limits and contracts can change.
 TinyFish currently documents free Search at 30 requests/minute and 500/hour;
-Fetch at 150 URLs/minute and 1,000/day, with a key required. Provider usage and
-LLM costs are separate. Do not interpret free service as unlimited.
+Fetch at 150 URLs/minute and 1,000/day, with a key required. Browser is currently
+$0.002/minute with up to five concurrent sessions; start the pilot with one.
+Search, Fetch and Browser share one API key. The existing agent's model costs
+are separate. Recheck account-specific terms; free quotas are not unlimited.
 
 - https://docs.tinyfish.ai/api-reference/search-the-web
 - https://docs.tinyfish.ai/api-reference/fetch-and-extract-content-from-urls
+- https://docs.tinyfish.ai/browser-api
+- https://docs.tinyfish.ai/api-reference/create-a-remote-browser-session
 - https://www.tinyfish.ai/pricing
-- https://www.kernel.sh/pricing
-- https://www.kernel.sh/docs/info/pricing
-- https://kernel.sh/docs/introduction/control.md
 - https://playwright.dev/docs/library
 - https://apify.com/apify/google-search-scraper
 - https://apify.com/apify/instagram-profile-scraper
