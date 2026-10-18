@@ -252,6 +252,11 @@ await runInOrganization(orgA!.id, async () => {
   const emptyStart = await startDiscovery(criteria("orthodontists"), context, { contactAfter: contactAfter("req-empty"), provider: "apify" });
   const emptyJob = await runToEnd(emptyStart.jobId);
   check("an Apify run with nothing hands the same job to the scraper, keeping the request id", emptyJob.stage === "searching" && payloadOf(emptyJob).provider === "scraper" && payloadOf(emptyJob).contactAfter?.requestId === "req-empty" && /no businesses/.test((payloadOf(emptyJob).providerNotes ?? []).join(" ")));
+  // The scraper that took over then fails: Apify already searched, so it is not paid for again.
+  await db.update(assistantJobs).set({ payload: { ...emptyJob.payload, deadline: new Date(Date.now() - 60_000).toISOString() } }).where(eq(assistantJobs.id, emptyStart.jobId));
+  const emptyAfterScraper = await step(emptyStart.jobId);
+  const emptyRuns = await db.select().from(apifyRuns).where(and(inOrg(apifyRuns), eq(apifyRuns.jobId, emptyStart.jobId)));
+  check("…and when that scraper search fails, Apify (which already searched) is not run a second time", emptyAfterScraper.status === "failed" && emptyRuns.length === 1 && payloadOf(emptyAfterScraper).provider === "scraper", `${emptyAfterScraper.status} ${emptyRuns.length} run(s) ${payloadOf(emptyAfterScraper).provider}`);
 
   // ---------------------------------------------------------- credits exhausted at start
   apify.startError = { status: 402, type: "not-enough-usage-to-run-paid-actor", message: "You have exceeded your monthly usage limit" };
@@ -283,6 +288,10 @@ await runInOrganization(orgA!.id, async () => {
   delete process.env.GMAPS_SCRAPER_URL;
   const approvedFallback = await startDiscovery(criteria("dentists", "Mumbai, India", 10), context, {});
   check("no scraper, Maps Actor approved: Apify searches as the approved fallback, with the reason", approvedFallback.provider === "apify" && /not set up on this server/.test(approvedFallback.note ?? "") && /approved/.test(approvedFallback.note ?? ""), approvedFallback.note ?? "");
+  apify.next.set("compass~crawler-google-places", [{ pollsUntilDone: 1, finalStatus: "SUCCEEDED", items: [], usage: 0.01 }]);
+  const fallbackEmpty = await runToEnd(approvedFallback.jobId);
+  const fallbackRuns = await db.select().from(apifyRuns).where(and(inOrg(apifyRuns), eq(apifyRuns.jobId, approvedFallback.jobId)));
+  check("…an empty fallback run is not started and paid for a second time, and the job does not claim Apify searched \"instead\"", fallbackRuns.length === 1 && fallbackEmpty.status === "failed" && !/through Apify instead/.test(`${fallbackEmpty.error} ${(payloadOf(fallbackEmpty).providerNotes ?? []).join(" ")}`), `${fallbackRuns.length} run(s), ${fallbackEmpty.status}: ${fallbackEmpty.error}`);
   await db.update(assistantJobs).set({ status: "cancelled" }).where(eq(assistantJobs.id, approvedFallback.jobId));
   apify.startError = { status: 402, type: "not-enough-usage-to-run-paid-actor", message: "Not enough usage" };
   apify.limits = { maxMonthlyUsageUsd: 50, monthlyUsageUsd: 50 };

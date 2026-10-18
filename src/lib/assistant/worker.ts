@@ -79,9 +79,21 @@ async function claim(): Promise<AssistantJob | null> {
   return job ?? null;
 }
 
+/**
+ * A step's progress over the job's. A wait (`waiting`) reported earlier is
+ * dropped unless this step reports it again, as every waiting step does:
+ * otherwise a search that has started still reads as waiting for a slot.
+ */
+export function mergeJobProgress(prior: Record<string, unknown>, next: Record<string, unknown> | undefined): Record<string, unknown> {
+  if (!next) return prior;
+  const kept = { ...prior };
+  delete kept.waiting;
+  return { ...kept, ...next };
+}
+
 async function release(job: AssistantJob, outcome: StepOutcome): Promise<AssistantJob | null> {
   const base = { lockedBy: null, heartbeatAt: null, attempts: 0 };
-  const progress = outcome.progress ? { ...job.progress, ...outcome.progress } : job.progress;
+  const progress = mergeJobProgress(job.progress, outcome.progress);
   const owned = and(eq(assistantJobs.id, job.id), eq(assistantJobs.lockedBy, workerId));
   if (outcome.next === "wait") {
     await db.update(assistantJobs).set({

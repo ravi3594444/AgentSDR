@@ -88,7 +88,14 @@ async function call(product: TinyfishProduct, key: string, url: string, init: { 
   } catch (error) {
     throw new TinyfishError(product, null, null, `${LABEL[product]} could not be reached: ${error instanceof Error ? error.message : String(error)}`);
   }
-  const text = await response.text();
+  let text: string;
+  try {
+    text = await response.text();
+  } catch (error) {
+    if (!response.ok) throw errorOf(product, response, null);
+    // TinyFish accepted and did the work; only its answer was lost, so it may be billed (status null: uncertain).
+    throw new TinyfishError(product, null, null, `${LABEL[product]}'s answer was cut off: ${error instanceof Error ? error.message : String(error)}`);
+  }
   let json: unknown = null;
   try {
     json = text ? JSON.parse(text) : null;

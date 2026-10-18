@@ -247,7 +247,8 @@ export async function startDiscovery(
     threadId: context.threadId,
     userId: context.userId,
   });
-  const payload: DiscoveryPayload = { criteria, phrase, contactAfter: options.contactAfter ?? null, target: "maps", provider, providerReason, requestMessageId: options.requestMessageId ?? null, providerNotes: notes };
+  // A search that starts on Apify has had its Apify search: no Apify fallback runs it again.
+  const payload: DiscoveryPayload = { criteria, phrase, contactAfter: options.contactAfter ?? null, target: "maps", provider, providerReason, requestMessageId: options.requestMessageId ?? null, providerNotes: notes, apifyFallbackTried: provider === "apify" };
   const [job] = await db.insert(assistantJobs).values({
     organizationId: currentOrganizationId(),
     kind: "discovery",

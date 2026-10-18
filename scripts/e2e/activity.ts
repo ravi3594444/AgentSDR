@@ -152,6 +152,22 @@ await runInOrganization(a.org.id, async () => {
   check("Activity shows it Cancelled, no longer open, with nothing to cancel", item?.state === "cancelled" && !item.open && !item.canCancel);
 });
 
+// A search that waited for a run slot and then started is no longer shown as waiting.
+const [resumed] = await db.insert(assistantJobs).values({
+  organizationId: a.org.id, kind: "apify_instagram", stage: "queued", threadId: seeded.yesterday.id, status: "queued", runAfter: new Date("1999-01-01T00:00:00Z"),
+  payload: { phrase: "real estate agents Pune" },
+  progress: { stage: "queued", found: 0, source: "Instagram (Apify)", waiting: { kind: "slot", provider: "apify", reason: "both Apify runs are in use; it starts when one finishes" } },
+}).returning();
+registerAssistantJobHandler("apify_instagram", async (job) => job.id === resumed!.id
+  ? { next: "stage", stage: "apify", progress: { stage: "searching", provider: "Apify", actor: "Instagram search" } }
+  : { next: "wait", delayMs: 60_000 });
+await runOneAssistantStep();
+const [started] = await db.select().from(assistantJobs).where(eq(assistantJobs.id, resumed!.id));
+await runInOrganization(a.org.id, async () => {
+  const item = (await listWork()).find((entry) => entry.id === resumed!.id);
+  check("a search that waited for a slot and then started is no longer shown as waiting", started?.stage === "apify" && !("waiting" in (started?.progress ?? {})) && item?.state === "queued" && item.reason === null, `${item?.state}: ${JSON.stringify(started?.progress)}`);
+});
+
 // Organization B sees and counts nothing of A.
 await runInOrganization(b.org.id, async () => {
   const [work, replies] = await Promise.all([listWork(), listReplies({ userId: b.owner.id })]);

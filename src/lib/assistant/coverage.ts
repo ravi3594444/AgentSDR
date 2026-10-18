@@ -22,8 +22,10 @@ const NAMED: [Platform, RegExp][] = [
   ["google_maps", /\b(?:google\s*maps?|g\s*maps?|maps)\b/i],
   ["instagram", /\b(?:instagram|insta|ig)\b/i],
   ["facebook", /\b(?:facebook|fb)\b/i],
-  ["linkedin", /\b(?:linked\s*in|linkedin|linked)\b/i],
-  ["web", /\b(?:websites?|web\s*search|directories|directory|google(?!\s*maps))\b/i],
+  // "LinkedIn", "linked in", and "linked" alone as a short form; not the verb ("the sites linked in their bio", "linked to their site").
+  ["linkedin", /\b(?:linked-?in\b|linked\s+in\b(?!\s+(?:their|the|his|her|its|my|our|your|a|an|each|every|this|that|these|those|bio|bios|profile|profiles)\b)|linked\b(?!\s*(?:in|to|from|on|with|by|at|through|via|into|up)\b))/i],
+  // A business's own website ("with their websites") is something to find for it, not a place to search; Google alone ("google reviews") is not a web search.
+  ["web", /\b(?:(?<!\b(?:their|its|his|her|our|your|my|with|own)\s+)websites?|web\s*search|directories|directory|google\s+search(?:es)?|search(?:ing)?\s+(?:on\s+)?google)\b/i],
 ];
 
 /** The platforms the owner's words name, in a fixed order; none for a request that leaves the choice to the assistant. */
@@ -69,15 +71,31 @@ function jobState(job: CoverageJob): { state: PlatformState; detail: string | nu
   return { state: "searching", detail: null, found: 0 };
 }
 
+/** The web searches and page reads the assistant ran itself for a request (web_search, read_webpage); they start no job. */
+export type WebToolUse = { searches: number; pagesRead: number };
+
+function webToolDetail(use: WebToolUse | null): string | null {
+  if (!use) return null;
+  const parts = [
+    use.searches > 0 ? `${use.searches} web search${use.searches === 1 ? "" : "es"}` : null,
+    use.pagesRead > 0 ? `${use.pagesRead} page${use.pagesRead === 1 ? "" : "s"} read` : null,
+  ].filter(Boolean);
+  return parts.length ? parts.join(", ") : null;
+}
+
 /**
  * Each named platform's state over the request's search jobs: searched when
  * all its searches finished, partial when some did while others still run or
  * failed, otherwise the state of its searches.
  */
-export function requestCoverage(named: readonly Platform[], jobs: readonly CoverageJob[]): PlatformCoverage[] {
+export function requestCoverage(named: readonly Platform[], jobs: readonly CoverageJob[], webTools: WebToolUse | null = null): PlatformCoverage[] {
   return named.map((platform) => {
     const states = jobs.filter((job) => platformOfJob(job) === platform).map(jobState);
-    if (!states.length) return { platform, state: "not started", detail: null };
+    if (!states.length) {
+      // No website-search job (it may be off): the web searches the assistant ran itself still cover the web.
+      const searchedItself = platform === "web" ? webToolDetail(webTools) : null;
+      return searchedItself ? { platform, state: "searched", detail: searchedItself } : { platform, state: "not started", detail: null };
+    }
     const searched = states.filter((entry) => entry.state === "searched");
     const pending = states.filter((entry) => entry.state === "searching" || entry.state === "waiting");
     if (searched.length && searched.length === states.length) {

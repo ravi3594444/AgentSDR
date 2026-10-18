@@ -98,6 +98,11 @@ await runInOrganization(a.org.id, async () => {
   check("the view never carries the key", !JSON.stringify(view).includes(KEY) && view.connected && view.useForWebSearch && view.browserMinutesPerDay === 0);
   const tooMany = await caught(tf.saveTinyfishSettings({ browserMinutesPerDay: 999 }, a.owner.id));
   check("browser minutes outside 0–240 are refused", tooMany instanceof tf.TinyfishSettingsError);
+  const tooFew = await caught(tf.saveTinyfishSettings({ browserMinutesPerDay: 5 }, a.owner.id));
+  check("browser minutes too few for one 10-minute session are refused, not shown as an allowance", tooFew instanceof tf.TinyfishSettingsError && /at least 10/.test(tooFew.message) && (await tf.tinyfishSettingsView()).browserMinutesPerDay === 0, tooFew instanceof Error ? tooFew.message : "saved");
+  const oneSession = await tf.saveTinyfishSettings({ browserMinutesPerDay: 10 }, a.owner.id);
+  check("one session's worth of minutes is accepted", oneSession.browserMinutesPerDay === 10);
+  await tf.saveTinyfishSettings({ browserMinutesPerDay: 0 }, a.owner.id);
 });
 await runInOrganization(b.org.id, async () => {
   await tf.saveTinyfishSettings({ key: KEY }, b.owner.id);
@@ -161,6 +166,18 @@ await runInOrganization(a.org.id, async () => {
   const lost = await caught(tf.fetchWithTinyfish(["https://a.example/7", "https://a.example/8"]));
   const [last] = await db.select().from(providerUsage).where(and(eq(providerUsage.organizationId, a.org.id), eq(providerUsage.product, "fetch"))).orderBy(desc(providerUsage.createdAt)).limit(1);
   check("a lost answer is kept as uncertain with its units counted", lost !== null && last?.status === "uncertain" && last.usedUnits === 2, `${last?.status} ${last?.usedUnits}`);
+
+  // TinyFish answered 200 and read the pages; the connection dropped while the body was read.
+  nextFetch = () => new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode("{\"results\":["));
+      controller.error(new TypeError("The socket connection was closed unexpectedly"));
+    },
+  }), { status: 200, headers: { "content-type": "application/json" } });
+  const dayBeforeCut = (await state("fetch"))!.dayUsed;
+  const cut = await caught(tf.fetchWithTinyfish(["https://a.example/9", "https://a.example/10"]));
+  const [cutRow] = await db.select().from(providerUsage).where(and(eq(providerUsage.organizationId, a.org.id), eq(providerUsage.product, "fetch"))).orderBy(desc(providerUsage.createdAt)).limit(1);
+  check("an answer cut off after TinyFish said 200 is kept as uncertain, its URLs still counted", cut !== null && cutRow?.status === "uncertain" && cutRow.usedUnits === 2 && (await state("fetch"))!.dayUsed - dayBeforeCut === 2, `${cut instanceof Error ? cut.message : cut} | ${cutRow?.status} ${cutRow?.usedUnits}`);
 });
 
 // ---------------------------------------------------------------- isolation
@@ -177,6 +194,8 @@ await runInOrganization(b.org.id, async () => {
   const { runTool } = await import("@/lib/assistant/tools.server");
   const { createThread } = await import("@/lib/assistant/threads.server");
   const { urlGiven } = await import("@/lib/assistant/agent");
+  const { requestCoverageFor } = await import("@/lib/assistant/coverage.server");
+  let coverageRequestId = "";
   // Real public host names (they must resolve as public before anything is sent); the content is the stand-in's.
   nextSearch = () => json(200, { query: "q", results: [{ position: 1, site_name: "example.com", title: "Real estate agents in Pune", snippet: "Top agencies", url: "https://example.com/agents" }], total_results: 1, page: 0 });
   nextFetch = (urls) => json(200, {
@@ -210,7 +229,22 @@ await runInOrganization(b.org.id, async () => {
     nextFetch = (urls) => json(200, { results: [], errors: urls.map((url) => ({ url, error: "login_required" })) });
     const walled = await runTool("read_webpage", { url: "https://example.com/members" }, context);
     check("a page TinyFish finds behind a login is reported as such", !walled.ok && /needs a login/.test(walled.summary));
+
+    // The owner named Google Maps and directories; website search is off, so the assistant searched the web itself.
+    const { addMessage } = await import("@/lib/assistant/threads.server");
+    const request = await addMessage({ threadId: thread.id, role: "user", content: "find real estate agencies in Pune on Google Maps and in online directories", createdBy: a.owner.id });
+    const unsearched = await requestCoverageFor(request.id);
+    check("before any search, the directories the owner named are not started", unsearched.find((entry) => entry.platform === "web")?.state === "not started", JSON.stringify(unsearched));
+    await addMessage({ threadId: thread.id, role: "tool", tool: "web_search", toolInput: { query: "real estate agency directory Pune" }, status: "ok", content: search.summary, toolResult: { summary: search.summary } });
+    await addMessage({ threadId: thread.id, role: "tool", tool: "read_webpage", toolInput: { url: "https://example.com/agents" }, status: "ok", content: read.summary, toolResult: { summary: read.summary } });
+    await addMessage({ threadId: thread.id, role: "tool", tool: "read_webpage", toolInput: { url: "https://example.com/members" }, status: "error", content: walled.summary, toolResult: { summary: walled.summary } });
+    const searched = await requestCoverageFor(request.id);
+    const web = searched.find((entry) => entry.platform === "web");
+    check("the web searches and page reads it ran count: Websites and directories searched, not 'not started'", web?.state === "searched" && web.detail === "1 web search, 1 page read" && searched.find((entry) => entry.platform === "google_maps")?.state === "not started", JSON.stringify(searched));
+    coverageRequestId = request.id;
   });
+  const seenByB = await runInOrganization(b.org.id, () => requestCoverageFor(coverageRequestId));
+  check("another organization gets no coverage for that request", Boolean(coverageRequestId) && seenByB.length === 0);
 }
 
 // ---------------------------------------------------------------- a website search waits for TinyFish's allowance
