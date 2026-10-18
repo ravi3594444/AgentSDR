@@ -36,6 +36,11 @@ scripts
 !scripts/add-instagram-intake-discovery.ts
 !scripts/add-instagram-outreach.ts
 !scripts/add-wrong-number.ts
+!scripts/add-assistant-job-reports.ts
+!scripts/add-tinyfish.ts
+!scripts/add-research-sources.ts
+!scripts/add-browser-sessions.ts
+!scripts/add-activity.ts
 
 README.md
 

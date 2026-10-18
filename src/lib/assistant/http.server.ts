@@ -6,7 +6,7 @@ import { authContextErrorResponse, can, requireOrgContext, type OrgContext } fro
 import { crmRequestErrorResponse, requireCrmMutationContext } from "@/lib/crm/http";
 import { inOrg, runInOrganization } from "@/lib/tenancy/scope";
 import { users } from "@/lib/auth/schema";
-import { assistantJobs, outreachRuns, ownerDecisions } from "./schema";
+import { assistantJobs, outreachRuns, ownerDecisions, type OutreachPlan } from "./schema";
 import type { RequestApproval } from "./requestApproval";
 import { coveringApproval, runAuthorization, type RunAuthorization } from "./runEvidence";
 import { runLeads } from "./runLeads.server";
@@ -76,7 +76,7 @@ export async function assistantState(threadId: string | null, ctx: OrgContext, w
     : [];
   const runRows = runIds.length
     ? await db.select({
-      id: outreachRuns.id, status: outreachRuns.status, autopilot: outreachRuns.autopilot, error: outreachRuns.error, campaigns: outreachRuns.campaigns,
+      id: outreachRuns.id, status: outreachRuns.status, autopilot: outreachRuns.autopilot, error: outreachRuns.error, campaigns: outreachRuns.campaigns, plan: outreachRuns.plan,
       approvedAt: outreachRuns.approvedAt, approvedBy: outreachRuns.approvedBy,
       requestId: sql<string | null>`${outreachRuns.plan} ->> 'requestId'`,
       autonomous: sql<boolean>`coalesce((${outreachRuns.plan} ->> 'autonomous') = 'true', false)`,
@@ -86,7 +86,7 @@ export async function assistantState(threadId: string | null, ctx: OrgContext, w
       .from(outreachRuns).where(and(inOrg(outreachRuns), inArray(outreachRuns.id, [...new Set(runIds)])))
     : [];
   const authorizationOf = await runAuthorizations(thread.id, thread.autonomous, runRows);
-  const runs = runRows.map((run) => ({ id: run.id, status: run.status, autopilot: run.autopilot, error: run.error, campaigns: run.campaigns, authorization: authorizationOf(run.id) }));
+  const runs = runRows.map((run) => ({ id: run.id, status: run.status, autopilot: run.autopilot, error: run.error, campaigns: run.campaigns, plan: run.plan, authorization: authorizationOf(run.id) }));
   // The mode chosen on the latest started run: the next plan card starts with it selected.
   // This person's own choice on an outreach plan (not another member's, nor an inquiry run's).
   const [lastStarted] = ctx.userId ? await db.select({ autopilot: outreachRuns.autopilot }).from(outreachRuns)
@@ -118,7 +118,7 @@ export async function assistantState(threadId: string | null, ctx: OrgContext, w
       createdAt: message.createdAt.toISOString(),
     })),
     jobs: jobs.map((job) => ({ ...job, createdAt: job.createdAt.toISOString() })),
-    runs: Object.fromEntries(runs.map((run) => [run.id, { ...run, replies: replies[run.id] ?? [], leads: leads[run.id] ?? [], requestPeers: peers(run.id) }])),
+    runs: Object.fromEntries(runs.map(({ plan, ...run }) => [run.id, { ...run, plan: planCardView(plan), replies: replies[run.id] ?? [], leads: leads[run.id] ?? [], requestPeers: peers(run.id) }])),
     decisions: Object.fromEntries(decisions.map((decision) => [decision.id, { status: decision.status, answer: decision.answer }])),
     setup: withSetup ? { ...(await setupSnapshot()), canManageAutopilot: canManageAutopilot(ctx) } : null,
     lastReplyMode: lastStarted ? (lastStarted.autopilot ? "automatic" : "review") as "automatic" | "review" : null,
@@ -155,6 +155,28 @@ async function runAuthorizations(threadId: string, threadAutonomous: boolean, ru
       mayBeUnderApproval: Boolean(open),
       threadAutonomous,
     });
+  };
+}
+
+/**
+ * What a plan card shows of the plan as stored now: a start that left out
+ * people other plans already cover changed its leads, groups, samples and
+ * estimate since the prepare_outreach card was written. The messages and
+ * per-lead plans stay on the server.
+ */
+function planCardView(plan: OutreachPlan) {
+  return {
+    assignments: plan.assignments.map((assignment) => ({ channel: assignment.channel })),
+    samples: plan.samples,
+    groups: plan.groups?.map((group) => ({ id: group.id, label: group.label, count: group.count })),
+    personal: plan.personal?.map((item) => ({ personId: item.personId, name: item.name })),
+    skipped: plan.skipped,
+    limits: plan.limits,
+    excluded: plan.excluded,
+    estimate: plan.estimate,
+    autopilot: plan.autopilot,
+    ownerRequest: plan.ownerRequest ?? null,
+    requestId: plan.requestId ?? null,
   };
 }
 

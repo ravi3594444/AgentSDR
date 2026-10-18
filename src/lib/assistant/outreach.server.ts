@@ -32,6 +32,7 @@ import { getBusinessProfile } from "./profile.server";
 import { effectiveBusinessProfile } from "./businessContext.server";
 import { activeInquiryRun, inquiryRunLockSql, inquiryRunMembers, inquiryRunReadiness } from "./inquiryRuns.server";
 import { missingForOutreach } from "./profile";
+import { PERSONALIZE_BATCH } from "./overlap";
 import {
   assistantJobs,
   outreachRunLeads,
@@ -57,7 +58,6 @@ import { businessContext, sortLeads, writePersonalLines, writePersonalMessages, 
 
 const DEFAULT_MAX_LEADS = 100;
 const HARD_MAX_LEADS = 1_000;
-const PERSONALIZE_BATCH = 10;
 /** Leads sorted per model call, and first messages written per call. */
 const SORT_BATCH = 25;
 const PERSONAL_BATCH = 5;
@@ -411,6 +411,7 @@ export async function prepareOutreach(input: PrepareInput): Promise<Proposal> {
       aiCalls: personalizeCalls,
       aiCostUsd: perCall !== null ? Number((perCall * personalizeCalls + (cost.usd ?? 0)).toFixed(4)) : null,
       days: days || null,
+      perCallUsd: perCall,
     },
     autopilot: Boolean(input.autopilot),
     instructions,
@@ -443,50 +444,98 @@ export async function getRun(runId: string) {
   return run ?? null;
 }
 
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
 /**
- * The owner's approval: a proposal becomes a running campaign only here.
- * Called by the Start button, by a request approval the owner gave for
- * the rest of a request (requestApproval.server.ts), and in a chat the
- * owner put in Autonomous mode (autonomy.server.ts, in the name of the
- * owner or admin who turned it on, within the daily caps). Never by the
- * assistant's model directly: no tool starts outreach.
+ * The organization's start lock (a transaction-level advisory lock): every
+ * start that enrols people takes it — the Start button, a request approval,
+ * Autonomous mode — and enrols inside it, so two plans starting at the same
+ * moment see each other's people (overlap.server.ts) and never both take
+ * one person. The Autonomous daily caps are counted under it too.
  */
-export async function startOutreachRun(runId: string, userId: string | null, options: { autopilot?: boolean } = {}): Promise<{ jobId: string }> {
-  const run = await getRun(runId);
-  if (!run) throw new OutreachError("That outreach plan does not exist.");
-  if (run.status !== "proposed") throw new OutreachError(`This plan is already ${run.status}.`);
-  if (run.plan.kind === "inquiries") throw new OutreachError("This plan answers inquiries; start it with startInquiryRun.");
-  const availability = await channelAvailability();
-  const broken = run.channels.filter((channel) => !availability[channel].available);
-  if (broken.length) throw new OutreachError(`Cannot start: ${broken.map((channel) => `${channel} — ${availability[channel].reason}`).join("; ")}.`);
-  const autopilot = options.autopilot ?? run.autopilot;
-  const claimed = await db.update(outreachRuns)
-    .set({ status: "starting", approvedBy: userId, approvedAt: new Date(), autopilot, updatedAt: new Date() })
+export function startLockSql() {
+  return sql`select pg_advisory_xact_lock(hashtextextended(${`autonomous:${currentOrganizationId()}`}, 0))`;
+}
+
+/** Sending channels whose senders are gone since the plan was prepared, as a reason; null when all can send. */
+export function brokenChannelsProblem(channels: readonly AudienceChannel[], availability: Awaited<ReturnType<typeof channelAvailability>>): string | null {
+  const broken = channels.filter((channel) => !availability[channel].available);
+  return broken.length ? `Cannot start: ${broken.map((channel) => `${channel} — ${availability[channel].reason}`).join("; ")}.` : null;
+}
+
+/**
+ * Inside a transaction holding the start lock: claims a proposed run
+ * (starting, approved by `userId`), saves `plan` and `channels` when given
+ * (a plan narrowed for overlaps), enrols the plan's people per channel and
+ * queues the launch job, all or nothing. Null when the run is no longer
+ * proposed.
+ */
+export async function claimOutreachStart(
+  tx: Tx,
+  runId: string,
+  input: { userId: string | null; autopilot: boolean; plan?: OutreachPlan; channels?: AudienceChannel[] },
+): Promise<{ jobId: string; leads: number } | null> {
+  const [claimed] = await tx.update(outreachRuns)
+    .set({
+      status: "starting",
+      approvedBy: input.userId,
+      approvedAt: new Date(),
+      autopilot: input.autopilot,
+      updatedAt: new Date(),
+      ...(input.plan ? { plan: input.plan } : {}),
+      ...(input.channels ? { channels: input.channels } : {}),
+    })
     .where(and(inOrg(outreachRuns), eq(outreachRuns.id, runId), eq(outreachRuns.status, "proposed")))
-    .returning({ id: outreachRuns.id });
-  if (!claimed.length) throw new OutreachError("This plan was started already.");
+    .returning();
+  if (!claimed) return null;
   // The approved audience, per channel: what the run (and its reply mode) covers.
-  const assignments = run.plan.assignments;
+  const assignments = claimed.plan.assignments;
   for (let index = 0; index < assignments.length; index += 500) {
-    await db.insert(outreachRunLeads).values(assignments.slice(index, index + 500).map((assignment) => ({
+    await tx.insert(outreachRunLeads).values(assignments.slice(index, index + 500).map((assignment) => ({
       organizationId: currentOrganizationId(),
       runId,
       personId: assignment.personId,
       channel: assignment.channel,
     }))).onConflictDoNothing();
   }
-  const [job] = await db.insert(assistantJobs).values({
+  const [job] = await tx.insert(assistantJobs).values({
     organizationId: currentOrganizationId(),
     kind: "outreach_start",
     stage: "personalizing",
-    threadId: run.threadId,
-    audienceId: run.audienceId,
+    threadId: claimed.threadId,
+    audienceId: claimed.audienceId,
     runId,
     payload: { personalizeIndex: 0 },
-    progress: { stage: "personalizing", personalized: 0, total: run.plan.assignments.length },
-    createdBy: userId,
+    progress: { stage: "personalizing", personalized: 0, total: assignments.length },
+    createdBy: input.userId,
   }).returning({ id: assistantJobs.id });
-  return { jobId: job!.id };
+  return { jobId: job!.id, leads: assignments.length };
+}
+
+/**
+ * The owner's approval: a proposal becomes a running campaign only here.
+ * Called by the Start button. A request approval the owner gave for the
+ * rest of a request (requestApproval.server.ts) and a chat the owner put
+ * in Autonomous mode (autonomy.server.ts, in the name of the owner or
+ * admin who turned it on, within the daily caps) start through
+ * claimOutreachStart under the same lock, after leaving out people other
+ * plans already cover. Never by the assistant's model directly: no tool
+ * starts outreach.
+ */
+export async function startOutreachRun(runId: string, userId: string | null, options: { autopilot?: boolean } = {}): Promise<{ jobId: string }> {
+  const run = await getRun(runId);
+  if (!run) throw new OutreachError("That outreach plan does not exist.");
+  if (run.status !== "proposed") throw new OutreachError(`This plan is already ${run.status}.`);
+  if (run.plan.kind === "inquiries") throw new OutreachError("This plan answers inquiries; start it with startInquiryRun.");
+  const broken = brokenChannelsProblem(run.channels, await channelAvailability());
+  if (broken) throw new OutreachError(broken);
+  const autopilot = options.autopilot ?? run.autopilot;
+  const started = await db.transaction(async (tx) => {
+    await tx.execute(startLockSql());
+    return claimOutreachStart(tx, runId, { userId, autopilot });
+  });
+  if (!started) throw new OutreachError("This plan was started already.");
+  return { jobId: started.jobId };
 }
 
 /**

@@ -9,13 +9,17 @@ import { runLinkedinSearchStep } from "./linkedinSearch.server";
 import { runOutreachStartStep } from "./outreach.server";
 import { applyRequestApproval } from "./requestApproval.server";
 import { addMessage, claimThread, releaseThread, touchThread } from "./threads.server";
-import { onAssistantJobFinished, registerAssistantJobHandler, type AssistantJob } from "./worker";
+import { claimJobReport, onAssistantJobFinished, registerAssistantJobHandler, type AssistantJob } from "./worker";
 
 /**
  * Wires the assistant's background jobs to the worker, and reports each
  * finished job into its chat thread as an EVENT the owner reads and the
  * model sees. The wording is built from the job's own result, never by the
- * model, so it says exactly what happened.
+ * model, so it says exactly what happened, and covers that job only: one
+ * search finishing never says the whole request is done (the coverage line
+ * says what of the request is still open). Each report is posted once,
+ * with the job marked reported in the same transaction; a report a restart
+ * lost is posted by the worker's reconciliation, with what follows it.
  */
 
 /** A finished website and directory search, from its result. */
@@ -90,24 +94,41 @@ export function registerAssistantJobs(): void {
   registerAssistantJobHandler("web_discovery", runWebDiscoveryStep);
   // Instagram prospects through Apify run on the discovery job's stages (discovery.server.ts).
   registerAssistantJobHandler("apify_instagram", runDiscoveryStep);
-  onAssistantJobFinished(async (job) => {
-    if (!job.threadId) return;
-    const search = job.kind === "discovery" || job.kind === "linkedin_search" || job.kind === "web_discovery" || job.kind === "apify_instagram";
-    const coverage = search ? await coverageLineForJob(job).catch(() => null) : null;
-    const content = `${search ? discoveryMessage(job) : outreachMessage(job)}${coverage ? ` ${coverage}` : ""}`;
-    await addMessage({ threadId: job.threadId, role: "event", content });
-    if (search && (job.status !== "succeeded" || !job.audienceId || Number((job.result ?? {}).eligible ?? 0) <= 0)) {
-      // Autonomous mode: a search that failed or found nobody still wakes the assistant, to try elsewhere.
-      if ((await threadAutonomy(job.threadId)).on) void continueAfterEvent(job.threadId);
-      return;
-    }
-    if (!search || job.status !== "succeeded" || !job.audienceId) return;
-    // The owner asked to contact what is found: the plan is prepared here,
-    // not left to the model's judgement. It still waits for the owner's Start.
-    const contactAfter = (job.payload as { contactAfter?: { channels: string[] | null; ownerRequest?: string; requestId?: string } | null }).contactAfter;
-    // Not awaited: writing the plan takes model calls, and the worker moves on.
-    void followUpSearch(job, job.threadId, contactAfter ?? null);
+  onAssistantJobFinished(reportFinishedJob);
+}
+
+/**
+ * A finished job's report in its chat, then what follows it (the plan a
+ * "find and contact" search asked for, or the next step in Autonomous
+ * mode). Posted at most once per job, however often it is called: a
+ * duplicate callback, or the worker's reconciliation after a restart,
+ * finds it reported and does nothing.
+ */
+export async function reportFinishedJob(job: AssistantJob): Promise<void> {
+  if (!job.threadId) {
+    await claimJobReport(job, async () => undefined);
+    return;
+  }
+  const threadId = job.threadId;
+  const search = job.kind === "discovery" || job.kind === "linkedin_search" || job.kind === "web_discovery" || job.kind === "apify_instagram";
+  const coverage = search ? await coverageLineForJob(job).catch(() => null) : null;
+  const content = `${search ? discoveryMessage(job) : outreachMessage(job)}${coverage ? ` ${coverage}` : ""}`;
+  const posted = await claimJobReport(job, async (tx) => {
+    await addMessage({ threadId, role: "event", content, toolResult: { reportKey: job.reportKey } }, tx);
   });
+  // Reported already (a duplicate callback): so was what follows the report.
+  if (!posted) return;
+  if (search && (job.status !== "succeeded" || !job.audienceId || Number((job.result ?? {}).eligible ?? 0) <= 0)) {
+    // Autonomous mode: a search that failed or found nobody still wakes the assistant, to try elsewhere.
+    if ((await threadAutonomy(job.threadId)).on) void continueAfterEvent(job.threadId);
+    return;
+  }
+  if (!search || job.status !== "succeeded" || !job.audienceId) return;
+  // The owner asked to contact what is found: the plan is prepared here,
+  // not left to the model's judgement. It still waits for the owner's Start.
+  const contactAfter = (job.payload as { contactAfter?: { channels: string[] | null; ownerRequest?: string; requestId?: string } | null }).contactAfter;
+  // Not awaited: writing the plan takes model calls, and the worker moves on.
+  void followUpSearch(job, job.threadId, contactAfter ?? null);
 }
 
 async function followUpSearch(job: AssistantJob, threadId: string, contactAfter: { channels: string[] | null; ownerRequest?: string; requestId?: string } | null): Promise<void> {
@@ -138,9 +159,12 @@ async function followUpSearch(job: AssistantJob, threadId: string, contactAfter:
           // Switched off at the last moment: treated as without Autonomous mode.
           const auto = tried && !tried.off ? tried : null;
           // Otherwise it starts on its own when the owner already approved this request on another of its plans.
-          const approval = auto ? { started: auto.started, reason: auto.reason } : runId ? await applyRequestApproval(runId) : { started: false, reason: null };
+          const approval: { started: boolean; reason: string | null; closed?: boolean } = auto
+            ? { started: auto.started, reason: auto.reason, closed: auto.closed }
+            : runId ? await applyRequestApproval(runId) : { started: false, reason: null };
           // A reason from autoStartPlan was already posted; with none (switched off meanwhile) the plan waits as usual.
-          if (!approval.started && !(auto && auto.reason)) {
+          // A plan closed for having nobody new to contact was reported as such: it is not offered for Start.
+          if (!approval.started && !approval.closed && !(auto && auto.reason)) {
             await addMessage({
               threadId,
               role: "event",

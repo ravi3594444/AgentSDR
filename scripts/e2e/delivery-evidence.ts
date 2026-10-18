@@ -85,7 +85,7 @@ const seeded = await runInOrganization(a.org.id, async () => {
   const run = async (name: string, values: Omit<Partial<typeof outreachRuns.$inferInsert>, "plan"> & { plan?: Record<string, unknown> }) => {
     const [row] = await db.insert(outreachRuns).values({
       organizationId: a.org.id, threadId: thread.id, audienceId, name, status: "running", channels: ["whatsapp"], autopilot: false, createdBy: a.owner.id,
-      approvedBy: a.owner.id, approvedAt: new Date(now.getTime() - 3_600_000), ...values, plan: { requestId, ...(values.plan ?? {}) } as unknown as OutreachPlan,
+      approvedBy: a.owner.id, approvedAt: new Date(now.getTime() - 3_600_000), ...values, plan: { requestId, assignments: [], samples: [], excluded: [], limits: {}, estimate: { aiCalls: 0, aiCostUsd: 0, days: 0 }, ...(values.plan ?? {}) } as unknown as OutreachPlan,
     }).returning();
     await addMessage({ threadId: thread.id, role: "tool", tool: "prepare_outreach", status: "ok", content: "", toolResult: { data: { runId: row!.id } } });
     return row!;

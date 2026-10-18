@@ -5,7 +5,8 @@
  * background searches. What still bounds it lives in code, not in the
  * prompt: the organization's daily caps (Settings → Organization, the
  * "general" Sending rules), every channel's own sending limits, Do Not
- * Contact, opt-outs and the reply agent's checks.
+ * Contact, opt-outs and the reply agent's checks. A plan whose leads are
+ * partly in other running plans starts with the rest (overlap.ts).
  *
  * Pure: the decisions are unit-tested; autonomy.server.ts reads the counts.
  */
@@ -23,23 +24,22 @@ export type AutoStartFacts = {
   runsToday: number;
   /** Leads in those plans. */
   leadsToday: number;
-  /** Leads in this plan. */
+  /** Leads this plan would contact: those already in another running plan are left out first (overlap.ts). */
   planLeads: number;
-  /** This plan's leads already in another running or paused plan. */
-  busyPeople: number;
   /** The person who turned Autonomous on, and the one who asked for this outreach, are owners or admins. */
   approverAllowed: boolean;
 };
 
+export const APPROVER_PROBLEM = "only an owner or admin can have plans started on their own: the person who turned Autonomous on, or who asked for this outreach, is not one";
+
 /** Why a plan must wait for the owner's Start instead of starting on its own, or null. */
 export function autoStartProblem(facts: AutoStartFacts, caps: AutonomyCaps): string | null {
-  if (!facts.approverAllowed) return "only an owner or admin can have plans started on their own: the person who turned Autonomous on, or who asked for this outreach, is not one";
+  if (!facts.approverAllowed) return APPROVER_PROBLEM;
   if (facts.planLeads <= 0) return "the plan has no leads to contact";
   if (facts.runsToday >= caps.runsPerDay) return `${facts.runsToday} plans already started on their own in the last 24 hours (your cap is ${caps.runsPerDay})`;
   if (facts.leadsToday + facts.planLeads > caps.leadsPerDay) {
     return `its ${facts.planLeads} leads would pass your cap of ${caps.leadsPerDay} leads contacted on its own in 24 hours (${facts.leadsToday} so far)`;
   }
-  if (facts.busyPeople > 0) return `${facts.busyPeople} of its leads are already in another running plan`;
   return null;
 }
 

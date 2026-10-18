@@ -206,7 +206,6 @@ describe("one Start for a whole request", () => {
   test("it never covers a new channel, a bigger plan, people already in a running plan, an inquiry run, or a paused, stopped or old approval", () => {
     expect(approvalProblem(approval, "running", { plan: plan("msg-1"), channels: ["linkedin"] }, now)).toContain("linkedin");
     expect(approvalProblem(approval, "running", { plan: plan("msg-1", 150), channels: ["email"] }, now)).toContain("150 leads");
-    expect(approvalProblem(approval, "running", { plan: plan("msg-1"), channels: ["email"], busyPeople: 2 }, now)).toContain("2 of its leads are already in another running plan");
     expect(approvalProblem(approval, "running", { plan: { ...plan("msg-1"), kind: "inquiries" as const }, channels: [] }, now)).toContain("inquiry run");
     expect(approvalProblem(approval, "paused", { plan: plan("msg-1"), channels: ["email"] }, now)).toContain("paused");
     expect(approvalProblem(approval, "stopped", { plan: plan("msg-1"), channels: ["email"] }, now)).toContain("stopped");

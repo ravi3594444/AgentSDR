@@ -340,7 +340,7 @@ await runInOrganization(org!.id, async () => {
     check("a Facebook page is not treated as the business's website; the scraper's email is kept", sunrise?.email === `sunrise.ortho.${stamp}@gmail.test` && !(sunrise.raw as Record<string, unknown>).website);
     const events = await listMessages(thread.id);
     check("the finished search is announced in the chat with the real counts",
-      events.some((m) => m.role === "event" && m.content.includes("7 businesses found on Google Maps, 3 can be contacted")),
+      events.some((m) => m.role === "event" && m.content.includes("7 businesses found on Google Maps through the built-in scraper, 3 can be contacted")),
       events.filter((m) => m.role === "event").map((m) => m.content).join(" | "));
 
     const again = await runTool("find_leads", { what: "dental clinics", where: "Pune, India", maxResults: 20 }, context);

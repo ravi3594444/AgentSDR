@@ -999,6 +999,8 @@ CREATE TABLE public.assistant_jobs (
     created_by uuid,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     finished_at timestamp with time zone,
+    report_key text,
+    reported_at timestamp with time zone,
     CONSTRAINT assistant_jobs_kind_chk CHECK ((kind = ANY (ARRAY['discovery'::text, 'outreach_start'::text, 'linkedin_search'::text, 'web_discovery'::text, 'apify_instagram'::text]))),
     CONSTRAINT assistant_jobs_status_chk CHECK ((status = ANY (ARRAY['queued'::text, 'running'::text, 'succeeded'::text, 'failed'::text, 'cancelled'::text])))
 );
@@ -4615,6 +4617,12 @@ CREATE INDEX assistant_jobs_claim_idx ON public.assistant_jobs USING btree (stat
 --
 
 CREATE INDEX assistant_jobs_organization_idx ON public.assistant_jobs USING btree (organization_id, created_at);
+
+--
+-- Name: assistant_jobs_unreported_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX assistant_jobs_unreported_idx ON public.assistant_jobs USING btree (finished_at) WHERE ((report_key IS NOT NULL) AND (reported_at IS NULL));
 
 --
 -- Name: assistant_messages_organization_idx; Type: INDEX; Schema: public; Owner: -

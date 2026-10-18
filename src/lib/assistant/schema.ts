@@ -250,10 +250,19 @@ export const assistantJobs = pgTable(
     createdBy: uuid("created_by"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
+    /**
+     * The report key (CONTEXT.md), set with the terminal status: this job's
+     * outcome is owed one report in its chat. Null on jobs finished before
+     * reports were recorded, which are never reported again.
+     */
+    reportKey: text("report_key"),
+    /** When that report was posted: set in the same transaction as the chat event, so it is posted once. */
+    reportedAt: timestamp("reported_at", { withTimezone: true }),
   },
   (t) => [
     index("assistant_jobs_organization_idx").on(t.organizationId, t.createdAt),
     index("assistant_jobs_claim_idx").on(t.status, t.runAfter),
+    index("assistant_jobs_unreported_idx").on(t.finishedAt).where(sql`${t.reportKey} IS NOT NULL AND ${t.reportedAt} IS NULL`),
     check("assistant_jobs_kind_chk", sql`${t.kind} IN ('discovery', 'outreach_start', 'linkedin_search', 'web_discovery', 'apify_instagram')`),
     check("assistant_jobs_status_chk", sql`${t.status} IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')`),
   ],
@@ -269,6 +278,8 @@ export type PlannedStep = { subject: string | null; body: string; waitDays: numb
 export type OutreachPlan = {
   /** Started on its own by a chat in Autonomous mode (counted against its daily caps). */
   autonomous?: boolean;
+  /** When it was started on its own (ISO): the caps count the last 24 hours. */
+  autonomousAt?: string;
   /**
    * "outreach" (absent on every plan written before inquiry runs): first
    * messages and follow-ups to an audience. "inquiries": no first message
@@ -289,7 +300,12 @@ export type OutreachPlan = {
   limits: { maxLeads: number; emailPerMailboxPerDay: number | null; whatsappNewChatsPerDay: number | null; instagramNewChatsPerDay?: number | null };
   /** Leads left out and why, counted by reason. */
   excluded: { reason: string; count: number }[];
-  estimate: { aiCalls: number; aiCostUsd: number | null; days: number | null };
+  /**
+   * aiCalls: personalization calls the start makes; aiCostUsd: the writing
+   * already spent plus those calls; perCallUsd: one such call's cost, kept so
+   * the estimate can be recomputed when leads are taken out (overlap.ts).
+   */
+  estimate: { aiCalls: number; aiCostUsd: number | null; days: number | null; perCallUsd?: number | null };
   /** Automatic mode: answer ordinary replies without asking (see src/lib/crm/autopilot.ts). */
   autopilot: boolean;
   instructions: string | null;

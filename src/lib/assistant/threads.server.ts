@@ -44,6 +44,9 @@ export async function listMessages(threadId: string, limit = 300) {
   return rows.reverse();
 }
 
+/** The database, or a transaction the message must commit with (a job's report, worker.ts claimJobReport). */
+type Executor = Pick<typeof db, "insert" | "update">;
+
 export async function addMessage(input: {
   threadId: string;
   role: AssistantRole;
@@ -54,8 +57,8 @@ export async function addMessage(input: {
   status?: AssistantToolStatus | null;
   attachments?: AssistantAttachment[];
   createdBy?: string | null;
-}) {
-  const [message] = await db.insert(assistantMessages).values({
+}, executor: Executor = db) {
+  const [message] = await executor.insert(assistantMessages).values({
     organizationId: currentOrganizationId(),
     threadId: input.threadId,
     role: input.role,
@@ -69,7 +72,7 @@ export async function addMessage(input: {
   }).returning();
   // A greeting does not name the conversation; its first real request does.
   const title = input.role === "user" ? threadTitleFrom(input.content) : null;
-  await db.update(assistantThreads)
+  await executor.update(assistantThreads)
     .set({
       updatedAt: new Date(),
       ...(title ? { title: sql`case when ${assistantThreads.title} = 'Conversation' then ${title} else ${assistantThreads.title} end` } : {}),

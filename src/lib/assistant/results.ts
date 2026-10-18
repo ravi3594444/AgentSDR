@@ -46,6 +46,47 @@ export function periodFor(kind: PeriodKind, timeZone: string, now = new Date()):
   }
 }
 
+/** The calendar day it is at `instant` in this time zone, e.g. "2026-10-18". */
+export function localDate(timeZone: string, instant = new Date()): string {
+  return dayLabel(timeZone, instant);
+}
+
+/**
+ * Whose work a report counts. "organization" is everything; the others
+ * restrict every ledger query to the outreach runs, lead lists and jobs of
+ * one run, one owner request (the plans and searches it started) or one
+ * chat. Limits and the channels' sending checks stay organization-wide:
+ * they are shared by every run.
+ */
+export type ResultsScopeKind = "run" | "request" | "thread" | "organization";
+export const RESULTS_SCOPE_KINDS: readonly ResultsScopeKind[] = ["run", "request", "thread", "organization"];
+
+export type ResultsScope = {
+  kind: ResultsScopeKind;
+  runIds: string[];
+  audienceIds: string[];
+  jobIds: string[];
+  /** A run's name, for scope "run". */
+  name?: string | null;
+};
+
+export const ORGANIZATION_SCOPE: ResultsScope = { kind: "organization", runIds: [], audienceIds: [], jobIds: [] };
+
+/** What a scope covers, in words: "this request (2 plans, 3 searches)". */
+export function scopeLabel(scope: ResultsScope): string {
+  if (scope.kind === "organization") return "the whole organization";
+  const plans = `${scope.runIds.length} plan${scope.runIds.length === 1 ? "" : "s"}`;
+  const searches = scope.jobIds.length ? `, ${scope.jobIds.length} background job${scope.jobIds.length === 1 ? "" : "s"}` : "";
+  if (scope.kind === "run") return `the plan “${scope.name ?? "this run"}”`;
+  const what = scope.kind === "request" ? "this request" : "this chat";
+  return scope.runIds.length || scope.jobIds.length ? `${what} (${plans}${searches})` : what;
+}
+
+/** Whether a narrower scope has nothing attributed to it yet: its figures are then all zero for that reason. */
+export function scopeIsEmpty(scope: ResultsScope): boolean {
+  return scope.kind !== "organization" && !scope.runIds.length && !scope.audienceIds.length && !scope.jobIds.length;
+}
+
 /** The local calendar day a summary written at `now` covers: the day before. */
 export function summaryDay(timeZone: string, now = new Date()): { day: string; period: Period } {
   const period = periodFor("yesterday", timeZone, now);

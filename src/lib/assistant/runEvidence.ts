@@ -44,7 +44,7 @@ export function runAuthorization(input: RunAuthorizationInput): RunAuthorization
   const who = input.approverName?.trim() || "an owner";
   const at = input.approvedAt?.toISOString() ?? null;
   if (NOT_STARTED.has(input.status) || (input.status === "failed" && !input.approvedAt)) {
-    if (input.status === "cancelled") return { kind: "none", text: "Discarded before it started; nothing was sent.", by: null, at: null, until: null };
+    if (input.status === "cancelled") return { kind: "none", text: "Not started; nothing was sent from it.", by: null, at: null, until: null };
     if (input.status === "failed") return { kind: "none", text: "It did not start; nothing was sent.", by: null, at: null, until: null };
     return {
       kind: "none",
