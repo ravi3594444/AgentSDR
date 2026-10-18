@@ -594,11 +594,12 @@ const TONE_LABEL: Record<Tone, string> = {
 /** Where the row's reply stands: one label, one colour, one icon — and what to do when it is not ready. */
 type DraftState = { label: string; tone: Tone; icon: IconType; hint?: string };
 
-function draftStateOf({ editable, draftFull, status, dnc, sendable, actionText }: { editable: boolean; draftFull: string; status: string; dnc: boolean; sendable: boolean; actionText: string }): DraftState {
+function draftStateOf({ editable, draftFull, status, dnc, sendable, actionText, apology = false }: { editable: boolean; draftFull: string; status: string; dnc: boolean; sendable: boolean; actionText: string; apology?: boolean }): DraftState {
   if (editable) {
     if (status === "failed") return { label: "Draft failed", tone: "error", icon: RiErrorWarningFill, hint: "Edit it or regenerate" };
     if (dnc) return { label: "Do not contact", tone: "error", icon: RiForbid2Line, hint: "Sending is blocked" };
     if (!sendable) return { label: "Out of date", tone: "warning", icon: RiErrorWarningFill, hint: "A newer reply arrived — edit before sending" };
+    if (apology) return { label: "Wrong number: apology", tone: "warning", icon: RiForbid2Line, hint: "Outreach to this number stopped; this one short apology waits for you" };
     return { label: "Ready to send", tone: "success", icon: RiCheckboxCircleFill };
   }
   if (draftFull) return { label: humanize(status || "draft"), tone: "neutral", icon: RiDraftLine };
@@ -704,7 +705,7 @@ export function describeAction(action: Action, categories: Data[], pipeline: boo
   const dnc = Boolean(asObject(action.contactPolicy).doNotContact);
   const sendableDraft = Boolean(editable) && !dnc && Number(editable?.expectedContextVersion) === Number(record.contextVersion);
   const actionText = actionType(action);
-  const draftState = draftStateOf({ editable: Boolean(editable), draftFull, status: String(draft.status ?? ""), dnc, sendable: sendableDraft, actionText });
+  const draftState = draftStateOf({ editable: Boolean(editable), draftFull, status: String(draft.status ?? ""), dnc, sendable: sendableDraft, actionText, apology: Boolean(action.wrongNumberApology) });
   return {
     id, href, record, person, activeRun, inbound, subcategory, classification, category, channel, stage,
     proposedCategoryKey, proposedSubcategoryId, proposedLabel, keepCategoryKey, keepSubcategoryId,

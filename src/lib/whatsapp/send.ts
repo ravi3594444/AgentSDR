@@ -11,6 +11,8 @@ import { organizationPhoneCountry } from "@/lib/calls/phone.server";
 import { callCampaignContacts, callCampaigns, callSessions } from "@/lib/calls/schema";
 import { logCallMessage } from "@/lib/calls/campaigns";
 import { isPersonDoNotContact } from "@/lib/crm/policies";
+import { normalizeRoute } from "@/lib/crm/wrongNumber";
+import { wrongRouteSendRefusal } from "@/lib/crm/wrongRoutes";
 import {
   findUnipileWhatsappChat,
   sendUnipileWhatsappMessage,
@@ -343,6 +345,13 @@ async function assertNotDoNotContact(personId: string | null): Promise<void> {
   }
 }
 
+/** A number recorded as a wrong number takes nothing more, from a campaign or a person (its one apology goes through the CRM). */
+async function assertNotWrongNumber(phone: string | null): Promise<void> {
+  const route = normalizeRoute("whatsapp", phone);
+  const refusal = route ? await wrongRouteSendRefusal(db, { channel: "whatsapp", routes: [route] }) : null;
+  if (refusal) throw new WhatsappSendRefusedError(refusal, 409, null, "wrong_number");
+}
+
 /** The account to send from when the request names no chat. */
 async function chooseAccount(accountId: string | undefined, phone: string): Promise<{ account: WhatsappAccountRow; chat: WhatsappChatRow | null }> {
   if (accountId) {
@@ -434,6 +443,7 @@ export async function sendWhatsapp(request: SendWhatsappRequest): Promise<SendWh
   });
   personId = links.personId;
   await assertNotDoNotContact(personId);
+  await assertNotWrongNumber(phone);
 
   const sent = await performWhatsappSend({
     account,

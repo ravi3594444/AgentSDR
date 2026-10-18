@@ -26,8 +26,13 @@ export const AUTOPILOT_LIMITS = {
 /** Classifications applied by the AI with confidence or confirmed by a person. */
 const CONFIRMED_CLASSIFICATIONS = new Set(["auto_applied", "accepted", "overridden"]);
 
-/** "Other" replies that are not the lead talking: the right person is someone else, or they left. */
-const NOT_THE_LEAD_SUBCATEGORIES = new Set(["left_company", "connected_to_different_poc", "did_not_connect_to_different_poc"]);
+/**
+ * "Other" replies that are not the lead talking: the right person is
+ * someone else, they left, or the number reached a stranger (a wrong
+ * number's one apology is sent by wrongNumberAck.server.ts, never as an
+ * ordinary autopilot reply).
+ */
+const NOT_THE_LEAD_SUBCATEGORIES = new Set(["left_company", "connected_to_different_poc", "did_not_connect_to_different_poc", "wrong_number"]);
 
 /** Subcategories a person handles even when classified with confidence. */
 export const AUTOPILOT_ESCALATE_SUBCATEGORIES = new Set([

@@ -12,6 +12,7 @@ import { serializeError } from "@/lib/linkedin/serializeError";
 import { MAX_LEAD_RETRIES } from "@/lib/linkedin/inviteRetry";
 import { recordFollowUpSendFailure } from "@/lib/linkedin/inviteRetry.server";
 import { isPersonDoNotContact } from "@/lib/crm/policies";
+import { linkedinRouteIsWrong } from "@/lib/crm/wrongRoutes";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { channelRules } from "@/lib/channels/rules.server";
 import { pickInRange } from "@/lib/channels/rules";
@@ -255,12 +256,14 @@ const runFollowUpStage = async (account: LinkedInAccount, stage: FollowUpStage):
       continue;
     }
 
-    if (await isPersonDoNotContact(db, lead.personId!)) {
+    const barred = await isPersonDoNotContact(db, lead.personId!) ? "Person-global DNC"
+      : await linkedinRouteIsWrong(db, lead.personId!, lead.linkedinUrl) ? "a wrong-number record" : null;
+    if (barred) {
       await db.transaction(async (tx) => {
         await tx.delete(messages).where(and(inOrg(messages), eq(messages.id, messageClaim.id)));
         await tx.update(leadsTable).set({ status: "FAILED" }).where(and(inOrg(leadsTable), eq(leadsTable.id, lead.id)));
       });
-      console.warn(`[sendFollowUps] ${stage.label}: ${lead.linkedinUrl} blocked by Person-global DNC`);
+      console.warn(`[sendFollowUps] ${stage.label}: ${lead.linkedinUrl} blocked by ${barred}`);
       continue;
     }
 

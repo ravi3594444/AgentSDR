@@ -30,4 +30,16 @@ describe("replyState", () => {
     expect(replyState({ ...base, agentStatus: "stopped", agentReason: "a newer message arrived; that one is answered instead" }, true, now)).toMatchObject({ tone: "done" });
     expect(replyState({ ...base, agentStatus: "failed", agentReason: "the send failed: refused" }, true, now)).toMatchObject({ tone: "failed" });
   });
+
+  test("a wrong number says so, with where its one apology stands", () => {
+    const wrong = { ...base, agentAction: "wrong_number" };
+    expect(replyState({ ...wrong, agentStatus: "replied", agentReason: "Wrong number: outreach to this number stopped; one apology sent" }, true, now))
+      .toEqual({ tone: "done", text: "Wrong number — outreach stopped; apology sent" });
+    expect(replyState({ ...wrong, agentStatus: "drafted" }, false, now)).toEqual({ tone: "you", text: "Wrong number — outreach stopped; the apology waits for you in Action required" });
+    expect(replyState({ ...wrong, agentStatus: "drafted", draftStatus: "sent" }, false, now).text).toBe("Wrong number — outreach stopped; apology sent");
+    expect(replyState({ ...wrong, agentStatus: "stopped", agentReason: "Wrong number: outreach to this number stopped; no apology (they asked not to be contacted)" }, true, now))
+      .toEqual({ tone: "done", text: "Wrong number — outreach stopped; no apology (they asked not to be contacted)" });
+    expect(replyState({ ...wrong, agentStatus: "stopped", agentReason: "Wrong number: outreach to this number stopped; whether the apology arrived is uncertain, so it is not resent" }, true, now).tone).toBe("you");
+    expect(replyState({ ...wrong, agentStatus: "stopped", agentReason: "Wrong number: outreach to this number stopped; the apology could not be sent and is not retried (refused)" }, true, now).tone).toBe("failed");
+  });
 });

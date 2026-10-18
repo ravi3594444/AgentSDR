@@ -46,6 +46,11 @@ describe("contactChannels", () => {
     expect(contactChannels({ ...none, email: "a@acme.com", emailSuppressed: true, phone: "+14155550100" })).toEqual({ channels: ["whatsapp"], reason: null });
   });
 
+  test("a wrong number closes that channel only", () => {
+    expect(contactChannels({ ...none, email: "a@acme.com", phone: "+919876543210", wrongChannels: ["whatsapp"] })).toEqual({ channels: ["email"], reason: null });
+    expect(contactChannels({ ...none, phone: "+919876543210", wrongChannels: ["whatsapp"] })).toEqual({ channels: [], reason: "wrong number" });
+  });
+
   test("countReasons counts largest first", () => {
     expect(countReasons(["a", "b", "a", null])).toEqual([{ reason: "a", count: 2 }, { reason: "b", count: 1 }]);
   });

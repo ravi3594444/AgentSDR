@@ -1,8 +1,9 @@
 import "server-only";
 
-import { and, asc, count, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, count, eq, inArray, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { crmPersonContactPolicies } from "@/lib/crm/schema";
+import { crmPersonContactPolicies, crmWrongRoutes } from "@/lib/crm/schema";
+import { normalizeRoute } from "@/lib/crm/wrongNumber";
 import { companies, people } from "@/lib/leads/schema";
 import { suppressionList } from "@/lib/outreach/schema";
 import { instagramUsername } from "@/lib/instagram/parse";
@@ -60,7 +61,33 @@ type PersonFacts = {
   companyId: string | null;
   doNotContact: boolean;
   emailSuppressed: boolean;
+  wrongChannels: AudienceChannel[];
 };
+
+/** Per person, the channels whose route (this person's, or the same number or address on another record) was recorded as a wrong number. */
+async function wrongChannelsOf(rows: readonly { id: string; email: string | null; phone: string | null }[]): Promise<Map<string, AudienceChannel[]>> {
+  const result = new Map<string, AudienceChannel[]>();
+  if (!rows.length) return result;
+  const emailOf = new Map(rows.map((row) => [row.id, normalizeRoute("email", row.email)]));
+  const phoneOf = new Map(rows.map((row) => [row.id, normalizeRoute("whatsapp", row.phone)]));
+  const routes = [...new Set([...emailOf.values(), ...phoneOf.values()].filter((route): route is string => Boolean(route)))];
+  const wrong = await db.select({ personId: crmWrongRoutes.personId, channel: crmWrongRoutes.channel, route: crmWrongRoutes.route }).from(crmWrongRoutes)
+    .where(and(inOrg(crmWrongRoutes), or(
+      inArray(crmWrongRoutes.personId, rows.map((row) => row.id)),
+      routes.length ? inArray(crmWrongRoutes.route, routes) : undefined,
+    )));
+  for (const row of rows) {
+    const channels = new Set<AudienceChannel>();
+    for (const route of wrong) {
+      const sameRoute = (route.channel === "email" && route.route === emailOf.get(row.id))
+        || (route.channel === "whatsapp" && route.route === phoneOf.get(row.id));
+      const ownProfile = route.personId === row.id && (route.channel === "linkedin" || route.channel === "instagram");
+      if (sameRoute || ownProfile) channels.add(route.channel);
+    }
+    if (channels.size) result.set(row.id, [...channels]);
+  }
+  return result;
+}
 
 /** People with what decides their channels, read in three queries whatever the count. */
 export async function loadPersonFacts(personIds: readonly string[]): Promise<Map<string, PersonFacts>> {
@@ -88,6 +115,7 @@ export async function loadPersonFacts(personIds: readonly string[]): Promise<Map
     ? (await db.select({ email: suppressionList.email }).from(suppressionList)
       .where(and(inOrg(suppressionList), inArray(suppressionList.email, emails)))).map((row) => row.email)
     : []);
+  const wrong = await wrongChannelsOf(rows);
   for (const row of rows) {
     const name = row.fullName?.trim()
       || [row.firstName, row.lastName].filter(Boolean).join(" ").trim()
@@ -107,6 +135,7 @@ export async function loadPersonFacts(personIds: readonly string[]): Promise<Map
       companyId: row.companyId,
       doNotContact: dnc.has(row.id),
       emailSuppressed: row.email ? suppressed.has(row.email.toLowerCase()) : false,
+      wrongChannels: wrong.get(row.id) ?? [],
     });
   }
   return facts;

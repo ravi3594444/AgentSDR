@@ -59,9 +59,22 @@ import { announceRecordChanged } from "./recordEvents";
 import { hasUnsavedReply, setUnsavedReply } from "./recordQueue";
 import { ChannelAvatar } from "./CrmActionsClient";
 import { BRAND } from "@/lib/brand";
+import { wrongRouteAckLabel } from "@/lib/crm/wrongNumber";
 
 type Data = Record<string, unknown>;
 type Channel = "email" | "linkedin" | "whatsapp" | "instagram";
+
+/** The record's routes recorded as a wrong number (queries.ts), and the one among them a conversation runs into. */
+function wrongRoutesOf(record: Data): Data[] {
+  return asList<Data>(record.wrongRoutes);
+}
+function wrongRouteFor(record: Data, conversationIds: readonly string[]): Data | undefined {
+  return wrongRoutesOf(record).find((route) => asList<string>(route.conversationIds).some((id) => conversationIds.includes(String(id))));
+}
+/** "Wrong number — outreach stopped" and where its one apology stands. */
+function wrongRouteLine(route: Data): string {
+  return `Wrong number — outreach stopped · ${wrongRouteAckLabel(String(route.ackStatus ?? "none"), route.ackReason ? String(route.ackReason) : null).label}`;
+}
 type TimelineFilter = "all" | Channel;
 
 const eventLabels: Record<string, string> = {
@@ -230,6 +243,9 @@ export default function CrmRecordClient({ recordId, variant = "page" }: { record
   const editorOpen = hasDraft || writeMessage;
   const lastMessage = [...messages].filter((message) => message.direction === "inbound")
     .sort((a, b) => String(b.sentAt ?? b.createdAt).localeCompare(String(a.sentAt ?? a.createdAt)))[0];
+  // A wrong number on the channel shown, else any recorded for this lead.
+  const wrongRoute = wrongRouteFor(data, conversations.filter((item) => item.channel === data.activeChannel).map((item) => String(item.id))) ?? wrongRoutesOf(data)[0];
+  const whatsappWrong = wrongRouteFor(data, conversations.filter((item) => item.channel === "whatsapp").map((item) => String(item.id)));
   return (
     <div className={cn("space-y-5 transition-opacity", loading && "opacity-60")} aria-busy={loading || undefined}>
       <RecordHeader
@@ -257,7 +273,7 @@ export default function CrmRecordClient({ recordId, variant = "page" }: { record
       <div className="flex flex-wrap items-center gap-3 border-y border-stroke-soft-200 py-3">
         <ClassificationSelect record={data} categories={categories} onAction={mutate} />
         <p role="status" className="min-w-0 flex-1 text-paragraph-xs text-text-sub-600">
-          {data.dnc ? "Outreach stopped · Do Not Contact" : hasDraft ? "A draft needs your attention" : summary.answered ? `${summary.answerLabel} · waiting for their reply` : "Conversation history"}
+          {data.dnc ? "Outreach stopped · Do Not Contact" : wrongRoute ? wrongRouteLine(wrongRoute) : hasDraft ? "A draft needs your attention" : summary.answered ? `${summary.answerLabel} · waiting for their reply` : "Conversation history"}
         </p>
         <ActivityDrawer events={events} drafts={drafts} sendAttempts={sendAttempts} />
         {data.activeChannel !== "whatsapp" && !hasDraft && <Button.Root variant="neutral" mode="stroke" size="xsmall" onClick={() => setWriteMessage((open) => !open)}>{writeMessage ? "Close composer" : "Write a message"}</Button.Root>}
@@ -267,7 +283,7 @@ export default function CrmRecordClient({ recordId, variant = "page" }: { record
         className={cn("grid min-h-[28rem] items-stretch gap-6 xl:grid-rows-[minmax(0,1fr)]", editorOpen && "xl:grid-cols-[minmax(0,1fr)_minmax(20rem,0.65fr)]")}>
         <div className="h-[min(70dvh,44rem)] min-h-0 min-w-0 xl:h-auto">
           {data.activeChannel === "whatsapp"
-            ? <WhatsappRecordPanel personId={String(person.id ?? data.personId)} blockedReason={data.dnc ? "This contact is marked Do Not Contact. Outreach has stopped." : undefined}
+            ? <WhatsappRecordPanel personId={String(person.id ?? data.personId)} blockedReason={data.dnc ? "This contact is marked Do Not Contact. Outreach has stopped." : whatsappWrong ? "This number was recorded as a wrong number for this lead. Outreach to it has stopped." : undefined}
                 answered={summary.answered} onSent={() => { announceRecordChanged(recordId); void load(); }}>
                 <ConversationPanel conversations={conversations} messages={messages} name={name} avatarUrl={avatarUrl} />
               </WhatsappRecordPanel>
@@ -383,6 +399,7 @@ function RecordHeader({ back, data, person, name, avatarUrl, currentStep, active
       badge={<>
         {state && <Badge.Root variant="lighter" size="medium" color={state.color}><Badge.Dot />{state.label}</Badge.Root>}
         {dnc && <Badge.Root variant="lighter" size="medium" color="red"><Badge.Dot />Do not contact</Badge.Root>}
+        {wrongRoutesOf(data).length > 0 && <Badge.Root variant="lighter" size="medium" color="orange"><Badge.Dot />Wrong number</Badge.Root>}
       </>}
       description={<div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-paragraph-sm text-text-sub-600">
         {(title || company) && <span className="inline-flex min-w-0 items-center gap-1.5"><RiBriefcaseLine className="size-4 shrink-0 text-text-soft-400" aria-hidden="true" /><span className="truncate">{[title, company].filter(Boolean).join(" · ")}</span></span>}
@@ -570,7 +587,11 @@ function ReplyComposer({ record, draft, conversations, citations, uncertainAttem
   useEffect(() => () => setUnsavedReply(recordId, false), [recordId]);
   const stale = Boolean(draft.id && Number(draft.expectedContextVersion) !== Number(record.contextVersion));
   const revision = Number(draft.revision ?? 1);
-  const ready = Boolean(body.trim() && (channel !== "email" || subject.trim()) && conversationId && !record.dnc && (!editingCurrentDraft || !stale));
+  // A wrong number takes nothing more, except its one closing apology (this draft, while it is still claimable).
+  const wrongRoute = wrongRouteFor(record, [conversationId]);
+  const apology = Boolean(wrongRoute && editingCurrentDraft && String(wrongRoute.ackDraftId) === String(draft.id) && ["drafted", "reserved"].includes(String(wrongRoute.ackStatus)));
+  const routeBlocked = Boolean(wrongRoute) && !apology;
+  const ready = Boolean(body.trim() && (channel !== "email" || subject.trim()) && conversationId && !record.dnc && !routeBlocked && (!editingCurrentDraft || !stale));
   const requestSubject = channel === "email" ? subject : null;
 
   const changeConversation = (value: string) => {
@@ -592,6 +613,8 @@ function ReplyComposer({ record, draft, conversations, citations, uncertainAttem
       <FramePanel className="flex min-h-0 flex-col overflow-hidden p-0 sm:p-0">
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 sm:p-5">
         {Boolean(record.dnc) && <InlineWarning tone="danger" title="Sending is blocked" detail="This person is marked as Do Not Contact. Clear that status before replying." />}
+        {!record.dnc && routeBlocked && <InlineWarning tone="danger" title="Sending is blocked" detail={`${wrongRouteLine(wrongRoute!)}. This ${channel === "email" ? "address" : "number"} reached someone other than this lead, so nothing more is sent to it.`} />}
+        {!record.dnc && apology && <InlineWarning tone="warning" title="Wrong number — closing apology" detail="Outreach to this number has stopped. Only this short apology can go out, once: no question, offer or request for the right number." />}
         {editingCurrentDraft && draft.status === "failed" && (
           // A draft fails either while being written or when its send was refused; say which.
           sendRefused
@@ -615,7 +638,7 @@ function ReplyComposer({ record, draft, conversations, citations, uncertainAttem
           <div className="mb-1.5 flex items-center justify-between gap-2">
             <span className="flex min-w-0 items-center gap-2">
               <label htmlFor="crm-reply-body" className="text-label-sm text-text-strong-950">{editingCurrentDraft ? "Draft reply" : "Your reply"}</label>
-              {editingCurrentDraft && <DraftBadge draft={draft} stale={stale} dnc={Boolean(record.dnc)} />}
+              {editingCurrentDraft && <DraftBadge draft={draft} stale={stale} dnc={Boolean(record.dnc)} apology={apology} />}
             </span>
             {editingCurrentDraft && <button type="button" className={cn(secondaryButtonClass, "h-7 gap-1.5 whitespace-nowrap px-2.5 text-label-xs")} onClick={() => setRegenerateOpen(true)} aria-label="Regenerate draft"><RiRefreshLine className="size-3.5" aria-hidden="true" /><span className="hidden sm:inline">Regenerate draft</span></button>}
           </div>
@@ -653,11 +676,12 @@ function ReplyComposer({ record, draft, conversations, citations, uncertainAttem
 }
 
 /** Where the AI draft stands, in the same words the Action required table uses. */
-function DraftBadge({ draft, stale, dnc }: { draft: Data; stale: boolean; dnc: boolean }) {
+function DraftBadge({ draft, stale, dnc, apology = false }: { draft: Data; stale: boolean; dnc: boolean; apology?: boolean }) {
   const status = String(draft.status ?? "");
   const [label, color]: [string, React.ComponentProps<typeof Badge.Root>["color"]] = status === "failed" ? ["Draft failed", "red"]
     : dnc ? ["Do not contact", "red"]
     : stale ? ["Out of date", "orange"]
+    : apology ? ["Closing apology", "orange"]
     : status === "awaiting_review" ? ["Ready to send", "green"]
     : [humanize(status || "draft"), "gray"];
   return <Badge.Root variant="lighter" size="medium" color={color} className="shrink-0 whitespace-nowrap"><Badge.Dot />{label}</Badge.Root>;

@@ -17,6 +17,8 @@ export type ReplyRecord = {
   agentStatus?: string | null;
   agentReason?: string | null;
   agentMs?: number | null;
+  /** The agent's action (reply_agent_runs.action): "wrong_number" is shown as such, never as an answer. */
+  agentAction?: string | null;
 };
 
 export type ReplyState = {
@@ -36,9 +38,21 @@ function seconds(ms: number | null | undefined): string {
   return ` in ${ms < 10_000 ? (ms / 1_000).toFixed(1) : Math.round(ms / 1_000)} s`;
 }
 
+/** A wrong number (crm/wrongNumberAck.server.ts): outreach to it stopped, and where the one apology stands. */
+function wrongNumberState(record: ReplyRecord): ReplyState {
+  const head = "Wrong number — outreach stopped";
+  const detail = (record.agentReason ?? "").split("; ").slice(1).join("; ");
+  if (record.agentStatus === "replied" || record.draftStatus === "sent") return { tone: "done", text: `${head}; apology sent` };
+  if (record.agentStatus === "drafted") return { tone: "you", text: `${head}; the apology waits for you in Action required` };
+  if (/uncertain/.test(detail)) return { tone: "you", text: `${head}; ${detail}` };
+  if (/could not be sent/.test(detail)) return { tone: "failed", text: `${head}; ${detail}` };
+  return { tone: "done", text: detail ? `${head}; ${detail}` : head };
+}
+
 /** What the reply agent did with the message (replyAgent/agent.server.ts). */
 function agentState(record: ReplyRecord): ReplyState | null {
   const reason = record.agentReason ?? "";
+  if (record.agentAction === "wrong_number" && record.agentStatus !== "running") return wrongNumberState(record);
   switch (record.agentStatus) {
     case "running": return { tone: "waiting", text: "Reading the reply and answering…" };
     case "replied": return { tone: "done", text: `Answered automatically${seconds(record.agentMs)}${reason.includes("the owner was told") ? "; you were told in Needs you" : ""}` };

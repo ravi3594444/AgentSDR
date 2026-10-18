@@ -16,8 +16,19 @@
  * mode only drafts, a retried job never answers twice, a newer message wins,
  * a chat the owner took over and a lead outside a running run stay with the
  * classifier, a model outage still answers, and the Replies list shows the
- * outcome with its time. With AI_SOURCE_ORGANIZATION_ID it also runs a few
- * messages through the real model and prints the answers and timings.
+ * outcome with its time.
+ *
+ * Wrong number (WhatsApp): in an Automatic run one brief apology goes out and
+ * nothing after it (a repeat, a duplicate webhook, a retried or restarted
+ * job, an ordinary draft, a duplicate record holding the same number); in
+ * Review mode one draft waits and nothing is sent until it is approved, and
+ * then only once; concurrent workers send one; a failed or uncertain apology
+ * is never retried and the number stays stopped; a lead already marked Do
+ * Not Contact, a chat the owner took over, and "Wrong number, stop messaging
+ * me" get nothing (the last becomes Do Not Contact).
+ *
+ * With AI_SOURCE_ORGANIZATION_ID it also runs a few messages through the
+ * real model and prints the answers and timings.
  *
  * Creates its own organization ("Reply agent check …") and leaves it behind.
  * Refuses a non-local DATABASE_URL.
@@ -47,9 +58,18 @@ const { createThread } = await import("@/lib/assistant/threads.server");
 const { takeOverConversation } = await import("@/lib/assistant/decisions.server");
 const { runReplies } = await import("@/lib/assistant/runReplies.server");
 const { runReplyAgent } = await import("@/lib/assistant/replyAgent/agent.server");
+const { closeWrongNumber } = await import("@/lib/crm/wrongNumberAck.server");
+const { DefiniteCrmSendError, sendDraft } = await import("@/lib/crm/send");
+const { setPersonDoNotContact } = await import("@/lib/crm/policies");
+const { loadPersonFacts } = await import("@/lib/assistant/audiences.server");
+const { contactChannels } = await import("@/lib/assistant/audiences");
+const { findWrongRoutes, wrongRouteSendRefusal } = await import("@/lib/crm/wrongRoutes");
+const { wrongRouteAckLabel } = await import("@/lib/crm/wrongNumber");
+const { getCrmRecordWorkspace, listCrmActions } = await import("@/lib/crm/queries");
 type AgentModel = import("@/lib/assistant/replyAgent/agent.server").AgentModel;
 type CrmSendAdapter = import("@/lib/crm/send").CrmSendAdapter;
 type CrmJob = import("@/lib/crm/queue").CrmJob;
+type ClassificationCompletion = import("@/lib/crm/ai/types").ClassificationCompletion;
 
 let failures = 0;
 function check(label: string, ok: boolean, detail = "") {
@@ -77,6 +97,9 @@ const model: AgentModel = async ({ userPrompt }) => {
   return { text, provider: "stand-in", model: "stand-in-agent", request: {}, response: {} };
 };
 const deps = { model, send, allowNonProduction: true, brief: false };
+
+/** A number the first organization records as wrong; the second must not see it. */
+let isolationPhone = "";
 
 const [org] = await db.insert(organizations).values({ name: `Reply agent check ${stamp}`, slug: `reply-agent-check-${stamp}` }).returning();
 console.log(`Organization ${org!.name} (${org!.id})`);
@@ -259,6 +282,251 @@ await runInOrganization(org!.id, async () => {
   const shownOk = replies.find((item) => item.id === ok.id);
   check("…and a message that needed no answer", Boolean(shownOk && /No answer needed/.test(shownOk.state.text)), shownOk?.state.text ?? "(missing)");
 
+  // ============================================================ wrong number (WhatsApp)
+  const waAccount = `wa-agent-check-${stamp}`;
+  const phoneOf = (index: number) => `+9198${String(stamp).slice(-6)}${String(index).padStart(2, "0")}`;
+  const waPersons = await db.insert(people).values(Array.from({ length: 16 }, (_, index) => ({
+    organizationId: orgId,
+    phone: phoneOf(index),
+    fullName: `Dr Wrong ${index + 1}`,
+    source: "reply-agent-check",
+  }))).returning({ id: people.id });
+  const W = waPersons.map((person) => person.id);
+  // W[1] is a duplicate record of W[0]'s lead: the same number, another row.
+  await db.update(people).set({ phone: phoneOf(0) }).where(eq(people.id, W[1]!));
+  const waPlan = { ...plan, autopilot: true };
+  const [waAuto] = await db.insert(schema.outreachRuns).values({ organizationId: orgId, threadId: thread.id, audienceId, name: "Automatic WhatsApp run", status: "running", channels: ["whatsapp"], plan: waPlan, autopilot: true, approvedAt: new Date(Date.now() - 60_000) }).returning();
+  const [waReview] = await db.insert(schema.outreachRuns).values({ organizationId: orgId, threadId: thread.id, audienceId, name: "Review WhatsApp run", status: "running", channels: ["whatsapp"], plan: { ...waPlan, autopilot: false }, autopilot: false }).returning();
+  const autoIdx = [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15];
+  const reviewIdx = [2];
+  await db.insert(schema.outreachRunLeads).values([
+    ...autoIdx.map((index) => ({ organizationId: orgId, runId: waAuto!.id, personId: W[index]!, channel: "whatsapp" as const })),
+    ...reviewIdx.map((index) => ({ organizationId: orgId, runId: waReview!.id, personId: W[index]!, channel: "whatsapp" as const })),
+    // W[13] is in no run: the classifier path, Review semantics.
+  ]);
+
+  const waSends: { body: string; phone: string | null; thread: string | null }[] = [];
+  const waSend: CrmSendAdapter = async (input) => {
+    waSends.push({ body: input.bodyText, phone: input.recipientPhone ?? null, thread: input.providerThreadId });
+    return { provider: "unipile", providerMessageId: `wa-check-${stamp}-${waSends.length}`, providerThreadId: input.providerThreadId, rfcMessageId: null, response: {} };
+  };
+  const waDeps = { model, send: waSend, allowNonProduction: true, brief: false };
+  const sentTo = (index: number) => waSends.filter((item) => item.thread === `wa-chat-${index}-${stamp}`).length;
+  const standInClassifier: ClassificationCompletion = async () => ({
+    text: JSON.stringify({ categoryKey: "other", subcategoryKey: "wrong_number", confidence: 0.9, reasoning: "stand-in: wrong number", suggestedNextActionAt: null }),
+    provider: "stand-in",
+    model: "stand-in-classifier",
+    request: {},
+    response: {},
+  });
+  let waN = 0;
+  /** A WhatsApp message from the number the person's chat is with (their own phone unless given). */
+  async function waInbound(index: number, body: string, idempotencyKey = `wa-in-${index}-${stamp}-${(waN += 1)}`, phone = phoneOf(index)) {
+    const digits = phone.replace(/\D/g, "");
+    return ingestInboundReply({
+      personId: W[index]!,
+      channel: "whatsapp",
+      accountRef: waAccount,
+      providerThreadId: `wa-chat-${index}-${stamp}`,
+      providerContactId: `${digits}@s.whatsapp.net`,
+      idempotencyKey,
+      providerMessageId: `wa-pm-${idempotencyKey}`,
+      bodyText: body,
+      sentAt: new Date(),
+    });
+  }
+  async function waClassify(messageId: string, extra: { complete?: ClassificationCompletion; send?: CrmSendAdapter } = {}) {
+    const [job] = await db.select().from(crm.crmJobs).where(and(eq(crm.crmJobs.kind, "classification"), eq(crm.crmJobs.entityId, messageId))).limit(1);
+    await handleClassificationJob(job as unknown as CrmJob, { replyAgent: { ...waDeps, ...(extra.send ? { send: extra.send } : {}) }, ...(extra.complete ? { complete: extra.complete } : {}) });
+  }
+  const routeOf = async (index: number) => (await db.select().from(crm.crmWrongRoutes)
+    .where(and(eq(crm.crmWrongRoutes.organizationId, orgId), eq(crm.crmWrongRoutes.route, phoneOf(index).replace(/\D/g, "")))).limit(1))[0] ?? null;
+  const runLead = async (index: number) => (await db.select().from(schema.outreachRunLeads)
+    .where(and(eq(schema.outreachRunLeads.organizationId, orgId), eq(schema.outreachRunLeads.personId, W[index]!))).limit(1))[0] ?? null;
+  const recordOf = async (index: number) => (await db.select().from(crm.crmRecords).where(and(eq(crm.crmRecords.organizationId, orgId), eq(crm.crmRecords.personId, W[index]!))).limit(1))[0] ?? null;
+  const awaitingDrafts = async (index: number) => {
+    const record = await recordOf(index);
+    return record ? db.select().from(crm.crmDrafts).where(and(eq(crm.crmDrafts.crmRecordId, record.id), eq(crm.crmDrafts.status, "awaiting_review"))) : [];
+  };
+  const APOLOGY = "Sorry about that—we won't message this number again.";
+  script.set("Wrong number", () => ({ action: "wrong_number", reply: APOLOGY }));
+
+  // ------------------------------------------------------------ Automatic: one apology, then nothing
+  const wrongKey = `wa-in-0-first-${stamp}`;
+  const wrong = await waInbound(0, "Wrong number", wrongKey);
+  await waClassify(wrong.message.id);
+  let route = await routeOf(0);
+  check("Automatic: \"Wrong number\" gets exactly one brief apology", sentTo(0) === 1 && waSends.at(-1)?.body === APOLOGY && route?.ackStatus === "sent", `${sentTo(0)} sent, ack ${route?.ackStatus}`);
+  check("…the number is recorded as wrong for the intended lead, not Do Not Contact", route?.personId === W[0] && route?.messageId === wrong.message.id && !(await isPersonDoNotContact(db, W[0]!)));
+  check("…outreach to the number stopped (run lead stopped, not opted out)", (await runLead(0))?.status === "stopped");
+  check("…and to a duplicate record holding the same number", (await runLead(1))?.status === "stopped");
+  const dupFacts = (await loadPersonFacts([W[1]!])).get(W[1]!);
+  check("…which no later run can enrol on WhatsApp", Boolean(dupFacts) && !contactChannels(dupFacts!).channels.includes("whatsapp"), contactChannels(dupFacts!).reason ?? "");
+  let record = await recordOf(0);
+  const [wrongClass] = await db.select().from(crm.crmClassifications).where(eq(crm.crmClassifications.messageId, wrong.message.id));
+  const [wrongSub] = record?.subcategoryId ? await db.select().from(crm.crmSubcategories).where(eq(crm.crmSubcategories.id, record.subcategoryId)) : [];
+  check("…filed as Wrong Number (other), not interested or not interested", record?.categoryKey === "other" && wrongSub?.key === "wrong_number" && wrongClass?.proposedCategoryKey === "other", `${record?.categoryKey}/${wrongSub?.key}`);
+  check("…and nothing is left in Action required", record?.workflowState === "idle", record?.workflowState ?? "");
+  check("…the reply agent logged it as a wrong number", (await agentRow(wrong.message.id))?.action === "wrong_number" && (await agentRow(wrong.message.id))?.status === "replied");
+
+  let waBefore = waSends.length;
+  const repeat = await waInbound(0, "I said wrong number!!");
+  await waClassify(repeat.message.id);
+  check("a repeated \"wrong number\" gets no second apology", waSends.length === waBefore && (await routeOf(0))?.ackStatus === "sent");
+  check("…and no draft, and no Action required", (await awaitingDrafts(0)).length === 0 && (await recordOf(0))?.workflowState === "idle", (await recordOf(0))?.workflowState ?? "");
+  const duplicate = await waInbound(0, "Wrong number", wrongKey);
+  check("a duplicate webhook is the same message, not a new one", duplicate.duplicate && duplicate.message.id === wrong.message.id);
+  await db.update(schema.replyAgentRuns).set({ status: "running", updatedAt: new Date(Date.now() - 10 * 60_000) }).where(eq(schema.replyAgentRuns.messageId, wrong.message.id));
+  const restarted = await runReplyAgent(wrong.message.id, waDeps);
+  const resumed = await closeWrongNumber({ messageId: wrong.message.id, source: "reply_agent", acknowledgement: APOLOGY, optOut: false, sendAllowed: true }, { send: waSend });
+  check("a restarted job and a retried close send nothing more", waSends.length === waBefore && resumed?.ackStatus === "sent", `${restarted?.status ?? "not the agent's"} / ${resumed?.summary}`);
+
+  record = await recordOf(0);
+  const [salesDraft] = await db.insert(crm.crmDrafts).values({
+    crmRecordId: record!.id, conversationId: wrong.conversation.id, replyForMessageId: null, sequenceStepRunId: null,
+    expectedContextVersion: record!.contextVersion, channel: "whatsapp", subject: null, aiBodyText: "Following up on our dental chair servicing offer!",
+    status: "awaiting_review", provider: "check", model: "check", request: {}, response: {},
+  }).returning();
+  let refusal = "";
+  try {
+    await sendDraft({ draftId: salesDraft!.id, revision: salesDraft!.revision, idempotencyKey: `sales-after-wrong-${stamp}`, requestId: crypto.randomUUID(), actorRef: null }, { send: waSend });
+  } catch (error) {
+    refusal = error instanceof Error ? error.message : String(error);
+  }
+  check("a later sales message to the number is refused by the send path", waSends.length === waBefore && /wrong number/i.test(refusal), refusal);
+  const dupMessage = await waInbound(1, "Hello?", undefined, phoneOf(0));
+  await waClassify(dupMessage.message.id, { complete: standInClassifier });
+  check("the duplicate record's chat on that number gets nothing either", waSends.length === waBefore && (await awaitingDrafts(1)).length === 0);
+
+  // ------------------------------------------------------------ Review mode: one draft, sent only on approval
+  waBefore = waSends.length;
+  const reviewWrong = await waInbound(2, "Wrong number");
+  await waClassify(reviewWrong.message.id);
+  route = await routeOf(2);
+  let drafts = await awaitingDrafts(2);
+  check("Review mode: one apology draft and no send", waSends.length === waBefore && drafts.length === 1 && drafts[0]?.aiBodyText === APOLOGY && route?.ackStatus === "drafted" && route.ackDraftId === drafts[0]?.id);
+  check("…the record waits in Action required, outreach already stopped", (await recordOf(2))?.workflowState === "action_required" && (await runLead(2))?.status === "stopped");
+  const reviewAgain = await waInbound(2, "wrong number, sorry");
+  await waClassify(reviewAgain.message.id);
+  drafts = await awaitingDrafts(2);
+  route = await routeOf(2);
+  check("a repeat before approval still leaves exactly one apology draft", waSends.length === waBefore && drafts.length === 1 && route?.ackDraftId === drafts[0]?.id && route?.ackStatus === "drafted");
+  await sendDraft({ draftId: drafts[0]!.id, revision: drafts[0]!.revision, idempotencyKey: `approve-${stamp}`, requestId: crypto.randomUUID(), actorRef: null }, { send: waSend });
+  route = await routeOf(2);
+  check("approving it sends the one apology", sentTo(2) === 1 && route?.ackStatus === "sent" && (await recordOf(2))?.workflowState === "idle", `${sentTo(2)} / ${route?.ackStatus} / ${(await recordOf(2))?.workflowState}`);
+  refusal = "";
+  try {
+    await sendDraft({ draftId: drafts[0]!.id, revision: drafts[0]!.revision, idempotencyKey: `approve-again-${stamp}`, requestId: crypto.randomUUID(), actorRef: null }, { send: waSend });
+  } catch (error) {
+    refusal = error instanceof Error ? error.message : String(error);
+  }
+  check("…and approving it again sends nothing", sentTo(2) === 1 && Boolean(refusal), refusal);
+
+  // ------------------------------------------------------------ concurrent workers
+  waBefore = waSends.length;
+  // W[5] is another record holding W[4]'s number: two chats, one route, three workers at once.
+  await db.update(people).set({ phone: phoneOf(4) }).where(eq(people.id, W[5]!));
+  const raceA = await waInbound(4, "Wrong number");
+  const raceB = await waInbound(5, "Wrong number", undefined, phoneOf(4));
+  const racers = await Promise.all([
+    closeWrongNumber({ messageId: raceA.message.id, source: "classifier", acknowledgement: null, optOut: false, sendAllowed: true }, { send: waSend }),
+    closeWrongNumber({ messageId: raceA.message.id, source: "classifier", acknowledgement: null, optOut: false, sendAllowed: true }, { send: waSend }),
+    closeWrongNumber({ messageId: raceB.message.id, source: "classifier", acknowledgement: null, optOut: false, sendAllowed: true }, { send: waSend }),
+  ]);
+  check("concurrent workers on one number send one apology", waSends.length === waBefore + 1, `${waSends.length - waBefore} sent; ${racers.map((outcome) => outcome?.ackStatus).join(", ")}`);
+
+  // ------------------------------------------------------------ failed and uncertain apologies
+  waBefore = waSends.length;
+  let attempts = 0;
+  const refusing: CrmSendAdapter = async () => { attempts += 1; throw new DefiniteCrmSendError("simulated provider refusal"); };
+  const failed = await waInbound(6, "Wrong number");
+  await waClassify(failed.message.id, { send: refusing });
+  route = await routeOf(6);
+  check("a failed apology is recorded as failed", attempts === 1 && route?.ackStatus === "failed" && (await recordOf(6))?.workflowState === "idle", `${route?.ackStatus} / ${(await recordOf(6))?.workflowState}`);
+  await closeWrongNumber({ messageId: failed.message.id, source: "classifier", acknowledgement: null, optOut: false, sendAllowed: true }, { send: refusing });
+  await closeWrongNumber({ messageId: failed.message.id, source: "classifier", acknowledgement: null, optOut: false, sendAllowed: true }, { send: waSend });
+  check("…is never retried, and the number stays stopped", attempts === 1 && waSends.length === waBefore && (await routeOf(6))?.ackStatus === "failed" && (await runLead(6))?.status === "stopped");
+
+  let lost = 0;
+  const losing: CrmSendAdapter = async () => { lost += 1; throw new Error("simulated lost response"); };
+  const uncertain = await waInbound(7, "Wrong number");
+  await waClassify(uncertain.message.id, { send: losing });
+  route = await routeOf(7);
+  check("an apology whose response was lost is uncertain", lost === 1 && route?.ackStatus === "uncertain", route?.ackStatus ?? "");
+  await closeWrongNumber({ messageId: uncertain.message.id, source: "classifier", acknowledgement: null, optOut: false, sendAllowed: true }, { send: waSend });
+  check("…is not resent blindly, and the number stays stopped", lost === 1 && waSends.length === waBefore && (await routeOf(7))?.ackStatus === "uncertain" && (await runLead(7))?.status === "stopped");
+
+  // ------------------------------------------------------------ restarts mid-way
+  const interrupted = await waInbound(8, "Wrong number");
+  // As if the process died after claiming the apology, before sending it.
+  const firstPass = await closeWrongNumber({ messageId: interrupted.message.id, source: "classifier", acknowledgement: null, optOut: false, sendAllowed: false }, { send: waSend });
+  await db.update(crm.crmWrongRoutes).set({ ackStatus: "reserved" }).where(eq(crm.crmWrongRoutes.id, firstPass!.routeId!));
+  waBefore = waSends.length;
+  const secondPass = await closeWrongNumber({ messageId: interrupted.message.id, source: "classifier", acknowledgement: null, optOut: false, sendAllowed: true }, { send: waSend });
+  const thirdPass = await closeWrongNumber({ messageId: interrupted.message.id, source: "classifier", acknowledgement: null, optOut: false, sendAllowed: true }, { send: waSend });
+  check("a restart after the claim sends it once, and only once", firstPass?.ackStatus === "drafted" && secondPass?.ackStatus === "sent" && thirdPass?.ackStatus === "sent" && waSends.length === waBefore + 1, `${firstPass?.ackStatus} → ${secondPass?.ackStatus} → ${thirdPass?.ackStatus}`);
+  const midSend = await waInbound(9, "Wrong number");
+  const drafted = await closeWrongNumber({ messageId: midSend.message.id, source: "classifier", acknowledgement: null, optOut: false, sendAllowed: false }, { send: waSend });
+  // As if the process died after the send began (the claim was consumed).
+  await db.update(crm.crmWrongRoutes).set({ ackStatus: "sending" }).where(eq(crm.crmWrongRoutes.id, drafted!.routeId!));
+  waBefore = waSends.length;
+  const afterCrash = await closeWrongNumber({ messageId: midSend.message.id, source: "classifier", acknowledgement: null, optOut: false, sendAllowed: true }, { send: waSend });
+  check("a restart after the send began marks it uncertain and sends nothing", afterCrash?.ackStatus === "uncertain" && waSends.length === waBefore, afterCrash?.ackStatus ?? "");
+
+  // ------------------------------------------------------------ nothing for blocked leads
+  waBefore = waSends.length;
+  await setPersonDoNotContact({ personId: W[10]!, reason: "asked earlier", source: "human", actorType: "human" });
+  const dncWrong = await waInbound(10, "Wrong number");
+  await waClassify(dncWrong.message.id, { complete: standInClassifier });
+  route = await routeOf(10);
+  check("a lead already marked Do Not Contact gets no apology", waSends.length === waBefore && route?.ackStatus === "blocked" && (await awaitingDrafts(10)).length === 0, `${route?.ackStatus}: ${route?.ackReason}`);
+
+  const optOut = await waInbound(11, "Wrong number, stop messaging me");
+  await waClassify(optOut.message.id, { complete: standInClassifier });
+  route = await routeOf(11);
+  check("\"Wrong number, stop messaging me\" is Do Not Contact and nothing is sent", waSends.length === waBefore && await isPersonDoNotContact(db, W[11]!) && route?.ackStatus === "blocked" && (await awaitingDrafts(11)).length === 0, `${route?.ackStatus}: ${route?.ackReason}`);
+  // The classifier path's own rule misses this one; the agent reads a wrong
+  // number, and the opt-out beside it still wins.
+  script.set("I'm not Dr Wrong 13, don't text me again", () => ({ action: "wrong_number", reply: APOLOGY }));
+  const optOutAgent = await waInbound(12, "I'm not Dr Wrong 13, don't text me again");
+  await waClassify(optOutAgent.message.id);
+  check("…as is a wrong number the agent reads beside \"don't text me\"", waSends.length === waBefore && await isPersonDoNotContact(db, W[12]!) && (await routeOf(12))?.ackStatus === "blocked", (await routeOf(12))?.ackStatus ?? "no route");
+
+  const takenWrong = await waInbound(14, "Wrong number");
+  await takeOverConversation(takenWrong.conversation.id, null);
+  await waClassify(takenWrong.message.id, { complete: standInClassifier });
+  check("a chat the owner took over gets no apology, and the number still stops", waSends.length === waBefore && (await routeOf(14))?.ackStatus === "blocked" && (await runLead(14))?.status === "stopped");
+
+  // ------------------------------------------------------------ the classifier path, outside any run
+  const outside = await waInbound(13, "Sorry, wrong number");
+  await waClassify(outside.message.id, { complete: standInClassifier });
+  check("outside any run the classifier path drafts the apology for review and sends nothing", waSends.length === waBefore && (await awaitingDrafts(13)).length === 1 && (await routeOf(13))?.ackStatus === "drafted");
+
+  // ------------------------------------------------------------ the model fails, or writes a bad apology
+  script.set("wrong number bro", () => new Error("simulated model outage"));
+  const outageWrong = await waInbound(15, "wrong number bro");
+  await waClassify(outageWrong.message.id);
+  check("when the model is down \"wrong number\" still gets the fixed apology, not a holding line", sentTo(15) === 1 && waSends.at(-1)?.body === APOLOGY, waSends.at(-1)?.body ?? "");
+  const badIdx = 3;
+  script.set("This isn't Dr Wrong's number", () => ({ action: "wrong_number", reply: "Sorry! Could you share the right number for Dr Wrong? We have a great offer." }));
+  const bad = await waInbound(badIdx, "This isn't Dr Wrong's number");
+  await waClassify(bad.message.id);
+  check("an apology with a question or an offer is replaced by the fixed line", sentTo(badIdx) === 1 && waSends.at(-1)?.body === APOLOGY, waSends.at(-1)?.body ?? "");
+
+  const workspace = await getCrmRecordWorkspace((await recordOf(0))!.id);
+  const shownRoute = workspace.wrongRoutes[0];
+  check("the CRM record shows \"Wrong number — outreach stopped\" and that the apology was sent", workspace.wrongRoutes.length === 1 && shownRoute?.ackStatus === "sent" && shownRoute.conversationIds.includes(wrong.conversation.id) && wrongRouteAckLabel(shownRoute.ackStatus).label === "Apology sent");
+  const reviewWorkspace = await getCrmRecordWorkspace((await recordOf(13))!.id);
+  check("…and an apology awaiting review on a record outside any run", reviewWorkspace.wrongRoutes[0]?.ackStatus === "drafted" && reviewWorkspace.wrongRoutes[0]?.ackDraftId === (reviewWorkspace.draft as { id?: string } | null)?.id);
+  const actions = await listCrmActions({ recordId: (await recordOf(13))!.id });
+  check("…which Action required names as a wrong-number apology", actions.actions[0]?.actionType === "Wrong number: apology review" && actions.actions[0]?.wrongNumberApology === true, actions.actions[0]?.actionType ?? "(no row)");
+
+  isolationPhone = phoneOf(0);
+
+  const wrongReplies = (await runReplies([waAuto!.id], 50))[waAuto!.id] ?? [];
+  const wrongShown = wrongReplies.find((item) => item.id === outageWrong.message.id);
+  check("the Replies list says wrong number and that the apology went out", Boolean(wrongShown && /Wrong number/.test(wrongShown.state.text) && /apology sent/i.test(wrongShown.state.text)), wrongShown?.state.text ?? "(missing)");
+
   // ------------------------------------------------------------ the real model (optional)
   const aiSource = process.env.AI_SOURCE_ORGANIZATION_ID?.trim();
   if (aiSource) {
@@ -287,6 +555,20 @@ await runInOrganization(org!.id, async () => {
       check(`real model: "${text}" gets a decision`, Boolean(outcome && outcome.status !== "failed"), outcome?.reason ?? "");
     }
   }
+});
+
+// ------------------------------------------------------------ another organization sees none of the wrong numbers
+const [otherOrg] = await db.insert(organizations).values({ name: `Reply agent check other ${stamp}`, slug: `reply-agent-check-other-${stamp}` }).returning();
+await runInOrganization(otherOrg!.id, async () => {
+  const otherId = currentOrganizationId();
+  await ensureCrmDefaults();
+  const [stranger] = await db.insert(people).values({ organizationId: otherId, phone: isolationPhone, fullName: "Other org lead", source: "reply-agent-check" }).returning({ id: people.id });
+  const digits = isolationPhone.replace(/\D/g, "");
+  check("another organization does not see the first one's wrong numbers", Boolean(digits) && (await findWrongRoutes(db, { channel: "whatsapp", routes: [digits] })).length === 0
+    && !(await wrongRouteSendRefusal(db, { channel: "whatsapp", routes: [digits] })));
+  const theirs = await ingestInboundReply({ personId: stranger!.id, channel: "whatsapp", accountRef: `wa-other-${stamp}`, providerThreadId: `wa-other-chat-${stamp}`, providerContactId: `${digits}@s.whatsapp.net`, idempotencyKey: `wa-other-${stamp}`, bodyText: "Wrong number", sentAt: new Date() });
+  const closedThere = await closeWrongNumber({ messageId: theirs.message.id, source: "classifier", acknowledgement: null, optOut: false, sendAllowed: true });
+  check("…and records its own, unaffected by the first's", Boolean(closedThere?.created) && closedThere?.ackStatus === "drafted", closedThere?.summary ?? "");
 });
 
 console.log(failures ? `\n${failures} check(s) failed` : "\nAll reply agent checks passed");

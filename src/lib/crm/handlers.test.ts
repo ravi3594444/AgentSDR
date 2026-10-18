@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { classifiedIntoDoNotContactSubcategory, detectsExplicitDncIntent } from "./handlers";
+import { classifiedAsWrongNumber, classifiedIntoDoNotContactSubcategory, detectsExplicitDncIntent } from "./handlers";
+import { detectsOptOutWording, detectsWrongNumber } from "./wrongNumber";
 
 test("explicit DNC detection matches direct first-person requests", () => {
   assert.equal(detectsExplicitDncIntent("Please unsubscribe me from these emails."), true);
@@ -53,4 +54,28 @@ test("does not flag a different subcategory, an unapplied result, a stale result
     classifiedIntoDoNotContactSubcategory({ applied: true, stale: false }, null, subcategories),
     false,
   );
+});
+
+test("explicit DNC detection also catches \"wrong number\" beside a stop", () => {
+  // classificationContext treats either as an explicit opt-out.
+  assert.equal(detectsExplicitDncIntent("Wrong number, stop messaging me"), true);
+  assert.equal(detectsWrongNumber("Wrong number. STOP") && detectsOptOutWording("Wrong number. STOP"), true);
+  assert.equal(detectsWrongNumber("Wrong number") && detectsOptOutWording("Wrong number"), false);
+});
+
+test("a wrong number closes on a current classification into its subcategory, when clear enough", () => {
+  const subcategories = [
+    { id: "sub-wrong", categoryKey: "other", key: "wrong_number", name: "Wrong Number", reviewRequired: false },
+    { id: "sub-other", categoryKey: "other", key: "other", name: "Other", reviewRequired: false },
+  ] as const;
+  const sure = { confidence: 0.9, wrongNumberWords: false };
+  // "Other" is proposed, not applied, by default: still closed when the reading is clear.
+  assert.equal(classifiedAsWrongNumber({ applied: false, stale: false }, "sub-wrong", subcategories, sure), true);
+  assert.equal(classifiedAsWrongNumber({ applied: false, stale: false }, "sub-wrong", subcategories, { confidence: 0.3, wrongNumberWords: true }), true);
+  assert.equal(classifiedAsWrongNumber({ applied: true, stale: false }, "sub-wrong", subcategories, { confidence: 0.3, wrongNumberWords: false }), true);
+  // Unsure, stale, or another subcategory: left for a person (and never a sales draft).
+  assert.equal(classifiedAsWrongNumber({ applied: false, stale: false }, "sub-wrong", subcategories, { confidence: 0.3, wrongNumberWords: false }), false);
+  assert.equal(classifiedAsWrongNumber({ applied: true, stale: true }, "sub-wrong", subcategories, sure), false);
+  assert.equal(classifiedAsWrongNumber({ applied: true, stale: false }, "sub-other", subcategories, sure), false);
+  assert.equal(classifiedAsWrongNumber({ applied: true, stale: false }, null, subcategories, sure), false);
 });

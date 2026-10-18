@@ -135,6 +135,14 @@ const DEFAULT_SUBCATEGORIES: readonly DefaultSubcategory[] = [
   },
   {
     categoryKey: "other",
+    name: "Wrong Number",
+    description: "The number, address or profile reached someone other than the intended lead.",
+    classificationGuidance: "Use when the person who replied says this is a wrong number or that they are not the person we meant to reach, without referring us to the right contact. Outreach to this route stops; at most one brief apology is sent, never a sales message. If they also ask to stop or unsubscribe, use Do Not Contact instead.",
+    sortOrder: 15,
+    stageRank: null,
+  },
+  {
+    categoryKey: "other",
     name: "Connected to Different POC",
     description: "A contact has referred us to or shared details for a different person who is the appropriate point of contact.",
     classificationGuidance: "Use when the recipient provides another person's contact information, copies them into the conversation, or makes a direct introduction to the correct point of contact.",

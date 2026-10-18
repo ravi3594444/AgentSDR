@@ -5,6 +5,8 @@ import { db } from "@/lib/db";
 import { normalizePhone } from "@/lib/calls/phone";
 import { organizationPhoneCountry } from "@/lib/calls/phone.server";
 import { isPersonDoNotContact } from "@/lib/crm/policies";
+import { normalizeRoute } from "@/lib/crm/wrongNumber";
+import { wrongRouteSendRefusal } from "@/lib/crm/wrongRoutes";
 import { findUnipileWhatsappChat } from "@/services/unipile.whatsapp";
 import { findWhatsappAccountByUnipileId } from "./accounts";
 import { WhatsappSendRefusedError } from "./errors";
@@ -37,6 +39,8 @@ export type DeliverWhatsappInput = {
   /** The lead's number, E.164 — used when there is no chat yet. */
   phone: string | null;
   text: string;
+  /** A wrong-number closing acknowledgement in flight (its crm_wrong_routes row): the one send that route still takes. */
+  wrongRouteAckId?: string | null;
 };
 
 export type DeliverWhatsappResult = {
@@ -68,6 +72,9 @@ export async function deliverWhatsappFromCrm(input: DeliverWhatsappInput): Promi
   if (personId && (await isPersonDoNotContact(db, personId))) {
     throw new WhatsappSendRefusedError("This lead is marked Do Not Contact", 409);
   }
+  const route = normalizeRoute("whatsapp", phone);
+  const wrongNumber = route ? await wrongRouteSendRefusal(db, { channel: "whatsapp", routes: [route], ackRouteId: input.wrongRouteAckId ?? null }) : null;
+  if (wrongNumber) throw new WhatsappSendRefusedError(wrongNumber, 409, null, "wrong_number");
 
   const sent = await performWhatsappSend({
     account,

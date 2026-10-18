@@ -27,6 +27,8 @@ import { pickInRange } from "@/lib/channels/rules";
 import { fillTemplate, renderEmail, unsubscribePostUrl } from "./render";
 import { isMigrationControlPaused } from "@/lib/migration/controls";
 import { isPersonDoNotContact } from "@/lib/crm/policies";
+import { candidateRoutes } from "@/lib/crm/wrongNumber";
+import { wrongRouteSendRefusal } from "@/lib/crm/wrongRoutes";
 import { inOrg, currentOrganizationId, runInOrganization } from "@/lib/tenancy/scope";
 import { leadsInOrg } from "./orgScope";
 
@@ -210,7 +212,9 @@ async function sendNextStep(
     return;
   }
 
-  if (await isSuppressed(lead.email)) {
+  // An address recorded as a wrong number (it reached someone else) is as
+  // closed to a campaign as an unsubscribed one.
+  if (await isSuppressed(lead.email) || await wrongRouteSendRefusal(db, { channel: "email", routes: candidateRoutes("email", { email: lead.email }) })) {
     await db
       .update(outreachLeads)
       .set({ sequenceStatus: "suppressed", updatedAt: now })

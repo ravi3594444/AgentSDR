@@ -65,6 +65,7 @@ const OWNED_TABLES = [
   "crm_subcategories",
   "crm_settings",
   "crm_person_contact_policies",
+  "crm_wrong_routes",
   "crm_records",
   "crm_conversations",
   "crm_conversation_messages",

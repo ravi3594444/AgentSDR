@@ -232,6 +232,7 @@ async function runForOrganization(): Promise<void> {
           and r.status='running' and r.approved_at is not null and r.approved_by is not null and l.status='active' and l.channel='instagram' and a.status='connected'
           and lower(coalesce(a.username,''))<>${recipient.username}
           and not exists(select 1 from crm_person_contact_policies p where p.person_id=q.person_id and p.do_not_contact)
+          and not exists(select 1 from crm_wrong_routes w where w.organization_id=q.organization_id and w.channel='instagram' and (w.person_id=q.person_id or w.route=lower(${recipient.messagingId})))
           and not exists(select 1 from instagram_chats c join instagram_messages m on m.chat_id=c.id where c.person_id=q.person_id and c.account_id=q.account_id and m.direction='inbound' and m.sent_at>=q.created_at)
           and not exists(select 1 from instagram_chats c where c.account_id=q.account_id and c.provider_id=${recipient.messagingId} and c.person_id is not null and c.person_id<>q.person_id)
         for update of r,l,a`);

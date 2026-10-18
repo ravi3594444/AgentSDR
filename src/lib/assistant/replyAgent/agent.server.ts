@@ -10,9 +10,12 @@ import { appendCrmEvent } from "@/lib/crm/events";
 import { isPersonDoNotContact, setPersonDoNotContact } from "@/lib/crm/policies";
 import { lockCrmRecord, recordAiClassificationInTransaction } from "@/lib/crm/records";
 import { withCrmTransaction, type CrmExecutor } from "@/lib/crm/repository";
-import { crmConversationMessages, crmConversations, crmDrafts, crmRecords } from "@/lib/crm/schema";
+import { crmConversationMessages, crmConversations, crmDrafts, crmRecords, crmSubcategories } from "@/lib/crm/schema";
 import { sendDraft, type CrmSendAdapter } from "@/lib/crm/send";
 import type { ReplyConversationMessage } from "@/lib/crm/ai/replyConversation";
+import { closingAcknowledgement, detectsWrongNumber } from "@/lib/crm/wrongNumber";
+import { closeWrongNumber } from "@/lib/crm/wrongNumberAck.server";
+import { wrongRouteForConversation } from "@/lib/crm/wrongRoutes";
 import { companies, people } from "@/lib/leads/schema";
 import { isSuppressed } from "@/lib/outreach/suppression";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
@@ -32,6 +35,7 @@ import {
   ownerNoteToDecision,
   parseAgentDecision,
   replyProblems,
+  wrongNumberClosing,
   type AgentChannel,
   type AgentDecision,
   type HardFacts,
@@ -237,6 +241,9 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
   const person = profileRow?.person;
   const facts = await readFacts(db, scope, person?.email ?? null);
   if (facts.runInactive || facts.takeover || facts.doNotContact || facts.suppressed) return null;
+  // A route already recorded as a wrong number: nothing more goes to it,
+  // and the classifier path files the message without a model.
+  if (await wrongRouteForConversation(db, scope.conversationId)) return null;
   const membership = facts.membership!;
 
   // Claim the message: a retried job never answers twice.
@@ -313,7 +320,10 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
         lastResult = result;
         const parsed = parseAgentDecision(result.text);
         const found = parsed.action === "reply" ? replyProblems(parsed.reply, channel, knowledge) : [];
-        turns.push({ turn, ms: Date.now() - began, action: parsed.action, reply: parsed.reply || null, problems: found, error: null });
+        // A wrong-number apology is not handed back: one that fails its check
+        // is replaced by the fixed line in their language (closeWrongNumber).
+        const replaced = parsed.action === "wrong_number" ? closingAcknowledgement(parsed.reply, scope.leadMessage, channel).problems : [];
+        turns.push({ turn, ms: Date.now() - began, action: parsed.action, reply: parsed.reply || null, problems: [...found, ...replaced], error: null });
         if (found.length) {
           problems = found;
           previousReply = parsed.reply;
@@ -326,6 +336,11 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
     }
     await db.update(replyAgentRuns).set({ turns, updatedAt: new Date() }).where(eq(replyAgentRuns.id, runRowId));
 
+    // No usable answer for a message that plainly says "wrong number": close
+    // it with the fixed apology, never a holding line that promises more.
+    if (!decision && detectsWrongNumber(scope.leadMessage)) {
+      decision = { action: "wrong_number", reply: "", ownerNote: null, category: "other", confidence: 0.6, reasoning: "The model gave no usable answer; the message says it is a wrong number." };
+    }
     // No usable answer: an honest holding line for the lead (once a day per
     // chat, so a broken AI connection never repeats it), a card for the owner.
     if (!decision) {
@@ -345,14 +360,20 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
       };
     }
     const modelName = lastResult?.model ?? null;
+    const closing = wrongNumberClosing(decision, scope.leadMessage);
+    // A wrong number is filed as "Wrong Number" (other), never as a buyer's answer.
+    const [wrongNumberSubcategory] = closing
+      ? await db.select({ id: crmSubcategories.id }).from(crmSubcategories)
+        .where(and(eq(crmSubcategories.pipelineId, scope.pipelineId), eq(crmSubcategories.key, "wrong_number"), eq(crmSubcategories.active, true))).limit(1)
+      : [];
 
     // The CRM's view of the reply: the agent's reading of it.
     const classified = await withCrmTransaction((tx) => recordAiClassificationInTransaction(tx, {
       recordId: scope.recordId,
       messageId,
       expectedContextVersion: scope.contextVersion,
-      categoryKey: decision!.action === "stop_contact" ? "not_interested" : decision!.category,
-      subcategoryId: null,
+      categoryKey: closing ? "other" : decision!.action === "stop_contact" ? "not_interested" : decision!.category,
+      subcategoryId: wrongNumberSubcategory?.id ?? null,
       confidence: decision!.confidence,
       reasoning: decision!.reasoning || null,
       provider: lastResult?.provider ?? "reply-agent",
@@ -365,6 +386,32 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
       return finish(runRowId, scope, startedAt, { status: "stopped", reason: late?.reason ?? "the conversation changed while the assistant was answering", action: decision.action, category: decision.category, turns, model: modelName });
     }
     const base = { action: decision.action, category: decision.category, turns, model: modelName };
+
+    if (closing) {
+      // Wrong number: the route is recorded and outreach to it stops first;
+      // then the one closing apology is sent (Automatic) or drafted (Review),
+      // unless an explicit opt-out, Do Not Contact or a takeover forbids it.
+      const closed = await closeWrongNumber({
+        messageId,
+        source: "reply_agent",
+        acknowledgement: decision.action === "wrong_number" ? decision.reply || null : null,
+        optOut: closing.optOut,
+        reasoning: decision.reasoning || null,
+        sendAllowed: sendingAllowed(deps),
+        provider: lastResult?.provider ?? "reply-agent",
+        model: modelName ?? "reply-agent",
+      }, { send: deps.send });
+      const status: ReplyAgentStatus = closed?.ackStatus === "sent" ? "replied" : closed?.ackStatus === "drafted" ? "drafted" : "stopped";
+      return finish(runRowId, scope, startedAt, {
+        ...base,
+        action: "wrong_number",
+        category: "other",
+        status,
+        reason: closed?.summary ?? "wrong number: nothing to record",
+        reply: closed && ["sent", "drafted", "reserved", "sending", "failed", "uncertain"].includes(closed.ackStatus) ? closed.acknowledgement : null,
+        draftId: closed?.draftId ?? null,
+      });
+    }
 
     if (decision.action === "stop_contact") {
       await setPersonDoNotContact({ personId: scope.personId, reason: `${decision.reasoning || "They asked not to be contacted"} (read in their reply)`.slice(0, 500), source: "inbound_request", actorType: "ai", actorRef: AUTOPILOT_ACTOR });

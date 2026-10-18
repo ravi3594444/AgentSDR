@@ -22,6 +22,7 @@ import {
   crmSequenceSteps,
   crmSequences,
   crmSubcategories,
+  crmWrongRoutes,
   type CrmCategoryKey,
   type CrmRecordChannel,
   type CrmWorkflowState,
@@ -29,6 +30,7 @@ import {
 import { emailOutreachRowToMessageInput } from "./outreachHistory";
 import { CrmNotFoundError } from "./repository";
 import { crmDueState } from "./stateMachine";
+import { wrongRoutesForRecord } from "./wrongRoutes";
 import type { CrmActionGroup } from "./actionGroups";
 import { crmActionableSql, crmActionGroupSql } from "./actionGroups.server";
 import { inOrg } from "@/lib/tenancy/scope";
@@ -251,6 +253,12 @@ export async function listCrmActions(input: CrmActionFilters = {}) {
       .where(inArray(crmSequenceStepRuns.id, draftStepRunIds))
     : [];
   const draftStepByRunId = new Map(draftSteps.map((row) => [row.stepRunId, row]));
+  // Drafts that are a wrong number's one closing apology, waiting for review.
+  const apologyDraftIds = new Set(drafts.length
+    ? (await db.select({ draftId: crmWrongRoutes.ackDraftId }).from(crmWrongRoutes)
+      .where(and(inOrg(crmWrongRoutes), inArray(crmWrongRoutes.ackDraftId, drafts.map((draft) => draft.id)), inArray(crmWrongRoutes.ackStatus, ["drafted", "reserved"]))))
+      .map((row) => row.draftId)
+    : []);
   const latestInbound = new Map(messages.map((row) => [row.recordId, row.message]));
   const latestClassification = new Map(classifications.map((row) => [row.crmRecordId, row]));
   const activeRun = new Map(runs.map((row) => [row.run.crmRecordId, row]));
@@ -282,7 +290,7 @@ export async function listCrmActions(input: CrmActionFilters = {}) {
         : draft?.status === "delivery_uncertain"
           ? "Delivery reconciliation"
           : draft?.status === "awaiting_review"
-            ? draftStep?.stepType === "follow_up" ? "Follow-up review" : "Reply review"
+            ? apologyDraftIds.has(draft.id) ? "Wrong number: apology review" : draftStep?.stepType === "follow_up" ? "Follow-up review" : "Reply review"
             : row.record.nextActionAt && row.record.nextActionAt <= new Date()
               // Due from WhatsApp Calling (calls/crmFollowUp.ts) — a call-only
               // record, with no reply on it: the rep calls or messages them;
@@ -320,6 +328,8 @@ export async function listCrmActions(input: CrmActionFilters = {}) {
       aiChanged,
       activeRun: run,
       draft,
+      /** The draft is a wrong number's one closing apology (outreach to that number already stopped). */
+      wrongNumberApology: Boolean(draft && apologyDraftIds.has(draft.id)),
       contactPolicy: policyByPerson.get(row.record.personId) ?? null,
       lastRun: lastRunByRecord.get(row.record.id) ?? null,
     };
@@ -431,6 +441,7 @@ export async function getCrmRecordWorkspace(recordId: string) {
   ]);
   const header = headers[0];
   if (!header) throw new CrmNotFoundError("CRM record", recordId);
+  const wrongRoutes = await wrongRoutesForRecord(db, { person: header.person, conversations });
 
   const latestClassification = classifications[0] ?? null;
   const currentDraft = drafts.find((draft) => ["awaiting_review", "failed", "delivery_uncertain"].includes(draft.status)) ?? null;
@@ -593,6 +604,8 @@ export async function getCrmRecordWorkspace(recordId: string) {
     subcategory: header.subcategory?.name ?? null,
     dnc: header.policy?.doNotContact ?? false,
     contactPolicy: header.policy,
+    // Routes recorded as a wrong number ("Wrong number — outreach stopped") and where each one's apology stands.
+    wrongRoutes,
     classification: latestClassification ? {
       ...latestClassification,
       category: latestClassification.appliedCategoryKey ?? latestClassification.proposedCategoryKey,

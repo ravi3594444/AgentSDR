@@ -12,6 +12,7 @@ import {
 } from "./repository";
 import { assertWorkflowTransition } from "./stateMachine";
 import { stopOutreachForPersonInTransaction } from "@/lib/outreach/optOut";
+import { blockPendingAcknowledgementsInTransaction } from "./wrongRoutes";
 import { inOrg } from "@/lib/tenancy/scope";
 
 export type CrmContactPolicy = typeof crmPersonContactPolicies.$inferSelect;
@@ -190,6 +191,8 @@ export async function setPersonDoNotContactInTransaction(
   });
   // Campaign enrollments, email suppression, assistant runs: all stop now.
   await stopOutreachForPersonInTransaction(tx, { personId: input.personId, reason });
+  // Not even a wrong-number apology still waiting to go out.
+  await blockPendingAcknowledgementsInTransaction(tx, { personId: input.personId, reason: "the lead is marked Do Not Contact" });
   return policy;
 }
 

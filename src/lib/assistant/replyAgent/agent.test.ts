@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { agentSystemPrompt, agentUserPrompt, fallbackReply, hardStop, MAX_TURNS, ownerNoteToDecision, parseAgentDecision, replyProblems } from "./agent";
+import { agentSystemPrompt, agentUserPrompt, fallbackReply, hardStop, MAX_TURNS, ownerNoteToDecision, parseAgentDecision, replyProblems, wrongNumberClosing } from "./agent";
 
 const knowledge = "Business: Bright Path\n\nOffer: Monthly maintenance plan: ₹2,499 per chair per month, includes two visits.\n\nService area: Pune.\n\nHow meetings are booked: https://cal.example.test/brightpath";
 
@@ -65,5 +65,25 @@ describe("the prompt", () => {
   test("an Instagram inquiry is answered as a chat, within a chat's length", () => {
     expect(agentSystemPrompt({ channel: "instagram", profile: { senderName: "Ravi" } })).toContain("Instagram: write like a person texting");
     expect(replyProblems("a".repeat(700), "instagram", "")).toEqual([expect.stringContaining("keep it under 600")]);
+  });
+});
+
+describe("a wrong number", () => {
+  test("is its own action: the apology is kept, and it is never filed as a buyer's answer", () => {
+    const decision = parseAgentDecision(JSON.stringify({ reasoning: "not the lead", action: "wrong_number", reply: " Sorry about that—we won't message this number again. ", ownerNote: null, category: "not_interested", confidence: 0.9 }));
+    expect(decision).toMatchObject({ action: "wrong_number", reply: "Sorry about that—we won't message this number again.", category: "other" });
+    // No apology written: the harness uses the fixed line.
+    expect(parseAgentDecision(JSON.stringify({ action: "wrong_number", reply: "", ownerNote: null, category: "interested", confidence: 0.8 }))).toMatchObject({ action: "wrong_number", reply: "", category: "other" });
+    expect(agentSystemPrompt({ channel: "whatsapp", profile: { senderName: "Ravi" } })).toContain("- wrong_number:");
+  });
+
+  test("closes with one apology, unless an explicit opt-out sits beside it", () => {
+    expect(wrongNumberClosing({ action: "wrong_number" }, "Wrong number")).toEqual({ optOut: false });
+    expect(wrongNumberClosing({ action: "wrong_number" }, "Wrong number, stop messaging me")).toEqual({ optOut: true });
+    expect(wrongNumberClosing({ action: "wrong_number" }, "Not him. Don't text me again")).toEqual({ optOut: true });
+    // A stop request that also says "wrong number" still records the route, with nothing sent.
+    expect(wrongNumberClosing({ action: "stop_contact" }, "wrong number, unsubscribe")).toEqual({ optOut: true });
+    expect(wrongNumberClosing({ action: "stop_contact" }, "unsubscribe")).toBeNull();
+    expect(wrongNumberClosing({ action: "reply" }, "Wrong number")).toBeNull();
   });
 });
