@@ -1,7 +1,7 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import { and, asc, eq, gte, inArray, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNotNull, isNull, lt, or, sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { runInOrganization } from "@/lib/tenancy/scope";
 import { assistantJobs, type AssistantJobKind } from "./schema";
@@ -20,7 +20,8 @@ import { assistantJobs, type AssistantJobKind } from "./schema";
  * written with a report key; the report is posted in the same transaction
  * that marks it reported (claimJobReport), so a duplicate callback posts
  * nothing; and the loop reposts reports a stop between the two lost
- * (reconcileAssistantJobReports).
+ * (reconcileAssistantJobReports), and hands back a reported job whose
+ * follow-up a stop left undone (followUpDue).
  */
 
 export type AssistantJob = typeof assistantJobs.$inferSelect;
@@ -141,23 +142,54 @@ export async function claimJobReport(job: Pick<AssistantJob, "id" | "organizatio
 }
 
 /**
+ * What follows a job's report (the plan a "find and contact" search
+ * promised, register.server.ts) is kept in the job's progress: `followUp`
+ * is "owed" from the report's own commit, "preparing" while a process
+ * works on it under a lease (`followUpAt`, renewed every minute), and
+ * "done" once made. A lease older than this was left by a process that
+ * stopped: the reconciliation hands the job back, and the next taker
+ * resumes it.
+ */
+export const FOLLOW_UP_LEASE_MS = 5 * 60_000;
+
+/** A follow-up nobody is working on: owed, or its lease is stale. */
+export function followUpDue(now = new Date()): SQL {
+  const stale = new Date(now.getTime() - FOLLOW_UP_LEASE_MS).toISOString();
+  return sql`(${assistantJobs.progress} ->> 'followUp' = 'owed' OR (${assistantJobs.progress} ->> 'followUp' = 'preparing' AND (${assistantJobs.progress} ->> 'followUpAt')::timestamptz < ${stale}::timestamptz))`;
+}
+
+/**
  * Hands every finished job of the last 24 hours that owes its chat a
  * report and has none (the process stopped, or posting failed, between
  * finishing it and posting) to the finished-job listener again, each in
- * its organization. Jobs finished in the last `graceMs` are left to the
- * normal path. Returns how many were handed over; the listener's claim
- * keeps each report single.
+ * its organization, and every reported one whose follow-up is due (the
+ * process stopped after the report, before what follows it was done).
+ * Jobs finished in the last `graceMs` are left to the normal path. Returns
+ * how many were handed over; the listener's claims keep each report and
+ * each follow-up single.
  */
 export async function reconcileAssistantJobReports(graceMs = REPORT_GRACE_MS, now = new Date()): Promise<number> {
   if (!onFinished) return 0;
-  const due = await db.select().from(assistantJobs).where(and(
-    inArray(assistantJobs.status, ["succeeded", "failed"]),
-    isNotNull(assistantJobs.reportKey),
-    isNull(assistantJobs.reportedAt),
+  const recent = and(
     isNotNull(assistantJobs.threadId),
     gte(assistantJobs.finishedAt, new Date(now.getTime() - REPORT_WINDOW_MS)),
     lt(assistantJobs.finishedAt, new Date(now.getTime() - graceMs)),
-  )).orderBy(asc(assistantJobs.finishedAt)).limit(20);
+  );
+  const [unreported, followUps] = await Promise.all([
+    db.select().from(assistantJobs).where(and(
+      inArray(assistantJobs.status, ["succeeded", "failed"]),
+      isNotNull(assistantJobs.reportKey),
+      isNull(assistantJobs.reportedAt),
+      recent,
+    )).orderBy(asc(assistantJobs.finishedAt)).limit(20),
+    db.select().from(assistantJobs).where(and(
+      eq(assistantJobs.status, "succeeded"),
+      isNotNull(assistantJobs.reportedAt),
+      followUpDue(now),
+      recent,
+    )).orderBy(asc(assistantJobs.finishedAt)).limit(20),
+  ]);
+  const due = [...unreported, ...followUps];
   let handed = 0;
   for (const job of due) {
     try {

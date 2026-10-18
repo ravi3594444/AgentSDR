@@ -201,7 +201,8 @@ export async function browserAct(threadId: string, action: BrowserAction, check:
   }
   const snapshot = await page.snapshot();
   await touch(row, snapshot.url);
-  return { snapshot, problem: action.kind === "read" || action.kind === "scroll" ? null : await check(snapshot.url) };
+  // Every step is checked, reads and scrolls too: a refused page stays open, and must not be read afterwards.
+  return { snapshot, problem: await check(snapshot.url) };
 }
 
 /** Ends the chat's browser, if one is open; the minutes it used. */

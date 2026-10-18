@@ -18,9 +18,15 @@
  * Durable reports (worker.ts, register.server.ts): a job whose report was
  * lost when the listener died is reported exactly once by the worker's
  * reconciliation, never twice on duplicate callbacks; reports before the
- * report key existed are not replayed. And reports scoped to one request
- * exclude other runs' work, counting reply decisions apart from plans
- * waiting for Start.
+ * report key existed are not replayed. The plan a "find and contact"
+ * search promised is owed with its report, in the same commit: a restart
+ * after the report (before the plan, or while writing it) leaves it to the
+ * reconciliation, which prepares it once, and never while another process
+ * still works on it. And reports scoped to one request exclude other runs'
+ * work, counting reply decisions apart from plans waiting for Start; a
+ * results question with nothing of its own recorded is answered for the
+ * organization; and a chat's report counts the plans prepared or shown in
+ * it, not another chat's plan a report in it looked at.
  *
  * Nothing is sent: the one launch it runs activates a LinkedIn campaign on
  * a fake Unipile connection no engine runs against, paused again at the end.
@@ -55,7 +61,8 @@ const { startOutreachRun } = await import("@/lib/assistant/outreach.server");
 const { applyRequestApproval, recordRequestApproval } = await import("@/lib/assistant/requestApproval.server");
 const { claimJobReport, onAssistantJobFinished, reconcileAssistantJobReports, registerAssistantJobHandler, runOneAssistantStep } = await import("@/lib/assistant/worker");
 const { registerAssistantJobs, reportFinishedJob } = await import("@/lib/assistant/register.server");
-const { requestScope, results } = await import("@/lib/assistant/results.server");
+const { requestScope, results, threadScope } = await import("@/lib/assistant/results.server");
+const { runToolInThread } = await import("@/lib/assistant/agent.server");
 const { runTool } = await import("@/lib/assistant/tools.server");
 const linkedin = await import("@/lib/linkedin/schema");
 type OutreachPlan = import("@/lib/assistant/schema").OutreachPlan;
@@ -386,6 +393,49 @@ await runInOrganization(org2!.id, async () => {
   await reconcileAssistantJobReports(0);
   check("durable report: jobs finished before report keys existed, or more than a day ago, are not replayed", !(await quietEvents()).some((event) => /Legacy report check|Stale report check/.test(event.content)));
 
+  // ------------------------------------------------------------ the plan a "find and contact" search promised
+  // Each case in its own chat. The organization's profile is empty, so prepare_outreach answers at once that
+  // it needs the business details: the tool line itself is the evidence that the follow-up ran, and how often.
+  async function contactSearch(extra: Partial<typeof schema.assistantJobs.$inferInsert>) {
+    const chat = await createThread(owner2!.id);
+    const [request] = await db.insert(schema.assistantMessages).values({ organizationId: orgId, threadId: chat.id, role: "user", content: "Find clinics and contact them", createdBy: owner2!.id }).returning();
+    const [job] = await db.insert(schema.assistantJobs).values({
+      organizationId: orgId, kind: "web_discovery", status: "succeeded", stage: "done", threadId: chat.id, audienceId, createdBy: owner2!.id,
+      payload: { contactAfter: { channels: null, ownerRequest: "Find clinics and contact them", requestId: request!.id } }, progress: {},
+      result: { found: 2, eligible: 2, phrase: "clinics" }, finishedAt: new Date(Date.now() - 2 * 60_000), reportKey: `assistant_job:follow-up-${stamp}-${chat.id}:succeeded`, ...extra,
+    }).returning();
+    return job!;
+  }
+  const planAttempts = async (job: { threadId: string | null }) => (await listMessages(job.threadId!, 300)).filter((message) => message.role === "tool" && message.tool === "prepare_outreach").length;
+  const followUpOf = async (job: { id: string }) => ((await jobRow(job.id)).progress as { followUp?: string }).followUp ?? null;
+  const followedUp = async (job: { id: string }) => {
+    for (let round = 0; round < 150 && (await followUpOf(job)) !== "done"; round += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+    return followUpOf(job);
+  };
+  const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+
+  const live = await contactSearch({});
+  await reportFinishedJob(live);
+  const owedAtReport = await followUpOf(live);
+  check("follow-up: the promised plan is recorded as owed in the report's commit", (await jobRow(live.id)).reportedAt instanceof Date && (owedAtReport === "owed" || owedAtReport === "preparing"), String(owedAtReport));
+  check("follow-up: without a restart it is prepared once, and recorded done", (await followedUp(live)) === "done" && (await planAttempts(live)) === 1, `${await followUpOf(live)} ${await planAttempts(live)}`);
+
+  const lostAfterReport = await contactSearch({ reportedAt: new Date(Date.now() - 60_000), progress: { followUp: "owed" } });
+  const lostWhileWriting = await contactSearch({ reportedAt: new Date(Date.now() - 15 * 60_000), progress: { followUp: "preparing", followUpAt: minutesAgo(10) } });
+  const stillWriting = await contactSearch({ reportedAt: new Date(Date.now() - 60_000), progress: { followUp: "preparing", followUpAt: minutesAgo(0) } });
+  const eventsBefore = (await quietEvents()).length;
+  await reconcileAssistantJobReports(0);
+  check("follow-up: a restart after the report commits: the reconciliation prepares the plan", (await followedUp(lostAfterReport)) === "done" && (await planAttempts(lostAfterReport)) === 1, `${await followUpOf(lostAfterReport)} ${await planAttempts(lostAfterReport)}`);
+  check("follow-up: a restart while the plan was being written: taken over once its lease is stale", (await followedUp(lostWhileWriting)) === "done" && (await planAttempts(lostWhileWriting)) === 1, `${await followUpOf(lostWhileWriting)} ${await planAttempts(lostWhileWriting)}`);
+  check("follow-up: one another process is still writing is left to it", (await followUpOf(stillWriting)) === "preparing" && (await planAttempts(stillWriting)) === 0);
+  check("follow-up: no report is posted again", (await quietEvents()).length === eventsBefore && !(await events(lostAfterReport.threadId!)).some((event) => /web search/i.test(event.content)));
+  await reconcileAssistantJobReports(0);
+  await reportFinishedJob(await jobRow(lostAfterReport.id));
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  check("follow-up: reconciling again and a duplicate callback prepare nothing more", (await planAttempts(lostAfterReport)) === 1 && (await planAttempts(lostWhileWriting)) === 1 && (await planAttempts(live)) === 1 && (await planAttempts(stillWriting)) === 0);
+  // Leave nothing owed for a later reconciliation (it covers every organization).
+  await db.update(schema.assistantJobs).set({ progress: { followUp: "done" } }).where(eq(schema.assistantJobs.id, stillWriting.id));
+
   // ------------------------------------------------------------ reports scoped to one request
   const [firstLead] = campaignLeads;
   await db.insert(linkedin.messages).values({ organizationId: orgId, type: "INVITATION", text: "Hi", linkedinMessageId: `invitation-${stamp}`, leadId: firstLead!.id });
@@ -409,6 +459,23 @@ await runInOrganization(org2!.id, async () => {
   check("the report tool counts the request this turn serves by default, and says so", toolReport.ok && /this request \(1 plan/.test(toolReport.summary) && /1 LinkedIn connection requests/.test(toolReport.summary) && /1 reply decision\b/.test(toolReport.summary) && /0 plans waiting for your Start/.test(toolReport.summary), toolReport.summary.split("\n").slice(0, 7).join(" | "));
   const orgReport = await runTool("report", { period: "today", scope: "organization" }, context);
   check("asked for the whole organization, it counts every request", orgReport.ok && !/ only:/.test(orgReport.summary.split("\n")[0]!) && /2 reply decisions/.test(orgReport.summary) && /plans? waiting for your Start \(/.test(orgReport.summary), orgReport.summary.split("\n").slice(0, 7).join(" | "));
+
+  // A results question can read as an outreach request ("...did we send..."): its own request has nothing recorded.
+  const [question] = await db.insert(schema.assistantMessages).values({ organizationId: orgId, threadId: thread.id, role: "user", content: "How many emails did we send this week?", createdBy: owner2!.id }).returning();
+  const questionContext = { threadId: thread.id, userId: owner2!.id, ownerText: question!.content, outreachRequestId: question!.id, requestMessageId: question!.id };
+  const questionReport = await runTool("report", { period: "today" }, questionContext);
+  check("a results question with nothing of its own recorded gets the organization's figures, not an empty request's", questionReport.ok && !/ only:/.test(questionReport.summary.split("\n")[0]!) && !/Nothing is recorded/.test(questionReport.summary) && /2 reply decisions/.test(questionReport.summary), questionReport.summary.split("\n").slice(0, 3).join(" | "));
+  const askedRequest = await runTool("report", { period: "today", scope: "request" }, questionContext);
+  check("asked for that request by name, the report keeps it, and says nothing is recorded for it", askedRequest.ok && /this request only:/.test(askedRequest.summary.split("\n")[0]!) && /Nothing is recorded for this request/.test(askedRequest.summary), askedRequest.summary.split("\n").slice(0, 2).join(" | "));
+
+  // A chat's report: a report in it on another chat's plan does not make that plan this chat's.
+  const asking = await createThread(owner2!.id);
+  const asked = await runToolInThread({ threadId: asking.id, userId: owner2!.id, ownerText: "how did that plan do?" }, "report", { runId: fortyFive.id });
+  const looked = await threadScope(asking.id);
+  check("thread report: a run report asked for in a chat does not add that run to the chat's scope", asked.ok && looked.runIds.length === 0 && looked.jobIds.length === 0, JSON.stringify(looked));
+  await db.insert(schema.assistantMessages).values({ organizationId: orgId, threadId: asking.id, role: "tool", tool: "prepare_outreach", status: "ok", content: "Plan ready", toolResult: { summary: "Plan ready", data: { runId: left.id } } });
+  const shownHere = await threadScope(asking.id);
+  check("thread report: a plan card shown in the chat is the chat's", shownHere.runIds.join() === left.id, JSON.stringify(shownHere.runIds));
 
   // Nothing left that could send.
   await db.update(linkedin.campaigns).set({ status: "PAUSED", updatedAt: new Date() }).where(eq(linkedin.campaigns.organizationId, orgId));

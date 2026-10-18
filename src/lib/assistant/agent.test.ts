@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { actionsProblem, agentReplySchema, cleanSuggestions, displayThreadTitle, isSmallTalk, MAX_ACTIONS_PER_REPLY, MAX_ACTIONS_PER_STEP, nextAgentBatch, outreachIntent, outreachRequested, outreachRequestProblem, parseAgentReply, pendingOutreachRequest, sameMessage, standingOutreachRequestIndex, outreachRevoked, threadTitleFrom, transcriptText, unbackedClaim, ungroundedContacts, urlGiven, type AgentReply, type TranscriptMessage } from "./agent";
+import { actionsProblem, agentReplySchema, cleanSuggestions, displayThreadTitle, groundingCorpus, isSmallTalk, MAX_ACTIONS_PER_REPLY, MAX_ACTIONS_PER_STEP, nextAgentBatch, outreachIntent, outreachRequested, outreachRequestProblem, parseAgentReply, pendingOutreachRequest, sameMessage, standingOutreachRequestIndex, outreachRevoked, threadTitleFrom, transcriptText, unbackedClaim, ungroundedContacts, urlGiven, type AgentReply, type TranscriptMessage } from "./agent";
 
 const TOOLS = ["find_leads", "save_business_info", "prepare_outreach"];
 
@@ -384,6 +384,54 @@ describe("contacts and links from the chat", () => {
     expect(outreachRequested("Please send DMs to these Instagram accounts")).toBe(true);
     expect(outreachRequested("Don't DM @dev__ravi_35 yet")).toBe(false);
     expect(outreachRevoked("Don't DM @dev__ravi_35 yet")).toBe(true);
+  });
+});
+
+describe("groundingCorpus: what the owner wrote and what sources returned", () => {
+  const owner = (content: string) => ({ role: "user" as const, content, tool: null, status: null, toolResult: null });
+  const searched = (query: string, results: { url: string; title: string | null; snippet: string | null }[], status = "ok") => {
+    const summary = results.length
+      ? `TinyFish Search for “${query}”: ${results.length} results (candidates; read a page before relying on it).\n${results.map((hit, index) => `${index + 1}. ${hit.title ?? "(no title)"} — ${hit.url}${hit.snippet ? ` — ${hit.snippet}` : ""}`).join("\n")}`
+      : `TinyFish Search for “${query}” returned nothing. Try different keywords or another source.`;
+    return { role: "tool" as const, tool: "web_search", status, content: summary, toolResult: { summary, data: { query, page: 0, provider: "tinyfish", results } } };
+  };
+  const ask = "find the email of Acme Dental, Pune and contact them";
+  const input = (corpus: string) => ({ smallTalk: false, profile: {}, ownerCorpus: corpus, outreachRequested: true });
+  const addGuess = { tool: "add_contacts", args: { contacts: [{ email: "info@acmedental.in", name: "Acme Dental" }], contactAfter: true } };
+  const readGuess = { tool: "read_webpage", args: { url: "https://acmedental.in/contact" } };
+
+  test("a web search's own query grounds nothing: a guessed email or site stays refused after a search for it", () => {
+    for (const query of ["info@acmedental.in", "acmedental.in"]) {
+      const corpus = groundingCorpus([owner(ask), searched(query, [])]);
+      expect(actionsProblem([addGuess], input(corpus))).toContain("not in what the owner wrote");
+      expect(actionsProblem([readGuess], input(corpus))).toContain("only links the owner gave");
+    }
+    // A search that returned other businesses does not ground the query either.
+    const other = groundingCorpus([owner(ask), searched("acmedental.in contact email", [{ url: "https://www.justdial.example/pune/dentists", title: "Dentists in Pune", snippet: "Top 20 dentists" }])]);
+    expect(actionsProblem([addGuess], input(other))).toContain("not in what the owner wrote");
+    expect(actionsProblem([readGuess], input(other))).toContain("only links the owner gave");
+    expect(actionsProblem([{ tool: "read_webpage", args: { url: "https://justdial.example/pune/dentists" } }], input(other))).toBeNull();
+  });
+
+  test("what a search returned grounds its links and contacts", () => {
+    const corpus = groundingCorpus([owner(ask), searched("Acme Dental Pune", [{ url: "https://www.acmedental.in/", title: "Acme Dental, Pune", snippet: "Write to info@acmedental.in" }])]);
+    expect(actionsProblem([addGuess], input(corpus))).toBeNull();
+    expect(actionsProblem([readGuess], input(corpus))).toBeNull();
+  });
+
+  test("owner messages, documents and successful page reads count; failed reads and other tools do not", () => {
+    const read = (status: string, content: string) => ({ role: "tool" as const, tool: "read_webpage", status, content, toolResult: { summary: content } });
+    const corpus = groundingCorpus([
+      owner("We sell to clinics in Pune"),
+      read("ok", "Page https://clinic.example: call +91 98220 11111"),
+      read("error", "Could not open https://guess.example: not found"),
+      { role: "tool" as const, tool: "find_leads", status: "ok", content: "Search for “guess.example” started", toolResult: { summary: "Search for “guess.example” started" } },
+      { role: "assistant" as const, tool: null, status: null, content: "I will email ceo@guess.example", toolResult: null },
+    ], "Price list: ₹2,499 a month");
+    expect(corpus).toContain("We sell to clinics in Pune");
+    expect(corpus).toContain("+91 98220 11111");
+    expect(corpus).toContain("₹2,499");
+    expect(corpus).not.toContain("guess.example");
   });
 });
 

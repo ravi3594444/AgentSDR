@@ -404,6 +404,34 @@ export function ungroundedContacts(contacts: unknown, corpus: string): string[] 
   return out;
 }
 
+/** Tools whose successful result is a source: a page read, a search's results, a Treg answer, a browser page. */
+function isSourceTool(tool: string | null): boolean {
+  return tool === "read_webpage" || tool === "web_search" || tool === "treg_call" || Boolean(tool?.startsWith("browser_"));
+}
+
+/**
+ * What contacts, links and business information may come from (actionsProblem's
+ * ownerCorpus): what the owner wrote or attached, their saved documents, and
+ * the successful results of reading or searching. A web search counts only
+ * for what it returned: its summary repeats the query the model wrote, and a
+ * guessed address or domain searched for is not thereby given.
+ */
+export function groundingCorpus(messages: readonly Pick<TranscriptMessage, "role" | "tool" | "status" | "content" | "toolResult">[], documentsText = ""): string {
+  return messages
+    .filter((message) => message.role === "user" || (message.role === "tool" && (message.tool === "read_document" || message.tool === "import_contacts" || (isSourceTool(message.tool) && message.status === "ok"))))
+    .map((message) => {
+      if (message.tool === "web_search") {
+        const results = (message.toolResult?.data as { results?: unknown } | undefined)?.results;
+        return (Array.isArray(results) ? results : [])
+          .map((hit) => (hit && typeof hit === "object" ? hit as Record<string, unknown> : {}))
+          .map((hit) => [hit.title, hit.url, hit.snippet].filter((part) => typeof part === "string").join(" — "))
+          .join("\n");
+      }
+      return `${message.content} ${typeof message.toolResult?.summary === "string" ? message.toolResult.summary : ""}`;
+    })
+    .join("\n") + `\n${documentsText}`;
+}
+
 const HOST_IN_TEXT = /(?:^|[^a-z0-9.-])((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9])(?![a-z0-9-])/g;
 
 /** Every host name written in `corpus` (in links, bare domains and email addresses), without "www.". */

@@ -1,15 +1,19 @@
 import "server-only";
 
+import { and, eq, sql, type SQL } from "drizzle-orm";
+import { db } from "@/lib/db";
 import { runDiscoveryStep, sourceLabel } from "@/lib/discovery/discovery.server";
 import { runWebDiscoveryStep } from "@/lib/discovery/webDiscovery.server";
+import { inOrg } from "@/lib/tenancy/scope";
 import { continueAfterEvent, runToolInThread } from "./agent.server";
 import { coverageLineForJob } from "./coverage.server";
 import { autoStartPlan, threadAutonomy } from "./autonomy.server";
 import { runLinkedinSearchStep } from "./linkedinSearch.server";
 import { runOutreachStartStep } from "./outreach.server";
 import { applyRequestApproval } from "./requestApproval.server";
+import { assistantJobs } from "./schema";
 import { addMessage, claimThread, releaseThread, touchThread } from "./threads.server";
-import { claimJobReport, onAssistantJobFinished, registerAssistantJobHandler, type AssistantJob } from "./worker";
+import { claimJobReport, followUpDue, onAssistantJobFinished, registerAssistantJobHandler, type AssistantJob } from "./worker";
 
 /**
  * Wires the assistant's background jobs to the worker, and reports each
@@ -19,7 +23,9 @@ import { claimJobReport, onAssistantJobFinished, registerAssistantJobHandler, ty
  * search finishing never says the whole request is done (the coverage line
  * says what of the request is still open). Each report is posted once,
  * with the job marked reported in the same transaction; a report a restart
- * lost is posted by the worker's reconciliation, with what follows it.
+ * lost is posted by the worker's reconciliation, with what follows it, and
+ * so is the plan a "find and contact" search promised when a restart came
+ * after its report (owed from the report's commit, see followUpDue).
  */
 
 /** A finished website and directory search, from its result. */
@@ -97,12 +103,41 @@ export function registerAssistantJobs(): void {
   onAssistantJobFinished(reportFinishedJob);
 }
 
+type ContactAfter = { channels: string[] | null; ownerRequest?: string; requestId?: string };
+
+/** The job's progress with `followUp` set (and, while preparing, its lease time), keeping the rest. */
+function followUpPatch(state: "owed" | "preparing" | "done"): SQL {
+  return state === "preparing"
+    ? sql`${assistantJobs.progress} || jsonb_build_object('followUp', 'preparing', 'followUpAt', now())`
+    : sql`${assistantJobs.progress} || jsonb_build_object('followUp', ${state}::text)`;
+}
+
+/** Takes the job's follow-up under a lease: false when it is not owed, is done, or another process holds it. */
+async function takeFollowUp(job: AssistantJob): Promise<boolean> {
+  const taken = await db.update(assistantJobs).set({ progress: followUpPatch("preparing") })
+    .where(and(inOrg(assistantJobs), eq(assistantJobs.id, job.id), followUpDue()))
+    .returning({ id: assistantJobs.id });
+  return taken.length > 0;
+}
+
+async function renewFollowUp(job: AssistantJob): Promise<void> {
+  await db.update(assistantJobs).set({ progress: followUpPatch("preparing") })
+    .where(and(inOrg(assistantJobs), eq(assistantJobs.id, job.id), sql`${assistantJobs.progress} ->> 'followUp' = 'preparing'`));
+}
+
+async function finishFollowUp(job: AssistantJob): Promise<void> {
+  await db.update(assistantJobs).set({ progress: followUpPatch("done") }).where(and(inOrg(assistantJobs), eq(assistantJobs.id, job.id)));
+}
+
 /**
  * A finished job's report in its chat, then what follows it (the plan a
  * "find and contact" search asked for, or the next step in Autonomous
  * mode). Posted at most once per job, however often it is called: a
  * duplicate callback, or the worker's reconciliation after a restart,
- * finds it reported and does nothing.
+ * finds it reported and posts nothing. The promised plan is recorded as
+ * owed in the report's own commit, so a restart before it is made hands
+ * the job back (worker.ts followUpDue) and the plan is still prepared,
+ * once.
  */
 export async function reportFinishedJob(job: AssistantJob): Promise<void> {
   if (!job.threadId) {
@@ -111,72 +146,88 @@ export async function reportFinishedJob(job: AssistantJob): Promise<void> {
   }
   const threadId = job.threadId;
   const search = job.kind === "discovery" || job.kind === "linkedin_search" || job.kind === "web_discovery" || job.kind === "apify_instagram";
+  const found = search && job.status === "succeeded" && Boolean(job.audienceId) && Number((job.result ?? {}).eligible ?? 0) > 0;
+  // The owner asked to contact what is found: the plan is prepared here,
+  // not left to the model's judgement. It still waits for the owner's Start.
+  const contactAfter = found ? (job.payload as { contactAfter?: ContactAfter | null }).contactAfter ?? null : null;
   const coverage = search ? await coverageLineForJob(job).catch(() => null) : null;
   const content = `${search ? discoveryMessage(job) : outreachMessage(job)}${coverage ? ` ${coverage}` : ""}`;
   const posted = await claimJobReport(job, async (tx) => {
     await addMessage({ threadId, role: "event", content, toolResult: { reportKey: job.reportKey } }, tx);
+    if (contactAfter) await tx.update(assistantJobs).set({ progress: followUpPatch("owed") }).where(and(inOrg(assistantJobs), eq(assistantJobs.id, job.id)));
   });
-  // Reported already (a duplicate callback): so was what follows the report.
-  if (!posted) return;
-  if (search && (job.status !== "succeeded" || !job.audienceId || Number((job.result ?? {}).eligible ?? 0) <= 0)) {
+  if (!posted) {
+    // Reported already (a duplicate callback, or the reconciliation): what follows it runs only while it
+    // is still owed and nobody is working on it (followUpSearch takes it), so at most once.
+    if (contactAfter) void followUpSearch(job, threadId, contactAfter);
+    return;
+  }
+  if (search && !found) {
     // Autonomous mode: a search that failed or found nobody still wakes the assistant, to try elsewhere.
     if ((await threadAutonomy(job.threadId)).on) void continueAfterEvent(job.threadId);
     return;
   }
   if (!search || job.status !== "succeeded" || !job.audienceId) return;
-  // The owner asked to contact what is found: the plan is prepared here,
-  // not left to the model's judgement. It still waits for the owner's Start.
-  const contactAfter = (job.payload as { contactAfter?: { channels: string[] | null; ownerRequest?: string; requestId?: string } | null }).contactAfter;
   // Not awaited: writing the plan takes model calls, and the worker moves on.
-  void followUpSearch(job, job.threadId, contactAfter ?? null);
+  void followUpSearch(job, job.threadId, contactAfter);
 }
 
-async function followUpSearch(job: AssistantJob, threadId: string, contactAfter: { channels: string[] | null; ownerRequest?: string; requestId?: string } | null): Promise<void> {
+async function followUpSearch(job: AssistantJob, threadId: string, contactAfter: ContactAfter | null): Promise<void> {
   try {
+    // The promised plan is taken under a lease: made once, and a restart part-way leaves it to the reconciliation.
+    if (contactAfter && !(await takeFollowUp(job))) return;
     let autonomous = (await threadAutonomy(threadId)).on;
     if (contactAfter) {
-      // Wait for a turn in progress to end, so the plan is made once.
-      let claimed = false;
-      for (let attempt = 0; attempt < 60 && !claimed; attempt += 1) {
-        claimed = await claimThread(threadId);
-        if (!claimed) await new Promise((resolve) => setTimeout(resolve, 2_000));
-      }
-      // Writing a plan can take minutes: keep the claim fresh meanwhile.
-      const heartbeat = claimed ? setInterval(() => void touchThread(threadId).catch(() => undefined), 60_000) : null;
-      // The switch as it is now, after the wait.
-      autonomous = (await threadAutonomy(threadId)).on;
+      // The lease is renewed while waiting for the chat and writing the plan; a stop leaves it to go stale.
+      const lease = setInterval(() => void renewFollowUp(job).catch(() => undefined), 60_000);
       let prepared;
       try {
-        prepared = await runToolInThread(
-          { threadId, userId: job.createdBy, ownerText: contactAfter.ownerRequest ?? "", authorizedBy: "search", outreachRequestId: contactAfter.requestId ?? null, autonomous },
-          "prepare_outreach",
-          { audienceId: job.audienceId, ownerRequest: contactAfter.ownerRequest ?? null, ...(contactAfter.channels?.length ? { channels: contactAfter.channels } : {}), ...(autonomous ? { autopilot: true } : {}) },
-        );
-        if (prepared.ok) {
-          const runId = typeof prepared.data?.runId === "string" ? prepared.data.runId : null;
-          // Autonomous mode: every start goes through the capped path (autoStartPlan posts why one waits).
-          const tried = autonomous && runId ? await autoStartPlan(threadId, runId) : null;
-          // Switched off at the last moment: treated as without Autonomous mode.
-          const auto = tried && !tried.off ? tried : null;
-          // Otherwise it starts on its own when the owner already approved this request on another of its plans.
-          const approval: { started: boolean; reason: string | null; closed?: boolean } = auto
-            ? { started: auto.started, reason: auto.reason, closed: auto.closed }
-            : runId ? await applyRequestApproval(runId) : { started: false, reason: null };
-          // A reason from autoStartPlan was already posted; with none (switched off meanwhile) the plan waits as usual.
-          // A plan closed for having nobody new to contact was reported as such: it is not offered for Start.
-          if (!approval.started && !approval.closed && !(auto && auto.reason)) {
-            await addMessage({
-              threadId,
-              role: "event",
-              content: approval.reason
-                ? `The outreach plan for these leads is ready below. It was not started with the rest of your request because ${approval.reason}: check it and press Start. Nothing is sent before that.`
-                : "The outreach plan for these leads is ready below. Check the audience, the sample messages and the limits, then press Start. Nothing is sent before that.",
-            });
+        // Wait for a turn in progress to end, so the plan is made once.
+        let claimed = false;
+        for (let attempt = 0; attempt < 60 && !claimed; attempt += 1) {
+          claimed = await claimThread(threadId);
+          if (!claimed) await new Promise((resolve) => setTimeout(resolve, 2_000));
+        }
+        // Writing a plan can take minutes: keep the claim fresh meanwhile.
+        const heartbeat = claimed ? setInterval(() => void touchThread(threadId).catch(() => undefined), 60_000) : null;
+        // The switch as it is now, after the wait.
+        autonomous = (await threadAutonomy(threadId)).on;
+        try {
+          prepared = await runToolInThread(
+            { threadId, userId: job.createdBy, ownerText: contactAfter.ownerRequest ?? "", authorizedBy: "search", outreachRequestId: contactAfter.requestId ?? null, autonomous },
+            "prepare_outreach",
+            { audienceId: job.audienceId, ownerRequest: contactAfter.ownerRequest ?? null, ...(contactAfter.channels?.length ? { channels: contactAfter.channels } : {}), ...(autonomous ? { autopilot: true } : {}) },
+          );
+          if (prepared.ok) {
+            const runId = typeof prepared.data?.runId === "string" ? prepared.data.runId : null;
+            // Autonomous mode: every start goes through the capped path (autoStartPlan posts why one waits).
+            const tried = autonomous && runId ? await autoStartPlan(threadId, runId) : null;
+            // Switched off at the last moment: treated as without Autonomous mode.
+            const auto = tried && !tried.off ? tried : null;
+            // Otherwise it starts on its own when the owner already approved this request on another of its plans.
+            const approval: { started: boolean; reason: string | null; closed?: boolean } = auto
+              ? { started: auto.started, reason: auto.reason, closed: auto.closed }
+              : runId ? await applyRequestApproval(runId) : { started: false, reason: null };
+            // A reason from autoStartPlan was already posted; with none (switched off meanwhile) the plan waits as usual.
+            // A plan closed for having nobody new to contact was reported as such: it is not offered for Start.
+            if (!approval.started && !approval.closed && !(auto && auto.reason)) {
+              await addMessage({
+                threadId,
+                role: "event",
+                content: approval.reason
+                  ? `The outreach plan for these leads is ready below. It was not started with the rest of your request because ${approval.reason}: check it and press Start. Nothing is sent before that.`
+                  : "The outreach plan for these leads is ready below. Check the audience, the sample messages and the limits, then press Start. Nothing is sent before that.",
+              });
+            }
           }
+        } finally {
+          if (heartbeat) clearInterval(heartbeat);
+          // Made or refused, it is no longer owed (released after, so whoever takes the chat next sees it done).
+          await finishFollowUp(job).catch((error) => console.error("[assistant] recording a search's follow-up as done failed:", error));
+          if (claimed) await releaseThread(threadId);
         }
       } finally {
-        if (heartbeat) clearInterval(heartbeat);
-        if (claimed) await releaseThread(threadId);
+        clearInterval(lease);
       }
       // Autonomous mode keeps working toward the owner's goal (the next search, a report); otherwise the plan waits.
       if (prepared.ok && !autonomous) return;
