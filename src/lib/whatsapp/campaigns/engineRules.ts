@@ -68,6 +68,8 @@ export function classifySendError(error: unknown): SendFailureAction {
         return { kind: "skip_account" };
       case "do_not_contact":
         return { kind: "stop_lead", error: "Do Not Contact" };
+      case "wrong_number":
+        return { kind: "stop_lead", error: "Wrong number" };
       case "recipient_unreachable":
         // A definite recipient refusal: fail this lead once, do not retry, and
         // do not let one bad number stop the rest of the campaign.

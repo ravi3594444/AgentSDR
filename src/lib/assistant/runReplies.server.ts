@@ -24,6 +24,7 @@ type Row = {
   agentStatus: string | null;
   agentReason: string | null;
   agentMs: number | null;
+  agentAction: string | null;
 };
 
 /** The latest replies from each run's leads since it was approved, with what became of each. */
@@ -35,7 +36,7 @@ export async function runReplies(runIds: readonly string[], perRun = 5): Promise
       m.channel, left(m.body_text, 160) as "preview", coalesce(p.full_name, p.phone, p.email) as "who", r.autopilot,
       d.status as "draftStatus", a.status as "autoStatus", a.reason as "autoReason",
       j.status as "jobStatus", to_char(j.run_after at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as "sendAfter",
-      g.status as "agentStatus", g.reason as "agentReason", g.total_ms as "agentMs"
+      g.status as "agentStatus", g.reason as "agentReason", g.total_ms as "agentMs", g.action as "agentAction"
     from outreach_run_leads l
     join outreach_runs r on r.id = l.run_id and r.organization_id = l.organization_id
     join people p on p.id = l.person_id and p.organization_id = l.organization_id

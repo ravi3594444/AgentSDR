@@ -4,6 +4,7 @@ import { connections, leads, messages } from "@/lib/linkedin/schema";
 import { deliverMessageToConnection, getChatIdForUser } from "@/services/unipile.service";
 import { fillTemplate } from "@/lib/outreach/render";
 import { isPersonDoNotContact } from "@/lib/crm/policies";
+import { linkedinRouteIsWrong } from "@/lib/crm/wrongRoutes";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 
 type AcceptanceLead = {
@@ -98,12 +99,14 @@ export const processLeadAcceptance = async (
     return "advanced";
   }
 
-  if (await isPersonDoNotContact(db, lead.personId)) {
+  const barred = await isPersonDoNotContact(db, lead.personId) ? "Person-global DNC"
+    : await linkedinRouteIsWrong(db, lead.personId, lead.linkedinUrl) ? "a wrong-number record" : null;
+  if (barred) {
     await db.transaction(async (tx) => {
       await tx.delete(messages).where(and(inOrg(messages), eq(messages.id, messageClaim.id)));
       await tx.update(leads).set({ status: "FAILED" }).where(and(inOrg(leads), eq(leads.id, lead.id)));
     });
-    log("acceptance blocked by Person-global DNC");
+    log(`acceptance blocked by ${barred}`);
     return "blocked";
   }
 

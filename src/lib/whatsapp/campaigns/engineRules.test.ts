@@ -50,6 +50,9 @@ describe("classifySendError", () => {
   test("Do Not Contact stops the lead", () => {
     expect(classifySendError(refused("do_not_contact"))).toEqual({ kind: "stop_lead", error: "Do Not Contact" });
   });
+  test("a number recorded as a wrong number stops the lead", () => {
+    expect(classifySendError(refused("wrong_number"))).toEqual({ kind: "stop_lead", error: "Wrong number" });
+  });
   test("a recipient refusal fails the lead without guessing registration", () => {
     const action = classifySendError(refused("recipient_unreachable", 400));
     expect(action.kind).toBe("fail_lead");

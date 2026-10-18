@@ -36,6 +36,8 @@ import {
 } from "./schema";
 import { startSequenceRunInTransaction } from "./sequences";
 import { PermanentCrmJobError, registerCrmJobHandlers } from "./worker";
+import { detectsOptOutWording, detectsWrongNumber } from "./wrongNumber";
+import { wrongRouteForConversation } from "./wrongRoutes";
 import { inOrg } from "@/lib/tenancy/scope";
 
 /** Deliberately conservative: only direct first-person suppression commands match. */
@@ -67,6 +69,36 @@ export function classifiedIntoDoNotContactSubcategory(
   return subcategory?.key === "do_not_contact";
 }
 
+function subcategoryKeyOf(subcategoryId: string | null, subcategories: readonly Pick<ClassificationSubcategory, "id" | "key">[]): string | null {
+  return subcategoryId ? subcategories.find((candidate) => candidate.id === subcategoryId)?.key ?? null : null;
+}
+
+/**
+ * True when the classifier's reading closes a wrong number: the "Wrong
+ * Number" subcategory on a current classification, applied, or proposed
+ * (an "other" category always is, by default) with the plain words or
+ * reasonable confidence. Anything less waits for a person, and never gets
+ * a sales draft either way.
+ */
+export function classifiedAsWrongNumber(
+  appliedResult: { applied: boolean; stale: boolean },
+  subcategoryId: string | null,
+  subcategories: readonly Pick<ClassificationSubcategory, "id" | "key">[],
+  evidence: { confidence: number; wrongNumberWords: boolean },
+): boolean {
+  if (appliedResult.stale || subcategoryKeyOf(subcategoryId, subcategories) !== "wrong_number") return false;
+  return appliedResult.applied || evidence.wrongNumberWords || evidence.confidence >= 0.6;
+}
+
+/** Whether the wrong-number apology may go out automatically from here, with the reply agent's stand-ins in tests. */
+function wrongNumberSending(agent: false | import("@/lib/assistant/replyAgent/agent.server").ReplyAgentDependencies) {
+  const deps = agent || {};
+  return {
+    sendAllowed: deps.allowNonProduction ?? (process.env.NODE_ENV === "production" || process.env.AUTOPILOT_ALLOW_NON_PRODUCTION === "true"),
+    send: deps.send,
+  };
+}
+
 function scalarAttributes(raw: Record<string, unknown> | null | undefined) {
   return Object.fromEntries(Object.entries(raw ?? {}).filter((entry): entry is [string, string | number | boolean | null] => {
     const value = entry[1];
@@ -80,7 +112,12 @@ async function classificationContext(messageId: string): Promise<{
   channel: string;
   expectedContextVersion: number;
   personId: string;
+  /** An explicit opt-out; "wrong number" beside any stop or unsubscribe wording counts as one. */
   dncIntent: boolean;
+  /** The message says "wrong number" (or the wrong person) in plain words. */
+  wrongNumberWords: boolean;
+  /** The conversation's route was already recorded as a wrong number. */
+  routeWrong: boolean;
   /** Only a greeting or an acknowledgement ("Hey", "ok thanks"): never interest, whatever the model says. */
   greetingOnly: boolean;
   input: Parameters<typeof classifyCrmReply>[0];
@@ -199,7 +236,10 @@ async function classificationContext(messageId: string): Promise<{
     channel: scope.conversation.channel,
     expectedContextVersion: scope.record.contextVersion,
     personId: scope.record.personId,
-    dncIntent: detectsExplicitDncIntent(scope.message.bodyText),
+    dncIntent: detectsExplicitDncIntent(scope.message.bodyText)
+      || (detectsWrongNumber(scope.message.bodyText) && detectsOptOutWording(scope.message.bodyText)),
+    wrongNumberWords: detectsWrongNumber(scope.message.bodyText),
+    routeWrong: Boolean(await wrongRouteForConversation(db, scope.conversation.id)),
     greetingOnly: isBareGreeting(scope.message.bodyText),
     input: {
       ...contextInput,
@@ -272,15 +312,40 @@ export async function handleClassificationJob(
       const { runReplyAgent } = await import("@/lib/assistant/replyAgent/agent.server");
       if (await runReplyAgent(job.entityId, agent)) return;
     }
+    const sending = wrongNumberSending(agent);
+    const wrongNumberSubcategoryId = context.input.subcategories.find((subcategory) => subcategory.key === "wrong_number")?.id ?? null;
+    const { closeWrongNumber } = await import("./wrongNumberAck.server");
+    // A route already recorded as a wrong number takes nothing more: the
+    // reply is filed as "Wrong Number" without the model, and no second
+    // apology is written (an explicit opt-out still goes the usual way).
+    if (context.routeWrong && !context.dncIntent) {
+      await withCrmTransaction((tx) => recordAiClassificationInTransaction(tx, {
+        recordId: context.recordId,
+        messageId: job.entityId,
+        expectedContextVersion: context.expectedContextVersion,
+        categoryKey: "other",
+        subcategoryId: wrongNumberSubcategoryId,
+        confidence: 1,
+        reasoning: "This number or address was already recorded as a wrong number; outreach to it is stopped.",
+        provider: "rules",
+        model: "wrong-route",
+        request: { wrongRoute: true },
+        response: { wrongRoute: true },
+      }));
+      await closeWrongNumber({ messageId: job.entityId, source: "classifier", acknowledgement: null, optOut: false, sendAllowed: sending.sendAllowed }, { send: sending.send });
+      return;
+    }
     const result = await classifyCrmReply(context.input, dependencies);
-    await withCrmTransaction(async (tx) => {
+    const closeAs = await withCrmTransaction(async (tx): Promise<{ optOut: boolean } | null> => {
+      // "Wrong number, stop messaging me" is Do Not Contact, filed as a wrong number rather than a buyer's no.
+      const dncWrongNumber = context.dncIntent && context.wrongNumberWords;
       const appliedResult = await recordAiClassificationInTransaction(tx, {
         recordId: context.recordId,
         messageId: job.entityId,
         expectedContextVersion: context.expectedContextVersion,
         // A bare "Hey" is a reply, not interest: the model's "interested" is not applied to the record.
-        categoryKey: context.dncIntent ? "not_interested" : context.greetingOnly && result.categoryKey === "interested" ? "other" : result.categoryKey,
-        subcategoryId: context.dncIntent ? null : context.greetingOnly && result.categoryKey === "interested" ? null : result.subcategoryId,
+        categoryKey: dncWrongNumber ? "other" : context.dncIntent ? "not_interested" : context.greetingOnly && result.categoryKey === "interested" ? "other" : result.categoryKey,
+        subcategoryId: dncWrongNumber ? wrongNumberSubcategoryId : context.dncIntent ? null : context.greetingOnly && result.categoryKey === "interested" ? null : result.subcategoryId,
         confidence: context.dncIntent ? 1 : context.greetingOnly ? Math.min(result.confidence, 0.5) : result.confidence,
         reasoning: context.dncIntent
           ? `Explicit do-not-contact request detected. ${result.reasoning}`
@@ -314,9 +379,20 @@ export async function handleClassificationJob(
           actorType: "ai",
           actorRef: result.model,
         });
-        return;
+        return null;
       }
-      if (appliedResult.stale || context.dncIntent) return;
+      if (appliedResult.stale) return null;
+      // Opted out and said "wrong number": the route is recorded too (closeWrongNumber below), nothing sent.
+      if (context.dncIntent) return dncWrongNumber ? { optOut: true } : null;
+      // A wrong number never gets a sales draft. When the reading is clear,
+      // closeWrongNumber (below: outside this transaction, because it may
+      // send) records the route and the one apology; an unsure one waits for
+      // a person in Action required.
+      if (subcategoryKeyOf(result.subcategoryId, context.input.subcategories) === "wrong_number") {
+        return classifiedAsWrongNumber(appliedResult, result.subcategoryId, context.input.subcategories, { confidence: result.confidence, wrongNumberWords: context.wrongNumberWords })
+          ? { optOut: false }
+          : null;
+      }
       // A classification left for a person to confirm (unsure, "other", a
       // customer) waits in Action required. A lead of the owner's assistant
       // outreach still gets a draft: the reply autopilot reads the message
@@ -325,7 +401,7 @@ export async function handleClassificationJob(
       // is never left without an answer and without anyone being told.
       const assistantLead = !appliedResult.applied
         && (await runMembershipFor(tx, context.personId, context.channel, context.conversationId))?.leadStatus === "active";
-      if (!appliedResult.applied && !assistantLead) return;
+      if (!appliedResult.applied && !assistantLead) return null;
       const current = await lockCrmRecord(tx, context.recordId);
       // The rep answered while this ran — e.g. straight from their phone on
       // WhatsApp (manualOutbound.ts): keep the classification, skip the draft.
@@ -334,7 +410,7 @@ export async function handleClassificationJob(
           reason: "answered_outside_crm",
           actorType: "system",
         });
-        return;
+        return null;
       }
       // Sequences follow an applied category; an unconfirmed one drafts from the thread.
       const started = appliedResult.applied ? await startSequenceRunInTransaction(tx, {
@@ -354,7 +430,20 @@ export async function handleClassificationJob(
         entityId: appliedResult.classification.id,
         payload: firstStep ? { stepRunId: firstStep.id } : { recordId: current.id },
       });
+      return null;
     });
+    if (closeAs) {
+      await closeWrongNumber({
+        messageId: job.entityId,
+        source: "classifier",
+        acknowledgement: null,
+        optOut: closeAs.optOut,
+        reasoning: result.reasoning,
+        sendAllowed: sending.sendAllowed,
+        provider: result.provider,
+        model: result.model,
+      }, { send: sending.send });
+    }
   } catch (error) {
     if (!(error instanceof PermanentCrmJobError)) await recordClassificationFailure(job.entityId, error);
     throw error;

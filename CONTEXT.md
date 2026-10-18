@@ -99,3 +99,8 @@ Unipile's delivered flag is not proof that a person saw the message.
   recorded as wrong for that lead. In Automatic mode one brief apology may be
   sent. In Review mode it is drafted for review. An explicit "stop" or
   "unsubscribe" in the same message means DNC instead, so nothing is sent.
+  The route is blocked for every record in the organization that holds it
+  (crm_wrong_routes); the lead's other channels go on.
+- **Closing acknowledgement**: that one apology. Claimed once per wrong
+  route, so a repeat, a duplicate webhook, a retry or a second worker never
+  sends another; never retried when it fails or is uncertain.

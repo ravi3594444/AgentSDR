@@ -18,6 +18,8 @@ export type WhatsappSendRefusalReason =
   | "new_chat_limit"
   | "warm_up"
   | "do_not_contact"
+  /** The number was recorded as a wrong number (crm_wrong_routes): nothing more goes to it. */
+  | "wrong_number"
   | "no_phone"
   | "no_number"
   | "rate_limited"

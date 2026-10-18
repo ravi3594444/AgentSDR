@@ -52,6 +52,8 @@ import {
   type CrmChannel,
 } from "./schema";
 import { assertCurrentCrmContext } from "./stateMachine";
+import { acknowledgementProblems, candidateRoutes } from "./wrongNumber";
+import { claimRouteForSendInTransaction, settleAcknowledgementInTransaction, wrongRouteSendRefusal } from "./wrongRoutes";
 import { adoptCurrentSequenceStepInTransaction, interruptActiveSequenceRunInTransaction } from "./sequences";
 
 export type NormalizedCrmSendResult = {
@@ -83,6 +85,12 @@ export type CrmSendAdapterInput = {
   references?: string[];
   /** Email through a Unipile mailbox only: the earlier email Unipile sends this as a reply to. */
   providerReplyTo?: string | null;
+  /**
+   * Set only on a wrong-number closing acknowledgement: the crm_wrong_routes
+   * row whose single-use exemption prepareSend consumed. The channel checks
+   * it again (still `sending`) instead of refusing the route.
+   */
+  wrongRouteAckId?: string | null;
 };
 
 const RFC_MESSAGE_ID = /^<[^<>\s@]+@[^<>\s@]+>$/;
@@ -250,6 +258,7 @@ export async function sendWhatsappThroughCrm(
       unipileChatId: input.providerThreadId,
       phone,
       text: input.bodyText,
+      ...(input.wrongRouteAckId ? { wrongRouteAckId: input.wrongRouteAckId } : {}),
     });
   } catch (error) {
     if (error instanceof WhatsappSendRefusedError) throw new DefiniteCrmSendError(error.message);
@@ -322,6 +331,15 @@ type PreparedSend = {
   request: CrmSendAdapterInput;
 };
 
+/** The routes a send reaches, for the wrong-number checks: the conversation's contact and the Person's address on the channel. */
+function sendRoutes(request: CrmSendAdapterInput): string[] {
+  return candidateRoutes(request.channel, {
+    providerContactId: request.providerContactId,
+    email: request.recipientEmail,
+    phone: request.recipientPhone,
+  });
+}
+
 async function prepareSend(tx: CrmTransaction, input: {
   draftId: string;
   revision: number;
@@ -366,6 +384,22 @@ async function prepareSend(tx: CrmTransaction, input: {
     throw new CrmConflictError("CRM conversation is unavailable for sending");
   }
   if (conversation.channel !== draft.channel) throw new CrmConflictError("Draft channel does not match its conversation");
+  const [person] = await tx.select({ id: people.id, email: people.email, phone: people.phone, linkedinUrl: people.linkedinUrl }).from(people)
+    .where(and(inOrg(people), eq(people.id, record.personId))).limit(1);
+  if (!person) throw new CrmNotFoundError("Person", record.personId);
+  // A route recorded as a wrong number takes nothing more, except its one
+  // closing acknowledgement, whose single-use claim this consumes.
+  const { ackRouteId } = await claimRouteForSendInTransaction(tx, {
+    draftId: draft.id,
+    channel: draft.channel,
+    personId: record.personId,
+    routes: candidateRoutes(draft.channel, {
+      providerContactId: conversation.providerContactId,
+      email: person.email,
+      phone: person.phone,
+      linkedinUrl: person.linkedinUrl,
+    }),
+  });
   if (draft.sequenceStepRunId) {
     const [stepScope] = await tx.select({ stepRun: crmSequenceStepRuns, run: crmSequenceRuns })
       .from(crmSequenceStepRuns)
@@ -374,20 +408,18 @@ async function prepareSend(tx: CrmTransaction, input: {
     if (!stepScope || stepScope.stepRun.status !== "awaiting_review" || stepScope.run.status !== "active") {
       throw new CrmConflictError("The sequence step is no longer awaiting review on an active run");
     }
-  } else {
+  } else if (!ackRouteId) {
     // A hand-written draft on a record with a pending step *is* that step's
     // reply (or follow-up). Linking it here lets finishSuccessfulSend advance
     // the run instead of interrupting it; it re-reads the draft, so the link
-    // only has to be persisted, not threaded through PreparedSend.
+    // only has to be persisted, not threaded through PreparedSend. (A
+    // wrong-number acknowledgement is never a step: it closes the route.)
     await adoptCurrentSequenceStepInTransaction(tx, {
       recordId: record.id,
       draftId: draft.id,
       contextVersion: record.contextVersion,
     });
   }
-  const [person] = await tx.select({ id: people.id, email: people.email, phone: people.phone }).from(people)
-    .where(and(inOrg(people), eq(people.id, record.personId))).limit(1);
-  if (!person) throw new CrmNotFoundError("Person", record.personId);
   const history = await tx.select({ raw: crmConversationMessages.raw, providerMessageId: crmConversationMessages.providerMessageId })
     .from(crmConversationMessages)
     .where(eq(crmConversationMessages.conversationId, conversation.id))
@@ -406,6 +438,12 @@ async function prepareSend(tx: CrmTransaction, input: {
   }
   const bodyText = draft.editedBodyText?.trim() || draft.aiBodyText?.trim() || "";
   if (!bodyText) throw new CrmConflictError("Draft has no sendable body");
+  if (ackRouteId) {
+    // The exemption covers one brief apology, nothing else, even if edited.
+    const problems = acknowledgementProblems(bodyText);
+    if (problems.length) throw new CrmConflictError(`A wrong-number apology can only apologise and say the messages stop: ${problems.join("; ")}`);
+    if (extras.cc.length || extras.bcc.length) throw new CrmConflictError("A wrong-number apology goes to the one recipient only; remove Cc and Bcc");
+  }
   const request: CrmSendAdapterInput = {
     channel: draft.channel,
     accountRef: conversation.accountRef,
@@ -414,6 +452,7 @@ async function prepareSend(tx: CrmTransaction, input: {
     recipientEmail: person.email,
     recipientPhone: draft.channel === "whatsapp" ? person.phone : null,
     personId: draft.channel === "instagram" ? person.id : null,
+    ...(ackRouteId ? { wrongRouteAckId: ackRouteId } : {}),
     subject: draft.subject,
     bodyText,
     bodyHtml: draft.editedBodyHtml ?? draft.aiBodyHtml,
@@ -594,6 +633,8 @@ async function finishSuccessfulSend(
       updatedAt: now,
     }).where(eq(crmSendAttempts.id, attempt.id));
     await tx.update(crmDrafts).set({ status: "sent", updatedAt: now }).where(eq(crmDrafts.id, draft.id));
+    // A wrong-number acknowledgement: its one send is done.
+    await settleAcknowledgementInTransaction(tx, { draftId: draft.id, status: "sent" });
 
     let nextActionAt: Date | null = null;
     let workflowState = record.workflowState;
@@ -695,7 +736,12 @@ async function finishFailedSend(prepared: PreparedSend, error: unknown, definite
       await tx.update(crmSequenceStepRuns).set({ status: "failed", lastError: message, updatedAt: now })
         .where(eq(crmSequenceStepRuns.id, draft.sequenceStepRunId));
     }
-    await tx.update(crmRecords).set({ workflowState: "error", nextActionAt: null, updatedAt: now })
+    // A wrong-number acknowledgement is never retried. A definite failure
+    // leaves nothing for anyone to do (outreach to the route is already
+    // stopped), so the record is not an error; an uncertain one is, until a
+    // person checks whether it arrived.
+    const acknowledgement = await settleAcknowledgementInTransaction(tx, { draftId: draft.id, status: definite ? "failed" : "uncertain", reason: message });
+    await tx.update(crmRecords).set({ workflowState: acknowledgement && definite ? "idle" : "error", nextActionAt: null, updatedAt: now })
       .where(eq(crmRecords.id, record.id));
     await appendCrmEvent(tx, {
       personId: record.personId, crmRecordId: record.id, pipelineId: record.pipelineId,
@@ -728,6 +774,13 @@ export async function sendDraft(input: {
     if (await isPersonDoNotContact(db, prepared.personId)) {
       throw new DefiniteCrmSendError("This Person was marked Do Not Contact before provider submission");
     }
+    const wrongRoute = await wrongRouteSendRefusal(db, {
+      channel: prepared.request.channel,
+      personId: prepared.personId,
+      routes: sendRoutes(prepared.request),
+      ackRouteId: prepared.request.wrongRouteAckId ?? null,
+    });
+    if (wrongRoute) throw new DefiniteCrmSendError(wrongRoute);
     const result = await (dependencies.send ?? sendThroughCrmProvider)(prepared.request);
     return await finishSuccessfulSend(prepared, result, input.actorRef);
   } catch (error) {
@@ -797,6 +850,7 @@ export async function reconcileDeliveryUncertain(input: {
     }).where(eq(crmSendAttempts.id, attempt.id)).returning();
     await tx.update(crmDrafts).set({ status: "failed", updatedAt: now })
       .where(eq(crmDrafts.id, draft.id));
+    await settleAcknowledgementInTransaction(tx, { draftId: draft.id, status: "failed", reason: `not delivered: ${note}` });
     if (draft.sequenceStepRunId) {
       await tx.update(crmSequenceStepRuns).set({
         status: "failed",

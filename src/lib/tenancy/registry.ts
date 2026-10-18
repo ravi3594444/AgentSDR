@@ -69,6 +69,7 @@ export const SCOPED_TABLES: readonly ScopedTable[] = [
   snake("crm_notes"),
   snake("crm_tasks"),
   snake("crm_webhook_events"),
+  snake("crm_wrong_routes"),
   // Tables (grid)
   snake("grid_folders"),
   snake("grid_workbooks"),

@@ -1947,6 +1947,33 @@ CREATE TABLE public.crm_webhook_events (
 );
 
 --
+-- Name: crm_wrong_routes; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.crm_wrong_routes (
+    organization_id uuid NOT NULL,
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    person_id uuid,
+    channel text NOT NULL,
+    route text NOT NULL,
+    crm_record_id uuid,
+    conversation_id uuid,
+    message_id uuid,
+    source text NOT NULL,
+    reason text,
+    ack_status text DEFAULT 'none'::text NOT NULL,
+    ack_reason text,
+    ack_draft_id uuid,
+    ack_updated_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT crm_wrong_routes_ack_status_chk CHECK ((ack_status = ANY (ARRAY['none'::text, 'drafted'::text, 'reserved'::text, 'sending'::text, 'sent'::text, 'failed'::text, 'uncertain'::text, 'blocked'::text]))),
+    CONSTRAINT crm_wrong_routes_channel_chk CHECK ((channel = ANY (ARRAY['email'::text, 'whatsapp'::text, 'linkedin'::text, 'instagram'::text]))),
+    CONSTRAINT crm_wrong_routes_route_chk CHECK ((length(btrim(route)) > 0)),
+    CONSTRAINT crm_wrong_routes_source_chk CHECK ((source = ANY (ARRAY['reply_agent'::text, 'classifier'::text, 'human'::text])))
+);
+
+--
 -- Name: daily_summaries; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3811,6 +3838,13 @@ ALTER TABLE ONLY public.crm_webhook_events
     ADD CONSTRAINT crm_webhook_events_pkey PRIMARY KEY (id);
 
 --
+-- Name: crm_wrong_routes crm_wrong_routes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.crm_wrong_routes
+    ADD CONSTRAINT crm_wrong_routes_pkey PRIMARY KEY (id);
+
+--
 -- Name: daily_summaries daily_summaries_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4905,6 +4939,24 @@ CREATE INDEX crm_tasks_organization_idx ON public.crm_tasks USING btree (organiz
 --
 
 CREATE INDEX crm_webhook_events_organization_idx ON public.crm_webhook_events USING btree (organization_id);
+
+--
+-- Name: crm_wrong_routes_ack_draft_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX crm_wrong_routes_ack_draft_uq ON public.crm_wrong_routes USING btree (ack_draft_id) WHERE (ack_draft_id IS NOT NULL);
+
+--
+-- Name: crm_wrong_routes_org_route_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX crm_wrong_routes_org_route_uq ON public.crm_wrong_routes USING btree (organization_id, channel, route);
+
+--
+-- Name: crm_wrong_routes_person_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX crm_wrong_routes_person_idx ON public.crm_wrong_routes USING btree (organization_id, person_id);
 
 --
 -- Name: daily_summaries_organization_day_uq; Type: INDEX; Schema: public; Owner: -
@@ -6596,6 +6648,20 @@ ALTER TABLE ONLY public.crm_tasks
 
 ALTER TABLE ONLY public.crm_webhook_events
     ADD CONSTRAINT crm_webhook_events_organization_fk FOREIGN KEY (organization_id) REFERENCES public.organizations(id) ON DELETE RESTRICT;
+
+--
+-- Name: crm_wrong_routes crm_wrong_routes_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.crm_wrong_routes
+    ADD CONSTRAINT crm_wrong_routes_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
+
+--
+-- Name: crm_wrong_routes crm_wrong_routes_person_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.crm_wrong_routes
+    ADD CONSTRAINT crm_wrong_routes_person_id_fkey FOREIGN KEY (person_id) REFERENCES public.people(id) ON DELETE SET NULL;
 
 --
 -- Name: daily_summaries daily_summaries_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -

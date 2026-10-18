@@ -1,5 +1,6 @@
 import type { CrmChannel } from "./channels";
 import type { AiInstructionBlock } from "./ai/instructions";
+import type { WrongRouteAckStatus, WrongRouteChannel } from "./wrongNumber";
 import {
   type AnyPgColumn,
   boolean,
@@ -720,6 +721,52 @@ export const crmRecordSequenceOverrides = pgTable(
       "crm_record_sequence_overrides_time_chk",
       sql`${table.clearedAt} IS NULL OR ${table.clearedAt} >= ${table.effectiveAt}`,
     ),
+  ],
+);
+
+/**
+ * A contact route (a phone number, an email address, a profile) recorded as
+ * reaching someone other than the intended lead — a wrong number. Not Do
+ * Not Contact: the lead is not opted out, but nothing is sent through this
+ * route again, to them or to any other record in the organization holding
+ * it (unique per organization, channel and route). The one exception is a
+ * single closing acknowledgement, claimed on this row (ack_status,
+ * ack_draft_id) against the inbound message that reported it, so repeats,
+ * retries and concurrent workers never send a second. See wrongNumber.ts.
+ */
+export const crmWrongRoutes = pgTable(
+  "crm_wrong_routes",
+  {
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** The lead the route was meant to reach; kept when the Person is deleted so the route stays blocked. */
+    personId: uuid("person_id").references(() => people.id, { onDelete: "set null" }),
+    channel: text("channel").notNull().$type<WrongRouteChannel>(),
+    /** normalizeRoute(): email lowercased, phone digits, profile id lowercased. */
+    route: text("route").notNull(),
+    crmRecordId: uuid("crm_record_id"),
+    conversationId: uuid("conversation_id"),
+    /** The inbound message that said the route is wrong. */
+    messageId: uuid("message_id"),
+    source: text("source").notNull().$type<"reply_agent" | "classifier" | "human">(),
+    reason: text("reason"),
+    ackStatus: text("ack_status").notNull().default("none").$type<WrongRouteAckStatus>(),
+    ackReason: text("ack_reason"),
+    ackDraftId: uuid("ack_draft_id"),
+    ackUpdatedAt: timestamp("ack_updated_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("crm_wrong_routes_org_route_uq").on(table.organizationId, table.channel, table.route),
+    index("crm_wrong_routes_person_idx").on(table.organizationId, table.personId),
+    uniqueIndex("crm_wrong_routes_ack_draft_uq").on(table.ackDraftId).where(sql`${table.ackDraftId} IS NOT NULL`),
+    check("crm_wrong_routes_channel_chk", sql`${table.channel} IN ('email', 'whatsapp', 'linkedin', 'instagram')`),
+    check("crm_wrong_routes_route_chk", sql`length(btrim(${table.route})) > 0`),
+    check("crm_wrong_routes_source_chk", sql`${table.source} IN ('reply_agent', 'classifier', 'human')`),
+    check("crm_wrong_routes_ack_status_chk", sql`${table.ackStatus} IN ('none', 'drafted', 'reserved', 'sending', 'sent', 'failed', 'uncertain', 'blocked')`),
   ],
 );
 

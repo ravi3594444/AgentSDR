@@ -18,6 +18,7 @@ import { sendConnectionRequest } from "@/services/unipile.service";
 import { UnsuccessfulRequestError } from "unipile-node-sdk";
 import type { LinkedInAccount } from "@/lib/linkedin/schema";
 import { isPersonDoNotContact } from "@/lib/crm/policies";
+import { linkedinRouteIsWrong } from "@/lib/crm/wrongRoutes";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { channelRules } from "@/lib/channels/rules.server";
 import { pickInRange } from "@/lib/channels/rules";
@@ -162,12 +163,14 @@ export const sendInvitations = async (account: LinkedInAccount): Promise<void> =
 
     // The claim is local and recoverable; check global DNC at the last safe
     // point before Unipile and remove the unsent claim when contact is barred.
-    if (await isPersonDoNotContact(db, personId)) {
+    const barred = await isPersonDoNotContact(db, personId) ? "Person-global DNC"
+      : await linkedinRouteIsWrong(db, personId, lead.linkedinUrl) ? "a wrong-number record" : null;
+    if (barred) {
       await db.transaction(async (tx) => {
         await tx.delete(messages).where(and(inOrg(messages), eq(messages.id, claimed.messageId!)));
         await tx.update(leads).set({ status: "FAILED" }).where(and(inOrg(leads), eq(leads.id, lead.id)));
       });
-      console.warn(`[sendInvitations] ${lead.linkedinUrl} blocked by Person-global DNC`);
+      console.warn(`[sendInvitations] ${lead.linkedinUrl} blocked by ${barred}`);
       continue;
     }
 
