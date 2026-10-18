@@ -32,6 +32,14 @@ const { apifyRuns, apifySettings } = await import("@/lib/apify/schema");
 const { tregCalls, tregSettings } = await import("@/lib/treg/schema");
 const { tavilySettings } = await import("@/lib/tavily/schema");
 const { encryptIntegrationCredential } = await import("@/lib/integrations/credentials");
+const { tinyfishSettings } = await import("@/lib/tinyfish/schema");
+const { researchSettings } = await import("@/lib/research/sourcesSchema");
+const { browserSessions } = await import("@/lib/browser/schema");
+const { providerUsage } = await import("@/lib/quota/schema");
+const { crmWrongRoutes } = await import("@/lib/crm/schema");
+const { activitySeen } = await import("@/lib/activity/schema");
+const { members } = await import("@/lib/auth/schema");
+const { eq } = await import("drizzle-orm");
 
 const stamp = Date.now();
 await runInOrganization(organizationId, async () => {
@@ -58,6 +66,14 @@ await runInOrganization(organizationId, async () => {
     channels: [],
     plan: { kind: "inquiries", inquiry: { channels: ["instagram"], accounts: [] }, assignments: [], sequences: {}, personalizationKey: "", samples: [], limits: { maxLeads: 0, emailPerMailboxPerDay: null, whatsappNewChatsPerDay: null }, excluded: [], estimate: { aiCalls: 0, aiCostUsd: null, days: null }, autopilot: false, instructions: null },
   });
+  // The tables added on 18 October 2026: TinyFish, research sources, the browser, the usage ledger, wrong numbers, Activity.
+  await db.insert(tinyfishSettings).values({ organizationId, encryptedKey: encryptIntegrationCredential(`iso-tinyfish-key-${stamp}`), keyHint: "…iso4", keyScope: `tinyfish:iso-scope-${stamp}`, browserMinutesPerDay: 5 }).onConflictDoNothing();
+  await db.insert(researchSettings).values({ organizationId, redditApprovalNote: `isolation reddit note ${stamp}`, redditClientHint: `iso-reddit-${stamp}` }).onConflictDoNothing();
+  const [usage] = await db.insert(providerUsage).values({ organizationId, provider: "tinyfish", product: "search", scopeKey: `tinyfish:iso-scope-${stamp}`, units: 1, usedUnits: 1, status: "settled", detail: { query: `isolation search ${stamp}` }, settledAt: new Date() }).returning();
+  await db.insert(browserSessions).values({ organizationId, provider: "tinyfish", providerSessionId: `iso-browser-${stamp}`, usageId: usage!.id, status: "closed", currentUrl: `https://isolation-browser-${stamp}.example.test/`, endedAt: new Date(), minutesUsed: 1 });
+  await db.insert(crmWrongRoutes).values({ organizationId, personId: person!.id, channel: "whatsapp", route: `+9190000${String(stamp % 100000).padStart(5, "0")}`, source: "human", reason: `isolation wrong number ${stamp}` });
+  const [owner] = await db.select({ userId: members.userId }).from(members).where(eq(members.organizationId, organizationId)).limit(1);
+  if (owner) await db.insert(activitySeen).values({ organizationId, userId: owner.userId, repliesSeenAt: new Date() }).onConflictDoNothing();
   console.log(`Seeded new-feature fixtures into ${organizationId}: instagram account ${account!.id}, chat ${chat!.id}, endpoint ${endpoint!.id}, audience ${audienceId}.`);
 });
 process.exit(0);
