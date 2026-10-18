@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { latestInboundAnswered, manualOutboundDecision, type ManualOutboundRecordState } from "./manualOutbound";
+import { latestInboundAnswered, manualOutboundDecision, settledWorkflowState, type ManualOutboundRecordState } from "./manualOutbound";
 import type { CrmWorkflowState } from "./schema";
 
 const replyAt = new Date("2026-09-02T09:00:00.000Z");
@@ -58,5 +58,15 @@ describe("latestInboundAnswered", () => {
     expect(latestInboundAnswered(record({ lastOutboundAt: before }))).toBe(false);
     expect(latestInboundAnswered(record({ lastOutboundAt: after }))).toBe(true);
     expect(latestInboundAnswered(record({ latestInboundMessageId: null, lastOutboundAt: after }))).toBe(false);
+  });
+});
+
+describe("settling an answered record", () => {
+  test("it leaves Action required when nothing else waits on a person", () => {
+    expect(settledWorkflowState([])).toBe("idle");
+  });
+
+  test("a send whose delivery is uncertain keeps it there until confirmed", () => {
+    expect(settledWorkflowState(["delivery_uncertain"])).toBe("action_required");
   });
 });

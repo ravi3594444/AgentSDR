@@ -5,6 +5,8 @@ import { db } from "@/lib/db";
 import { assistantJobs, assistantThreads, outreachRuns } from "@/lib/assistant/schema";
 import { displayThreadTitle } from "@/lib/assistant/agent";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
+import { crmNeedsYouSql, RAW_RECORD_COLUMNS } from "@/lib/crm/actionGroups.server";
+import { contactDisplayName } from "@/lib/crm/contactName";
 import { activitySeen } from "./schema";
 import { jobState, OPEN_STATES, REPLY_STATE_LABELS, replyState, runState, WORK_STATE_LABELS, type ReplyState, type WorkState } from "./status";
 
@@ -141,7 +143,9 @@ export type ReplyItem = {
 
 type ReplyRow = {
   id: string; channel: string; account_ref: string; sent_at: Date | string; preview: string; crm_record_id: string;
-  workflow_state: string | null; name: string; answered: boolean; latest: boolean; run_id: string | null; run_name: string | null; thread_id: string | null;
+  workflow_state: string | null; needs_you: boolean; answered: boolean; latest: boolean; run_id: string | null; run_name: string | null; thread_id: string | null;
+  full_name: string | null; first_name: string | null; last_name: string | null; email: string | null; phone: string | null;
+  linkedin_url: string | null; company: string | null; instagram: string | null;
 };
 
 /** Recorded incoming messages on every channel, newest first, with where each stands. */
@@ -150,7 +154,9 @@ export async function listReplies(input: { userId: string | null; channel?: stri
   const seen = input.userId ? await repliesSeenAt(input.userId) : null;
   const rows = await db.execute<ReplyRow>(sql`
     SELECT m.id, m.channel, m.account_ref, m.sent_at, left(m.body_text, 240) AS preview, c.crm_record_id, r.workflow_state,
-      coalesce(nullif(p.full_name, ''), nullif(trim(concat_ws(' ', p.first_name, p.last_name)), ''), p.email, p.phone, 'Unknown contact') AS name,
+      ${crmNeedsYouSql(RAW_RECORD_COLUMNS)} AS needs_you,
+      p.full_name, p.first_name, p.last_name, p.email, p.phone, p.linkedin_url,
+      coalesce(nullif(co.name, ''), p.raw->>'businessName') AS company, p.raw->'instagram'->>'username' AS instagram,
       EXISTS (SELECT 1 FROM crm_conversation_messages o WHERE o.conversation_id = m.conversation_id AND o.direction = 'outbound' AND o.sent_at > m.sent_at) AS answered,
       NOT EXISTS (SELECT 1 FROM crm_conversation_messages n WHERE n.conversation_id = m.conversation_id AND n.direction = 'inbound' AND n.sent_at > m.sent_at) AS latest,
       run.id AS run_id, run.name AS run_name, run.thread_id
@@ -158,6 +164,7 @@ export async function listReplies(input: { userId: string | null; channel?: stri
     JOIN crm_conversations c ON c.id = m.conversation_id AND c.organization_id = ${org}
     JOIN crm_records r ON r.id = c.crm_record_id AND r.organization_id = ${org}
     JOIN people p ON p.id = m.person_id AND p.organization_id = ${org}
+    LEFT JOIN companies co ON co.id = p.company_id AND co.organization_id = ${org}
     LEFT JOIN LATERAL (
       SELECT o.id, o.name, o.thread_id FROM outreach_run_leads l JOIN outreach_runs o ON o.id = l.run_id AND o.organization_id = ${org}
       WHERE l.person_id = m.person_id AND l.organization_id = ${org} AND o.created_at <= m.sent_at
@@ -168,11 +175,15 @@ export async function listReplies(input: { userId: string | null; channel?: stri
     LIMIT ${Math.min(Math.max(input.limit ?? 60, 1), 200)}`);
   const replies = rows.map((row): ReplyItem => {
     const receivedAt = new Date(row.sent_at);
-    const state = replyState({ answered: Boolean(row.answered), latest: Boolean(row.latest), workflowState: row.workflow_state });
+    const state = replyState({ answered: Boolean(row.answered), latest: Boolean(row.latest), workflowState: row.workflow_state, needsYou: Boolean(row.needs_you) });
     return {
       messageId: row.id,
       recordId: row.crm_record_id,
-      personName: row.name,
+      // Their name, else the business and the route they wrote from — never "Unknown contact" alone when either is known.
+      personName: contactDisplayName({
+        fullName: row.full_name, firstName: row.first_name, lastName: row.last_name, company: row.company,
+        email: row.email, phone: row.phone, instagram: row.instagram, linkedin: row.linkedin_url, channel: row.channel,
+      }),
       channel: row.channel,
       account: row.account_ref,
       receivedAt: receivedAt.toISOString(),

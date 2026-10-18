@@ -27,9 +27,12 @@ import { inOrg } from "@/lib/tenancy/scope";
  *
  * When it answers the latest inbound reply, it has the effect a hand-written
  * draft sent through sendDraft has (send.ts, the non-sequence branch): the
- * record goes idle, the active sequence is interrupted, open drafts go
- * stale, and the reply's classification is acknowledged. What the rep sent
- * is the reply; the AI's pending one is not needed any more.
+ * active sequence is interrupted, open drafts go stale, the reply's
+ * classification is acknowledged and the record leaves Action required —
+ * unless an uncertain delivery still has to be confirmed. What the rep sent is the reply; the AI's pending one is
+ * not needed any more. Open owner decisions and a takeover are left as they
+ * are, and a message older than the latest reply (a late echo) or a repeat
+ * delivery changes nothing.
  */
 
 export type ManualOutboundDecision =
@@ -126,10 +129,34 @@ export async function inboundAnsweredSince(
   return Boolean(answer);
 }
 
+/** What still waits on a person once the latest reply has been answered. */
+export type PendingAfterAnswer = "delivery_uncertain";
+
 /**
- * Takes a record whose latest reply the rep already answered out of the
- * queue: the classification job's ending when a manual outbound message
- * arrived while it ran (the "await_classification" decision).
+ * Where an answered record goes: out of Action required, unless a send whose
+ * delivery is uncertain still has to be confirmed (it is never assumed). A
+ * classification still proposed does not hold it: the reply was handled, and
+ * the record stays findable with its proposal in All replies. Pure, for the
+ * tests.
+ */
+export function settledWorkflowState(pending: readonly PendingAfterAnswer[]): "idle" | "action_required" {
+  return pending.length ? "action_required" : "idle";
+}
+
+async function pendingAfterAnswer(tx: CrmTransaction, record: CrmRecord): Promise<PendingAfterAnswer[]> {
+  const [uncertain] = await tx.select({ id: crmDrafts.id }).from(crmDrafts)
+    .where(and(eq(crmDrafts.crmRecordId, record.id), eq(crmDrafts.status, "delivery_uncertain"))).limit(1);
+  return uncertain ? ["delivery_uncertain"] : [];
+}
+
+/**
+ * Settles a record whose latest reply the rep already answered: the end of
+ * an answering manual message, and the classification job's ending when one
+ * arrived while it ran (the "await_classification" decision). The record
+ * leaves Action required unless something else still waits on a person
+ * (settledWorkflowState). Owner decisions are not touched — an open question
+ * (a quote, a meeting) is the owner's to settle in Needs you — and neither is
+ * a takeover: answering by hand does not change the reply mode.
  */
 export async function settleAnsweredRecordInTransaction(
   tx: CrmTransaction,
@@ -137,8 +164,11 @@ export async function settleAnsweredRecordInTransaction(
   input: { reason: string; actorType: CrmEventActor; actorRef?: string | null },
 ): Promise<void> {
   if (record.workflowState === "idle") return;
+  const pending = await pendingAfterAnswer(tx, record);
+  const workflowState = settledWorkflowState(pending);
+  if (record.workflowState === workflowState && record.nextActionAt === null) return;
   const now = new Date();
-  await tx.update(crmRecords).set({ workflowState: "idle", nextActionAt: null, updatedAt: now })
+  await tx.update(crmRecords).set({ workflowState, nextActionAt: null, updatedAt: now })
     .where(eq(crmRecords.id, record.id));
   if (record.latestInboundMessageId) {
     await tx.update(crmClassifications).set({ acknowledgedAt: now, updatedAt: now }).where(and(
@@ -155,8 +185,8 @@ export async function settleAnsweredRecordInTransaction(
     actorType: input.actorType,
     actorRef: input.actorRef,
     fromData: { workflowState: record.workflowState, nextActionAt: record.nextActionAt },
-    toData: { workflowState: "idle", nextActionAt: null },
-    meta: { reason: input.reason },
+    toData: { workflowState, nextActionAt: null },
+    meta: { reason: input.reason, ...(pending.length ? { stillPending: pending } : {}) },
     contextVersion: record.contextVersion,
   });
 }

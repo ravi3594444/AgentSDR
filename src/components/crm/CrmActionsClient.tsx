@@ -62,6 +62,7 @@ import { useRecordChanged } from "./recordEvents";
 import { publishRecordQueue, withdrawRecordQueue, type RecordQueue } from "./recordQueue";
 import { CRM_DUE_STATE_LABELS, type CrmDueState } from "@/lib/crm/stateMachine";
 import { CRM_ACTION_GROUP_LABELS, CRM_ACTION_GROUPS } from "@/lib/crm/actionGroups";
+import { CRM_CHANNELS } from "@/lib/crm/channels";
 
 export type Data = Record<string, unknown>;
 export type Action = Data;
@@ -85,7 +86,21 @@ export function actionId(action: Action) { return String(action.id ?? action.rec
 export const PAGE_SIZE = 30;
 
 const CATEGORY_KEYS = ["interested", "customer", "not_interested", "other"] as const;
-const CHANNELS = ["email", "linkedin", "whatsapp", "instagram"] as const;
+// Every CRM channel, Instagram included: the filter cannot fall behind the channels the CRM records.
+const CHANNELS = CRM_CHANNELS;
+
+/**
+ * The workspace's views, all on /crm/actions (`?view=` deep-links one). The
+ * queue is the default; Needs you is the owner's open decisions and drafts;
+ * All replies keeps every conversation a reply arrived on findable, answered
+ * or not.
+ */
+const VIEWS = ["actions", "needs_you", "replies"] as const;
+type View = (typeof VIEWS)[number];
+type ScopeCounts = Record<View, number>;
+function isView(value: unknown): value is View {
+  return typeof value === "string" && (VIEWS as readonly string[]).includes(value);
+}
 
 export function CompactSelect({ label, value, onChange, placeholder, children, className }: { label: string; value: string; onChange: (value: string) => void; placeholder: string; children: React.ReactNode; className?: string }) {
   return <Select.Root size="xsmall" value={value} onValueChange={onChange}>
@@ -161,6 +176,19 @@ export function CrmActionsClient() {
   const [hasMore, setHasMore] = useState(false);
   const [total, setTotal] = useState<number | null>(null);
   const [summary, reloadSummary] = useQueueSummary();
+  const [view, setView] = useState<View>("actions");
+  const [scopeCounts, setScopeCounts] = useState<ScopeCounts | null>(null);
+  // Read once on mount rather than through useSearchParams, so the page stays statically rendered.
+  useEffect(() => {
+    const requested = new URLSearchParams(window.location.search).get("view");
+    if (isView(requested)) setView(requested);
+  }, []);
+  const selectView = useCallback((next: View) => {
+    setView(next);
+    const url = new URL(window.location.href);
+    if (next === "actions") url.searchParams.delete("view"); else url.searchParams.set("view", next);
+    window.history.replaceState(window.history.state, "", url);
+  }, []);
   useEffect(() => {
     void Promise.all([crmFetch("/categories"), crmFetch("/sequences?includeArchived=true")]).then(([categoryResult, sequenceResult]) => {
       setCategories(asList<Data>(asObject(categoryResult).categories));
@@ -181,9 +209,10 @@ export function CrmActionsClient() {
     if (filters.due === "overdue") params.set("overdue", "true");
     if (filters.due === "today") params.set("dueBefore", new Date(new Date().setHours(23, 59, 59, 999)).toISOString());
     if (filters.due === "upcoming") params.set("dueAfter", new Date().toISOString());
+    if (view !== "actions") params.set("scope", view);
     params.set("limit", String(PAGE_SIZE));
     return params.toString();
-  }, [filters]);
+  }, [filters, view]);
   // Only the AI review post-filter makes the server total a count of this page
   // rather than of the queue.
   const postFiltered = Boolean(filters.classificationReview);
@@ -203,6 +232,7 @@ export function CrmActionsClient() {
       setNextOffset(Number(body.nextOffset ?? offset + page.length));
       setHasMore(Boolean(body.hasMore));
       if (firstPage) setTotal(typeof body.total === "number" ? body.total : null);
+      if (firstPage && body.scopeCounts) setScopeCounts(body.scopeCounts as ScopeCounts);
       setLoaded(true);
     } catch (cause) { setError(errorMessage(cause)); } finally { setLoading(false); setLoadingMore(false); }
   }, [query]);
@@ -220,21 +250,39 @@ export function CrmActionsClient() {
   // moment after a burst of edits keeps the strip honest without a read per click.
   const summaryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (summaryTimer.current) clearTimeout(summaryTimer.current); }, []);
+  // The view counts come with the list; after an edit one small read refreshes them.
+  const reloadCounts = useCallback(async () => {
+    try {
+      const params = new URLSearchParams(query);
+      params.delete("scope");
+      params.set("limit", "1");
+      const body = asObject(await crmFetch(`/actions?${params}`));
+      if (body.scopeCounts) setScopeCounts(body.scopeCounts as ScopeCounts);
+    } catch { /* They refresh with the list. */ }
+  }, [query]);
   const onMutated = useCallback(() => {
     if (summaryTimer.current) clearTimeout(summaryTimer.current);
-    summaryTimer.current = setTimeout(() => void reloadSummary(), 1500);
-  }, [reloadSummary]);
+    summaryTimer.current = setTimeout(() => { void reloadSummary(); void reloadCounts(); }, 1500);
+  }, [reloadSummary, reloadCounts]);
 
   const refresh = () => { void load(0); void reloadSummary(); };
   const shown = actions.length;
+  const order = view === "replies" ? "latest activity first" : "newest reply first";
   const detail = !loaded ? "Loading…"
-    : total !== null && !(postFiltered && hasMore) ? `${(postFiltered ? shown : total).toLocaleString()} ${(postFiltered ? shown : total) === 1 ? "item" : "items"}${activeFilterCount ? " match these filters" : ""} · newest reply first`
-    : `${shown}+ items · newest reply first`;
+    : total !== null && !(postFiltered && hasMore) ? `${(postFiltered ? shown : total).toLocaleString()} ${(postFiltered ? shown : total) === 1 ? "item" : "items"}${activeFilterCount ? " match these filters" : ""} · ${order}`
+    : `${shown}+ items · ${order}`;
+  const empty = activeFilterCount
+    ? { icon: RiFilterOffLine, title: "Nothing matches these filters", detail: "There are items, just none that fit every filter you picked.", action: <Button.Root variant="neutral" mode="stroke" size="small" onClick={clearFilters}>Clear filters</Button.Root> }
+    : view === "needs_you"
+    ? { icon: RiCheckDoubleLine, title: "Nothing needs you", detail: "Questions the assistant could not answer, handovers and drafts to review will show up here." }
+    : view === "replies"
+    ? { icon: RiCheckDoubleLine, title: "No replies yet", detail: "Every reply a lead sends shows up here, answered or not." }
+    : { icon: RiCheckDoubleLine, title: "You're all caught up", detail: "New replies, drafts to approve and due follow-ups will show up here." };
 
   return <>
     <PageHeader
       title="Action required"
-      description="Unresolved reviews, decisions and follow-ups. Answered conversations stay in Leads & replies."
+      description="Unresolved reviews, decisions and follow-ups. Needs you holds your open decisions and drafts; All replies keeps every reply findable."
       actions={<Button.Root variant="neutral" mode="stroke" size="small" onClick={refresh} disabled={loading}>
         <Button.Icon as={RiRefreshLine} className={cn(loading && loaded && "animate-spin")} />Refresh
       </Button.Root>}
@@ -242,14 +290,16 @@ export function CrmActionsClient() {
 
     <div className="mt-5"><WorkspaceNavigation area="leads" active="/crm/actions" /></div>
     <WorkspaceStats items={[
-      { label: "In the queue", value: summary?.queue.toLocaleString() ?? "—", detail: "Needs a human action", onSelect: clearFilters, selected: activeFilterCount === 0 },
+      { label: "Needs you", value: scopeCounts?.needs_you.toLocaleString() ?? "—", detail: "Open decisions and drafts", onSelect: () => selectView(view === "needs_you" ? "actions" : "needs_you"), selected: view === "needs_you" },
+      { label: "In the queue", value: summary?.queue.toLocaleString() ?? "—", detail: "Needs a human action", onSelect: () => { selectView("actions"); clearFilters(); }, selected: view === "actions" && activeFilterCount === 0 },
+      { label: "All replies", value: scopeCounts?.replies.toLocaleString() ?? "—", detail: "Answered ones included", onSelect: () => selectView(view === "replies" ? "actions" : "replies"), selected: view === "replies" },
       { label: "Drafts to review", value: summary?.drafts?.toLocaleString() ?? "—", detail: "Waiting for approval" },
       { label: "Follow-ups due", value: summary?.followUpsDue.toLocaleString() ?? "—", onSelect: () => setFilter("actionGroup", filters.actionGroup === "follow_up" ? "" : "follow_up"), selected: filters.actionGroup === "follow_up" },
       { label: "Errors", value: summary?.errors.toLocaleString() ?? "—", onSelect: () => setFilter("error", filters.error ? "" : "true"), selected: Boolean(filters.error) },
     ]} />
 
     <Frame className="mt-5">
-      <FrameHeader title="Queue" description={detail} actions={<>
+      <FrameHeader title={view === "needs_you" ? "Needs you" : view === "replies" ? "All replies" : "Queue"} description={detail} actions={<>
           <CompactSelect label="Category" placeholder="All categories" value={filters.category} onChange={(value) => setFilter("category", value)}><Select.Item value="">All categories</Select.Item>{categoryItems()}</CompactSelect>
           <CompactSelect label="Channel" placeholder="All channels" value={filters.channel} onChange={(value) => setFilter("channel", value)}><Select.Item value="">All channels</Select.Item>{channelItems()}</CompactSelect>
           <CompactSelect label="Action type" placeholder="All action types" value={filters.actionGroup} onChange={(value) => setFilter("actionGroup", value)}><Select.Item value="">All action types</Select.Item>{CRM_ACTION_GROUPS.map((group) => <Select.Item key={group} value={group}>{CRM_ACTION_GROUP_LABELS[group]}</Select.Item>)}</CompactSelect>
@@ -286,9 +336,8 @@ export function CrmActionsClient() {
               refreshing={loading}
               hasMore={hasMore && !loadingMore}
               onLoadMore={loadMore}
-              empty={activeFilterCount
-                ? { icon: RiFilterOffLine, title: "Nothing matches these filters", detail: "The queue has items, just none that fit every filter you picked.", action: <Button.Root variant="neutral" mode="stroke" size="small" onClick={clearFilters}>Clear filters</Button.Root> }
-                : { icon: RiCheckDoubleLine, title: "You're all caught up", detail: "New replies, drafts to approve and due follow-ups will show up here." }}
+              scope={view === "actions" ? undefined : view}
+              empty={empty}
             />
             {hasMore && <LoadMoreOnScroll onLoadMore={loadMore} busy={loadingMore} />}
           </>}
@@ -343,9 +392,11 @@ type Notice = { tone: "success" | "error"; text: string };
  * Reloading the whole list instead would lose the reader's scroll position
  * and every page they had loaded.
  */
-export function useRowMutations({ onActionsChange, pipeline, onMutated, onRowGone }: {
+export function useRowMutations({ onActionsChange, pipeline, scope, onMutated, onRowGone }: {
   onActionsChange: React.Dispatch<React.SetStateAction<Action[]>>;
   pipeline?: boolean;
+  /** The Needs you or All replies view: a row is re-read in that view, so an answered one stays. */
+  scope?: "needs_you" | "replies";
   onMutated?: () => void;
   onRowGone?: (id: string) => void;
 }) {
@@ -357,12 +408,13 @@ export function useRowMutations({ onActionsChange, pipeline, onMutated, onRowGon
   const refreshRow = useCallback(async (id: string) => {
     // The pipeline re-reads in its own scope, so a sent reply moves the row to
     // Waiting rather than dropping it the way the Action required queue does.
-    const result = await crmFetch(`/actions?recordId=${encodeURIComponent(id)}&limit=1${pipeline ? "&scope=pipeline" : ""}`);
+    const view = pipeline ? "pipeline" : scope;
+    const result = await crmFetch(`/actions?recordId=${encodeURIComponent(id)}&limit=1${view ? `&scope=${view}` : ""}`);
     const [fresh] = asList<Action>(result, ["actions"]);
     onActionsChange((old) => fresh ? old.map((item) => actionId(item) === id ? fresh : item) : old.filter((item) => actionId(item) !== id));
     if (!fresh) onRowGone?.(id);
     return fresh ?? null;
-  }, [onActionsChange, pipeline, onRowGone]);
+  }, [onActionsChange, pipeline, scope, onRowGone]);
 
   const mutateRow = useCallback(async (id: string, path: string, body: Data, method: string, success: string) => {
     setBusyIds((old) => new Set(old).add(id));
@@ -463,15 +515,17 @@ type RowsProps = {
   /** More pages exist; the record pop-up loads them when it steps near the end. */
   hasMore?: boolean;
   onLoadMore?: () => void;
+  /** Rows of the Needs you or All replies view. */
+  scope?: "needs_you" | "replies";
 };
 
-export function ActionRows({ actions, categories, onActionsChange, pipeline, refreshing, onMutated, empty, hasMore, onLoadMore }: RowsProps) {
+export function ActionRows({ actions, categories, onActionsChange, pipeline, refreshing, onMutated, empty, hasMore, onLoadMore, scope }: RowsProps) {
   const router = useRouter();
   const [editingId, setEditingId] = useState("");
   // Read once per mount so the "follow-up overdue" arithmetic stays pure.
   const [now] = useState(() => Date.now());
   const onRowGone = useCallback((id: string) => setEditingId((current) => current === id ? "" : current), []);
-  const { busyIds, notice, setNotice, mutateRow, classify, refreshRow } = useRowMutations({ onActionsChange, pipeline, onMutated, onRowGone });
+  const { busyIds, notice, setNotice, mutateRow, classify, refreshRow } = useRowMutations({ onActionsChange, pipeline, scope, onMutated, onRowGone });
   useSyncRecordChanges(actions, refreshRow, onMutated);
   usePublishRecordQueue(actions, hasMore, onLoadMore);
 
@@ -609,7 +663,13 @@ function draftStateOf({ editable, draftFull, status, dnc, sendable, actionText, 
     case "No sequence assigned": return { label: "No sequence", tone: "neutral", icon: RiLinkUnlink, hint: "Nothing runs for this classification" };
     case "Delivery reconciliation": return { label: "Confirm delivery", tone: "warning", icon: RiQuestionLine, hint: "Open the record to confirm the last send" };
     case "Reply review":
+    case "Write a reply":
     case "Human review": return { label: "Needs a reply", tone: "info", icon: RiReplyLine, hint: "No draft yet — write one on the record" };
+    // The next actions the Needs you and All replies views name off the queue (conversationSummary.ts).
+    case "Open conversation": return { label: "Open conversation", tone: "neutral", icon: RiCheckDoubleLine, hint: "Nothing is waiting on you here" };
+    case "Classifying their reply": return { label: "Classifying their reply", tone: "neutral", icon: RiHourglass2Fill };
+    case "Do not contact": return { label: "Do not contact", tone: "error", icon: RiForbid2Line, hint: "Nothing is sent to this person again" };
+    case "Wrong number — outreach stopped": return { label: "Wrong number", tone: "warning", icon: RiForbid2Line, hint: "Outreach to this route stopped" };
     default: return { label: actionText, tone: "neutral", icon: RiTimeLine };
   }
 }
@@ -706,7 +766,15 @@ export function describeAction(action: Action, categories: Data[], pipeline: boo
   const sendableDraft = Boolean(editable) && !dnc && Number(editable?.expectedContextVersion) === Number(record.contextVersion);
   const actionText = actionType(action);
   const draftState = draftStateOf({ editable: Boolean(editable), draftFull, status: String(draft.status ?? ""), dnc, sendable: sendableDraft, actionText, apology: Boolean(action.wrongNumberApology) });
+  // The server's reading of the conversation (conversationSummary.ts): who
+  // answered, from recorded evidence, and whether it is now their move.
+  const conversation = asObject(action.summary);
+  const answered = asObject(conversation.answer).status === "answered";
+  const answerLabel = answered ? String(asObject(conversation.answer).label ?? "") : "";
+  const headline = conversation.headline ? String(conversation.headline) : "";
+  const openConversation = asObject(conversation.nextAction).kind === "open_conversation";
   return {
+    answerLabel, headline, openConversation,
     id, href, record, person, activeRun, inbound, subcategory, classification, category, channel, stage,
     proposedCategoryKey, proposedSubcategoryId, proposedLabel, keepCategoryKey, keepSubcategoryId,
     dueLabel, dueDetail, dueColor, dueIcon, actionText, name, companyDomain, companyLabel,
@@ -836,7 +904,10 @@ function DraftSummary({ row }: { row: Row }) {
 
 /** Due (or, on the pipeline, stage) as one chip with an icon; the when, if any, underneath. */
 function DueChip({ row, align = "end" }: { row: Row; align?: "start" | "end" }) {
-  if (row.dueLabel === "—") return <span className="text-paragraph-sm text-text-soft-400" title="Nothing scheduled">—</span>;
+  // Nothing due: say where the conversation stands ("Answered by you · Waiting for their reply") rather than a bare dash.
+  if (row.dueLabel === "—") return row.headline
+    ? <span className="text-paragraph-xs text-text-sub-600">{row.headline}</span>
+    : <span className="text-paragraph-sm text-text-soft-400" title="Nothing scheduled">—</span>;
   return <div className={cn("flex min-w-0 flex-col gap-1", align === "end" ? "items-end" : "items-start")}>
     <Badge.Root variant="lighter" size="medium" color={row.dueColor} className="h-6 max-w-full shrink-0 gap-1 whitespace-nowrap px-2" title={row.dueLabel}>
       <Badge.Icon as={row.dueIcon} className="-ml-0.5 mr-0 size-3.5" /><span>{row.dueLabel}</span>
@@ -932,7 +1003,8 @@ function ActionRow({ action, categories, busy, editing, pipeline, now, onOpen, o
       </Table.Cell>}
       <Table.Cell className="px-3 py-3 text-right">
         <DueChip row={row} />
-        {pipeline && <Link href={href} className="mt-2 inline-block text-paragraph-xs text-text-sub-600 underline-offset-4 hover:text-text-strong-950 hover:underline">Open conversation</Link>}
+        {pipeline && row.answerLabel && row.dueLabel !== "—" && <p className="mt-1 text-paragraph-xs text-text-sub-600">{row.answerLabel}</p>}
+        {(pipeline || row.openConversation) && <Link href={href} className="mt-2 inline-block text-paragraph-xs text-text-sub-600 underline-offset-4 hover:text-text-strong-950 hover:underline">Open conversation</Link>}
       </Table.Cell>
       <Table.Cell className="px-2 py-3" data-row-tools onKeyDown={(event) => event.stopPropagation()}>
         <RowMenu
@@ -1120,7 +1192,7 @@ export function ActionCard({ action, categories, now, busy, onOpen, onMutate, on
 
     <div className="mt-3 flex items-center justify-between gap-2 border-t border-stroke-soft-200 pt-3">
       <Badge.Root variant="lighter" size="medium" color={chipRow.dueColor} className="h-6 min-w-0 shrink gap-1 px-2" title={chipRow.dueLabel}>
-        <Badge.Icon as={chipRow.dueIcon} className="-ml-0.5 mr-0 size-3.5" /><span className="truncate">{chipRow.dueLabel === "—" ? "Nothing due" : chipRow.dueLabel}</span>
+        <Badge.Icon as={chipRow.dueIcon} className="-ml-0.5 mr-0 size-3.5" /><span className="truncate">{chipRow.dueLabel === "—" ? row.answerLabel || "Nothing due" : chipRow.dueLabel}</span>
       </Badge.Root>
       {/* The quote above already says when they replied; this is the when of the chip. */}
       <span className="shrink-0 text-paragraph-xs tabular-nums text-text-sub-600" title={formatDate(row.repliedAt)}>{row.dueDetail && row.dueDetail !== "—" ? row.dueDetail : row.latestReply ? "" : timeAgo(row.repliedAt)}</span>

@@ -55,7 +55,7 @@ export type NavBadges = {
   actionRequired: number;
   whatsappUnread: number;
   draftsAwaitingReview: number;
-  /** Failing mailboxes + disconnected LinkedIn and WhatsApp accounts. */
+  /** Failing mailboxes + disconnected LinkedIn, WhatsApp and Instagram accounts. */
   accountsNeedingAttention: number;
   /** Leads waiting for a person: the assistant's open handoffs (Needs you). */
   needsYou: number;

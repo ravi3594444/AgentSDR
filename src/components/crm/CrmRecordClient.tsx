@@ -38,7 +38,7 @@ import { CallButton } from "@/components/calls/CallButton";
 import { CallsCard } from "@/components/calls/CallsCard";
 import { EmptyState } from "@/components/page/EmptyState";
 import { PageHeader } from "@/components/page/PageHeader";
-import { conversationSummary } from "./conversationSummary";
+import { conversationSummary } from "@/lib/crm/conversationSummary";
 import { PersonWhatsappPanel } from "@/components/whatsapp/PersonWhatsappPanel";
 import { WhatsappLogo } from "@/components/whatsapp/WhatsappLogo";
 import { cn } from "@/utils/cn";
@@ -238,7 +238,13 @@ export default function CrmRecordClient({ recordId, variant = "page" }: { record
   const currentStep = asObject(currentStepRow?.step);
   const name = displayName({ ...data, person });
   const avatarUrl = person.profilePictureUrl ? String(person.profilePictureUrl) : null;
-  const summary = conversationSummary(messages);
+  // The server's reading (conversationSummary.ts) when it came with the record; the timeline's otherwise.
+  const server = asObject(data.summary);
+  const fallback = conversationSummary(messages);
+  const serverAnswer = asObject(server.answer);
+  const summary = server.answer
+    ? { answered: serverAnswer.status === "answered", headline: String(server.headline ?? ""), replyMode: server.replyModeLabel ? String(server.replyModeLabel) : "", account: String(asObject(server.account).label ?? ""), nextAction: asObject(server.nextAction) }
+    : { answered: fallback.answered, headline: fallback.answered ? `${fallback.answerLabel} · Waiting for their reply` : "Conversation history", replyMode: "", account: "", nextAction: {} as Data };
   const hasDraft = Boolean(draft.id && ["awaiting_review", "failed", "delivery_uncertain"].includes(String(draft.status)));
   const editorOpen = hasDraft || writeMessage;
   const lastMessage = [...messages].filter((message) => message.direction === "inbound")
@@ -273,7 +279,10 @@ export default function CrmRecordClient({ recordId, variant = "page" }: { record
       <div className="flex flex-wrap items-center gap-3 border-y border-stroke-soft-200 py-3">
         <ClassificationSelect record={data} categories={categories} onAction={mutate} />
         <p role="status" className="min-w-0 flex-1 text-paragraph-xs text-text-sub-600">
-          {data.dnc ? "Outreach stopped · Do Not Contact" : wrongRoute ? wrongRouteLine(wrongRoute) : hasDraft ? "A draft needs your attention" : summary.answered ? `${summary.answerLabel} · waiting for their reply` : "Conversation history"}
+          {data.dnc ? "Outreach stopped · Do Not Contact" : wrongRoute ? wrongRouteLine(wrongRoute) : hasDraft ? "A draft needs your attention" : summary.headline}
+          {/* What happens next, when it is not the draft above: an owner decision, a classification, an uncertain send. */}
+          {!hasDraft && summary.nextAction.urgent === true && <span className="text-text-strong-950"> · Next: {String(summary.nextAction.label)}</span>}
+          {(summary.replyMode || summary.account) && <span className="text-text-soft-400"> · {[summary.replyMode && `Reply mode: ${summary.replyMode}`, summary.account && `Sending from ${summary.account}`].filter(Boolean).join(" · ")}</span>}
         </p>
         <ActivityDrawer events={events} drafts={drafts} sendAttempts={sendAttempts} />
         {data.activeChannel !== "whatsapp" && !hasDraft && <Button.Root variant="neutral" mode="stroke" size="xsmall" onClick={() => setWriteMessage((open) => !open)}>{writeMessage ? "Close composer" : "Write a message"}</Button.Root>}
