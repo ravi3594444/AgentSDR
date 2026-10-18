@@ -40,6 +40,9 @@ export function isWrongRouteChannel(channel: string): channel is WrongRouteChann
  * One comparable value per route: a lowercased email address, a phone
  * number's digits (a WhatsApp contact id "919876543210@s.whatsapp.net" and
  * "+91 98765 43210" are the same route), a profile id or URL lowercased.
+ * A WhatsApp privacy id ("…@lid") carries no number, so it is no route: a
+ * chat addressed by one reaches its number through the Person's phone,
+ * which every phone-based check (sends, campaigns, duplicates) compares.
  */
 export function normalizeRoute(channel: WrongRouteChannel, value: string | null | undefined): string | null {
   const raw = value?.trim();
@@ -49,7 +52,8 @@ export function normalizeRoute(channel: WrongRouteChannel, value: string | null 
     return /^[^\s@]+@[^\s@]+$/.test(email) ? email : null;
   }
   if (channel === "whatsapp") {
-    const digits = raw.replace(/@.*$/, "").replace(/\D/g, "");
+    if (raw.includes("@") && !/@(?:s\.whatsapp\.net|c\.us)$/i.test(raw)) return null;
+    const digits = raw.replace(/(?::\d+)?@.*$/, "").replace(/\D/g, "");
     return digits.length >= 7 && digits.length <= 15 ? digits : null;
   }
   return raw.toLowerCase().replace(/\/+$/, "");

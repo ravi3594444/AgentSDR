@@ -149,16 +149,21 @@ export type HardFacts = {
   perDay: number;
 };
 
-export type HardStop = { reason: string; tellOwner: boolean } | null;
+export type HardStop = { reason: string; tellOwner: boolean; answered?: true } | null;
 
-/** The few things decided in code, before the agent runs. `tellOwner`: a limit was reached and the owner should know. */
+/**
+ * The few things decided in code, before the agent runs. `tellOwner`: a
+ * limit was reached and the owner should know. `answered`: someone already
+ * answered the message (the owner from their phone, say), so it is settled
+ * rather than left waiting.
+ */
 export function hardStop(facts: HardFacts): HardStop {
   if (facts.doNotContact) return { reason: "they asked not to be contacted", tellOwner: false };
   if (facts.suppressed) return { reason: "the address unsubscribed or bounced", tellOwner: false };
   if (facts.runInactive) return { reason: "outreach to them is stopped or paused", tellOwner: false };
   if (facts.takeover) return { reason: "you are handling this conversation yourself", tellOwner: false };
   if (facts.newerInbound) return { reason: "a newer message arrived; that one is answered instead", tellOwner: false };
-  if (facts.answeredAlready) return { reason: "it was already answered", tellOwner: false };
+  if (facts.answeredAlready) return { reason: "it was already answered", tellOwner: false, answered: true };
   if (facts.sentInConversation >= facts.perConversation) return { reason: `the assistant already sent ${facts.sentInConversation} messages in this chat (a loop safety net)`, tellOwner: true };
   if (facts.sentInLast24h >= facts.perDay) return { reason: `the limit of ${facts.perDay} automatic replies in 24 hours is reached`, tellOwner: true };
   return null;

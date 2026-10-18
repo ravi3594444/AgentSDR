@@ -308,6 +308,13 @@ export async function settleAcknowledgementInTransaction(tx: CrmTransaction, inp
   return rows.length > 0;
 }
 
+/** A person discarded the acknowledgement's draft: it never goes out, and no later message writes it again. */
+export async function setAsideAcknowledgementInTransaction(tx: CrmTransaction, input: { draftId: string; reason: string }): Promise<void> {
+  const now = new Date();
+  await tx.update(crmWrongRoutes).set({ ackStatus: "blocked", ackReason: input.reason.slice(0, 500), ackUpdatedAt: now, updatedAt: now })
+    .where(and(inOrg(crmWrongRoutes), eq(crmWrongRoutes.ackDraftId, input.draftId), inArray(crmWrongRoutes.ackStatus, [...ACK_CLAIMABLE])));
+}
+
 /** Do Not Contact was set: an acknowledgement not yet sending never goes out. */
 export async function blockPendingAcknowledgementsInTransaction(tx: CrmTransaction, input: { personId: string; reason: string }): Promise<void> {
   const now = new Date();

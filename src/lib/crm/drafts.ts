@@ -19,6 +19,7 @@ import {
 import { draftInOrg, lockCrmRecord } from "./records";
 import { releaseStepRunDraftLinks } from "./sequences";
 import { currentStageMoveInTransaction } from "./stageMove";
+import { setAsideAcknowledgementInTransaction } from "./wrongRoutes";
 import {
   crmClassifications,
   crmConversationMessages,
@@ -603,6 +604,8 @@ export async function discardDraft(input: { draftId: string; actorRef?: string |
     const record = await lockCrmRecord(tx, draft.crmRecordId);
     const [updated] = await tx.update(crmDrafts).set({ status: "discarded", updatedAt: new Date() })
       .where(eq(crmDrafts.id, draft.id)).returning();
+    // A wrong-number apology set aside by a person is not sent, nor written again.
+    await setAsideAcknowledgementInTransaction(tx, { draftId: draft.id, reason: "a person set the apology aside" });
     await appendCrmEvent(tx, {
       personId: record.personId, crmRecordId: record.id, pipelineId: record.pipelineId,
       eventType: "draft.discarded", actorType: "authenticated_operator", actorRef: input.actorRef,

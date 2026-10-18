@@ -26,6 +26,13 @@ describe("routes", () => {
     expect(candidateRoutes("email", { email: "Lead@Clinic.test", phone: "+919876543210" })).toEqual(["lead@clinic.test"]);
     expect(candidateRoutes("sms", { phone: "+919876543210" })).toEqual([]);
   });
+
+  test("a WhatsApp privacy id (@lid) is no number: the chat's route is the Person's phone", () => {
+    expect(normalizeRoute("whatsapp", "123456789012345@lid")).toBeNull();
+    expect(normalizeRoute("whatsapp", "919876543210:12@s.whatsapp.net")).toBe("919876543210");
+    expect(normalizeRoute("whatsapp", "919876543210@c.us")).toBe("919876543210");
+    expect(candidateRoutes("whatsapp", { providerContactId: "123456789012345@lid", phone: "+919876543210" })).toEqual(["919876543210"]);
+  });
 });
 
 describe("reading the message", () => {
