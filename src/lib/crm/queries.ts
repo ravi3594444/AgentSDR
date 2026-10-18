@@ -32,7 +32,9 @@ import { CrmNotFoundError } from "./repository";
 import { crmDueState } from "./stateMachine";
 import { wrongRoutesForRecord } from "./wrongRoutes";
 import type { CrmActionGroup } from "./actionGroups";
-import { crmActionableSql, crmActionGroupSql } from "./actionGroups.server";
+import { crmActionableSql, crmActionGroupSql, crmNeedsYouSql } from "./actionGroups.server";
+import { contactDisplayName } from "./contactName";
+import { loadConversationSummaries } from "./conversationSummary.server";
 import { inOrg } from "@/lib/tenancy/scope";
 
 /**
@@ -79,8 +81,30 @@ const personListColumns = {
     'name', ${people.raw}->'name', 'fullName', ${people.raw}->'fullName', 'full_name', ${people.raw}->'full_name',
     'firstName', ${people.raw}->'firstName', 'first_name', ${people.raw}->'first_name',
     'lastName', ${people.raw}->'lastName', 'last_name', ${people.raw}->'last_name',
-    'email', ${people.raw}->'email', 'linkedinUrl', ${people.raw}->'linkedinUrl', 'linkedin_url', ${people.raw}->'linkedin_url'))`.as("raw"),
+    'email', ${people.raw}->'email', 'linkedinUrl', ${people.raw}->'linkedinUrl', 'linkedin_url', ${people.raw}->'linkedin_url',
+    'businessName', ${people.raw}->'businessName', 'instagram', ${people.raw}->'instagram'))`.as("raw"),
 };
+
+/** The list's name for a person: their own, else business and contact route (contactName.ts). */
+function personContactName(
+  person: { fullName: string | null; firstName: string | null; lastName: string | null; email: string | null; phone: string | null; linkedinUrl: string | null; raw: Record<string, unknown> | null },
+  company: { name: string | null } | null,
+  channel: string | null,
+): string {
+  const raw = person.raw ?? {};
+  const instagram = raw.instagram && typeof raw.instagram === "object" ? (raw.instagram as { username?: unknown }).username : null;
+  return contactDisplayName({
+    fullName: person.fullName || raw.name || raw.fullName || raw.full_name,
+    firstName: person.firstName || raw.firstName || raw.first_name,
+    lastName: person.lastName || raw.lastName || raw.last_name,
+    company: company?.name || raw.businessName,
+    email: person.email,
+    phone: person.phone,
+    instagram,
+    linkedin: person.linkedinUrl,
+    channel,
+  });
+}
 
 /** "Follow-up 2 · Nudge", or just "Follow-up 2" when that is already the step's name. */
 function followUpStepLabel(position: number, name: string): string {
@@ -97,8 +121,19 @@ export type CrmPipelineStage = "needs_action" | "waiting" | "exhausted";
 
 export const CRM_PIPELINE_STAGES: readonly CrmPipelineStage[] = ["needs_action", "waiting", "exhausted"];
 
+export const CRM_ACTION_SCOPES = ["actions", "pipeline", "needs_you", "replies"] as const;
+export type CrmActionScope = (typeof CRM_ACTION_SCOPES)[number];
+
+/** The workspace views counted beside the list (the pipeline has its own stage counts). */
+export type CrmScopeCounts = { needs_you: number; actions: number; replies: number };
+
 const actionableCondition = crmActionableSql(crmRecords);
 const actionGroup = crmActionGroupSql(crmRecords);
+const needsYouCondition = crmNeedsYouSql(crmRecords);
+/** The Action required queue's condition as the list filters by it; the navigation badge counts the same (crmActionQueueCountSql). */
+export const crmActionQueueCondition = actionableCondition;
+// Every record a reply was ever recorded on, answered or not, open or closed.
+const repliedCondition = sql`${crmRecords.latestInboundMessageId} is not null`;
 // Idle alone is ambiguous — a hand-sent reply also lands there. Only a record
 // whose newest sequence run ran to its last step has used up its follow-ups.
 const exhaustedCondition = sql`(${crmRecords.workflowState} = 'idle' and (
@@ -115,9 +150,13 @@ export type CrmActionFilters = {
   /**
    * `actions` (the default) is the Action required queue. `pipeline` is every
    * open record — the queue plus those waiting on the lead or a scheduled
-   * follow-up, and those whose follow-ups have all gone out.
+   * follow-up, and those whose follow-ups have all gone out. `needs_you` is
+   * every record with an open owner decision or a draft awaiting review
+   * (crmNeedsYouSql), whatever its workflow state. `replies` is every record
+   * a reply was recorded on, so an answered or closed conversation stays
+   * findable.
    */
-  scope?: "actions" | "pipeline";
+  scope?: CrmActionScope;
   /** Pipeline only: narrow to one stage. */
   stage?: CrmPipelineStage;
   /** Leave out Not interested records; unclassified and Other stay in. */
@@ -141,18 +180,12 @@ export type CrmActionFilters = {
 export async function listCrmActions(input: CrmActionFilters = {}) {
   const limit = Math.max(1, Math.min(200, Math.floor(input.limit ?? 50)));
   const offset = Math.max(0, Math.floor(input.offset ?? 0));
-  const pipeline = input.scope === "pipeline";
-  // Everything except the stage, so the stage tabs can count against the same
-  // filters the list is under.
-  const baseConditions = [
+  const scope = input.scope ?? "actions";
+  const pipeline = scope === "pipeline";
+  // The filters other than the scope itself, so the view counts are taken
+  // under the same filters the list is.
+  const filterConditions = [
     inOrg(crmRecords),
-    input.error === true
-      ? eq(crmRecords.workflowState, "error")
-      : input.workflowState
-      ? eq(crmRecords.workflowState, input.workflowState)
-      : pipeline
-      ? sql`${crmRecords.workflowState} <> 'closed'`
-      : actionableCondition,
     input.recordId ? eq(crmRecords.id, input.recordId) : undefined,
     input.potentialOnly ? sql`${crmRecords.categoryKey} is distinct from 'not_interested'` : undefined,
     input.categoryKey ? eq(crmRecords.categoryKey, input.categoryKey) : undefined,
@@ -169,6 +202,20 @@ export async function listCrmActions(input: CrmActionFilters = {}) {
          and action_run.status in ('active', 'paused')
     )` : undefined,
   ];
+  const scopeCondition = input.error === true
+    ? eq(crmRecords.workflowState, "error")
+    : input.workflowState
+    ? eq(crmRecords.workflowState, input.workflowState)
+    : pipeline
+    ? sql`${crmRecords.workflowState} <> 'closed'`
+    : scope === "needs_you"
+    ? needsYouCondition
+    : scope === "replies"
+    ? repliedCondition
+    : actionableCondition;
+  // Everything except the stage, so the stage tabs can count against the same
+  // filters the list is under.
+  const baseConditions = [...filterConditions, scopeCondition];
   // Filter on the same CASE the tab counts group by. Negating the two
   // conditions instead drops rows where they are NULL — no next_action_at,
   // or no sequence run at all — which the CASE sends to Waiting.
@@ -181,7 +228,7 @@ export async function listCrmActions(input: CrmActionFilters = {}) {
   // than let DESC float those NULLs to the top; id keeps paging stable.
   // The pipeline counts our own sends as activity too (greatest() skips
   // NULLs), so a lead replied to this morning sits above one from last week.
-  const lastActivity = pipeline
+  const lastActivity = pipeline || scope === "replies"
     ? sql`coalesce(greatest(${crmRecords.lastInboundAt}, ${crmRecords.lastOutboundAt}), ${crmRecords.createdAt})`
     : sql`coalesce(${crmRecords.lastInboundAt}, ${crmRecords.createdAt})`;
   const orderBy = [desc(lastActivity), asc(crmRecords.id)] as const;
@@ -195,7 +242,7 @@ export async function listCrmActions(input: CrmActionFilters = {}) {
   const pagePersonIds = db.select({ personId: crmRecords.personId }).from(crmRecords)
     .innerJoin(people, eq(people.id, crmRecords.personId))
     .where(where).orderBy(...orderBy).limit(limit).offset(offset);
-  const [rows, totals, messages, classifications, runs, drafts, policies, stageCounts, lastRuns] = await Promise.all([
+  const [rows, totals, messages, classifications, runs, drafts, policies, stageCounts, lastRuns, scopeCounts] = await Promise.all([
     db.select({ record: crmRecords, person: personListColumns, company: companies, subcategory: crmSubcategories, stage: pipelineStage })
       .from(crmRecords)
       .innerJoin(people, eq(people.id, crmRecords.personId))
@@ -242,7 +289,17 @@ export async function listCrmActions(input: CrmActionFilters = {}) {
         .where(inArray(crmSequenceRuns.crmRecordId, pageRecordIds))
         .orderBy(crmSequenceRuns.crmRecordId, desc(crmSequenceRuns.createdAt))
       : Promise.resolve([]),
+    // Needs you, Action required and All replies under the list's filters:
+    // one pass, the same three conditions the views list by.
+    !pipeline && !input.recordId
+      ? db.select({
+        needs_you: sql<number>`count(*) filter (where ${needsYouCondition})`.mapWith(Number),
+        actions: sql<number>`count(*) filter (where ${actionableCondition})`.mapWith(Number),
+        replies: sql<number>`count(*) filter (where ${repliedCondition})`.mapWith(Number),
+      }).from(crmRecords).where(and(...filterConditions))
+      : Promise.resolve([]),
   ]);
+  const summaries = await loadConversationSummaries(rows.map((row) => row.record.id));
   // Which step each open draft was written for: a follow-up on someone's desk
   // is not an immediate reply, and the row has to say so.
   const draftStepRunIds = drafts.flatMap((draft) => draft.sequenceStepRunId ? [draft.sequenceStepRunId] : []);
@@ -273,7 +330,12 @@ export async function listCrmActions(input: CrmActionFilters = {}) {
     const aiChanged = Boolean(classification && !classification.acknowledgedAt);
     // Off the queue there is no action to name, so say what the record is
     // waiting on instead of falling through to "Human review".
-    const actionType = row.stage === "exhausted"
+    const summary = summaries.get(row.record.id) ?? null;
+    // Off the queue, the Needs you and All replies views name the record's
+    // actual next action — for an answered conversation, Open conversation.
+    const actionType = !pipeline && scope !== "actions" && row.stage !== "needs_action" && summary
+      ? summary.nextAction.label
+      : row.stage === "exhausted"
       ? "All follow-ups sent"
       : row.stage === "waiting"
       ? row.record.workflowState === "classifying" || row.record.workflowState === "unclassified"
@@ -332,6 +394,10 @@ export async function listCrmActions(input: CrmActionFilters = {}) {
       wrongNumberApology: Boolean(draft && apologyDraftIds.has(draft.id)),
       contactPolicy: policyByPerson.get(row.record.personId) ?? null,
       lastRun: lastRunByRecord.get(row.record.id) ?? null,
+      /** The person's name, else their business and contact route. */
+      contactName: personContactName(row.person, row.company, row.record.activeChannel),
+      /** Latest messages, who answered, reply mode, what pends and the actual next action. */
+      summary,
     };
   }).filter((row) => input.classificationReview === undefined
     || (input.classificationReview
@@ -349,6 +415,7 @@ export async function listCrmActions(input: CrmActionFilters = {}) {
     nextOffset: offset + rows.length,
     hasMore: rows.length === limit,
     ...(pipeline && !input.recordId ? { stageCounts: Object.fromEntries(CRM_PIPELINE_STAGES.map((stage) => [stage, Number(stageCounts.find((row) => row.stage === stage)?.total ?? 0)])) } : {}),
+    ...(!pipeline && !input.recordId ? { scopeCounts: { needs_you: scopeCounts[0]?.needs_you ?? 0, actions: scopeCounts[0]?.actions ?? 0, replies: scopeCounts[0]?.replies ?? 0 } satisfies CrmScopeCounts } : {}),
   };
 }
 
@@ -361,7 +428,7 @@ export async function getCrmRecordWorkspace(recordId: string) {
   const personIdOfRecord = db.select({ personId: crmRecords.personId }).from(crmRecords).where(and(inOrg(crmRecords), eq(crmRecords.id, recordId)));
   const personEmailOfRecord = db.select({ email: sql<string>`lower(${people.email})` }).from(crmRecords)
     .innerJoin(people, eq(people.id, crmRecords.personId)).where(and(inOrg(crmRecords), eq(crmRecords.id, recordId)));
-  const [headers, conversations, messages, classifications, events, runs, drafts, stepRuns, citations, attempts, linkedinHistory, linkedinAccounts, emailOutreach, inboxHistory] = await Promise.all([
+  const [headers, conversations, messages, classifications, events, runs, drafts, stepRuns, citations, attempts, linkedinHistory, linkedinAccounts, emailOutreach, inboxHistory, summaries] = await Promise.all([
     db.select({ record: crmRecords, person: people, company: companies, subcategory: crmSubcategories, policy: crmPersonContactPolicies })
       .from(crmRecords)
       .innerJoin(people, eq(people.id, crmRecords.personId))
@@ -438,6 +505,7 @@ export async function getCrmRecordWorkspace(recordId: string) {
       .innerJoin(inboxContacts, eq(inboxContacts.id, inboxMessages.contactId))
       .where(and(inOrg(inboxContacts), sql`lower(${inboxContacts.email}) in (${personEmailOfRecord})`))
       .orderBy(asc(inboxMessages.sentAt)),
+    loadConversationSummaries([recordId]),
   ]);
   const header = headers[0];
   if (!header) throw new CrmNotFoundError("CRM record", recordId);
@@ -599,6 +667,10 @@ export async function getCrmRecordWorkspace(recordId: string) {
   ].sort((a, b) => new Date(a.sentAt ?? a.createdAt).getTime() - new Date(b.sentAt ?? b.createdAt).getTime());
   return {
     ...header.record,
+    /** The person's name, else their business and contact route. */
+    contactName: personContactName(header.person, header.company, header.record.activeChannel),
+    /** Latest messages, who answered, reply mode, what pends and the actual next action (conversationSummary.ts). */
+    summary: summaries.get(recordId) ?? null,
     person: { ...header.person, company: header.company?.name ?? null },
     company: header.company,
     subcategory: header.subcategory?.name ?? null,

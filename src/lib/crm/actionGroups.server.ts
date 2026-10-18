@@ -1,5 +1,6 @@
 import { sql, type SQL, type SQLWrapper } from "drizzle-orm";
 import type { CrmActionGroup } from "./actionGroups";
+import { REPORT_KINDS } from "@/lib/assistant/handoff";
 
 /** The crm_records columns the grouping reads — Drizzle columns, or raw `r.<column>` under an alias. */
 export type CrmRecordColumns = { id: SQLWrapper; workflowState: SQLWrapper; nextActionAt: SQLWrapper };
@@ -43,4 +44,43 @@ export function crmActionGroupSql(r: CrmRecordColumns): SQL<CrmActionGroup | nul
         case when ${r.nextActionAt} <= now() then 'follow_up' else 'next_step' end)
     end
   end`;
+}
+
+/** The crm_records columns crmNeedsYouSql reads — Drizzle columns, or raw `r.<column>` under an alias. */
+export type CrmRecordScopeColumns = { id: SQLWrapper; organizationId: SQLWrapper };
+
+/**
+ * Needs you: an open owner decision on the record that is a handoff (missing
+ * information, a complaint, a negotiation, a meeting, …), or a draft awaiting
+ * review. Interested and opt-out reports are shown but never count
+ * (handoff.ts REPORT_KINDS). Independent of the workflow state: a handoff
+ * stays the owner's after the assistant's holding reply took the record out
+ * of Action required. describeConversation's `needsYou` is the same rule.
+ */
+export function crmNeedsYouSql(r: CrmRecordScopeColumns): SQL<boolean> {
+  const reports = sql.join(REPORT_KINDS.map((kind) => sql`${kind}`), sql`, `);
+  return sql<boolean>`(exists (
+      select 1 from owner_decisions od
+       where od.crm_record_id = ${r.id} and od.organization_id = ${r.organizationId}
+         and od.status = 'open' and od.kind not in (${reports}))
+    or exists (
+      select 1 from crm_drafts nd
+       where nd.crm_record_id = ${r.id} and nd.status = 'awaiting_review'))`;
+}
+
+/** Raw-SQL record columns under the alias `r`, for statements written by hand (badges, Activity). */
+export const RAW_RECORD_COLUMNS = {
+  id: sql.raw("r.id"),
+  organizationId: sql.raw("r.organization_id"),
+  workflowState: sql.raw("r.workflow_state"),
+  nextActionAt: sql.raw("r.next_action_at"),
+} as const;
+
+/**
+ * The Action required count for an organization: exactly the queue
+ * listCrmActions lists (crmActionableSql), counted. The navigation badge
+ * reads it, so the badge and the list cannot disagree.
+ */
+export function crmActionQueueCountSql(organizationId: string): SQL<number> {
+  return sql<number>`(SELECT count(*) FROM crm_records r WHERE r.organization_id = ${organizationId} AND ${crmActionableSql(RAW_RECORD_COLUMNS)})::int`;
 }

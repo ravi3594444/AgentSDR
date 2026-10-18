@@ -1,4 +1,5 @@
 import { CRM_CATEGORY_COLOR } from "@/components/analytics/theme";
+import { contactDisplayName } from "@/lib/crm/contactName";
 
 export type CrmCategory = "customer" | "interested" | "not_interested" | "other";
 export type CrmChannel = "email" | "linkedin" | "whatsapp" | "instagram";
@@ -57,19 +58,17 @@ export function displayName(value: Record<string, unknown>): string {
     || raw.lastName || raw.last_name || personRaw.lastName || personRaw.last_name || "";
   const fullName = `${String(first)} ${String(last)}`.trim();
   if (fullName) return fullName;
-  const business = asObject(value.company).name || person.company || raw.businessName || personRaw.businessName;
-  if (typeof business === "string" && business.trim()) return business.trim();
-  const email = value.email || person.email || raw.email || personRaw.email;
-  if (typeof email === "string" && email.trim()) return email.trim();
-  const linkedin = value.linkedinUrl || value.linkedin_url || person.linkedinUrl || person.linkedin_url
-    || raw.linkedinUrl || raw.linkedin_url || personRaw.linkedinUrl || personRaw.linkedin_url;
-  if (typeof linkedin === "string" && linkedin.trim()) {
-    const slug = linkedin.trim().replace(/\/+$/, "").split("/").pop() || linkedin.trim();
-    return `LinkedIn · ${slug}`;
-  }
-  const phone = value.phone || person.phone || raw.phone || personRaw.phone;
-  if (typeof phone === "string" && phone.trim()) return phone.trim();
-  return "Unknown contact";
+  // The server names an unnamed contact by business and route (contactName.ts); use it when it came along.
+  if (typeof value.contactName === "string" && value.contactName.trim()) return value.contactName.trim();
+  return contactDisplayName({
+    company: asObject(value.company).name || person.company || raw.businessName || personRaw.businessName,
+    email: value.email || person.email || raw.email || personRaw.email,
+    phone: value.phone || person.phone || raw.phone || personRaw.phone,
+    instagram: asObject(raw.instagram).username || asObject(personRaw.instagram).username,
+    linkedin: value.linkedinUrl || value.linkedin_url || person.linkedinUrl || person.linkedin_url
+      || raw.linkedinUrl || raw.linkedin_url || personRaw.linkedinUrl || personRaw.linkedin_url,
+    channel: value.activeChannel ?? value.channel,
+  });
 }
 
 export function formatDate(value: unknown, fallback = "—"): string {

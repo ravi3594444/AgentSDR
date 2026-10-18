@@ -104,10 +104,13 @@ export const REPLY_STATE_LABELS: Record<ReplyState, string> = {
  * exists in its conversation; otherwise from its record's workflow state.
  * The record's state belongs to its newest reply, so an older reply that
  * was answered stays Answered; on the newest, needs-you wins over answered.
+ * `needsYou` is the CRM's Needs you (an open owner decision or a draft
+ * awaiting review): a quote the assistant could not give is the owner's even
+ * after its holding reply went out.
  */
-export function replyState(input: { answered: boolean; latest: boolean; workflowState: string | null }): ReplyState {
+export function replyState(input: { answered: boolean; latest: boolean; workflowState: string | null; needsYou?: boolean }): ReplyState {
   if (input.answered && !input.latest) return "answered";
-  if (input.workflowState === "action_required") return "needs_you";
+  if (input.workflowState === "action_required" || input.needsYou) return "needs_you";
   if (input.answered) return "answered";
   if (input.workflowState === "classifying" || input.workflowState === "unclassified") return "processing";
   return "waiting";

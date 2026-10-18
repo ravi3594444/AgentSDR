@@ -78,8 +78,10 @@ word means here and, where it matters, what it does not mean.
 - **Takeover**: the owner saying "I'll reply myself" for one conversation.
   The agent then stays silent there.
 - **Needs you**: open owner decisions such as missing information, a
-  complaint, a negotiation or a meeting. Interested and opt-out reports are
-  shown but do not count as Needs you.
+  complaint, a negotiation or a meeting, and drafts awaiting review.
+  Interested and opt-out reports are shown but do not count as Needs you. A
+  decision stays in Needs you after the assistant's answer or the owner's own
+  reply until the owner settles it.
 - **Action required**: CRM records waiting on a person, such as a draft
   awaiting review or an unclassified reply.
 

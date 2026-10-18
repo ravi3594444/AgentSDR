@@ -62,3 +62,9 @@ test("the record's state belongs to its newest reply: an older answered reply st
   // An older reply nobody answered is still part of the open question.
   expect(replyState({ answered: false, latest: false, workflowState: "action_required" })).toBe("needs_you");
 });
+
+test("an open owner decision keeps the newest reply in Needs you after the assistant's answer", () => {
+  expect(replyState({ answered: true, latest: true, workflowState: "idle", needsYou: true })).toBe("needs_you");
+  expect(replyState({ answered: true, latest: false, workflowState: "idle", needsYou: true })).toBe("answered");
+  expect(replyState({ answered: true, latest: true, workflowState: "idle", needsYou: false })).toBe("answered");
+});
