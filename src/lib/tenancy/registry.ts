@@ -92,6 +92,8 @@ export const SCOPED_TABLES: readonly ScopedTable[] = [
   snake("treg_settings"),
   snake("treg_calls"),
   snake("tavily_settings"),
+  snake("tinyfish_settings"),
+  snake("provider_usage"),
   // LinkedIn (ex-Prisma, camelCase columns)
   pascal("LinkedInAccount"),
   pascal("Campaign"),
@@ -157,6 +159,10 @@ export const GLOBAL: readonly string[] = [
   // The scheduler's slot claims; a per-organization job names its
   // organization in `job` (src/lib/scheduler/schema.ts).
   "scheduled_job_runs",
+  // A provider's limits per API key (keyed by the key's hash): counters and
+  // a wait only, shared by every organization that saved the same key
+  // (src/lib/quota/schema.ts). Each organization's use is in provider_usage.
+  "provider_quota_state",
 ];
 
 /**

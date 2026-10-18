@@ -2799,6 +2799,46 @@ CREATE TABLE public.people (
 );
 
 --
+-- Name: provider_quota_state; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.provider_quota_state (
+    scope_key text NOT NULL,
+    product text NOT NULL,
+    minute_start timestamp with time zone,
+    minute_used integer DEFAULT 0 NOT NULL,
+    hour_start timestamp with time zone,
+    hour_used integer DEFAULT 0 NOT NULL,
+    day_start timestamp with time zone,
+    day_used integer DEFAULT 0 NOT NULL,
+    blocked_until timestamp with time zone,
+    blocked_reason text,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+--
+-- Name: provider_usage; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.provider_usage (
+    organization_id uuid NOT NULL,
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    provider text NOT NULL,
+    product text NOT NULL,
+    scope_key text,
+    units integer NOT NULL,
+    used_units integer,
+    status text DEFAULT 'reserved'::text NOT NULL,
+    job_id uuid,
+    thread_id uuid,
+    detail jsonb,
+    error text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    settled_at timestamp with time zone,
+    CONSTRAINT provider_usage_status_chk CHECK ((status = ANY (ARRAY['reserved'::text, 'settled'::text, 'failed'::text, 'uncertain'::text])))
+);
+
+--
 -- Name: qualification_jobs; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2938,6 +2978,22 @@ CREATE TABLE public.teams (
     organization_id uuid NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone
+);
+
+--
+-- Name: tinyfish_settings; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.tinyfish_settings (
+    organization_id uuid NOT NULL,
+    encrypted_key text,
+    key_hint text,
+    key_scope text,
+    use_for_web_search boolean DEFAULT true NOT NULL,
+    browser_minutes_per_day integer DEFAULT 0 NOT NULL,
+    updated_by uuid,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT tinyfish_settings_browser_chk CHECK (((browser_minutes_per_day >= 0) AND (browser_minutes_per_day <= 240)))
 );
 
 --
@@ -4084,6 +4140,20 @@ ALTER TABLE ONLY public.people
     ADD CONSTRAINT people_pkey PRIMARY KEY (id);
 
 --
+-- Name: provider_quota_state provider_quota_state_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.provider_quota_state
+    ADD CONSTRAINT provider_quota_state_pkey PRIMARY KEY (scope_key, product);
+
+--
+-- Name: provider_usage provider_usage_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.provider_usage
+    ADD CONSTRAINT provider_usage_pkey PRIMARY KEY (id);
+
+--
 -- Name: qualification_jobs qualification_jobs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4152,6 +4222,13 @@ ALTER TABLE ONLY public.team_members
 
 ALTER TABLE ONLY public.teams
     ADD CONSTRAINT teams_pkey PRIMARY KEY (id);
+
+--
+-- Name: tinyfish_settings tinyfish_settings_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.tinyfish_settings
+    ADD CONSTRAINT tinyfish_settings_pkey PRIMARY KEY (organization_id);
 
 --
 -- Name: treg_calls treg_calls_pkey; Type: CONSTRAINT; Schema: public; Owner: -
@@ -5442,6 +5519,12 @@ CREATE INDEX people_organization_idx ON public.people USING btree (organization_
 --
 
 CREATE INDEX people_phone_lookup_idx ON public.people USING btree (phone) WHERE (phone IS NOT NULL);
+
+--
+-- Name: provider_usage_org_product_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX provider_usage_org_product_idx ON public.provider_usage USING btree (organization_id, provider, product, created_at);
 
 --
 -- Name: reply_agent_runs_conversation_idx; Type: INDEX; Schema: public; Owner: -
@@ -6970,6 +7053,13 @@ ALTER TABLE ONLY public.people
     ADD CONSTRAINT people_organization_fk FOREIGN KEY (organization_id) REFERENCES public.organizations(id) ON DELETE RESTRICT;
 
 --
+-- Name: provider_usage provider_usage_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.provider_usage
+    ADD CONSTRAINT provider_usage_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
+
+--
 -- Name: qualification_jobs qualification_jobs_campaign_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7031,6 +7121,13 @@ ALTER TABLE ONLY public.team_members
 
 ALTER TABLE ONLY public.teams
     ADD CONSTRAINT teams_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id) ON DELETE CASCADE;
+
+--
+-- Name: tinyfish_settings tinyfish_settings_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.tinyfish_settings
+    ADD CONSTRAINT tinyfish_settings_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
 
 --
 -- Name: treg_calls treg_calls_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
