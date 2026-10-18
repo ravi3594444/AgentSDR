@@ -38,7 +38,10 @@ import { findWrongRoutes, recordWrongRouteInTransaction, setAcknowledgementInTra
 
 export type CloseWrongNumberInput = {
   messageId: string;
-  source: "reply_agent" | "classifier";
+  /** Who read it as a wrong number: the reply agent, the classifier, or a person confirming the classification. */
+  source: "reply_agent" | "classifier" | "human";
+  /** The person who confirmed it (source "human"). */
+  actorRef?: string | null;
   /** The model's acknowledgement; checked here, and replaced by the fixed line in their language when it fails or is missing. */
   acknowledgement: string | null;
   /** The same message asks to stop or not be contacted: Do Not Contact, nothing sent. */
@@ -258,7 +261,8 @@ export async function closeWrongNumber(input: CloseWrongNumberInput, deps: { sen
   const scope = await loadScope(db, input.messageId);
   if (!scope) return null;
   const { text } = closingAcknowledgement(input.acknowledgement, scope.leadMessage, scope.channel);
-  const actorRef = input.source === "reply_agent" ? AUTOPILOT_ACTOR : input.model ?? "classifier";
+  const actorType = input.source === "human" ? "authenticated_operator" : "ai";
+  const actorRef = input.source === "reply_agent" ? AUTOPILOT_ACTOR : input.source === "human" ? input.actorRef ?? null : input.model ?? "classifier";
 
   // 1. Record the route and stop outreach on it, before anything is sent;
   //    write the acknowledgement draft in the same transaction.
@@ -269,7 +273,7 @@ export async function closeWrongNumber(input: CloseWrongNumberInput, deps: { sen
         personId: scope.personId,
         reason: "Wrong number, and they asked not to be contacted (read in their reply)",
         source: "inbound_request",
-        actorType: "ai",
+        actorType,
         actorRef,
       });
     }
@@ -277,7 +281,7 @@ export async function closeWrongNumber(input: CloseWrongNumberInput, deps: { sen
     const blocker = await ackBlocker(tx, scope, input.optOut);
     const membership = await runMembershipFor(tx, scope.personId, scope.channel, scope.conversationId);
     const automatic = Boolean(membership?.automatic && membership.runStatus === "running" && membership.leadStatus === "active" && input.sendAllowed);
-    const reviewReason = membership?.automatic && membership.runStatus === "running" && !input.sendAllowed
+    const reviewReason = input.source !== "human" && membership?.automatic && membership.runStatus === "running" && !input.sendAllowed
       ? "Automatic sends only go out from a production server"
       : null;
     const recorded = await recordWrongRouteInTransaction(tx, {
@@ -292,7 +296,7 @@ export async function closeWrongNumber(input: CloseWrongNumberInput, deps: { sen
       reason: input.reasoning?.trim() || "They said this does not reach the intended lead",
       ackStatus: blocker ? "blocked" : "none",
       ackReason: blocker,
-      actorType: "ai",
+      actorType,
       actorRef,
     });
     // Read again: Do Not Contact moves the record's context on.
@@ -315,6 +319,28 @@ export async function closeWrongNumber(input: CloseWrongNumberInput, deps: { sen
       return { row, created: true, dispatch: automatic ? { draftId: draft.id, revision: draft.revision } : null };
     }
 
+    // The apology still waiting for review, when this route has one. A
+    // person discarding it ends it: it is never written again. Set aside by
+    // a newer message in this chat, or by a person's reclassification that
+    // moved the context on, it is written again against the current
+    // context: still one.
+    const waiting = row.ackStatus === "drafted" && row.ackDraftId
+      ? (await tx.select({ status: crmDrafts.status, aiBodyText: crmDrafts.aiBodyText, editedBodyText: crmDrafts.editedBodyText })
+        .from(crmDrafts).where(eq(crmDrafts.id, row.ackDraftId)).limit(1))[0] ?? null
+      : null;
+    if (waiting?.status === "discarded") {
+      await setAcknowledgementInTransaction(tx, { id: row.id, from: ["drafted"], to: "blocked", reason: "a person set the apology aside" });
+      if (row.messageId !== scope.messageId) await settleRecord(tx, scope, false);
+      return { row, created: false, dispatch: null };
+    }
+    const writeAgain = async () => {
+      await tx.update(crmDrafts).set({ status: "stale", updatedAt: new Date() })
+        .where(and(eq(crmDrafts.id, row.ackDraftId!), inArray(crmDrafts.status, ["generating", "awaiting_review", "failed"])));
+      const draft = await writeAcknowledgementDraft(tx, record, scope, waiting?.editedBodyText?.trim() || waiting?.aiBodyText?.trim() || text, input);
+      await setAcknowledgementInTransaction(tx, { id: row.id, from: ["drafted"], to: "drafted", draftId: draft.id, reason: row.ackReason });
+      await settleRecord(tx, scope, true);
+    };
+
     if (row.messageId === scope.messageId) {
       // The same message again (a retried job, a restart): carry on from
       // where it stopped, never from the start.
@@ -328,6 +354,16 @@ export async function closeWrongNumber(input: CloseWrongNumberInput, deps: { sen
         // the attempt's own transaction): safe to send, once.
         const [draft] = await tx.select({ revision: crmDrafts.revision }).from(crmDrafts).where(eq(crmDrafts.id, row.ackDraftId)).limit(1);
         return { row, created: false, dispatch: draft ? { draftId: row.ackDraftId, revision: draft.revision } : null };
+      }
+      if (waiting?.status === "stale" && row.conversationId === scope.conversationId) {
+        // Set aside without a newer message (a person reclassified the
+        // reply): written again, unless something now forbids it.
+        if (blocker) {
+          await setAcknowledgementInTransaction(tx, { id: row.id, from: ["drafted"], to: "blocked", reason: blocker });
+          await settleRecord(tx, scope, false);
+        } else {
+          await writeAgain();
+        }
       }
       return { row, created: false, dispatch: null };
     }
@@ -346,12 +382,7 @@ export async function closeWrongNumber(input: CloseWrongNumberInput, deps: { sen
     // (every inbound stales the record's drafts), so it is written again
     // against it: still one. (In another record's chat it was left alone.)
     if (row.ackStatus === "drafted" && row.ackDraftId && row.conversationId === scope.conversationId && !blocker) {
-      await tx.update(crmDrafts).set({ status: "stale", updatedAt: new Date() })
-        .where(and(eq(crmDrafts.id, row.ackDraftId), inArray(crmDrafts.status, ["generating", "awaiting_review", "failed"])));
-      const [previous] = await tx.select({ aiBodyText: crmDrafts.aiBodyText, editedBodyText: crmDrafts.editedBodyText }).from(crmDrafts).where(eq(crmDrafts.id, row.ackDraftId)).limit(1);
-      const draft = await writeAcknowledgementDraft(tx, record, scope, previous?.editedBodyText?.trim() || previous?.aiBodyText?.trim() || text, input);
-      await setAcknowledgementInTransaction(tx, { id: row.id, from: ["drafted"], to: "drafted", draftId: draft.id, reason: row.ackReason });
-      await settleRecord(tx, scope, true);
+      await writeAgain();
       return { row, created: false, dispatch: null };
     }
     if (blocker && ACK_CLAIMABLE.includes(row.ackStatus)) {

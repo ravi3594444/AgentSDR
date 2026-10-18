@@ -32,6 +32,7 @@ import {
   crmSequenceSteps,
   crmSettings,
   crmSubcategories,
+  crmWrongRoutes,
   type CrmCategoryKey,
 } from "./schema";
 import { startSequenceRunInTransaction } from "./sequences";
@@ -116,6 +117,8 @@ async function classificationContext(messageId: string): Promise<{
   dncIntent: boolean;
   /** The message says "wrong number" (or the wrong person) in plain words. */
   wrongNumberWords: boolean;
+  /** Any stop, unsubscribe or "don't text me" wording: beside a wrong number it means Do Not Contact, nothing sent. */
+  optOutWords: boolean;
   /** The conversation's route was already recorded as a wrong number. */
   routeWrong: boolean;
   /** Only a greeting or an acknowledgement ("Hey", "ok thanks"): never interest, whatever the model says. */
@@ -239,6 +242,7 @@ async function classificationContext(messageId: string): Promise<{
     dncIntent: detectsExplicitDncIntent(scope.message.bodyText)
       || (detectsWrongNumber(scope.message.bodyText) && detectsOptOutWording(scope.message.bodyText)),
     wrongNumberWords: detectsWrongNumber(scope.message.bodyText),
+    optOutWords: detectsOptOutWording(scope.message.bodyText),
     routeWrong: Boolean(await wrongRouteForConversation(db, scope.conversation.id)),
     greetingOnly: isBareGreeting(scope.message.bodyText),
     input: {
@@ -287,6 +291,56 @@ async function recordClassificationFailure(messageId: string, error: unknown) {
   });
 }
 
+type ClassificationContext = Awaited<ReturnType<typeof classificationContext>>;
+
+/**
+ * A retried job whose classification already committed (the worker died
+ * after it): the wrong-number handling it left unfinished, if any — this
+ * message's apology claimed (reserved) or mid-send (sending), or a clear
+ * wrong-number reading whose route was never recorded. Null when nothing
+ * was left, and the job is simply stale.
+ */
+async function unfinishedWrongNumber(
+  messageId: string,
+  expectedContextVersion: number,
+  context: ClassificationContext,
+): Promise<{ source: "reply_agent" | "classifier"; optOut: boolean } | null> {
+  const [route] = await db.select({ ackStatus: crmWrongRoutes.ackStatus, source: crmWrongRoutes.source }).from(crmWrongRoutes)
+    .where(and(inOrg(crmWrongRoutes), eq(crmWrongRoutes.messageId, messageId))).limit(1);
+  if (route) {
+    return route.ackStatus === "reserved" || route.ackStatus === "sending"
+      ? { source: route.source === "reply_agent" ? "reply_agent" : "classifier", optOut: false }
+      : null;
+  }
+  if (context.routeWrong) return null;
+  const [classification] = await db.select().from(crmClassifications)
+    .where(and(
+      eq(crmClassifications.crmRecordId, context.recordId),
+      eq(crmClassifications.messageId, messageId),
+      eq(crmClassifications.expectedContextVersion, expectedContextVersion),
+    )).limit(1);
+  if (!classification || classification.status === "stale" || classification.status === "failed") return null;
+  const subcategoryId = classification.appliedSubcategoryId ?? classification.proposedSubcategoryId;
+  // The reply agent files a message as "Wrong Number" only when it closes it.
+  const fromAgent = classification.request?.replyAgent === true;
+  const closing = subcategoryKeyOf(subcategoryId, context.input.subcategories) === "wrong_number" && (fromAgent || classifiedAsWrongNumber(
+    { applied: classification.status === "auto_applied", stale: false },
+    subcategoryId,
+    context.input.subcategories,
+    { confidence: Number(classification.confidence ?? 0), wrongNumberWords: context.wrongNumberWords },
+  ));
+  return closing ? { source: fromAgent ? "reply_agent" : "classifier", optOut: context.optOutWords || context.dncIntent } : null;
+}
+
+/** The reply was answered before anyone got to it (the owner from their phone, say): it leaves "classifying" the way a manual reply settles it. */
+async function settleAnsweredReply(recordId: string, messageId: string): Promise<void> {
+  await withCrmTransaction(async (tx) => {
+    const record = await lockCrmRecord(tx, recordId);
+    if (record.latestInboundMessageId !== messageId) return;
+    await settleAnsweredRecordInTransaction(tx, record, { reason: "answered_outside_crm", actorType: "system" });
+  });
+}
+
 export async function handleClassificationJob(
   job: CrmJob,
   dependencies: {
@@ -295,29 +349,38 @@ export async function handleClassificationJob(
     replyAgent?: false | import("@/lib/assistant/replyAgent/agent.server").ReplyAgentDependencies;
   } = {},
 ): Promise<void> {
-  let context: Awaited<ReturnType<typeof classificationContext>>;
+  let context: ClassificationContext;
   try {
     context = await classificationContext(job.entityId);
+    const agent = dependencies.replyAgent ?? (dependencies.complete ? false : {});
+    const sending = wrongNumberSending(agent);
+    const { closeWrongNumber } = await import("./wrongNumberAck.server");
     const expected = Number(job.payload.expectedContextVersion ?? context.expectedContextVersion);
     if (expected !== context.expectedContextVersion) {
-      throw new PermanentCrmJobError("Classification job context is stale");
+      // Requeued after its classification committed: finish the wrong-number
+      // handling it left (closeWrongNumber picks up where it stopped, never
+      // sends twice), else it is stale.
+      const unfinished = await unfinishedWrongNumber(job.entityId, expected, context);
+      if (!unfinished) throw new PermanentCrmJobError("Classification job context is stale");
+      await closeWrongNumber({ messageId: job.entityId, source: unfinished.source, acknowledgement: null, optOut: unfinished.optOut, sendAllowed: sending.sendAllowed }, { send: sending.send });
+      return;
     }
     // A lead of a running assistant outreach run is answered by the reply
     // agent in one step (src/lib/assistant/replyAgent/): it reads the
     // message, replies, tells the owner or stops, and records the
     // classification itself. Anything else — and every explicit opt-out —
     // goes through the classifier below, as before. REPLY_AGENT=off turns it off.
-    const agent = dependencies.replyAgent ?? (dependencies.complete ? false : {});
     if (agent && !context.dncIntent && process.env.REPLY_AGENT !== "off") {
       const { runReplyAgent } = await import("@/lib/assistant/replyAgent/agent.server");
-      if (await runReplyAgent(job.entityId, agent)) return;
+      const outcome = await runReplyAgent(job.entityId, agent);
+      if (outcome?.answered) await settleAnsweredReply(context.recordId, job.entityId);
+      if (outcome) return;
     }
-    const sending = wrongNumberSending(agent);
     const wrongNumberSubcategoryId = context.input.subcategories.find((subcategory) => subcategory.key === "wrong_number")?.id ?? null;
-    const { closeWrongNumber } = await import("./wrongNumberAck.server");
     // A route already recorded as a wrong number takes nothing more: the
     // reply is filed as "Wrong Number" without the model, and no second
-    // apology is written (an explicit opt-out still goes the usual way).
+    // apology is written (an explicit opt-out still goes the usual way; a
+    // bare "Stop" makes it Do Not Contact and withdraws a waiting apology).
     if (context.routeWrong && !context.dncIntent) {
       await withCrmTransaction((tx) => recordAiClassificationInTransaction(tx, {
         recordId: context.recordId,
@@ -332,7 +395,7 @@ export async function handleClassificationJob(
         request: { wrongRoute: true },
         response: { wrongRoute: true },
       }));
-      await closeWrongNumber({ messageId: job.entityId, source: "classifier", acknowledgement: null, optOut: false, sendAllowed: sending.sendAllowed }, { send: sending.send });
+      await closeWrongNumber({ messageId: job.entityId, source: "classifier", acknowledgement: null, optOut: context.optOutWords, sendAllowed: sending.sendAllowed }, { send: sending.send });
       return;
     }
     const result = await classifyCrmReply(context.input, dependencies);
@@ -386,12 +449,24 @@ export async function handleClassificationJob(
       if (context.dncIntent) return dncWrongNumber ? { optOut: true } : null;
       // A wrong number never gets a sales draft. When the reading is clear,
       // closeWrongNumber (below: outside this transaction, because it may
-      // send) records the route and the one apology; an unsure one waits for
-      // a person in Action required.
+      // send) records the route and the one apology — none when the message
+      // also asks to stop; an unsure one waits for a person in Action required.
       if (subcategoryKeyOf(result.subcategoryId, context.input.subcategories) === "wrong_number") {
         return classifiedAsWrongNumber(appliedResult, result.subcategoryId, context.input.subcategories, { confidence: result.confidence, wrongNumberWords: context.wrongNumberWords })
-          ? { optOut: false }
+          ? { optOut: context.optOutWords }
           : null;
+      }
+      const current = await lockCrmRecord(tx, context.recordId);
+      // The rep answered while this ran — e.g. straight from their phone on
+      // WhatsApp (manualOutbound.ts): keep the classification, skip the draft.
+      // Checked first, so a classification left proposed settles the same
+      // whether the answer arrived before or after it.
+      if (await inboundAnsweredSince(tx, current.id, job.entityId)) {
+        await settleAnsweredRecordInTransaction(tx, current, {
+          reason: "answered_outside_crm",
+          actorType: "system",
+        });
+        return null;
       }
       // A classification left for a person to confirm (unsure, "other", a
       // customer) waits in Action required. A lead of the owner's assistant
@@ -402,16 +477,6 @@ export async function handleClassificationJob(
       const assistantLead = !appliedResult.applied
         && (await runMembershipFor(tx, context.personId, context.channel, context.conversationId))?.leadStatus === "active";
       if (!appliedResult.applied && !assistantLead) return null;
-      const current = await lockCrmRecord(tx, context.recordId);
-      // The rep answered while this ran — e.g. straight from their phone on
-      // WhatsApp (manualOutbound.ts): keep the classification, skip the draft.
-      if (await inboundAnsweredSince(tx, current.id, job.entityId)) {
-        await settleAnsweredRecordInTransaction(tx, current, {
-          reason: "answered_outside_crm",
-          actorType: "system",
-        });
-        return null;
-      }
       // Sequences follow an applied category; an unconfirmed one drafts from the thread.
       const started = appliedResult.applied ? await startSequenceRunInTransaction(tx, {
         recordId: current.id,

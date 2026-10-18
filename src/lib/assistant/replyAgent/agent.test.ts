@@ -40,6 +40,9 @@ describe("the hard rules", () => {
     expect(hardStop({ ...ok, doNotContact: true })?.tellOwner).toBe(false);
     expect(hardStop({ ...ok, newerInbound: true })?.reason).toContain("newer message");
     expect(hardStop({ ...ok, answeredAlready: true })?.reason).toContain("already answered");
+    expect(hardStop({ ...ok, answeredAlready: true })?.answered).toBe(true);
+    expect(hardStop({ ...ok, newerInbound: true, answeredAlready: true })?.answered).toBeUndefined();
+    expect(hardStop({ ...ok, sentInLast24h: 40 })?.answered).toBeUndefined();
     expect(hardStop({ ...ok, takeover: true })?.reason).toContain("yourself");
     expect(hardStop({ ...ok, sentInConversation: 30 })).toMatchObject({ tellOwner: true });
     expect(hardStop({ ...ok, sentInLast24h: 40 })).toMatchObject({ tellOwner: true });

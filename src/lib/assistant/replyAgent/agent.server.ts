@@ -13,8 +13,8 @@ import { withCrmTransaction, type CrmExecutor } from "@/lib/crm/repository";
 import { crmConversationMessages, crmConversations, crmDrafts, crmRecords, crmSubcategories } from "@/lib/crm/schema";
 import { sendDraft, type CrmSendAdapter } from "@/lib/crm/send";
 import type { ReplyConversationMessage } from "@/lib/crm/ai/replyConversation";
-import { closingAcknowledgement, detectsWrongNumber } from "@/lib/crm/wrongNumber";
-import { closeWrongNumber } from "@/lib/crm/wrongNumberAck.server";
+import { closingAcknowledgement, detectsOptOutWording, detectsWrongNumber } from "@/lib/crm/wrongNumber";
+import { closeWrongNumber, type CloseWrongNumberOutcome } from "@/lib/crm/wrongNumberAck.server";
 import { wrongRouteForConversation } from "@/lib/crm/wrongRoutes";
 import { companies, people } from "@/lib/leads/schema";
 import { isSuppressed } from "@/lib/outreach/suppression";
@@ -73,7 +73,14 @@ export type ReplyAgentDependencies = {
   brief?: boolean;
 };
 
-export type ReplyAgentOutcome = { status: ReplyAgentStatus; reason: string | null; reply: string | null; ms: number };
+export type ReplyAgentOutcome = {
+  status: ReplyAgentStatus;
+  reason: string | null;
+  reply: string | null;
+  ms: number;
+  /** Someone answered the message before the agent got to it (the owner from their phone, say): nothing was sent, and the job settles the record. */
+  answered?: boolean;
+};
 
 const MODEL_TIMEOUT_MS = 25_000;
 /** A claim older than this with no result belongs to a job that died; the retry takes it over. */
@@ -225,6 +232,24 @@ function emailSubject(scope: Scope): string | null {
   return /^re:/i.test(subject) ? subject : `Re: ${subject}`;
 }
 
+async function wrongNumberSubcategoryId(pipelineId: string): Promise<string | null> {
+  const [subcategory] = await db.select({ id: crmSubcategories.id }).from(crmSubcategories)
+    .where(and(eq(crmSubcategories.pipelineId, pipelineId), eq(crmSubcategories.key, "wrong_number"), eq(crmSubcategories.active, true))).limit(1);
+  return subcategory?.id ?? null;
+}
+
+/** How a closed wrong number reads in the agent's log: what happened to the one apology. */
+function wrongNumberResult(closed: CloseWrongNumberOutcome | null) {
+  return {
+    action: "wrong_number",
+    category: "other",
+    status: (closed?.ackStatus === "sent" ? "replied" : closed?.ackStatus === "drafted" ? "drafted" : "stopped") as ReplyAgentStatus,
+    reason: closed?.summary ?? "wrong number: nothing to record",
+    reply: closed && ["sent", "drafted", "reserved", "sending", "failed", "uncertain"].includes(closed.ackStatus) ? closed.acknowledgement : null,
+    draftId: closed?.draftId ?? null,
+  };
+}
+
 /**
  * Answers one incoming message, or returns null when it is not the agent's
  * (not a lead of a running assistant run, the owner took the chat over, or
@@ -268,10 +293,42 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
   try {
     const stop = hardStop(facts);
     if (stop) {
+      const answered = stop.answered ? { answered: true } : {};
+      // "Wrong number" is still recorded, and outreach to the route stopped,
+      // when a limit or an earlier answer keeps the agent from replying:
+      // closeWrongNumber's own checks hold the apology for review (a limit)
+      // or withhold it (already answered).
+      if ((stop.tellOwner || stop.answered) && detectsWrongNumber(scope.leadMessage)) {
+        const reasoning = `The message says it is a wrong number; the assistant did not answer it (${stop.reason}).`;
+        const subcategoryId = await wrongNumberSubcategoryId(scope.pipelineId);
+        const classified = await withCrmTransaction((tx) => recordAiClassificationInTransaction(tx, {
+          recordId: scope.recordId,
+          messageId,
+          expectedContextVersion: scope.contextVersion,
+          categoryKey: "other",
+          subcategoryId,
+          confidence: 0.6,
+          reasoning,
+          provider: "reply-agent",
+          model: "reply-agent",
+          request: { replyAgent: true, turns: 0 },
+          response: { hardStop: stop.reason },
+        }));
+        if (classified.stale) return { ...(await finish(runRowId, scope, startedAt, { status: "stopped", reason: stop.reason, action: "wrong_number", category: "other" })), ...answered };
+        const closed = await closeWrongNumber({
+          messageId,
+          source: "reply_agent",
+          acknowledgement: null,
+          optOut: detectsOptOutWording(scope.leadMessage),
+          reasoning,
+          sendAllowed: sendingAllowed(deps),
+        }, { send: deps.send });
+        return { ...(await finish(runRowId, scope, startedAt, wrongNumberResult(closed))), ...answered };
+      }
       const decisionId = stop.tellOwner
         ? await tellOwner({ scope, facts, leadName, kind: "limit", note: stop.reason, decision: "Read the conversation and answer yourself.", draftId: null, told: false, brief })
         : null;
-      return finish(runRowId, scope, startedAt, { status: stop.tellOwner ? "told_owner" : "stopped", reason: stop.reason, decisionId });
+      return { ...(await finish(runRowId, scope, startedAt, { status: stop.tellOwner ? "told_owner" : "stopped", reason: stop.reason, decisionId })), ...answered };
     }
 
     // Context: the conversation before this message, the business, the lead.
@@ -362,10 +419,7 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
     const modelName = lastResult?.model ?? null;
     const closing = wrongNumberClosing(decision, scope.leadMessage);
     // A wrong number is filed as "Wrong Number" (other), never as a buyer's answer.
-    const [wrongNumberSubcategory] = closing
-      ? await db.select({ id: crmSubcategories.id }).from(crmSubcategories)
-        .where(and(eq(crmSubcategories.pipelineId, scope.pipelineId), eq(crmSubcategories.key, "wrong_number"), eq(crmSubcategories.active, true))).limit(1)
-      : [];
+    const wrongNumberSubcategory = closing ? await wrongNumberSubcategoryId(scope.pipelineId) : null;
 
     // The CRM's view of the reply: the agent's reading of it.
     const classified = await withCrmTransaction((tx) => recordAiClassificationInTransaction(tx, {
@@ -373,7 +427,7 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
       messageId,
       expectedContextVersion: scope.contextVersion,
       categoryKey: closing ? "other" : decision!.action === "stop_contact" ? "not_interested" : decision!.category,
-      subcategoryId: wrongNumberSubcategory?.id ?? null,
+      subcategoryId: wrongNumberSubcategory,
       confidence: decision!.confidence,
       reasoning: decision!.reasoning || null,
       provider: lastResult?.provider ?? "reply-agent",
@@ -401,16 +455,7 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
         provider: lastResult?.provider ?? "reply-agent",
         model: modelName ?? "reply-agent",
       }, { send: deps.send });
-      const status: ReplyAgentStatus = closed?.ackStatus === "sent" ? "replied" : closed?.ackStatus === "drafted" ? "drafted" : "stopped";
-      return finish(runRowId, scope, startedAt, {
-        ...base,
-        action: "wrong_number",
-        category: "other",
-        status,
-        reason: closed?.summary ?? "wrong number: nothing to record",
-        reply: closed && ["sent", "drafted", "reserved", "sending", "failed", "uncertain"].includes(closed.ackStatus) ? closed.acknowledgement : null,
-        draftId: closed?.draftId ?? null,
-      });
+      return finish(runRowId, scope, startedAt, { ...base, ...wrongNumberResult(closed) });
     }
 
     if (decision.action === "stop_contact") {

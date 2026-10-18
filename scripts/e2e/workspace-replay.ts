@@ -140,6 +140,9 @@ await runInOrganization(A.org.id, async () => {
   const wrong = await lead("wrong", 4, { fullName: "Dr Wrong" });
   const offline = await lead("offline", 5, { fullName: "Dr Offline" });
   const taken = await lead("taken", 6, { fullName: "Dr Takeover" });
+  const early = await lead("early", 7, { fullName: "Dr Early" });
+  const late = await lead("late", 8, { fullName: "Dr Late" });
+  const who = await lead("who", 9, { fullName: "Dr Who" });
 
   const audienceId = await createAudience({ name: "workspace replay", source: "list" });
   const thread = await createThread(A.owner.id);
@@ -147,7 +150,7 @@ await runInOrganization(A.org.id, async () => {
   const [autoRun] = await db.insert(schema.outreachRuns).values({ organizationId: orgId, threadId: thread.id, audienceId, name: "Automatic WhatsApp run", status: "running", channels: ["whatsapp"], plan, autopilot: true, approvedAt: new Date(Date.now() - 60_000) }).returning();
   const [reviewRun] = await db.insert(schema.outreachRuns).values({ organizationId: orgId, threadId: thread.id, audienceId, name: "Review WhatsApp run", status: "running", channels: ["whatsapp"], plan: { ...plan, autopilot: false }, autopilot: false }).returning();
   await db.insert(schema.outreachRunLeads).values([
-    ...[pricing, dnc, wrong, offline, taken].map((item) => ({ organizationId: orgId, runId: autoRun!.id, personId: item.personId, channel: "whatsapp" as const })),
+    ...[pricing, dnc, wrong, offline, taken, early, late].map((item) => ({ organizationId: orgId, runId: autoRun!.id, personId: item.personId, channel: "whatsapp" as const })),
     { organizationId: orgId, runId: reviewRun!.id, personId: review.personId, channel: "whatsapp" as const },
   ]);
 
@@ -340,6 +343,41 @@ await runInOrganization(A.org.id, async () => {
   check("Takeover, manual reply: the reply is settled — out of Action required, its proposal kept on the record", seen.record.workflowState === "idle" && seen.summary.pending.classification === "proposed" && seen.summary.nextAction.kind === "open_conversation", `${seen.record.workflowState} / ${seen.summary.nextAction.label}`);
   counts = await countsAgree("Takeover, manual reply");
   check("Takeover, manual reply: still findable in All replies", counts.replies.actions.some((item) => item.id === seen.record.id) && !counts.queue.actions.some((item) => item.id === seen.record.id));
+
+  // ============================================================ the owner answers before the reply is classified
+  // An assistant-run lead: the message, the owner's echo, then the classification job.
+  before = sends.length;
+  const earlyIn = await webhook(payload(early, "Can you come on Thursday?"));
+  recordIds.push((await recordOf(early)).id);
+  await webhook(payload(early, "Yes, Thursday works. I'll come at 11.", { fromOwner: true }));
+  await classify(earlyIn.crmMessageId);
+  seen = await look(early);
+  check("Answered before classification: nothing is sent and the reply is settled, not left classifying", sends.length === before && seen.record.workflowState === "idle" && seen.summary.nextAction.kind !== "classifying" && seen.summary.answer.label === "Answered by you", `${seen.record.workflowState} / ${seen.summary.nextAction.label} / ${seen.summary.answer.label}`);
+  // The echo delivered before the lead's message that it answers (sent earlier, delivered later).
+  const lateFirst = await webhook(payload(late, "Hi, is this Bright Path?"));
+  recordIds.push((await recordOf(late)).id);
+  await classify(lateFirst.crmMessageId);
+  await pause();
+  const lateAt = new Date();
+  await pause();
+  before = sends.length;
+  await webhook(payload(late, "Calling you in five minutes.", { fromOwner: true }));
+  const lateIn = await webhook(payload(late, "Can you call me?", { at: lateAt }));
+  await classify(lateIn.crmMessageId);
+  seen = await look(late);
+  check("…also when the owner's echo is delivered before the lead's message", sends.length === before && seen.record.workflowState === "idle" && seen.summary.nextAction.kind !== "classifying", `${seen.record.workflowState} / ${seen.summary.nextAction.label}`);
+  counts = await countsAgree("Answered before classification");
+  const answeredFirst = [(await recordOf(early)).id, (await recordOf(late)).id];
+  check("…out of the queue and findable in All replies", answeredFirst.every((id) => counts.replies.actions.some((row) => row.id === id) && !counts.queue.actions.some((row) => row.id === id)));
+  // A lead outside any run, its classification left proposed: settled the same whichever comes first.
+  const whoIn = await webhook(payload(who, "Who is this?"));
+  recordIds.push((await recordOf(who)).id);
+  await webhook(payload(who, "Hi, it's Ravi from Bright Path — we spoke last week.", { fromOwner: true }));
+  await classify(whoIn.crmMessageId, { complete: classifierSaying("other") });
+  seen = await look(who);
+  check("Answered before a proposed classification: settled, as when the answer comes after", seen.record.workflowState === "idle" && seen.summary.pending.classification === "proposed" && seen.summary.nextAction.kind === "open_conversation", `${seen.record.workflowState} / ${seen.summary.nextAction.label}`);
+  counts = await countsAgree("Answered before a proposed classification");
+  check("…out of the queue, still in All replies", counts.replies.actions.some((item) => item.id === seen.record.id) && !counts.queue.actions.some((item) => item.id === seen.record.id));
 
   // ============================================================ Do Not Contact
   before = sends.length;

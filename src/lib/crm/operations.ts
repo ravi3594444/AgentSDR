@@ -23,6 +23,7 @@ import {
 } from "./schema";
 import { interruptActiveSequenceRunInTransaction, startSequenceRunInTransaction } from "./sequences";
 import { STAGE_MOVED_EVENT, type StageMoveNext } from "./stageMove";
+import { db } from "@/lib/db";
 import { inOrg } from "@/lib/tenancy/scope";
 
 export async function applyHumanClassification(input: {
@@ -34,7 +35,7 @@ export async function applyHumanClassification(input: {
   reason?: string | null;
   actorRef?: string | null;
 }) {
-  return withCrmTransaction(async (tx) => {
+  const result = await withCrmTransaction(async (tx) => {
     const before = await lockCrmRecord(tx, input.recordId);
     if (!before.latestInboundMessageId) {
       throw new CrmConflictError("CRM record has no inbound message to classify");
@@ -87,26 +88,70 @@ export async function applyHumanClassification(input: {
       actorType: "authenticated_operator",
     });
     // A person confirming "Do Not Contact" sets it, as the AI's own result does.
-    if (input.subcategoryId) {
-      const [subcategory] = await tx.select({ key: crmSubcategories.key }).from(crmSubcategories)
-        .where(eq(crmSubcategories.id, input.subcategoryId)).limit(1);
-      if (subcategory?.key === "do_not_contact") {
-        await setPersonDoNotContactInTransaction(tx, {
-          personId: updated.personId,
-          reason: input.reason?.trim() || "Classified as Do Not Contact by a person",
-          source: "human",
-          actorType: "authenticated_operator",
-          actorRef: input.actorRef ?? null,
-        });
-      }
+    const [subcategory] = input.subcategoryId
+      ? await tx.select({ key: crmSubcategories.key }).from(crmSubcategories)
+        .where(eq(crmSubcategories.id, input.subcategoryId)).limit(1)
+      : [];
+    if (subcategory?.key === "do_not_contact") {
+      await setPersonDoNotContactInTransaction(tx, {
+        personId: updated.personId,
+        reason: input.reason?.trim() || "Classified as Do Not Contact by a person",
+        source: "human",
+        actorType: "authenticated_operator",
+        actorRef: input.actorRef ?? null,
+      });
+    }
+    // A person confirming "Wrong Number" closes it as the AI's own reading
+    // does (closeWrongNumber, below): never a sequence or a sales draft.
+    // Nothing waits on a person unless the apology is left for review.
+    if (subcategory?.key === "wrong_number") {
+      await staleDraftsOfOldContextInTransaction(tx, updated);
+      if (await isPersonDoNotContact(tx, updated.personId)) return { record: updated, sequenceRun: null, wrongNumberMessageId: before.latestInboundMessageId };
+      const [uncertain] = await tx.select({ id: crmDrafts.id }).from(crmDrafts)
+        .where(and(eq(crmDrafts.crmRecordId, updated.id), eq(crmDrafts.status, "delivery_uncertain"))).limit(1);
+      const [settled] = await tx.update(crmRecords).set({ workflowState: uncertain ? "action_required" : "idle", nextActionAt: null, updatedAt: new Date() })
+        .where(eq(crmRecords.id, updated.id)).returning();
+      return { record: settled ?? updated, sequenceRun: null, wrongNumberMessageId: before.latestInboundMessageId };
     }
     // A re-applied classification keeps its id, and its draft job has
     // usually already succeeded for the previous run's step.
-    return restartRecordWorkInTransaction(tx, updated, {
-      draftJob: { entityId: classificationId, requeueCompleted: true },
-      actorRef: input.actorRef,
-    });
+    return {
+      ...await restartRecordWorkInTransaction(tx, updated, {
+        draftJob: { entityId: classificationId, requeueCompleted: true },
+        actorRef: input.actorRef,
+      }),
+      wrongNumberMessageId: null,
+    };
   });
+  if (!result.wrongNumberMessageId) return { record: result.record, sequenceRun: result.sequenceRun };
+  // Outside the transaction, as on the AI's path: the route is recorded and
+  // outreach to it stopped, and the one apology is written for review.
+  const { closeWrongNumber } = await import("./wrongNumberAck.server");
+  await closeWrongNumber({
+    messageId: result.wrongNumberMessageId,
+    source: "human",
+    actorRef: input.actorRef ?? null,
+    acknowledgement: null,
+    optOut: false,
+    reasoning: input.reason?.trim() || "A person classified the reply as a wrong number",
+    sendAllowed: false,
+  });
+  const [record] = await db.select().from(crmRecords).where(and(inOrg(crmRecords), eq(crmRecords.id, result.record.id))).limit(1);
+  return { record: record ?? result.record, sequenceRun: null };
+}
+
+/**
+ * The context just moved on, so every open draft — including hand-written
+ * ones, which no sequence run owns — was written for a reply brief that no
+ * longer applies. Inbound replies do the same; without it the old draft
+ * stays "awaiting review" and fails with a stale-context error on send.
+ */
+async function staleDraftsOfOldContextInTransaction(tx: CrmTransaction, updated: CrmRecord): Promise<void> {
+  await tx.update(crmDrafts).set({ status: "stale", updatedAt: new Date() }).where(and(
+    eq(crmDrafts.crmRecordId, updated.id),
+    inArray(crmDrafts.status, ["generating", "awaiting_review", "failed"]),
+    ne(crmDrafts.expectedContextVersion, updated.contextVersion),
+  ));
 }
 
 /**
@@ -127,15 +172,7 @@ async function restartRecordWorkInTransaction(
     actorRef?: string | null;
   },
 ) {
-  // The context just moved on, so every open draft — including hand-written
-  // ones, which no sequence run owns — was written for a reply brief that no
-  // longer applies. Inbound replies do the same; without it the old draft
-  // stays "awaiting review" and fails with a stale-context error on send.
-  await tx.update(crmDrafts).set({ status: "stale", updatedAt: new Date() }).where(and(
-    eq(crmDrafts.crmRecordId, updated.id),
-    inArray(crmDrafts.status, ["generating", "awaiting_review", "failed"]),
-    ne(crmDrafts.expectedContextVersion, updated.contextVersion),
-  ));
+  await staleDraftsOfOldContextInTransaction(tx, updated);
   if (!updated.latestInboundMessageId || await isPersonDoNotContact(tx, updated.personId)) {
     return { record: updated, sequenceRun: null };
   }
