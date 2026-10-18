@@ -83,7 +83,10 @@ export type TinyfishPage = {
   language: string | null;
   publishedDate: string | null;
   text: string;
+  /** Public http(s) links on the page, absolute, each once. */
   links: string[];
+  /** mailto: and tel: links on the page, for contact extraction. */
+  contactLinks: string[];
 };
 
 export type TinyfishFetchFailure = { url: string; code: string; status: number | null };
@@ -128,7 +131,9 @@ export function tinyfishFetchResult(body: unknown): { pages: TinyfishPage[]; fai
     const page = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
     const url = webUrl(page.url);
     if (!url) continue;
-    const links = Array.isArray(page.links) ? [...new Set(page.links.map(webUrl).filter((link): link is string => Boolean(link)))].slice(0, TINYFISH_LIMITS.maxPageLinks) : [];
+    const rawLinks = Array.isArray(page.links) ? page.links.filter((link): link is string => typeof link === "string") : [];
+    const links = [...new Set(rawLinks.map(webUrl).filter((link): link is string => Boolean(link)))].slice(0, TINYFISH_LIMITS.maxPageLinks);
+    const contactLinks = [...new Set(rawLinks.map((link) => link.trim()).filter((link) => /^(?:mailto|tel):/i.test(link)))].slice(0, 40);
     pages.push({
       url,
       finalUrl: webUrl(page.final_url) ?? url,
@@ -138,6 +143,7 @@ export function tinyfishFetchResult(body: unknown): { pages: TinyfishPage[]; fai
       publishedDate: clean(page.published_date, 40),
       text: typeof page.text === "string" ? page.text.slice(0, TINYFISH_LIMITS.maxPageChars) : "",
       links,
+      contactLinks,
     });
   }
   const failures: TinyfishFetchFailure[] = [];

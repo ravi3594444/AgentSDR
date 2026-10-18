@@ -276,6 +276,23 @@ export function proxiedByEnvironment(url: URL, env: Record<string, string | unde
   return !exempt.some((entry) => entry === "*" || host === entry.replace(/^\*?\./, "") || host.endsWith(entry.startsWith(".") ? entry : `.${entry.replace(/^\*\./, "")}`));
 }
 
+/**
+ * Refuses an address that is not a public website (private, loopback,
+ * link-local, carrier-grade NAT, metadata; the name resolved first) before
+ * anything is sent to it or to a service that reads it for us (TinyFish).
+ * Test fixtures (allowPrivate / fetchImpl) skip it, as in fetchPublicPage.
+ */
+export async function assertPublicPageUrl(rawUrl: string, options: PageFetchOptions = {}): Promise<void> {
+  const url = new URL(rawUrl);
+  if (!/^https?:$/.test(url.protocol)) throw new Error(`Not a web address: ${url.toString()}`);
+  if (options.allowPrivate || options.fetchImpl) return;
+  try {
+    await assertPublicUrl(url, async (host) => (await (options.resolve ?? systemResolve)(host)).map((entry) => entry.address), false);
+  } catch {
+    throw notPublic(url.hostname);
+  }
+}
+
 /** One HTML page from a public address, following up to three redirects; null when it is not HTML. */
 export async function fetchPublicPage(rawUrl: string, options: PageFetchOptions = {}): Promise<{ url: string; html: string } | null> {
   const fixtures = Boolean(options.allowPrivate || options.fetchImpl);

@@ -172,6 +172,80 @@ await runInOrganization(b.org.id, async () => {
   check("B's view shows the shared key's use today", view.connected && view.today.fetchedUrls > 0 && view.today.browserMinutes === 0);
 });
 
+// ---------------------------------------------------------------- the assistant's web loop, with no seed URL
+{
+  const { runTool } = await import("@/lib/assistant/tools.server");
+  const { createThread } = await import("@/lib/assistant/threads.server");
+  const { urlGiven } = await import("@/lib/assistant/agent");
+  // Real public host names (they must resolve as public before anything is sent); the content is the stand-in's.
+  nextSearch = () => json(200, { query: "q", results: [{ position: 1, site_name: "example.com", title: "Real estate agents in Pune", snippet: "Top agencies", url: "https://example.com/agents" }], total_results: 1, page: 0 });
+  nextFetch = (urls) => json(200, {
+    results: urls.map((url) => ({ url, final_url: url, title: "Agents in Pune", text: "Write to sales@punehomes.in for listings.", links: ["https://www.iana.org/agents/raj", "mailto:raj@punehomes.in", "tel:+91 98220 12345", "https://www.instagram.com/someone/"] })),
+    errors: [],
+  });
+  await runInOrganization(a.org.id, async () => {
+    const thread = await createThread(a.owner.id);
+    const context = { threadId: thread.id, userId: a.owner.id, ownerText: "find real estate agents in Pune" };
+    const search = await runTool("web_search", { query: "real estate agents Pune", country: "in" }, context);
+    check("web_search returns candidates through TinyFish", search.ok && /TinyFish Search/.test(search.summary) && search.summary.includes("https://example.com/agents"), search.summary.slice(0, 120));
+    const sentCountry = calls.filter((call) => call.host === "search.tf.test").length > 0;
+    check("the search was made on the stand-in with the key", sentCountry && calls.at(-1)!.key === KEY);
+    const refusedArgs = await runTool("web_search", { query: "x y", page: 9 }, context);
+    check("bad arguments are refused for the model", !refusedArgs.ok && refusedArgs.refused === true);
+
+    const corpus1 = `OWNER: find real estate agents in Pune\n${search.summary}`;
+    check("a search result is a link the assistant may open; an unrelated site is not", urlGiven("https://example.com/agents", corpus1) && !urlGiven("https://another.example.net/", corpus1));
+    const read = await runTool("read_webpage", { url: "https://example.com/agents" }, context);
+    check("read_webpage reads the result through TinyFish", read.ok && /via TinyFish/.test(read.summary), read.summary.slice(0, 160));
+    check("it finds the page's contacts, including mailto and tel links", /email sales@punehomes\.in/.test(read.summary) && /email raj@punehomes\.in/.test(read.summary) && /phone \+91/.test(read.summary), read.summary.slice(0, 300));
+    check("it lists the page's links, without login-walled ones", read.summary.includes("https://www.iana.org/agents/raj") && !read.summary.includes("instagram.com/someone"));
+    const corpus2 = `${corpus1}\n${read.summary}`;
+    check("a link on a page read may be followed next", urlGiven("https://www.iana.org/agents/raj", corpus2));
+
+    const before = calls.length;
+    const internal = await runTool("read_webpage", { url: "http://127.0.0.1:8080/admin" }, context);
+    const metadata = await runTool("read_webpage", { url: "http://169.254.169.254/latest/meta-data/" }, context);
+    check("private and metadata addresses are refused before anything is sent, TinyFish included", !internal.ok && !metadata.ok && calls.length === before, `${internal.summary} | ${metadata.summary}`);
+
+    nextFetch = (urls) => json(200, { results: [], errors: urls.map((url) => ({ url, error: "login_required" })) });
+    const walled = await runTool("read_webpage", { url: "https://example.com/members" }, context);
+    check("a page TinyFish finds behind a login is reported as such", !walled.ok && /needs a login/.test(walled.summary));
+  });
+}
+
+// ---------------------------------------------------------------- a website search waits for TinyFish's allowance
+{
+  const { assistantJobs } = await import("@/lib/assistant/schema");
+  const { setFeature } = await import("@/lib/features/flags.server");
+  const { startWebDiscovery, runWebDiscoveryStep } = await import("@/lib/discovery/webDiscovery.server");
+  await runInOrganization(a.org.id, async () => {
+    await setFeature("web_discovery", true, a.owner.id);
+    const started = await startWebDiscovery({ customers: "real estate agencies", where: "Pune", maxResults: 5, language: "en", offer: null, ownWebsite: null } as never, { threadId: null, userId: a.owner.id });
+    check("a website search starts on TinyFish", started.provider === "tinyfish", started.provider);
+    await db.update(assistantJobs).set({ status: "running", stage: "searching", lockedBy: "e2e" }).where(eq(assistantJobs.id, started.jobId));
+    const until = new Date(Date.now() + 90_000);
+    await setState("search", { blockedUntil: until, blockedReason: "TinyFish Search is rate limiting this key" });
+    const before = calls.length;
+    const [job] = await db.select().from(assistantJobs).where(eq(assistantJobs.id, started.jobId));
+    const outcome = await runWebDiscoveryStep(job!, async () => undefined);
+    const waiting = (outcome as { progress?: { waiting?: { kind?: string; until?: string } } }).progress?.waiting;
+    check("the search step waits for the allowance instead of failing", outcome.next === "wait" && waiting?.kind === "quota" && calls.length === before, JSON.stringify(outcome).slice(0, 200));
+    check("it waits until TinyFish's time", outcome.next === "wait" && Math.abs(outcome.delayMs - (until.getTime() - Date.now())) < 5_000);
+    const [after] = await db.select().from(assistantJobs).where(eq(assistantJobs.id, started.jobId));
+    const payload = after!.payload as { searchStarted?: number; searches?: unknown[] };
+    check("nothing is recorded as bought, so the search runs later rather than being skipped", payload.searchStarted === -1 && !(payload.searches ?? []).length);
+
+    await setState("search", { blockedUntil: null, blockedReason: null });
+    nextSearch = () => json(200, { query: "q", results: [{ position: 1, site_name: "acme-realty.example", title: "Acme Realty", snippet: "Pune", url: "https://acme-realty.example/" }], total_results: 1, page: 0 });
+    const [again] = await db.select().from(assistantJobs).where(eq(assistantJobs.id, started.jobId));
+    const resumed = await runWebDiscoveryStep({ ...again!, lockedBy: "e2e" }, async () => undefined);
+    const searchCall = calls.at(-1)!;
+    const sentQuery = new URL(`https://x/?${String(searchCall.body ?? "")}`);
+    check("after the wait the same search runs, as keywords", resumed.next === "stage" && searchCall.host === "search.tf.test", `${resumed.next} ${sentQuery}`);
+    await db.update(assistantJobs).set({ status: "cancelled", lockedBy: null }).where(eq(assistantJobs.id, started.jobId));
+  });
+}
+
 setTinyfishApiBase(null);
 globalThis.fetch = realFetch;
 console.log(failures ? `\n${failures} check(s) failed` : "\nAll TinyFish checks passed");

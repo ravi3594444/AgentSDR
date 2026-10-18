@@ -330,12 +330,24 @@ describe("contacts and links from the chat", () => {
     expect(urlGiven("", owner)).toBe(false);
   });
 
+  test("a link is given only for the same site or its subdomain, never a look-alike or a parent", () => {
+    const corpus = "TOOL web_search: 1. Acme Realty — https://www.acme-realty.example/agents — Pune agents\nwrite to sales@shop.widgets.example";
+    expect(urlGiven("https://acme-realty.example/contact", corpus)).toBe(true);
+    expect(urlGiven("https://blog.acme-realty.example/", corpus)).toBe(true);
+    expect(urlGiven("https://shop.widgets.example/", corpus)).toBe(true);
+    expect(urlGiven("https://widgets.example/", corpus)).toBe(false);
+    expect(urlGiven("https://notacme-realty.example/", corpus)).toBe(false);
+    expect(urlGiven("https://realty.example/", corpus)).toBe(false);
+    expect(urlGiven("https://acme-realty.example.evil.test/", corpus)).toBe(false);
+  });
+
   test("actionsProblem refuses invented contacts and links nobody gave", () => {
     const input = { smallTalk: false, profile: {}, ownerCorpus: owner, outreachRequested: true };
     expect(actionsProblem([{ tool: "add_contacts", args: { contacts: [{ phone: "8084794983" }] } }], input)).toBeNull();
     expect(actionsProblem([{ tool: "add_contacts", args: { contacts: [{ phone: "9999999999" }] } }], input)).toContain("not in what the owner wrote");
     expect(actionsProblem([{ tool: "read_webpage", args: { url: "https://www.sparklehome.example/team" } }], input)).toBeNull();
     expect(actionsProblem([{ tool: "read_webpage", args: { url: "https://example.org" } }], input)).toContain("only links the owner gave");
+    expect(actionsProblem([{ tool: "read_webpage", args: { url: "https://example.org" } }], input)).toContain("web_search");
   });
 
   test("a supplied Instagram handle needs no URL, city or other contact identity", () => {

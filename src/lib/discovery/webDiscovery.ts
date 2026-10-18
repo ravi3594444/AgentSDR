@@ -50,6 +50,19 @@ export function buildSearchQueries(input: { customers: string; offer?: string | 
   return queries.slice(0, MAX_SEARCH_QUERIES);
 }
 
+/**
+ * The same searches as keywords, for a search engine (TinyFish) rather than
+ * a model; index-aligned with buildSearchQueries, whose sentence then goes
+ * along as the search's stated purpose.
+ */
+export function buildKeywordQueries(input: { customers: string; where: string; instagram?: boolean }): string[] {
+  const customers = clip(input.customers, 120);
+  const where = clip(input.where, 80);
+  const queries = [`${customers} ${where}`, `${customers} ${where} directory list`];
+  if (input.instagram) queries.push(`${customers} ${where} instagram`);
+  return queries.slice(0, MAX_SEARCH_QUERIES);
+}
+
 /** Listing and directory sites: their pages list many businesses, not one. */
 const DIRECTORY_HOST = /(?:^|\.)(?:justdial\.com|sulekha\.com|indiamart\.com|tradeindia\.com|exportersindia\.com|practo\.com|lybrate\.com|magicpin\.in|asklaila\.com|grotal\.com|zomato\.com|swiggy\.com|urbancompany\.com|yelp\.[a-z.]+|tripadvisor\.[a-z.]+|yellowpages\.[a-z.]+|yell\.com|foursquare\.com|hotfrog\.[a-z.]+|cylex(?:-[a-z]+)?\.[a-z.]+|manta\.com|bbb\.org|thumbtack\.com|angi\.com|houzz\.[a-z.]+|clutch\.co|goodfirms\.co|europages\.[a-z.]+|kompass\.com|trustpilot\.com|g2\.com|capterra\.com)$/i;
 /** Social networks other than Instagram: they need a login and are not read. */

@@ -28,6 +28,7 @@ import { cleanEmail, emailMatchesDomain, ownWebsite, websiteDomain } from "./con
 import { discoveryPageOptions, mailDomainCheck, type MailDomainCheck } from "./discovery.server";
 import { cleanBusinessName, rankEmails } from "./mapsResults";
 import {
+  buildKeywordQueries,
   buildSearchQueries,
   classifySourceUrl,
   directoryBusinessLinks,
@@ -42,6 +43,7 @@ import {
 } from "./webDiscovery";
 import { tavilyCapProblem } from "@/lib/tavily/catalog";
 import { tavilyConnection, tavilySearchesToday } from "@/lib/tavily/tavily.server";
+import { TinyfishWaitError } from "@/lib/tinyfish/tinyfish.server";
 import { searchWeb, webSearchAvailability, WebSearchUnavailableError, type WebSearchProvider } from "./webSearch.server";
 import { collectWebsiteContacts, fetchPublicPage } from "./websiteContacts.server";
 
@@ -157,6 +159,8 @@ type Tally = { eligible: number; excluded: number; duplicates: number; alreadyKn
 type Payload = {
   criteria: WebDiscoveryCriteria;
   queries: string[];
+  /** The same searches as keywords (buildKeywordQueries), for a search engine such as TinyFish. */
+  keywordQueries?: string[];
   phrase: string;
   instagram: { usable: boolean; reason: string | null };
   contactAfter?: ContactAfter;
@@ -277,6 +281,7 @@ export async function startWebDiscovery(
   const readiness = await instagramReadiness();
   const instagram = { usable: readiness.usable, reason: readiness.reason };
   const queries = buildSearchQueries({ customers: criteria.customers, offer: criteria.offer, where: criteria.where, language: criteria.language, instagram: instagram.usable });
+  const keywordQueries = buildKeywordQueries({ customers: criteria.customers, where: criteria.where, instagram: instagram.usable });
   const phrase = `${criteria.customers} in ${criteria.where}`;
   const organizationId = currentOrganizationId();
   // One start at a time per organization (a transaction-scoped lock), so two requests cannot both pass the limits.
@@ -296,7 +301,8 @@ export async function startWebDiscovery(
       const tavily = await tavilyConnection();
       const problem = tavily ? tavilyCapProblem(await tavilySearchesToday(tx), queries.length, tavily.dailySearches) : "no Tavily key is saved";
       if (problem) throw new WebDiscoveryLimitError(`Not started: ${problem}. It frees up as the last 24 hours pass; owners and admins can raise it.`);
-    } else if (recent >= MAX_WEB_DISCOVERIES_PER_DAY) {
+    } else if (availability.provider !== "tinyfish" && recent >= MAX_WEB_DISCOVERIES_PER_DAY) {
+      // TinyFish searches are free and bounded by its own allowance (lib/tinyfish/), which waits rather than refuses.
       throw new WebDiscoveryLimitError(`This organization has started ${recent} website searches in the last 24 hours, the most allowed (${MAX_WEB_DISCOVERIES_PER_DAY}; each is up to ${MAX_SEARCH_QUERIES} paid web searches). Ask again later, or use Google Maps search, which has no per-search fee.`);
     }
     if (availability.provider === AIML_PROVIDER_KEY) {
@@ -314,7 +320,7 @@ export async function startWebDiscovery(
       threadId: context.threadId,
       userId: context.userId,
     });
-    const payload: Payload = { criteria, queries, phrase, instagram, contactAfter: options.contactAfter ?? null, searchProvider: availability.provider };
+    const payload: Payload = { criteria, queries, keywordQueries, phrase, instagram, contactAfter: options.contactAfter ?? null, searchProvider: availability.provider };
     const [job] = await tx.insert(assistantJobs).values({
       organizationId,
       kind: "web_discovery",
@@ -427,7 +433,7 @@ async function stageSearching(job: AssistantJob, heartbeat: () => Promise<void>)
     // Saved before the call: if this step dies after paying, the retry sees it (above).
     await savePayload(job, { searchStarted: index });
     try {
-      const result = await searchWeb(query, { provider: (payload.searchProvider ?? null) as WebSearchProvider | null });
+      const result = await searchWeb(query, { provider: (payload.searchProvider ?? null) as WebSearchProvider | null, keywords: payload.keywordQueries?.[index] ?? null, jobId: job.id });
       searches.push({ query, sources: result.sources.length, provider: result.provider, model: result.model, costUsd: result.costUsd, error: result.sources.length ? null : "the provider returned no web sources" });
       for (const source of result.sources) {
         const origin: Origin = { query, url: source.url, title: source.title, snippet: source.snippet };
@@ -446,6 +452,12 @@ async function stageSearching(job: AssistantJob, heartbeat: () => Promise<void>)
       }
     } catch (error) {
       if (error instanceof WebSearchUnavailableError) return { next: "failed", error: error.message };
+      if (error instanceof TinyfishWaitError) {
+        // Nothing was bought (TinyFish refused before or without charging): wait for its allowance and run this search then.
+        await savePayload(job, { searchStarted: -1 });
+        const delayMs = Math.max(1_000, error.until.getTime() - Date.now());
+        return { next: "wait", delayMs, payload: { searchStarted: -1 }, progress: { stage: "searching", searches: payload.queries.length, searchesDone: index, candidates: (payload.candidates ?? []).length, waiting: { kind: "quota", provider: "tinyfish", until: error.until.toISOString(), reason: error.reason } } };
+      }
       searches.push({ query, sources: 0, provider: null, model: null, costUsd: null, error: message(error).slice(0, 300) });
     }
     // The paid result is stored at once, before anything else can fail this step.

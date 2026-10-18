@@ -215,7 +215,7 @@ export type TranscriptMessage = {
 
 /** The conversation as the model reads it: newest last, tool results by their summary. */
 /** Tools whose result the model reads at length (the rest are cut to 1,500 characters). */
-const LONG_RESULT_TOOLS = new Set(["read_webpage", "treg_search", "treg_call"]);
+const LONG_RESULT_TOOLS = new Set(["read_webpage", "web_search", "treg_search", "treg_call"]);
 
 export function transcriptText(messages: readonly TranscriptMessage[], maxChars = 24_000): string {
   const lines = messages.map((message) => {
@@ -401,15 +401,33 @@ export function ungroundedContacts(contacts: unknown, corpus: string): string[] 
   return out;
 }
 
-/** Whether `url`'s site appears in what the owner wrote or a page they had read (the assistant opens only links it was given). */
-export function urlGiven(url: unknown, corpus: string): boolean {
+const HOST_IN_TEXT = /(?:^|[^a-z0-9.-])((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9])(?![a-z0-9-])/g;
+
+/** Every host name written in `corpus` (in links, bare domains and email addresses), without "www.". */
+export function corpusHosts(corpus: string): Set<string> {
+  const hosts = new Set<string>();
+  for (const match of corpus.toLowerCase().matchAll(HOST_IN_TEXT)) hosts.add(match[1]!.replace(/^www\./, ""));
+  return hosts;
+}
+
+/**
+ * Whether `url`'s site is one the owner wrote, a page they had read linked
+ * to, or a web search returned (the assistant opens only links it was
+ * given): the same host, or a subdomain of one. A host merely containing a
+ * known one ("notacme.com" for "acme.com") or a parent of one is not given.
+ */
+export function urlGiven(url: unknown, corpus: string | Set<string>): boolean {
   if (typeof url !== "string" || !url.trim()) return false;
+  let host: string;
   try {
-    const host = new URL(/^https?:\/\//i.test(url.trim()) ? url.trim() : `https://${url.trim()}`).hostname.toLowerCase().replace(/^www\./, "");
-    return corpus.toLowerCase().includes(host);
+    host = new URL(/^https?:\/\//i.test(url.trim()) ? url.trim() : `https://${url.trim()}`).hostname.toLowerCase().replace(/^www\./, "");
   } catch {
     return false;
   }
+  const hosts = typeof corpus === "string" ? corpusHosts(corpus) : corpus;
+  if (hosts.has(host)) return true;
+  for (const known of hosts) if (host.endsWith(`.${known}`)) return true;
+  return false;
 }
 
 /**
@@ -440,7 +458,7 @@ export function actionsProblem(actions: readonly AgentAction[], input: { smallTa
       continue;
     }
     if (action.tool === "read_webpage") {
-      if (!urlGiven(action.args.url, input.ownerCorpus)) return "read_webpage opens only links the owner gave (or links on a page already read). Ask the owner for the link.";
+      if (!urlGiven(action.args.url, input.ownerCorpus)) return "read_webpage opens only links the owner gave, links on a page already read, or results web_search returned. Search for it with web_search, or ask the owner for the link.";
       continue;
     }
     if (action.tool !== "save_business_info") continue;

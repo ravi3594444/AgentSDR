@@ -42,7 +42,7 @@ describe("TinyFish fetch results", () => {
     });
     expect(pages).toEqual([{
       url: "https://acme.example/", finalUrl: "https://www.acme.example/home", title: "Acme", description: null, language: "en", publishedDate: null,
-      text: "# Acme\nWe build things.", links: ["https://www.acme.example/contact"],
+      text: "# Acme\nWe build things.", links: ["https://www.acme.example/contact"], contactLinks: ["mailto:hi@acme.example"],
     }]);
     expect(failures).toEqual([{ url: "https://gone.example/", code: "page_not_found", status: 404 }, { url: "https://slow.example/", code: "timeout", status: null }]);
     expect(fetchFailureText(failures[0]!)).toBe("the page does not exist");

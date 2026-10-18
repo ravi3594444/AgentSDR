@@ -307,6 +307,40 @@ export function contactPageLinks(html: string, pageUrl: string, limit = 3): stri
   return out;
 }
 
+/**
+ * The page's http(s) links, absolute and without fragments, each once:
+ * links on the same site first (in page order), then the others. What the
+ * assistant may follow from a page it read.
+ */
+export function publicLinks(html: string, pageUrl: string, limit = 40): string[] {
+  let base: URL;
+  try {
+    base = new URL(pageUrl);
+  } catch {
+    return [];
+  }
+  const site = base.hostname.replace(/^www\./, "");
+  const same: string[] = [];
+  const other: string[] = [];
+  const seen = new Set<string>([base.toString()]);
+  for (const href of hrefs(html)) {
+    if (/^(?:mailto|tel|javascript|data):/i.test(href)) continue;
+    let url: URL;
+    try {
+      url = new URL(href, base);
+    } catch {
+      continue;
+    }
+    if (!/^https?:$/.test(url.protocol)) continue;
+    url.hash = "";
+    const normalized = url.toString();
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    (url.hostname.replace(/^www\./, "") === site ? same : other).push(normalized);
+  }
+  return [...same, ...other].slice(0, limit);
+}
+
 /** "https://www.Acme.com/path" → "acme.com"; null for anything that is not a web address. */
 export function websiteDomain(raw: string | null | undefined): string | null {
   const value = raw?.trim();

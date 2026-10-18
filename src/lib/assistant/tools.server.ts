@@ -7,10 +7,12 @@ import { getAiConnection } from "@/lib/ai/connections";
 import { retrieveKnowledge } from "@/lib/crm/knowledge";
 import { discoveryAvailability, DiscoveryUnavailableError, normalizeCriteria, startDiscovery, startInstagramProspects, startSocialProspects } from "@/lib/discovery/discovery.server";
 import { searchAreaProblem } from "@/lib/discovery/geocode";
-import { extractContacts, visibleText } from "@/lib/discovery/contacts";
-import { fetchPublicPage } from "@/lib/discovery/websiteContacts.server";
+import { extractContacts, publicLinks, visibleText } from "@/lib/discovery/contacts";
+import { assertPublicPageUrl, fetchPublicPage } from "@/lib/discovery/websiteContacts.server";
 import { normalizeWebCriteria, startWebDiscovery, WebDiscoveryUnavailableError } from "@/lib/discovery/webDiscovery.server";
-import { webSearchAvailability, webSearchAvailabilityFrom } from "@/lib/discovery/webSearch.server";
+import { generalWebSearch, webSearchAvailability, webSearchAvailabilityFrom, webSearchProviderName, WebSearchUnavailableError } from "@/lib/discovery/webSearch.server";
+import { fetchFailureText } from "@/lib/tinyfish/catalog";
+import { fetchWithTinyfish, tinyfishConnection, TinyfishWaitError } from "@/lib/tinyfish/tinyfish.server";
 import type { FeatureState } from "@/lib/features/catalog";
 import { featureEnabled, FeatureDisabledError } from "@/lib/features/flags.server";
 import { compactResult, describeEndpoint, TREG_LIMITS } from "@/lib/treg/catalog";
@@ -168,6 +170,7 @@ async function setupSnapshot() {
     featureEnabled("web_discovery"),
   ]);
   const connection = byok.connectionId ? await getAiConnection(byok.connectionId) : null;
+  const tinyfish = await tinyfishConnection();
   const discovery = discoveryAvailability();
   const known = businessContext(profile, await businessSources());
   return {
@@ -185,7 +188,9 @@ async function setupSnapshot() {
     },
     leadDiscovery: discovery,
     /** Website and directory search: the optional feature, and its web search (Tavily, else the organization's web-searching AI provider). */
-    webDiscovery: { enabled: webDiscoveryOn, ...webSearchAvailabilityFrom(byok, connection, { connected: Boolean(await tavilyConnection()) }) },
+    webDiscovery: { enabled: webDiscoveryOn, ...webSearchAvailabilityFrom(byok, connection, { connected: Boolean(await tavilyConnection()) }, tinyfish ? { connected: true, useForWebSearch: tinyfish.useForWebSearch } : null) },
+    /** The assistant's own web_search and page reading: TinyFish when connected. */
+    webAccess: { tinyfish: Boolean(tinyfish), searchProvider: tinyfish?.useForWebSearch ? "TinyFish" : (await tavilyConnection()) ? "Tavily" : null, browserMinutesPerDay: tinyfish?.browserMinutesPerDay ?? 0 },
     ai: { connected: Boolean(connection?.verified), defaultModel: byok.defaultModel?.modelId ?? null },
     /** Optional features (Settings → Organization), all off by default, and whether new inquiries can be answered. */
     features: await featureState(),
@@ -201,7 +206,7 @@ const AUDIENCE_SOURCE_WORD: Record<string, string> = { discovery: "found", list:
 function webDiscoveryLine(web: { enabled: boolean; available: boolean; provider: string | null; model: string | null; reason: string | null }): string {
   if (!web.enabled) return "Website and directory search: off (an owner or admin can turn it on in Settings → Organization).";
   return web.available
-    ? `Website and directory search: ready (${web.provider === "openrouter" ? "OpenRouter web search" : "AI/ML API web research model"}, ${web.model}).`
+    ? `Website and directory search: ready (${webSearchProviderName(web.provider)}, ${web.model}).`
     : `Website and directory search: not ready — ${web.reason}`;
 }
 
@@ -218,6 +223,19 @@ function webDiscoveryProgress(job: typeof assistantJobs.$inferSelect): string {
   if (job.stage === "reading") return `Reading websites and directories: ${progress.read ?? 0} of ${progress.candidates ?? "?"} pages done (${progress.found ?? 0} found so far).`;
   if (job.stage === "saving") return `Saving leads: ${progress.saved ?? 0} of ${progress.found ?? "?"}.`;
   return `Searching the web (${progress.searchesDone ?? 0} of ${progress.searches ?? "?"} searches done)…`;
+}
+
+/** A page read for the model: text, contacts and the links it may follow next. */
+function pageResult(page: { url: string; title: string; body: string; contacts: { kind: string; value: string }[]; links: string[]; via: string }): ToolResult {
+  const title = page.title.slice(0, 200);
+  const host = new URL(page.url).hostname.replace(/^www\./, "");
+  const links = page.links.filter((link) => !LOGIN_WALLED.test(new URL(link).hostname)).slice(0, 40);
+  return {
+    ok: true,
+    summary: `Read ${page.url}${title ? ` “${title}”` : ""} via ${page.via} (${page.body.length.toLocaleString("en-US")} characters). Contacts on the page: ${page.contacts.map((contact) => `${contact.kind} ${contact.value}`).join(", ") || "none"}. Links on the page: ${links.join(" ") || "none"}. Text: ${page.body.slice(0, 6_000)}`,
+    display: `${host}${title ? ` · ${title}` : ""} · ${page.contacts.length} contact${page.contacts.length === 1 ? "" : "s"} found`,
+    data: { url: page.url, title, contacts: page.contacts, links },
+  };
 }
 
 export const TOOLS: Record<string, Tool> = {
@@ -366,7 +384,7 @@ export const TOOLS: Record<string, Tool> = {
 
   find_customers_on_web: {
     available: (features) => features.web_discovery,
-    description: "Find customers matching the owner's description of them with a real web search provider (Tavily when the organization saved a Tavily key, else its OpenRouter connection with its web plugin, or AI/ML API's web research model; never a model answering from memory): only the pages the provider returned are used. It reads the businesses' own websites and the local directories or lists the search returned (and the business websites those directories link to) for the emails and phones they publish, and keeps each contact with the page it came from; it never guesses an email, phone, person or page, and people already in the leads are reused, not duplicated. Public Instagram profiles and posts the search returns are read (a profile's website, a post's comments) only when Instagram is connected (the Instagram feature on and an account linked); otherwise they are skipped. Instagram-only profiles can receive an initial DM after plan approval when an Instagram sender is connected. Up to 3 paid searches; runs in the background and announces the result in the chat. Needs the Website and directory search feature.",
+    description: "Find customers matching the owner's description of them with a real web search provider (TinyFish when connected, free within its daily allowance; else Tavily when the organization saved a Tavily key; else its OpenRouter connection with its web plugin, or AI/ML API's web research model; never a model answering from memory): only the pages the provider returned are used. It reads the businesses' own websites and the local directories or lists the search returned (and the business websites those directories link to) for the emails and phones they publish, and keeps each contact with the page it came from; it never guesses an email, phone, person or page, and people already in the leads are reused, not duplicated. Public Instagram profiles and posts the search returns are read (a profile's website, a post's comments) only when Instagram is connected (the Instagram feature on and an account linked); otherwise they are skipped. Instagram-only profiles can receive an initial DM after plan approval when an Instagram sender is connected. Up to 3 searches (free on TinyFish, paid on the others); runs in the background, waits when TinyFish's free allowance asks it to, and announces the result in the chat. Needs the Website and directory search feature.",
     arguments: "customers (who the customers are, from the owner's words or the business profile), where (city/area/region), maxResults (5-40 business websites to read, default 20), contactAfter (true only when the owner asked to contact, email or message the leads found: the outreach plan is then prepared automatically when the search finishes), channels (optional, with contactAfter: array of email|whatsapp|linkedin|instagram)",
     run: async (args, context) => {
       if (!(await featureEnabled("web_discovery"))) return { ok: false, summary: new FeatureDisabledError("web_discovery").message };
@@ -388,7 +406,7 @@ export const TOOLS: Record<string, Tool> = {
       try {
         const started = await startWebDiscovery(criteria, context, { contactAfter });
         const instagram = started.instagram.usable ? " Public Instagram profiles and posts it returns are read too." : ` Instagram pages are skipped (${started.instagram.reason}).`;
-        const provider = started.provider === "openrouter" ? "OpenRouter web search" : "AI/ML API web research";
+        const provider = webSearchProviderName(started.provider);
         return {
           ok: true,
           summary: `Web search started for “${started.phrase}” with ${provider} (${started.model}): ${started.queries.length} searches, up to ${criteria.maxResults} business websites; job ${started.jobId}, audience ${started.audienceId}.${instagram} Results are announced in the chat when done.${contactAfter ? " The outreach plan will be prepared automatically when it finishes." : ""}`,
@@ -590,10 +608,40 @@ export const TOOLS: Record<string, Tool> = {
     },
   },
 
+  web_search: {
+    description: "Search the web for pages that match a query: businesses' own websites, directories and member lists, public profiles, news and public discussions. Returns titles, URLs and snippets from TinyFish Search (free within its daily allowance), or Tavily when only Tavily is connected. A result is a candidate, not a verified lead or buyer: read the promising pages with read_webpage (results become links you may open) and check fit, location and contact route there. Refine the query and use page for more results when the first ones do not fit; stop when a few searches find nothing new. Keyword queries work best (e.g. 'real estate agency Pune', 'wholesale tile distributors Lagos list').",
+    arguments: "query (keywords), country (optional 2-letter code where results should come from, e.g. IN), page (optional 0–3, for more results), purpose (optional: why you are searching, one sentence)",
+    run: async (args, context) => {
+      const query = text(args, "query", true)!.trim();
+      if (query.length < 2) throw new ToolArgumentError("query is empty");
+      const country = text(args, "country");
+      if (country && !/^[A-Za-z]{2}$/.test(country)) throw new ToolArgumentError("country must be a 2-letter code such as IN or US");
+      const page = args.page === undefined ? 0 : Number(args.page);
+      if (!Number.isInteger(page) || page < 0 || page > 3) throw new ToolArgumentError("page must be a whole number from 0 to 3");
+      try {
+        const { provider, hits } = await generalWebSearch({ query, country: country?.toUpperCase() ?? null, page, purpose: text(args, "purpose") }, { threadId: context.threadId });
+        const name = webSearchProviderName(provider);
+        const lines = hits.map((hit, index) => `${index + 1}. ${hit.title ?? "(no title)"} — ${hit.url}${hit.snippet ? ` — ${hit.snippet}` : ""}${hit.date ? ` (${hit.date})` : ""}`);
+        return {
+          ok: true,
+          summary: hits.length
+            ? `${name} for “${query}”${page ? ` (page ${page})` : ""}: ${hits.length} results (candidates; read a page before relying on it).\n${lines.join("\n")}`
+            : `${name} for “${query}” returned nothing. Try different keywords or another source.`,
+          display: `Searched the web (${name}) for “${query}”: ${hits.length} result${hits.length === 1 ? "" : "s"}`,
+          data: { query, page, provider, results: hits },
+        };
+      } catch (error) {
+        if (error instanceof TinyfishWaitError) return { ok: false, summary: `Web search is waiting: ${error.message}. Use another source meanwhile, or tell the owner when it resumes.` };
+        if (error instanceof WebSearchUnavailableError) return { ok: false, summary: `Web search is not available: ${error.message}.` };
+        throw error;
+      }
+    },
+  },
+
   read_webpage: {
-    description: "Open one public web page from a link the owner gave (or a link on a page already read) and read its text and the emails, phones and LinkedIn links on it: for example the owner's own website, to learn about the business, or a page listing people to contact. Not a web search; it cannot log in, so Instagram, Facebook, X, TikTok and LinkedIn pages cannot be read.",
+    description: "Open one public web page and read its text, the emails, phones and LinkedIn links on it, and the links it contains (which you may open next): a link the owner gave, a result of web_search, or a link on a page already read. Read through TinyFish when it is connected (it renders pages that need JavaScript), else directly. It cannot log in, so Instagram, Facebook, X, TikTok and LinkedIn pages cannot be read.",
     arguments: "url",
-    run: async (args) => {
+    run: async (args, context) => {
       const raw = text(args, "url", true)!.trim();
       let url: URL;
       try {
@@ -604,23 +652,45 @@ export const TOOLS: Record<string, Tool> = {
       if (LOGIN_WALLED.test(url.hostname)) {
         return { ok: false, summary: `${url.hostname} needs a login and does not allow automated reading, so it cannot be opened. LinkedIn people can be found with find_linkedin_leads; other networks are not supported.` };
       }
+      // A private or internal address is refused before anything leaves the server, TinyFish included.
+      try {
+        await assertPublicPageUrl(url.toString());
+      } catch (error) {
+        return { ok: false, summary: `Could not open ${url.toString()}: ${error instanceof Error ? error.message : String(error)}` };
+      }
+      let note = "";
+      if (await tinyfishConnection()) {
+        try {
+          const { pages, failures } = await fetchWithTinyfish([url.toString()], { threadId: context.threadId });
+          const page = pages[0];
+          if (page) {
+            const contacts = extractContacts(`${page.contactLinks.map((link) => `<a href="${link.replace(/"/g, "")}"></a>`).join("")}${page.text}`, page.finalUrl).slice(0, 60);
+            return pageResult({ url: page.finalUrl, title: page.title ?? "", body: page.text, contacts, links: page.links, via: "TinyFish" });
+          }
+          note = failures[0] ? ` (TinyFish: ${fetchFailureText(failures[0])}; read directly instead)` : "";
+          if (failures[0] && ["page_not_found", "login_required", "invalid_url", "invalid_redirect_url"].includes(failures[0].code)) {
+            return { ok: false, summary: `Could not open ${url.toString()}: ${fetchFailureText(failures[0])}.` };
+          }
+        } catch (error) {
+          if (!(error instanceof TinyfishWaitError)) throw error;
+          note = ` (TinyFish is waiting: ${error.reason}; read directly instead)`;
+        }
+      }
       let page: { url: string; html: string } | null;
       try {
         page = await fetchPublicPage(url.toString());
       } catch (error) {
-        return { ok: false, summary: `Could not open ${url.toString()}: ${error instanceof Error ? error.message : String(error)}` };
+        return { ok: false, summary: `Could not open ${url.toString()}${note}: ${error instanceof Error ? error.message : String(error)}` };
       }
-      if (!page) return { ok: false, summary: `${url.toString()} is not a readable web page.` };
-      const title = visibleText(pageTitle(page.html)).trim().slice(0, 200);
-      const body = visibleText(page.html).trim();
-      const contacts = extractContacts(page.html, page.url).slice(0, 60);
-      const host = new URL(page.url).hostname.replace(/^www\./, "");
-      return {
-        ok: true,
-        summary: `Read ${page.url}${title ? ` “${title}”` : ""} (${body.length.toLocaleString("en-US")} characters). Contacts on the page: ${contacts.map((contact) => `${contact.kind} ${contact.value}`).join(", ") || "none"}. Text: ${body.slice(0, 6_000)}`,
-        display: `${host}${title ? ` · ${title}` : ""} · ${contacts.length} contact${contacts.length === 1 ? "" : "s"} found`,
-        data: { url: page.url, title, contacts },
-      };
+      if (!page) return { ok: false, summary: `${url.toString()} is not a readable web page${note}.` };
+      return pageResult({
+        url: page.url,
+        title: visibleText(pageTitle(page.html)).trim(),
+        body: visibleText(page.html).trim(),
+        contacts: extractContacts(page.html, page.url).slice(0, 60),
+        links: publicLinks(page.html, page.url, 40),
+        via: `direct${note}`,
+      });
     },
   },
 

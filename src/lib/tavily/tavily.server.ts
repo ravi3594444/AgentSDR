@@ -2,6 +2,7 @@ import "server-only";
 
 import { and, eq, gte, sql } from "drizzle-orm";
 import { assistantJobs } from "@/lib/assistant/schema";
+import { providerUsage } from "@/lib/quota/schema";
 import { db } from "@/lib/db";
 import { isMissingTable } from "@/lib/features/flags.server";
 import { decryptIntegrationCredential, encryptIntegrationCredential } from "@/lib/integrations/credentials";
@@ -40,17 +41,29 @@ export async function tavilyConnection(): Promise<{ key: string; dailySearches: 
   return row?.encryptedKey ? { key: decryptIntegrationCredential(row.encryptedKey), dailySearches: row.dailySearches } : null;
 }
 
-/** Tavily searches the organization's website searches used in the last 24 hours. */
+/** Tavily searches the organization used in the last 24 hours: its website searches' queries, and the assistant's own web searches (provider_usage). */
 export async function tavilySearchesToday(executor: Pick<typeof db, "select"> = db): Promise<number> {
-  const [row] = await executor.select({
-    n: sql<number>`coalesce(sum(jsonb_array_length(coalesce(${assistantJobs.payload}->'queries', '[]'::jsonb))), 0)::int`,
-  }).from(assistantJobs).where(and(
-    inOrg(assistantJobs),
-    eq(assistantJobs.kind, "web_discovery"),
-    sql`${assistantJobs.payload}->>'searchProvider' = 'tavily'`,
-    gte(assistantJobs.createdAt, new Date(Date.now() - DAY_MS)),
-  ));
-  return Number(row?.n ?? 0);
+  const since = new Date(Date.now() - DAY_MS);
+  const [jobs, direct] = await Promise.all([
+    executor.select({
+      n: sql<number>`coalesce(sum(jsonb_array_length(coalesce(${assistantJobs.payload}->'queries', '[]'::jsonb))), 0)::int`,
+    }).from(assistantJobs).where(and(
+      inOrg(assistantJobs),
+      eq(assistantJobs.kind, "web_discovery"),
+      sql`${assistantJobs.payload}->>'searchProvider' = 'tavily'`,
+      gte(assistantJobs.createdAt, since),
+    )),
+    executor.select({ n: sql<number>`coalesce(sum(${providerUsage.units}), 0)::int` }).from(providerUsage).where(and(
+      inOrg(providerUsage),
+      eq(providerUsage.provider, "tavily"),
+      eq(providerUsage.product, "search"),
+      gte(providerUsage.createdAt, since),
+    )).catch((error: unknown) => {
+      if (isMissingTable(error)) return [{ n: 0 }];
+      throw error;
+    }),
+  ]);
+  return Number(jobs[0]?.n ?? 0) + Number(direct[0]?.n ?? 0);
 }
 
 export async function tavilySettingsView(): Promise<TavilySettingsView> {

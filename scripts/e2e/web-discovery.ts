@@ -377,7 +377,7 @@ try {
 
     await setFeature("web_discovery", true, null);
     const noProvider = await runTool("find_customers_on_web", { customers: "dental clinics", where: "Baner, Pune" }, ctx(thread.id));
-    check("no AI provider: the tool says web search is unavailable and why", !noProvider.ok && /needs a web search: save a Tavily key .* or connect an AI provider that searches the web/.test(noProvider.summary), noProvider.summary);
+    check("no AI provider: the tool says web search is unavailable and why", !noProvider.ok && /needs a web search: save a TinyFish key .* a Tavily key .* or connect an AI provider that searches the web/.test(noProvider.summary), noProvider.summary);
     const setup = await runTool("check_setup", {}, ctx(thread.id));
     check("check_setup reports website and directory search as not ready", /Website and directory search: not ready — .*needs a web search/.test(setup.summary), setup.summary);
     const after = await db.select({ id: assistantJobs.id }).from(assistantJobs).where(inOrg(assistantJobs));
