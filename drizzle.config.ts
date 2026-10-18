@@ -129,6 +129,7 @@ const OWNED_TABLES = [
   "instagram_accounts",
   "instagram_chats",
   "instagram_messages",
+  "instagram_outreach_queue",
   "intake_endpoints",
   "inquiries",
   "organization_features",

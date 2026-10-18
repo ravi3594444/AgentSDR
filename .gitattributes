@@ -19,3 +19,4 @@
 bun.lock linguist-generated=true -diff
 db/schema.sql linguist-generated=true
 docs/prisma-history/** linguist-documentation=true
+graphify-out/graph.json merge=graphify
