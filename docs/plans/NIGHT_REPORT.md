@@ -26,7 +26,42 @@ alternative, is in `docs/plans/DECISIONS-2026-10-18.md`.
 | S10 Activity | `78c9cd7` | `/activity`: every search and plan, and every reply, across all chats, with the real state and reason; cancel a search; new-replies badge | `scripts/e2e/activity.ts` 23 checks; screenshots, desktop and phone |
 | S12 Plan evidence | `da68f91`, `8bf2721` | Plan cards say who authorized sending (Start, request approval, Autonomous, or not started), each sender's time zone, gate and next allowed send, and per-lead delivery evidence (accepted, delivered as WhatsApp reported, read receipt; never "seen") | `scripts/e2e/delivery-evidence.ts` 18 checks |
 
-S11 (the CRM half of the workspace rework) is reported in its own section below.
+### S11 Workspace: the CRM half (`7b63f66`)
+
+- **Conversation summary.** Every CRM record, and every Action required
+  row, now carries a summary built only from recorded message evidence:
+  - the latest inbound and outbound message;
+  - who answered: "Answered by you" or "Answered by assistant", else a
+    neutral label;
+  - "Waiting for their reply" where that is true;
+  - the account and channel, and the effective reply mode;
+  - any pending draft or decision;
+  - restrictions (DNC, wrong route) and the actual next action.
+- **New views.** Action required gains Needs you and All replies views, each
+  with a count. `/crm/actions` keeps working.
+- **Manual replies settle.** A manual reply, from the app or echoed from
+  WhatsApp Web, settles the pending reply and stales its drafts. It keeps
+  unrelated open decisions and newer messages, and never changes takeover.
+- **Badge.** The Action required badge counts exactly what the list shows.
+- **Instagram.** It is in the channel filter and in account attention.
+- **Unnamed contacts.** They show their business and contact route.
+- **Verification.**
+  - `scripts/e2e/workspace-replay.ts` (87 checks) replays the pricing enquiry,
+    the assistant's answer, the owner's reply from WhatsApp Web and a newer
+    message.
+  - It also covers a pending classification, an unrelated quote decision,
+    wrong number and DNC, duplicate and delayed webhooks, an unavailable
+    provider, and isolation.
+
+## Review of the whole night's work
+
+Every slice was then reviewed by area: providers, assistant, outreach starts
+and evidence, CRM send paths, and tenancy and Activity. S11 got its own
+review. Each finding was handed to a second agent whose job was to refute it.
+
+Results: 35 findings confirmed, 3 refuted. The confirmed ones were 1
+blocker, 6 major and 28 minor. The fixes and their verification are in the
+section below.
 
 ## Tenancy isolation
 
