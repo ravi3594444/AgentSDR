@@ -278,6 +278,8 @@ export type PlannedStep = { subject: string | null; body: string; waitDays: numb
 export type OutreachPlan = {
   /** Started on its own by a chat in Autonomous mode (counted against its daily caps). */
   autonomous?: boolean;
+  /** Started on its own under another plan's request approval: that plan's id (requestApproval.server.ts), so the card can say so. */
+  startedUnder?: string;
   /** When it was started on its own (ISO): the caps count the last 24 hours. */
   autonomousAt?: string;
   /**

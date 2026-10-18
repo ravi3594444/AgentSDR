@@ -329,6 +329,7 @@ await runInOrganization(org2!.id, async () => {
   const applied = await recordRequestApproval(approved.id, { autopilot: true, approvedBy: owner2!.id });
   const siblingLeads = await leadsOf(sibling.id);
   check("request approval: the request's other plan starts with the 3 not already covered", applied.started.some((item) => item.runId === sibling.id) && siblingLeads.length === 3 && !siblingLeads.includes(L[2]!), JSON.stringify(applied));
+  check("…and the plan records which approval started it, for its card", (await runRow(sibling.id)).plan.startedUnder === approved.id && !(await runRow(approved.id)).plan.startedUnder);
   check("…and the chat says it started under the approval, with who was left out", /started on its own under your approval of this request: 3 leads/.test(await lastEvent(approvalThread.id)) && /1 lead is already in another running plan/.test(await lastEvent(approvalThread.id)), await lastEvent(approvalThread.id));
   const later = await propose([L[95]!], { threadId: approvalThread.id, requestId: ask!.id });
   const laterOutcome = await applyRequestApproval(later.id);

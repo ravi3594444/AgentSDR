@@ -98,7 +98,8 @@ async function startUnderApproval(run: RunRow, approval: RequestApproval, approv
       await saveNarrowedPlan(tx, run.id, narrowed);
       return { kind: "failed", problem: broken, narrowed };
     }
-    const started = await claimOutreachStart(tx, run.id, { userId: approval.approvedBy, autopilot, plan: narrowed.plan, channels: narrowed.channels });
+    // Recorded on the plan: a Start press in the same window must not read as this approval.
+    const started = await claimOutreachStart(tx, run.id, { userId: approval.approvedBy, autopilot, plan: { ...narrowed.plan, startedUnder: approvingRunId }, channels: narrowed.channels });
     return started ? { kind: "started", narrowed } : { kind: "changed" };
   });
   if (outcome.kind === "changed") return { started: false, reason: "it was started or changed meanwhile" };
