@@ -51,7 +51,7 @@ export function OverviewView({ data, loading, onSelectView }: ViewProps<"overvie
 
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-12 lg:gap-5">
-      <KpiStrip className="lg:col-span-12" columns={5}>
+      <KpiStrip className="lg:col-span-12" columns={5} compact>
         <KpiCell icon={RiReplyLine} label="Replies" value={formatCompact(crm.kpis.replies.value)} metric={crm.kpis.replies} hint={HINTS.replies} context={`from ${formatCompact(kpis.replied.value)} ${kpis.replied.value === 1 ? "person" : "people"}`} spark={replySpark} />
         <KpiCell icon={RiThumbUpLine} label="Positive" value={formatCompact(kpis.positive.value)} metric={kpis.positive} hint={HINTS.positive} context={kpis.replied.value > 0 ? `${formatPercent(kpis.positive.value / kpis.replied.value)} of people who replied` : vsPrevious(kpis.positive)} />
         <KpiCell icon={RiCalendarEventLine} label="Meetings" value={formatCompact(kpis.meetings.value)} metric={kpis.meetings} hint={HINTS.meetings} context={vsPrevious(kpis.meetings)} />
@@ -62,6 +62,9 @@ export function OverviewView({ data, loading, onSelectView }: ViewProps<"overvie
       <SentimentCard className="lg:col-span-8" series={crm.repliesByCategory} bucket={range.bucket} loading={loading} />
       <AttentionCard attention={data.attention} loading={loading} />
 
+      <details className="border-y border-stroke-soft-200 py-4 lg:col-span-12">
+        <summary className="cursor-pointer text-label-sm text-text-strong-950">CRM details &amp; assistant activity</summary>
+        <div className="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-12">
       <PipelineCard className="lg:col-span-6 lg:self-start" value={crm.pipeline} loading={loading} />
       {/* Pipeline runs long; the two shorter cards stack beside it. */}
       <div className="flex flex-col gap-4 lg:col-span-6 lg:gap-5">
@@ -70,6 +73,8 @@ export function OverviewView({ data, loading, onSelectView }: ViewProps<"overvie
       </div>
 
       <AiAssistantCard className="lg:col-span-12" crm={crm} loading={loading} />
+        </div>
+      </details>
 
       <SectionHeading className="mt-2 lg:col-span-12" title="Outreach" description="Where these conversations came from. Open a channel for its detail." />
       <ChannelTable data={data} loading={loading} onSelectView={onSelectView} />

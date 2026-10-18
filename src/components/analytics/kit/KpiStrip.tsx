@@ -24,9 +24,9 @@ import { Sparkline } from "./Sparkline";
  * - spark: number[] trend, drawn in the de-emphasis gray, top-right beside the icon
  * - selected / onSelect: optional switcher behaviour (button with aria-pressed)
  */
-export function KpiStrip({ children, columns, className }: { children: React.ReactNode; columns: number; className?: string }) {
+export function KpiStrip({ children, columns, className, compact = false }: { children: React.ReactNode; columns: number; className?: string; compact?: boolean }) {
   return (
-    <Frame className={className}>
+    <Frame className={cn(className, compact && "[&_[data-kpi-cell]]:gap-2 [&_[data-kpi-heading]]:hidden [&_[data-kpi-value]]:text-[26px]")}>
       <FramePanel className="overflow-hidden p-0 sm:p-0">
         <div
           className="grid grid-cols-2 gap-px bg-stroke-soft-200 lg:grid-cols-[repeat(var(--cols),minmax(0,1fr))] [&>*:last-child:nth-child(odd)]:col-span-2 lg:[&>*:last-child:nth-child(odd)]:col-span-1"
@@ -63,9 +63,9 @@ export function KpiCell({
   onSelect?: () => void;
 }) {
   return (
-    <div className={cn("relative flex min-w-0 flex-col gap-3 bg-bg-white-0 p-4 transition-colors sm:p-5", selected && "bg-bg-weak-50 shadow-[inset_0_2px_0_var(--color-primary-base)]")}>
+    <div data-kpi-cell className={cn("relative flex min-w-0 flex-col gap-3 bg-bg-white-0 p-4 transition-colors sm:p-5", selected && "bg-bg-weak-50 shadow-[inset_0_2px_0_var(--color-primary-base)]")}>
       {onSelect && <button type="button" onClick={onSelect} aria-pressed={Boolean(selected)} aria-label={`Show ${label}`} className="absolute inset-0 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-base" />}
-      <div className="flex items-center justify-between gap-2">
+      <div data-kpi-heading className="flex items-center justify-between gap-2">
         {Icon ? (
           <span className="flex size-8 items-center justify-center rounded-lg border border-stroke-soft-200">
             <Icon className="size-4 text-text-sub-600" />
@@ -95,7 +95,7 @@ export function KpiCell({
           )}
         </div>
         <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
-          <p className="text-[32px] font-medium leading-none tracking-[-0.045em] tabular-nums text-text-strong-950">{value}</p>
+          <p data-kpi-value className="text-[32px] font-medium leading-none tracking-[-0.045em] tabular-nums text-text-strong-950">{value}</p>
           {metric && <DeltaPill metric={metric} upIsGood={upIsGood} />}
         </div>
       </div>

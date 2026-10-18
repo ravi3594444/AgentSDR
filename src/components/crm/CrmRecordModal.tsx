@@ -51,13 +51,12 @@ export function CrmRecordModal({ children }: { children: React.ReactNode }) {
       <Modal.Content
         ref={contentRef}
         hideClose
-        size="max-w-6xl"
+        size="max-w-[1600px]"
         aria-describedby={undefined}
         // The visible card is the inner div, so the stack can sit behind it
         // inside the same dialog rather than over the page.
-        className="h-[calc(100dvh-1rem)] max-h-none bg-transparent shadow-none ring-0 sm:h-[min(88dvh,1000px)]"
+        className="h-[calc(100dvh-1rem)] max-h-none bg-transparent shadow-none ring-0 sm:h-[92dvh]"
       >
-        <QueueStack depth={nav?.upcoming.length ?? 0} />
         <div className="relative flex h-full flex-col overflow-hidden rounded-2xl bg-bg-white-0 shadow-regular-md ring-1 ring-inset ring-stroke-soft-200">
           <div className="flex h-12 shrink-0 items-center gap-2 border-b border-stroke-soft-200 pl-4 pr-2.5 sm:pl-5">
             <RiContactsBook3Line className="size-4 shrink-0 text-text-soft-400" aria-hidden="true" />
@@ -229,26 +228,6 @@ function UpNext({ items, onOpen }: { items: QueueItem[]; onOpen: (id: string) =>
           </button>
         ))}
       </div>
-    </div>
-  );
-}
-
-/**
- * The leads still waiting, drawn as cards stacked behind this one — each a
- * step up and to the right, fainter the further back — so the pop-up reads as
- * the top of a pile rather than a dead end. Purely decorative.
- */
-function QueueStack({ depth }: { depth: number }) {
-  if (!depth) return null;
-  return (
-    <div aria-hidden="true" className="pointer-events-none absolute inset-0 hidden sm:block">
-      {Array.from({ length: depth }, (_, index) => depth - index).map((level) => (
-        <div
-          key={level}
-          className="absolute inset-0 rounded-2xl bg-bg-white-0 shadow-regular-md ring-1 ring-inset ring-stroke-soft-200 transition-[transform,opacity] duration-300"
-          style={{ transform: `translate(${level * 12}px, ${level * -12}px)`, opacity: 1 - level * 0.25 }}
-        />
-      ))}
     </div>
   );
 }

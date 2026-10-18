@@ -5,7 +5,7 @@ import { runInOrganization } from "@/lib/tenancy/scope";
 import { listCompanies, listPeoplePage } from "@/lib/leads/records";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Leads" };
+export const metadata = { title: "Contacts" };
 
 export default async function LeadsPage({ searchParams }: { searchParams: Promise<{ tab?: string | string[] }> }) {
   const ctx = await requirePageOrgContext();

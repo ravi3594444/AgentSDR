@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { defaultFeatureState } from "@/lib/features/catalog";
 import { SETTINGS_NAV, visibleSettingsNav } from "@/components/settings/settingsNav";
-import { NAV_SECTIONS, paletteItems, visibleNavSections } from "./navConfig";
+import { activeHref, NAV_SECTIONS, paletteItems, visibleNavSections } from "./navConfig";
 
 const instagramOn = { ...defaultFeatureState(), instagram: true };
 
@@ -40,4 +40,12 @@ describe("navigation tied to optional features", () => {
     expect(on).toContain("/instagram/messages");
     expect(on).toContain("/settings/instagram-accounts");
   });
+});
+
+test("reporting bookmarks share Overview, while lead records and contacts keep their workspace", () => {
+  expect(activeHref("/analytics")).toBe("/assistant/results");
+  expect(activeHref("/assistant/results")).toBe("/assistant/results");
+  expect(activeHref("/leads")).toBe("/crm/pipeline");
+  expect(activeHref("/crm/records/example")).toBe("/crm/pipeline");
+  expect(activeHref("/crm/actions")).toBe("/crm/actions");
 });

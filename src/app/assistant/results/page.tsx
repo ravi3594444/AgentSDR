@@ -8,7 +8,7 @@ import { results } from "@/lib/assistant/results.server";
 import { brandTitle } from "@/lib/brand";
 import { runInOrganization } from "@/lib/tenancy/scope";
 
-export const metadata: Metadata = { title: { absolute: brandTitle("Results") } };
+export const metadata: Metadata = { title: { absolute: brandTitle("Overview") } };
 
 export const dynamic = "force-dynamic";
 

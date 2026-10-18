@@ -35,6 +35,7 @@ import { APP_VERSION, bugReportUrl, SUPPORT_LINKS } from "@/lib/support";
 import { useDemoMode } from "@/components/demo/DemoProvider";
 import { cn } from "@/utils/cn";
 import { BRAND } from "@/lib/brand";
+import { useRecordChanged } from "@/components/crm/recordEvents";
 
 /**
  * The app sidebar, in the ReUI shape: brand + collapse at the top, a
@@ -81,6 +82,7 @@ function useBadges(pathname: string): { badges: NavBadges | null; features: Feat
       })
       .catch(() => {});
   }, []);
+  useRecordChanged(load);
   useEffect(() => {
     load();
   }, [load, pathname]);

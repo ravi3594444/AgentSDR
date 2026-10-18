@@ -14,14 +14,12 @@ import {
   RiHistoryLine,
   RiInstagramLine,
   RiLinkedinLine,
-  RiLoopLeftLine,
   RiMailLine,
   RiMoreLine,
   RiPauseLine,
   RiPhoneLine,
   RiPlayLine,
   RiRefreshLine,
-  RiReplyLine,
   RiSaveLine,
   RiSendPlaneLine,
   RiSkipForwardLine,
@@ -40,7 +38,7 @@ import { CallButton } from "@/components/calls/CallButton";
 import { CallsCard } from "@/components/calls/CallsCard";
 import { EmptyState } from "@/components/page/EmptyState";
 import { PageHeader } from "@/components/page/PageHeader";
-import { StatRow } from "@/components/page/StatRow";
+import { conversationSummary } from "./conversationSummary";
 import { PersonWhatsappPanel } from "@/components/whatsapp/PersonWhatsappPanel";
 import { WhatsappLogo } from "@/components/whatsapp/WhatsappLogo";
 import { cn } from "@/utils/cn";
@@ -53,12 +51,12 @@ import {
   subtleButtonClass,
 } from "./CrmLayout";
 import { RecordBody } from "./CrmSkeletons";
-import { asList, asObject, crmFetch, displayName, errorMessage, formatDate, relativeDate } from "./crm-utils";
+import { asList, asObject, crmFetch, displayName, errorMessage, formatDate } from "./crm-utils";
 import { ClassificationPicker, MoveStageDialog, moveStageSuccessMessage, RegenerateDraftDialog, humanize } from "./ActionRowTools";
 import { ContactAvatar } from "./ContactAvatar";
 import { takeRecordWorkspace } from "./recordPrefetch";
 import { announceRecordChanged } from "./recordEvents";
-import { setUnsavedReply } from "./recordQueue";
+import { hasUnsavedReply, setUnsavedReply } from "./recordQueue";
 import { ChannelAvatar } from "./CrmActionsClient";
 import { BRAND } from "@/lib/brand";
 
@@ -88,7 +86,7 @@ const eventLabels: Record<string, string> = {
   "draft.discarded": "Reply draft discarded",
   "draft.failed": "Draft generation failed",
   "message.sending": "Message queued for delivery",
-  "message.sent": "Message delivered",
+  "message.sent": "Message sent",
   "message.failed": "Message failed",
   "message.delivery_uncertain": "Delivery needs reconciliation",
   "message.delivery_reconciled": "Delivery status reconciled",
@@ -139,6 +137,9 @@ export default function CrmRecordClient({ recordId, variant = "page" }: { record
   const [error, setError] = useState("");
   const [workspaceRef, workspaceHeight] = useWorkspaceHeight<HTMLDivElement>(Boolean(data.id));
   const [notice, setNotice] = useState("");
+  const [writeMessage, setWriteMessage] = useState(false);
+  const request = useRef(0);
+  const snapshot = useRef("");
   // Bumped after a call starts so the Calls card below refetches without the
   // rest of the page reloading.
   const [callsRefreshKey, setCallsRefreshKey] = useState(0);
@@ -147,17 +148,34 @@ export default function CrmRecordClient({ recordId, variant = "page" }: { record
   const [categories, setCategories] = useState<Data[]>([]);
   useEffect(() => { void crmFetch("/categories").then((result) => setCategories(asList<Data>(asObject(result).categories))).catch(() => setCategories([])); }, []);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    // The Action required table starts this request while the pointer rests
-    // on a row, so the first load usually finds it already in flight.
-    try { setData(asObject(await (takeRecordWorkspace(recordId) ?? crmFetch(`/records/${recordId}`)))); }
-    catch (cause) { setError(errorMessage(cause)); }
-    finally { setLoading(false); }
+  const load = useCallback(async (quiet = false) => {
+    const mine = ++request.current;
+    if (!quiet) setLoading(true);
+    try {
+      const cached = !quiet && !snapshot.current ? takeRecordWorkspace(recordId) : null;
+      const next = asObject(await (cached ?? crmFetch(`/records/${recordId}`)));
+      if (mine !== request.current) return;
+      const signature = [next.id, next.contextVersion, next.lastOutboundAt, next.updatedAt].join(":");
+      if (quiet && snapshot.current && snapshot.current !== signature) announceRecordChanged(recordId);
+      snapshot.current = signature;
+      // Refresh restrictions and new messages without replacing text being edited.
+      setData((previous) => quiet && hasUnsavedReply(recordId) ? { ...next, draft: previous.draft } : next);
+      setError("");
+    } catch (cause) { if (mine === request.current) setError(errorMessage(cause)); }
+    finally { if (mine === request.current) setLoading(false); }
   }, [recordId]);
 
-  useEffect(() => { void load(); }, [load]);
+  const cancelRequests = useCallback(() => { request.current += 1; }, []);
+  useEffect(() => {
+    setData({});
+    setWriteMessage(false);
+    snapshot.current = "";
+    void load();
+    const poll = () => { if (document.visibilityState === "visible") void load(true); };
+    const timer = window.setInterval(poll, 10_000);
+    document.addEventListener("visibilitychange", poll);
+    return () => { cancelRequests(); clearInterval(timer); document.removeEventListener("visibilitychange", poll); };
+  }, [load, cancelRequests]);
 
   const mutate = async (path: string, body: Data = {}, method = "POST", success = "Changes saved") => {
     setNotice("");
@@ -194,7 +212,7 @@ export default function CrmRecordClient({ recordId, variant = "page" }: { record
   // The API merges CRM rows with the LinkedIn outreach history the sending
   // engine recorded; fall back to the per-conversation lists if it is absent.
   const timeline = asList<Data>(data.timeline);
-  const messages = timeline.length ? timeline : conversations.flatMap((conversation) => asList<Data>(conversation.messages).map((message) => ({
+  const messages: Data[] = timeline.length ? timeline : conversations.flatMap((conversation) => asList<Data>(conversation.messages).map((message) => ({
     ...message,
     channel: message.channel ?? conversation.channel,
     conversationId: message.conversationId ?? conversation.id,
@@ -202,19 +220,16 @@ export default function CrmRecordClient({ recordId, variant = "page" }: { record
   const runs = asList<Data>(data.runs);
   const activeRunRow = runs.find((row) => ["active", "paused"].includes(String(asObject(row.run).status)));
   const activeRun = asObject(activeRunRow?.run);
-  const activeSequence = asObject(activeRunRow?.sequence);
   const stepRuns = asList<Data>(data.stepRuns).filter((row) => asObject(row.stepRun).sequenceRunId === activeRun.id);
   const currentStepRow = stepRuns.find((row) => Number(asObject(row.step).position) === Number(activeRun.currentStepPosition));
   const currentStep = asObject(currentStepRow?.step);
   const name = displayName({ ...data, person });
   const avatarUrl = person.profilePictureUrl ? String(person.profilePictureUrl) : null;
-  const channels = [...new Set([...conversations, ...messages].map((item) => item.channel).filter(Boolean))].map(channelLabel);
-  const lastInbound = data.lastInboundAt ? relativeDate(data.lastInboundAt).replace(" overdue", " ago") : "No reply yet";
-  const nextAction = text(currentStep.name, data.nextActionAt ? relativeDate(data.nextActionAt) : "None scheduled");
-  // The message being answered: the newest inbound one on any channel.
-  const lastMessage = ([...messages] as Data[]).filter((message) => message.direction === "inbound")
+  const summary = conversationSummary(messages);
+  const hasDraft = Boolean(draft.id && ["awaiting_review", "failed", "delivery_uncertain"].includes(String(draft.status)));
+  const editorOpen = hasDraft || writeMessage;
+  const lastMessage = [...messages].filter((message) => message.direction === "inbound")
     .sort((a, b) => String(b.sentAt ?? b.createdAt).localeCompare(String(a.sentAt ?? a.createdAt)))[0];
-
   return (
     <div className={cn("space-y-5 transition-opacity", loading && "opacity-60")} aria-busy={loading || undefined}>
       <RecordHeader
@@ -239,48 +254,41 @@ export default function CrmRecordClient({ recordId, variant = "page" }: { record
       {notice && <div role="status" className="flex items-center gap-2 rounded-xl bg-success-lighter px-4 py-2.5 text-paragraph-sm text-success-dark ring-1 ring-inset ring-success-light"><RiCheckLine className="size-4 shrink-0" aria-hidden="true" /><span className="min-w-0 flex-1">{notice}</span><button type="button" onClick={() => setNotice("")} className="text-label-xs opacity-70 hover:opacity-100">Dismiss</button></div>}
       {error && <ErrorState message={error} onRetry={() => void load()} />}
 
-      <StatRow items={[
-        { label: "Last reply", value: lastInbound, icon: RiReplyLine, hint: data.lastInboundAt ? formatDate(data.lastInboundAt) : undefined },
-        { label: "Next step", value: nextAction, icon: RiTimerLine, hint: data.nextActionAt ? formatDate(data.nextActionAt) : undefined },
-        { label: "Sequence", value: activeSequence.name ? `${String(activeSequence.name)}${activeRun.status === "paused" ? " · paused" : ""}` : "None running", icon: RiLoopLeftLine },
-        { label: channels.length > 1 ? "Channels" : "Channel", value: channels.join(", ") || "—", icon: RiChat3Line },
-      ]} />
-
-      {/* The measured height only holds if the grid row is allowed to be
-          smaller than its content: an auto row grows to the longest thread and
-          pushes the page down regardless of the container's height, so the row
-          is minmax(0,1fr) and each column is min-h-0 so the panels' own scroll
-          areas do the shrinking. */}
-      <div ref={workspaceRef} style={workspaceHeight ? { height: workspaceHeight } : undefined} className="grid items-start gap-5 xl:grid-cols-2 xl:grid-rows-[minmax(0,1fr)] xl:items-stretch">
-        <div className="min-w-0 xl:min-h-0">
-          <ReplyComposer
-            record={data}
-            draft={draft}
-            conversations={conversations}
-            citations={citations}
-            uncertainAttempt={uncertainAttempt}
-            sendRefused={sendAttempts.some((attempt) => attempt.draftId === draft.id && attempt.status === "failed")}
-            lastMessage={lastMessage}
-            onAction={mutate}
-            stage={<ClassificationSelect record={data} categories={categories} onAction={mutate} />}
-            activity={<ActivityDrawer events={events} drafts={drafts} sendAttempts={sendAttempts} />}
-            stageNotice={<ProposedClassificationNotice record={data} categories={categories} onAction={mutate} />}
-          />
-        </div>
-        <div className="min-w-0 xl:min-h-0">
+      <div className="flex flex-wrap items-center gap-3 border-y border-stroke-soft-200 py-3">
+        <ClassificationSelect record={data} categories={categories} onAction={mutate} />
+        <p role="status" className="min-w-0 flex-1 text-paragraph-xs text-text-sub-600">
+          {data.dnc ? "Outreach stopped · Do Not Contact" : hasDraft ? "A draft needs your attention" : summary.answered ? `${summary.answerLabel} · waiting for their reply` : "Conversation history"}
+        </p>
+        <ActivityDrawer events={events} drafts={drafts} sendAttempts={sendAttempts} />
+        {data.activeChannel !== "whatsapp" && !hasDraft && <Button.Root variant="neutral" mode="stroke" size="xsmall" onClick={() => setWriteMessage((open) => !open)}>{writeMessage ? "Close composer" : "Write a message"}</Button.Root>}
+      </div>
+      <ProposedClassificationNotice record={data} categories={categories} onAction={mutate} />
+      <div ref={workspaceRef} style={workspaceHeight ? { height: workspaceHeight } : undefined}
+        className={cn("grid min-h-[28rem] items-stretch gap-6 xl:grid-rows-[minmax(0,1fr)]", editorOpen && "xl:grid-cols-[minmax(0,1fr)_minmax(20rem,0.65fr)]")}>
+        <div className="h-[min(70dvh,44rem)] min-h-0 min-w-0 xl:h-auto">
           {data.activeChannel === "whatsapp"
-            ? <WhatsappRecordPanel personId={String(person.id ?? data.personId)} onSent={() => { announceRecordChanged(recordId); void load(); }}>
+            ? <WhatsappRecordPanel personId={String(person.id ?? data.personId)} blockedReason={data.dnc ? "This contact is marked Do Not Contact. Outreach has stopped." : undefined}
+                answered={summary.answered} onSent={() => { announceRecordChanged(recordId); void load(); }}>
                 <ConversationPanel conversations={conversations} messages={messages} name={name} avatarUrl={avatarUrl} />
               </WhatsappRecordPanel>
             : <ConversationPanel conversations={conversations} messages={messages} name={name} avatarUrl={avatarUrl} />}
         </div>
+        {editorOpen && <div className="min-h-0 min-w-0">
+          <ReplyComposer key={`${recordId}:${String(draft.id ?? "new")}`}
+            record={data} draft={draft} conversations={conversations} citations={citations}
+            uncertainAttempt={uncertainAttempt} sendRefused={sendAttempts.some((attempt) => attempt.draftId === draft.id && attempt.status === "failed")}
+            lastMessage={lastMessage} onAction={mutate} />
+        </div>}
       </div>
-      <CallsCard personId={String(person.id ?? data.personId)} refreshKey={callsRefreshKey} />
+      <details className="border-t border-stroke-soft-200 py-3">
+        <summary className="cursor-pointer text-label-sm text-text-sub-600">Call history</summary>
+        <div className="pt-4"><CallsCard personId={String(person.id ?? data.personId)} refreshKey={callsRefreshKey} /></div>
+      </details>
     </div>
   );
 }
 
-const BACK = { href: "/crm/actions", label: "Action required" };
+const BACK = { href: "/crm/pipeline", label: "Leads & replies" };
 
 /**
  * Height of the workspace row, measured rather than assumed.
@@ -291,7 +299,7 @@ const BACK = { href: "/crm/actions", label: "Action required" };
  * exactly the part that must stay on screen. Below the two-column breakpoint
  * the columns stack and the page scrolls normally, so no height is imposed.
  */
-const WORKSPACE_MIN_HEIGHT = 520;
+const WORKSPACE_MIN_HEIGHT = 440;
 const TWO_COLUMN_WIDTH = 1280;
 
 function useWorkspaceHeight<T extends HTMLElement>(ready: boolean) {
@@ -426,7 +434,7 @@ function RecordHeader({ back, data, person, name, avatarUrl, currentStep, active
  * with a composer (sent through Unipile), and the CRM's all-channel timeline
  * one toggle away. The Call button lives in the lead header above.
  */
-function WhatsappRecordPanel({ personId, onSent, children }: { personId: string; onSent: () => void; children: React.ReactNode }) {
+function WhatsappRecordPanel({ personId, onSent, children, blockedReason, answered }: { personId: string; onSent: () => void; children: React.ReactNode; blockedReason?: string; answered: boolean }) {
   const [view, setView] = useState<"whatsapp" | "all">("whatsapp");
   return (
     <div className="flex h-full min-h-[28rem] flex-col gap-2">
@@ -439,9 +447,9 @@ function WhatsappRecordPanel({ personId, onSent, children }: { personId: string;
       <div className="min-h-0 flex-1">
         {view === "whatsapp"
           ? <Frame className="h-full">
-              <FrameHeader title="WhatsApp" description="The live thread, sent through the linked number." />
+              <FrameHeader title="Conversation" description="WhatsApp · messages from the connected account" />
               <FramePanel className="flex min-h-0 flex-col overflow-hidden p-4 sm:p-4">
-                <PersonWhatsappPanel personId={personId} onSent={onSent} className="flex min-h-0 flex-1 flex-col" heightClass="min-h-0 flex-1" />
+                <PersonWhatsappPanel personId={personId} onSent={onSent} className="flex min-h-0 flex-1 flex-col" heightClass="min-h-0 flex-1" blockedReason={blockedReason} composerLabel={answered ? "Optional follow-up · your latest message is already in the conversation." : undefined} />
               </FramePanel>
             </Frame>
           : children}
@@ -459,6 +467,8 @@ function ConversationPanel({ conversations, messages, name, avatarUrl }: { conve
   // The thread reads oldest first, but the message being replied to is the
   // last one, so the rail opens at the bottom rather than at an introduction
   // from three weeks ago.
+  const latestVisible = visible.at(-1);
+  const latestVisibleKey = `${String(latestVisible?.id ?? "")}:${String(latestVisible?.body ?? latestVisible?.bodyText ?? "")}`;
   useEffect(() => {
     const element = scrollRef.current;
     if (!element) return;
@@ -467,7 +477,7 @@ function ConversationPanel({ conversations, messages, name, avatarUrl }: { conve
     // the text has wrapped at the rail's real width.
     const frame = requestAnimationFrame(() => { element.scrollTop = element.scrollHeight; });
     return () => cancelAnimationFrame(frame);
-  }, [visible, filter]);
+  }, [latestVisibleKey, filter]);
 
   return (
     <Frame className="h-full min-h-0">
@@ -476,12 +486,10 @@ function ConversationPanel({ conversations, messages, name, avatarUrl }: { conve
           <h2 className="text-label-sm text-text-strong-950">Conversation</h2>
           <p className="mt-0.5 text-paragraph-xs text-text-sub-600">{messages.length} {messages.length === 1 ? "message" : "messages"}{channelSummary.length ? ` across ${channelSummary.join(" and ")}` : ""}</p>
         </div>
-        <SegmentedControl.Root value={filter} onValueChange={(value) => setFilter(value as TimelineFilter)}>
+        <SegmentedControl.Root value={filter} onValueChange={(value) => setFilter(value as TimelineFilter)} className="max-w-full overflow-x-auto">
           <SegmentedControl.List className="w-auto" aria-label="Channel">
-            {(["all", "email", "linkedin", "whatsapp"] as TimelineFilter[]).map((item) => {
-              const disabled = item !== "all" && !channels.has(item);
-              return <SegmentedControl.Trigger key={item} value={item} disabled={disabled} className={cn("gap-1.5 px-2 text-label-xs sm:px-2.5", disabled && "opacity-40")}>{item !== "all" && channelIcon(item, "size-3.5")}{item === "all" ? "All" : channelLabel(item)}</SegmentedControl.Trigger>;
-            })}
+            {(["all", "email", "linkedin", "whatsapp", "instagram"] as TimelineFilter[]).filter((item) => item === "all" || channels.has(item)).map((item) =>
+              <SegmentedControl.Trigger key={item} value={item} className="gap-1.5 px-2 text-label-xs sm:px-2.5">{item !== "all" && channelIcon(item, "size-3.5")}{item === "all" ? "All" : channelLabel(item)}</SegmentedControl.Trigger>)}
           </SegmentedControl.List>
         </SegmentedControl.Root>
       </div>
@@ -519,16 +527,10 @@ function ConversationPanel({ conversations, messages, name, avatarUrl }: { conve
   );
 }
 
-function ReplyComposer({ record, draft, conversations, citations, uncertainAttempt, sendRefused = false, lastMessage, onAction, stage, activity, stageNotice }: {
+function ReplyComposer({ record, draft, conversations, citations, uncertainAttempt, sendRefused = false, lastMessage, onAction }: {
   record: Data;
   /** Their newest message, quoted above the reply when the thread is not beside it. */
   lastMessage?: Data;
-  /** The stage picker: where this lead is, and fixing a misread. */
-  stage: React.ReactNode;
-  /** The activity-history drawer's trigger. */
-  activity: React.ReactNode;
-  /** A stage change the AI proposed and is holding for a person to decide. */
-  stageNotice: React.ReactNode;
   draft: Data;
   conversations: Data[];
   citations: Data[];
@@ -546,11 +548,12 @@ function ReplyComposer({ record, draft, conversations, citations, uncertainAttem
   const [providerMessageId, setProviderMessageId] = useState("");
   const [regenerateOpen, setRegenerateOpen] = useState(false);
 
+  const suggestedConversationId = String(defaultConversation?.id ?? "");
   useEffect(() => {
-    setConversationId(String((conversations.find((item) => item.id === draft.conversationId) ?? conversations.find((item) => item.channel === record.activeChannel) ?? conversations[0])?.id ?? ""));
+    setConversationId(suggestedConversationId);
     setBody(text(draft.body));
     setSubject(text(draft.subject));
-  }, [conversations, draft.body, draft.conversationId, draft.subject, record.activeChannel]);
+  }, [suggestedConversationId, draft.body, draft.subject]);
 
   const conversation = conversations.find((item) => String(item.id) === conversationId);
   const channel = String(conversation?.channel ?? draft.channel ?? "email") as Channel;
@@ -583,16 +586,9 @@ function ReplyComposer({ record, draft, conversations, citations, uncertainAttem
 
   return (
     <Frame className="h-full min-h-0">
-      {/* Classification lives in the reply header because it is a property
-          of the reply about to be sent, and drives the next draft. */}
-      {/* Narrow: title and Activity share the first line, the classification
-          takes the second whole. Wide: one line. */}
       <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 px-4 pb-3 pt-3">
         <h2 className="text-label-sm text-text-strong-950">Reply</h2>
-        <div className="order-3 flex min-w-0 basis-full items-center sm:order-none sm:basis-auto">{stage}</div>
-        <div className="order-2 ml-auto sm:order-none">{activity}</div>
       </div>
-      {stageNotice && <div className="shrink-0 px-1 pb-2">{stageNotice}</div>}
       <FramePanel className="flex min-h-0 flex-col overflow-hidden p-0 sm:p-0">
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 sm:p-5">
         {Boolean(record.dnc) && <InlineWarning tone="danger" title="Sending is blocked" detail="This person is marked as Do Not Contact. Clear that status before replying." />}
@@ -603,9 +599,9 @@ function ReplyComposer({ record, draft, conversations, citations, uncertainAttem
             : <InlineWarning tone="danger" title="The draft could not be written" detail={text(draft.error, "Regenerate it, or write the reply yourself.")} />
         )}
         {stale && editingCurrentDraft && <InlineWarning tone="warning" title="This draft may be out of date" detail="A newer reply changed the conversation. Regenerate or carefully review before sending." />}
-        {!conversations.length && <InlineWarning tone="warning" title="No reply channel available" detail="Email or LinkedIn must be connected before a reply can be sent." />}
+        {!conversations.length && <InlineWarning tone="warning" title="No reply channel available" detail="Connect a supported sending account before replying." />}
 
-        {/* Below xl the conversation stacks under this panel, so the message
+        {/* Below xl the conversation sits above this panel, so the message
             being answered is quoted here instead of a scroll away. */}
         {lastMessage && <figure className="shrink-0 rounded-lg bg-bg-weak-50 px-3 py-2.5 ring-1 ring-inset ring-stroke-soft-200 xl:hidden">
           <figcaption className="mb-1 flex items-center gap-1.5 text-paragraph-xs text-text-soft-400">{channelIcon(lastMessage.channel, "size-3.5")}Replying to their message · {formatDate(lastMessage.sentAt ?? lastMessage.createdAt)}</figcaption>

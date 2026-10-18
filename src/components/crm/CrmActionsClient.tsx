@@ -17,13 +17,11 @@ import {
   RiDraftLine,
   RiEqualizer2Line,
   RiErrorWarningFill,
-  RiErrorWarningLine,
   RiExternalLinkLine,
   RiFilterOffLine,
   RiFlashlightFill,
   RiForbid2Line,
   RiHourglass2Fill,
-  RiInboxLine,
   RiInstagramFill,
   RiLinkedinFill,
   RiLinkUnlink,
@@ -49,8 +47,8 @@ import * as Popover from "@/components/alignui/popover";
 import * as Select from "@/components/alignui/select";
 import * as Table from "@/components/alignui/table";
 import { Frame, FrameHeader, FramePanel } from "@/components/analytics/kit/Frame";
-import { KpiCell, KpiStrip } from "@/components/analytics/kit/KpiStrip";
-import { CHANNEL_META, CONVERSATION_CHANNEL_META, HUE, MUTED_STRONG } from "@/components/analytics/theme";
+import { WorkspaceNavigation, WorkspaceStats } from "@/components/page/WorkspaceNavigation";
+import { CONVERSATION_CHANNEL_META, HUE, MUTED_STRONG } from "@/components/analytics/theme";
 import { EmptyState } from "@/components/page/EmptyState";
 import { PageHeader } from "@/components/page/PageHeader";
 import { cn } from "@/utils/cn";
@@ -87,7 +85,7 @@ export function actionId(action: Action) { return String(action.id ?? action.rec
 export const PAGE_SIZE = 30;
 
 const CATEGORY_KEYS = ["interested", "customer", "not_interested", "other"] as const;
-const CHANNELS = ["email", "linkedin", "whatsapp"] as const;
+const CHANNELS = ["email", "linkedin", "whatsapp", "instagram"] as const;
 
 export function CompactSelect({ label, value, onChange, placeholder, children, className }: { label: string; value: string; onChange: (value: string) => void; placeholder: string; children: React.ReactNode; className?: string }) {
   return <Select.Root size="xsmall" value={value} onValueChange={onChange}>
@@ -113,8 +111,8 @@ function ItemLabel({ children }: { children: React.ReactNode }) {
 
 export function channelItems() {
   return CHANNELS.map((key) => {
-    const Icon = CHANNEL_META[key].icon;
-    return <Select.Item key={key} value={key}><ItemLabel><span className="flex shrink-0" style={{ color: CHANNEL_META[key].color }}><Icon className="size-4" /></span>{CHANNEL_META[key].label}</ItemLabel></Select.Item>;
+    const Icon = CONVERSATION_CHANNEL_META[key].icon;
+    return <Select.Item key={key} value={key}><ItemLabel><span className="flex shrink-0" style={{ color: CONVERSATION_CHANNEL_META[key].color }}><Icon className="size-4" /></span>{CONVERSATION_CHANNEL_META[key].label}</ItemLabel></Select.Item>;
   });
 }
 
@@ -236,18 +234,19 @@ export function CrmActionsClient() {
   return <>
     <PageHeader
       title="Action required"
-      description="Replies, drafts and follow-ups that need a person's decision before the CRM moves on."
+      description="Unresolved reviews, decisions and follow-ups. Answered conversations stay in Leads & replies."
       actions={<Button.Root variant="neutral" mode="stroke" size="small" onClick={refresh} disabled={loading}>
         <Button.Icon as={RiRefreshLine} className={cn(loading && loaded && "animate-spin")} />Refresh
       </Button.Root>}
     />
 
-    <KpiStrip className="mt-6" columns={4}>
-      <KpiCell icon={RiInboxLine} label="In the queue" value={summary ? summary.queue.toLocaleString() : "—"} context={summary ? `${summary.needsDecision.toLocaleString()} awaiting a decision` : undefined} hint="Every record waiting on a person: new replies, drafts to approve, AI changes to confirm, follow-ups past due and processing errors." selected={activeFilterCount === 0} onSelect={clearFilters} />
-      <KpiCell icon={RiDraftLine} label="Drafts to review" value={summary?.drafts != null ? summary.drafts.toLocaleString() : "—"} context="AI-written replies waiting for approval" hint="Drafts the AI has written that nobody has sent, edited or discarded yet. Hover a row's draft to read it, then Edit or Send." />
-      <KpiCell icon={RiTimerLine} label="Follow-ups due" value={summary ? summary.followUpsDue.toLocaleString() : "—"} context="Drafted or past their scheduled time" hint="Follow-ups waiting on a person: drafts to approve, and scheduled steps past their time with nothing drafted yet. Select to show only these." selected={filters.actionGroup === "follow_up"} onSelect={() => setFilter("actionGroup", filters.actionGroup === "follow_up" ? "" : "follow_up")} />
-      <KpiCell icon={RiErrorWarningLine} label="Errors" value={summary ? summary.errors.toLocaleString() : "—"} context={summary?.errors ? "Processing failed — open the record to retry" : "Nothing failed"} hint="Records whose classification, drafting or sending failed. Select to show only these." selected={Boolean(filters.error)} onSelect={() => setFilter("error", filters.error ? "" : "true")} />
-    </KpiStrip>
+    <div className="mt-5"><WorkspaceNavigation area="leads" active="/crm/actions" /></div>
+    <WorkspaceStats items={[
+      { label: "In the queue", value: summary?.queue.toLocaleString() ?? "—", detail: "Needs a human action", onSelect: clearFilters, selected: activeFilterCount === 0 },
+      { label: "Drafts to review", value: summary?.drafts?.toLocaleString() ?? "—", detail: "Waiting for approval" },
+      { label: "Follow-ups due", value: summary?.followUpsDue.toLocaleString() ?? "—", onSelect: () => setFilter("actionGroup", filters.actionGroup === "follow_up" ? "" : "follow_up"), selected: filters.actionGroup === "follow_up" },
+      { label: "Errors", value: summary?.errors.toLocaleString() ?? "—", onSelect: () => setFilter("error", filters.error ? "" : "true"), selected: Boolean(filters.error) },
+    ]} />
 
     <Frame className="mt-5">
       <FrameHeader title="Queue" description={detail} actions={<>
@@ -479,8 +478,8 @@ export function ActionRows({ actions, categories, onActionsChange, pipeline, ref
   if (!actions.length) return <EmptyState icon={empty.icon} title={empty.title} description={empty.detail} action={empty.action} />;
   return <HoverPreviewProvider>
     <NoticeBar notice={notice} onDismiss={() => setNotice(null)} className="border-b border-stroke-soft-200" />
-    {/* Below md the table would only scroll sideways, so each row is a card. */}
-    <div aria-busy={refreshing || undefined} className={cn("space-y-2 bg-bg-weak-50 p-2 transition-opacity md:hidden", refreshing && "pointer-events-none opacity-60")}>
+    {/* Narrower workspaces use cards so replies stay readable. */}
+    <div aria-busy={refreshing || undefined} className={cn("space-y-3 p-2 transition-opacity xl:hidden", refreshing && "pointer-events-none opacity-60")}>
       {actions.map((action, index) => {
         const id = actionId(action);
         return <ActionCard
@@ -496,16 +495,16 @@ export function ActionRows({ actions, categories, onActionsChange, pipeline, ref
         />;
       })}
     </div>
-    <div aria-busy={refreshing || undefined} className={cn("hidden overflow-x-auto p-2 transition-opacity md:block", refreshing && "pointer-events-none opacity-60")}>
-      <Table.Root className="min-w-[1000px]" style={{ tableLayout: "fixed" }}>
-        <caption className="sr-only">People and CRM actions requiring review</caption>
+    <div aria-busy={refreshing || undefined} className={cn("hidden overflow-x-auto p-2 transition-opacity xl:block", refreshing && "pointer-events-none opacity-60")}>
+      <Table.Root className={pipeline ? "min-w-[760px]" : "min-w-[900px]"} style={{ tableLayout: "fixed" }}>
+        <caption className="sr-only">{pipeline ? "All open leads and their latest replies" : "People and CRM actions requiring review"}</caption>
         <Table.Header>
           <Table.Row>
-            <Table.Head scope="col" className="w-[19%] px-4">Contact</Table.Head>
+            <Table.Head scope="col" className={cn("px-4", pipeline ? "w-[27%]" : "w-[19%]")}>Contact</Table.Head>
             <Table.Head scope="col" className="w-[18%] px-4">Classification</Table.Head>
-            <Table.Head scope="col" className="w-[20%] px-4">Latest reply</Table.Head>
-            <Table.Head scope="col" className="w-[23%] px-4">Draft reply</Table.Head>
-            <Table.Head scope="col" className="w-[17%] px-3 text-right">{pipeline ? "Status" : "Due"}</Table.Head>
+            <Table.Head scope="col" className={cn("px-4", pipeline ? "w-[32%]" : "w-[20%]")}>Latest reply</Table.Head>
+            {!pipeline && <Table.Head scope="col" className="w-[23%] px-4">Draft reply</Table.Head>}
+            <Table.Head scope="col" className={cn("px-3 text-right", pipeline ? "w-[23%]" : "w-[17%]")}>{pipeline ? "Status" : "Due"}</Table.Head>
             <Table.Head scope="col" className="w-12 px-2"><span className="sr-only">More actions</span></Table.Head>
           </Table.Row>
         </Table.Header>
@@ -907,7 +906,7 @@ function ActionRow({ action, categories, busy, editing, pipeline, now, onOpen, o
           <ReplyQuote row={row} />
         </HoverPreview>
       </Table.Cell>
-      <Table.Cell className="relative px-4 py-3">
+      {!pipeline && <Table.Cell className="relative px-4 py-3">
         {/* Hover the text for the whole draft (with Edit and Send there too);
             the same two actions float in at the cell's end while the row is
             hovered or focused, so a ready draft is one click from sent. */}
@@ -929,9 +928,10 @@ function ActionRow({ action, categories, busy, editing, pipeline, now, onOpen, o
           <Button.Root variant="neutral" mode="ghost" size="xxsmall" onClick={onToggleEdit} aria-label={`Edit the draft to ${row.name}`} title="Edit the draft here"><Button.Icon as={RiPencilLine} /></Button.Root>
           <Button.Root variant="primary" mode="filled" size="xxsmall" disabled={!sendable} onClick={() => sendDraft(row, onMutate)} aria-label={`Send the draft to ${row.name}`} title={sendTitle}><Button.Icon as={RiSendPlaneFill} />Send</Button.Root>
         </div>}
-      </Table.Cell>
+      </Table.Cell>}
       <Table.Cell className="px-3 py-3 text-right">
         <DueChip row={row} />
+        {pipeline && <Link href={href} className="mt-2 inline-block text-paragraph-xs text-text-sub-600 underline-offset-4 hover:text-text-strong-950 hover:underline">Open conversation</Link>}
       </Table.Cell>
       <Table.Cell className="px-2 py-3" data-row-tools onKeyDown={(event) => event.stopPropagation()}>
         <RowMenu
@@ -950,7 +950,7 @@ function ActionRow({ action, categories, busy, editing, pipeline, now, onOpen, o
       </Table.Cell>
     </Table.Row>
     {editing && editable && <tr>
-      <td colSpan={6} className="rounded-xl bg-bg-weak-50 px-4 pb-4 pt-2">
+      <td colSpan={pipeline ? 5 : 6} className="rounded-xl bg-bg-weak-50 px-4 pb-4 pt-2">
         <InlineDraftEditor action={action} busy={busy} onMutate={onMutate} onClose={onToggleEdit} />
       </td>
     </tr>}

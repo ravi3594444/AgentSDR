@@ -14,6 +14,7 @@ import { ErrorState } from "@/components/crm/CrmLayout";
 import { EmptyState } from "@/components/page/EmptyState";
 import { PageContainer, PageHeader } from "@/components/page/PageHeader";
 import { PageTabs } from "@/components/page/PageTabs";
+import { WorkspaceNavigation } from "@/components/page/WorkspaceNavigation";
 import { cn } from "@/utils/cn";
 import { CompaniesTable } from "./CompaniesTable";
 import { LeadsFilterPopover, type Subcategory } from "./LeadsFilterPopover";
@@ -164,11 +165,12 @@ export default function LeadsClient({ initialTab, initialRows, initialTotal }: P
     <main className="h-full w-full overflow-y-auto bg-bg-white-0">
       <PageContainer>
         <PageHeader
-          title="Leads"
+          title="Contacts"
           description="Every person and company you can reach, with their outreach and CRM state."
           actions={isPeople && <Button.Root variant="primary" mode="filled" size="small" onClick={() => setShowImport(true)}><Button.Icon as={RiUpload2Line} />Import people</Button.Root>}
         />
 
+        <div className="mt-5"><WorkspaceNavigation area="leads" active="/leads" /></div>
         <PageTabs className="mt-6" label="Lead type" tabs={tabs} value={tab} onChange={switchTab} />
 
         <Frame className="mt-5">

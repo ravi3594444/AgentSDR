@@ -1,22 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import Link from "next/link";
 import {
   RiArrowLeftLine,
-  RiChat3Line,
-  RiCheckboxCircleLine,
-  RiErrorWarningLine,
-  RiLinkedinBoxLine,
   RiMailSendLine,
-  RiSearchLine,
-  RiStarLine,
-  RiUserFollowLine,
-  RiWhatsappLine,
 } from "@remixicon/react";
 
 import { EmptyState } from "@/components/page/EmptyState";
-import { KpiCell, KpiStrip } from "@/components/analytics/kit/KpiStrip";
+import { WorkspaceNavigation, WorkspaceStats } from "@/components/page/WorkspaceNavigation";
+import { useRecordChanged } from "@/components/crm/recordEvents";
 import NeedsYouList, { type NeedsYouPayload } from "@/components/assistant/NeedsYouList";
 import { describeChannelSending, figure, money, PERIOD_KINDS, type PeriodKind } from "@/lib/assistant/results";
 import type { Results } from "@/lib/assistant/results.server";
@@ -42,13 +35,11 @@ const PERIOD_LABEL: Record<PeriodKind, string> = {
   all_time: "All time",
 };
 
-function Section({ title, children, className }: { title: string; children: React.ReactNode; className?: string }) {
-  return (
-    <section className={cn("rounded-xl border border-stroke-soft-200 bg-bg-white-0 p-4", className)}>
-      <h2 className="text-label-md text-text-strong-950">{title}</h2>
-      <div className="mt-2 text-paragraph-sm text-text-sub-600">{children}</div>
-    </section>
-  );
+function Section({ title, children, className, collapsible = false }: { title: string; children: React.ReactNode; className?: string; collapsible?: boolean }) {
+  const content = <div className="mt-4 text-paragraph-sm leading-relaxed text-text-sub-600">{children}</div>;
+  const classes = cn("min-w-0 border-b border-stroke-soft-200 py-5", className);
+  if (collapsible) return <details className={classes}><summary className="cursor-pointer text-label-md text-text-strong-950">{title}</summary>{content}</details>;
+  return <section className={classes}><h2 className="text-label-md text-text-strong-950">{title}</h2>{content}</section>;
 }
 
 function List({ items, empty }: { items: string[]; empty: string }) {
@@ -60,29 +51,36 @@ export default function ResultsClient({ initial }: { initial: ResultsPayload }) 
   const [payload, setPayload] = useState(initial);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const request = useRef(0);
+  const selectedPeriod = useRef(initial.results.period.kind);
   const r = payload.results;
   const o = r.outreach;
 
   async function load(period: PeriodKind) {
+    selectedPeriod.current = period;
+    const mine = ++request.current;
     setLoading(true);
     setError(null);
     try {
       const response = await fetch(`/api/assistant/results?period=${period}`, { cache: "no-store" });
       const body = (await response.json()) as ResultsPayload & { error?: string };
       if (!response.ok) throw new Error(body.error ?? `HTTP ${response.status}`);
+      if (mine !== request.current) return;
       setPayload((current) => ({ ...body, needsYou: current.needsYou }));
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      if (mine === request.current) setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
-      setLoading(false);
+      if (mine === request.current) setLoading(false);
     }
   }
 
+  useRecordChanged(() => { void load(selectedPeriod.current); });
+
   return (
-    <div aria-busy={loading} className="mx-auto flex w-full max-w-6xl flex-col gap-5 px-4 py-6 sm:px-6">
+    <div aria-busy={loading} className="mx-auto flex w-full max-w-[1440px] flex-col gap-5 px-4 py-6 sm:px-6 lg:px-8">
       <header className="flex flex-wrap items-center gap-3">
         <Link href="/assistant" className="inline-flex items-center gap-1 text-label-xs text-text-sub-600 hover:text-text-strong-950"><RiArrowLeftLine className="size-4" /> Assistant</Link>
-        <h1 className="text-[26px] font-semibold tracking-[-0.035em] text-text-strong-950">Results</h1>
+        <h1 className="text-[26px] font-semibold tracking-[-0.035em] text-text-strong-950">Overview</h1>
         <p className="text-paragraph-xs text-text-soft-400">{r.period.label} · {r.period.timeZone}</p>
         <div role="group" aria-label="Filter results by period" className="ml-auto flex flex-wrap gap-1 rounded-lg bg-bg-weak-50 p-1">
           {PERIOD_KINDS.map((kind) => (
@@ -93,30 +91,30 @@ export default function ResultsClient({ initial }: { initial: ResultsPayload }) 
           ))}
         </div>
       </header>
+      <WorkspaceNavigation area="reporting" active="/assistant/results" />
       {error && <p role="alert" className="text-paragraph-sm text-error-base">{error}</p>}
 
       <NeedsYouList initial={initial.needsYou ?? null} />
 
-      <KpiStrip columns={5}>
-        <KpiCell icon={RiSearchLine} label="Leads found" value={String(r.leads.discovered)} context={`${r.leads.imported} from your lists · ${r.leads.duplicates} duplicates merged`} hint="Businesses found by lead search, and people imported from lists, in this period." />
-        <KpiCell icon={RiCheckboxCircleLine} label="Contactable" value={String(r.leads.usable)} context={`${r.leads.leftOut} left out with a reason`} hint="Leads with a usable, permitted email, phone, LinkedIn or Instagram profile." />
-        <KpiCell icon={RiUserFollowLine} label="People contacted" value={String(o.peopleContacted)} context="had at least one message sent" hint="Distinct people with a sent email, WhatsApp message , LinkedIn request/message or initial Instagram DM in this period, from each channel's send records. Unsubscribing later does not remove them." />
-        <KpiCell icon={RiChat3Line} label="Replies" value={String(o.repliesReceived)} context={`from ${o.peopleReplied} people`} hint="Inbound replies recorded by the CRM in this period." />
-        <KpiCell icon={RiStarLine} label="Interested" value={String(o.interested)} context="classified interested; not a sale" hint="Conversations whose reply was classified Interested (applied automatically or by you). Interest is not a closed sale." />
-      </KpiStrip>
-
-      <KpiStrip columns={6}>
-        <KpiCell icon={RiMailSendLine} label="Emails sent" value={String(o.emailsSent)} hint="Campaign emails with status sent (first messages and follow-ups). Drafts are never counted." />
-        <KpiCell icon={RiWhatsappLine} label="WhatsApp sent" value={String(o.whatsappSent)} hint="WhatsApp campaign messages confirmed sent." />
-        <KpiCell icon={RiLinkedinBoxLine} label="LinkedIn requests" value={String(o.linkedinInvitations)} context={`${o.linkedinMessages} LinkedIn messages`} hint="Connection requests confirmed by LinkedIn, counted apart from messages (acceptance and follow-ups)." />
-        <KpiCell icon={RiChat3Line} label="Instagram DMs" value={String(o.instagramSent)} hint="Initial Instagram DMs confirmed sent. Uncertain deliveries are excluded." />
-        <KpiCell icon={RiChat3Line} label="Replies answered" value={String(o.automaticReplies + o.repliesByYou)} context={`${o.automaticReplies} automatically · ${o.repliesByYou} by you`} hint="CRM replies sent: by the reply autopilot or by a person." />
-        <KpiCell icon={RiErrorWarningLine} label="Waiting for you" value={String(r.attention.repliesWaiting + r.attention.openDecisions)} context={`${r.attention.openDecisions} ${r.attention.openDecisions === 1 ? "decision" : "decisions"} · ${r.attention.repliesWaiting} ${r.attention.repliesWaiting === 1 ? "reply" : "replies"} to review`} hint="Open decisions from the assistant and AI reply drafts waiting in Action required (now, not just this period)." />
-      </KpiStrip>
+      <WorkspaceStats items={[
+        { label: "Leads found", value: r.leads.discovered, detail: `${r.leads.usable} contactable` },
+        { label: "People contacted", value: o.peopleContacted, detail: "At least one confirmed send" },
+        { label: "Replies", value: o.repliesReceived, detail: `From ${o.peopleReplied} people` },
+        { label: "Interested", value: o.interested, detail: "An enquiry, not a sale" },
+      ]} />
+      <div className="flex flex-wrap gap-x-6 gap-y-2 border-y border-stroke-soft-200 py-3 text-paragraph-xs text-text-sub-600">
+        <span>Email sent <strong className="ml-1 text-text-strong-950">{o.emailsSent}</strong></span>
+        <span>WhatsApp sent <strong className="ml-1 text-text-strong-950">{o.whatsappSent}</strong></span>
+        <span>LinkedIn <strong className="ml-1 text-text-strong-950">{o.linkedinInvitations} requests · {o.linkedinMessages} messages</strong></span>
+        <span>Instagram DMs <strong className="ml-1 text-text-strong-950">{o.instagramSent}</strong></span>
+        <span>Answered <strong className="ml-1 text-text-strong-950">{o.automaticReplies} by AI · {o.repliesByYou} by you</strong></span>
+      </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Section title="Interested people">
+          <p className="mb-3 text-paragraph-xs text-text-soft-400">Replies classified as Interested. Open Leads to read the full conversations.</p>
           <List items={r.interestedPeople.map((p) => `${p.name}${p.what ? ` — ${p.what}` : ""} (${new Date(p.at).toLocaleString()})`)} empty="No interested replies in this period." />
+          <Link href="/crm/pipeline" className="mt-4 inline-block text-label-xs text-text-strong-950 underline underline-offset-4">Open leads &amp; replies</Link>
         </Section>
         <Section title="Where leads came from">
           {r.leads.bySource.length ? (
@@ -154,7 +152,7 @@ export default function ResultsClient({ initial }: { initial: ResultsPayload }) 
           <p className="mt-1 text-paragraph-xs text-text-soft-400">Email {describeChannelSending(r.sending.email)}.</p>
           <p className="text-paragraph-xs text-text-soft-400">WhatsApp {describeChannelSending(r.sending.whatsapp)}.</p>
         </Section>
-        <Section title="Stopped and held">
+        <Section title="Stopped and held" collapsible>
           <List
             items={[
               `${r.stopped.optedOut} asked not to be contacted`,
@@ -165,10 +163,10 @@ export default function ResultsClient({ initial }: { initial: ResultsPayload }) 
             empty="Nothing stopped."
           />
         </Section>
-        <Section title="Failures">
+        <Section title="Failures" collapsible>
           <List items={r.failures.map((f) => `${f.count} × ${f.channel}: ${f.reason}`)} empty="No failures recorded in this period." />
         </Section>
-        <Section title="Spending and limits">
+        <Section title="Spending and limits" collapsible>
           <ul className="space-y-1 text-paragraph-xs">
             <li>AI spending recorded: <span className="text-text-strong-950">{money(r.spending.aiRecordedUsd)}</span> over {r.spending.aiCalls} assistant calls{r.spending.aiCallsWithoutCost ? ` (${r.spending.aiCallsWithoutCost} without a reported cost)` : ""}.</li>
             {r.spending.byKind.map((k) => <li key={k.kind} className="pl-3">{k.kind.replace(/_/g, " ")}: {money(k.usd)} ({k.calls} calls)</li>)}
@@ -202,7 +200,7 @@ export default function ResultsClient({ initial }: { initial: ResultsPayload }) 
         ) : <EmptyState compact icon={RiMailSendLine} title="No outreach runs in this period" description="Try another date range, or open the assistant to plan your next outreach." action={<Link href="/assistant" className="rounded-lg bg-bg-strong-950 px-4 py-2 text-label-xs text-text-white-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-base">Open assistant</Link>} />}
       </Section>
 
-      <Section title="Daily summaries">
+      <Section title="Daily summaries" collapsible>
         {payload.summaries.length ? (
           <div className="space-y-2">
             {payload.summaries.map((s) => (

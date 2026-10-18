@@ -57,6 +57,8 @@ export function displayName(value: Record<string, unknown>): string {
     || raw.lastName || raw.last_name || personRaw.lastName || personRaw.last_name || "";
   const fullName = `${String(first)} ${String(last)}`.trim();
   if (fullName) return fullName;
+  const business = asObject(value.company).name || person.company || raw.businessName || personRaw.businessName;
+  if (typeof business === "string" && business.trim()) return business.trim();
   const email = value.email || person.email || raw.email || personRaw.email;
   if (typeof email === "string" && email.trim()) return email.trim();
   const linkedin = value.linkedinUrl || value.linkedin_url || person.linkedinUrl || person.linkedin_url
@@ -65,6 +67,8 @@ export function displayName(value: Record<string, unknown>): string {
     const slug = linkedin.trim().replace(/\/+$/, "").split("/").pop() || linkedin.trim();
     return `LinkedIn · ${slug}`;
   }
+  const phone = value.phone || person.phone || raw.phone || personRaw.phone;
+  if (typeof phone === "string" && phone.trim()) return phone.trim();
   return "Unknown contact";
 }
 

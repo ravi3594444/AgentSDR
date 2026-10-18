@@ -8,13 +8,13 @@ import {
   RiFilterOffLine,
   RiKanbanView2,
   RiListUnordered,
-  RiTeamLine,
+  RiRefreshLine,
 } from "@remixicon/react";
 import * as Button from "@/components/alignui/button";
 import * as SegmentedControl from "@/components/alignui/segmented-control";
 import * as Select from "@/components/alignui/select";
 import { Frame, FrameHeader, FramePanel } from "@/components/analytics/kit/Frame";
-import { KpiCell, KpiStrip } from "@/components/analytics/kit/KpiStrip";
+import { WorkspaceNavigation, WorkspaceStats } from "@/components/page/WorkspaceNavigation";
 import { EmptyState } from "@/components/page/EmptyState";
 import { PageHeader } from "@/components/page/PageHeader";
 import { cn } from "@/utils/cn";
@@ -53,7 +53,7 @@ const EMPTY_COPY: Record<PipelineStage | "all", { title: string; detail: string 
 };
 
 type Filters = { category: string; channel: string };
-const DEFAULT_FILTERS: Filters = { category: "potential", channel: "" };
+const DEFAULT_FILTERS: Filters = { category: "", channel: "" };
 
 function filterParams(filters: Filters) {
   const params = new URLSearchParams({ scope: "pipeline" });
@@ -80,15 +80,21 @@ function usePipelinePage(query: string, pageSize: number, enabled: boolean) {
   const [error, setError] = useState("");
   const [nextOffset, setNextOffset] = useState(0);
   const [hasMore, setHasMore] = useState(false);
+  const request = useRef(0);
+  const inFlight = useRef(false);
   const load = useCallback(async (offset: number) => {
     const firstPage = offset === 0;
-    if (firstPage) setLoading(true); else setLoadingMore(true);
+    if (!firstPage && inFlight.current) return;
+    const mine = ++request.current;
+    inFlight.current = true;
+    if (firstPage) { setLoading(true); setLoadingMore(false); } else setLoadingMore(true);
     setError("");
     try {
       const params = new URLSearchParams(query);
       params.set("limit", String(pageSize));
       params.set("offset", String(offset));
       const result = await crmFetch(`/actions?${params}`);
+      if (mine !== request.current) return;
       const page = asList<Action>(result, ["actions"]);
       const body = asObject(result);
       setActions((old) => {
@@ -100,10 +106,19 @@ function usePipelinePage(query: string, pageSize: number, enabled: boolean) {
       setNextOffset(Number(body.nextOffset ?? offset + page.length));
       setHasMore(Boolean(body.hasMore));
       setLoaded(true);
-    } catch (cause) { setError(errorMessage(cause)); } finally { setLoading(false); setLoadingMore(false); }
+    } catch (cause) {
+      if (mine === request.current) setError(errorMessage(cause));
+    } finally {
+      if (mine === request.current) { inFlight.current = false; setLoading(false); setLoadingMore(false); }
+    }
   }, [query, pageSize]);
-  useEffect(() => { if (enabled) void load(0); }, [load, enabled]);
-  const loadMore = useCallback(() => { void load(nextOffset); }, [load, nextOffset]);
+  useEffect(() => {
+    if (enabled) void load(0);
+    return () => { request.current += 1; inFlight.current = false; };
+  }, [load, enabled]);
+  const loadMore = useCallback(() => {
+    if (enabled && !loading && !loadingMore && hasMore) void load(nextOffset);
+  }, [enabled, loading, loadingMore, hasMore, load, nextOffset]);
   return { actions, setActions, stageCounts, loaded, loading, loadingMore, error, hasMore, load, loadMore };
 }
 
@@ -117,7 +132,7 @@ type View = "board" | "list";
  * the list is the same data as a table, with the inline draft editor.
  */
 export function CrmPipelineClient() {
-  const [view, setView] = useState<View>("board");
+  const [view, setView] = useState<View>("list");
   const [categories, setCategories] = useState<Data[]>([]);
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [listStage, setListStage] = useState<PipelineStage | "all">("all");
@@ -163,16 +178,21 @@ export function CrmPipelineClient() {
 
   return <>
     <PageHeader
-      title="Pipeline"
-      description="Every open lead, by where it stands: waiting on you, waiting on them, or out of follow-ups."
+      title="Leads & replies"
+      description="Every open conversation stays here, including the ones you or the assistant have already answered."
+      actions={<Button.Root variant="neutral" mode="stroke" size="small" onClick={() => {
+        setFreshCounts(null);
+        if (view === "list") void list.load(0);
+        else for (const page of Object.values(columns)) void page.load(0);
+      }}><Button.Icon as={RiRefreshLine} />Refresh</Button.Root>}
     />
-
-    <KpiStrip className="mt-6" columns={4}>
-      <KpiCell icon={RiTeamLine} label="Open leads" value={format(total)} context={filters.category === "potential" ? "Not counting “Not interested”" : "Under the current filters"} hint="Every CRM record that is not closed, under the category and channel filters below." />
-      <KpiCell icon={STAGE_META.needs_action.icon} label={STAGE_META.needs_action.label} value={format(countFor("needs_action"))} context={STAGE_META.needs_action.detail} hint="The same records as Action required." />
-      <KpiCell icon={STAGE_META.waiting.icon} label={STAGE_META.waiting.label} value={format(countFor("waiting"))} context={STAGE_META.waiting.detail} />
-      <KpiCell icon={STAGE_META.exhausted.icon} label={STAGE_META.exhausted.label} value={format(countFor("exhausted"))} context={STAGE_META.exhausted.detail} hint="The last sequence run finished its final step without an answer. Move their stage or close them." />
-    </KpiStrip>
+    <div className="mt-5"><WorkspaceNavigation area="leads" active="/crm/pipeline" /></div>
+    <WorkspaceStats items={[
+      { label: "Open leads", value: format(total), detail: "Under the current filters" },
+      { label: "Needs action", value: format(countFor("needs_action")), detail: "Waiting for you" },
+      { label: "Waiting on them", value: format(countFor("waiting")), detail: "Answered or scheduled" },
+      { label: "Follow-ups exhausted", value: format(countFor("exhausted")) },
+    ]} />
 
     <div className="mt-5 flex flex-wrap items-center justify-between gap-2">
       <SegmentedControl.Root value={view} onValueChange={(value) => setView(value as View)}>

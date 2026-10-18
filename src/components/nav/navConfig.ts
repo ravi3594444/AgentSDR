@@ -101,10 +101,9 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     entries: [
       link("/assistant", "Assistant", RiRobot2Line),
-      link("/assistant/results", "Results", RiBarChartBoxLine, { badge: "needsYou" }),
-      link("/analytics", "Analytics", RiBarChartBoxLine),
+      link("/assistant/results", "Overview", RiBarChartBoxLine, { badge: "needsYou", match: ["/analytics"] }),
       link("/crm/actions", "Action required", RiTodoLine, { badge: "actionRequired" }),
-      link("/leads", "Leads", RiUserSearchLine, { match: ["/crm/records"] }),
+      link("/crm/pipeline", "Leads & replies", RiUserSearchLine, { match: ["/crm/records", "/leads"] }),
     ],
   },
   {

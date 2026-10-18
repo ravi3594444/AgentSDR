@@ -30,6 +30,8 @@ export function PersonWhatsappPanel({
   onSent,
   heightClass = "h-72",
   className,
+  blockedReason,
+  composerLabel,
 }: {
   personId: string;
   campaignContactId?: string | null;
@@ -41,6 +43,8 @@ export function PersonWhatsappPanel({
   onSent?: () => void;
   heightClass?: string;
   className?: string;
+  blockedReason?: string;
+  composerLabel?: string;
 }) {
   const [data, setData] = useState<PersonWhatsappThreadResponse | null>(null);
   const [error, setError] = useState("");
@@ -97,7 +101,7 @@ export function PersonWhatsappPanel({
           <WhatsappMessageList messages={data.messages} threadKey={personId} emptyText="No WhatsApp messages yet." className="px-3 py-2" />
         </div>
       ) : null}
-      {data && !canSend && (
+      {data && !canSend && !blockedReason && (
         <p className="text-paragraph-xs text-text-sub-600">
           {fallbackSend ? "No WhatsApp number is linked, so this opens WhatsApp Web instead. " : "No WhatsApp number is linked, so messages cannot be sent from here. "}
           <Link href="/settings/whatsapp-accounts" className="text-primary-base hover:underline">Link a number</Link>
@@ -105,11 +109,13 @@ export function PersonWhatsappPanel({
           <DocsLink page="whatsapp/accounts#link-a-number" appearance="inline" className="font-normal" />
         </p>
       )}
+      {blockedReason && <p role="status" className="text-paragraph-xs text-text-sub-600">{blockedReason}</p>}
+      {composerLabel && !blockedReason && <p className="text-paragraph-xs text-text-soft-400">{composerLabel}</p>}
       <WhatsappComposer
         value={draft}
         onChange={setDraft}
         onSend={send}
-        disabled={!data || (!canSend && !fallbackSend)}
+        disabled={Boolean(blockedReason) || !data || (!canSend && !fallbackSend)}
         rows={3}
         placeholder={canSend || !fallbackSend ? "Write a WhatsApp message… (Enter to send, Shift+Enter for new line)" : "Write a message to open in WhatsApp Web…"}
       />

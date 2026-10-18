@@ -5,6 +5,7 @@ import { createElement, useCallback, useEffect, useRef, useState, useSyncExterna
 import * as Popover from "@/components/alignui/popover";
 import { ANALYTICS_CHANNELS, dayCount, MAX_ANALYTICS_RANGE_DAYS, type AnalyticsResponse, type AnalyticsView } from "@/lib/analytics/contract";
 import { cn } from "@/utils/cn";
+import { WorkspaceNavigation } from "@/components/page/WorkspaceNavigation";
 import { ErrorState } from "./kit/ErrorState";
 import { parseRange, RANGE_PRESETS, resolveRange, serializeRange, type RangeSelection } from "./range";
 import { CHANNEL_META, formatDay } from "./theme";
@@ -101,7 +102,7 @@ export default function AnalyticsClient({ initialView, initialRange }: { initial
   const View = views[view] as unknown as ComponentType<ViewProps<AnalyticsView>>;
 
   return (
-    <div>
+    <div className="space-y-5">
       <header className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <h1 className="text-title-h5 text-text-strong-950">Analytics</h1>
@@ -114,6 +115,7 @@ export default function AnalyticsClient({ initialView, initialRange }: { initial
           </button>
         </div>
       </header>
+      <WorkspaceNavigation area="reporting" active="/analytics" />
 
       <div className="mt-6 flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-stroke-soft-200">
         <div role="tablist" aria-label="Analytics views" className="-mb-px flex gap-5 overflow-x-auto">
