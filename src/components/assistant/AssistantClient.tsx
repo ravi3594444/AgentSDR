@@ -33,6 +33,7 @@ import * as Popover from "@/components/alignui/popover";
 import { displayThreadTitle } from "@/lib/assistant/agent";
 import { takesAnAnswer } from "@/lib/assistant/handoff";
 import type { OwnerDecisionKind } from "@/lib/assistant/schema";
+import type { RunAuthorization, SenderStatus } from "@/lib/assistant/runEvidence";
 import { AUTOPILOT_LIMITS } from "@/lib/crm/autopilot";
 import * as Button from "@/components/alignui/button";
 import NeedsYouList from "@/components/assistant/NeedsYouList";
@@ -74,7 +75,7 @@ type RunReply = { id: string; conversationId: string; who: string; channel: stri
 
 type RunLead = { personId: string; who: string; channel: string; progress: { tone: "waiting" | "sent" | "replied" | "good" | "stopped" | "failed"; text: string } };
 
-type Run = { id: string; status: string; autopilot: boolean; error: string | null; campaigns: Record<string, string>; replies?: RunReply[]; leads?: RunLead[]; /** Other plans of the same request, and its searches still running. */ requestPeers?: number };
+type Run = { id: string; status: string; autopilot: boolean; error: string | null; campaigns: Record<string, string>; replies?: RunReply[]; leads?: RunLead[]; /** Other plans of the same request, and its searches still running. */ requestPeers?: number; /** Who authorized it to send, and how (runEvidence.ts). */ authorization?: RunAuthorization };
 
 type DecisionState = { status: "open" | "answered" | "resolved"; answer: string | null };
 
@@ -467,6 +468,7 @@ function ProposalCard({ message, run, canManageAutopilot, lastReplyMode, onChang
         <p className="min-w-0 flex-1 text-label-md text-text-strong-950">Outreach plan: {data.name}</p>
         <Badge.Root variant="lighter" size="medium" color={badge.color}>{badge.label}</Badge.Root>
       </div>
+      {run?.authorization && <AuthorizationLine authorization={run.authorization} autopilot={run.autopilot} status={status} />}
       <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-paragraph-sm sm:grid-cols-4">
         <div><dt className="text-paragraph-xs text-text-soft-400">Leads</dt><dd className="text-label-sm text-text-strong-950">{data.plan.assignments.length}</dd></div>
         <div><dt className="text-paragraph-xs text-text-soft-400">Channels</dt><dd className="text-label-sm text-text-strong-950">{Object.entries(perChannel).map(([c, n]) => `${CHANNEL_LABEL[c] ?? c} ${n}`).join(", ")}</dd></div>
@@ -547,11 +549,77 @@ function ProposalCard({ message, run, canManageAutopilot, lastReplyMode, onChang
           <Button.Root variant="error" mode="stroke" size="xsmall" disabled={busy} onClick={() => void act("stop")}>Stop</Button.Root>
         </div>
       )}
+      {(status === "running" || status === "paused" || status === "starting") && <SendingStatus runId={data.runId} />}
       {run?.replies && run.replies.length > 0 && <RepliesList replies={run.replies} onChanged={onChanged} />}
       {run?.leads && run.leads.length > 0 && <LeadsList leads={run.leads} />}
       {run?.error && <p className="mt-2 text-paragraph-xs text-error-base">{run.error}</p>}
       {error && <p role="alert" className="mt-2 text-paragraph-xs text-error-base">{error}</p>}
     </div>
+  );
+}
+
+const dateTime = (iso: string) => new Date(iso).toLocaleString([], { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+
+/** Who let this plan send, and how; for a plan not started yet, that nothing is sent. */
+function AuthorizationLine({ authorization, autopilot, status }: { authorization: RunAuthorization; autopilot: boolean; status: string }) {
+  const started = authorization.kind !== "none";
+  return (
+    <p className="mt-2 text-paragraph-xs text-text-sub-600">
+      {authorization.text}
+      {started && authorization.at && <> {dateTime(authorization.at)}.</>}
+      {authorization.until && <> That approval covers this request&apos;s plans until {dateTime(authorization.until)}.</>}
+      {started && status !== "cancelled" && <> Replies: <span className="text-text-strong-950">{autopilot ? "Automatic" : "Review"}</span>.</>}
+    </p>
+  );
+}
+
+/**
+ * Each sending account of a running plan, loaded when opened: its configured
+ * time zone, what is holding it right now and the earliest time it may send.
+ * No recorded gate does not prove a worker is running.
+ */
+function SendingStatus({ runId }: { runId: string }) {
+  const [state, setState] = useState<{ at: string; senders: SenderStatus[]; notCovered: string[] } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const load = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      setState(await readJson(await fetch(`/api/assistant/runs/${runId}/delivery`, { cache: "no-store" })));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setLoading(false);
+    }
+  };
+  return (
+    <details className="mt-3 border-t border-stroke-soft-200 pt-3 text-paragraph-xs" onToggle={(event) => { if ((event.target as HTMLDetailsElement).open && !state && !loading) void load(); }}>
+      <summary className="cursor-pointer text-label-xs text-text-strong-950">Sending status</summary>
+      {loading && <p className="mt-1.5 text-text-soft-400">Checking the senders…</p>}
+      {error && <p role="alert" className="mt-1.5 text-error-base">{error}</p>}
+      {state && (
+        <div className="mt-1.5 space-y-2">
+          {state.senders.length === 0 && <p className="text-text-sub-600">No sending account is recorded for this plan yet.</p>}
+          <ul className="space-y-1.5">
+            {state.senders.map((sender) => (
+              <li key={`${sender.channel}-${sender.account}`} className="rounded-md bg-bg-weak-50 px-2.5 py-1.5">
+                <p className="text-text-strong-950">{CHANNEL_LABEL[sender.channel] ?? sender.channel} · {sender.account}{sender.queued !== null && <span className="text-text-soft-400"> · {sender.queued} waiting</span>}</p>
+                <p className="text-text-sub-600">
+                  {sender.gates.length ? sender.gates.join("; ") : "No recorded gate is holding it"}.
+                  {sender.nextAt && <> Next send allowed {dateTime(sender.nextAt)}.</>}
+                  {" "}{sender.timezone ? `Sending hours in ${sender.timezone}.` : "No sending hours set: any time."}
+                  {sender.note && <> {sender.note}</>}
+                </p>
+              </li>
+            ))}
+          </ul>
+          {state.notCovered.length > 0 && <p className="text-text-soft-400">Not covered here: {state.notCovered.map((channel) => CHANNEL_LABEL[channel] ?? channel).join(", ")}.</p>}
+          <p className="text-text-soft-400">Checked {timeOf(state.at)} from the recorded settings and queues. It does not prove the sender is running; a send is confirmed only when the provider accepts it.
+            {" "}<button type="button" className="underline underline-offset-2" onClick={() => void load()}>Check again</button></p>
+        </div>
+      )}
+    </details>
   );
 }
 

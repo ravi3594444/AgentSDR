@@ -90,3 +90,25 @@ export function mailboxHoursFromWeekly(hours: WeeklyHours): WorkingHours {
   ) as WorkingHours["days"];
   return { timezone: hours.timezone, days };
 }
+
+/**
+ * When the next sending window opens, in its own time zone: null when `now`
+ * is already inside one, or when no day is enabled. Looks a week ahead.
+ */
+export function nextWindowStart(workingHours: WorkingHours, now: Date = new Date()): Date | null {
+  if (isWithinWorkingHours(workingHours, now)) return null;
+  try {
+    const zonedNow = toZonedTime(now, workingHours.timezone);
+    for (let offset = 0; offset <= 7; offset++) {
+      const zonedDay = addDays(zonedNow, offset);
+      const day = workingHours.days[DAY_NAMES[zonedDay.getDay()]];
+      if (!day?.enabled) continue;
+      const { hours, minutes } = parseHHmm(day.from);
+      const start = fromZonedTime(setTime(zonedDay, { hours, minutes, seconds: 0, milliseconds: 0 }), workingHours.timezone);
+      if (start > now) return start;
+    }
+  } catch (err) {
+    console.error("[outreach/workingHours] nextWindowStart error:", err);
+  }
+  return null;
+}

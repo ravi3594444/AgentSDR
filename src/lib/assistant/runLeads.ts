@@ -11,6 +11,9 @@ export type LeadProgressInput = {
   whatsappStatus: string | null;
   whatsappSentAt: string | null;
   whatsappError: string | null;
+  /** The latest campaign message's provider-reported delivery and read receipt (Unipile's flags), when recorded. */
+  whatsappDeliveredAt?: string | null;
+  whatsappReadAt?: string | null;
   linkedinStatus: string | null;
   instagramStatus?: string | null;
   instagramError?: string | null;
@@ -28,6 +31,19 @@ function replied(input: LeadProgressInput): LeadProgress {
   return { tone: input.category === "interested" || input.category === "customer" ? "good" : "replied", text: `Replied · ${label}` };
 }
 
+/**
+ * How far the latest WhatsApp message got, strongest evidence first: a read
+ * receipt, then delivery as WhatsApp reported it through Unipile, then only
+ * accepted for sending. None of them proves the person saw it.
+ */
+function whatsappEvidence(input: LeadProgressInput): string {
+  if (input.whatsappReadAt) return "read receipt received";
+  if (input.whatsappDeliveredAt) return "delivered (WhatsApp reported)";
+  return "accepted for sending";
+}
+
+const capitalized = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+
 export function leadProgress(input: LeadProgressInput): LeadProgress {
   if (input.runStatus === "opted_out") return { tone: "stopped", text: "Asked not to be contacted" };
   if (input.category) return replied(input);
@@ -35,7 +51,7 @@ export function leadProgress(input: LeadProgressInput): LeadProgress {
     switch (input.instagramStatus) {
       case "queued": case "resolving": return { tone: "waiting", text: "Waiting to send the Instagram DM" };
       case "sending": return { tone: "waiting", text: "Submitting the Instagram DM" };
-      case "sent": return { tone: "sent", text: "Instagram DM sent, waiting for a reply" };
+      case "sent": return { tone: "sent", text: "Instagram DM accepted for sending, waiting for a reply" };
       case "replied": return replied(input);
       case "failed": return { tone: "failed", text: `Could not send${input.instagramError ? `: ${input.instagramError}` : ""}` };
       case "uncertain": return { tone: "failed", text: "Delivery uncertain; no automatic resend" };
@@ -57,11 +73,14 @@ export function leadProgress(input: LeadProgressInput): LeadProgress {
   if (input.channel === "whatsapp") {
     switch (input.whatsappStatus) {
       case "queued": return { tone: "waiting", text: "Waiting to send" };
-      case "in_sequence": return input.whatsappSentAt ? { tone: "sent", text: "Message sent, waiting for a reply" } : { tone: "waiting", text: "Waiting to send" };
+      case "in_sequence": return input.whatsappSentAt ? { tone: "sent", text: `${capitalized(whatsappEvidence(input))}, waiting for a reply` } : { tone: "waiting", text: "Waiting to send" };
       case "replied": return replied(input);
-      case "completed": return { tone: "sent", text: "All messages sent, no reply" };
+      case "completed": return { tone: "sent", text: `All messages sent, no reply · last one ${whatsappEvidence(input)}` };
       case "stopped": return { tone: "stopped", text: "Stopped" };
-      case "failed": return { tone: "failed", text: `Could not send${input.whatsappError ? `: ${input.whatsappError}` : ""}` };
+      case "failed":
+        // A send whose answer was lost: the engine never resends it on its own.
+        if (input.whatsappError && /uncertain/i.test(input.whatsappError)) return { tone: "failed", text: "Delivery uncertain; no automatic resend. Check the chat in WhatsApp Messages" };
+        return { tone: "failed", text: `Could not send${input.whatsappError ? `: ${input.whatsappError}` : ""}` };
     }
   }
   if (input.channel === "linkedin") {

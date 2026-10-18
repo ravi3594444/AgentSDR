@@ -29,4 +29,19 @@ describe("leadProgress", () => {
     expect(leadProgress({ ...base, whatsappStatus: "replied" }).text).toBe("Replied");
     expect(leadProgress({ ...base, runStatus: "opted_out", category: "interested" }).text).toBe("Asked not to be contacted");
   });
+
+  test("WhatsApp says how far the message got, never that the person saw it", () => {
+    const sent = { ...base, whatsappStatus: "in_sequence", whatsappSentAt: "2026-10-15T10:00:00Z" };
+    expect(leadProgress(sent).text).toBe("Accepted for sending, waiting for a reply");
+    expect(leadProgress({ ...sent, whatsappDeliveredAt: "2026-10-15T10:00:05Z" }).text).toBe("Delivered (WhatsApp reported), waiting for a reply");
+    expect(leadProgress({ ...sent, whatsappDeliveredAt: "2026-10-15T10:00:05Z", whatsappReadAt: "2026-10-15T11:00:00Z" }).text).toBe("Read receipt received, waiting for a reply");
+    expect(leadProgress({ ...base, whatsappStatus: "completed", whatsappDeliveredAt: "2026-10-15T10:00:05Z" }).text).toBe("All messages sent, no reply · last one delivered (WhatsApp reported)");
+    for (const lead of [sent, { ...sent, whatsappReadAt: "x" }, { ...base, whatsappStatus: "completed" }]) expect(leadProgress(lead).text).not.toMatch(/\bseen\b/i);
+  });
+
+  test("an uncertain send is shown as uncertain and never resent", () => {
+    const progress = leadProgress({ ...base, whatsappStatus: "failed", whatsappError: "Delivery of message 2 is uncertain — check Messages before resuming" });
+    expect(progress.tone).toBe("failed");
+    expect(progress.text).toContain("no automatic resend");
+  });
 });

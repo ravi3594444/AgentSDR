@@ -5,7 +5,10 @@ import { db } from "@/lib/db";
 import { authContextErrorResponse, can, requireOrgContext, type OrgContext } from "@/lib/auth/context";
 import { crmRequestErrorResponse, requireCrmMutationContext } from "@/lib/crm/http";
 import { inOrg, runInOrganization } from "@/lib/tenancy/scope";
+import { users } from "@/lib/auth/schema";
 import { assistantJobs, outreachRuns, ownerDecisions } from "./schema";
+import type { RequestApproval } from "./requestApproval";
+import { coveringApproval, runAuthorization, type RunAuthorization } from "./runEvidence";
 import { runLeads } from "./runLeads.server";
 import { runReplies } from "./runReplies.server";
 import { listMessages, listThreads, resolveThread, threadBusy } from "./threads.server";
@@ -71,10 +74,19 @@ export async function assistantState(threadId: string | null, ctx: OrgContext, w
     ? await db.select({ id: ownerDecisions.id, status: ownerDecisions.status, answer: ownerDecisions.answer })
       .from(ownerDecisions).where(and(inOrg(ownerDecisions), inArray(ownerDecisions.id, [...new Set(decisionIds)])))
     : [];
-  const runs = runIds.length
-    ? await db.select({ id: outreachRuns.id, status: outreachRuns.status, autopilot: outreachRuns.autopilot, error: outreachRuns.error, campaigns: outreachRuns.campaigns })
+  const runRows = runIds.length
+    ? await db.select({
+      id: outreachRuns.id, status: outreachRuns.status, autopilot: outreachRuns.autopilot, error: outreachRuns.error, campaigns: outreachRuns.campaigns,
+      approvedAt: outreachRuns.approvedAt, approvedBy: outreachRuns.approvedBy,
+      requestId: sql<string | null>`${outreachRuns.plan} ->> 'requestId'`,
+      autonomous: sql<boolean>`coalesce((${outreachRuns.plan} ->> 'autonomous') = 'true', false)`,
+      requestApproval: sql<RequestApproval | null>`${outreachRuns.plan} -> 'requestApproval'`,
+      startedUnder: sql<string | null>`${outreachRuns.plan} ->> 'startedUnder'`,
+    })
       .from(outreachRuns).where(and(inOrg(outreachRuns), inArray(outreachRuns.id, [...new Set(runIds)])))
     : [];
+  const authorizationOf = await runAuthorizations(thread.id, thread.autonomous, runRows);
+  const runs = runRows.map((run) => ({ id: run.id, status: run.status, autopilot: run.autopilot, error: run.error, campaigns: run.campaigns, authorization: authorizationOf(run.id) }));
   // The mode chosen on the latest started run: the next plan card starts with it selected.
   // This person's own choice on an outreach plan (not another member's, nor an inquiry run's).
   const [lastStarted] = ctx.userId ? await db.select({ autopilot: outreachRuns.autopilot }).from(outreachRuns)
@@ -110,6 +122,39 @@ export async function assistantState(threadId: string | null, ctx: OrgContext, w
     decisions: Object.fromEntries(decisions.map((decision) => [decision.id, { status: decision.status, answer: decision.answer }])),
     setup: withSetup ? { ...(await setupSnapshot()), canManageAutopilot: canManageAutopilot(ctx) } : null,
     lastReplyMode: lastStarted ? (lastStarted.autopilot ? "automatic" : "review") as "automatic" | "review" : null,
+  };
+}
+
+/**
+ * How each plan of this thread was authorized to send (runEvidence.ts): its
+ * own Start, a request approval recorded on another plan of the same
+ * request, or the chat's Autonomous mode, with the approver's name.
+ */
+async function runAuthorizations(threadId: string, threadAutonomous: boolean, runs: readonly {
+  id: string; status: string; approvedAt: Date | null; approvedBy: string | null; requestId: string | null; autonomous: boolean; requestApproval: RequestApproval | null; startedUnder: string | null;
+}[]): Promise<(runId: string) => RunAuthorization> {
+  const approvals = await db.select({ id: outreachRuns.id, requestId: sql<string | null>`${outreachRuns.plan} ->> 'requestId'`, approval: sql<RequestApproval>`${outreachRuns.plan} -> 'requestApproval'` })
+    .from(outreachRuns).where(and(inOrg(outreachRuns), eq(outreachRuns.threadId, threadId), sql`${outreachRuns.plan} ? 'requestApproval'`));
+  const userIds = [...new Set([...runs.map((run) => run.approvedBy), ...approvals.map((row) => row.approval.approvedBy)].filter((id): id is string => Boolean(id)))];
+  const names = new Map((userIds.length ? await db.select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, userIds)) : []).map((user) => [user.id, user.name]));
+  const byId = new Map(runs.map((run) => [run.id, run]));
+  return (runId) => {
+    const run = byId.get(runId)!;
+    const marked = run.startedUnder ? approvals.find((row) => row.id === run.startedUnder)?.approval ?? null : null;
+    const covering = marked ?? null;
+    const open = !marked && !run.autonomous && !run.requestApproval && run.requestId
+      ? coveringApproval(run.approvedAt, approvals.filter((row) => row.id !== run.id && row.requestId === run.requestId).map((row) => row.approval))
+      : null;
+    return runAuthorization({
+      status: run.status,
+      approvedAt: run.approvedAt,
+      approverName: run.approvedBy ? names.get(run.approvedBy) ?? null : null,
+      autonomous: run.autonomous,
+      ownApproval: run.requestApproval,
+      coveringApproval: covering ? { approverName: covering.approvedBy ? names.get(covering.approvedBy) ?? null : null, approvedAt: covering.approvedAt, expiresAt: covering.expiresAt } : null,
+      mayBeUnderApproval: Boolean(open),
+      threadAutonomous,
+    });
   };
 }
 

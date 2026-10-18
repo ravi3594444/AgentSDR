@@ -18,6 +18,7 @@ export async function runLeads(runIds: readonly string[], perRun = 200): Promise
       coalesce(p.full_name, p.phone, p.email, p.raw->'instagram'->>'username') as "who",
       e.sequence_status as "emailStatus",
       w.status as "whatsappStatus", w.last_sent_at::text as "whatsappSentAt", left(w.last_error, 120) as "whatsappError",
+      wm.delivered_at::text as "whatsappDeliveredAt", wm.read_at::text as "whatsappReadAt",
       li.status::text as "linkedinStatus",
       case when ig.status='sent' and exists (
         select 1 from instagram_messages im join instagram_chats ic on ic.id=im.chat_id
@@ -31,6 +32,10 @@ export async function runLeads(runIds: readonly string[], perRun = 200): Promise
     join people p on p.id = l.person_id and p.organization_id = l.organization_id
     left join outreach_leads e on l.channel = 'email' and e.person_id = l.person_id and e.campaign_id::text = r.campaigns ->> 'email'
     left join whatsapp_campaign_leads w on l.channel = 'whatsapp' and w.person_id = l.person_id and w.campaign_id::text = r.campaigns ->> 'whatsapp'
+    left join lateral (
+      select m.delivered_at, m.read_at from whatsapp_campaign_sends s join whatsapp_messages m on m.id = s.whatsapp_message_id
+      where s.lead_id = w.id and s.status = 'sent' order by s.step desc limit 1
+    ) wm on w.id is not null
     left join "Lead" li on l.channel = 'linkedin' and li."personId" = l.person_id and li."campaignId" = r.campaigns ->> 'linkedin'
     left join instagram_outreach_queue ig on l.channel = 'instagram' and ig.person_id=l.person_id and ig.run_id=r.id and ig.organization_id=l.organization_id
     left join lateral (

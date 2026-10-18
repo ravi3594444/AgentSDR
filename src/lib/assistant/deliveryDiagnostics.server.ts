@@ -11,8 +11,12 @@ import { mailboxes } from "@/lib/outreach/schema";
 import {
   isWithinWorkingHours,
   mailboxHoursFromWeekly,
+  nextWindowStart,
 } from "@/lib/outreach/workingHours";
+import { isPlatformConnected } from "@/lib/platform/credentials";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
+import { NEW_CHAT_WINDOW_MS, whatsappGuardrails } from "@/lib/whatsapp/guardrails";
+import { emailSenderStatus, whatsappSenderStatus, type SenderStatus } from "./runEvidence";
 import { outreachRuns } from "./schema";
 
 /** Read-only snapshot. It reports stored gates, not a claim that a worker or provider is healthy. */
@@ -135,6 +139,21 @@ export async function diagnoseDelivery(runId?: string) {
       and (${runId ?? null}::uuid is null or run_id=${runId ?? null}::uuid) and updated_at>now()-interval '7 days' group by status,error order by n desc limit 5`),
     );
   }
+  const whatsapp = await whatsappSenders(run?.campaigns.whatsapp ?? null, Boolean(run), now);
+  const instagramRules = instagram.length ? await channelRules("instagram") : null;
+  const senders: SenderStatus[] = [
+    ...email.map((m) => emailSenderStatus({ mailbox: m.mailbox, workingHours: m.workingHours, nextEmailTime: m.nextSendAt ? new Date(m.nextSendAt) : null, gates: m.gates, queued: m.activeQueue, now })),
+    ...whatsapp,
+    ...instagram.map((a): SenderStatus => {
+      const hours = instagramRules?.sendingHours ? mailboxHoursFromWeekly(instagramRules.sendingHours) : null;
+      const nextSend = a.gates.find((gate) => gate.startsWith("Next send allowed at "))?.slice("Next send allowed at ".length) ?? null;
+      // Only the hours and the per-account gap have a known end here.
+      const timed = a.gates.every((gate) => gate.startsWith("Outside sending hours") || gate.startsWith("Next send allowed at "));
+      const opens = hours && a.gates.some((gate) => gate.startsWith("Outside sending hours")) ? nextWindowStart(hours, now) : null;
+      const next = [opens, nextSend ? new Date(nextSend) : null].filter((date): date is Date => Boolean(date)).sort((x, y) => y.getTime() - x.getTime())[0] ?? null;
+      return { channel: "instagram", account: a.account, timezone: hours?.timezone ?? null, gates: a.gates, nextAt: a.gates.length && timed ? next?.toISOString() ?? null : null, queued: a.queued, note: null };
+    }),
+  ];
   const lines = [
     run
       ? `“${run.name}” is ${run.status}${run.error ? `: ${run.error}` : ""}.`
@@ -153,6 +172,10 @@ export async function diagnoseDelivery(runId?: string) {
         `Instagram ${a.account}: ${a.queued} awaiting delivery, ${a.attempted24h}/${a.limit} initial DM attempts in 24 hours. ${a.gates.join("; ") || "No recorded account gate is blocking sends"}.`,
     ),
     ...instagramErrors.map((e) => `${e.n} Instagram ${e.status}: ${e.reason}`),
+    ...whatsapp.map(
+      (w) =>
+        `WhatsApp ${w.account}: ${w.queued} awaiting their next message. ${w.gates.join("; ") || "No recorded number gate is blocking sends"}${w.nextAt ? `; next send allowed at ${w.nextAt}` : ""}.${w.timezone ? ` Sending hours are in ${w.timezone}.` : " No campaign sending hours are set (any time)."}`,
+    ),
     "This snapshot does not measure worker liveness or confirm future delivery. Lead cities do not determine a sender's sending timezone.",
   ];
   if (!email.length) lines.splice(1, 0, "No email mailbox is configured.");
@@ -164,6 +187,52 @@ export async function diagnoseDelivery(runId?: string) {
     errors: Array.from(errors),
     instagram,
     instagramErrors,
+    whatsapp,
+    senders,
+    /** Channels this snapshot does not cover, so a card can say so instead of implying all is well. */
+    notCovered: run?.campaigns.linkedin ? ["linkedin"] : [],
     summary: lines.join("\n"),
   };
+}
+
+/**
+ * The WhatsApp numbers a run's campaign sends from (or every number of the
+ * organization), with the gates send.ts applies under its lock, read the same way.
+ */
+async function whatsappSenders(campaignId: string | null, forRun: boolean, now: Date): Promise<SenderStatus[]> {
+  if (forRun && !campaignId) return [];
+  const org = currentOrganizationId();
+  const accounts = await db.execute<{
+    id: string; name: string | null; phone: string | null; status: string; connected_at: string | null; new_chats_per_day: number | null;
+    last_sent: string | null; new_chats: number; oldest_new_chat: string | null; queued: number;
+  }>(sql`select a.id, a.name, a.phone, a.status, a.connected_at::text, a.new_chats_per_day,
+      (select max(m.sent_at)::text from whatsapp_messages m join whatsapp_chats c on c.id = m.chat_id where c.account_id = a.id and m.origin = 'agentsdr') as last_sent,
+      (select count(*)::int from whatsapp_chats c where c.account_id = a.id and c.created_at >= ${new Date(now.getTime() - NEW_CHAT_WINDOW_MS).toISOString()}::timestamptz
+        and (select m.origin from whatsapp_messages m where m.chat_id = c.id order by m.sent_at asc limit 1) = 'agentsdr') as new_chats,
+      (select min(c.created_at)::text from whatsapp_chats c where c.account_id = a.id and c.created_at >= ${new Date(now.getTime() - NEW_CHAT_WINDOW_MS).toISOString()}::timestamptz
+        and (select m.origin from whatsapp_messages m where m.chat_id = c.id order by m.sent_at asc limit 1) = 'agentsdr') as oldest_new_chat,
+      (select count(*)::int from whatsapp_campaign_leads l join whatsapp_campaigns wc on wc.id = l.campaign_id
+        where wc.organization_id = ${org} and l.status in ('queued', 'in_sequence') and (l.account_id = a.id or l.account_id is null)
+          and (${campaignId}::uuid is null or l.campaign_id = ${campaignId}::uuid)) as queued
+    from whatsapp_accounts a
+    where a.organization_id = ${org}
+      and (${campaignId}::uuid is null or a.id in (select ca.account_id from whatsapp_campaign_accounts ca where ca.campaign_id = ${campaignId}::uuid))
+    order by a.created_at`);
+  if (!accounts.length) return [];
+  const [rules, unipile] = await Promise.all([channelRules("whatsapp"), isPlatformConnected("unipile")]);
+  const hours = rules.sendingHours ? mailboxHoursFromWeekly(rules.sendingHours) : null;
+  return accounts.map((a) => whatsappSenderStatus({
+    account: a.phone || a.name || a.id,
+    status: a.status,
+    unipileConnected: unipile,
+    paused: isMigrationControlPaused("whatsappOutbound"),
+    sendingHours: hours,
+    guardrails: whatsappGuardrails(rules, { newChatsPerDay: a.new_chats_per_day }),
+    connectedAt: a.connected_at ? new Date(a.connected_at) : null,
+    lastSentAt: a.last_sent ? new Date(a.last_sent) : null,
+    newChatsInWindow: Number(a.new_chats),
+    oldestNewChatAt: a.oldest_new_chat ? new Date(a.oldest_new_chat) : null,
+    queued: Number(a.queued),
+    now,
+  }));
 }
