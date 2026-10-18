@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, eq, gte, inArray, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, lt, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { featureEnabled, isMissingTable } from "@/lib/features/flags.server";
 import { decryptIntegrationCredential, encryptIntegrationCredential } from "@/lib/integrations/credentials";
@@ -113,12 +113,13 @@ type AccountLimits = { maxMonthlyUsageUsd: number | null; monthlyUsageUsd: numbe
 
 export type ApifyReadiness =
   | { usable: true; token: string; maxChargeUsd: number; maxItems: number; settings: SettingsRow; account: AccountLimits }
-  | { usable: false; exhausted: boolean; reason: string };
+  | { usable: false; exhausted: boolean; slotsFull?: boolean; reason: string };
 
 /**
  * Whether `actor` may run now, and within what: the feature on, a token,
  * the Actor approved, and allowance left (the owner's monthly budget here
- * and the Apify account's own limit, read live). Read-only.
+ * and the Apify account's own limit, read live). Writes nothing but the
+ * closing of stale runs (sweepStaleRuns), which would otherwise hold a slot.
  */
 export async function apifyReadiness(actor: ApifyActorKey, wantedItems: number): Promise<ApifyReadiness> {
   if (!(await featureEnabled("apify_discovery"))) return { usable: false, exhausted: false, reason: "Apify discovery is off for this organization" };
@@ -126,6 +127,7 @@ export async function apifyReadiness(actor: ApifyActorKey, wantedItems: number):
   if (!row?.encryptedToken) return { usable: false, exhausted: false, reason: "no Apify token is saved" };
   if (!row.approvedActors.includes(actor)) return { usable: false, exhausted: false, reason: `the ${APIFY_ACTORS[actor].label} is not approved in Settings → Organization → Apify` };
   const token = decryptIntegrationCredential(row.encryptedToken);
+  await sweepStaleRuns();
   const usage = await monthUsage();
   let account: AccountLimits | null = null;
   try {
@@ -144,7 +146,7 @@ export async function apifyReadiness(actor: ApifyActorKey, wantedItems: number):
     openRuns: usage.openRuns,
     account,
   });
-  if (!allowance.ok) return { usable: false, exhausted: allowance.exhausted, reason: allowance.reason };
+  if (!allowance.ok) return { usable: false, exhausted: allowance.exhausted, slotsFull: allowance.slotsFull, reason: allowance.reason };
   return { usable: true, token, maxChargeUsd: allowance.maxChargeUsd, maxItems: Math.max(1, Math.min(wantedItems, row.maxResultsPerRun)), settings: row, account: account! };
 }
 
@@ -154,7 +156,35 @@ async function savedToken(): Promise<string | null> {
   return row?.encryptedToken ? decryptIntegrationCredential(row.encryptedToken) : null;
 }
 
-export type StartedRun = { started: true; row: ApifyRunRow } | { started: false; exhausted: boolean; reason: string };
+export type StartedRun = { started: true; row: ApifyRunRow } | { started: false; exhausted: boolean; slotsFull?: boolean; reason: string };
+
+/**
+ * Runs nothing polls any more hold a run slot and their reserved cap until
+ * the month ends. A run still "starting" ten minutes on (the process died
+ * between reserving and calling Apify) or "running" well past Apify's own
+ * timeout is closed as failed, its reserved cap kept as spent: it may have
+ * run and been charged, so it is never refunded to the budget.
+ */
+export async function sweepStaleRuns(): Promise<number> {
+  const runningCutoff = new Date(Date.now() - (APIFY_LIMITS.runTimeoutSeconds + 15 * 60) * 1_000);
+  const startingCutoff = new Date(Date.now() - 10 * 60_000);
+  const swept = await db.update(apifyRuns)
+    .set({ status: "failed", error: "No longer tracked: the job that started it stopped polling; its reserved cap stays counted.", finishedAt: new Date(), usageUsd: sql`coalesce(${apifyRuns.usageUsd}, ${apifyRuns.maxChargeUsd})` })
+    .where(and(inOrg(apifyRuns), or(
+      and(eq(apifyRuns.status, "starting"), lt(apifyRuns.createdAt, startingCutoff)),
+      and(eq(apifyRuns.status, "running"), lt(apifyRuns.createdAt, runningCutoff)),
+    )))
+    .returning({ id: apifyRuns.id });
+  return swept.length;
+}
+
+/** The run a job already started for `actor` and is still open, so a retried step polls it instead of paying for another. */
+export async function openRunForJob(jobId: string, actor: ApifyActorKey): Promise<ApifyRunRow | null> {
+  const [row] = await db.select().from(apifyRuns)
+    .where(and(inOrg(apifyRuns), eq(apifyRuns.jobId, jobId), eq(apifyRuns.actorKey, actor), inArray(apifyRuns.status, ["starting", "running"])))
+    .limit(1);
+  return row ?? null;
+}
 
 /**
  * Starts one run under the organization's lock: readiness checked again, the
@@ -170,9 +200,14 @@ export async function startTrackedRun(input: {
   /** The owner's request the job serves (kept on the run). */
   requestId: string | null;
 }): Promise<StartedRun> {
+  // A retried step finds the run its first attempt started rather than paying for a second.
+  if (input.jobId) {
+    const open = await openRunForJob(input.jobId, input.actor);
+    if (open?.status === "running") return { started: true, row: open };
+  }
   // The account's allowance is read first (a network call, outside any transaction)…
   const readiness = await apifyReadiness(input.actor, input.wantedItems);
-  if (!readiness.usable) return { started: false, exhausted: readiness.exhausted, reason: readiness.reason };
+  if (!readiness.usable) return { started: false, exhausted: readiness.exhausted, slotsFull: readiness.slotsFull, reason: readiness.reason };
   const reserved = await db.transaction(async (tx) => {
     // …then the owner's budget is checked again and the run reserved under the organization's lock.
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`apify-start:${currentOrganizationId()}`}, 0))`);
@@ -185,7 +220,7 @@ export async function startTrackedRun(input: {
       openRuns: usage.openRuns,
       account: readiness.account,
     });
-    if (!allowance.ok) return { usable: false as const, exhausted: allowance.exhausted, reason: allowance.reason };
+    if (!allowance.ok) return { usable: false as const, exhausted: allowance.exhausted, slotsFull: allowance.slotsFull, reason: allowance.reason };
     const [row] = await tx.insert(apifyRuns).values({
       organizationId: currentOrganizationId(),
       jobId: input.jobId,
@@ -198,7 +233,7 @@ export async function startTrackedRun(input: {
     }).returning();
     return { usable: true as const, row: row!, token: readiness.token };
   });
-  if (!reserved.usable) return { started: false, exhausted: reserved.exhausted, reason: reserved.reason };
+  if (!reserved.usable) return { started: false, exhausted: reserved.exhausted, slotsFull: reserved.slotsFull, reason: reserved.reason };
   const { row, token } = reserved;
   try {
     const run = await startApifyRun(token, row.actorId, input.input(row.maxItems), {

@@ -25,7 +25,8 @@ export type ApifyAllowanceInput = {
   account: { maxMonthlyUsageUsd: number | null; monthlyUsageUsd: number | null } | null;
 };
 
-export type ApifyAllowance = { ok: true; maxChargeUsd: number } | { ok: false; exhausted: boolean; reason: string };
+/** `slotsFull`: every run slot is taken, so the work waits for one rather than giving up. */
+export type ApifyAllowance = { ok: true; maxChargeUsd: number } | { ok: false; exhausted: boolean; slotsFull?: boolean; reason: string };
 
 /**
  * Whether one more run may start, and the most it may spend: the owner's
@@ -35,7 +36,7 @@ export type ApifyAllowance = { ok: true; maxChargeUsd: number } | { ok: false; e
  */
 export function apifyAllowance(input: ApifyAllowanceInput): ApifyAllowance {
   if (input.openRuns >= APIFY_LIMITS.openRuns) {
-    return { ok: false, exhausted: false, reason: `${input.openRuns} Apify runs are still open for this organization` };
+    return { ok: false, exhausted: false, slotsFull: true, reason: `${input.openRuns} Apify runs are still open for this organization` };
   }
   const budgetLeft = input.monthlyBudgetUsd - input.spentThisMonthUsd - input.reservedUsd;
   if (budgetLeft < 0.05) {

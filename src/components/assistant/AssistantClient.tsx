@@ -319,9 +319,12 @@ function DiscoveryCard({ message, job }: { message: Message; job: Job | undefine
   const viaApify = (job?.progress as Record<string, unknown> | undefined)?.provider === "Apify" || (job?.result as Record<string, unknown> | null | undefined)?.provider === "apify";
   if (message.status !== "ok" || !job) return <Card title={TOOL_TITLE[message.tool ?? "find_leads"] ?? "Lead search"} status={message.status}><p>{message.toolResult?.display ?? message.content}</p></Card>;
   const progress = job.progress as Record<string, number | string>;
+  // The source and provider the server recorded, e.g. "Google Maps through the built-in scraper".
+  const source = typeof progress.source === "string" ? progress.source : null;
+  const waiting = (job.progress as { waiting?: { reason?: string | null; until?: string } } | null)?.waiting;
   const stageText: Record<string, string> = {
-    queued: progress.note ? `${String(progress.note)}…` : "Starting the search…",
-    searching: social ? `Searching through Apify (${String(progress.actor ?? "social media")})…` : linkedin ? `Searching LinkedIn (${progress.found ?? 0} profiles so far)…` : web ? "Searching the web for matching businesses and directories…" : instagram ? `Searching Instagram through Apify (${String(progress.actor ?? "")})…` : `Searching Google Maps${viaApify ? " through Apify" : ""}${progress.searches ? ` in ${progress.searches} area${Number(progress.searches) === 1 ? "" : "s"}` : ""} (usually 1–10 minutes)…`,
+    queued: waiting ? `Waiting to start${source ? ` ${source}` : ""}: ${waiting.reason ?? "a provider asked to wait"}.` : progress.note ? `${String(progress.note)}…` : "Starting the search…",
+    searching: waiting ? `Waiting: ${waiting.reason ?? "a provider asked to wait"}${waiting.until ? ` (until ${new Date(waiting.until).toLocaleTimeString()})` : ""}.` : social ? `Searching through Apify (${String(progress.actor ?? "social media")})…` : linkedin ? `Searching LinkedIn (${progress.found ?? 0} profiles so far)…` : web ? "Searching the web for matching businesses and directories…" : instagram ? `Searching Instagram through Apify (${String(progress.actor ?? "")})…` : `Searching ${source ?? `Google Maps${viaApify ? " through Apify" : ""}`}${progress.searches ? ` in ${progress.searches} area${Number(progress.searches) === 1 ? "" : "s"}` : ""} (usually 1–10 minutes)…`,
     reading: `Reading the pages the search found for published contact details (${progress.read ?? progress.pagesRead ?? 0} of ${progress.toRead ?? progress.candidates ?? "?"})…`,
     enriching: `Reading business websites for contact details (${progress.websitesChecked ?? 0} of ${progress.websitesToCheck ?? "?"})…`,
     saving: `Checking and saving contacts (${progress.saved ?? 0} of ${progress.found ?? "?"})…`,
@@ -331,9 +334,11 @@ function DiscoveryCard({ message, job }: { message: Message; job: Job | undefine
     <Card title={`${linkedin ? "LinkedIn search" : web ? "Web search" : instagram ? "Instagram prospects" : viaApify ? "Lead search (Apify)" : "Lead search"}: ${data?.phrase ?? data?.keywords ?? (data as { customers?: string } | undefined)?.customers ?? ""}`} status={job.status}>
       {job.status === "queued" || job.status === "running" ? (
         <p role="status">{stageText[job.stage] ?? "Working…"}{typeof progress.found === "number" && job.stage !== "searching" ? ` ${progress.found} businesses found.` : ""}</p>
+      ) : job.status === "succeeded" && result?.notSearched ? (
+        <p>{instagram ? "Instagram was not searched." : `${source ?? "This source"} was not searched.`}{result.note ? <span className="mt-1 block">{String(result.note)}</span> : null}</p>
       ) : job.status === "succeeded" && result ? (
         <p>
-          {result.found ?? 0} {linkedin ? "profiles" : instagram ? "Instagram accounts" : "businesses"} found{instagram ? " (potential matches, not interest)" : ""} · <span className="text-label-sm text-text-strong-950">{result.eligible ?? 0} contactable</span>{linkedin ? " on LinkedIn" : ` (${result.withEmail ?? 0} by email, ${result.withPhoneOnly ?? 0} by phone only, ${result.withInstagram ?? 0} with Instagram profiles)`}
+          {result.found ?? 0} {linkedin ? "profiles" : instagram ? "Instagram accounts" : "businesses"} found{source && !instagram && !linkedin ? ` on ${source}` : ""}{instagram ? " (potential matches, not interest)" : ""} · <span className="text-label-sm text-text-strong-950">{result.eligible ?? 0} contactable</span>{linkedin ? " on LinkedIn" : ` (${result.withEmail ?? 0} by email, ${result.withPhoneOnly ?? 0} by phone only, ${result.withInstagram ?? 0} with Instagram profiles)`}
           {instagram && Number(result.instagramOnly ?? 0) > 0 && ` · ${result.instagramOnly} found on Instagram only — approved DM plan and connected sender required`}
           {Number(result.excluded ?? 0) > 0 && ` · ${result.excluded} left out with reasons`}
           {Number(result.duplicates ?? 0) > 0 && ` · ${result.duplicates} duplicates skipped`}

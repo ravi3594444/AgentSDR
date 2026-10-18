@@ -62,3 +62,14 @@ describe("which web search a website search uses", () => {
     expect(webSearchProviderName(null)).toBe("web search");
   });
 });
+
+describe("a search's source and provider, as the owner reads them", () => {
+  test("names both, and never calls a website fallback a Maps or Instagram search", async () => {
+    const { sourceLabel } = await import("./discovery.server");
+    expect(sourceLabel("maps", "scraper")).toBe("Google Maps through the built-in scraper");
+    expect(sourceLabel("maps", "apify")).toBe("Google Maps through Apify");
+    expect(sourceLabel("instagram", "apify")).toBe("Instagram through Apify");
+    expect(sourceLabel("linkedin", "apify")).toBe("LinkedIn through Apify");
+    expect(sourceLabel("instagram", "website")).toBe("Instagram (not searched; website search instead)");
+  });
+});

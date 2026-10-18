@@ -138,6 +138,14 @@ type DiscoveryPayload = {
   providerNotes?: string[];
   /** search: Instagram's own account search instead of hashtags (instagram_search). */
   instagram?: { hashtags: string[]; posts?: InstagramPost[]; search?: boolean };
+  /** Why this provider searches: the built-in scraper normally; Apify when asked for, or as the fallback the owner approved. */
+  providerReason?: string | null;
+  /** The owner's message this search serves: a request's coverage is told per platform from it. */
+  requestMessageId?: string | null;
+  /** When it began waiting for a free Apify run slot (it gives up after MAX_SLOT_WAIT_MS). */
+  waitingSince?: string | null;
+  /** Apify already took over from a missing or failed scraper once for this search. */
+  apifyFallbackTried?: boolean;
 };
 
 type ContactAfter = { channels: AudienceChannel[] | null; ownerRequest?: string; requestId?: string } | null;
@@ -175,28 +183,62 @@ export type StartedDiscovery = {
   provider: "apify" | "scraper" | "website";
   /** Why not Apify, or what the fallback covers less well; null when nothing to say. */
   note: string | null;
+  /** The search waits for a free Apify run slot before it starts. */
+  waiting?: boolean;
 };
 
+/** A search's source and provider as the owner reads them, e.g. "Google Maps through the built-in scraper". */
+export function sourceLabel(source: "maps" | "instagram" | SocialPlatform | "website", provider: "apify" | "scraper" | "website" | null | undefined): string {
+  const name = source === "maps" ? "Google Maps" : source === "instagram" ? "Instagram" : source === "website" ? "Business websites and directories" : SOCIAL[source].label;
+  if (source === "website" || provider === "website") return source === "website" ? "Business websites and directories through web search" : `${name} (not searched; website search instead)`;
+  if (provider === "scraper") return `${name} through the built-in scraper`;
+  if (provider === "apify") return `${name} through Apify`;
+  return name;
+}
+
+/** How long a search waits for a free Apify run slot before reporting it was not searched. */
+const MAX_SLOT_WAIT_MS = 6 * 60 * 60_000;
+const SLOT_POLL_MS = 60_000;
+
 /**
- * Starts a discovery: an audience to fill and the job that fills it. The
- * provider is chosen here only to say so (the job chooses again when it
- * runs): Apify when it is set up with allowance left, else the scraper, else
- * — when neither is there — website search, which takes over the request
- * with the same customer type, place and request id.
+ * Starts a Google Maps discovery: an audience to fill and the job that fills
+ * it. The built-in scraper is the normal backend (free per search). Apify's
+ * Google Maps Actor searches only when the owner asks for Apify, or as the
+ * fallback the organization pre-authorized by approving that Actor, when the
+ * scraper is not set up (or fails while running). A saved Apify token alone
+ * never routes a working Maps search to a paid Actor. With neither, website
+ * search takes the request (same customer type, place and request id).
  */
 export async function startDiscovery(
   criteria: DiscoveryCriteria,
   context: { threadId: string | null; userId: string | null },
-  options: { contactAfter?: ContactAfter } = {},
+  options: { contactAfter?: ContactAfter; provider?: "apify" | null; requestMessageId?: string | null } = {},
 ): Promise<StartedDiscovery> {
   const scraper = discoveryAvailability();
-  const apify = await apifyReadiness("google_maps", criteria.maxResults);
-  const apifyNote = apify.usable ? null : apifyFallbackNote(apify);
-  if (!apify.usable && !scraper.available) {
-    const fallback = await startWebsiteFallback(criteria, context, options.contactAfter ?? null);
-    if (fallback) return { ...fallback, note: [apifyNote, fallback.note].filter(Boolean).join(" ") || null };
-    throw new DiscoveryUnavailableError([scraper.reason, apifyNote].filter(Boolean).join(" "));
+  const asked = options.provider === "apify";
+  const apify = asked || !scraper.available ? await apifyReadiness("google_maps", criteria.maxResults) : null;
+  const apifyRuns = Boolean(apify && (apify.usable || (!apify.usable && apify.slotsFull)));
+  let provider: "apify" | "scraper";
+  let providerReason: string;
+  const notes: string[] = [];
+  if (asked && apifyRuns) {
+    provider = "apify";
+    providerReason = "the owner asked for Apify";
+  } else if (scraper.available) {
+    provider = "scraper";
+    providerReason = "the built-in scraper is the normal Google Maps search";
+    if (asked && apify && !apify.usable) notes.push(`Apify was asked for but not used: ${apify.reason}; the built-in scraper searches instead (free).`);
+  } else if (apifyRuns) {
+    provider = "apify";
+    providerReason = "the built-in Google Maps scraper is not set up on this server, and the organization approved Apify's Google Maps Actor as the fallback";
+  } else {
+    const fallback = await startWebsiteFallback(criteria, context, options.contactAfter ?? null, options.requestMessageId ?? null);
+    const apifyNote = apify && !apify.usable ? apifyFallbackNote(apify) : null;
+    if (!("unavailable" in fallback)) return { ...fallback, note: [scraper.reason, apifyNote, fallback.note].filter(Boolean).join(" ") || null };
+    throw new DiscoveryUnavailableError([scraper.reason, apifyNote, `Website search cannot take it either: ${fallback.unavailable}`].filter(Boolean).join(" "));
   }
+  const waiting = provider === "apify" && Boolean(apify && !apify.usable && apify.slotsFull);
+  if (waiting) notes.push(`It waits for a free Apify run slot (${apify!.usable ? "" : apify!.reason}) and starts when one finishes.`);
   const phrase = mapsSearchPhrase(criteria.what, criteria.where);
   const audienceId = await createAudience({
     name: `${criteria.what} — ${criteria.where}`,
@@ -205,17 +247,17 @@ export async function startDiscovery(
     threadId: context.threadId,
     userId: context.userId,
   });
-  const payload: DiscoveryPayload = { criteria, phrase, contactAfter: options.contactAfter ?? null, target: "maps" };
+  const payload: DiscoveryPayload = { criteria, phrase, contactAfter: options.contactAfter ?? null, target: "maps", provider, providerReason, requestMessageId: options.requestMessageId ?? null, providerNotes: notes };
   const [job] = await db.insert(assistantJobs).values({
     organizationId: currentOrganizationId(),
     kind: "discovery",
     threadId: context.threadId,
     audienceId,
     payload: payload as unknown as Record<string, unknown>,
-    progress: { stage: "queued", found: 0 },
+    progress: { stage: "queued", found: 0, source: sourceLabel("maps", provider) },
     createdBy: context.userId,
   }).returning({ id: assistantJobs.id });
-  return { jobId: job!.id, audienceId, phrase, provider: apify.usable ? "apify" : "scraper", note: apifyNote };
+  return { jobId: job!.id, audienceId, phrase, provider, note: [`${sourceLabel("maps", provider)}: ${providerReason}.`, ...notes].join(" "), waiting };
 }
 
 /** What to tell the owner when Apify was set up but cannot be used now; nothing when it is simply off. */
@@ -237,12 +279,13 @@ async function startWebsiteFallback(
   criteria: DiscoveryCriteria,
   context: { threadId: string | null; userId: string | null },
   contactAfter: ContactAfter,
-): Promise<Omit<StartedDiscovery, "note"> & { note: string } | null> {
+  requestMessageId: string | null = null,
+): Promise<(Omit<StartedDiscovery, "note"> & { note: string }) | { unavailable: string }> {
   const web = await import("./webDiscovery.server");
   const webCriteria = web.normalizeWebCriteria({ customers: criteria.what, where: criteria.where, maxResults: Math.min(40, criteria.maxResults), language: criteria.language });
-  if ("error" in webCriteria) return null;
+  if ("error" in webCriteria) return { unavailable: webCriteria.error };
   try {
-    const started = await web.startWebDiscovery(webCriteria, context, { contactAfter });
+    const started = await web.startWebDiscovery(webCriteria, context, { contactAfter, requestMessageId });
     return {
       jobId: started.jobId,
       audienceId: started.audienceId,
@@ -251,7 +294,8 @@ async function startWebsiteFallback(
       note: `Searching business websites and directories for “${criteria.what}” in ${criteria.where} instead of Google Maps listings: it covers businesses the web search finds, usually fewer than a Maps search.`,
     };
   } catch (error) {
-    if (error instanceof web.WebDiscoveryUnavailableError) return null;
+    // Off, not set up, or at its limit (WebDiscoveryLimitError): the owner hears which.
+    if (error instanceof web.WebDiscoveryUnavailableError) return { unavailable: error.message };
     throw error;
   }
 }
@@ -266,14 +310,16 @@ async function startWebsiteFallback(
 export async function startInstagramProspects(
   input: { what: string; where: string; hashtags?: string[]; maxResults: number; language: string },
   context: { threadId: string | null; userId: string | null },
-  options: { contactAfter?: ContactAfter } = {},
+  options: { contactAfter?: ContactAfter; requestMessageId?: string | null } = {},
 ): Promise<StartedDiscovery> {
   const readiness = await apifyReadiness("instagram_hashtags", input.maxResults);
-  if (!readiness.usable) {
-    const note = apifyFallbackNote(readiness) ?? "Instagram prospect search needs Apify discovery (Settings → Organization), which is off.";
-    const fallback = await startWebsiteFallback({ what: input.what, where: input.where, maxResults: input.maxResults, language: input.language }, context, options.contactAfter ?? null);
-    if (fallback) return { ...fallback, note: `${note} ${fallback.note} Instagram accounts appear only when the web search returns their pages (and Instagram is connected).` };
-    throw new DiscoveryUnavailableError(`${note} Instagram has no keyword or hashtag search of its own that AgentSDR can use, and website search is not on, so nothing was searched.`);
+  // Every Apify run slot busy is a wait, not a reason to search something else: the job is queued below.
+  const waiting = !readiness.usable && Boolean(readiness.slotsFull);
+  if (!readiness.usable && !waiting) {
+    const note = `Instagram was not searched: ${apifyFallbackNote(readiness) ?? "Instagram prospect search needs Apify discovery (Settings → Organization), which is off."}`;
+    const fallback = await startWebsiteFallback({ what: input.what, where: input.where, maxResults: input.maxResults, language: input.language }, context, options.contactAfter ?? null, options.requestMessageId ?? null);
+    if (!("unavailable" in fallback)) return { ...fallback, note: `${note} ${fallback.note} Instagram accounts appear only when the web search returns their pages (and Instagram is connected).` };
+    throw new DiscoveryUnavailableError(`${note} Instagram has no keyword or hashtag search of its own that AgentSDR can use, and website search cannot take it (${fallback.unavailable}), so nothing was searched.`);
   }
   const hashtags = hashtagsFor(input.what, input.where, input.hashtags ?? []);
   if (!hashtags.length) throw new DiscoveryUnavailableError("Say what kind of accounts to look for, or which hashtags.");
@@ -286,14 +332,14 @@ export async function startInstagramProspects(
     threadId: context.threadId,
     userId: context.userId,
   });
-  const payload: DiscoveryPayload = { criteria, phrase, contactAfter: options.contactAfter ?? null, target: "instagram", instagram: { hashtags } };
+  const payload: DiscoveryPayload = { criteria, phrase, contactAfter: options.contactAfter ?? null, target: "instagram", provider: "apify", instagram: { hashtags }, requestMessageId: options.requestMessageId ?? null };
   const [job] = await db.insert(assistantJobs).values({
     organizationId: currentOrganizationId(),
     kind: "apify_instagram",
     threadId: context.threadId,
     audienceId,
     payload: payload as unknown as Record<string, unknown>,
-    progress: { stage: "queued", found: 0 },
+    progress: { stage: "queued", found: 0, source: sourceLabel("instagram", "apify"), ...(waiting ? { waiting: { kind: "slot", provider: "apify", reason: readiness.usable ? null : readiness.reason } } : {}) },
     createdBy: context.userId,
   }).returning({ id: assistantJobs.id });
   return {
@@ -301,7 +347,8 @@ export async function startInstagramProspects(
     audienceId,
     phrase,
     provider: "apify",
-    note: `${APIFY_ACTORS.instagram_hashtags.limitation}`,
+    waiting,
+    note: [waiting ? `Queued: ${readiness.usable ? "" : readiness.reason}; the Instagram search starts as soon as an Apify run finishes.` : null, APIFY_ACTORS.instagram_hashtags.limitation].filter(Boolean).join(" "),
   };
 }
 
@@ -317,12 +364,13 @@ export async function startSocialProspects(
   platform: SocialPlatform | "instagram",
   input: { what: string; where: string; maxResults: number; language: string },
   context: { threadId: string | null; userId: string | null },
-  options: { contactAfter?: ContactAfter } = {},
+  options: { contactAfter?: ContactAfter; requestMessageId?: string | null } = {},
 ): Promise<StartedDiscovery> {
   const actor: ApifyActorKey = platform === "instagram" ? "instagram_search" : SOCIAL[platform].actor;
   const label = platform === "instagram" ? "Instagram" : SOCIAL[platform].label;
   const readiness = await apifyReadiness(actor, input.maxResults);
-  if (!readiness.usable) {
+  const waiting = !readiness.usable && Boolean(readiness.slotsFull);
+  if (!readiness.usable && !waiting) {
     throw new DiscoveryUnavailableError(`${label} search runs through Apify: ${apifyFallbackNote(readiness) ?? readiness.reason} Approve the ${APIFY_ACTORS[actor].label} in Settings → Organization → Apify to use it.`);
   }
   const criteria: DiscoveryCriteria = { what: input.what, where: input.where, maxResults: input.maxResults, language: input.language };
@@ -335,18 +383,25 @@ export async function startSocialProspects(
     userId: context.userId,
   });
   const payload: DiscoveryPayload = platform === "instagram"
-    ? { criteria, phrase, contactAfter: options.contactAfter ?? null, target: "instagram", provider: "apify", instagram: { hashtags: [], search: true } }
-    : { criteria, phrase, contactAfter: options.contactAfter ?? null, target: platform, provider: "apify" };
+    ? { criteria, phrase, contactAfter: options.contactAfter ?? null, target: "instagram", provider: "apify", instagram: { hashtags: [], search: true }, requestMessageId: options.requestMessageId ?? null }
+    : { criteria, phrase, contactAfter: options.contactAfter ?? null, target: platform, provider: "apify", requestMessageId: options.requestMessageId ?? null };
   const [job] = await db.insert(assistantJobs).values({
     organizationId: currentOrganizationId(),
     kind: platform === "instagram" ? "apify_instagram" : "discovery",
     threadId: context.threadId,
     audienceId,
     payload: payload as unknown as Record<string, unknown>,
-    progress: { stage: "queued", found: 0 },
+    progress: { stage: "queued", found: 0, source: sourceLabel(platform, "apify"), ...(waiting ? { waiting: { kind: "slot", provider: "apify", reason: readiness.usable ? null : readiness.reason } } : {}) },
     createdBy: context.userId,
   }).returning({ id: assistantJobs.id });
-  return { jobId: job!.id, audienceId, phrase, provider: "apify", note: APIFY_ACTORS[actor].limitation };
+  return {
+    jobId: job!.id,
+    audienceId,
+    phrase,
+    provider: "apify",
+    waiting,
+    note: [waiting ? `Queued: ${readiness.usable ? "" : readiness.reason}; the ${label} search starts as soon as an Apify run finishes.` : null, APIFY_ACTORS[actor].limitation].filter(Boolean).join(" "),
+  };
 }
 
 // ── DNS: does an email domain accept mail? (mailDomain.server.ts) ───────────
@@ -374,7 +429,8 @@ async function stageQueued(job: AssistantJob): Promise<StepOutcome> {
       requestId,
     });
     if (started.started) return apifyStage(started.row.id, platform.actor, payload.providerNotes ?? []);
-    return doneWithNothing(job, [...(payload.providerNotes ?? []), `${platform.label} was not searched: ${apifyFallbackNote(started) ?? started.reason}`]);
+    if (started.slotsFull) return waitForSlot(job, sourceLabel(payload.target, "apify"), started.reason);
+    return doneWithNothing(job, [...(payload.providerNotes ?? []), `${platform.label} was not searched: ${apifyFallbackNote(started) ?? started.reason}`], true);
   }
   if (payload.target === "instagram" && payload.instagram?.search) {
     const started = await startTrackedRun({
@@ -385,7 +441,8 @@ async function stageQueued(job: AssistantJob): Promise<StepOutcome> {
       requestId,
     });
     if (started.started) return apifyStage(started.row.id, "instagram_search", payload.providerNotes ?? []);
-    return handOffToWebsite(job, [...(payload.providerNotes ?? []), apifyFallbackNote(started) ?? started.reason]);
+    if (started.slotsFull) return waitForSlot(job, sourceLabel("instagram", "apify"), started.reason);
+    return handOffToWebsite(job, [...(payload.providerNotes ?? []), `Instagram was not searched: ${apifyFallbackNote(started) ?? started.reason}`]);
   }
   if (payload.target === "instagram") {
     const started = await startTrackedRun({
@@ -396,10 +453,11 @@ async function stageQueued(job: AssistantJob): Promise<StepOutcome> {
       requestId,
     });
     if (started.started) return apifyStage(started.row.id, "instagram_hashtags", payload.providerNotes ?? []);
+    if (started.slotsFull) return waitForSlot(job, sourceLabel("instagram", "apify"), started.reason);
     // Allowance gone between the tool call and now: website search takes the request, if it can.
-    return handOffToWebsite(job, [...(payload.providerNotes ?? []), apifyFallbackNote(started) ?? started.reason]);
+    return handOffToWebsite(job, [...(payload.providerNotes ?? []), `Instagram was not searched: ${apifyFallbackNote(started) ?? started.reason}`]);
   }
-  if (payload.provider !== "scraper") {
+  if (payload.provider === "apify") {
     const started = await startTrackedRun({
       actor: "google_maps",
       input: (maxItems) => ({
@@ -413,10 +471,52 @@ async function stageQueued(job: AssistantJob): Promise<StepOutcome> {
       requestId,
     });
     if (started.started) return apifyStage(started.row.id, "google_maps", payload.providerNotes ?? []);
-    const note = apifyFallbackNote(started);
-    return startScraperOrFallback(job, note ? [...(payload.providerNotes ?? []), note] : payload.providerNotes ?? []);
+    if (started.slotsFull) return waitForSlot(job, sourceLabel("maps", "apify"), started.reason);
+    const note = apifyFallbackNote(started) ?? `Apify was not used: ${started.reason}.`;
+    // Never back to Apify from here: the built-in scraper, else website search.
+    if (discoveryAvailability().available) return startScraper(job, [...(payload.providerNotes ?? []), note]);
+    return handOffToWebsite(job, [...(payload.providerNotes ?? []), note]);
   }
   return startScraperOrFallback(job, payload.providerNotes ?? []);
+}
+
+/**
+ * Waits for one of the organization's Apify run slots (the search was asked
+ * for and is allowed; only concurrency is in the way). Gives up after
+ * MAX_SLOT_WAIT_MS with an honest "not searched", never "0 found".
+ */
+function waitForSlot(job: AssistantJob, label: string, reason: string): StepOutcome {
+  const payload = payloadOf(job);
+  const since = payload.waitingSince ?? new Date().toISOString();
+  if (Date.now() - new Date(since).getTime() > MAX_SLOT_WAIT_MS) {
+    return doneWithNothing(job, [...(payload.providerNotes ?? []), `${label} was not searched: no Apify run slot came free within ${MAX_SLOT_WAIT_MS / 3_600_000} hours (${reason}). Ask again later.`], true);
+  }
+  return {
+    next: "wait",
+    delayMs: SLOT_POLL_MS,
+    payload: { waitingSince: since },
+    progress: { stage: "queued", found: 0, source: label, waiting: { kind: "slot", provider: "apify", reason: `${reason}; it starts when one finishes`, since } },
+  };
+}
+
+/**
+ * Google Maps through Apify when the built-in scraper is missing or failed,
+ * only as the fallback the organization pre-authorized by approving Apify's
+ * Google Maps Actor. Null when that is not possible.
+ */
+async function apifyMapsFallback(job: AssistantJob, notes: string[], why: string): Promise<StepOutcome | null> {
+  const payload = payloadOf(job);
+  // Once per search: an Apify refusal after the scraper failed must not bounce between the two.
+  if ((payload.target && payload.target !== "maps") || payload.apifyFallbackTried) return null;
+  const readiness = await apifyReadiness("google_maps", payload.criteria.maxResults);
+  if (!readiness.usable && !readiness.slotsFull) return null;
+  const providerReason = `${why}; the organization approved Apify's Google Maps Actor as the fallback`;
+  return {
+    next: "stage",
+    stage: "queued",
+    payload: { provider: "apify", providerReason, apifyFallbackTried: true, providerNotes: [...notes, `${why}: searching Google Maps through Apify instead (the approved fallback).`], apify: null, externalIds: [] },
+    progress: { stage: "queued", found: 0, source: sourceLabel("maps", "apify") },
+  };
 }
 
 function apifyStage(runRowId: string, actor: ApifyActorKey, notes: string[], extra: Partial<DiscoveryPayload> = {}): StepOutcome {
@@ -429,17 +529,19 @@ function apifyStage(runRowId: string, actor: ApifyActorKey, notes: string[], ext
   };
 }
 
-/** The scraper when it is set up; otherwise website search takes the request (same customer type, place and request id). */
+/** The scraper when it is set up; otherwise Apify if pre-authorized, else website search takes the request (same customer type, place and request id). */
 async function startScraperOrFallback(job: AssistantJob, notes: string[]): Promise<StepOutcome> {
   if (discoveryAvailability().available) return startScraper(job, notes);
+  const apify = await apifyMapsFallback(job, notes, "the built-in Google Maps scraper is not set up on this server");
+  if (apify) return apify;
   return handOffToWebsite(job, notes);
 }
 
 async function handOffToWebsite(job: AssistantJob, notes: string[]): Promise<StepOutcome> {
   const payload = payloadOf(job);
-  const fallback = await startWebsiteFallback(payload.criteria, { threadId: job.threadId, userId: job.createdBy }, payload.contactAfter ?? null);
-  if (!fallback) {
-    return { next: "failed", error: [...notes, "No other search for this is set up here: the Google Maps scraper is not configured and website search is not on."].join(" ") };
+  const fallback = await startWebsiteFallback(payload.criteria, { threadId: job.threadId, userId: job.createdBy }, payload.contactAfter ?? null, payload.requestMessageId ?? null);
+  if ("unavailable" in fallback) {
+    return { next: "failed", error: [...notes, `No other search could take it: ${fallback.unavailable}`].join(" ") };
   }
   return {
     next: "done",
@@ -447,6 +549,8 @@ async function handOffToWebsite(job: AssistantJob, notes: string[]): Promise<Ste
     result: {
       audienceId: job.audienceId,
       phrase: payload.phrase,
+      // Nothing was searched here: the card and the chat say so rather than "0 found".
+      notSearched: true,
       found: 0,
       eligible: 0,
       handedToJobId: fallback.jobId,
@@ -544,9 +648,9 @@ async function stageApify(job: AssistantJob): Promise<StepOutcome> {
   return instagramPlaces(job, payload.instagram?.posts ?? [], profilesFromItems(polled.items, country), notes);
 }
 
-function doneWithNothing(job: AssistantJob, notes: string[]): StepOutcome {
+function doneWithNothing(job: AssistantJob, notes: string[], notSearched = false): StepOutcome {
   const payload = payloadOf(job);
-  return { next: "done", progress: { stage: "done" }, result: { audienceId: job.audienceId, phrase: payload.phrase, found: 0, eligible: 0, note: notes.join(" ") } };
+  return { next: "done", progress: { stage: "done" }, result: { audienceId: job.audienceId, phrase: payload.phrase, found: 0, eligible: 0, ...(notSearched ? { notSearched: true } : {}), note: notes.join(" ") } };
 }
 
 /** Instagram accounts as places to read and save: one per account, the post that matched it as evidence. */
@@ -639,7 +743,9 @@ async function startScraper(job: AssistantJob, notes: string[]): Promise<StepOut
       progress: { stage: "searching", searches: 1, startedSearchAt: new Date().toISOString() },
     };
   } catch (error) {
-    if (error instanceof MapsScraperError) return { next: "failed", error: error.message };
+    if (error instanceof MapsScraperError) {
+      return (await apifyMapsFallback(job, notes, `the built-in Google Maps scraper failed (${error.message})`)) ?? { next: "failed", error: error.message };
+    }
     throw error;
   }
 }
@@ -664,8 +770,12 @@ async function stageSearching(job: AssistantJob): Promise<StepOutcome> {
     return { next: "wait", delayMs: POLL_MS, progress: { stage: "searching", searches: ids.length, searchesDone: ids.length - open.length } };
   }
   if (!done.length) {
-    if (statuses.every((entry) => entry.status === "lost")) return { next: "failed", error: "The Google Maps scraper no longer has this search (it may have restarted). Ask again." };
-    return { next: "failed", error: pastDeadline ? "The Google Maps search took too long and was stopped." : "The Google Maps scraper could not complete this search. Google may have blocked it; try again later or with fewer results." };
+    const why = statuses.every((entry) => entry.status === "lost")
+      ? "The Google Maps scraper no longer has this search (it may have restarted)."
+      : pastDeadline ? "The Google Maps search took too long and was stopped." : "The Google Maps scraper could not complete this search; Google may have blocked it.";
+    const fallback = await apifyMapsFallback(job, payload.providerNotes ?? [], why.replace(/\.$/, ""));
+    if (fallback) return fallback;
+    return { next: "failed", error: `${why} ${statuses.every((entry) => entry.status === "lost") ? "Ask again." : "Try again later or with fewer results."}` };
   }
   const country = await organizationPhoneCountry();
   const byKey = new Map<string, MapsPlace>();

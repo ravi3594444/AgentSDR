@@ -180,6 +180,8 @@ type Payload = {
   searchProvider?: string | null;
   /** The search a step started paying for, saved before the call: a retried step never buys it again. */
   searchStarted?: number;
+  /** The owner's message this search serves (its request's per-platform coverage). */
+  requestMessageId?: string | null;
 };
 
 export class WebDiscoveryUnavailableError extends Error {
@@ -273,7 +275,7 @@ const ownsEmail = (owner: OwnerIdentity, email: string) => owner.emails.has(emai
 export async function startWebDiscovery(
   criteria: WebDiscoveryCriteria,
   context: { threadId: string | null; userId: string | null },
-  options: { contactAfter?: ContactAfter } = {},
+  options: { contactAfter?: ContactAfter; requestMessageId?: string | null } = {},
 ): Promise<{ jobId: string; audienceId: string; phrase: string; queries: string[]; provider: string; model: string; instagram: { usable: boolean; reason: string | null } }> {
   if (!(await featureEnabled("web_discovery"))) throw new WebDiscoveryUnavailableError(new FeatureDisabledError("web_discovery").message);
   const availability = await webSearchAvailability();
@@ -320,7 +322,7 @@ export async function startWebDiscovery(
       threadId: context.threadId,
       userId: context.userId,
     });
-    const payload: Payload = { criteria, queries, keywordQueries, phrase, instagram, contactAfter: options.contactAfter ?? null, searchProvider: availability.provider };
+    const payload: Payload = { criteria, queries, keywordQueries, phrase, instagram, contactAfter: options.contactAfter ?? null, searchProvider: availability.provider, requestMessageId: options.requestMessageId ?? null };
     const [job] = await tx.insert(assistantJobs).values({
       organizationId,
       kind: "web_discovery",

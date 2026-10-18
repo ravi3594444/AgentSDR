@@ -1,8 +1,9 @@
 import "server-only";
 
-import { runDiscoveryStep } from "@/lib/discovery/discovery.server";
+import { runDiscoveryStep, sourceLabel } from "@/lib/discovery/discovery.server";
 import { runWebDiscoveryStep } from "@/lib/discovery/webDiscovery.server";
 import { continueAfterEvent, runToolInThread } from "./agent.server";
+import { coverageLineForJob } from "./coverage.server";
 import { autoStartPlan, threadAutonomy } from "./autonomy.server";
 import { runLinkedinSearchStep } from "./linkedinSearch.server";
 import { runOutreachStartStep } from "./outreach.server";
@@ -54,11 +55,13 @@ function discoveryMessage(job: AssistantJob): string {
   const providerNote = typeof result.providerNote === "string" && result.providerNote ? ` ${result.providerNote}` : "";
   if (!found) return `${String(result.note ?? "The lead search found no businesses.")}${result.note ? "" : providerNote}`;
   const eligible = Number(result.eligible ?? 0);
-  const source = result.target === "facebook" ? "Facebook pages" : result.target === "linkedin" ? "LinkedIn company pages" : "Google Maps";
+  const payload = (job.payload ?? {}) as { target?: "maps" | "facebook" | "linkedin"; provider?: "apify" | "scraper" };
+  const target = result.target === "facebook" || result.target === "linkedin" ? result.target : payload.target === "facebook" || payload.target === "linkedin" ? payload.target : "maps";
+  const source = sourceLabel(target, (result.provider === "apify" || result.provider === "scraper" ? result.provider : payload.provider) ?? null);
   const parts = [
     job.kind === "linkedin_search"
       ? `The LinkedIn search for “${String(result.phrase ?? "")}” finished: ${found} profiles found, ${eligible} can be contacted on LinkedIn`
-      : `The lead search for “${String(result.phrase ?? "")}” finished: ${found} businesses found on ${source}${result.provider === "apify" ? " (through Apify)" : ""}, ${eligible} can be contacted`,
+      : `The lead search for “${String(result.phrase ?? "")}” finished: ${found} businesses found on ${source}, ${eligible} can be contacted`,
     job.kind === "linkedin_search" ? "" : `(${Number(result.withEmail ?? 0)} by email, ${Number(result.withPhoneOnly ?? 0)} by phone only)`,
   ];
   const extra: string[] = [];
@@ -90,7 +93,8 @@ export function registerAssistantJobs(): void {
   onAssistantJobFinished(async (job) => {
     if (!job.threadId) return;
     const search = job.kind === "discovery" || job.kind === "linkedin_search" || job.kind === "web_discovery" || job.kind === "apify_instagram";
-    const content = search ? discoveryMessage(job) : outreachMessage(job);
+    const coverage = search ? await coverageLineForJob(job).catch(() => null) : null;
+    const content = `${search ? discoveryMessage(job) : outreachMessage(job)}${coverage ? ` ${coverage}` : ""}`;
     await addMessage({ threadId: job.threadId, role: "event", content });
     if (search && (job.status !== "succeeded" || !job.audienceId || Number((job.result ?? {}).eligible ?? 0) <= 0)) {
       // Autonomous mode: a search that failed or found nobody still wakes the assistant, to try elsewhere.

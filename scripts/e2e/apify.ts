@@ -5,7 +5,13 @@
  *
  *   bun run --conditions=react-server scripts/e2e/apify.ts
  *
- * Checks: Apify used only when on, set up, approved and within allowance;
+ * Checks: the built-in scraper is the normal Google Maps backend (no Apify
+ * Maps run while it works, even with Apify set up); Apify searches Maps only
+ * when asked for (provider "apify") or as the approved fallback when the
+ * scraper is missing; a full set of run slots queues the search instead of
+ * handing it to website search, and it starts once when a slot frees, never
+ * twice after a restart; a run left "starting" by a crash is swept; Apify
+ * used only when on, set up, approved and within allowance;
  * the run recorded with its Apify run id and the owner's request id and
  * polled again after a "restart"; a run cut short keeps what it found
  * (partial); exhausted credit (at start, the account's limit, the owner's
@@ -18,7 +24,7 @@
  * Creates its own organizations ("Apify check A/B …") and leaves them;
  * removes the AI connection it made. Refuses a non-local DATABASE_URL.
  */
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 
 if (!/@(localhost|127\.0\.0\.1)[:/]/.test(process.env.DATABASE_URL ?? "")) {
   console.error("Refusing to run: DATABASE_URL must point at a local, disposable database.");
@@ -104,7 +110,7 @@ const { saveByokSettings } = await import("@/lib/ai/byok");
 const { assistantJobs, leadAudienceMembers } = await import("@/lib/assistant/schema");
 const { memberInsights } = await import("@/lib/assistant/audiences.server");
 const { apifyRuns } = await import("@/lib/apify/schema");
-const { apifySettingsView, saveApifySettings, trackedRun } = await import("@/lib/apify/apify.server");
+const { apifySettingsView, saveApifySettings, sweepStaleRuns, trackedRun } = await import("@/lib/apify/apify.server");
 const { setApifyApiBase } = await import("@/services/apify");
 const { DiscoveryUnavailableError, runDiscoveryStep, setDiscoveryPageOptions, startDiscovery, startInstagramProspects, startSocialProspects } = await import("@/lib/discovery/discovery.server");
 const { setFeature, clearFeatureCache } = await import("@/lib/features/flags.server");
@@ -169,7 +175,7 @@ await runInOrganization(orgA!.id, async () => {
 
   // ---------------------------------------------------------- off by default
   const off = await startDiscovery(criteria(), context, { contactAfter: contactAfter("req-off") });
-  check("off by default: the search runs on the scraper and says nothing about Apify", off.provider === "scraper" && off.note === null, `${off.provider} ${off.note}`);
+  check("off by default: the search runs on the scraper and says nothing about Apify", off.provider === "scraper" && !/Apify/.test(off.note ?? "") && /built-in scraper/.test(off.note ?? ""), `${off.provider} ${off.note}`);
   check("off by default: Apify is never called", apify.calls.length === 0, apify.calls.join(", "));
   const offJob = await step(off.jobId);
   check("off by default: the job starts the scraper search", offJob.stage === "searching" && payloadOf(offJob).provider === "scraper");
@@ -178,7 +184,9 @@ await runInOrganization(orgA!.id, async () => {
   await setFeature("apify_discovery", true, null);
   clearFeatureCache();
   const notConnected = await startDiscovery(criteria(), context, {});
-  check("feature on but no token: scraper, and the note says why", notConnected.provider === "scraper" && /no Apify token/.test(notConnected.note ?? ""), notConnected.note ?? "");
+  check("feature on but no token: the scraper searches, Apify is not even consulted", notConnected.provider === "scraper" && !/Apify/.test(notConnected.note ?? ""), notConnected.note ?? "");
+  const askedNoToken = await startDiscovery(criteria(), context, { provider: "apify" });
+  check("Apify asked for but no token: the scraper searches, and the note says why", askedNoToken.provider === "scraper" && /asked for but not used/.test(askedNoToken.note ?? "") && /no Apify token/.test(askedNoToken.note ?? ""), askedNoToken.note ?? "");
   let refusedToken = "";
   try {
     await saveApifySettings({ token: "wrong-token" }, null);
@@ -192,10 +200,18 @@ await runInOrganization(orgA!.id, async () => {
   // ---------------------------------------------------------- an existing lead, to be reused
   const existing = await withLeadTransaction((tx) => upsertPerson(tx, { email: "hello@lotusdental.example", raw: { note: "already a lead" }, source: "e2e:apify" }));
 
-  // ---------------------------------------------------------- a full Apify run
+  // ---------------------------------------------------------- the built-in scraper stays the normal backend
+  const runsAtStart = apify.runs.size;
+  const normal = await startDiscovery(criteria("dentists", "Nagpur, India"), context, {});
+  const normalJob = await step(normal.jobId);
+  check("Apify set up and approved, scraper healthy: a normal Maps search uses the built-in scraper", normal.provider === "scraper" && normalJob.stage === "searching" && payloadOf(normalJob).provider === "scraper", `${normal.provider} ${normalJob.stage}`);
+  check("…and no Apify Maps run is started for it", apify.runs.size === runsAtStart && !apify.calls.some((call) => call.startsWith("POST /actors")));
+  await db.update(assistantJobs).set({ status: "cancelled" }).where(eq(assistantJobs.id, normal.jobId));
+
+  // ---------------------------------------------------------- a full Apify run (asked for)
   apify.next.set("compass~crawler-google-places", [{ pollsUntilDone: 2, finalStatus: "SUCCEEDED", items: mapsItems, usage: 0.42 }]);
-  const started = await startDiscovery(criteria(), context, { contactAfter: contactAfter("req-apify") });
-  check("set up, approved, allowance left: the search runs on Apify", started.provider === "apify" && started.note === null, `${started.provider} ${started.note}`);
+  const started = await startDiscovery(criteria(), context, { contactAfter: contactAfter("req-apify"), provider: "apify" });
+  check("asked for Apify, set up, approved, allowance left: the search runs on Apify and says why", started.provider === "apify" && /owner asked for Apify/.test(started.note ?? ""), `${started.provider} ${started.note}`);
   let job = await step(started.jobId);
   const opened = (payloadOf(job).apify ?? null) as { runRowId: string } | null;
   const row = opened ? await trackedRun(opened.runRowId) : null;
@@ -223,7 +239,7 @@ await runInOrganization(orgA!.id, async () => {
 
   // ---------------------------------------------------------- partial result
   apify.next.set("compass~crawler-google-places", [{ pollsUntilDone: 1, finalStatus: "ABORTED", statusMessage: "The run reached its maximum total charge (maxTotalChargeUsd)", items: mapsItems.slice(2, 4), usage: 0.3 }]);
-  const partialStart = await startDiscovery(criteria("dentists", "Pune, India", 30), context, { contactAfter: contactAfter("req-partial") });
+  const partialStart = await startDiscovery(criteria("dentists", "Pune, India", 30), context, { contactAfter: contactAfter("req-partial"), provider: "apify" });
   const partialJob = await runToEnd(partialStart.jobId);
   const partialResult = (partialJob.result ?? {}) as Record<string, unknown>;
   check("a run cut short by its cap keeps what it found", partialJob.status === "succeeded" && partialResult.found === 2, JSON.stringify(partialResult));
@@ -233,13 +249,13 @@ await runInOrganization(orgA!.id, async () => {
 
   // ---------------------------------------------------------- an empty run falls back in place
   apify.next.set("compass~crawler-google-places", [{ pollsUntilDone: 1, finalStatus: "SUCCEEDED", items: [], usage: 0.01 }]);
-  const emptyStart = await startDiscovery(criteria("orthodontists"), context, { contactAfter: contactAfter("req-empty") });
+  const emptyStart = await startDiscovery(criteria("orthodontists"), context, { contactAfter: contactAfter("req-empty"), provider: "apify" });
   const emptyJob = await runToEnd(emptyStart.jobId);
   check("an Apify run with nothing hands the same job to the scraper, keeping the request id", emptyJob.stage === "searching" && payloadOf(emptyJob).provider === "scraper" && payloadOf(emptyJob).contactAfter?.requestId === "req-empty" && /no businesses/.test((payloadOf(emptyJob).providerNotes ?? []).join(" ")));
 
   // ---------------------------------------------------------- credits exhausted at start
   apify.startError = { status: 402, type: "not-enough-usage-to-run-paid-actor", message: "You have exceeded your monthly usage limit" };
-  const exhaustedStart = await startDiscovery(criteria("dental labs"), context, { contactAfter: contactAfter("req-402") });
+  const exhaustedStart = await startDiscovery(criteria("dental labs"), context, { contactAfter: contactAfter("req-402"), provider: "apify" });
   const exhaustedJob = await step(exhaustedStart.jobId);
   check("credits exhausted at start: the same job falls back to the scraper", exhaustedJob.stage === "searching" && payloadOf(exhaustedJob).provider === "scraper");
   check("…keeping the customer type, the place and the request id", payloadOf(exhaustedJob).contactAfter?.requestId === "req-402" && (payloadOf(exhaustedJob).criteria as { what: string; where: string }).what === "dental labs" && scraperJobs.at(-1)?.includes("dental labs") === true);
@@ -251,7 +267,7 @@ await runInOrganization(orgA!.id, async () => {
   // ---------------------------------------------------------- the account's own limit reached
   apify.limits = { maxMonthlyUsageUsd: 50, monthlyUsageUsd: 50 };
   const runsBefore = apify.runs.size;
-  const accountFull = await startDiscovery(criteria("pediatric dentists"), context, { contactAfter: contactAfter("req-account") });
+  const accountFull = await startDiscovery(criteria("pediatric dentists"), context, { contactAfter: contactAfter("req-account"), provider: "apify" });
   const accountJob = await step(accountFull.jobId);
   check("the Apify account's limit reached: scraper, with the reason", accountFull.provider === "scraper" && /usage limit is reached/.test(accountFull.note ?? "") && /never tops up/.test(accountFull.note ?? ""), accountFull.note ?? "");
   check("…no run is started at Apify", apify.runs.size === runsBefore && accountJob.stage === "searching");
@@ -259,12 +275,15 @@ await runInOrganization(orgA!.id, async () => {
 
   // ---------------------------------------------------------- the owner's budget used
   await saveApifySettings({ monthlyBudgetUsd: 0.5 }, null);
-  const overBudget = await startDiscovery(criteria("cosmetic dentists"), context, {});
+  const overBudget = await startDiscovery(criteria("cosmetic dentists"), context, { provider: "apify" });
   check("this month's spend ($0.72) over the owner's budget ($0.50): scraper, with the reason", overBudget.provider === "scraper" && /budget/.test(overBudget.note ?? ""), overBudget.note ?? "");
   await saveApifySettings({ monthlyBudgetUsd: 10 }, null);
 
   // ---------------------------------------------------------- no scraper either: website search takes the request
   delete process.env.GMAPS_SCRAPER_URL;
+  const approvedFallback = await startDiscovery(criteria("dentists", "Mumbai, India", 10), context, {});
+  check("no scraper, Maps Actor approved: Apify searches as the approved fallback, with the reason", approvedFallback.provider === "apify" && /not set up on this server/.test(approvedFallback.note ?? "") && /approved/.test(approvedFallback.note ?? ""), approvedFallback.note ?? "");
+  await db.update(assistantJobs).set({ status: "cancelled" }).where(eq(assistantJobs.id, approvedFallback.jobId));
   apify.startError = { status: 402, type: "not-enough-usage-to-run-paid-actor", message: "Not enough usage" };
   apify.limits = { maxMonthlyUsageUsd: 50, monthlyUsageUsd: 50 };
   let unavailable = "";
@@ -418,6 +437,35 @@ await runInOrganization(orgA!.id, async () => {
   const igSearchMembers = await memberInsightsOf(igSearch.audienceId);
   check("…an account found by search is a potential match from Instagram's account search", igSearchMembers.some((member) => /Instagram's account search/.test(member.matchReason ?? "")), igSearchMembers.map((member) => member.matchReason).join(" | "));
 
+  // ---------------------------------------------------------- every run slot busy: wait, never hand off
+  const fillers = await db.insert(apifyRuns).values([0, 1].map(() => ({
+    organizationId: currentOrganizationId(), jobId: null, requestId: null, actorKey: "google_maps" as const, actorId: "compass~crawler-google-places", status: "running" as const, maxChargeUsd: 0.1, maxItems: 1,
+  }))).returning({ id: apifyRuns.id });
+  const runsBeforeWait = apify.runs.size;
+  const queued = await startInstagramProspects({ what: "home bakers", where: "Nashik", maxResults: 10, language: "en" }, context, { contactAfter: contactAfter("req-wait") });
+  check("two runs open: the Instagram search is queued, not handed to website search", queued.provider === "apify" && queued.waiting === true && /starts as soon as/.test(queued.note ?? ""), `${queued.provider} ${queued.note}`);
+  let waitJob = await step(queued.jobId);
+  const waitProgress = waitJob.progress as { waiting?: { kind?: string } };
+  check("…its job waits for a slot without calling Apify", waitJob.status === "queued" && waitJob.stage === "queued" && waitProgress.waiting?.kind === "slot" && apify.runs.size === runsBeforeWait, JSON.stringify(waitJob.progress));
+  await db.update(apifyRuns).set({ status: "succeeded", usageUsd: 0.05, finishedAt: new Date() }).where(inArray(apifyRuns.id, fillers.map((filler) => filler.id)));
+  apify.next.set("apify~instagram-hashtag-scraper", [{ pollsUntilDone: 3, finalStatus: "SUCCEEDED", usage: 0.02, items: [] }]);
+  waitJob = await step(queued.jobId);
+  check("…and starts once a slot is free", waitJob.stage === "apify" && apify.runs.size === runsBeforeWait + 1, `${waitJob.stage} ${apify.runs.size - runsBeforeWait}`);
+  // A restart that replays the start (its outcome was lost) must not pay for a second run.
+  await db.update(assistantJobs).set({ stage: "queued" }).where(eq(assistantJobs.id, queued.jobId));
+  waitJob = await step(queued.jobId);
+  check("…replaying its start after a restart reuses the open run instead of starting another", waitJob.stage === "apify" && apify.runs.size === runsBeforeWait + 1);
+  await db.update(assistantJobs).set({ status: "cancelled" }).where(eq(assistantJobs.id, queued.jobId));
+  await db.update(apifyRuns).set({ status: "succeeded", usageUsd: 0.02, finishedAt: new Date() }).where(and(inOrg(apifyRuns), eq(apifyRuns.jobId, queued.jobId)));
+
+  // ---------------------------------------------------------- a run left "starting" by a crash
+  const [stale] = await db.insert(apifyRuns).values({
+    organizationId: currentOrganizationId(), jobId: null, requestId: null, actorKey: "google_maps", actorId: "compass~crawler-google-places", status: "starting", maxChargeUsd: 0.5, maxItems: 1, createdAt: new Date(Date.now() - 20 * 60_000),
+  }).returning();
+  const swept = await sweepStaleRuns();
+  const [sweptRow] = await db.select().from(apifyRuns).where(eq(apifyRuns.id, stale!.id));
+  check("a run left starting for 20 minutes is closed, its cap kept as spent", swept >= 1 && sweptRow?.status === "failed" && sweptRow.usageUsd === 0.5, JSON.stringify(sweptRow));
+
   // ---------------------------------------------------------- never tops up
   check("nothing ever changed the Apify account: only reads, runs and dataset reads", apify.calls.every((call) => /^(GET \/users\/me(\/limits)?|POST \/actors\/[^/]+\/runs|GET \/actor-runs\/[^/]+|GET \/datasets\/[^/]+\/items)$/.test(call)), apify.calls.filter((call) => !/^(GET|POST \/actors)/.test(call)).join(", "));
 });
@@ -437,7 +485,7 @@ await runInOrganization(orgB!.id, async () => {
   const bRuns = await db.select().from(apifyRuns).where(inOrg(apifyRuns));
   check("isolation: B counts no Apify runs", bRuns.length === 0);
   const b = await startDiscovery({ what: "dentists", where: "Pune, India", maxResults: 10, language: "en" }, { threadId: null, userId: null }, {});
-  check("isolation: B's search uses its own (off) settings", b.provider === "scraper" && b.note === null);
+  check("isolation: B's search uses its own (off) settings", b.provider === "scraper" && !/Apify/.test(b.note ?? ""), b.note ?? "");
   await db.update(assistantJobs).set({ status: "cancelled" }).where(and(eq(assistantJobs.organizationId, orgB!.id)));
 });
 

@@ -5,7 +5,9 @@ import { db } from "@/lib/db";
 import { getByokSettings } from "@/lib/ai/byok";
 import { getAiConnection } from "@/lib/ai/connections";
 import { retrieveKnowledge } from "@/lib/crm/knowledge";
-import { discoveryAvailability, DiscoveryUnavailableError, normalizeCriteria, startDiscovery, startInstagramProspects, startSocialProspects } from "@/lib/discovery/discovery.server";
+import { discoveryAvailability, DiscoveryUnavailableError, normalizeCriteria, sourceLabel, startDiscovery, startInstagramProspects, startSocialProspects } from "@/lib/discovery/discovery.server";
+import { coverageLine } from "./coverage";
+import { requestCoverageFor } from "./coverage.server";
 import { searchAreaProblem } from "@/lib/discovery/geocode";
 import { extractContacts, publicLinks, visibleText } from "@/lib/discovery/contacts";
 import { assertPublicPageUrl, fetchPublicPage } from "@/lib/discovery/websiteContacts.server";
@@ -70,7 +72,14 @@ export type ToolContext = {
   authorizedBy?: "search" | null;
   /** The chat is in Autonomous mode (autonomy.ts): a prepared plan starts on its own when the caps allow. */
   autonomous?: boolean;
+  /** The owner's latest message, by id: searches started for it carry it, so its per-platform coverage can be told. */
+  requestMessageId?: string | null;
 };
+
+/** The request a search serves: the outreach request when there is one (its plans share it), else the owner's latest message. */
+function searchRequestId(context: ToolContext): string | null {
+  return context.outreachRequestId ?? context.requestMessageId ?? null;
+}
 
 /**
  * `summary` is what the model reads (ids included, for later tool calls);
@@ -225,6 +234,12 @@ function webDiscoveryProgress(job: typeof assistantJobs.$inferSelect): string {
   return `Searching the web (${progress.searchesDone ?? 0} of ${progress.searches ?? "?"} searches done)…`;
 }
 
+/** The per-platform coverage of the request this turn serves, when it named several platforms. */
+async function requestCoverageLine(context: ToolContext): Promise<string | null> {
+  const id = searchRequestId(context);
+  return id ? coverageLine(await requestCoverageFor(id)) : null;
+}
+
 /** A page read for the model: text, contacts and the links it may follow next. */
 function pageResult(page: { url: string; title: string; body: string; contacts: { kind: string; value: string }[]; links: string[]; via: string }): ToolResult {
   const title = page.title.slice(0, 200);
@@ -290,8 +305,8 @@ export const TOOLS: Record<string, Tool> = {
   },
 
   find_leads: {
-    description: "Search public Google Maps business listings for leads matching the owner's target customers, then read each business's own website for published contact details. Takes a few minutes and runs in the background; the chat shows its progress and announces the result. It runs on Apify's Google Maps Scraper when the organization set Apify up (approved, within its budget; paid from the owner's Apify account), otherwise on the self-hosted scraper at no cost per search, and when neither is available, on website search when that is on — the result says which, and what the fallback covers less well. Only businesses with a public listing are found.",
-    arguments: "what (kind of business, e.g. 'dental clinics'), where (city/region/country), maxResults (5-200, default 50), language (two letters, optional), contactAfter (true only when the owner asked to contact, email or message the leads found: the outreach plan is then prepared automatically when the search finishes), channels (optional, with contactAfter: array of email|whatsapp|linkedin|instagram)",
+    description: "Search public Google Maps business listings for leads matching the owner's target customers, then read each business's own website for published contact details. Takes a few minutes and runs in the background; the chat shows its progress and announces the result. It runs on the built-in Google Maps scraper (no cost per search). Apify's Google Maps Actor (paid from the owner's Apify account) is used only when the owner asks for Apify (provider 'apify'), or as the fallback the organization approved when the built-in scraper is not set up or fails; with neither, website search takes it when that is on. The result names the source and provider, and the reason. Google Maps is one source however many cities or providers search it. Only businesses with a public listing are found.",
+    arguments: "what (kind of business, e.g. 'dental clinics'), where (city/region/country), maxResults (5-200, default 50), language (two letters, optional), provider (optional: 'apify' only when the owner asked for Apify), contactAfter (true only when the owner asked to contact, email or message the leads found: the outreach plan is then prepared automatically when the search finishes), channels (optional, with contactAfter: array of email|whatsapp|linkedin|instagram)",
     run: async (args, context) => {
       const profile = await getBusinessProfile();
       const criteria = normalizeCriteria(args, profile.language ?? "en");
@@ -301,14 +316,16 @@ export const TOOLS: Record<string, Tool> = {
       const area = await checkSearchArea(criteria.where, criteria.language);
       if (area?.refused) throw new ToolArgumentError(area.problem);
       if (area) return { ok: false, summary: area.problem };
+      if (args.provider !== undefined && args.provider !== null && args.provider !== "apify") throw new ToolArgumentError("provider may only be 'apify' (when the owner asked for Apify); leave it out otherwise");
       const contactAfter = request ? { channels: channels(args) ?? null, ownerRequest: request, requestId: context.outreachRequestId ?? undefined } : null;
       try {
-        const started = await startDiscovery(criteria, context, { contactAfter });
-        const via = started.provider === "apify" ? " on Apify's Google Maps Scraper" : started.provider === "website" ? " on website and directory search (no Google Maps search is available)" : "";
+        const started = await startDiscovery(criteria, context, { contactAfter, provider: args.provider === "apify" ? "apify" : null, requestMessageId: searchRequestId(context) });
+        const source = started.provider === "website" ? "business websites and directories (no Google Maps search is available)" : sourceLabel("maps", started.provider);
         return {
           ok: true,
-          summary: `Search started for “${started.phrase}”${via} (up to ${criteria.maxResults} businesses); job ${started.jobId}, audience ${started.audienceId}. It runs in the background; results are announced in the chat when done.${contactAfter ? " The outreach plan will be prepared automatically when it finishes." : ""}${started.note ? ` ${started.note}` : ""}`,
-          data: { jobId: started.jobId, audienceId: started.audienceId, phrase: started.phrase, criteria, provider: started.provider, note: started.note },
+          summary: `${started.waiting ? "Queued" : "Search started"} for “${started.phrase}” on ${source} (up to ${criteria.maxResults} businesses); job ${started.jobId}, audience ${started.audienceId}. It runs in the background; results are announced in the chat when done.${contactAfter ? " The outreach plan will be prepared automatically when it finishes." : ""}${started.note ? ` ${started.note}` : ""}`,
+          display: `${started.waiting ? "Queued" : "Searching"} ${source} for “${started.phrase}”`,
+          data: { jobId: started.jobId, audienceId: started.audienceId, phrase: started.phrase, criteria, provider: started.provider, source, waiting: Boolean(started.waiting), note: started.note },
         };
       } catch (error) {
         if (error instanceof DiscoveryUnavailableError) return { ok: false, summary: error.message };
@@ -335,8 +352,12 @@ export const TOOLS: Record<string, Tool> = {
       const request = args.contactAfter === true ? requireOutreachRequest(context) : null;
       const contactAfter = request ? { channels: channels(args) ?? ["instagram", "email", "whatsapp"], ownerRequest: request, requestId: context.outreachRequestId ?? undefined } : null;
       try {
-        const started = await startInstagramProspects({ what: what.slice(0, 200), where: where.slice(0, 200), hashtags, maxResults, language: profile.language ?? "en" }, context, { contactAfter });
-        const via = started.provider === "apify" ? `Instagram search started for ${started.phrase} through Apify` : `Instagram search through Apify is not available, so website and directory search started instead for “${what}” in ${where}`;
+        const started = await startInstagramProspects({ what: what.slice(0, 200), where: where.slice(0, 200), hashtags, maxResults, language: profile.language ?? "en" }, context, { contactAfter, requestMessageId: searchRequestId(context) });
+        const via = started.provider !== "apify"
+          ? `Instagram was NOT searched (Apify cannot run it now); website and directory search started instead for “${what}” in ${where}, which is not an Instagram search`
+          : started.waiting
+            ? `Instagram search for ${started.phrase} through Apify is queued: it waits for a free Apify run slot and starts by itself`
+            : `Instagram search started for ${started.phrase} through Apify`;
         return {
           ok: true,
           summary: `${via}; job ${started.jobId}, audience ${started.audienceId}. Results are announced in the chat when done.${contactAfter ? " The outreach plan will be prepared automatically for those who can be contacted." : ""} ${started.note ?? ""}`.trim(),
@@ -368,11 +389,11 @@ export const TOOLS: Record<string, Tool> = {
       const request = args.contactAfter === true ? requireOutreachRequest(context) : null;
       const contactAfter = request ? { channels: channels(args) ?? (platform === "instagram" ? ["instagram", "email", "whatsapp"] : null), ownerRequest: request, requestId: context.outreachRequestId ?? undefined } : null;
       try {
-        const started = await startSocialProspects(platform, { what: what.slice(0, 200), where: where.slice(0, 200), maxResults, language: profile.language ?? "en" }, context, { contactAfter });
+        const started = await startSocialProspects(platform, { what: what.slice(0, 200), where: where.slice(0, 200), maxResults, language: profile.language ?? "en" }, context, { contactAfter, requestMessageId: searchRequestId(context) });
         const name = platform === "facebook" ? "Facebook" : platform === "linkedin" ? "LinkedIn" : "Instagram";
         return {
           ok: true,
-          summary: `${name} search started for “${what}” in ${where} through Apify (up to ${maxResults}); job ${started.jobId}, audience ${started.audienceId}. Results are announced in the chat when done.${contactAfter ? " The outreach plan will be prepared automatically for those who can be contacted." : ""} ${started.note ?? ""}`.trim(),
+          summary: `${name} search ${started.waiting ? "queued (it waits for a free Apify run slot and starts by itself)" : "started"} for “${what}” in ${where} through Apify (up to ${maxResults}); job ${started.jobId}, audience ${started.audienceId}. Results are announced in the chat when done.${contactAfter ? " The outreach plan will be prepared automatically for those who can be contacted." : ""} ${started.note ?? ""}`.trim(),
           data: { jobId: started.jobId, audienceId: started.audienceId, phrase: started.phrase, provider: started.provider, note: started.note },
         };
       } catch (error) {
@@ -404,7 +425,7 @@ export const TOOLS: Record<string, Tool> = {
       const request = args.contactAfter === true ? requireOutreachRequest(context) : null;
       const contactAfter = request ? { channels: channels(args) ?? null, ownerRequest: request, requestId: context.outreachRequestId ?? undefined } : null;
       try {
-        const started = await startWebDiscovery(criteria, context, { contactAfter });
+        const started = await startWebDiscovery(criteria, context, { contactAfter, requestMessageId: searchRequestId(context) });
         const instagram = started.instagram.usable ? " Public Instagram profiles and posts it returns are read too." : ` Instagram pages are skipped (${started.instagram.reason}).`;
         const provider = webSearchProviderName(started.provider);
         return {
@@ -719,9 +740,10 @@ export const TOOLS: Record<string, Tool> = {
   },
 
   lead_search_status: {
-    description: "The progress or result of a lead search (Google Maps, LinkedIn or web).",
+    description: "The progress or result of a lead search (Google Maps, Instagram, Facebook, LinkedIn or web), and for a request that named several platforms, each platform's state (searched, searching, waiting, not searched, not started) with its reason.",
     arguments: "jobId (optional; the latest search when left out)",
-    run: async (args) => {
+    run: async (args, context) => {
+      const coverage = await requestCoverageLine(context);
       const jobId = uuid(args, "jobId", false);
       const [job] = await db.select().from(assistantJobs)
         .where(and(inOrg(assistantJobs), inArray(assistantJobs.kind, ["discovery", "linkedin_search", "web_discovery", "apify_instagram"]), ...(jobId ? [eq(assistantJobs.id, jobId)] : [])))
@@ -730,14 +752,16 @@ export const TOOLS: Record<string, Tool> = {
       if (job.kind === "web_discovery") {
         return {
           ok: true,
-          summary: `Web search ${job.id}: ${job.status} (${job.stage}). Progress ${JSON.stringify(job.progress)}.${job.error ? ` Error: ${job.error}` : ""}${job.result ? ` Result: ${JSON.stringify(job.result)}` : ""}`,
-          display: webDiscoveryProgress(job),
+          summary: `Web search ${job.id}: ${job.status} (${job.stage}). Progress ${JSON.stringify(job.progress)}.${job.error ? ` Error: ${job.error}` : ""}${job.result ? ` Result: ${JSON.stringify(job.result)}` : ""}${coverage ? ` ${coverage}` : ""}`,
+          display: `${webDiscoveryProgress(job)}${coverage ? `\n${coverage}` : ""}`,
           data: { jobId: job.id, kind: job.kind, status: job.status, stage: job.stage, progress: job.progress, result: job.result, error: job.error, audienceId: job.audienceId },
         };
       }
-      const progress = job.progress as { found?: number; websitesChecked?: number; websitesToCheck?: number; saved?: number };
-      const result = (job.result ?? {}) as { found?: number; eligible?: number; note?: string | null };
-      const display = job.status === "failed"
+      const progress = job.progress as { found?: number; websitesChecked?: number; websitesToCheck?: number; saved?: number; source?: string; waiting?: { reason?: string } };
+      const result = (job.result ?? {}) as { found?: number; eligible?: number; note?: string | null; notSearched?: boolean };
+      const display = progress.waiting && job.status !== "succeeded" && job.status !== "failed"
+        ? `Waiting to start ${progress.source ?? "the search"}: ${progress.waiting.reason ?? "a provider asked to wait"}.`
+        : job.status === "failed"
         ? `The search failed: ${job.error ?? "unknown error"}`
         : job.status === "succeeded"
           ? result.note ?? `Finished: ${result.found ?? 0} businesses found, ${result.eligible ?? 0} can be contacted.`
@@ -745,11 +769,11 @@ export const TOOLS: Record<string, Tool> = {
             ? `Reading websites for contact details: ${progress.websitesChecked ?? 0} of ${progress.websitesToCheck ?? "?"} done (${progress.found ?? 0} businesses found).`
             : job.stage === "saving"
               ? `Saving leads: ${progress.saved ?? 0} of ${progress.found ?? "?"}.`
-              : "Searching Google Maps (usually 3–10 minutes)…";
+              : `Searching ${progress.source ?? "Google Maps"} (usually 3–10 minutes)…`;
       return {
         ok: true,
-        summary: `Search ${job.id}: ${job.status} (${job.stage}). Progress ${JSON.stringify(job.progress)}.${job.error ? ` Error: ${job.error}` : ""}${job.result ? ` Result: ${JSON.stringify(job.result)}` : ""}`,
-        display,
+        summary: `Search ${job.id}: ${job.status} (${job.stage}). Progress ${JSON.stringify(job.progress)}.${job.error ? ` Error: ${job.error}` : ""}${job.result ? ` Result: ${JSON.stringify(job.result)}` : ""}${coverage ? ` ${coverage}` : ""}`,
+        display: `${display}${coverage ? `\n${coverage}` : ""}`,
         data: { jobId: job.id, status: job.status, stage: job.stage, progress: job.progress, result: job.result, error: job.error, audienceId: job.audienceId },
       };
     },

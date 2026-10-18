@@ -39,7 +39,8 @@ describe("apifyAllowance", () => {
 
   test("fails closed when the account allowance cannot be read, and on too many open runs", () => {
     expect(apifyAllowance({ ...base, account: null })).toMatchObject({ ok: false, exhausted: false });
-    expect(apifyAllowance({ ...base, openRuns: 2 })).toMatchObject({ ok: false, exhausted: false });
+    expect(apifyAllowance({ ...base, openRuns: 2 })).toMatchObject({ ok: false, exhausted: false, slotsFull: true });
+    expect(apifyAllowance({ ...base, monthlyBudgetUsd: 0.01 })).not.toHaveProperty("slotsFull");
   });
 
   test("an account without a hard limit is bounded by the owner's budget alone", () => {
