@@ -43,7 +43,8 @@ const NOT_STARTED = new Set(["proposed", "cancelled"]);
 export function runAuthorization(input: RunAuthorizationInput): RunAuthorization {
   const who = input.approverName?.trim() || "an owner";
   const at = input.approvedAt?.toISOString() ?? null;
-  if (NOT_STARTED.has(input.status) || (input.status === "failed" && !input.approvedAt)) {
+  // A run fails only when no channel launched, so nothing was sent, whoever pressed Start.
+  if (NOT_STARTED.has(input.status) || input.status === "failed") {
     if (input.status === "cancelled") return { kind: "none", text: "Not started; nothing was sent from it.", by: null, at: null, until: null };
     if (input.status === "failed") return { kind: "none", text: "It did not start; nothing was sent.", by: null, at: null, until: null };
     return {
@@ -144,8 +145,8 @@ export function whatsappSenderStatus(input: {
   guardrails: WhatsappGuardrails;
   connectedAt: Date | null;
   lastSentAt: Date | null;
-  newChatsInWindow: number;
-  oldestNewChatAt: Date | null;
+  /** When each chat this number started in the last 24 hours was created, oldest first. */
+  newChatTimes: Date[];
   queued: number;
   now: Date;
 }): SenderStatus {
@@ -168,9 +169,12 @@ export function whatsappSenderStatus(input: {
     gates.push(`New chats wait for the ${guardrails.warmUpHours}-hour warm-up after linking`);
     times.push(warmUp);
   }
-  if (input.newChatsInWindow >= guardrails.newChatsPerDay) {
-    gates.push(`${input.newChatsInWindow} of ${guardrails.newChatsPerDay} new chats used in the last 24 hours`);
-    times.push(input.oldestNewChatAt ? new Date(input.oldestNewChatAt.getTime() + NEW_CHAT_WINDOW_MS) : null);
+  const newChats = input.newChatTimes.length;
+  if (newChats >= guardrails.newChatsPerDay) {
+    gates.push(`${newChats} of ${guardrails.newChatsPerDay} new chats used in the last 24 hours`);
+    // send.ts allows a new chat once the count is under the limit: after this many have left the window.
+    const freedBy = input.newChatTimes[newChats - guardrails.newChatsPerDay];
+    times.push(freedBy ? new Date(freedBy.getTime() + NEW_CHAT_WINDOW_MS) : null);
   }
   const wait = secondsUntilNextSend(input.lastSentAt, now, guardrails.minSecondsBetweenSends);
   if (wait > 0) times.push(new Date(now.getTime() + wait * 1000));
@@ -182,6 +186,6 @@ export function whatsappSenderStatus(input: {
     gates,
     nextAt: next?.toISOString() ?? null,
     queued: input.queued,
-    note: input.newChatsInWindow >= guardrails.newChatsPerDay || warmUp ? "Follow-ups in chats already open are not held by the new-chat limits." : null,
+    note: newChats >= guardrails.newChatsPerDay || warmUp ? "Follow-ups in chats already open are not held by the new-chat limits." : null,
   };
 }

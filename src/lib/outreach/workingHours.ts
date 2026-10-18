@@ -103,6 +103,9 @@ export function nextWindowStart(workingHours: WorkingHours, now: Date = new Date
       const zonedDay = addDays(zonedNow, offset);
       const day = workingHours.days[DAY_NAMES[zonedDay.getDay()]];
       if (!day?.enabled) continue;
+      // An overnight window also covers its own day's early morning (isWithinDayWindow), so a later day can open at midnight.
+      const midnight = fromZonedTime(setTime(zonedDay, { hours: 0, minutes: 0, seconds: 0, milliseconds: 0 }), workingHours.timezone);
+      if (offset > 0 && isWithinWorkingHours(workingHours, midnight)) return midnight;
       const { hours, minutes } = parseHHmm(day.from);
       const start = fromZonedTime(setTime(zonedDay, { hours, minutes, seconds: 0, milliseconds: 0 }), workingHours.timezone);
       if (start > now) return start;
