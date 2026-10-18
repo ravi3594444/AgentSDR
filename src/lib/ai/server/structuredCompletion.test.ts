@@ -4,13 +4,13 @@ import { completeStructured, isStrictJsonSchema, type StructuredCompletionRuntim
 import { actionsProblem, agentReplySchema, nextAgentBatch, outreachRequested, parseAgentReply, type AgentReply } from "@/lib/assistant/agent";
 import { parseWriterReply, writerReplyInstructions, WRITER_REPLY_SCHEMAS } from "@/lib/assistant/writerReply";
 
-type Reply = { toolArgs?: string; content?: string; throws?: Error; error?: unknown };
+type Reply = { toolArgs?: string; content?: string; throws?: Error; error?: unknown; finish?: string };
 
 /** A runtime whose client answers each call from the scripted list, in order. */
-function scripted(replies: Reply[], schemaName = "submit") {
+function scripted(replies: Reply[], schemaName = "submit", providerKey: "openrouter" | "aimlapi" = "openrouter") {
   const requests: unknown[] = [];
   const runtime: StructuredCompletionRuntime = async () => ({
-    providerKey: "openrouter",
+    providerKey,
     selection: { provider: "minimax", modelId: "minimax/minimax-m3" },
     routing: { provider: { only: ["minimax"] } },
     structuredOutput: "tool_call",
@@ -22,7 +22,7 @@ function scripted(replies: Reply[], schemaName = "submit") {
       if (reply.throws) throw reply.throws;
       if (reply.error !== undefined) return { error: reply.error };
       return {
-        choices: [{ message: {
+        choices: [{ finish_reason: reply.finish ?? "tool_calls", message: {
           content: reply.content ?? null,
           tool_calls: reply.toolArgs === undefined
             ? []
@@ -340,6 +340,43 @@ describe("outreach response recovery through the provider transport", () => {
       ...input, schemaName: "lead_sorting", jsonSchema: WRITER_REPLY_SCHEMAS.lead_sorting, maxAttempts: 2,
       accept: (text) => { parseWriterReply(text, "lead_sorting"); },
     }, { runtime, sleep: noSleep }), /lead_sorting failed after 2 attempts: lead_sorting.leads must be an array/);
+  });
+});
+
+describe("a function call cut off at the token limit (Claude Haiku 5.5 on AI/ML API, 18 Oct 2026)", () => {
+  // The answers the owner saw, replayed: {} and message-only calls, each ending with finish "length".
+  const schema = agentReplySchema(["find_leads", "report"]);
+  const assistant = { ...input, schemaName: "assistant_reply", jsonSchema: schema, maxOutputTokens: 1_500, accept: (text: string) => void parseAgentReply(text, ["find_leads", "report"], { allowEmpty: true }) };
+
+  test("AI/ML API names the function to call instead of leaving it to the model", async () => {
+    const { runtime, requests } = scripted([{ toolArgs: '{"message":"","actions":[],"suggestions":[]}' }], "assistant_reply", "aimlapi");
+    await completeStructured(assistant, { runtime, sleep: noSleep });
+    assert.deepEqual((requests[0] as { tool_choice: unknown }).tool_choice, { type: "function", function: { name: "assistant_reply" } });
+  });
+
+  test("OpenRouter keeps tool_choice auto", async () => {
+    const { runtime, requests } = scripted([{ toolArgs: '{"message":"","actions":[],"suggestions":[]}' }], "assistant_reply");
+    await completeStructured(assistant, { runtime, sleep: noSleep });
+    assert.equal((requests[0] as { tool_choice: unknown }).tool_choice, "auto");
+  });
+
+  test("{} and message-only calls cut off by the limit are retried with twice the budget, never accepted", async () => {
+    const good = '{"message":"Searching Mumbai.","actions":[{"tool":"find_leads","arguments":"{\\"what\\":\\"real estate agents\\",\\"where\\":\\"Mumbai\\"}"}],"suggestions":[]}';
+    const { runtime, requests } = scripted([
+      { toolArgs: "{}", finish: "length" },
+      { toolArgs: '{"message":"I\'m starting searches for real estate agents in Mumbai"}', finish: "length" },
+      { toolArgs: good },
+    ], "assistant_reply", "aimlapi");
+    const result = await completeStructured(assistant, { runtime, sleep: noSleep });
+    assert.equal(result.attempts, 3);
+    assert.equal(JSON.parse(result.text).actions.length, 1);
+    const budgets = (requests as Record<string, unknown>[]).map((request) => request.max_tokens ?? request.max_completion_tokens);
+    assert.deepEqual(budgets, [1_500, 3_000, 6_000]);
+  });
+
+  test("a complete-looking call without actions is still refused with a repair instruction", async () => {
+    const { runtime } = scripted([{ toolArgs: '{"message":"Searching now."}' }, { toolArgs: '{"message":"Searching now."}' }, { toolArgs: "{}" }], "assistant_reply", "aimlapi");
+    await assert.rejects(completeStructured(assistant, { runtime, sleep: noSleep }), /actions must be an array/);
   });
 });
 

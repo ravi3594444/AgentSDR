@@ -181,6 +181,9 @@ export async function runAgentTurn(input: {
     const toolNames = toolNamesFor(features);
     const maxSteps = autonomy.on ? AUTONOMOUS_MAX_STEPS : MAX_STEPS;
     let pendingReply: AgentReply | null = null;
+    // A "Retrying" note this turn posted while the model was asked again (updated, then hidden or turned into the failure summary).
+    let retryNoteId: string | null = null;
+    const turnStartedAt = Date.now() - 1_000;
     let replanReason: string | null = null;
     const observations = new Map<string, ToolResult>();
     // A long turn keeps the thread claimed: one step (writing a plan) can take minutes.
@@ -219,6 +222,11 @@ export async function runAgentTurn(input: {
         }
         if (!reply) {
           const completion = await completeStructured({
+            onRetry: async ({ attempt, maxAttempts }) => {
+              const content = `Retrying: the AI model's answer was incomplete, so I asked it again (attempt ${attempt} of ${maxAttempts}).`;
+              if (retryNoteId) await updateMessage(retryNoteId, { content });
+              else retryNoteId = (await addMessage({ threadId: input.threadId, role: "event", content, toolResult: { transient: true } })).id;
+            },
             timeoutMs: 90_000,
             maxOutputTokens: 1_500,
             schemaName: "assistant_reply",
@@ -233,16 +241,31 @@ export async function runAgentTurn(input: {
             },
           });
           await recordUsage("assistant", completion);
+          // Recovered: the "Retrying" note has done its job.
+          if (retryNoteId) await updateMessage(retryNoteId, { toolResult: { transient: true, hidden: true } });
+          retryNoteId = null;
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        await addMessage({
-          threadId: input.threadId,
-          role: "event",
-          content: /AI provider|AI Settings|default model|Connect an AI/i.test(message)
-            ? `The assistant needs an AI provider: ${message}`
-            : `The assistant could not answer (${message.slice(0, 300)}). Try again in a moment.`,
-        });
+        if (/AI provider|AI Settings|default model|Connect an AI/i.test(message)) {
+          await addMessage({ threadId: input.threadId, role: "event", content: `The assistant needs an AI provider: ${message}` });
+          return;
+        }
+        // The model's raw answer and the schema's wording stay in the server log (structuredCompletion.ts).
+        console.warn(`[assistant] turn stopped: ${message.slice(0, 500)}`);
+        const done = (await listMessages(input.threadId, 80))
+          .filter((row) => row.role === "tool" && row.status === "ok" && row.createdAt.getTime() >= turnStartedAt)
+          .map((row) => String((row.toolResult as { display?: unknown } | null)?.display ?? row.content).split("\n")[0]!.slice(0, 120));
+        const content = [
+          /failed after \d+ attempts/.test(message)
+            ? "The AI model did not give a usable answer after several tries, so I stopped here."
+            : "The AI model could not be reached just now, so I stopped here.",
+          done.length ? `Done so far: ${done.slice(0, 6).join("; ")}.` : "Nothing was started or changed in this step.",
+          "Press Retry to continue the same request: what is done is kept and will not be repeated.",
+        ].join(" ");
+        const toolResult = { data: { retry: true } };
+        if (retryNoteId) await updateMessage(retryNoteId, { content, toolResult });
+        else await addMessage({ threadId: input.threadId, role: "event", content, toolResult });
         return;
       }
       const staged = nextAgentBatch(reply as unknown as AgentReply);
@@ -353,3 +376,6 @@ export async function continueAfterEvent(threadId: string): Promise<void> {
   }
 }
 
+
+/** The system prompt a chat turn sends, for the live model checks (scripts/e2e/aiml-live.ts). */
+export { systemPrompt as assistantSystemPrompt };

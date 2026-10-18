@@ -70,6 +70,8 @@ export type StructuredCompletionInput = {
    * attempt; the thrown message is surfaced if every attempt is rejected.
    */
   accept?: (text: string) => void;
+  /** Called before each retry (attempt 2, 3, …), e.g. to tell the owner the model is being asked again. */
+  onRetry?: (info: { attempt: number; maxAttempts: number; reason: string }) => void | Promise<void>;
   /** OpenRouter plugins, e.g. `[{ id: "web" }]` for grounded answers. */
   plugins?: Array<Record<string, unknown>>;
   /** Sees each request before it is sent, so a caller can audit one that fails. */
@@ -246,7 +248,13 @@ export async function completeStructured(
           parameters: input.jsonSchema,
         },
       }],
-      tool_choice: "auto" as const,
+      // AI/ML API: the call is required, not left to the model. Measured 18 Oct 2026 with the
+      // assistant's real prompt: with "auto", Claude Haiku 5.5 spent its whole budget reasoning
+      // and stopped mid-call (finish "length", arguments {} or message-only) every time, and
+      // Grok 4.7 answered in prose; with the function named, both returned complete calls.
+      tool_choice: providerKey === "openrouter"
+        ? "auto" as const
+        : { type: "function" as const, function: { name: input.schemaName } },
     };
   }
 
@@ -302,6 +310,12 @@ export async function completeStructured(
           : `The model returned neither a ${input.schemaName} call nor content`,
       );
     }
+    if (choice?.finish_reason === "length") {
+      // A call cut off at the token limit can still parse ({} or a lone message): never accept it as the answer.
+      const spent = outputTokens;
+      outputTokens *= 2;
+      throw new RejectedAttemptError(`The model ran out of output tokens (${spent}) while writing its ${input.schemaName} call`);
+    }
     const text = call.arguments;
     if (typeof text !== "string" || !isJsonObjectText(text)) {
       throw new RejectedAttemptError(`The ${input.schemaName} call carried arguments that are not a JSON object`);
@@ -339,6 +353,8 @@ export async function completeStructured(
   let lastError: unknown;
   for (let index = 0; index < maxAttempts; index += 1) {
     if (index > 0) {
+      // Lets the caller say it is retrying; a failure to say so never stops the retry.
+      await Promise.resolve(input.onRetry?.({ attempt: index + 1, maxAttempts, reason: lastError instanceof Error ? lastError.message : String(lastError) })).catch(() => undefined);
       await (dependencies.sleep ?? sleep)(RETRY_BACKOFF_MS[Math.min(index - 1, RETRY_BACKOFF_MS.length - 1)], input.signal);
     }
     try {

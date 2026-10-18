@@ -1162,6 +1162,29 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
     }
   }
 
+  /** Takes the turn again for the owner's latest request after the model could not finish it. */
+  async function retryTurn() {
+    if (sending || state.busy) return;
+    jumpToLatest();
+    setSending(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/assistant/threads/retry", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ threadId }) });
+      if (response.status === 409) {
+        setState((previous) => ({ ...previous, busy: true }));
+        await refresh(false);
+        return;
+      }
+      const next = await readJson<AssistantStatePayload>(response);
+      setState((previous) => ({ ...next, setup: previous.setup }));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      await refresh(false);
+    } finally {
+      setSending(false);
+    }
+  }
+
   function pickStarter(starter: Starter) {
     if (starter.send) {
       void send(starter.text);
@@ -1206,10 +1229,17 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
   const assistantItems = (items: Message[]) => items.map((message) => {
     if (message.role === "assistant") return <div key={message.id} className="text-paragraph-sm text-text-strong-950"><RichText text={message.content} /></div>;
     if (message.role === "event") {
+      // Only the newest event can offer Retry: an older failure was already followed by more work.
+      const retry = message.toolResult?.data?.retry === true && message.id === shown.at(-1)?.id;
       return (
         <div key={message.id} className="flex items-start gap-2 rounded-lg bg-bg-weak-50 px-3 py-2 text-paragraph-xs text-text-sub-600">
           <RiInformationLine className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-          <span>{message.content}</span>
+          <span className="min-w-0 flex-1">{message.content}</span>
+          {retry && (
+            <Button.Root variant="neutral" mode="stroke" size="xxsmall" className="shrink-0" disabled={sending || state.busy} onClick={() => void retryTurn()}>
+              Retry
+            </Button.Root>
+          )}
         </div>
       );
     }
