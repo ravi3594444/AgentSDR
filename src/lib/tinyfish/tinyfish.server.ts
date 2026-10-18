@@ -1,6 +1,7 @@
 import "server-only";
 
 import { createHash } from "node:crypto";
+import { BROWSER_LIMITS } from "@/lib/browser/snapshot";
 import { db } from "@/lib/db";
 import { isMissingTable } from "@/lib/features/flags.server";
 import { decryptIntegrationCredential, encryptIntegrationCredential } from "@/lib/integrations/credentials";
@@ -122,6 +123,10 @@ export async function saveTinyfishSettings(
     const value = Number(input.browserMinutesPerDay);
     const { min, max } = TINYFISH_LIMITS.browserMinutesPerDay;
     if (!Number.isInteger(value) || value < min || value > max) throw new TinyfishSettingsError(`Browser minutes a day must be a whole number from ${min} to ${max}`);
+    // Each session reserves its full length up front, so fewer minutes could never open one.
+    if (value > 0 && value < BROWSER_LIMITS.maxSessionMinutes) {
+      throw new TinyfishSettingsError(`Browser minutes a day must be 0 (off) or at least ${BROWSER_LIMITS.maxSessionMinutes}, one session's length`);
+    }
     browserMinutesPerDay = value;
   }
   let useForWebSearch = current?.useForWebSearch ?? true;

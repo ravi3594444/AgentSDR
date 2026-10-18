@@ -71,6 +71,33 @@ describe("TinyFish client", () => {
     expect([e.status, e.uncertain]).toEqual([null, true]);
   });
 
+  /** An answer whose headers arrived and whose body is cut off part way (a reset socket, the timeout). */
+  const cutOff = (status: number, headers: Record<string, string> = {}) => new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode("{\"results\":["));
+      controller.error(new TypeError("The socket connection was closed unexpectedly"));
+    },
+  }), { status, headers: { "content-type": "application/json", ...headers } });
+
+  test("a 2xx answer cut off while its body is read is uncertain: TinyFish did the work", async () => {
+    answer = () => cutOff(200);
+    const fetched = (await tinyfishFetch("k".repeat(20), ["https://a.example/"]).catch((x: unknown) => x)) as TinyfishError;
+    expect(fetched).toBeInstanceOf(TinyfishError);
+    expect([fetched.product, fetched.status, fetched.uncertain]).toEqual(["fetch", null, true]);
+    expect(fetched.message).toContain("cut off");
+    answer = () => cutOff(201);
+    const browser = (await createTinyfishBrowserSession("k".repeat(20), { timeoutSeconds: 60 }).catch((x: unknown) => x)) as TinyfishError;
+    expect(browser).toBeInstanceOf(TinyfishError);
+    expect([browser.product, browser.uncertain]).toEqual(["browser", true]);
+  });
+
+  test("an error answer cut off while its body is read keeps its status and wait", async () => {
+    answer = () => cutOff(429, { "retry-after": "7" });
+    const e = (await tinyfishSearch("k".repeat(20), { query: "x" }).catch((x: unknown) => x)) as TinyfishError;
+    expect(e).toBeInstanceOf(TinyfishError);
+    expect([e.status, e.retryAfterMs, e.uncertain]).toEqual([429, 7_000, false]);
+  });
+
   test("browser sessions are created and ended by id", async () => {
     answer = (request) => request.method === "POST"
       ? json(201, { session_id: "br-1/2", cdp_url: "wss://x.tf.test/cdp", base_url: "https://x.tf.test" })
