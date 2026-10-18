@@ -34,5 +34,6 @@ scripts
 !scripts/add-assistant-automation.ts
 !scripts/add-handoff.ts
 !scripts/add-instagram-intake-discovery.ts
+!scripts/add-instagram-outreach.ts
 
 README.md
