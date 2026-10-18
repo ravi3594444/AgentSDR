@@ -1,7 +1,8 @@
 /**
  * TinyFish's real API, once per product, to catch contract drift: one
- * search, one fetch of a public page, and one browser session that is
- * created and ended at once (about $0.002 of Browser time). Reads the key
+ * search, one fetch of a public page, and one browser session that the
+ * assistant's real driver (playwright-core over CDP) reads a page in before
+ * it is ended (about $0.002 of Browser time). Reads the key
  * from TINYFISH_API_KEY for this check only; the app itself never reads a
  * TinyFish key from the environment. Prints shapes and timings, never the
  * key.
@@ -10,6 +11,7 @@
  */
 import { tinyfishFetchResult, tinyfishSearchHits } from "@/lib/tinyfish/catalog";
 import { createTinyfishBrowserSession, deleteTinyfishBrowserSession, tinyfishFetch, tinyfishSearch, TinyfishError } from "@/services/tinyfish";
+import { connectBrowser } from "@/lib/browser/driver.server";
 
 const key = process.env.TINYFISH_API_KEY;
 if (!key) {
@@ -51,6 +53,16 @@ if (!process.argv.includes("--no-browser")) {
   try {
     const [session, ms] = await timed(() => createTinyfishBrowserSession(key, { url: "https://example.com", timeoutSeconds: 60 }));
     check("Browser creates a session with a CDP URL", session.cdpUrl.startsWith("wss://"), `${ms} ms`);
+    try {
+      // The real driver (playwright-core over CDP), as the assistant's browser tools use it.
+      const [page, connectMs] = await timed(() => connectBrowser(session.cdpUrl));
+      await page.goto("https://example.com/");
+      const snapshot = await page.snapshot();
+      check("the assistant's driver reads the page over CDP", /Example Domain/i.test(snapshot.title) && snapshot.elements.length > 0, `${connectMs} ms to connect; title “${snapshot.title}”, ${snapshot.elements.length} elements`);
+      await page.disconnect();
+    } catch (error) {
+      check("the assistant's driver reads the page over CDP", false, error instanceof Error ? error.message.slice(0, 200) : String(error));
+    }
     await deleteTinyfishBrowserSession(key, session.sessionId);
     await deleteTinyfishBrowserSession(key, session.sessionId);
     check("Browser ends the session, twice without error", true);

@@ -330,6 +330,18 @@ describe("contacts and links from the chat", () => {
     expect(urlGiven("", owner)).toBe(false);
   });
 
+  test("a browser step ends the batch, like a page read; browser_open follows the link rule", () => {
+    const reply = { message: "Working.", suggestions: [], actions: [
+      { tool: "browser_open", args: { url: "https://dir.example/agents" } },
+      { tool: "browser_click", args: { n: 3 } },
+    ] };
+    const { batch, replanAfterRead } = nextAgentBatch(reply);
+    expect(batch.actions.map((action) => action.tool)).toEqual(["browser_open"]);
+    expect(replanAfterRead).toBe(true);
+    expect(actionsProblem([{ tool: "browser_open", args: { url: "https://dir.example/agents" } }], { smallTalk: false, profile: {}, ownerCorpus: "TOOL web_search: https://dir.example/agents", outreachRequested: false })).toBeNull();
+    expect(actionsProblem([{ tool: "browser_open", args: { url: "https://elsewhere.example/" } }], { smallTalk: false, profile: {}, ownerCorpus: "TOOL web_search: https://dir.example/agents", outreachRequested: false })).toContain("browser_open opens only links");
+  });
+
   test("a link is given only for the same site or its subdomain, never a look-alike or a parent", () => {
     const corpus = "TOOL web_search: 1. Acme Realty — https://www.acme-realty.example/agents — Pune agents\nwrite to sales@shop.widgets.example";
     expect(urlGiven("https://acme-realty.example/contact", corpus)).toBe(true);

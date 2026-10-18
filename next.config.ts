@@ -4,6 +4,10 @@ import pkg from "./package.json";
 const nextConfig: NextConfig = {
   output: "standalone",
 
+  // The assistant's remote browser (src/lib/browser/) drives TinyFish Browser over
+  // CDP with playwright-core: loaded from node_modules at runtime, never bundled.
+  serverExternalPackages: ["playwright-core"],
+
   // A second dev server beside the usual one (e.g. the demo, DEMO_MODE=true,
   // on its own database) needs its own build directory: two `next dev` in one
   // folder otherwise fight over .next's lock.

@@ -20,6 +20,7 @@ import { addMessage, claimThread, listMessages, releaseThread, touchThread, upda
 import { recordUsage } from "./usage.server";
 import { runTool, setupSnapshot, toolCatalog, toolNamesFor, type ToolContext, type ToolResult } from "./tools.server";
 import { observationKey } from "./observation";
+import { closeBrowser } from "@/lib/browser/browser.server";
 import { instagramCapabilityProblem } from "./instagramContacts";
 
 /**
@@ -193,7 +194,7 @@ export async function runAgentTurn(input: {
       const messages = await listMessages(input.threadId, 80);
       // What the owner wrote or attached: business information is saved only from it.
       const ownerCorpus = messages
-        .filter((message) => message.role === "user" || (message.role === "tool" && (message.tool === "read_document" || message.tool === "import_contacts" || ((message.tool === "read_webpage" || message.tool === "web_search" || message.tool === "treg_call") && message.status === "ok"))))
+        .filter((message) => message.role === "user" || (message.role === "tool" && (message.tool === "read_document" || message.tool === "import_contacts" || ((message.tool === "read_webpage" || message.tool === "web_search" || message.tool === "treg_call" || message.tool?.startsWith("browser_")) && message.status === "ok"))))
         .map((message) => `${message.content} ${typeof message.toolResult?.summary === "string" ? message.toolResult.summary : ""}`)
         .join("\n") + `\n${documentsText}`;
       let reply: AgentReply | null = null;
@@ -346,6 +347,8 @@ export async function runAgentTurn(input: {
     });
   } finally {
     if (heartbeat) clearInterval(heartbeat);
+    // A browser the turn opened stops billing when the turn ends.
+    await closeBrowser(input.threadId).catch((error: unknown) => console.warn("[assistant] closing the browser failed:", error));
     await releaseThread(input.threadId);
   }
 }

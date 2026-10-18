@@ -57,7 +57,7 @@ export type AgentReply = { message: string; actions: AgentAction[]; suggestions:
  * completion message. The owner's request remains in the conversation.
  */
 export function nextAgentBatch(reply: AgentReply): { batch: AgentReply; pending: AgentReply | null; replanAfterRead: boolean } {
-  const pageIndex = reply.actions.findIndex((action) => action.tool === "read_webpage");
+  const pageIndex = reply.actions.findIndex((action) => PAGE_STATE_TOOLS.has(action.tool));
   const replanAfterRead = pageIndex >= 0 && pageIndex < MAX_ACTIONS_PER_STEP;
   const count = replanAfterRead ? pageIndex + 1 : MAX_ACTIONS_PER_STEP;
   const actions = reply.actions.slice(0, count);
@@ -215,7 +215,10 @@ export type TranscriptMessage = {
 
 /** The conversation as the model reads it: newest last, tool results by their summary. */
 /** Tools whose result the model reads at length (the rest are cut to 1,500 characters). */
-const LONG_RESULT_TOOLS = new Set(["read_webpage", "web_search", "treg_search", "treg_call"]);
+const LONG_RESULT_TOOLS = new Set(["read_webpage", "web_search", "treg_search", "treg_call", "browser_open", "browser_read", "browser_click", "browser_fill", "browser_scroll"]);
+
+/** Tools whose result the next action depends on (a page read, a browser step): the batch ends after them. */
+export const PAGE_STATE_TOOLS = new Set(["read_webpage", "browser_open", "browser_read", "browser_click", "browser_fill", "browser_scroll"]);
 
 export function transcriptText(messages: readonly TranscriptMessage[], maxChars = 24_000): string {
   const lines = messages.map((message) => {
@@ -457,8 +460,8 @@ export function actionsProblem(actions: readonly AgentAction[], input: { smallTa
       if (invented.length) return `add_contacts: ${invented.join(", ")} ${invented.length === 1 ? "is" : "are"} not in what the owner wrote, a page read for them or a Treg answer. Add only those contacts, exactly as given.`;
       continue;
     }
-    if (action.tool === "read_webpage") {
-      if (!urlGiven(action.args.url, input.ownerCorpus)) return "read_webpage opens only links the owner gave, links on a page already read, or results web_search returned. Search for it with web_search, or ask the owner for the link.";
+    if (action.tool === "read_webpage" || action.tool === "browser_open") {
+      if (!urlGiven(action.args.url, input.ownerCorpus)) return `${action.tool} opens only links the owner gave, links on a page already read, or results web_search returned. Search for it with web_search, or ask the owner for the link.`;
       continue;
     }
     if (action.tool !== "save_business_info") continue;

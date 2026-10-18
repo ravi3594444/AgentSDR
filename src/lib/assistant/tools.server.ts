@@ -15,6 +15,8 @@ import { normalizeWebCriteria, startWebDiscovery, WebDiscoveryUnavailableError }
 import { generalWebSearch, webSearchAvailability, webSearchAvailabilityFrom, webSearchProviderName, WebSearchUnavailableError } from "@/lib/discovery/webSearch.server";
 import { fetchFailureText } from "@/lib/tinyfish/catalog";
 import { fetchWithTinyfish, tinyfishConnection, TinyfishWaitError } from "@/lib/tinyfish/tinyfish.server";
+import { browserAct, BrowserUnavailableError, closeBrowser, openBrowser, type BrowserAction } from "@/lib/browser/browser.server";
+import { BROWSER_LIMITS, formatSnapshot, type PageSnapshot } from "@/lib/browser/snapshot";
 import type { ResearchEvidence } from "@/lib/research/sources/catalog";
 import { readResearchSource } from "@/lib/research/sources/read.server";
 import { isRedditHost, redditRefusal } from "@/lib/research/sources/reddit";
@@ -237,6 +239,58 @@ function webDiscoveryProgress(job: typeof assistantJobs.$inferSelect): string {
   if (job.stage === "reading") return `Reading websites and directories: ${progress.read ?? 0} of ${progress.candidates ?? "?"} pages done (${progress.found ?? 0} found so far).`;
   if (job.stage === "saving") return `Saving leads: ${progress.saved ?? 0} of ${progress.found ?? "?"}.`;
   return `Searching the web (${progress.searchesDone ?? 0} of ${progress.searches ?? "?"} searches done)…`;
+}
+
+/** Where a browser navigation ended: a public website without a login wall, or why not. */
+async function browserNavigationProblem(raw: string): Promise<string | null> {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return `the browser is on “${raw}”, which is not a web page`;
+  }
+  if (url.protocol === "about:") return null;
+  if (LOGIN_WALLED.test(url.hostname) || isRedditHost(url.hostname)) return `${url.hostname} needs a login or may not be read; nothing from it is used — go back or open another page`;
+  try {
+    await assertPublicPageUrl(url.toString());
+  } catch {
+    return `${url.hostname} is not a public website; nothing from it is used`;
+  }
+  return null;
+}
+
+/** A browser step's result for the model: the page now, numbered elements to act on, and any problem with where it ended. */
+function browserResult(verb: string, snapshot: PageSnapshot, problem: string | null, extra = ""): ToolResult {
+  if (problem) return { ok: false, summary: `${verb}: ${problem}.` };
+  const host = (() => {
+    try {
+      return new URL(snapshot.url).hostname.replace(/^www\./, "");
+    } catch {
+      return snapshot.url;
+    }
+  })();
+  return {
+    ok: true,
+    summary: `${verb}${extra}.\n${formatSnapshot(snapshot)}`,
+    display: `${verb} · ${host}${snapshot.title ? ` · ${snapshot.title.slice(0, 80)}` : ""} · ${snapshot.elements.length} elements`,
+    data: { url: snapshot.url, title: snapshot.title, elements: snapshot.elements.length },
+  };
+}
+
+async function runBrowserStep(context: ToolContext, verb: string, action: BrowserAction): Promise<ToolResult> {
+  try {
+    const { snapshot, problem } = await browserAct(context.threadId, action, browserNavigationProblem);
+    return browserResult(verb, snapshot, problem);
+  } catch (error) {
+    if (error instanceof BrowserUnavailableError) return { ok: false, summary: error.message };
+    throw error;
+  }
+}
+
+function elementNumber(args: Record<string, unknown>): number {
+  const n = Number(args.n);
+  if (!Number.isInteger(n) || n < 1) throw new ToolArgumentError("n must be the number of an element from the latest page reading");
+  return n;
 }
 
 /** The per-platform coverage of the request this turn serves, when it named several platforms. */
@@ -738,6 +792,73 @@ export const TOOLS: Record<string, Tool> = {
         links: publicLinks(page.html, page.url, 40),
         via: via("direct"),
       });
+    },
+  },
+
+  browser_open: {
+    description: `Open a page in a remote browser (TinyFish Browser), when reading a page with read_webpage is not enough: a search form, filters, "load more" buttons, pagination by clicking, or a page that shows content only after interaction. It is paid by the minute (about $0.002) within the owner's daily browser minutes (Settings → Organization → TinyFish; off unless set), one browser per organization, each session at most ${BROWSER_LIMITS.maxSessionMinutes} minutes; it closes when the turn ends. The URL follows the same rule as read_webpage (a link the owner gave, a web_search result, or a link on a page already read). It never logs in, never types passwords, and cannot use Instagram, Facebook, X, TikTok, LinkedIn or Reddit. Returns the page text and its numbered elements for browser_click and browser_fill.`,
+    arguments: "url",
+    run: async (args, context) => {
+      const raw = text(args, "url", true)!.trim();
+      let url: URL;
+      try {
+        url = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+      } catch {
+        throw new ToolArgumentError(`“${raw}” is not a web address`);
+      }
+      const blocked = await browserNavigationProblem(url.toString());
+      if (blocked) return { ok: false, summary: `Not opened: ${blocked}.` };
+      try {
+        const opened = await openBrowser(url.toString(), context.threadId, browserNavigationProblem);
+        const allowance = opened.allowance;
+        return browserResult(opened.reused ? "Opened in the chat's browser" : "Opened a browser", opened.snapshot, opened.problem, opened.reused ? "" : ` (paid by the minute; ${allowance.usedToday} of today's ${allowance.minutesPerDay} browser minutes reserved or used)`);
+      } catch (error) {
+        if (error instanceof BrowserUnavailableError) return { ok: false, summary: error.message };
+        throw error;
+      }
+    },
+  },
+
+  browser_read: {
+    description: "Read the page open in the chat's browser again: its text and numbered elements.",
+    arguments: "none",
+    run: async (_args, context) => runBrowserStep(context, "Read the browser page", { kind: "read" }),
+  },
+
+  browser_click: {
+    description: "Click an element of the page open in the browser, by its number from the latest reading (a link, a button, a \"next\" or \"load more\" control). Returns the page afterwards.",
+    arguments: "n (element number)",
+    run: async (args, context) => runBrowserStep(context, `Clicked element ${String(args.n)}`, { kind: "click", n: elementNumber(args) }),
+  },
+
+  browser_fill: {
+    description: "Type into a text field of the page open in the browser (a search box or a filter), by its number from the latest reading; submit true presses Enter. Never a password or login field.",
+    arguments: "n (element number), text (what to type, up to 200 characters), submit (optional true/false)",
+    run: async (args, context) => {
+      const value = text(args, "text", true)!;
+      if (value.length > 200) throw new ToolArgumentError("text must be at most 200 characters");
+      if (args.submit !== undefined && typeof args.submit !== "boolean") throw new ToolArgumentError("submit must be true or false");
+      return runBrowserStep(context, `Typed into element ${String(args.n)}`, { kind: "fill", n: elementNumber(args), text: value, submit: args.submit === true });
+    },
+  },
+
+  browser_scroll: {
+    description: "Scroll the page open in the browser (to load more results on pages that load as you scroll).",
+    arguments: "direction (down|up, default down)",
+    run: async (args, context) => {
+      const direction = args.direction === "up" ? "up" : "down";
+      return runBrowserStep(context, `Scrolled ${direction}`, { kind: "scroll", direction });
+    },
+  },
+
+  browser_close: {
+    description: "Close the chat's browser when you are done with it (it also closes when the turn ends or after a few idle minutes).",
+    arguments: "none",
+    run: async (_args, context) => {
+      const minutes = await closeBrowser(context.threadId);
+      return minutes === null
+        ? { ok: true, summary: "No browser was open." }
+        : { ok: true, summary: `Browser closed after ${minutes} minute${minutes === 1 ? "" : "s"}.`, display: `Browser closed (${minutes} min)` };
     },
   },
 

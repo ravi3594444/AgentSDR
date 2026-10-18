@@ -34,6 +34,7 @@ export * from "./treg/schema";
 export * from "./tavily/schema";
 export * from "./tinyfish/schema";
 export * from "./quota/schema";
+export * from "./browser/schema";
 
 // Web research about imported companies (src/lib/research/).
 export * from "./research/schema";

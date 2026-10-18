@@ -1093,6 +1093,28 @@ CREATE TABLE public.autopilot_takeovers (
 );
 
 --
+-- Name: browser_sessions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.browser_sessions (
+    organization_id uuid NOT NULL,
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    thread_id uuid,
+    provider text DEFAULT 'tinyfish'::text NOT NULL,
+    provider_session_id text,
+    encrypted_cdp_url text,
+    usage_id uuid,
+    status text DEFAULT 'opening'::text NOT NULL,
+    current_url text,
+    error text,
+    started_at timestamp with time zone DEFAULT now() NOT NULL,
+    last_used_at timestamp with time zone DEFAULT now() NOT NULL,
+    ended_at timestamp with time zone,
+    minutes_used integer,
+    CONSTRAINT browser_sessions_status_chk CHECK ((status = ANY (ARRAY['opening'::text, 'open'::text, 'closed'::text, 'failed'::text])))
+);
+
+--
 -- Name: call_campaign_contacts; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3369,6 +3391,13 @@ ALTER TABLE ONLY public.autopilot_takeovers
     ADD CONSTRAINT autopilot_takeovers_pkey PRIMARY KEY (id);
 
 --
+-- Name: browser_sessions browser_sessions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.browser_sessions
+    ADD CONSTRAINT browser_sessions_pkey PRIMARY KEY (id);
+
+--
 -- Name: call_campaign_contacts call_campaign_contacts_campaign_person_uq; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4589,6 +4618,12 @@ CREATE UNIQUE INDEX autopilot_takeovers_conversation_uq ON public.autopilot_take
 --
 
 CREATE INDEX autopilot_takeovers_organization_idx ON public.autopilot_takeovers USING btree (organization_id);
+
+--
+-- Name: browser_sessions_org_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX browser_sessions_org_status_idx ON public.browser_sessions USING btree (organization_id, status, started_at);
 
 --
 -- Name: call_campaign_contacts_campaign_stage_idx; Type: INDEX; Schema: public; Owner: -
@@ -6035,6 +6070,13 @@ ALTER TABLE ONLY public.autopilot_replies
 
 ALTER TABLE ONLY public.autopilot_takeovers
     ADD CONSTRAINT autopilot_takeovers_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
+
+--
+-- Name: browser_sessions browser_sessions_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.browser_sessions
+    ADD CONSTRAINT browser_sessions_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
 
 --
 -- Name: call_campaign_contacts call_campaign_contacts_campaign_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
