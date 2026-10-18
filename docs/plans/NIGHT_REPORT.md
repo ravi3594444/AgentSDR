@@ -60,8 +60,61 @@ and evidence, CRM send paths, and tenancy and Activity. S11 got its own
 review. Each finding was handed to a second agent whose job was to refute it.
 
 Results: 35 findings confirmed, 3 refuted. The confirmed ones were 1
-blocker, 6 major and 28 minor. The fixes and their verification are in the
-section below.
+blocker, 6 major and 28 minor.
+
+### Round one of fixes (`0634a6d`)
+
+The findings were split into six clusters with no files in common:
+providers, assistant, plan evidence, wrong numbers, CRM workspace and
+Activity. Each cluster was fixed test-first in its own worktree and its own
+fresh database, then handed to a verifier.
+
+The blocker and every major finding were fixed:
+- **WhatsApp privacy id.** A WhatsApp `@lid` id was recorded as the wrong
+  route, so phone-based checks missed it.
+- **Apify Maps.** It could run, and be paid for, a second time after it
+  already searched.
+- **Stale waits.** A search that had started was still shown as "waiting
+  for a slot".
+- **Grounding.** `web_search` echoed the model's own query into what counts
+  as grounded, so a guessed email or phone could pass.
+- **Activity Cancel.** It was offered on a plan's start job, where it did
+  not stop the launch.
+- **Campaign steps.** They were labelled "Answered by you".
+- **Stuck classification.** An owner's reply that arrived during
+  classification left the lead stuck in "classifying".
+
+Results after merging all six clusters:
+- `tsc`, eslint and `db:check` pass, and so do 1554 unit tests.
+- All 13 e2e suites pass:
+
+  | Suite | Checks |
+  | --- | --- |
+  | activity | 34 |
+  | workspace-replay | 102 |
+  | reply-agent | 82 |
+  | delivery-evidence | 23 |
+  | autonomous | 62 |
+  | assistant-intake | 44 |
+  | assistant | 73 |
+  | assistant-recovery | 9 |
+  | tinyfish | 40 |
+  | browser | 20 |
+  | research-sources | 41 |
+  | apify | 63, plus its 5 known failures |
+  | web-discovery | 83, plus its 2 known failures |
+
+The verifiers then found one regression: a sending window ending at
+midnight showed 00:00 as the next send. They also found several partial
+fixes:
+- A person's manual "Wrong Number" confirmation ignored "stop" wording, so
+  it recorded no DNC.
+- A privacy-id chat recorded the person's current phone, not the number
+  that wrote.
+- Campaign-step labels did not survive removing a lead from the campaign.
+
+They also found one older gap: Stop pressed during a plan's launch did not
+stop the campaigns being created. These went into a second round, below.
 
 ## Tenancy isolation
 
