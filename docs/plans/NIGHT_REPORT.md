@@ -28,6 +28,26 @@ alternative, is in `docs/plans/DECISIONS-2026-10-18.md`.
 
 S11 (the CRM half of the workspace rework) is reported in its own section below.
 
+## Tenancy isolation
+
+`scripts/e2e/tenancy-isolation.ts` was run against a dev server on a fresh
+local copy (`agentsdr_iso`: `db:setup`, the demo organization as A, and the
+fixture rows for every table added tonight, from
+`scripts/e2e/seed-new-feature-fixtures.ts`). Result: **no isolation
+failures**.
+- Fingerprints: 1144, from 72 tables of A.
+- The positive control found A's own data in 38 of 69 plain GET routes.
+- Checked as B: 119 reads, 109 writes and 69 pages.
+
+It lists three items to review. Each answers 200 to B for one of A's ids,
+but no A identifier appears in the response. All three are routes tonight's
+work did not touch:
+- `GET /api/linkedin/campaigns/[id]/chart-data`
+- `GET /api/linkedin/campaigns/[id]/merge-fields`
+- `GET /api/outreach/inbox/leads/[id]/crm-context`
+
+A 404 would be more correct for each.
+
 ## Gates on the final commit
 
 <!-- filled in at the end -->
@@ -60,7 +80,7 @@ The image now ships all six (`Dockerfile`, `.dockerignore`).
    it names each source and provider, and what was not searched and why.
 4. Send one test inbound reply to a plan in Review mode and check Action
    required, Activity → Replies and the plan card agree.
-5. Decide decision 16 below (Instagram-only eligibility).
+5. Decide decision 16 in the decisions log (whether Instagram-only accounts are eligible).
 
 ## Known gaps and failures
 
