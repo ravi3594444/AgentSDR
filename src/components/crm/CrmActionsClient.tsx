@@ -60,6 +60,7 @@ import { asList, asObject, CATEGORY_LABELS, crmFetch, displayName, errorMessage,
 import { prefetchRecordWorkspace } from "./recordPrefetch";
 import { useRecordChanged } from "./recordEvents";
 import { publishRecordQueue, withdrawRecordQueue, type RecordQueue } from "./recordQueue";
+import { createResponseGate } from "./responseGate";
 import { CRM_DUE_STATE_LABELS, type CrmDueState } from "@/lib/crm/stateMachine";
 import { CRM_ACTION_GROUP_LABELS, CRM_ACTION_GROUPS } from "@/lib/crm/actionGroups";
 import { CRM_CHANNELS } from "@/lib/crm/channels";
@@ -177,11 +178,14 @@ export function CrmActionsClient() {
   const [total, setTotal] = useState<number | null>(null);
   const [summary, reloadSummary] = useQueueSummary();
   const [view, setView] = useState<View>("actions");
+  // Nothing loads until the deep link is read, so ?view=needs_you sends no queue request first.
+  const [viewRead, setViewRead] = useState(false);
   const [scopeCounts, setScopeCounts] = useState<ScopeCounts | null>(null);
   // Read once on mount rather than through useSearchParams, so the page stays statically rendered.
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get("view");
     if (isView(requested)) setView(requested);
+    setViewRead(true);
   }, []);
   const selectView = useCallback((next: View) => {
     setView(next);
@@ -216,14 +220,20 @@ export function CrmActionsClient() {
   // Only the AI review post-filter makes the server total a count of this page
   // rather than of the queue.
   const postFiltered = Boolean(filters.classificationReview);
+  // A view or filter picked while a list is loading must not be overwritten by
+  // the earlier request's answer when that one returns last.
+  const [responses] = useState(createResponseGate);
   const load = useCallback(async (offset: number) => {
     const firstPage = offset === 0;
-    if (firstPage) setLoading(true); else setLoadingMore(true);
+    const ticket = firstPage ? responses.restart() : responses.follow();
+    if (ticket === null) return;
+    if (firstPage) { setLoading(true); setLoadingMore(false); } else setLoadingMore(true);
     setError("");
     try {
       const params = new URLSearchParams(query);
       params.set("offset", String(offset));
       const result = await crmFetch(`/actions?${params}`);
+      if (!responses.isCurrent(ticket)) return;
       const page = asList<Action>(result, ["actions"]);
       const body = asObject(result);
       // Append, never splice by index: a later page can arrive after the row
@@ -234,10 +244,15 @@ export function CrmActionsClient() {
       if (firstPage) setTotal(typeof body.total === "number" ? body.total : null);
       if (firstPage && body.scopeCounts) setScopeCounts(body.scopeCounts as ScopeCounts);
       setLoaded(true);
-    } catch (cause) { setError(errorMessage(cause)); } finally { setLoading(false); setLoadingMore(false); }
-  }, [query]);
+      if (firstPage) responses.land(ticket);
+    } catch (cause) {
+      if (responses.isCurrent(ticket)) setError(errorMessage(cause));
+    } finally {
+      if (responses.isCurrent(ticket)) { setLoading(false); setLoadingMore(false); }
+    }
+  }, [query, responses]);
   // A filter change resets to the first page; `load` changes with the query.
-  useEffect(() => { void load(0); }, [load]);
+  useEffect(() => { if (viewRead) void load(0); }, [load, viewRead]);
   const loadMore = useCallback(() => { void load(nextOffset); }, [load, nextOffset]);
   const subcategories = useMemo(() => categories.flatMap((category) => asList<Data>(category.subcategories))
     .filter((subcategory) => !filters.category || subcategory.categoryKey === filters.category), [categories, filters.category]);
@@ -252,14 +267,16 @@ export function CrmActionsClient() {
   useEffect(() => () => { if (summaryTimer.current) clearTimeout(summaryTimer.current); }, []);
   // The view counts come with the list; after an edit one small read refreshes them.
   const reloadCounts = useCallback(async () => {
+    const ticket = responses.follow();
+    if (ticket === null) return;
     try {
       const params = new URLSearchParams(query);
       params.delete("scope");
       params.set("limit", "1");
       const body = asObject(await crmFetch(`/actions?${params}`));
-      if (body.scopeCounts) setScopeCounts(body.scopeCounts as ScopeCounts);
+      if (responses.isCurrent(ticket) && body.scopeCounts) setScopeCounts(body.scopeCounts as ScopeCounts);
     } catch { /* They refresh with the list. */ }
-  }, [query]);
+  }, [query, responses]);
   const onMutated = useCallback(() => {
     if (summaryTimer.current) clearTimeout(summaryTimer.current);
     summaryTimer.current = setTimeout(() => { void reloadSummary(); void reloadCounts(); }, 1500);

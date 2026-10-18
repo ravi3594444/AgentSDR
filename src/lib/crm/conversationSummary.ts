@@ -24,7 +24,18 @@ export const REPLY_MODE_LABELS: Readonly<Record<ReplyMode, string>> = {
   takeover: "Takeover",
 };
 
-type MessageEvidence = { idempotencyKey?: unknown; raw?: unknown; origin?: unknown };
+type MessageEvidence = {
+  idempotencyKey?: unknown;
+  raw?: unknown;
+  origin?: unknown;
+  /**
+   * A WhatsApp campaign step (an assistant run's WhatsApp leg is a campaign
+   * too): its send is recorded with origin `agentsdr` like the Messages tab's,
+   * so only its whatsapp_campaign_sends row tells them apart
+   * (conversationSummary.server.ts reads it).
+   */
+  campaignStep?: unknown;
+};
 
 /**
  * Who sent an outbound message, from what the message records:
@@ -41,13 +52,15 @@ export function outboundActor(message: MessageEvidence): AnswerActor | null {
   const key = typeof message.idempotencyKey === "string" ? message.idempotencyKey : "";
   const raw = message.raw && typeof message.raw === "object" ? message.raw as Record<string, unknown> : {};
   const origin = typeof message.origin === "string" ? message.origin : typeof raw.origin === "string" ? raw.origin : null;
+  if (message.campaignStep === true) return null;
   if (key.startsWith("crm-send:autopilot:") || key.startsWith("crm-send:wrong-number-ack:")) return "assistant";
   if (origin === "phone" || origin === "agentsdr") return "you";
   if (key.startsWith("crm-send:")) return "you";
   return null;
 }
 
-export function answerLabel(actor: AnswerActor | null): string {
+export function answerLabel(actor: AnswerActor | null, campaignStep = false): string {
+  if (campaignStep) return "Campaign message sent";
   return actor === "assistant" ? "Answered by assistant" : actor === "you" ? "Answered by you" : "Reply sent";
 }
 
@@ -68,7 +81,7 @@ export function conversationSummary(messages: readonly TimelineMessage[]) {
     if (message.direction === "outbound" && (!outbound || timestamp(message) >= timestamp(outbound))) outbound = message;
   }
   const answered = Boolean(inbound && outbound && timestamp(outbound) >= timestamp(inbound));
-  return { answered, answerLabel: answerLabel(outbound ? outboundActor(outbound) : null), lastOutboundAt: outbound?.sentAt ?? outbound?.createdAt };
+  return { answered, answerLabel: answerLabel(outbound ? outboundActor(outbound) : null, outbound?.campaignStep === true), lastOutboundAt: outbound?.sentAt ?? outbound?.createdAt };
 }
 
 export type SummaryMessage = {
@@ -122,7 +135,7 @@ export type ConversationSummary = {
   latestOutbound: (SummaryMessage & { actor: AnswerActor | null }) | null;
   /** `answered`: the latest outbound went out at or after the latest inbound. `none`: no inbound reply yet. */
   answer: { status: "answered" | "unanswered" | "none"; actor: AnswerActor | null; label: string | null };
-  /** Answered, and nothing stops the conversation: the lead's move. */
+  /** Answered, no handoff open and nothing stops the conversation: the lead's move. */
   waitingForThem: boolean;
   channel: string | null;
   account: { channel: string; ref: string; label: string } | null;
@@ -158,7 +171,7 @@ export function describeConversation(facts: ConversationFacts): ConversationSumm
   const answered = Boolean(inbound && outbound && at(outbound) >= at(inbound));
   const answer: ConversationSummary["answer"] = !inbound
     ? { status: "none", actor: null, label: null }
-    : answered ? { status: "answered", actor, label: answerLabel(actor) } : { status: "unanswered", actor: null, label: null };
+    : answered ? { status: "answered", actor, label: answerLabel(actor, outbound?.campaignStep === true) } : { status: "unanswered", actor: null, label: null };
 
   const open = facts.decisions.filter((decision) => decision.status === "open" && isHandoff(decision.kind)).sort(byUrgency);
   const reports = facts.decisions.filter((decision) => !isHandoff(decision.kind));
@@ -184,7 +197,9 @@ export function describeConversation(facts: ConversationFacts): ConversationSumm
     : facts.workflowState === "waiting" && due ? action("follow_up_due", "Follow-up due", true)
     : action("open_conversation", "Open conversation", false);
 
-  const waitingForThem = answer.status === "answered" && !facts.doNotContact && !facts.wrongRoute;
+  // An open handoff means the lead was told a person will reply (the handover
+  // message is the assistant's answer), so the move is the owner's, not theirs.
+  const waitingForThem = answer.status === "answered" && open.length === 0 && !facts.doNotContact && !facts.wrongRoute;
   const headline = facts.doNotContact ? "Outreach stopped · Do Not Contact"
     : facts.wrongRoute ? "Wrong number — outreach stopped"
     : answer.status === "answered" ? `${answer.label}${waitingForThem ? " · Waiting for their reply" : ""}`

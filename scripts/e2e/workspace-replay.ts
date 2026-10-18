@@ -18,7 +18,9 @@
  * makes stale, a takeover a manual reply leaves in place, wrong-number and Do
  * Not Contact closure, a duplicate and a delayed webhook, an unavailable
  * provider, an unnamed lead shown by business and route, Instagram in the
- * channel filter and the accounts badge, and a second organization that sees
+ * channel filter and the accounts badge, a WhatsApp campaign step that is
+ * never read as the owner's answer, the Errors filter narrowing Needs you and
+ * All replies (with counts that match), and a second organization that sees
  * and counts nothing.
  *
  * Creates its own organizations ("Workspace replay …") and leaves them.
@@ -47,7 +49,8 @@ const { organizations, users, members } = await import("@/lib/auth/schema");
 const { companies, people } = await import("@/lib/leads/schema");
 const crm = await import("@/lib/crm/schema");
 const schema = await import("@/lib/assistant/schema");
-const { whatsappAccounts, whatsappMessages } = await import("@/lib/whatsapp/schema");
+const { whatsappAccounts, whatsappMessages, whatsappChats, whatsappCampaigns, whatsappCampaignLeads, whatsappCampaignSends } = await import("@/lib/whatsapp/schema");
+const { recordWhatsappOutboundInCrm } = await import("@/lib/whatsapp/crmBridge");
 const { instagramAccounts } = await import("@/lib/instagram/schema");
 const { runInOrganization, currentOrganizationId } = await import("@/lib/tenancy/scope");
 const { ensureCrmDefaults } = await import("@/lib/crm/defaults");
@@ -428,6 +431,30 @@ await runInOrganization(A.org.id, async () => {
   const igReply = (await listReplies({ userId: A.owner.id, channel: "instagram" })).replies[0];
   check("Instagram: Activity names the unnamed lead by handle", igReply?.personName === "@brightsmile.pune", igReply?.personName ?? "(none)");
 
+  // ============================================================ a WhatsApp campaign step after a reply on another channel
+  // The lead replied by email; a WhatsApp campaign (an assistant run's WhatsApp leg is one) later sends its step
+  // through sendWhatsapp, which records it on that same record as origin agentsdr. The rows below are what that
+  // send and the campaign engine write; nothing is sent.
+  const campaignLead = await lead("campaign", 7, { fullName: "Dr Campaign", email: `dr-campaign-${stamp}@workspace-replay.test` });
+  const emailReply = await ingestInboundReply({ personId: campaignLead.personId, channel: "email", accountRef: `replay-mailbox-${stamp}@workspace-replay.test`, providerThreadId: `replay-email-thread-${stamp}`, providerContactId: `dr-campaign-${stamp}@workspace-replay.test`, idempotencyKey: `email:replay-${stamp}`, bodyText: "Sounds interesting, tell me more.", sentAt: new Date(Date.now() - 60_000) });
+  recordIds.push(emailReply.record.id);
+  const [waAccount] = await db.select({ id: whatsappAccounts.id }).from(whatsappAccounts).where(and(eq(whatsappAccounts.organizationId, orgId), eq(whatsappAccounts.unipileAccountId, WA_ACCOUNT)));
+  const [campaignChat] = await db.insert(whatsappChats).values({ accountId: waAccount!.id, unipileChatId: campaignLead.chatId, providerId: jidOf(campaignLead), phone: campaignLead.phone, personId: campaignLead.personId }).returning();
+  const stepBody = "Hi Dr Campaign, Ravi from Bright Path. Same-week servicing for dental chairs in Pune.";
+  const [campaign] = await db.insert(whatsappCampaigns).values({ organizationId: orgId, name: "Replay WhatsApp campaign", status: "active", steps: [{ id: "replay-step-1", body: stepBody, delayHours: 0 }] }).returning();
+  const [enrolled] = await db.insert(whatsappCampaignLeads).values({ campaignId: campaign!.id, personId: campaignLead.personId, phone: campaignLead.phone, status: "in_sequence", currentStep: 1, accountId: waAccount!.id }).returning();
+  const stepAt = new Date();
+  const stepUnipileId = `wa-replay-campaign-step-${stamp}`;
+  const [stepMessage] = await db.insert(whatsappMessages).values({ chatId: campaignChat!.id, unipileMessageId: stepUnipileId, direction: "outbound", origin: "agentsdr", body: stepBody, sentAt: stepAt }).returning();
+  const recordedStep = await recordWhatsappOutboundInCrm({ personId: campaignLead.personId, unipileAccountId: WA_ACCOUNT, unipileChatId: campaignLead.chatId, providerContactId: jidOf(campaignLead), unipileMessageId: stepUnipileId, body: stepBody, sentAt: stepAt, raw: null, origin: "agentsdr" });
+  await db.update(whatsappMessages).set({ crmConversationMessageId: recordedStep.crmConversationMessageId }).where(eq(whatsappMessages.id, stepMessage!.id));
+  await db.insert(whatsappCampaignSends).values({ leadId: enrolled!.id, step: 0, stepId: "replay-step-1", status: "sent", accountId: waAccount!.id, whatsappMessageId: stepMessage!.id, body: stepBody, sentAt: stepAt });
+  seen = await look(campaignLead);
+  check("Campaign step: recorded on the record the email reply opened, as its latest outbound", Boolean(recordedStep.crmConversationMessageId) && seen.record.id === emailReply.record.id && seen.summary.latestOutbound?.id === recordedStep.crmConversationMessageId);
+  check("Campaign step: read as a campaign message, never Answered by you", seen.summary.answer.label === "Campaign message sent" && seen.summary.answer.actor === null && seen.summary.latestOutbound?.actor === null && !seen.summary.headline.includes("Answered by you"), `${seen.summary.answer.label} / ${seen.summary.headline}`);
+  const campaignRow = (await listCrmActions({ scope: "replies", limit: 200 })).actions.find((item) => item.id === seen.record.id);
+  check("Campaign step: the All replies row says the same", campaignRow?.summary?.answer.label === "Campaign message sent" && !campaignRow.summary.headline.includes("Answered by you"), campaignRow?.summary?.headline ?? "(none)");
+
   // ============================================================ every reply stays findable
   const all = await listCrmActions({ scope: "replies", limit: 200 });
   const replies = await listReplies({ userId: A.owner.id, limit: 200 });
@@ -437,6 +464,25 @@ await runInOrganization(A.org.id, async () => {
   check("every conversation a reply arrived on is in All replies, answered and closed ones included", recordIds.every((id) => all.actions.some((item) => item.id === id)) && all.total === recordIds.length, `${all.total} of ${recordIds.length}`);
   check("every recorded inbound reply is in Activity's replies", replies.replies.length === inboundCount, `${replies.replies.length} of ${inboundCount}`);
   check("the quote decision is still open at the end", (await db.select().from(schema.ownerDecisions).where(eq(schema.ownerDecisions.id, quoteDecisionId)))[0]?.status === "open");
+
+  // ============================================================ the Errors filter narrows a view; it does not replace it
+  // The unavailable-provider record is an error that needs you; the taken-over one, put in error here, does not.
+  const takenRecord = await recordOf(taken);
+  await db.update(crm.crmRecords).set({ workflowState: "error" }).where(and(eq(crm.crmRecords.organizationId, orgId), eq(crm.crmRecords.id, takenRecord.id)));
+  const [needsYouAll, needsYouErrors, repliesAll, repliesErrors, queueErrors] = await Promise.all([
+    listCrmActions({ scope: "needs_you", limit: 200 }),
+    listCrmActions({ scope: "needs_you", error: true, limit: 200 }),
+    listCrmActions({ scope: "replies", limit: 200 }),
+    listCrmActions({ scope: "replies", error: true, limit: 200 }),
+    listCrmActions({ error: true, limit: 200 }),
+  ]);
+  const idsOf = (list: { actions: { id: string }[] }) => JSON.stringify(list.actions.map((item) => item.id).sort());
+  const errorsIn = (list: { actions: { id: string; record: { workflowState: string } }[] }) => JSON.stringify(list.actions.filter((item) => item.record.workflowState === "error").map((item) => item.id).sort());
+  check("Errors in Needs you: only the errors that need you", errorsIn(needsYouAll) !== "[]" && idsOf(needsYouErrors) === errorsIn(needsYouAll) && !needsYouErrors.actions.some((item) => item.id === takenRecord.id), `${needsYouErrors.total} listed, ${errorsIn(needsYouAll)} expected`);
+  check("Errors in All replies: only the errors a reply was recorded on", idsOf(repliesErrors) === errorsIn(repliesAll) && repliesErrors.actions.some((item) => item.id === takenRecord.id), `${repliesErrors.total} listed`);
+  check("Errors: each view's count is its list's", needsYouErrors.scopeCounts?.needs_you === needsYouErrors.total && repliesErrors.scopeCounts?.replies === repliesErrors.total && queueErrors.scopeCounts?.actions === queueErrors.total,
+    `needs you ${needsYouErrors.scopeCounts?.needs_you}/${needsYouErrors.total}, replies ${repliesErrors.scopeCounts?.replies}/${repliesErrors.total}, queue ${queueErrors.scopeCounts?.actions}/${queueErrors.total}`);
+  await db.update(crm.crmRecords).set({ workflowState: takenRecord.workflowState }).where(and(eq(crm.crmRecords.organizationId, orgId), eq(crm.crmRecords.id, takenRecord.id)));
 });
 
 // ============================================================ a second organization sees and counts nothing

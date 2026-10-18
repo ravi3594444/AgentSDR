@@ -6,7 +6,7 @@ import { instagramAccounts } from "@/lib/instagram/schema";
 import { people } from "@/lib/leads/schema";
 import { linkedInAccounts } from "@/lib/linkedin/schema";
 import { inOrg } from "@/lib/tenancy/scope";
-import { whatsappAccounts } from "@/lib/whatsapp/schema";
+import { whatsappAccounts, whatsappCampaignLeads, whatsappCampaigns, whatsappCampaignSends, whatsappMessages } from "@/lib/whatsapp/schema";
 import { describeConversation, type ConversationSummary, type ReplyMode, type SummaryDecision } from "./conversationSummary";
 import {
   crmClassifications,
@@ -53,6 +53,7 @@ export async function loadConversationSummaries(recordIds: readonly string[], no
       providerContactId: crmConversations.providerContactId,
       sentAt: crmConversationMessages.sentAt,
       idempotencyKey: crmConversationMessages.idempotencyKey,
+      providerMessageId: crmConversationMessages.providerMessageId,
       origin: sql<string | null>`${crmConversationMessages.raw}->>'origin'`,
       excerpt: sql<string>`left(${crmConversationMessages.bodyText}, 240)`,
     }).from(crmConversationMessages)
@@ -96,8 +97,12 @@ export async function loadConversationSummaries(recordIds: readonly string[], no
     return conversation?.channel === channel ? [conversation.accountRef] : [];
   }))];
   const [whatsappRefs, instagramRefs, linkedinRefs] = [refsOf("whatsapp"), refsOf("instagram"), refsOf("linkedin")];
+  // A WhatsApp outbound that is a campaign step: the same Unipile message as a
+  // step the organization's campaigns sent (sendWhatsapp records it with
+  // origin agentsdr, the same as a person's send from the Messages tab).
+  const whatsappOutboundIds = [...new Set([...outboundOf.values()].flatMap((row) => row.channel === "whatsapp" && row.providerMessageId ? [row.providerMessageId] : []))];
 
-  const [memberships, wrongRoutes, whatsappRows, instagramRows, linkedinRows] = await Promise.all([
+  const [memberships, wrongRoutes, whatsappRows, instagramRows, linkedinRows, campaignSteps] = await Promise.all([
     personIds.length
       ? db.select({
         personId: outreachRunLeads.personId, channel: outreachRunLeads.channel, leadStatus: outreachRunLeads.status,
@@ -124,12 +129,20 @@ export async function loadConversationSummaries(recordIds: readonly string[], no
       ? db.select({ ref: linkedInAccounts.linkedinId, name: linkedInAccounts.name, username: linkedInAccounts.username })
         .from(linkedInAccounts).where(and(inOrg(linkedInAccounts), inArray(linkedInAccounts.linkedinId, linkedinRefs)))
       : Promise.resolve([]),
+    whatsappOutboundIds.length && personIds.length
+      ? db.selectDistinct({ unipileMessageId: whatsappMessages.unipileMessageId }).from(whatsappMessages)
+        .innerJoin(whatsappCampaignSends, eq(whatsappCampaignSends.whatsappMessageId, whatsappMessages.id))
+        .innerJoin(whatsappCampaignLeads, eq(whatsappCampaignLeads.id, whatsappCampaignSends.leadId))
+        .innerJoin(whatsappCampaigns, and(eq(whatsappCampaigns.id, whatsappCampaignLeads.campaignId), inOrg(whatsappCampaigns)))
+        .where(and(inArray(whatsappMessages.unipileMessageId, whatsappOutboundIds), inArray(whatsappCampaignLeads.personId, personIds)))
+      : Promise.resolve([]),
   ]);
 
   const draftOf = new Map(drafts.map((row) => [row.recordId, row]));
   const awaitingOf = new Set(awaiting.map((row) => row.recordId));
   const classificationOf = new Map(classifications.map((row) => [row.recordId, row.status]));
   const takenOver = new Set(takeovers.map((row) => row.conversationId));
+  const campaignStepIds = new Set(campaignSteps.map((row) => row.unipileMessageId));
   const decisionsOf = new Map<string, SummaryDecision[]>();
   for (const decision of decisions) {
     if (!decision.recordId) continue;
@@ -187,7 +200,10 @@ export async function loadConversationSummaries(recordIds: readonly string[], no
       workflowState: record.workflowState,
       nextActionAt: record.nextActionAt,
       latestInbound: inbound ? message(inbound) : null,
-      latestOutbound: outbound ? { ...message(outbound), idempotencyKey: outbound.idempotencyKey, origin: outbound.origin } : null,
+      latestOutbound: outbound ? {
+        ...message(outbound), idempotencyKey: outbound.idempotencyKey, origin: outbound.origin,
+        campaignStep: outbound.channel === "whatsapp" && outbound.providerMessageId !== null && campaignStepIds.has(outbound.providerMessageId),
+      } : null,
       draft: draft ? { id: draft.id, status: draft.status, kind: draft.apologyRouteId ? "apology" : draft.stepType === "follow_up" ? "follow_up" : "reply" } : null,
       draftAwaitingReview: awaitingOf.has(record.id),
       classificationStatus: classificationOf.get(record.id) ?? null,

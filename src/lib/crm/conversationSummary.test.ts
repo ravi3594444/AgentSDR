@@ -12,6 +12,7 @@ describe("timeline summary (client fallback)", () => {
   test("a phone reply is identified, while an unknown sender is not attributed to the owner", () => {
     expect(conversationSummary([inbound, { ...outbound, raw: { origin: "phone" } }]).answerLabel).toBe("Answered by you");
     expect(conversationSummary([inbound, outbound]).answerLabel).toBe("Reply sent");
+    expect(conversationSummary([inbound, { ...outbound, raw: { origin: "agentsdr" }, campaignStep: true }]).answerLabel).toBe("Campaign message sent");
   });
 
   test("a later inbound message requires a new answer even when older events arrive out of order", () => {
@@ -35,6 +36,8 @@ describe("who sent an outbound message", () => {
     // A campaign step or copied history: unknown, never the owner.
     expect(outboundActor({ idempotencyKey: "outreach-email:1" })).toBeNull();
     expect(outboundActor({ idempotencyKey: "whatsapp:abc" })).toBeNull();
+    // A WhatsApp campaign step goes out through the same send as the Messages tab (origin agentsdr).
+    expect(outboundActor({ idempotencyKey: "whatsapp:abc", raw: { origin: "agentsdr" }, campaignStep: true })).toBeNull();
   });
 });
 
@@ -76,6 +79,20 @@ describe("describeConversation", () => {
     expect(summary.answer.label).toBe("Answered by you");
   });
 
+  test("a WhatsApp campaign step after their reply is a campaign message, never the owner's answer", () => {
+    const summary = describeConversation(facts({
+      latestInbound: { ...message("in-1", "2026-10-18T15:30:00Z"), channel: "email", accountRef: "mailbox-1" },
+      latestOutbound: { ...message("out-3", "2026-10-18T15:45:00Z"), idempotencyKey: "whatsapp:unipile-msg-1", origin: "agentsdr", campaignStep: true },
+      replyMode: "review",
+    }));
+    expect(summary.answer).toEqual({ status: "answered", actor: null, label: "Campaign message sent" });
+    expect(summary.latestOutbound?.actor).toBeNull();
+    expect(summary.headline).toBe("Campaign message sent · Waiting for their reply");
+    // The same send from the Messages tab is the owner's.
+    const own = describeConversation(facts({ latestOutbound: { ...message("out-3", "2026-10-18T15:45:00Z"), idempotencyKey: "whatsapp:unipile-msg-1", origin: "agentsdr" } }));
+    expect(own.answer.label).toBe("Answered by you");
+  });
+
   test("a newer inbound message is unanswered again, and being classified is not urgent", () => {
     const summary = describeConversation(facts({ workflowState: "classifying", latestInbound: message("in-2", "2026-10-18T15:50:00Z") }));
     expect(summary.answer.status).toBe("unanswered");
@@ -95,9 +112,14 @@ describe("describeConversation", () => {
     expect(summary.pending.decisions.map((decision) => decision.id)).toEqual(["d2"]);
     expect(summary.pending.reports.map((report) => report.kind)).toEqual(["interested"]);
     expect(summary.answer.label).toBe("Answered by assistant");
+    // The answer was the handover ("a personal reply follows"): the lead waits on the owner, not the other way round.
+    expect(summary.waitingForThem).toBe(false);
+    expect(summary.headline).toBe("Answered by assistant");
     const reportOnly = describeConversation(facts({ decisions: [decisions[0]!] }));
     expect(reportOnly.needsYou).toBe(false);
     expect(reportOnly.nextAction.kind).toBe("open_conversation");
+    expect(reportOnly.waitingForThem).toBe(true);
+    expect(reportOnly.headline).toBe("Answered by assistant · Waiting for their reply");
   });
 
   test("a draft awaiting review comes before an open decision and counts as Needs you", () => {

@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, getTableColumns, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, getTableColumns, inArray, isNull, sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { inboxContacts, inboxMessages } from "@/lib/inbox/schema";
 import { companies, people } from "@/lib/leads/schema";
@@ -169,6 +169,7 @@ export type CrmActionFilters = {
   sequenceId?: string;
   /** One of the queue's action groups; filtered in SQL, so the total stays exact. */
   actionGroup?: CrmActionGroup;
+  /** Errors only. Narrows Needs you and All replies; in the queue and the pipeline it is the state condition. */
   error?: boolean;
   overdue?: boolean;
   dueAfter?: Date;
@@ -202,17 +203,22 @@ export async function listCrmActions(input: CrmActionFilters = {}) {
          and action_run.status in ('active', 'paused')
     )` : undefined,
   ];
-  const scopeCondition = input.error === true
+  // A state filter (the Errors tile) narrows Needs you and All replies; it
+  // stands in for the queue's and the pipeline's own state condition.
+  const stateFilter = input.error === true
     ? eq(crmRecords.workflowState, "error")
     : input.workflowState
     ? eq(crmRecords.workflowState, input.workflowState)
-    : pipeline
-    ? sql`${crmRecords.workflowState} <> 'closed'`
-    : scope === "needs_you"
-    ? needsYouCondition
-    : scope === "replies"
-    ? repliedCondition
-    : actionableCondition;
+    : undefined;
+  const narrowed = (condition: SQL): SQL => stateFilter ? sql`(${condition} and ${stateFilter})` : condition;
+  const viewCondition = (view: Exclude<CrmActionScope, "pipeline">): SQL => view === "needs_you"
+    ? narrowed(needsYouCondition)
+    : view === "replies"
+    ? narrowed(repliedCondition)
+    : stateFilter ?? actionableCondition;
+  const scopeCondition = scope === "pipeline"
+    ? stateFilter ?? sql`${crmRecords.workflowState} <> 'closed'`
+    : viewCondition(scope);
   // Everything except the stage, so the stage tabs can count against the same
   // filters the list is under.
   const baseConditions = [...filterConditions, scopeCondition];
@@ -293,9 +299,9 @@ export async function listCrmActions(input: CrmActionFilters = {}) {
     // one pass, the same three conditions the views list by.
     !pipeline && !input.recordId
       ? db.select({
-        needs_you: sql<number>`count(*) filter (where ${needsYouCondition})`.mapWith(Number),
-        actions: sql<number>`count(*) filter (where ${actionableCondition})`.mapWith(Number),
-        replies: sql<number>`count(*) filter (where ${repliedCondition})`.mapWith(Number),
+        needs_you: sql<number>`count(*) filter (where ${viewCondition("needs_you")})`.mapWith(Number),
+        actions: sql<number>`count(*) filter (where ${viewCondition("actions")})`.mapWith(Number),
+        replies: sql<number>`count(*) filter (where ${viewCondition("replies")})`.mapWith(Number),
       }).from(crmRecords).where(and(...filterConditions))
       : Promise.resolve([]),
   ]);
