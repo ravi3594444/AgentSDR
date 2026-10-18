@@ -8,7 +8,7 @@ import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { crmNeedsYouSql, RAW_RECORD_COLUMNS } from "@/lib/crm/actionGroups.server";
 import { contactDisplayName } from "@/lib/crm/contactName";
 import { activitySeen } from "./schema";
-import { jobState, OPEN_STATES, REPLY_STATE_LABELS, replyState, runState, WORK_STATE_LABELS, type ReplyState, type WorkState } from "./status";
+import { CANCELLABLE_JOB_KINDS, canCancelJob, jobState, OPEN_STATES, REPLY_STATE_LABELS, replyState, runState, WORK_STATE_LABELS, type ReplyState, type WorkState } from "./status";
 
 /**
  * Activity: the organization's background work and the replies it brought,
@@ -88,7 +88,7 @@ export async function listWork(now = new Date()): Promise<WorkItem[]> {
       found: typeof result.found === "number" ? result.found : null,
       eligible: typeof result.eligible === "number" ? result.eligible : null,
       runId: null,
-      canCancel: job.status === "queued" || job.status === "running",
+      canCancel: canCancelJob(job),
     });
   }
   for (const { run, threadTitle } of runs) {
@@ -116,11 +116,15 @@ export async function listWork(now = new Date()): Promise<WorkItem[]> {
   return items.sort((a, b) => Number(b.open) - Number(a.open) || b.startedAt.localeCompare(a.startedAt));
 }
 
-/** Cancels a queued or running job: no further step runs; a step already under way has its outcome discarded. */
+/**
+ * Cancels a queued or running search: no further step runs; a step already
+ * under way has its outcome discarded. Any other job (starting an outreach
+ * plan) is refused: the plan is paused or stopped through its own controls.
+ */
 export async function cancelJob(jobId: string): Promise<boolean> {
   const [row] = await db.update(assistantJobs)
     .set({ status: "cancelled", lockedBy: null, heartbeatAt: null, finishedAt: new Date(), error: "Cancelled by the owner" })
-    .where(and(inOrg(assistantJobs), eq(assistantJobs.id, jobId), inArray(assistantJobs.status, ["queued", "running"])))
+    .where(and(inOrg(assistantJobs), eq(assistantJobs.id, jobId), inArray(assistantJobs.kind, [...CANCELLABLE_JOB_KINDS]), inArray(assistantJobs.status, ["queued", "running"])))
     .returning({ id: assistantJobs.id });
   return Boolean(row);
 }
@@ -132,6 +136,8 @@ export type ReplyItem = {
   channel: string;
   account: string;
   receivedAt: string;
+  /** When AgentSDR recorded it, which is what "new" is judged by (a replayed webhook can record an older message late). */
+  recordedAt: string;
   preview: string;
   state: ReplyState;
   stateLabel: string;
@@ -142,7 +148,7 @@ export type ReplyItem = {
 };
 
 type ReplyRow = {
-  id: string; channel: string; account_ref: string; sent_at: Date | string; preview: string; crm_record_id: string;
+  id: string; channel: string; account_ref: string; sent_at: Date | string; created_at: Date | string; preview: string; crm_record_id: string;
   workflow_state: string | null; needs_you: boolean; answered: boolean; latest: boolean; run_id: string | null; run_name: string | null; thread_id: string | null;
   full_name: string | null; first_name: string | null; last_name: string | null; email: string | null; phone: string | null;
   linkedin_url: string | null; company: string | null; instagram: string | null;
@@ -152,8 +158,9 @@ type ReplyRow = {
 export async function listReplies(input: { userId: string | null; channel?: string | null; limit?: number }): Promise<{ replies: ReplyItem[]; seenAt: string | null }> {
   const org = currentOrganizationId();
   const seen = input.userId ? await repliesSeenAt(input.userId) : null;
+  const since = newSince(seen);
   const rows = await db.execute<ReplyRow>(sql`
-    SELECT m.id, m.channel, m.account_ref, m.sent_at, left(m.body_text, 240) AS preview, c.crm_record_id, r.workflow_state,
+    SELECT m.id, m.channel, m.account_ref, m.sent_at, m.created_at, left(m.body_text, 240) AS preview, c.crm_record_id, r.workflow_state,
       ${crmNeedsYouSql(RAW_RECORD_COLUMNS)} AS needs_you,
       p.full_name, p.first_name, p.last_name, p.email, p.phone, p.linkedin_url,
       coalesce(nullif(co.name, ''), p.raw->>'businessName') AS company, p.raw->'instagram'->>'username' AS instagram,
@@ -175,6 +182,7 @@ export async function listReplies(input: { userId: string | null; channel?: stri
     LIMIT ${Math.min(Math.max(input.limit ?? 60, 1), 200)}`);
   const replies = rows.map((row): ReplyItem => {
     const receivedAt = new Date(row.sent_at);
+    const recordedAt = new Date(row.created_at);
     const state = replyState({ answered: Boolean(row.answered), latest: Boolean(row.latest), workflowState: row.workflow_state, needsYou: Boolean(row.needs_you) });
     return {
       messageId: row.id,
@@ -187,10 +195,12 @@ export async function listReplies(input: { userId: string | null; channel?: stri
       channel: row.channel,
       account: row.account_ref,
       receivedAt: receivedAt.toISOString(),
+      recordedAt: recordedAt.toISOString(),
       preview: row.preview.replace(/\s+/g, " ").trim(),
       state,
       stateLabel: REPLY_STATE_LABELS[state],
-      isNew: !seen || receivedAt.getTime() > seen.getTime(),
+      // The badge's rule (newRepliesCount), to the millisecond: recorded after the seen time, or within the last week before a first visit.
+      isNew: recordedAt.getTime() > since.getTime(),
       runId: row.run_id,
       runName: row.run_name,
       threadId: row.thread_id,
@@ -205,21 +215,35 @@ async function repliesSeenAt(userId: string): Promise<Date | null> {
   return row?.at ?? null;
 }
 
-/** The person has looked at the replies list: what arrived until now is no longer new to them. */
-export async function markRepliesSeen(userId: string, at = new Date()): Promise<void> {
-  await db.insert(activitySeen).values({ organizationId: currentOrganizationId(), userId, repliesSeenAt: at })
-    .onConflictDoUpdate({ target: [activitySeen.organizationId, activitySeen.userId], set: { repliesSeenAt: at } });
+/** Replies recorded after this time are new: the person's seen time, or the last week before their first visit. */
+function newSince(seen: Date | null): Date {
+  return seen ?? new Date(Date.now() - WINDOW_DAYS * 86_400_000);
 }
 
-/** Replies that arrived since the person last looked (or in the last week, if never), for the navigation badge. */
+/**
+ * The person has looked at the replies list: what was recorded until `at`
+ * (the newest reply the list showed; now, if not given) is no longer new to
+ * them. Held to now, and never moved back by an older look.
+ */
+export async function markRepliesSeen(userId: string, at = new Date()): Promise<void> {
+  const until = new Date(Math.min(at.getTime(), Date.now()));
+  await db.insert(activitySeen).values({ organizationId: currentOrganizationId(), userId, repliesSeenAt: until })
+    .onConflictDoUpdate({
+      target: [activitySeen.organizationId, activitySeen.userId],
+      set: { repliesSeenAt: sql`greatest(activity_seen.replies_seen_at, excluded.replies_seen_at)` },
+    });
+}
+
+/** Replies recorded since the person last looked (or in the last week, if never), for the navigation badge. */
 export async function newRepliesCount(userId: string | null): Promise<number> {
   if (!userId) return 0;
   const org = currentOrganizationId();
-  const seen = (await repliesSeenAt(userId)) ?? new Date(Date.now() - WINDOW_DAYS * 86_400_000);
+  const since = newSince(await repliesSeenAt(userId));
+  // Compared to the millisecond, as listReplies compares the times it returns.
   const [row] = await db.execute<{ n: number }>(sql`
     SELECT count(*)::int AS n FROM crm_conversation_messages m
     JOIN crm_conversations c ON c.id = m.conversation_id AND c.organization_id = ${org}
-    WHERE m.direction = 'inbound' AND m.sent_at > ${seen.toISOString()}::timestamptz`);
+    WHERE m.direction = 'inbound' AND date_trunc('milliseconds', m.created_at) > ${since.toISOString()}::timestamptz`);
   return Number(row?.n ?? 0);
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { jobState, OPEN_STATES, replyState, runState, WORK_STATE_LABELS, type JobFacts } from "./status";
+import { canCancelJob, jobState, OPEN_STATES, REPLY_STATE_LABELS, repliesSeenUntil, replyState, runState, WORK_STATE_LABELS, type JobFacts } from "./status";
 
 const now = new Date("2026-10-18T12:00:00Z");
 const job = (facts: Partial<JobFacts>): JobFacts => ({ status: "queued", runAfter: null, heartbeatAt: null, attempts: 0, progress: null, result: null, ...facts });
@@ -50,7 +50,7 @@ test("open states are exactly the ones that can still change on their own", () =
 });
 
 test("a reply waiting on the owner says Needs you even when an earlier message was answered", () => {
-  expect(replyState({ answered: true, latest: true, workflowState: "action_required" })).toBe("needs_you");
+  expect(replyState({ answered: true, latest: true, workflowState: "action_required", needsYou: true })).toBe("needs_you");
   expect(replyState({ answered: true, latest: true, workflowState: "waiting" })).toBe("answered");
   expect(replyState({ answered: false, latest: true, workflowState: "classifying" })).toBe("processing");
   expect(replyState({ answered: false, latest: true, workflowState: "unclassified" })).toBe("processing");
@@ -60,7 +60,43 @@ test("a reply waiting on the owner says Needs you even when an earlier message w
 test("the record's state belongs to its newest reply: an older answered reply stays Answered", () => {
   expect(replyState({ answered: true, latest: false, workflowState: "action_required" })).toBe("answered");
   // An older reply nobody answered is still part of the open question.
-  expect(replyState({ answered: false, latest: false, workflowState: "action_required" })).toBe("needs_you");
+  expect(replyState({ answered: false, latest: false, workflowState: "action_required", needsYou: true })).toBe("needs_you");
+  expect(replyState({ answered: false, latest: false, workflowState: "action_required" })).toBe("action_required");
+});
+
+test("Needs you is the CRM's Needs you: Action required with no open decision or draft is Action required", () => {
+  expect(replyState({ answered: false, latest: true, workflowState: "action_required", needsYou: false })).toBe("action_required");
+  expect(replyState({ answered: true, latest: true, workflowState: "action_required" })).toBe("action_required");
+  expect(replyState({ answered: false, latest: true, workflowState: "action_required", needsYou: true })).toBe("needs_you");
+  expect(REPLY_STATE_LABELS.action_required).toBe("Action required");
+  expect(REPLY_STATE_LABELS.needs_you).toBe("Needs you");
+});
+
+test("Activity cancels search jobs only; a plan's start is stopped through the plan", () => {
+  for (const kind of ["discovery", "web_discovery", "linkedin_search", "apify_instagram"]) {
+    expect(canCancelJob({ kind, status: "queued" })).toBe(true);
+    expect(canCancelJob({ kind, status: "running" })).toBe(true);
+    expect(canCancelJob({ kind, status: "succeeded" })).toBe(false);
+    expect(canCancelJob({ kind, status: "cancelled" })).toBe(false);
+  }
+  expect(canCancelJob({ kind: "outreach_start", status: "queued" })).toBe(false);
+  expect(canCancelJob({ kind: "outreach_start", status: "running" })).toBe(false);
+  expect(canCancelJob({ kind: "something_new", status: "queued" })).toBe(false);
+});
+
+describe("replies are marked seen only up to what the full list showed", () => {
+  const reply = (recordedAt: string, isNew: boolean) => ({ recordedAt, isNew });
+  test("the newest recorded time shown, when the unfiltered list shows something new", () => {
+    expect(repliesSeenUntil("all", [reply("2026-10-18T10:00:00.000Z", false), reply("2026-10-18T11:30:00.000Z", true), reply("2026-10-18T11:00:00.000Z", true)])).toBe("2026-10-18T11:30:00.000Z");
+  });
+  test("a late-recorded reply further down the list still sets the mark", () => {
+    expect(repliesSeenUntil("all", [reply("2026-10-18T11:00:00.000Z", false), reply("2026-10-18T12:00:00.000Z", true)])).toBe("2026-10-18T12:00:00.000Z");
+  });
+  test("nothing new, or a channel filter hiding other channels' replies: nothing is marked", () => {
+    expect(repliesSeenUntil("all", [reply("2026-10-18T11:00:00.000Z", false)])).toBeNull();
+    expect(repliesSeenUntil("all", [])).toBeNull();
+    expect(repliesSeenUntil("email", [reply("2026-10-18T11:00:00.000Z", true)])).toBeNull();
+  });
 });
 
 test("an open owner decision keeps the newest reply in Needs you after the assistant's answer", () => {

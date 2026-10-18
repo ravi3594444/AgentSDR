@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { RiChat3Line, RiInboxLine, RiPulseLine, RiRefreshLine } from "@remixicon/react";
 import type { ReplyItem, WorkItem } from "@/lib/activity/activity.server";
-import type { ReplyState, WorkState } from "@/lib/activity/status";
+import { repliesSeenUntil, type ReplyState, type WorkState } from "@/lib/activity/status";
 import { CONVERSATION_CHANNEL_META } from "@/components/analytics/theme";
 import { announceRecordChanged } from "@/components/crm/recordEvents";
 import { Badge, ErrorState, LoadingRows, secondaryButtonClass } from "@/components/crm/CrmLayout";
@@ -47,6 +47,7 @@ const WORK_TONE: Record<WorkState, "neutral" | "success" | "info" | "danger" | "
 const REPLY_TONE: Record<ReplyState, "neutral" | "success" | "info" | "danger" | "warning"> = {
   answered: "success",
   needs_you: "danger",
+  action_required: "warning",
   processing: "info",
   waiting: "warning",
 };
@@ -83,10 +84,12 @@ export function ActivityClient({ initialView }: { initialView: View }) {
     const body = await readJson<{ replies: ReplyItem[] }>(await fetch(`/api/activity?view=replies${query}`, { cache: "no-store" }));
     setReplies(body.replies);
     const fresh = body.replies.filter((reply) => reply.isNew).map((reply) => reply.messageId);
-    if (fresh.length) {
-      setNewIds((current) => new Set([...current, ...fresh]));
-      // Seen now: the sidebar's count drops; the rows stay marked for this visit.
-      await fetch("/api/activity/seen", { method: "POST" }).catch(() => null);
+    if (fresh.length) setNewIds((current) => new Set([...current, ...fresh]));
+    // Seen up to the newest reply shown, and only from the unfiltered list: the sidebar's
+    // count drops; the rows stay marked for this visit. A filter hides other channels' replies.
+    const until = repliesSeenUntil(channel, body.replies);
+    if (until) {
+      await fetch("/api/activity/seen", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ until }) }).catch(() => null);
       announceRecordChanged("activity");
     }
   }, [channel]);
