@@ -8,6 +8,8 @@
  * - each lead's delivery evidence (accepted, then delivered as WhatsApp
  *   reported, then a read receipt), never "seen";
  * - an uncertain send shown as such, never resent;
+ * - a plan's senders only on the channels it uses (no unrelated mailbox or
+ *   Instagram account), and a plan whose launch failed never called started;
  * - a second organization reading nothing.
  * No message is sent and no provider is called.
  *
@@ -31,6 +33,9 @@ const { people } = await import("@/lib/leads/schema");
 const { gridProviderCredentials, gridProviders } = await import("@/lib/grid/schema");
 const { encryptIntegrationCredentials } = await import("@/lib/integrations/credentials");
 const { whatsappAccounts, whatsappCampaignLeads, whatsappCampaignSends, whatsappChats, whatsappMessages } = await import("@/lib/whatsapp/schema");
+const { mailboxes } = await import("@/lib/outreach/schema");
+const { instagramAccounts } = await import("@/lib/instagram/schema");
+const { setFeature } = await import("@/lib/features/flags.server");
 const { createWhatsappCampaign, addPeopleToWhatsappCampaign } = await import("@/lib/whatsapp/campaigns/campaigns.server");
 const { outreachRuns, outreachRunLeads, assistantThreads } = await import("@/lib/assistant/schema");
 const { runInOrganization } = await import("@/lib/tenancy/scope");
@@ -75,6 +80,10 @@ const seeded = await runInOrganization(a.org.id, async () => {
   await db.insert(gridProviderCredentials).values({ providerId: provider!.id, encryptedPayload: encryptIntegrationCredentials({ apiKey: "delivery-check", dsn: "https://unipile.invalid" }) });
   await saveChannelRules("whatsapp", { sendingHours: hours }, a.owner.id);
   const [account] = await db.insert(whatsappAccounts).values({ organizationId: a.org.id, unipileAccountId: `delivery-check-${stamp}`, name: "Sales number", phone: "+919800000099", status: "connected", connectedAt: new Date(now.getTime() - 3 * 86_400_000) }).returning();
+  // A mailbox and an Instagram account the WhatsApp plans do not send from.
+  const [mailbox] = await db.insert(mailboxes).values({ organizationId: a.org.id, emailAddress: `sales-${stamp}@delivery-check.test`, status: "connected" }).returning();
+  await setFeature("instagram", true, a.owner.id);
+  const [instagram] = await db.insert(instagramAccounts).values({ organizationId: a.org.id, unipileAccountId: `delivery-check-ig-${stamp}`, username: `delivery_check_${stamp}`, status: "connected" }).returning();
   const leads = await db.insert(people).values([1, 2].map((n) => ({ organizationId: a.org.id, phone: `+919${String(stamp % 100_000_000).padStart(8, "0")}${n}`, fullName: `Lead ${n}`, source: "delivery-check" }))).returning();
   const campaign = await createWhatsappCampaign({ name: "Delivery check", accountIds: [account!.id], steps: [{ id: randomUUID(), body: "Hi {{firstName}}", delayHours: 0 }, { id: randomUUID(), body: "Following up", delayHours: 24 }] });
   const added = await addPeopleToWhatsappCampaign(campaign.id, leads.map((lead) => lead.id));
@@ -96,9 +105,12 @@ const seeded = await runInOrganization(a.org.id, async () => {
   const unmarked = await run("Pune agents, unmarked", {});
   const automatic = await run("Autonomous plan", { autopilot: true, plan: { autonomous: true } });
   const proposed = await run("Waiting plan", { status: "proposed", approvedBy: null, approvedAt: null });
+  const emailPlan = await run("Email plan", { status: "starting", channels: ["email"] });
+  // Start was pressed and no channel launched: the only way a run becomes failed.
+  const failedStart = await run("Could not start", { status: "failed", error: "whatsapp: No connected WhatsApp number" });
   await db.update(assistantThreads).set({ autonomous: true, autonomousBy: a.owner.id, autonomousAt: now }).where(eq(assistantThreads.id, thread.id));
   await db.insert(outreachRunLeads).values(leads.map((lead) => ({ organizationId: a.org.id, runId: started.id, personId: lead.id, channel: "whatsapp" as const })));
-  return { account: account!, leads, campaign, thread, started, sibling, unmarked, automatic, proposed };
+  return { account: account!, mailbox: mailbox!, instagram: instagram!, leads, campaign, thread, started, sibling, unmarked, automatic, proposed, emailPlan, failedStart };
 });
 
 await runInOrganization(a.org.id, async () => {
@@ -108,6 +120,11 @@ await runInOrganization(a.org.id, async () => {
   check("outside its hours it says so and names when the window opens", sender?.gates.join() === "Outside campaign sending hours (Asia/Kolkata)" && sender.nextAt === expectedOpen, `${sender?.gates.join("; ")} next ${sender?.nextAt} (expected ${expectedOpen})`);
   check("its two leads are counted as waiting", sender?.queued === 2);
   check("the summary never infers a time zone from leads", /Lead cities do not determine/.test(diagnostics.summary) && /Asia\/Kolkata/.test(diagnostics.summary));
+  check("a WhatsApp plan lists no mailbox or Instagram account it does not send from", diagnostics.senders.every((entry) => entry.channel === "whatsapp"), diagnostics.senders.map((entry) => `${entry.channel} ${entry.account}`).join("; "));
+  const emailSenders = (await diagnoseDelivery(seeded.emailPlan.id)).senders;
+  check("an email plan lists the mailboxes, not the Instagram accounts", emailSenders.some((entry) => entry.channel === "email" && entry.account === seeded.mailbox.emailAddress) && emailSenders.every((entry) => entry.channel === "email"), emailSenders.map((entry) => `${entry.channel} ${entry.account}`).join("; "));
+  const everySender = (await diagnoseDelivery()).senders;
+  check("the organization's own snapshot still lists every mailbox and Instagram account", everySender.some((entry) => entry.channel === "email" && entry.account === seeded.mailbox.emailAddress) && everySender.some((entry) => entry.channel === "instagram" && entry.account === `@${seeded.instagram.username}`), everySender.map((entry) => `${entry.channel} ${entry.account}`).join("; "));
 
   await saveChannelRules("whatsapp", { sendingHours: null }, a.owner.id);
   const anyTime = (await diagnoseDelivery(seeded.started.id)).senders.find((entry) => entry.channel === "whatsapp");
@@ -138,6 +155,17 @@ await runInOrganization(a.org.id, async () => {
   const [storedChat] = await db.select({ createdAt: whatsappChats.createdAt }).from(whatsappChats).where(eq(whatsappChats.id, chat!.id));
   check("the rolling new-chat limit holds new chats until the oldest falls out of 24 hours", limited?.gates.join() === "1 of 1 new chats used in the last 24 hours" && limited.nextAt === new Date(storedChat!.createdAt.getTime() + 86_400_000).toISOString() && /Follow-ups/.test(limited.note ?? ""), `${limited?.gates.join("; ")} next ${limited?.nextAt}`);
 
+  // Two older chats it started, then the limit lowered to 2 under the 3 now in the window: one must age out, the oldest is not enough.
+  const older = [20, 10].map((hoursAgo) => new Date(now.getTime() - hoursAgo * 3_600_000));
+  for (const [index, createdAt] of older.entries()) {
+    const [olderChat] = await db.insert(whatsappChats).values({ accountId: seeded.account.id, unipileChatId: `chat-${stamp}-older-${index}`, phone: `+9198000${String(stamp % 10_000).padStart(4, "0")}${index}`, createdAt }).returning();
+    await db.insert(whatsappMessages).values({ chatId: olderChat!.id, unipileMessageId: `msg-${stamp}-older-${index}`, direction: "outbound", origin: "agentsdr", body: "Hi", sentAt: createdAt });
+  }
+  await db.update(whatsappAccounts).set({ newChatsPerDay: 2 }).where(eq(whatsappAccounts.id, seeded.account.id));
+  const over = (await diagnoseDelivery(seeded.started.id)).senders.find((entry) => entry.channel === "whatsapp");
+  const freed = new Date(older[1]!.getTime() + 86_400_000).toISOString();
+  check("over a lowered limit, new chats wait until enough chats leave the 24 hours, not just the oldest", over?.gates.join() === "3 of 2 new chats used in the last 24 hours" && over.nextAt === freed, `${over?.gates.join("; ")} next ${over?.nextAt} (expected ${freed})`);
+
   const ctx = { userId: a.owner.id, userName: "Owner A", userEmail: a.owner.email, organizationId: a.org.id, organizationName: a.org.name, organizationSlug: a.org.slug, roles: ["owner"] } as unknown as OrgContext;
   const state = await assistantState(seeded.thread.id, ctx, false);
   const auth = (id: string) => (state.runs as Record<string, { authorization: { kind: string; text: string; until: string | null } }>)[id]?.authorization;
@@ -146,6 +174,7 @@ await runInOrganization(a.org.id, async () => {
   check("a start the record cannot attribute claims neither Start nor the approval", auth(seeded.unmarked.id)?.text === "Started in Owner A's name.", auth(seeded.unmarked.id)?.text);
   check("Autonomous mode is named as the authorization", auth(seeded.automatic.id)?.kind === "autonomous", auth(seeded.automatic.id)?.text);
   check("a waiting plan in an Autonomous chat is not described as started", auth(seeded.proposed.id)?.kind === "none" && /did not start this one/.test(auth(seeded.proposed.id)?.text ?? ""), auth(seeded.proposed.id)?.text);
+  check("a plan whose launch failed is not described as started", auth(seeded.failedStart.id)?.kind === "none" && auth(seeded.failedStart.id)?.text === "It did not start; nothing was sent.", auth(seeded.failedStart.id)?.text);
 });
 
 await runInOrganization(b.org.id, async () => {

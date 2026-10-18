@@ -141,10 +141,12 @@ export async function diagnoseDelivery(runId?: string) {
   }
   const whatsapp = await whatsappSenders(run?.campaigns.whatsapp ?? null, Boolean(run), now);
   const instagramRules = instagram.length ? await channelRules("instagram") : null;
+  // A plan's senders are only those of the channels it uses (channels, not campaigns: a starting plan has none yet).
+  const sendsOn = (channel: "email" | "instagram") => !run || run.channels.includes(channel);
   const senders: SenderStatus[] = [
-    ...email.map((m) => emailSenderStatus({ mailbox: m.mailbox, workingHours: m.workingHours, nextEmailTime: m.nextSendAt ? new Date(m.nextSendAt) : null, gates: m.gates, queued: m.activeQueue, now })),
+    ...(sendsOn("email") ? email : []).map((m) => emailSenderStatus({ mailbox: m.mailbox, workingHours: m.workingHours, nextEmailTime: m.nextSendAt ? new Date(m.nextSendAt) : null, gates: m.gates, queued: m.activeQueue, now })),
     ...whatsapp,
-    ...instagram.map((a): SenderStatus => {
+    ...(sendsOn("instagram") ? instagram : []).map((a): SenderStatus => {
       const hours = instagramRules?.sendingHours ? mailboxHoursFromWeekly(instagramRules.sendingHours) : null;
       const nextSend = a.gates.find((gate) => gate.startsWith("Next send allowed at "))?.slice("Next send allowed at ".length) ?? null;
       // Only the hours and the per-account gap have a known end here.
@@ -204,13 +206,11 @@ async function whatsappSenders(campaignId: string | null, forRun: boolean, now: 
   const org = currentOrganizationId();
   const accounts = await db.execute<{
     id: string; name: string | null; phone: string | null; status: string; connected_at: string | null; new_chats_per_day: number | null;
-    last_sent: string | null; new_chats: number; oldest_new_chat: string | null; queued: number;
+    last_sent: string | null; new_chat_times: string[]; queued: number;
   }>(sql`select a.id, a.name, a.phone, a.status, a.connected_at::text, a.new_chats_per_day,
       (select max(m.sent_at)::text from whatsapp_messages m join whatsapp_chats c on c.id = m.chat_id where c.account_id = a.id and m.origin = 'agentsdr') as last_sent,
-      (select count(*)::int from whatsapp_chats c where c.account_id = a.id and c.created_at >= ${new Date(now.getTime() - NEW_CHAT_WINDOW_MS).toISOString()}::timestamptz
-        and (select m.origin from whatsapp_messages m where m.chat_id = c.id order by m.sent_at asc limit 1) = 'agentsdr') as new_chats,
-      (select min(c.created_at)::text from whatsapp_chats c where c.account_id = a.id and c.created_at >= ${new Date(now.getTime() - NEW_CHAT_WINDOW_MS).toISOString()}::timestamptz
-        and (select m.origin from whatsapp_messages m where m.chat_id = c.id order by m.sent_at asc limit 1) = 'agentsdr') as oldest_new_chat,
+      (select coalesce(array_agg(c.created_at::text order by c.created_at), '{}'::text[]) from whatsapp_chats c where c.account_id = a.id and c.created_at >= ${new Date(now.getTime() - NEW_CHAT_WINDOW_MS).toISOString()}::timestamptz
+        and (select m.origin from whatsapp_messages m where m.chat_id = c.id order by m.sent_at asc limit 1) = 'agentsdr') as new_chat_times,
       (select count(*)::int from whatsapp_campaign_leads l join whatsapp_campaigns wc on wc.id = l.campaign_id
         where wc.organization_id = ${org} and l.status in ('queued', 'in_sequence') and (l.account_id = a.id or l.account_id is null)
           and (${campaignId}::uuid is null or l.campaign_id = ${campaignId}::uuid)) as queued
@@ -230,8 +230,7 @@ async function whatsappSenders(campaignId: string | null, forRun: boolean, now: 
     guardrails: whatsappGuardrails(rules, { newChatsPerDay: a.new_chats_per_day }),
     connectedAt: a.connected_at ? new Date(a.connected_at) : null,
     lastSentAt: a.last_sent ? new Date(a.last_sent) : null,
-    newChatsInWindow: Number(a.new_chats),
-    oldestNewChatAt: a.oldest_new_chat ? new Date(a.oldest_new_chat) : null,
+    newChatTimes: a.new_chat_times.map((time) => new Date(time)),
     queued: Number(a.queued),
     now,
   }));

@@ -14,6 +14,13 @@ describe("runAuthorization", () => {
     expect(runAuthorization({ ...base, status: "failed", approvedAt: null }).kind).toBe("none");
   });
 
+  test("a plan whose launch failed sent nothing, so it is never described as started, however it was authorized", () => {
+    // A run is failed only when no channel launched, after Start recorded who pressed it.
+    for (const how of [{}, { autonomous: true }, { ownApproval: { expiresAt: "2026-10-19T10:00:00Z" } }, { mayBeUnderApproval: true }]) {
+      expect(runAuthorization({ ...base, ...how, status: "failed" })).toEqual({ kind: "none", text: "It did not start; nothing was sent.", by: null, at: null, until: null });
+    }
+  });
+
   test("names how it was authorized: Start, a request approval, or Autonomous mode", () => {
     expect(runAuthorization(base)).toMatchObject({ kind: "start", text: "Started by Ravi with Start.", by: "Ravi", at: "2026-10-18T10:00:00.000Z" });
     expect(runAuthorization({ ...base, ownApproval: { expiresAt: "2026-10-19T10:00:00Z" } })).toMatchObject({ kind: "request", until: "2026-10-19T10:00:00Z" });
@@ -37,7 +44,9 @@ describe("runAuthorization", () => {
 const india = mailboxHoursFromWeekly({ timezone: "Asia/Kolkata", days: [1, 2, 3, 4, 5], start: "09:00", end: "18:00" });
 const mondayEarly = new Date("2026-10-19T01:00:00Z"); // 06:30 in India
 const guardrails = { warmUpHours: 24, newChatsPerDay: 25, minSecondsBetweenSends: 10 };
-const whatsapp = { account: "+91 98000 00001", status: "connected", unipileConnected: true, paused: false, sendingHours: india, guardrails, connectedAt: new Date("2026-10-01T00:00:00Z"), lastSentAt: null, newChatsInWindow: 0, oldestNewChatAt: null, queued: 3, now: mondayEarly };
+const whatsapp = { account: "+91 98000 00001", status: "connected", unipileConnected: true, paused: false, sendingHours: india, guardrails, connectedAt: new Date("2026-10-01T00:00:00Z"), lastSentAt: null, newChatTimes: [] as Date[], queued: 3, now: mondayEarly };
+/** `count` new chats, the first at `oldest`, then one every `everyMinutes`: oldest first, as the query returns them. */
+const newChats = (count: number, oldest: string, everyMinutes = 1) => Array.from({ length: count }, (_, i) => new Date(Date.parse(oldest) + i * everyMinutes * 60_000));
 
 describe("sender status", () => {
   test("outside its hours a number says so in its own time zone, and when the window opens", () => {
@@ -54,13 +63,29 @@ describe("sender status", () => {
 
   test("the later of several gates decides; a gate with no known end gives no time", () => {
     const now = new Date("2026-10-19T06:00:00Z"); // inside hours
-    const full = whatsappSenderStatus({ ...whatsapp, now, newChatsInWindow: 25, oldestNewChatAt: new Date("2026-10-18T20:00:00Z") });
+    const full = whatsappSenderStatus({ ...whatsapp, now, newChatTimes: newChats(25, "2026-10-18T20:00:00Z") });
     expect(full.nextAt).toBe("2026-10-19T20:00:00.000Z");
     expect(full.note).toContain("Follow-ups");
     const warming = whatsappSenderStatus({ ...whatsapp, now, connectedAt: new Date("2026-10-19T00:00:00Z") });
     expect(warming.nextAt).toBe("2026-10-20T00:00:00.000Z");
     expect(whatsappSenderStatus({ ...whatsapp, now, unipileConnected: false }).nextAt).toBeNull();
     expect(whatsappSenderStatus({ ...whatsapp, now, connectedAt: null }).nextAt).toBeNull();
+  });
+
+  test("over a lowered new-chat limit, it waits until enough chats leave the 24 hours, not just the oldest", () => {
+    // 25 new chats, one every 30 minutes from 15:00, then the limit is lowered to 10: send.ts refuses until 16 have aged out.
+    const now = new Date("2026-10-18T14:00:00Z");
+    const over = whatsappSenderStatus({ ...whatsapp, sendingHours: null, now, guardrails: { ...guardrails, newChatsPerDay: 10 }, newChatTimes: newChats(25, "2026-10-17T15:00:00Z", 30) });
+    expect(over.gates).toEqual(["25 of 10 new chats used in the last 24 hours"]);
+    expect(over.nextAt).toBe("2026-10-18T22:30:00.000Z"); // the 16th oldest (22:30) plus 24 hours
+    // A limit of none: no chat leaving the window frees one.
+    expect(whatsappSenderStatus({ ...whatsapp, sendingHours: null, now, guardrails: { ...guardrails, newChatsPerDay: 0 }, newChatTimes: newChats(2, "2026-10-17T15:00:00Z") }).nextAt).toBeNull();
+  });
+
+  test("a mailbox outside an overnight window after days off may send again from midnight", () => {
+    const weeknights = mailboxHoursFromWeekly({ timezone: "UTC", days: [1, 2, 3, 4, 5], start: "22:00", end: "06:00" });
+    const status = emailSenderStatus({ mailbox: "nights@example.com", workingHours: weeknights, nextEmailTime: null, gates: [{ code: "hours", reason: "Outside this mailbox's sending hours (UTC)" }], queued: 1, now: new Date("2026-10-17T07:00:00Z") });
+    expect(status.nextAt).toBe("2026-10-19T00:00:00.000Z");
   });
 
   test("a mailbox at its daily limit waits for the next day's window in its time zone", () => {

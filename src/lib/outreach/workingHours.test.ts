@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mailboxHoursFromWeekly, nextWindowStart } from "./workingHours";
+import { isWithinWorkingHours, mailboxHoursFromWeekly, nextWindowStart } from "./workingHours";
 
 // Monday to Friday, 09:00–18:00 in India (UTC+5:30, no daylight saving).
 const india = mailboxHoursFromWeekly({ timezone: "Asia/Kolkata", days: [1, 2, 3, 4, 5], start: "09:00", end: "18:00" });
@@ -18,6 +18,14 @@ describe("nextWindowStart", () => {
     const nights = mailboxHoursFromWeekly({ timezone: "UTC", days: [0, 1, 2, 3, 4, 5, 6], start: "21:00", end: "06:00" });
     expect(nextWindowStart(nights, new Date("2026-10-19T12:00:00Z"))?.toISOString()).toBe("2026-10-19T21:00:00.000Z");
     expect(nextWindowStart(nights, new Date("2026-10-19T03:00:00Z"))).toBeNull();
+  });
+  test("an overnight window after days off opens at midnight, where its early-morning part begins", () => {
+    // Monday to Friday 22:00–06:00: Monday's window also covers Monday 00:00–06:00, and the scheduler sends then.
+    const weeknights = mailboxHoursFromWeekly({ timezone: "UTC", days: [1, 2, 3, 4, 5], start: "22:00", end: "06:00" });
+    const next = nextWindowStart(weeknights, new Date("2026-10-17T07:00:00Z")); // Saturday
+    expect(next?.toISOString()).toBe("2026-10-19T00:00:00.000Z");
+    expect(isWithinWorkingHours(weeknights, next!)).toBe(true);
+    expect(isWithinWorkingHours(weeknights, new Date("2026-10-18T23:59:00Z"))).toBe(false);
   });
   test("no enabled day: no next window", () => {
     expect(nextWindowStart(mailboxHoursFromWeekly({ timezone: "UTC", days: [], start: "09:00", end: "17:00" }), new Date("2026-10-19T12:00:00Z"))).toBeNull();
