@@ -4,7 +4,11 @@
  * that plan, that chat and where the reply stands; the new-replies count
  * drops once the list is seen and rises for the next reply; a search waiting
  * for a slot says so; a search cancelled mid-step stays cancelled when the
- * step returns; a second organization sees, counts and cancels nothing.
+ * step returns, and a plan's start job cannot be cancelled from Activity;
+ * Needs you is the CRM's Needs you; a reply is new by when it was recorded,
+ * the list and the badge agree, and seen moves only forward and only up to
+ * what the unfiltered list showed; a second organization sees, counts and
+ * cancels nothing.
  *
  *   bun run --conditions=react-server scripts/e2e/activity.ts
  *
@@ -22,7 +26,7 @@ const { db } = await import("@/lib/db");
 const { organizations, users, members } = await import("@/lib/auth/schema");
 const { people } = await import("@/lib/leads/schema");
 const { crmRecords, crmConversations, crmConversationMessages } = await import("@/lib/crm/schema");
-const { assistantJobs, assistantThreads, outreachRuns, outreachRunLeads } = await import("@/lib/assistant/schema");
+const { assistantJobs, assistantThreads, outreachRuns, outreachRunLeads, ownerDecisions } = await import("@/lib/assistant/schema");
 const { runInOrganization } = await import("@/lib/tenancy/scope");
 const { ensureCrmDefaults } = await import("@/lib/crm/defaults");
 const { createThread } = await import("@/lib/assistant/threads.server");
@@ -30,6 +34,8 @@ const { createAudience } = await import("@/lib/assistant/audiences.server");
 const { registerAssistantJobHandler, runOneAssistantStep } = await import("@/lib/assistant/worker");
 const { cancelJob, listReplies, listWork, markRepliesSeen, newRepliesCount, openWorkCount } = await import("@/lib/activity/activity.server");
 const { loadNavBadges } = await import("@/lib/nav/badges.server");
+const { listCrmActions } = await import("@/lib/crm/queries");
+const { repliesSeenUntil } = await import("@/lib/activity/status");
 type OutreachPlan = import("@/lib/assistant/schema").OutreachPlan;
 
 const stamp = Date.now();
@@ -47,6 +53,7 @@ async function organization(label: string) {
 }
 const a = await organization("a");
 const b = await organization("b");
+const c = await organization("c");
 const day = 86_400_000;
 const at = (offsetMs: number) => new Date(Date.now() + offsetMs);
 
@@ -93,11 +100,75 @@ await runInOrganization(a.org.id, async () => {
   await new Promise((resolve) => setTimeout(resolve, 20));
   await db.insert(crmConversationMessages).values(seeded.message("inbound", "Can you do ₹3,000 if we sign for a year?", new Date()));
   const newer = await listReplies({ userId: a.owner.id });
-  check("a newer question waiting on the owner: Needs you, and new again", newer.replies[0]?.state === "needs_you" && newer.replies[0].isNew && newer.replies.length === 2, newer.replies.map((reply) => reply.stateLabel).join(","));
+  const inNeedsYou = async () => (await listCrmActions({ scope: "needs_you", limit: 200 })).actions.some((row) => row.id === seeded.record.id);
+  check("a newer question in Action required with no owner decision or draft: Action required, not Needs you, and new again",
+    newer.replies[0]?.state === "action_required" && newer.replies[0].stateLabel === "Action required" && newer.replies[0].isNew && newer.replies.length === 2 && !(await inNeedsYou()),
+    newer.replies.map((reply) => reply.stateLabel).join(","));
   check("the older, answered reply stays Answered and seen", newer.replies[1]?.state === "answered" && !newer.replies[1].isNew);
+  await db.insert(ownerDecisions).values({
+    organizationId: a.org.id, kind: "negotiation", reason: "Asked for a discount outside the price rules", decision: "Offer ₹3,000 for a yearly plan?",
+    personId: seeded.person.id, crmRecordId: seeded.record.id, conversationId: seeded.conversation.id, runId: seeded.run.id,
+  });
+  const decided = await listReplies({ userId: a.owner.id });
+  check("an open owner decision on it: Needs you in Activity, as in the CRM's Needs you", decided.replies[0]?.state === "needs_you" && decided.replies[0].stateLabel === "Needs you" && (await inNeedsYou()), decided.replies[0]?.stateLabel);
   check("the badge counts only the reply since the list was seen", (await newRepliesCount(a.owner.id)) === 1);
   check("a channel filter keeps to that channel", (await listReplies({ userId: a.owner.id, channel: "email" })).replies.length === 0 && (await listReplies({ userId: a.owner.id, channel: "whatsapp" })).replies.length === 2);
   check("seen is per person: someone who never opened the list still has both as new", (await newRepliesCount(b.owner.id)) === 2);
+});
+
+// When a reply counts as new: by when AgentSDR recorded it; the list and the badge agree; seen moves forward only, up to what was shown.
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const seenCheck = await runInOrganization(c.org.id, async () => {
+  const { pipelineId } = await ensureCrmDefaults();
+  const [person] = await db.insert(people).values({ organizationId: c.org.id, source: "list", fullName: "Arjun Mehta", email: `arjun-${stamp}@mehtarealty.in`, phone: "+919800000002" }).returning();
+  const [record] = await db.insert(crmRecords).values({ organizationId: c.org.id, personId: person!.id, pipelineId, workflowState: "waiting" }).returning();
+  const conversation = async (channel: "whatsapp" | "email", accountRef: string) =>
+    (await db.insert(crmConversations).values({ organizationId: c.org.id, crmRecordId: record!.id, personId: person!.id, channel, accountRef }).returning())[0]!;
+  return { person: person!, whatsapp: await conversation("whatsapp", "wa-acct-c"), email: await conversation("email", `rep-${stamp}@activity-check.test`) };
+});
+let said = 0;
+async function inbound(conversation: typeof seenCheck.whatsapp, body: string, sentAt: Date, createdAt?: Date) {
+  const [row] = await db.insert(crmConversationMessages).values({
+    conversationId: conversation.id, personId: seenCheck.person.id, channel: conversation.channel, accountRef: conversation.accountRef, direction: "inbound",
+    idempotencyKey: `activity-c-${stamp}-${said++}`, bodyText: body, sentAt, ...(createdAt ? { createdAt } : {}),
+  }).returning();
+  return row!;
+}
+await runInOrganization(c.org.id, async () => {
+  const months = await inbound(seenCheck.whatsapp, "Still looking for a CRM?", at(-90 * day), at(-90 * day));
+  const recent = await inbound(seenCheck.whatsapp, "We have six agents now.", at(-2 * day), at(-2 * day));
+  const first = await listReplies({ userId: c.owner.id });
+  const marked = first.replies.filter((reply) => reply.isNew).map((reply) => reply.messageId);
+  check("before the first visit, the list marks only the last 7 days as new, and the badge counts the same",
+    marked.length === 1 && marked[0] === recent.id && first.replies.some((reply) => reply.messageId === months.id && !reply.isNew) && (await newRepliesCount(c.owner.id)) === 1,
+    `marked ${marked.length}, badge ${await newRepliesCount(c.owner.id)}`);
+
+  await markRepliesSeen(c.owner.id);
+  await sleep(20);
+  const late = await inbound(seenCheck.whatsapp, "Did you get my last message?", at(-3_600_000));
+  const afterLate = await listReplies({ userId: c.owner.id });
+  check("a reply recorded after the list was seen is new, though the provider says it was sent before",
+    afterLate.replies.find((reply) => reply.messageId === late.id)?.isNew === true && (await newRepliesCount(c.owner.id)) === 1,
+    `badge ${await newRepliesCount(c.owner.id)}`);
+
+  const until = repliesSeenUntil("all", afterLate.replies);
+  await sleep(20);
+  const email = await inbound(seenCheck.email, "Arrived after the list was shown", new Date());
+  const filtered = await listReplies({ userId: c.owner.id, channel: "email" });
+  check("an Email-filtered list shows the new email but marks nothing seen", filtered.replies[0]?.messageId === email.id && filtered.replies[0].isNew && repliesSeenUntil("email", filtered.replies) === null);
+  check("the unfiltered list marks seen up to the newest reply it showed", until === late.createdAt.toISOString(), `${until} vs ${late.createdAt.toISOString()}`);
+  await markRepliesSeen(c.owner.id, new Date(until!));
+  const afterSeen = await listReplies({ userId: c.owner.id });
+  check("seen up to what was shown: a reply recorded after it stays new, in the list and the badge",
+    afterSeen.replies.filter((reply) => reply.isNew).map((reply) => reply.messageId).join() === email.id && (await newRepliesCount(c.owner.id)) === 1);
+  await markRepliesSeen(c.owner.id, at(-day));
+  check("an earlier seen time never moves the mark back", (await newRepliesCount(c.owner.id)) === 1 && (await listReplies({ userId: c.owner.id })).replies.filter((reply) => reply.isNew).length === 1);
+  await markRepliesSeen(c.owner.id, at(day));
+  await sleep(20);
+  const next = await inbound(seenCheck.whatsapp, "Calling you tomorrow", new Date());
+  const ahead = await listReplies({ userId: c.owner.id });
+  check("a seen time in the future is held to now: the next reply is still new",
+    ahead.replies.filter((reply) => reply.isNew).map((reply) => reply.messageId).join() === next.id && (await newRepliesCount(c.owner.id)) === 1 && new Date(ahead.seenAt!).getTime() <= Date.now());
 });
 
 // Work: a search waiting for a slot, a stalled one, and a cancel mid-step.
@@ -166,6 +237,20 @@ const [started] = await db.select().from(assistantJobs).where(eq(assistantJobs.i
 await runInOrganization(a.org.id, async () => {
   const item = (await listWork()).find((entry) => entry.id === resumed!.id);
   check("a search that waited for a slot and then started is no longer shown as waiting", started?.stage === "apify" && !("waiting" in (started?.progress ?? {})) && item?.state === "queued" && item.reason === null, `${item?.state}: ${JSON.stringify(started?.progress)}`);
+});
+
+// Starting outreach is not a search: Activity offers no Cancel for it; the plan's own Pause and Stop control it.
+await runInOrganization(a.org.id, async () => {
+  const [starting] = await db.insert(assistantJobs).values({
+    organizationId: a.org.id, kind: "outreach_start", stage: "personalizing", threadId: seeded.yesterday.id, runId: seeded.run.id, status: "queued", runAfter: at(60_000),
+  }).returning();
+  const listed = (await listWork()).find((entry) => entry.id === starting!.id);
+  check("a plan's start job is listed without Cancel", listed?.title === "Starting outreach" && listed.open && !listed.canCancel, JSON.stringify({ title: listed?.title, canCancel: listed?.canCancel }));
+  const queuedRefused = (await cancelJob(starting!.id)) === false;
+  await db.update(assistantJobs).set({ status: "running", lockedBy: "launching-worker", heartbeatAt: new Date() }).where(eq(assistantJobs.id, starting!.id));
+  const runningRefused = (await cancelJob(starting!.id)) === false;
+  const [still] = await db.select().from(assistantJobs).where(eq(assistantJobs.id, starting!.id));
+  check("cancelling it, queued or mid-launch, is refused and changes nothing", queuedRefused && runningRefused && still?.status === "running" && still.lockedBy === "launching-worker", `${still?.status}`);
 });
 
 // Organization B sees and counts nothing of A.

@@ -2,8 +2,9 @@ import { pgTable, primaryKey, timestamp, uuid } from "drizzle-orm/pg-core";
 import { organizations } from "@/lib/auth/schema";
 
 /**
- * When each person last opened the Replies list (src/lib/activity/): replies
- * received after it count as new in the navigation badge. Seeing a reply
+ * How far each person has seen the Replies list (src/lib/activity/): replies
+ * recorded after it count as new in the list and the navigation badge. It
+ * only moves forward. Seeing a reply
  * approves, answers or changes nothing. Created by scripts/add-activity.ts.
  */
 export const activitySeen = pgTable(

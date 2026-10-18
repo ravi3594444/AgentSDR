@@ -75,6 +75,22 @@ export function jobState(job: JobFacts, now: Date): { state: WorkState; reason: 
   }
 }
 
+/**
+ * The jobs Activity may cancel: searches. Starting an outreach plan is
+ * controlled through the plan itself (Pause, Resume, Stop), never by
+ * cancelling its job, which would leave the run starting or launching.
+ */
+export const CANCELLABLE_JOB_KINDS = ["discovery", "web_discovery", "linkedin_search", "apify_instagram"] as const;
+
+export function isCancellableJobKind(kind: string): boolean {
+  return (CANCELLABLE_JOB_KINDS as readonly string[]).includes(kind);
+}
+
+/** Whether Activity offers Cancel on a job: a search that is still queued or running. */
+export function canCancelJob(job: { kind: string; status: string }): boolean {
+  return isCancellableJobKind(job.kind) && (job.status === "queued" || job.status === "running");
+}
+
 /** An outreach plan's state: proposed plans wait for Start; running is sending within its rules, not proof of a send. */
 export function runState(status: string): WorkState {
   switch (status) {
@@ -90,11 +106,12 @@ export function runState(status: string): WorkState {
   }
 }
 
-export type ReplyState = "answered" | "needs_you" | "processing" | "waiting";
+export type ReplyState = "answered" | "needs_you" | "action_required" | "processing" | "waiting";
 
 export const REPLY_STATE_LABELS: Record<ReplyState, string> = {
   answered: "Answered",
   needs_you: "Needs you",
+  action_required: "Action required",
   processing: "Being handled",
   waiting: "No answer yet",
 };
@@ -105,13 +122,29 @@ export const REPLY_STATE_LABELS: Record<ReplyState, string> = {
  * The record's state belongs to its newest reply, so an older reply that
  * was answered stays Answered; on the newest, needs-you wins over answered.
  * `needsYou` is the CRM's Needs you (an open owner decision or a draft
- * awaiting review): a quote the assistant could not give is the owner's even
- * after its holding reply went out.
+ * awaiting review), and only it says Needs you: a quote the assistant could
+ * not give is the owner's even after its holding reply went out. A record in
+ * Action required without one (a classification to confirm, a takeover) is
+ * Action required, as in the CRM.
  */
 export function replyState(input: { answered: boolean; latest: boolean; workflowState: string | null; needsYou?: boolean }): ReplyState {
   if (input.answered && !input.latest) return "answered";
-  if (input.workflowState === "action_required" || input.needsYou) return "needs_you";
+  if (input.needsYou) return "needs_you";
+  if (input.workflowState === "action_required") return "action_required";
   if (input.answered) return "answered";
   if (input.workflowState === "classifying" || input.workflowState === "unclassified") return "processing";
   return "waiting";
+}
+
+/**
+ * How far a look at the Replies list marks replies seen: up to the newest
+ * recorded time it showed, and only when it showed every channel and
+ * something new. A channel-filtered list marks nothing, so a reply it hid
+ * stays new in the list and in the badge. Null: nothing to mark.
+ */
+export function repliesSeenUntil(channel: string, replies: readonly { recordedAt: string; isNew: boolean }[]): string | null {
+  if (channel !== "all" || !replies.some((reply) => reply.isNew)) return null;
+  let newest = replies[0]!.recordedAt;
+  for (const reply of replies) if (Date.parse(reply.recordedAt) > Date.parse(newest)) newest = reply.recordedAt;
+  return newest;
 }
