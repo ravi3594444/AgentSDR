@@ -70,6 +70,7 @@ domains.json
 
 # Local agent / workspace state
 .claude/settings.local.json
+.claude/worktrees/
 .conductor/
 
 # Generated reports of any kind (integration runs, audits) — may hold provider
