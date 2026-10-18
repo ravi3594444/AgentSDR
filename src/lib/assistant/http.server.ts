@@ -5,7 +5,7 @@ import { db } from "@/lib/db";
 import { authContextErrorResponse, can, requireOrgContext, type OrgContext } from "@/lib/auth/context";
 import { crmRequestErrorResponse, requireCrmMutationContext } from "@/lib/crm/http";
 import { inOrg, runInOrganization } from "@/lib/tenancy/scope";
-import { assistantJobs, outreachRuns, ownerDecisions } from "./schema";
+import { assistantJobs, outreachRuns, ownerDecisions, type OutreachPlan } from "./schema";
 import { runLeads } from "./runLeads.server";
 import { runReplies } from "./runReplies.server";
 import { listMessages, listThreads, resolveThread, threadBusy } from "./threads.server";
@@ -72,7 +72,7 @@ export async function assistantState(threadId: string | null, ctx: OrgContext, w
       .from(ownerDecisions).where(and(inOrg(ownerDecisions), inArray(ownerDecisions.id, [...new Set(decisionIds)])))
     : [];
   const runs = runIds.length
-    ? await db.select({ id: outreachRuns.id, status: outreachRuns.status, autopilot: outreachRuns.autopilot, error: outreachRuns.error, campaigns: outreachRuns.campaigns })
+    ? await db.select({ id: outreachRuns.id, status: outreachRuns.status, autopilot: outreachRuns.autopilot, error: outreachRuns.error, campaigns: outreachRuns.campaigns, plan: outreachRuns.plan })
       .from(outreachRuns).where(and(inOrg(outreachRuns), inArray(outreachRuns.id, [...new Set(runIds)])))
     : [];
   // The mode chosen on the latest started run: the next plan card starts with it selected.
@@ -106,10 +106,32 @@ export async function assistantState(threadId: string | null, ctx: OrgContext, w
       createdAt: message.createdAt.toISOString(),
     })),
     jobs: jobs.map((job) => ({ ...job, createdAt: job.createdAt.toISOString() })),
-    runs: Object.fromEntries(runs.map((run) => [run.id, { ...run, replies: replies[run.id] ?? [], leads: leads[run.id] ?? [], requestPeers: peers(run.id) }])),
+    runs: Object.fromEntries(runs.map(({ plan, ...run }) => [run.id, { ...run, plan: planCardView(plan), replies: replies[run.id] ?? [], leads: leads[run.id] ?? [], requestPeers: peers(run.id) }])),
     decisions: Object.fromEntries(decisions.map((decision) => [decision.id, { status: decision.status, answer: decision.answer }])),
     setup: withSetup ? { ...(await setupSnapshot()), canManageAutopilot: canManageAutopilot(ctx) } : null,
     lastReplyMode: lastStarted ? (lastStarted.autopilot ? "automatic" : "review") as "automatic" | "review" : null,
+  };
+}
+
+/**
+ * What a plan card shows of the plan as stored now: a start that left out
+ * people other plans already cover changed its leads, groups, samples and
+ * estimate since the prepare_outreach card was written. The messages and
+ * per-lead plans stay on the server.
+ */
+function planCardView(plan: OutreachPlan) {
+  return {
+    assignments: plan.assignments.map((assignment) => ({ channel: assignment.channel })),
+    samples: plan.samples,
+    groups: plan.groups?.map((group) => ({ id: group.id, label: group.label, count: group.count })),
+    personal: plan.personal?.map((item) => ({ personId: item.personId, name: item.name })),
+    skipped: plan.skipped,
+    limits: plan.limits,
+    excluded: plan.excluded,
+    estimate: plan.estimate,
+    autopilot: plan.autopilot,
+    ownerRequest: plan.ownerRequest ?? null,
+    requestId: plan.requestId ?? null,
   };
 }
 

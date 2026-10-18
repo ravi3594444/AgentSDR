@@ -39,8 +39,8 @@ import { mergeProfile, PROFILE_LABELS, profileChanges } from "./profile";
 import { businessContext } from "./businessContext";
 import { businessSources } from "./businessContext.server";
 import { getBusinessProfile, updateBusinessProfile } from "./profile.server";
-import { PERIOD_KINDS, type PeriodKind } from "./results";
-import { results, resultsText } from "./results.server";
+import { ORGANIZATION_SCOPE, PERIOD_KINDS, RESULTS_SCOPE_KINDS, type PeriodKind, type ResultsScopeKind } from "./results";
+import { requestScope, results, resultsText, runScope, threadScope } from "./results.server";
 import { assistantJobs, outreachRuns, type AudienceChannel } from "./schema";
 import { featureState } from "@/lib/features/flags.server";
 import { createExistingLeadsAudience, inquiryOverview, MAX_EXISTING_LEADS } from "./existingLeads.server";
@@ -896,21 +896,32 @@ export const TOOLS: Record<string, Tool> = {
   },
 
   report: {
-    description: "Results from what was recorded: leads found and imported, duplicates, people contacted, emails/WhatsApp/LinkedIn requests and messages sent, replies, interested people, what waits for the owner, pending follow-ups, stopped and failed sends, AI spending and remaining limits. With runId, one run's per-channel counts.",
-    arguments: "period (optional: today | yesterday | last_7_days | last_30_days | all_time; default last_7_days); runId (optional)",
-    run: async (args) => {
+    description: "Results from what was recorded: leads found and imported, duplicates, people contacted, emails/WhatsApp/LinkedIn requests and messages sent, replies, interested people, what waits for the owner (replies to review, reply decisions, and plans waiting for Start, counted apart), pending follow-ups, stopped and failed sends, AI spending and remaining limits. scope says whose work is counted: request (the plans and searches of the owner's request this turn serves; the default when it serves one), thread (this chat), run (one plan; needs runId) or organization (everything; the default otherwise). Say which scope the figures cover. With runId, also that run's per-channel counts.",
+    arguments: "period (optional: today | yesterday | last_7_days | last_30_days | all_time; default last_7_days, all_time for one run); scope (optional: request | thread | run | organization); runId (optional)",
+    run: async (args, context) => {
       const runId = uuid(args, "runId", false);
+      const requested = (RESULTS_SCOPE_KINDS as readonly string[]).includes(String(args.scope)) ? args.scope as ResultsScopeKind : null;
+      const requestId = searchRequestId(context);
+      // The request this turn serves, by default; else (or asked) the whole organization.
+      const scopeKind: ResultsScopeKind = runId ? "run" : requested ?? (context.outreachRequestId ? "request" : "organization");
+      if (scopeKind === "run" && !runId) return { ok: false, summary: "scope run needs a runId (list_runs shows them)." };
+      if (scopeKind === "request" && !requestId) return { ok: false, summary: "This turn serves no request to report on; use scope thread or organization." };
+      const scope = scopeKind === "run" ? await runScope(runId!)
+        : scopeKind === "request" ? await requestScope(context.outreachRequestId ?? requestId!)
+          : scopeKind === "thread" ? await threadScope(context.threadId)
+            : ORGANIZATION_SCOPE;
+      if (!scope) return { ok: false, summary: "No such run." };
+      const period = (PERIOD_KINDS as readonly string[]).includes(String(args.period)) ? args.period as PeriodKind : scopeKind === "run" ? "all_time" : "last_7_days";
+      const r = await results(period, new Date(), scope);
       if (runId) {
         const report = await reportRun(runId);
         if (!report) return { ok: false, summary: "No such run." };
         return {
           ok: true,
-          summary: `“${report.name}” is ${report.status} (${report.autopilot ? "Automatic" : "Review"} replies): ${report.channels.map((c) => `${c.channel}: ${c.contacted} contacted, ${c.messagesSent === null ? "" : `${c.messagesSent} sent, `}${c.replied} replied, ${c.finished} finished, ${c.stopped} stopped`).join("; ") || "no campaign launched yet"}.${report.error ? ` Problems: ${report.error}` : ""}`,
-          data: report as unknown as Record<string, unknown>,
+          summary: `“${report.name}” is ${report.status} (${report.autopilot ? "Automatic" : "Review"} replies): ${report.channels.map((c) => `${c.channel}: ${c.contacted} contacted, ${c.messagesSent === null ? "" : `${c.messagesSent} sent, `}${c.replied} replied, ${c.finished} finished, ${c.stopped} stopped`).join("; ") || "no campaign launched yet, nothing sent"}.${report.error ? ` Problems: ${report.error}` : ""}\n${resultsText(r)}`,
+          data: { ...report, results: r } as unknown as Record<string, unknown>,
         };
       }
-      const kind = (PERIOD_KINDS as readonly string[]).includes(String(args.period)) ? args.period as PeriodKind : "last_7_days";
-      const r = await results(kind);
       return { ok: true, summary: resultsText(r), data: { results: r } as unknown as Record<string, unknown> };
     },
   },

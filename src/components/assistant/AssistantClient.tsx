@@ -74,7 +74,7 @@ type RunReply = { id: string; conversationId: string; who: string; channel: stri
 
 type RunLead = { personId: string; who: string; channel: string; progress: { tone: "waiting" | "sent" | "replied" | "good" | "stopped" | "failed"; text: string } };
 
-type Run = { id: string; status: string; autopilot: boolean; error: string | null; campaigns: Record<string, string>; replies?: RunReply[]; leads?: RunLead[]; /** Other plans of the same request, and its searches still running. */ requestPeers?: number };
+type Run = { id: string; status: string; autopilot: boolean; error: string | null; campaigns: Record<string, string>; replies?: RunReply[]; leads?: RunLead[]; /** Other plans of the same request, and its searches still running. */ requestPeers?: number; /** The plan as stored now (people left out at a start are gone from it). */ plan?: ProposalData["plan"] };
 
 type DecisionState = { status: "open" | "answered" | "resolved"; answer: string | null };
 
@@ -422,9 +422,11 @@ function ProposalCard({ message, run, canManageAutopilot, lastReplyMode, onChang
   const [error, setError] = useState<string | null>(null);
   if (message.status !== "ok" || !data) return <Card title={TOOL_TITLE.prepare_outreach!} status={message.status}><p>{message.content}</p></Card>;
   const status = run?.status ?? "proposed";
+  // The plan as it stands now: a start that left out people already in other plans changed it since the tool ran.
+  const plan = run?.plan ?? data.plan;
   // Offered only when the request has a rest: other plans, or searches that will make one.
-  const requestHasMore = Boolean(data.plan.requestId) && (run?.requestPeers ?? 0) > 0;
-  const perChannel = data.plan.assignments.reduce<Record<string, number>>((acc, a) => ({ ...acc, [a.channel]: (acc[a.channel] ?? 0) + 1 }), {});
+  const requestHasMore = Boolean(plan.requestId) && (run?.requestPeers ?? 0) > 0;
+  const perChannel = plan.assignments.reduce<Record<string, number>>((acc, a) => ({ ...acc, [a.channel]: (acc[a.channel] ?? 0) + 1 }), {});
 
   async function act(action: "start" | "cancel" | "pause" | "resume" | "stop" | "mode", nextMode?: "automatic" | "review") {
     if (action === "stop" && !window.confirm("Stop this run for good? Nothing more is sent for it and no reply is answered automatically. It cannot be resumed.")) return;
@@ -459,7 +461,10 @@ function ProposalCard({ message, run, canManageAutopilot, lastReplyMode, onChang
     failed: { label: "Could not start", color: "red" },
     cancelled: { label: "Discarded", color: "gray" },
   };
-  const badge = statusBadge[status] ?? { label: status, color: "gray" as const };
+  // A plan closed because everyone in it was already in other running plans was not discarded by anyone.
+  const badge = status === "cancelled" && run?.error?.startsWith("No new leads")
+    ? { label: "No new leads", color: "gray" as const }
+    : statusBadge[status] ?? { label: status, color: "gray" as const };
 
   return (
     <div className="w-full max-w-2xl rounded-xl border border-stroke-soft-200 bg-bg-white-0 p-3 shadow-regular-xs sm:p-4">
@@ -468,29 +473,29 @@ function ProposalCard({ message, run, canManageAutopilot, lastReplyMode, onChang
         <Badge.Root variant="lighter" size="medium" color={badge.color}>{badge.label}</Badge.Root>
       </div>
       <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-paragraph-sm sm:grid-cols-4">
-        <div><dt className="text-paragraph-xs text-text-soft-400">Leads</dt><dd className="text-label-sm text-text-strong-950">{data.plan.assignments.length}</dd></div>
+        <div><dt className="text-paragraph-xs text-text-soft-400">Leads</dt><dd className="text-label-sm text-text-strong-950">{plan.assignments.length}</dd></div>
         <div><dt className="text-paragraph-xs text-text-soft-400">Channels</dt><dd className="text-label-sm text-text-strong-950">{Object.entries(perChannel).map(([c, n]) => `${CHANNEL_LABEL[c] ?? c} ${n}`).join(", ")}</dd></div>
-        <div><dt className="text-paragraph-xs text-text-soft-400">Takes about</dt><dd className="text-label-sm text-text-strong-950">{data.plan.estimate.days ? `${data.plan.estimate.days} day${data.plan.estimate.days === 1 ? "" : "s"}` : "—"}</dd></div>
-        <div><dt className="text-paragraph-xs text-text-soft-400">AI cost</dt><dd className="text-label-sm text-text-strong-950">{data.plan.estimate.aiCostUsd === null ? `${data.plan.estimate.aiCalls} calls` : data.plan.estimate.aiCostUsd < 0.01 ? "< $0.01" : `≈ $${data.plan.estimate.aiCostUsd.toFixed(2)}`}</dd></div>
+        <div><dt className="text-paragraph-xs text-text-soft-400">Takes about</dt><dd className="text-label-sm text-text-strong-950">{plan.estimate.days ? `${plan.estimate.days} day${plan.estimate.days === 1 ? "" : "s"}` : "—"}</dd></div>
+        <div><dt className="text-paragraph-xs text-text-soft-400">AI cost</dt><dd className="text-label-sm text-text-strong-950">{plan.estimate.aiCostUsd === null ? `${plan.estimate.aiCalls} calls` : plan.estimate.aiCostUsd < 0.01 ? "< $0.01" : `≈ $${plan.estimate.aiCostUsd.toFixed(2)}`}</dd></div>
       </dl>
       <p className="mt-2 text-paragraph-xs text-text-sub-600">
         Daily limits: {[
-          data.plan.limits.emailPerMailboxPerDay ? `${data.plan.limits.emailPerMailboxPerDay} emails per mailbox` : null,
-          data.plan.limits.whatsappNewChatsPerDay ? `${data.plan.limits.whatsappNewChatsPerDay} new WhatsApp chats per number` : null,
-          data.plan.limits.instagramNewChatsPerDay ? `${data.plan.limits.instagramNewChatsPerDay} initial Instagram DMs per account in 24 hours` : null,
+          plan.limits.emailPerMailboxPerDay ? `${plan.limits.emailPerMailboxPerDay} emails per mailbox` : null,
+          plan.limits.whatsappNewChatsPerDay ? `${plan.limits.whatsappNewChatsPerDay} new WhatsApp chats per number` : null,
+          plan.limits.instagramNewChatsPerDay ? `${plan.limits.instagramNewChatsPerDay} initial Instagram DMs per account in 24 hours` : null,
         ].filter(Boolean).join(", ") || "the connected channels' limits"}. Sending rules, sending hours and Do Not Contact apply. Sending uses your own accounts.
         {perChannel.instagram ? " Instagram sends one initial DM; replies follow the reply mode you choose." : ""}
       </p>
-      {data.plan.excluded.length > 0 && (
-        <p className="mt-1 text-paragraph-xs text-text-sub-600">Left out: {data.plan.excluded.slice(0, 3).map((e) => `${e.count} × ${e.reason}`).join("; ")}.</p>
+      {plan.excluded.length > 0 && (
+        <p className="mt-1 text-paragraph-xs text-text-sub-600">Left out: {plan.excluded.slice(0, 3).map((e) => `${e.count} × ${e.reason}`).join("; ")}.</p>
       )}
-      {data.plan.groups && data.plan.groups.length > 0 && <SortingSummary plan={data.plan} />}
+      {plan.groups && plan.groups.length > 0 && <SortingSummary plan={plan} />}
       <div className="mt-3 space-y-2">
-        {data.plan.samples.map((sample, index) => (
+        {plan.samples.map((sample, index) => (
           <details key={`${sample.name}-${index}`} open={index === 0} className="rounded-lg bg-bg-weak-50 px-3 py-2">
             <summary className="cursor-pointer text-label-sm text-text-strong-950">
               {sample.approach === "personal" ? "Written for" : "Sample ·"} {sample.name} · {CHANNEL_LABEL[sample.channel] ?? sample.channel}
-              {data.plan.groups && data.plan.groups.length > 1 && sample.groupId ? <span className="font-normal text-text-sub-600"> · {data.plan.groups.find((group) => group.id === sample.groupId)?.label}</span> : null}
+              {plan.groups && plan.groups.length > 1 && sample.groupId ? <span className="font-normal text-text-sub-600"> · {plan.groups.find((group) => group.id === sample.groupId)?.label}</span> : null}
             </summary>
             <ol className="mt-2 space-y-2">
               {sample.messages.map((msg, step) => (
@@ -514,11 +519,11 @@ function ProposalCard({ message, run, canManageAutopilot, lastReplyMode, onChang
             <input type="radio" name={`mode-${data.runId}`} className="mt-0.5" checked={mode === "review"} disabled={busy} onChange={() => setMode("review")} />
             <span><span className="text-label-xs text-text-strong-950">Review.</span> The AI drafts every reply; each waits for you in Action required.</span>
           </label>
-          <p className="text-paragraph-xs text-text-soft-400">Either way the first messages and follow-ups go out automatically to these {data.plan.assignments.length} leads only, within the limits above. Adding people, channels or higher limits needs a new plan you approve.</p>
+          <p className="text-paragraph-xs text-text-soft-400">Either way the first messages and follow-ups go out automatically to these {plan.assignments.length} leads only, within the limits above. Adding people, channels or higher limits needs a new plan you approve.</p>
           {requestHasMore && (
             <label className="flex items-start gap-2 rounded-lg p-2 text-paragraph-xs ring-1 ring-inset ring-stroke-soft-200">
               <input type="checkbox" className="mt-0.5" checked={applyToRequest} disabled={busy} onChange={(event) => setApplyToRequest(event.target.checked)} />
-              <span><span className="text-label-xs text-text-strong-950">Apply to the rest of this request ({run!.requestPeers} more {run!.requestPeers === 1 ? "plan or search" : "plans or searches"}).</span> The other plans this request makes (more cities or searches, including leads found later) start on their own as soon as they are ready, in this run&apos;s reply mode, on these channels, with up to 100 leads each; you will not be asked again. A plan outside that, or with someone already in another running plan, waits for you with the reason. Pause or stop any of them on its card; pausing or stopping this one ends the approval.</span>
+              <span><span className="text-label-xs text-text-strong-950">Apply to the rest of this request ({run!.requestPeers} more {run!.requestPeers === 1 ? "plan or search" : "plans or searches"}).</span> The other plans this request makes (more cities or searches, including leads found later) start on their own as soon as they are ready, in this run&apos;s reply mode, on these channels, with up to 100 leads each; you will not be asked again. Leads already in another running plan stay there and are left out of the new plan; a plan outside that waits for you with the reason. Pause or stop any of them on its card; pausing or stopping this one ends the approval.</span>
             </label>
           )}
           <div className="flex justify-end gap-2">

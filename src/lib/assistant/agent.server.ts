@@ -15,6 +15,8 @@ import { autonomousSearchesToday, autonomyCaps, autoStartPlan, threadAutonomy } 
 import { listAudiences } from "./audiences.server";
 import { listOpenDecisions } from "./decisions.server";
 import { listRuns } from "./outreach.server";
+import { localDate } from "./results";
+import { organizationTimeZone } from "./results.server";
 import { assistantJobs, type AssistantAttachment, type BusinessProfile } from "./schema";
 import { addMessage, claimThread, listMessages, releaseThread, touchThread, updateMessage } from "./threads.server";
 import { recordUsage } from "./usage.server";
@@ -73,17 +75,19 @@ function systemPrompt(features: FeatureState, autonomy: AutonomyCaps | null = nu
 
 async function contextBlock(): Promise<{ text: string; outreachStarted: boolean; profile: BusinessProfile }> {
   const setup = await setupSnapshot();
-  const [audiences, runs, jobs, decisions] = await Promise.all([
+  const [audiences, runs, jobs, decisions, timeZone] = await Promise.all([
     listAudiences(8),
     listRuns(8),
     db.select({ id: assistantJobs.id, kind: assistantJobs.kind, status: assistantJobs.status, stage: assistantJobs.stage, audienceId: assistantJobs.audienceId, runId: assistantJobs.runId })
       .from(assistantJobs).where(and(inOrg(assistantJobs), inArray(assistantJobs.status, ["queued", "running"]))).orderBy(desc(assistantJobs.createdAt)).limit(5),
     listOpenDecisions(8),
+    organizationTimeZone(),
   ]);
   const channels = Object.entries(setup.channels)
     .map(([name, status]) => `${name} ${status.available ? `ready (${status.senders})` : `not ready: ${status.reason}`}`).join("; ");
   const text = [
-    `TODAY: ${new Date().toISOString().slice(0, 10)}`,
+    // The business's own day (Settings → Organization time zone), the one report's "today" counts.
+    `TODAY: ${localDate(timeZone)} (${timeZone})`,
     `BUSINESS PROFILE: ${JSON.stringify(setup.profile)}`,
     `SETUP: channels — ${channels}. Lead search — ${setup.leadDiscovery.available ? "ready (Google Maps)" : setup.leadDiscovery.reason}. AI — ${setup.ai.connected ? "connected" : "not set up on this server"}. Runs answering replies automatically — ${setup.automaticRuns}.`,
     `ALREADY KNOWN ELSEWHERE: ${setup.knownElsewhere}.`,

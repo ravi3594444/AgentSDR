@@ -212,7 +212,7 @@ await runInOrganization(orgA!.id, async () => {
   check("one Start: the request's waiting plan starts too, in the same mode", (await statusOf(mumbai)) === "starting" && (await getRun(mumbai))?.autopilot === true, JSON.stringify(applied.started));
   check("one Start: another request worded the same ('yes') keeps waiting", (await statusOf(gyms)) === "proposed");
   check("one Start: a plan on a channel the approval did not cover keeps waiting, with the reason", (await statusOf(waPlan)) === "proposed" && applied.skipped.some((item) => item.runId === waPlan && /whatsapp/.test(item.reason)), JSON.stringify(applied.skipped));
-  check("one Start: a plan with someone already in a running plan keeps waiting, with the reason", (await statusOf(overlap)) === "proposed" && applied.skipped.some((item) => item.runId === overlap && /already in another running plan/.test(item.reason)));
+  check("one Start: a plan whose only lead is already in a running plan is closed with the reason, not left waiting for Start", (await statusOf(overlap)) === "cancelled" && applied.skipped.some((item) => item.runId === overlap && item.closed === true && /no new leads to contact/.test(item.reason)));
   check("one Start: the started plan queued its launch job like a Start press", (await db.select().from(assistantJobs).where(and(eq(assistantJobs.runId, mumbai), eq(assistantJobs.kind, "outreach_start")))).length === 1);
   // Switching the approved run to Review: the rest of the request follows.
   await db.update(schema.outreachRuns).set({ autopilot: false }).where(eq(schema.outreachRuns.id, pune));

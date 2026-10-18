@@ -19,7 +19,9 @@ import type { AudienceChannel, OutreachPlan } from "./schema";
  * the approved plan's size, when larger), an inquiry run, or anything once
  * the approving run is paused, stopped or 24 hours old. The reply mode is
  * the approving run's at the moment each plan starts (switching it to
- * Review covers the rest of the request too).
+ * Review covers the rest of the request too). Leads already in another
+ * running plan do not stop a plan: they stay where they are and the plan
+ * starts with the rest (overlap.ts).
  */
 
 export type RequestApproval = {
@@ -56,7 +58,7 @@ export function makeRequestApproval(plan: Pick<OutreachPlan, "ownerRequest" | "r
 export function approvalProblem(
   approval: RequestApproval,
   approvingRunStatus: string,
-  candidate: { plan: Pick<OutreachPlan, "requestId" | "assignments" | "kind">; channels: AudienceChannel[]; busyPeople?: number },
+  candidate: { plan: Pick<OutreachPlan, "requestId" | "assignments" | "kind">; channels: AudienceChannel[] },
   now: Date,
 ): string | null {
   if (candidate.plan.kind === "inquiries") return "an inquiry run is always started by itself";
@@ -66,6 +68,5 @@ export function approvalProblem(
   const extra = candidate.channels.filter((channel) => !approval.channels.includes(channel));
   if (extra.length) return `it uses ${extra.join(" and ")}, which the approved plan did not`;
   if (candidate.plan.assignments.length > approval.maxLeadsPerPlan) return `it has ${candidate.plan.assignments.length} leads, more than the ${approval.maxLeadsPerPlan} one approval covers per plan`;
-  if (candidate.busyPeople) return `${candidate.busyPeople} of its leads ${candidate.busyPeople === 1 ? "is" : "are"} already in another running plan (no one gets two first messages without you looking)`;
   return null;
 }

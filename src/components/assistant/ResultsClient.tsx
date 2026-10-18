@@ -181,6 +181,12 @@ export default function ResultsClient({ initial }: { initial: ResultsPayload }) 
       </div>
 
       <Section title="Outreach runs">
+        {r.attention.plansAwaitingStart > 0 && (
+          <p className="mb-2 text-paragraph-xs text-text-sub-600">
+            {r.attention.plansAwaitingStart} {r.attention.plansAwaitingStart === 1 ? "plan waits" : "plans wait"} for your Start
+            {r.attention.plansAwaiting.length ? ` (${r.attention.plansAwaiting.map((plan) => `“${plan.name}”`).join(", ")}${r.attention.plansAwaitingStart > r.attention.plansAwaiting.length ? ", …" : ""})` : ""}. Nothing is sent for {r.attention.plansAwaitingStart === 1 ? "it" : "them"} until then; open the assistant to review.
+          </p>
+        )}
         {r.runs.length ? (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[32rem] text-left text-paragraph-xs">
