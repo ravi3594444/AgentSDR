@@ -744,7 +744,7 @@ export async function runOutreachStartStep(job: AssistantJob, heartbeat: () => P
     const availability = await channelAvailability();
     const launches: ChannelLaunch[] = [];
     for (const channel of run.channels) {
-      if ((await getRun(run.id))?.status !== "starting") return { next: "failed", error: "The owner stopped or changed this run while it was starting." };
+      if ((await getRun(run.id))?.status !== "starting") return haltLaunch(run.id, launches);
       const personIds = plan.assignments.filter((assignment) => assignment.channel === channel).map((assignment) => assignment.personId);
       const steps = plan.sequences[channel] ?? [];
       if (!personIds.length || !steps.length) continue;
@@ -775,7 +775,7 @@ export async function runOutreachStartStep(job: AssistantJob, heartbeat: () => P
       error: launches.filter((launch) => launch.problem).map((launch) => `${launch.channel}: ${launch.problem}`).join(" ") || null,
       updatedAt: new Date(),
     }).where(and(inOrg(outreachRuns), eq(outreachRuns.id, run.id), eq(outreachRuns.status, "starting"))).returning({ id: outreachRuns.id });
-    if (!updated.length) return { next: "failed", error: "The run changed during launch; it was not restarted." };
+    if (!updated.length) return haltLaunch(run.id, launches);
     return {
       next: launched.length ? "done" : "failed",
       ...(launched.length
@@ -785,6 +785,31 @@ export async function runOutreachStartStep(job: AssistantJob, heartbeat: () => P
     } as StepOutcome;
   }
   return { next: "failed", error: `Unknown outreach stage ${job.stage}` };
+}
+
+/**
+ * The run stopped (or otherwise left "starting") while its launch was under
+ * way: whatever the launch already created is recorded on the run and
+ * stopped the way stopRun stops a run's campaigns, so nothing it set up
+ * sends. Without this a campaign activated just before the owner's Stop
+ * stayed active and unrecorded, out of reach of Stop.
+ */
+async function haltLaunch(runId: string, launches: readonly ChannelLaunch[]): Promise<StepOutcome> {
+  const created = Object.fromEntries(launches.filter((launch) => launch.campaignId).map((launch) => [launch.channel, launch.campaignId!])) as Partial<Record<AudienceChannel, string>>;
+  const channels = Object.keys(created);
+  if (channels.length) {
+    const current = await getRun(runId);
+    await db.update(outreachRuns).set({ campaigns: { ...(current?.campaigns ?? {}), ...created }, updatedAt: new Date() })
+      .where(and(inOrg(outreachRuns), eq(outreachRuns.id, runId)));
+    const { problems } = await stopCampaigns(runId, created, new Date());
+    if (problems.length) console.error(`[outreach] run ${runId}: stopping the campaigns a halted launch created: ${problems.join("; ")}`);
+  }
+  return {
+    next: "failed",
+    error: channels.length
+      ? `The owner stopped or changed this run while it was starting; what the launch had already set up (${channels.join(", ")}) is stopped and sends nothing.`
+      : "The owner stopped or changed this run while it was starting; nothing was launched.",
+  };
 }
 
 /** Pauses or resumes every campaign of a run. */
@@ -852,9 +877,14 @@ export async function stopRun(runId: string): Promise<{ stopped: AudienceChannel
   await db.update(outreachRuns).set({ status: "stopped", stoppedAt: now, updatedAt: now }).where(and(inOrg(outreachRuns), eq(outreachRuns.id, runId)));
   await db.update(outreachRunLeads).set({ status: "stopped", stopReason: "the run was stopped", updatedAt: now })
     .where(and(inOrg(outreachRunLeads), eq(outreachRunLeads.runId, runId), eq(outreachRunLeads.status, "active")));
+  return stopCampaigns(run.id, run.campaigns, now);
+}
+
+/** Stops a run's campaigns for good (see stopRun): the per-channel half, also used when a launch is halted. */
+async function stopCampaigns(runId: string, campaigns: Partial<Record<AudienceChannel, string>>, now: Date): Promise<{ stopped: AudienceChannel[]; problems: string[] }> {
   const stopped: AudienceChannel[] = [];
   const problems: string[] = [];
-  for (const [channel, campaignId] of Object.entries(run.campaigns) as [AudienceChannel, string][]) {
+  for (const [channel, campaignId] of Object.entries(campaigns) as [AudienceChannel, string][]) {
     try {
       if (channel === "email") {
         await setCampaignStatus(campaignId, "completed");
@@ -866,7 +896,7 @@ export async function stopRun(runId: string): Promise<{ stopped: AudienceChannel
           .where(and(eq(whatsappCampaignLeads.campaignId, campaignId), inArray(whatsappCampaignLeads.status, ["queued", "in_sequence"])));
       } else if (channel === "instagram") {
         await db.update(instagramOutreachQueue).set({ status: "cancelled", error: "The owner stopped this run", lockedBy: null, lockedUntil: null, updatedAt: now })
-          .where(and(inOrg(instagramOutreachQueue), eq(instagramOutreachQueue.runId, run.id), inArray(instagramOutreachQueue.status, ["queued", "resolving"])));
+          .where(and(inOrg(instagramOutreachQueue), eq(instagramOutreachQueue.runId, runId), inArray(instagramOutreachQueue.status, ["queued", "resolving"])));
       } else {
         await db.update(linkedinCampaigns).set({ status: "PAUSED", updatedAt: now }).where(and(inOrg(linkedinCampaigns), eq(linkedinCampaigns.id, campaignId)));
         await db.update(linkedinLeads).set({ status: "CANCELLED", updatedAt: now })

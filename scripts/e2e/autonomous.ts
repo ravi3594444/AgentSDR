@@ -360,6 +360,36 @@ await runInOrganization(org2!.id, async () => {
   const launchReports = (await events()).filter((event) => /Outreach started\. linkedin: started with 43 leads/.test(event.content));
   check("restart: the launch is reported once, under its report key", launchReports.length === 1 && relaunched?.reportKey === `assistant_job:${launchJob!.id}:succeeded` && relaunched?.reportedAt instanceof Date && (launchReports[0]!.toolResult as { reportKey?: string } | null)?.reportKey === relaunched?.reportKey, `${launchReports.length}`);
 
+  // ------------------------------------------------------------ Stop pressed while the plan is launching
+  // The owner's Stop lands right after the launch activated the LinkedIn
+  // campaign and before it recorded it on the run: a stand-in for that
+  // moment, a trigger that flips the run to stopped as the campaign goes
+  // ACTIVE, only for this run, removed again below.
+  const [leftJob] = await jobsOf(left.id);
+  await db.update(schema.assistantJobs).set({ status: "queued", stage: "launching", lockedBy: null, heartbeatAt: null, runAfter: new Date("1999-12-31T00:00:00Z"), progress: { stage: "launching" } })
+    .where(eq(schema.assistantJobs.id, leftJob!.id));
+  await db.execute(sql.raw(`
+    CREATE OR REPLACE FUNCTION autonomous_check_stop_${stamp}() RETURNS trigger AS $$
+    BEGIN
+      UPDATE outreach_runs SET status = 'stopped', stopped_at = now() WHERE id = '${left.id}' AND status = 'starting';
+      RETURN NEW;
+    END $$ LANGUAGE plpgsql;
+    CREATE TRIGGER autonomous_check_stop_${stamp} AFTER UPDATE OF status ON "Campaign"
+      FOR EACH ROW WHEN (NEW.status = 'ACTIVE') EXECUTE FUNCTION autonomous_check_stop_${stamp}();`));
+  try {
+    await runOneAssistantStep();
+  } finally {
+    await db.execute(sql.raw(`DROP TRIGGER IF EXISTS autonomous_check_stop_${stamp} ON "Campaign"; DROP FUNCTION IF EXISTS autonomous_check_stop_${stamp}();`));
+  }
+  const stoppedJob = (await db.select().from(schema.assistantJobs).where(eq(schema.assistantJobs.id, leftJob!.id)))[0];
+  const stoppedRun = await runRow(left.id);
+  const stoppedCampaignId = stoppedRun.campaigns.linkedin;
+  const [stoppedCampaign] = stoppedCampaignId ? await db.select({ status: linkedin.campaigns.status }).from(linkedin.campaigns).where(eq(linkedin.campaigns.id, stoppedCampaignId)) : [];
+  const stillToSend = stoppedCampaignId ? await db.select({ id: linkedin.leads.id }).from(linkedin.leads).where(and(eq(linkedin.leads.campaignId, stoppedCampaignId), eq(linkedin.leads.status, "PENDING"))) : [];
+  check("Stop during launch: the campaign the launch had already created is recorded on the run and stopped, so nothing goes out",
+    stoppedJob?.status === "failed" && stoppedRun.status === "stopped" && Boolean(stoppedCampaignId) && stoppedCampaign?.status === "PAUSED" && stillToSend.length === 0,
+    JSON.stringify({ job: stoppedJob?.status, error: stoppedJob?.error, run: stoppedRun.status, campaign: stoppedCampaign?.status ?? null, pending: stillToSend.length }));
+
   // ------------------------------------------------------------ durable reports
   const quiet = await createThread(owner2!.id);
   const quietEvents = async () => events(quiet.id);
