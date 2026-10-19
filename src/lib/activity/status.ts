@@ -172,12 +172,14 @@ export function planState(input: { status: string; error: string | null; senders
 
 /**
  * A plan's people, those contacted (a message at least accepted for
- * sending; an uncertain or failed send is not one) and those who replied,
- * from each lead's progress as the plan card shows it.
+ * sending; an uncertain or failed send is not one) and those who replied:
+ * each lead's reach (runLeads.ts leadReach, which survives a stop), else
+ * its progress as the plan card shows it.
  */
-export function planCounts(leads: readonly { progress: { tone: string } }[]): { leads: number; contacted: number; replied: number } {
-  const replied = leads.filter((lead) => lead.progress.tone === "replied" || lead.progress.tone === "good").length;
-  return { leads: leads.length, contacted: replied + leads.filter((lead) => lead.progress.tone === "sent").length, replied };
+export function planCounts(leads: readonly { progress: { tone: string }; reach?: { contacted: boolean; replied: boolean } }[]): { leads: number; contacted: number; replied: number } {
+  const replied = (lead: (typeof leads)[number]) => lead.reach?.replied ?? (lead.progress.tone === "replied" || lead.progress.tone === "good");
+  const contacted = (lead: (typeof leads)[number]) => lead.reach?.contacted ?? (replied(lead) || lead.progress.tone === "sent");
+  return { leads: leads.length, contacted: leads.filter(contacted).length, replied: leads.filter(replied).length };
 }
 
 export type ReplyState = "answered" | "needs_you" | "action_required" | "processing" | "waiting";

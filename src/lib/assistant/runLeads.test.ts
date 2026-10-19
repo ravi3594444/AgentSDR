@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { leadProgress, type LeadProgressInput } from "./runLeads";
+import { leadProgress, leadReach, type LeadProgressInput } from "./runLeads";
 
 const base: LeadProgressInput = { channel: "whatsapp", runStatus: "active", emailStatus: null, whatsappStatus: null, whatsappSentAt: null, whatsappError: null, linkedinStatus: null, category: null, subcategory: null };
 
@@ -43,5 +43,25 @@ describe("leadProgress", () => {
     const progress = leadProgress({ ...base, whatsappStatus: "failed", whatsappError: "Delivery of message 2 is uncertain — check Messages before resuming" });
     expect(progress.tone).toBe("failed");
     expect(progress.text).toContain("no automatic resend");
+  });
+});
+
+describe("leadReach: whether a lead was contacted and replied, whatever its status now", () => {
+  const lead = (over: Partial<LeadProgressInput>): LeadProgressInput => ({ channel: "whatsapp", runStatus: "active", emailStatus: null, whatsappStatus: null, whatsappSentAt: null, whatsappError: null, linkedinStatus: null, category: null, subcategory: null, ...over });
+  test("a plan stopped after its first messages: those leads were still contacted", () => {
+    expect(leadReach(lead({ whatsappStatus: "stopped", whatsappSentAt: "2026-10-18T10:00:00Z" }))).toEqual({ contacted: true, replied: false });
+    expect(leadReach(lead({ channel: "linkedin", linkedinStatus: "CANCELLED", linkedinRequestSentAt: "2026-10-18T10:00:00Z" }))).toEqual({ contacted: true, replied: false });
+    expect(leadReach(lead({ channel: "email", emailStatus: "initial_sent" }))).toEqual({ contacted: true, replied: false });
+  });
+  test("stopped before anything went out, or a send that failed or is uncertain, is not contacted", () => {
+    expect(leadReach(lead({ whatsappStatus: "stopped" }))).toEqual({ contacted: false, replied: false });
+    expect(leadReach(lead({ channel: "linkedin", linkedinStatus: "CANCELLED" }))).toEqual({ contacted: false, replied: false });
+    expect(leadReach(lead({ channel: "instagram", instagramStatus: "uncertain" }))).toEqual({ contacted: false, replied: false });
+    expect(leadReach(lead({ channel: "email", emailStatus: "pending" }))).toEqual({ contacted: false, replied: false });
+  });
+  test("an opt-out is a reply to a message that was sent; a classified reply is a reply", () => {
+    expect(leadReach(lead({ runStatus: "opted_out", whatsappStatus: "stopped", whatsappSentAt: "2026-10-18T10:00:00Z" }))).toEqual({ contacted: true, replied: true });
+    expect(leadReach(lead({ channel: "email", emailStatus: "reply_received", category: "interested" }))).toEqual({ contacted: true, replied: true });
+    expect(leadReach(lead({ channel: "instagram", instagramStatus: "replied" }))).toEqual({ contacted: true, replied: true });
   });
 });

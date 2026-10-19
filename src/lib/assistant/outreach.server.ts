@@ -663,16 +663,32 @@ type ChannelLaunch = { channel: AudienceChannel; campaignId: string | null; adde
  * activates it, so Stop and a retried launch both find it. False once the
  * run has left "starting": the caller then leaves the campaign inactive.
  */
-type LaunchRecorder = (campaignId: string) => Promise<boolean>;
+type LaunchRecorder = {
+  (campaignId: string): Promise<boolean>;
+  /**
+   * Right after a campaign is activated: true while the run is still
+   * starting. A Stop that landed between the record and the activation found
+   * the campaign and stopped it, and the activation undid that, so it is
+   * stopped again here, at once.
+   */
+  activated(campaignId: string): Promise<boolean>;
+};
 
 function launchRecorder(runId: string, channel: AudienceChannel): LaunchRecorder {
-  return async (campaignId) => {
+  const record = async (campaignId: string) => {
     const [row] = await db.update(outreachRuns)
       .set({ campaigns: sql`${outreachRuns.campaigns} || jsonb_build_object(${channel}::text, ${campaignId}::text)`, updatedAt: new Date() })
       .where(and(inOrg(outreachRuns), eq(outreachRuns.id, runId)))
       .returning({ status: outreachRuns.status });
     return row?.status === "starting";
   };
+  return Object.assign(record, {
+    activated: async (campaignId: string) => {
+      if ((await getRun(runId))?.status === "starting") return true;
+      await stopCampaigns(runId, { [channel]: campaignId }, new Date());
+      return false;
+    },
+  });
 }
 
 /** People in the campaign: added now, or already there from an earlier attempt of the same launch. */
@@ -694,6 +710,7 @@ async function launchEmail(name: string, steps: PlannedStep[], personIds: string
   const problems = emailLaunchProblems(await emailLaunchFacts({ id: campaign.id, sequence }));
   if (problems.length) return { channel: "email", campaignId: campaign.id, added, skipped: personIds.length - added, problem: problems.join(" ") };
   await setCampaignStatus(campaign.id, "active");
+  if (!(await record.activated(campaign.id))) return haltedLaunch("email", campaign.id, personIds);
   await buildMailboxQueues({ organizationIds: [currentOrganizationId()] }).catch((error) => console.error("[assistant/outreach] queue build failed:", error));
   return { channel: "email", campaignId: campaign.id, added, skipped: personIds.length - added, problem: null };
 }
@@ -711,6 +728,7 @@ async function launchWhatsapp(name: string, steps: PlannedStep[], personIds: str
   } catch (error) {
     return { channel: "whatsapp", campaignId: campaign.id, added, skipped: personIds.length - added, problem: error instanceof Error ? error.message : String(error) };
   }
+  if (!(await record.activated(campaign.id))) return haltedLaunch("whatsapp", campaign.id, personIds);
   return { channel: "whatsapp", campaignId: campaign.id, added, skipped: personIds.length - added, problem: null };
 }
 
@@ -743,12 +761,18 @@ async function launchLinkedin(name: string, steps: PlannedStep[], personIds: str
   });
   if (!existing && !(await record(created.id))) return haltedLaunch("linkedin", created.id, personIds);
   const added = enrolled(await addPeopleToLinkedinCampaign(created.id, personIds));
+  if (existing) {
+    // An earlier attempt activated it before its worker died: the engine may have sent its invitations already, so it is launched.
+    const [current] = await db.select({ status: linkedinCampaigns.status }).from(linkedinCampaigns).where(and(inOrg(linkedinCampaigns), eq(linkedinCampaigns.id, created.id))).limit(1);
+    if (current?.status === "ACTIVE") return { channel: "linkedin", campaignId: created.id, added, skipped: personIds.length - added, problem: null };
+  }
   const [workable] = await db.select({ value: count() }).from(linkedinLeads)
     .where(and(inOrg(linkedinLeads), eq(linkedinLeads.campaignId, created.id), eq(linkedinLeads.status, "PENDING")));
   if (!accountIds.length || !Number(workable?.value ?? 0)) {
     return { channel: "linkedin", campaignId: created.id, added, skipped: personIds.length - added, problem: accountIds.length ? "no lead could be added" : "no connected LinkedIn account" };
   }
   await db.update(linkedinCampaigns).set({ status: "ACTIVE", updatedAt: new Date() }).where(and(inOrg(linkedinCampaigns), eq(linkedinCampaigns.id, created.id)));
+  if (!(await record.activated(created.id))) return haltedLaunch("linkedin", created.id, personIds);
   return { channel: "linkedin", campaignId: created.id, added, skipped: personIds.length - added, problem: null };
 }
 
@@ -757,7 +781,14 @@ export async function runOutreachStartStep(job: AssistantJob, heartbeat: () => P
   if (!job.runId) return { next: "failed", error: "The job lost its run." };
   const run = await getRun(job.runId);
   if (!run) return { next: "failed", error: "The run no longer exists." };
-  if (run.status !== "starting") return { next: "failed", error: `The run is ${run.status}; its launch job cannot continue.` };
+  if (run.status !== "starting") {
+    // Stopped while this launch was under way and its worker died before it could stop what it had activated: stopped here.
+    if (run.status === "stopped" || run.status === "cancelled") {
+      const { problems } = await stopCampaigns(run.id, run.campaigns, new Date());
+      if (problems.length) console.error(`[outreach] run ${run.id}: stopping what a halted launch activated: ${problems.join("; ")}`);
+    }
+    return { next: "failed", error: `The run is ${run.status}; its launch job cannot continue.` };
+  }
   const plan = run.plan;
 
   if (job.stage === "personalizing") {

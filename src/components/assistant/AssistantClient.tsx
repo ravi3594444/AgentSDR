@@ -35,6 +35,7 @@ import { takesAnAnswer } from "@/lib/assistant/handoff";
 import type { OwnerDecisionKind } from "@/lib/assistant/schema";
 import type { RunAuthorization, SenderStatus } from "@/lib/assistant/runEvidence";
 import { AUTOPILOT_LIMITS } from "@/lib/crm/autopilot";
+import { planCounts } from "@/lib/activity/status";
 import * as Button from "@/components/alignui/button";
 import NeedsYouList from "@/components/assistant/NeedsYouList";
 import { useChatScroll } from "./useChatScroll";
@@ -83,7 +84,7 @@ type Job = {
 
 type RunReply = { id: string; conversationId: string; who: string; channel: string; receivedAt: string; preview: string; state: { tone: "done" | "waiting" | "you" | "failed"; text: string; at?: string; release?: boolean } };
 
-type RunLead = { personId: string; who: string; channel: string; progress: { tone: "waiting" | "sent" | "replied" | "good" | "stopped" | "failed"; text: string } };
+type RunLead = { personId: string; who: string; channel: string; progress: { tone: "waiting" | "sent" | "replied" | "good" | "stopped" | "failed"; text: string }; /** Contacted and replied, kept after a stop (runLeads.ts leadReach). */ reach?: { contacted: boolean; replied: boolean } };
 
 type Run = { id: string; status: string; autopilot: boolean; error: string | null; campaigns: Record<string, string>; replies?: RunReply[]; leads?: RunLead[]; /** Other plans of the same request, and its searches still running. */ requestPeers?: number; /** The plan as stored now (people left out at a start are gone from it). */ plan?: ProposalData["plan"]; /** Who authorized it to send, and how (runEvidence.ts). */ authorization?: RunAuthorization };
 
@@ -760,8 +761,8 @@ function SortingSummary({ plan }: { plan: ProposalData["plan"] }) {
 
 /** Every lead of a started run and where it stands: waiting, sent, replied (and how), stopped or failed. */
 function LeadsList({ leads }: { leads: RunLead[] }) {
-  const contacted = leads.filter((lead) => ["sent", "replied", "good"].includes(lead.progress.tone)).length;
-  const replied = leads.filter((lead) => ["replied", "good"].includes(lead.progress.tone)).length;
+  // The same counts as Activity (planCounts): a stopped lead that was messaged was still contacted.
+  const { contacted, replied } = planCounts(leads);
   const interested = leads.filter((lead) => lead.progress.tone === "good").length;
   const tone = { good: "text-success-base", replied: "text-text-strong-950", sent: "text-text-sub-600", waiting: "text-text-soft-400", stopped: "text-text-soft-400", failed: "text-error-base" } as const;
   return (

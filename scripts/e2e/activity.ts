@@ -39,6 +39,7 @@ const { repliesSeenUntil } = await import("@/lib/activity/status");
 const linkedin = await import("@/lib/linkedin/schema");
 const { gridProviders, gridProviderCredentials } = await import("@/lib/grid/schema");
 const { encryptIntegrationCredentials } = await import("@/lib/integrations/credentials");
+const { stopRun } = await import("@/lib/assistant/outreach.server");
 type OutreachPlan = import("@/lib/assistant/schema").OutreachPlan;
 
 const stamp = Date.now();
@@ -215,7 +216,7 @@ const hoursCase = await runInOrganization(a.org.id, async () => {
   await db.insert(linkedin.campaignAccounts).values({ campaignId: campaign!.id, linkedinAccountId: account!.id });
   const statuses = ["PENDING", "PENDING", "REQUEST_SENT", "REPLIED", "FAILED"] as const;
   const leadPeople = await db.insert(people).values(statuses.map((_, index) => ({ organizationId: a.org.id, source: "list", fullName: `Hours lead ${index}`, linkedinUrl: `https://www.linkedin.com/in/activity-${stamp}-${index}` }))).returning({ id: people.id });
-  await db.insert(linkedin.leads).values(leadPeople.map((person, index) => ({ organizationId: a.org.id, personId: person.id, linkedinUrl: `https://www.linkedin.com/in/activity-${stamp}-${index}`, campaignId: campaign!.id, status: statuses[index]!, updatedAt: new Date() })));
+  await db.insert(linkedin.leads).values(leadPeople.map((person, index) => ({ organizationId: a.org.id, personId: person.id, linkedinUrl: `https://www.linkedin.com/in/activity-${stamp}-${index}`, campaignId: campaign!.id, status: statuses[index]!, updatedAt: new Date(), ...(statuses[index] === "REQUEST_SENT" || statuses[index] === "REPLIED" ? { requestSentAt: new Date(Date.now() - 3_600_000) } : {}) })));
   const [hoursRun] = await db.insert(outreachRuns).values({
     organizationId: a.org.id, threadId: seeded.today.id, audienceId: seeded.run.audienceId, name: "Agents on LinkedIn", status: "running", channels: ["linkedin"], campaigns: { linkedin: campaign!.id },
     plan: {} as unknown as OutreachPlan, autopilot: false, createdBy: a.owner.id,
@@ -244,6 +245,12 @@ await runInOrganization(a.org.id, async () => {
   check("a plan running on one channel of two is Partly done, still open, with what failed", part?.state === "partial" && part.open && /email: no mailbox is connected/.test(part.reason ?? ""), `${part?.stateLabel}: ${part?.reason}`);
   const cut = work.find((item) => item.id === hoursCase.cutShort.id);
   check("a search cut short is Partly done, finished, and keeps what it found", cut?.state === "partial" && !cut.open && cut.found === 6 && /cut short/.test(cut.reason ?? ""), `${cut?.stateLabel}: ${cut?.reason}`);
+});
+await runInOrganization(a.org.id, async () => {
+  // Stopped: its invitations are cancelled, but the people already messaged were still contacted.
+  await stopRun(hoursCase.hoursRun.id);
+  const stopped = (await listWork()).find((item) => item.id === hoursCase.hoursRun.id);
+  check("a stopped plan keeps its counts: 2 contacted, 1 replied", stopped?.counts?.contacted === 2 && stopped.counts.replied === 1 && stopped.runStatus === "stopped", JSON.stringify(stopped?.counts));
 });
 const otherWork = await runInOrganization(b.org.id, () => listWork());
 check("another organization's Activity lists none of it", !otherWork.some((item) => [hoursCase.hoursRun.id, hoursCase.partRun.id, hoursCase.cutShort.id, seeded.run.id].includes(item.id)));

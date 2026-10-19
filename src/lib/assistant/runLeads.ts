@@ -15,6 +15,8 @@ export type LeadProgressInput = {
   whatsappDeliveredAt?: string | null;
   whatsappReadAt?: string | null;
   linkedinStatus: string | null;
+  /** When the LinkedIn invitation went out; kept after a stop cancels the lead. */
+  linkedinRequestSentAt?: string | null;
   instagramStatus?: string | null;
   instagramError?: string | null;
   category: string | null;
@@ -22,6 +24,28 @@ export type LeadProgressInput = {
 };
 
 export type LeadProgress = { tone: "waiting" | "sent" | "replied" | "good" | "stopped" | "failed"; text: string };
+
+const EMAIL_SENT = new Set(["initial_sent", "in_follow_up", "reply_processing", "reply_received", "sequence_completed"]);
+const EMAIL_REPLIED = new Set(["reply_processing", "reply_received"]);
+const LINKEDIN_SENT = new Set(["REQUEST_SENT", "CONNECTED", "ACCEPT_MESSAGE_SENT", "FOLLOW_UP_1_SENT", "FOLLOW_UP_2_SENT", "FOLLOW_UP_3_SENT", "REPLIED", "COMPLETED"]);
+
+/**
+ * Whether a lead was contacted (a message at least accepted for sending;
+ * an uncertain or failed send is not one) and whether it replied, from the
+ * evidence a stop leaves in place: a stopped WhatsApp lead keeps its last
+ * send time, a cancelled LinkedIn lead its invitation time. An opt-out is a
+ * reply to a message that went out.
+ */
+export function leadReach(input: LeadProgressInput): { contacted: boolean; replied: boolean } {
+  const replied = input.runStatus === "opted_out" || Boolean(input.category)
+    || input.whatsappStatus === "replied" || input.linkedinStatus === "REPLIED" || input.instagramStatus === "replied"
+    || EMAIL_REPLIED.has(input.emailStatus ?? "");
+  const contacted = replied || (input.channel === "email" && EMAIL_SENT.has(input.emailStatus ?? ""))
+    || (input.channel === "whatsapp" && Boolean(input.whatsappSentAt))
+    || (input.channel === "linkedin" && (LINKEDIN_SENT.has(input.linkedinStatus ?? "") || Boolean(input.linkedinRequestSentAt)))
+    || (input.channel === "instagram" && input.instagramStatus === "sent");
+  return { contacted, replied };
+}
 
 const CATEGORY: Record<string, string> = { interested: "Interested", not_interested: "Not interested", customer: "Customer", other: "Other" };
 

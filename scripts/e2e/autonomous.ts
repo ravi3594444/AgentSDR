@@ -418,6 +418,35 @@ await runInOrganization(org2!.id, async () => {
     stoppedJob?.status === "failed" && stoppedRun.status === "stopped" && Boolean(stoppedCampaignId) && stoppedCampaign?.status === "PAUSED" && stillToSend.length === 0,
     JSON.stringify({ job: stoppedJob?.status, error: stoppedJob?.error, run: stoppedRun.status, campaign: stoppedCampaign?.status ?? null, pending: stillToSend.length }));
 
+  // A launch whose worker died after it activated its LinkedIn campaign: the engine already sent its invitations.
+  async function halfLaunchedPlan(people: string[], campaignStatus: "ACTIVE" | "PAUSED", leadStatus: "REQUEST_SENT" | "PENDING") {
+    const plan = await propose(people);
+    const started = await startOutreachRun(plan.id, owner2!.id, { autopilot: false });
+    const [campaign] = await db.insert(linkedin.campaigns).values({ organizationId: orgId, name: `${plan.name} · LinkedIn`, type: "REGULAR", status: campaignStatus, invitationMessage: "Hi", updatedAt: new Date() }).returning();
+    await db.insert(linkedin.campaignAccounts).values({ campaignId: campaign!.id, linkedinAccountId: account!.id });
+    await db.insert(linkedin.leads).values(people.map((personId, index) => ({ organizationId: orgId, personId, sourceLinkedinIdentifier: `half-${stamp}-${index}-${personId}`, campaignId: campaign!.id, status: leadStatus, updatedAt: new Date() })));
+    await db.update(schema.outreachRuns).set({ campaigns: { linkedin: campaign!.id } }).where(eq(schema.outreachRuns.id, plan.id));
+    await db.update(schema.assistantJobs).set({ status: "running", stage: "launching", lockedBy: "assistant-worker-that-died", heartbeatAt: new Date(Date.now() - 10 * 60_000), runAfter: new Date("1999-12-30T00:00:00Z"), progress: { stage: "launching" } })
+      .where(eq(schema.assistantJobs.id, started.jobId));
+    return { plan, jobId: started.jobId, campaignId: campaign!.id };
+  }
+  const activated = await halfLaunchedPlan(L.slice(89, 91), "ACTIVE", "REQUEST_SENT");
+  await runOneAssistantStep();
+  const activatedJob = (await db.select().from(schema.assistantJobs).where(eq(schema.assistantJobs.id, activated.jobId)))[0];
+  const activatedRun = await runRow(activated.plan.id);
+  const [activatedCampaign] = await db.select({ status: linkedin.campaigns.status }).from(linkedin.campaigns).where(eq(linkedin.campaigns.id, activated.campaignId));
+  check("a launch retried after it activated its campaign (invitations already sent) finishes as launched, the run running and stoppable",
+    activatedJob?.status === "succeeded" && activatedRun.status === "running" && activatedRun.campaigns.linkedin === activated.campaignId && activatedCampaign?.status === "ACTIVE",
+    JSON.stringify({ job: activatedJob?.status, error: activatedJob?.error, run: activatedRun.status, campaign: activatedCampaign?.status }));
+  // Stop landed while the launch activated its campaign, and the worker died before it could stop it again.
+  const undone = await halfLaunchedPlan(L.slice(91, 93), "ACTIVE", "PENDING");
+  await db.update(schema.outreachRuns).set({ status: "stopped", stoppedAt: new Date() }).where(eq(schema.outreachRuns.id, undone.plan.id));
+  await runOneAssistantStep();
+  const [undoneCampaign] = await db.select({ status: linkedin.campaigns.status }).from(linkedin.campaigns).where(eq(linkedin.campaigns.id, undone.campaignId));
+  const undoneToSend = await db.select({ id: linkedin.leads.id }).from(linkedin.leads).where(and(eq(linkedin.leads.campaignId, undone.campaignId), eq(linkedin.leads.status, "PENDING")));
+  check("a launch retried for a run that was stopped meanwhile stops what it had activated", undoneCampaign?.status === "PAUSED" && undoneToSend.length === 0,
+    JSON.stringify({ campaign: undoneCampaign?.status, pending: undoneToSend.length }));
+
   // ------------------------------------------------------------ durable reports
   const quiet = await createThread(owner2!.id);
   const quietEvents = async () => events(quiet.id);
