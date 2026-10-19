@@ -209,23 +209,34 @@ the dev server compiled every route and grew past the memory limit.
 
 ## Tenancy isolation
 
-`scripts/e2e/tenancy-isolation.ts` was run against a dev server on a fresh
-local copy (`agentsdr_iso`: `db:setup`, the demo organization as A, and the
-fixture rows for every table added tonight, from
-`scripts/e2e/seed-new-feature-fixtures.ts`). Result: **no isolation
-failures**.
-- Fingerprints: 1144, from 72 tables of A.
-- The positive control found A's own data in 38 of 69 plain GET routes.
-- Checked as B: 119 reads, 109 writes and 69 pages.
+Run on 19 October against a **production build** of the final commit,
+started as the Docker image starts it (`node .next/standalone/server.js`)
+with every outbound sender paused:
+- The database was a fresh local copy (`db:setup`), with the demo
+  organization as A and the fixture rows for every table the branch added,
+  objectives included (`scripts/e2e/seed-new-feature-fixtures.ts`).
+- **No isolation failures.**
+- Fingerprints: 1143, from 75 tables of A.
+- The positive control found A's own data in 39 of 69 plain GET routes.
+- Checked as B: 120 reads, 109 writes and 69 pages. Every request was
+  answered.
 
-It lists three items to review. Each answers 200 to B for one of A's ids,
-but no A identifier appears in the response. All three are routes tonight's
-work did not touch:
-- `GET /api/linkedin/campaigns/[id]/chart-data`
-- `GET /api/linkedin/campaigns/[id]/merge-fields`
-- `GET /api/outreach/inbox/leads/[id]/crm-context`
+It lists 16 items to review. In each, B got a 2xx for one of A's ids, with
+nothing of A's in the response. All are in routes this branch did not
+change; a 404 would be more correct for each.
+- 12 writes answer `{"ok":true}` (or an empty result), and A's row is
+  unchanged: the organization filter matched nothing. They are `DELETE` and
+  `PATCH` on LinkedIn leads and campaigns, mailboxes and their signature,
+  inbox tasks and notes; `POST` important/opened on inbox messages; `DELETE`
+  grid table runs; and `POST` campaign stop.
+- 4 reads return empty or static data: LinkedIn campaign `chart-data` (zeros)
+  and `merge-fields` (the fixed field list), `crm-context` (`null`), and grid
+  table `changes` (no rows).
 
-A 404 would be more correct for each.
+Earlier runs against a dev server also flagged 200s whose body was the dev
+server's error page, served while it was out of memory. The isolation check
+now records the response body of every such item, fails on any unanswered
+request, and runs against a production build.
 
 ## Gates on the final commit
 
@@ -233,6 +244,9 @@ All on the final tree, on a fresh local database:
 - `tsc --noEmit`: pass. eslint on every TypeScript file the branch changed
   since `299fd14`: pass.
 - Unit tests: 1686 pass, 0 fail.
+- Production build (`bun run build`, the Docker image's build step): pass.
+  The running-image markers ("Outside sending hours", "Same period in
+  Analytics", "Lead request") are in its output.
 - `db:check`: all checks pass, on a fresh install and on the upgrade path.
 - Upgrade path: the base branch's `db/schema.sql`, then the 7 migrations
   below in order, then all 7 again. Every run succeeded, and the result is

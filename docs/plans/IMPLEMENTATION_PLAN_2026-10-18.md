@@ -47,8 +47,8 @@ tests, `db:check`, the 16 e2e suites above (859 checks, 0 failures), and the
 upgrade path (the base branch's schema plus the 7 migrations in order, run
 twice) giving the same schema as a fresh install. A final review found 11
 real defects in the day's work, all fixed with tests that failed first (night
-report). The production build and the tenancy-isolation run against it are
-recorded in the night report.
+report). The production build passes, and the tenancy-isolation run against
+it found no isolation failures (night report).
 
 ### Pending: deployment (owner)
 
