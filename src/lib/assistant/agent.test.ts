@@ -477,6 +477,33 @@ describe("groundingCorpus: what the owner wrote and what sources returned", () =
     expect(opened).toContain("Page: https://knowndir.example/find “Find a business”");
   });
 
+  test("a page that only echoes what the model searched for grounds none of it, including after a redirect", () => {
+    const echoed = groundingCorpus([owner(listedOn), pageRead("https://www.knowndir.example/search?q=info@acmedental.in&tel=%2B919822011111", {
+      title: "Results for info@acmedental.in",
+      text: "No listings match info@acmedental.in or +919822011111. Try acmedental.in instead.",
+    })]);
+    // The model asked for one address and was redirected to another that repeats what it wrote.
+    const redirected = { ...pageRead("https://knowndir.example/landing", { title: "You searched acmedental.in", text: "Nothing for info@acmedental.in, 919822011111." }), toolInput: { url: "https://knowndir.example/go?to=acmedental.in&mail=info%40acmedental.in&p=919822011111" } };
+    const pathEcho = groundingCorpus([owner(listedOn), pageRead("https://knowndir.example/lookup/info@acmedental.in/919822011111", { title: "Lookup", text: "info@acmedental.in: no record. 919822011111: no record." })]);
+    for (const corpus of [echoed, groundingCorpus([owner(listedOn), redirected]), pathEcho]) {
+      expect(actionsProblem([addGuess], input(corpus))).toContain("not in what the owner wrote");
+      expect(actionsProblem([addPhoneGuess], input(corpus))).toContain("not in what the owner wrote");
+      expect(actionsProblem([readGuess], input(corpus))).toContain("only links the owner gave");
+      expect(actionsProblem([{ tool: "read_webpage", args: { url: "https://knowndir.example/listings" } }], input(corpus))).toBeNull();
+    }
+  });
+
+  test("a query naming the page's own site, or plain words, takes nothing from what the page returned", () => {
+    const corpus = groundingCorpus([owner(ask), pageRead("https://knowndir.example/search?site=knowndir.example&q=acme+dental", {
+      title: "knowndir.example: Acme Dental",
+      text: "Acme Dental, Pune — info@acmedental.in — +91 98220 11111 — https://www.acmedental.in/",
+    })]);
+    expect(actionsProblem([addGuess], input(corpus))).toBeNull();
+    expect(actionsProblem([addPhoneGuess], input(corpus))).toBeNull();
+    expect(actionsProblem([readGuess], input(corpus))).toBeNull();
+    expect(actionsProblem([{ tool: "read_webpage", args: { url: "https://knowndir.example/listings" } }], input(corpus))).toBeNull();
+  });
+
   test("what a page returned still grounds: its text, title, contacts and links, whatever its address", () => {
     const corpus = groundingCorpus([owner(listedOn), pageRead("https://www.knowndir.example/search?q=acme+dental+pune", {
       title: "Acme Dental, Pune",

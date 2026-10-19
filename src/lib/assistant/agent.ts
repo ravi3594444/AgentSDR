@@ -419,6 +419,44 @@ function parsedLink(value: string): URL | null {
 
 const LINK_IN_TEXT = /https?:\/\/[^\s"'<>]+/gi;
 
+function decoded(value: string): string {
+  try {
+    return decodeURIComponent(value.replace(/\+/g, " "));
+  } catch {
+    return value;
+  }
+}
+
+const CONTACT_LIKE = /[^\s@/?#&=]+@[^\s@/?#&=]+|\+?\d[\d\s().-]{5,}\d|(?:[a-z0-9-]+\.)+[a-z]{2,}/gi;
+
+/**
+ * What the model wrote into the addresses it opened (query values, the
+ * fragment, and path segments carrying an address or a long number), cut
+ * to what grounding reads: email addresses, host names and phone-like
+ * digit runs. The pages' own hosts are not among them.
+ */
+function modelWrittenTokens(pages: readonly URL[]): string[] {
+  const own = new Set(pages.map((page) => page.hostname.toLowerCase().replace(/^www\./, "")));
+  const tokens = new Set<string>();
+  for (const page of pages) {
+    const values = [...page.searchParams.values(), decoded(page.hash.slice(1)), ...page.pathname.split("/").map(decoded).filter((segment) => /@|\d{7,}/.test(segment))];
+    for (const value of values) {
+      for (const match of value.matchAll(CONTACT_LIKE)) {
+        const token = match[0].trim();
+        const bare = token.toLowerCase().replace(/^www\./, "");
+        if (own.has(bare) || [...own].some((host) => host.endsWith(`.${bare}`))) continue;
+        tokens.add(token);
+        // An address names its site too; a number may come back without its punctuation.
+        const domain = token.includes("@") ? token.split("@")[1]!.toLowerCase().replace(/^www\./, "") : null;
+        if (domain && !own.has(domain)) tokens.add(domain);
+        const digits = token.replace(/\D/g, "");
+        if (!token.includes("@") && digits.length >= 7) tokens.add(digits);
+      }
+    }
+  }
+  return [...tokens].sort((a, b) => b.length - a.length);
+}
+
 /**
  * A page read's or browser page's result as a source: what the page
  * returned (its text, title, contacts and the links it lists), with the
@@ -426,23 +464,33 @@ const LINK_IN_TEXT = /https?:\/\/[^\s"'<>]+/gi;
  * what the model wrote when it asked for the page, so reading
  * "…/search?q=info@guessed.in" grounds neither that address nor its site.
  * A link on the page back to that same address (a "#top" link resolves to
- * all of it) is cut the same way.
+ * all of it) is cut the same way. A page that repeats what the model wrote
+ * ("No results for info@guessed.in"), at the address it asked for or the
+ * one it was redirected to, grounds none of that either: every address,
+ * host or number the model put in either address is taken out of the page.
  */
-function pageSourceText(text: string, pageUrl: unknown): string {
-  const page = typeof pageUrl === "string" ? parsedLink(pageUrl) : null;
-  if (!page) return text;
-  const bare = `${page.origin}${page.pathname}`;
-  const samePage = (value: string) => {
-    const link = parsedLink(value);
-    return Boolean(link && link.origin === page.origin && link.pathname === page.pathname && link.search === page.search);
-  };
-  return text.replace(LINK_IN_TEXT, (match) => {
-    // Punctuation after a link in the summary ("…/search?q=x. Text:") is not part of it, though a query may end in some too.
-    for (let end = match.length; end > 0 && (end === match.length || /[.,;:!?)\]”]/.test(match[end]!)); end -= 1) {
-      if (samePage(match.slice(0, end))) return `${bare}${match.slice(end)}`;
-    }
-    return match;
+function pageSourceText(text: string, pageUrls: readonly unknown[]): string {
+  const pages = pageUrls.flatMap((value) => {
+    const page = typeof value === "string" ? parsedLink(value) : null;
+    return page ? [page] : [];
   });
+  let out = text;
+  for (const page of pages) {
+    const bare = `${page.origin}${page.pathname}`;
+    const samePage = (value: string) => {
+      const link = parsedLink(value);
+      return Boolean(link && link.origin === page.origin && link.pathname === page.pathname && link.search === page.search);
+    };
+    out = out.replace(LINK_IN_TEXT, (match) => {
+      // Punctuation after a link in the summary ("…/search?q=x. Text:") is not part of it, though a query may end in some too.
+      for (let end = match.length; end > 0 && (end === match.length || /[.,;:!?)\]”]/.test(match[end]!)); end -= 1) {
+        if (samePage(match.slice(0, end))) return `${bare}${match.slice(end)}`;
+      }
+      return match;
+    });
+  }
+  for (const token of modelWrittenTokens(pages)) out = out.replace(new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), " ");
+  return out;
 }
 
 /**
@@ -453,7 +501,7 @@ function pageSourceText(text: string, pageUrl: unknown): string {
  * guessed address or domain searched for is not thereby given. A page read
  * counts for the page, not for the query string the model opened it with.
  */
-export function groundingCorpus(messages: readonly Pick<TranscriptMessage, "role" | "tool" | "status" | "content" | "toolResult">[], documentsText = ""): string {
+export function groundingCorpus(messages: readonly (Pick<TranscriptMessage, "role" | "tool" | "status" | "content" | "toolResult"> & { toolInput?: Record<string, unknown> | null })[], documentsText = ""): string {
   return messages
     .filter((message) => message.role === "user" || (message.role === "tool" && (message.tool === "read_document" || message.tool === "import_contacts" || (isSourceTool(message.tool) && message.status === "ok"))))
     .map((message) => {
@@ -469,7 +517,7 @@ export function groundingCorpus(messages: readonly Pick<TranscriptMessage, "role
       if (message.tool === "read_webpage" || message.tool?.startsWith("browser_")) {
         // The address the page was read at: its data, or where the summary names it ("Read <url>", "Page: <url>").
         const named = message.tool === "read_webpage" ? /^Read (\S+)/.exec(summary || message.content) : /^Page: (\S+)/m.exec(summary || message.content);
-        return pageSourceText(text, (message.toolResult?.data as { url?: unknown } | undefined)?.url ?? named?.[1]);
+        return pageSourceText(text, [message.toolInput?.url, (message.toolResult?.data as { url?: unknown } | undefined)?.url, named?.[1]]);
       }
       return text;
     })
