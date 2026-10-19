@@ -1,4 +1,5 @@
 import { draftLeaks, draftPlaceholders, unverifiedActionClaims } from "@/lib/crm/ai/grounding";
+import { JOB_TITLES, WEBSITE_FACT_KEYS } from "@/lib/discovery/websiteProfile";
 import { unbackedLinks, unbackedNumbers } from "./replyCheck";
 import type { AudienceChannel, BusinessProfile, PlannedStep } from "./schema";
 
@@ -106,39 +107,77 @@ export function personalLineProblem(line: string): string | null {
   return null;
 }
 
-/** "You're hiring", "your job posting": what only their website's own words can back (facts.hiring). */
-const HIRING_CLAIM = /\b(?:you(?:['’]re| are) (?:hiring|recruiting)|(?:saw|noticed|see|read) (?:that )?you(?:['’]re| are)? (?:hiring|recruiting)|your (?:job (?:post|posting|ad|advert|opening|listing)|(?:open )?(?:opening|vacancy|vacancies|position)|hiring|careers? page))\b/i;
-/** That they lack something. Not finding it on the pages read is never proof it does not exist. */
-const ABSENCE_CLAIMS = [
-  /\b(?:you|your \w+(?: \w+)?)\s+(?:(?:do|does)(?:n['’]?t| not) (?:yet )?(?:have|offer|use|show|list|provide)|ha(?:ve|s)(?:n['’]?t| not) got|ha(?:ve|s) no|lacks?|(?:are|is) (?:missing|without)|(?:are|is)(?:n['’]?t| not) (?:yet )?(?:using|offering|showing))\b[^.?!]{0,40}?\b(?:booking|book|appointments?|website|site|chat|whatsapp|reviews?|presence|form|receptionist|calendar|system|scheduling)\b/i,
-  /\b(?:couldn['’]?t|could not|didn['’]?t|did not|can['’]?t|cannot|wasn['’]?t able to) (?:find|see|spot|locate)\b[^.?!]{0,50}\b(?:on|in) your (?:site|website|page|homepage|profile)\b/i,
-  /\b(?:there(?:['’]s| is) no|no) (?:online |easy |simple |clear )?(?:way to book|booking|appointment booking|website|chat|contact form|reviews?)\b[^.?!]{0,30}\b(?:on|in) your\b/i,
-];
-const GREETING_NAME = /^\s*(?:[Hh]i|[Hh]ello|[Hh]ey|[Dd]ear|[Nn]amaste|[Gg]ood (?:morning|afternoon|evening))[ ,]+((?:(?:Dr|Mr|Mrs|Ms|Prof)\.?\s+)?[A-Z][\p{L}'’-]+)/u;
+/** What a website shows that a message might say they lack. */
+const FEATURES = String.raw`(?:online bookings?|bookings?|book(?:ing)? online|appointments?|websites?|sites?|chats?|whatsapp|reviews?|presence|contact forms?|forms?|receptionists?|calendars?|systems?|scheduling)`;
+/** A clause that only supposes ("if you are not using…"), which claims nothing about the lead. */
+const NOT_SUPPOSED = String.raw`(?<!\b(?:if|whether|unless|when|once)\s)`;
+const JOB = new RegExp(`\\b${JOB_TITLES}\\b`, "gi");
+/** "Your job posting", "your vacancy": a hiring claim with no subject to name. */
+const HIRING_POSSESSIVE = /\byour (?:job (?:post|posting|ad|advert|opening|listing)s?|vacanc(?:y|ies)|open (?:position|role|opening)s?|hiring|careers? page)\b/i;
+const GREETING_NAME = /^\s*(?:[Hh]i|[Hh]ello|[Hh]ey|[Dd]ear|[Nn]amaste|[Gg]ood (?:morning|afternoon|evening))[ ,]+((?:(?:Dr|Mr|Mrs|Ms|Prof)\.?\s+)?[A-Z][\p{L}'’-]+)/mu;
 const TITLED_NAME = /\b(?:Dr|Mr|Mrs|Ms|Prof)\.?\s+([A-Z][\p{L}'’-]+)/gu;
-const NOT_A_NAME = new Set(["there", "team", "all", "everyone", "folks", "sir", "madam", "friends", "both"]);
+const NOT_A_NAME = new Set(["there", "team", "all", "everyone", "folks", "friends", "both", "sir", "madam", "maam", "ma'am", "ma’am", "ji", "doc", "doctor", "dr", "owner", "owners", "manager", "managers", "guys"]);
+
+function wordSet(text: string): Set<string> {
+  return new Set(text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean));
+}
+
+/** Who a sentence could be about: the lead by any of its names, or "you", "your clinic", "they", "it". */
+function subjectPattern(facts: Readonly<Record<string, string>>): string {
+  const names = [facts.businessName, facts.company, facts.name]
+    .map((value) => value?.replace(/\s*\(.*$/, "").trim())
+    .filter((value): value is string => Boolean(value && value.length >= 3))
+    .map(escapeRegExp);
+  return `(?:you|your \\w+(?: \\w+)?|it|they|its \\w+|their \\w+|the (?:clinic|practice|business|site|website|team)${names.length ? `|${names.join("|")}` : ""})`;
+}
 
 /**
  * What a message written for one lead says about them that neither their
  * facts nor the owner's information back, or null. In code, not only the
  * prompt: a price, percentage or link the information does not hold; that
- * they are hiring when their website showed no matching opening; a name
- * that is not theirs; or that they lack something (the pages read not
- * showing it is not proof it does not exist).
+ * they are hiring, unless their website showed that job; a greeting to a name
+ * that is not theirs; or that they lack something (the pages read not showing
+ * it is not proof it does not exist).
  */
 export function leadClaimProblem(text: string, facts: Readonly<Record<string, string>>, knowledge: string): string | null {
-  const corpus = `${knowledge}\n${Object.values(facts).join("\n")}`;
-  const numbers = unbackedNumbers(text, corpus);
-  if (numbers.length) return `it gives ${numbers.slice(0, 2).join(", ")}, which neither your information nor their facts contain`;
-  const links = unbackedLinks(text, corpus);
+  // A price or a percentage is about the offer: only the owner's information backs one (never a lead's review count or street number).
+  const numbers = unbackedNumbers(text, knowledge);
+  if (numbers.length) return `it gives ${numbers.slice(0, 2).join(", ")}, which your information does not contain`;
+  // A link is backed by the owner's information or the lead's own listing (its website), never by what a crawled page said.
+  const sourced = Object.entries(facts).filter(([key]) => !(WEBSITE_FACT_KEYS as readonly string[]).includes(key)).map(([, value]) => value);
+  const links = unbackedLinks(text, `${knowledge}\n${sourced.join("\n")}`);
   if (links.length) return `it gives a link or address (${links.slice(0, 2).join(", ")}) your information does not contain`;
-  if (!facts.hiring && HIRING_CLAIM.test(text)) return "it says they are hiring, which their website did not show";
-  if (ABSENCE_CLAIMS.some((pattern) => pattern.test(text))) return "it says they lack something; not finding it on the pages read does not mean they lack it";
-  const known = new Set(corpus.toLowerCase().split(/[^\p{L}\p{N}'’-]+/u).filter(Boolean));
-  const names = [GREETING_NAME.exec(text)?.[1]?.split(/\s+/).at(-1), ...[...text.matchAll(TITLED_NAME)].map((match) => match[1])]
-    .filter((name): name is string => Boolean(name) && !NOT_A_NAME.has(name!.toLowerCase()));
-  const stranger = names.find((name) => !known.has(name.toLowerCase()));
-  if (stranger) return `it addresses ${stranger}, a name not in their facts`;
+
+  const subject = subjectPattern(facts);
+  const job = JOB_TITLES;
+  const hiringClaim = new RegExp(`\\b(?:(?:you|they|${subject})(?:['’]re| are| is)|(?:saw|noticed|see|read)(?: that)? (?:you|they|${subject})(?:['’]re| are| is)?) (?:currently |now |still )?(?:hiring|recruiting|looking for (?:an? |new |another )*(?:[\\w-]+ ){0,3}?${job}|in need of (?:an? )?(?:[\\w-]+ ){0,3}?${job})`, "i");
+  const hiring = hiringClaim.exec(text) ?? HIRING_POSSESSIVE.exec(text);
+  if (hiring) {
+    if (!facts.hiring) return "it says they are hiring, which their website did not show";
+    // The finding backs the job it names, not any job.
+    const sentence = text.slice(text.lastIndexOf(".", hiring.index) + 1).split(/[.!?\n]/)[0] ?? "";
+    const opening = facts.hiring.toLowerCase();
+    const other = [...sentence.matchAll(JOB)].map((match) => match[0].toLowerCase().replace(/s$/, "")).find((word) => !opening.includes(word));
+    if (other) return `it says they are hiring a ${other}, which their website did not show`;
+  }
+
+  const absence = [
+    new RegExp(`${NOT_SUPPOSED}\\b${subject}\\s+(?:(?:do|does)(?:n['’]?t| not) (?:yet |really |seem to |appear to )?(?:have(?! to\\b)|offer|use|show|list|provide|take|accept|allow|support)|ha(?:ve|s)(?:n['’]?t| not) got|ha(?:ve|s) no|lacks?|(?:are|is) (?:missing|without))\\b[^.?!]{0,40}?\\b${FEATURES}\\b`, "i"),
+    new RegExp(`${NOT_SUPPOSED}\\b(?:you['’]re|you are|${subject}(?:['’]s| is| are)) not (?:yet )?(?:using|offering|showing|taking|listing|providing|accepting)\\b[^.?!]{0,40}?\\b${FEATURES}\\b`, "i"),
+    new RegExp(`${NOT_SUPPOSED}\\b(?:patients|customers|clients|people|visitors|guests)\\s+(?:can['’]?t|cannot|can not|are unable to|have no way to)\\s+(?:yet\\s+)?(?:book|reach|chat|message|find|contact|pay)\\b[^.?!]{0,40}\\b(?:with|on|at|through|via)\\s+(?:you|your|its|their|${subject})\\b`, "i"),
+    /\b(?:couldn['’]?t|could not|didn['’]?t|did not|can['’]?t|cannot|wasn['’]?t able to) (?:find|see|spot|locate)\b[^.?!]{0,50}\b(?:on|in) (?:your|its|their) (?:site|website|page|homepage|profile)\b/i,
+    /\b(?:there(?:['’]s| is) no|no) (?:online |easy |simple |clear )?(?:way to book|booking|appointment booking|website|chat|contact form|reviews?)\b[^.?!]{0,30}\b(?:on|in) (?:your|its|their)\b/i,
+  ];
+  if (absence.some((pattern) => pattern.test(text))) return "it says they lack something; not finding it on the pages read does not mean they lack it";
+
+  // A greeting names the lead (their facts alone); a titled name elsewhere may be the sender's or a client's from the information.
+  const own = wordSet(Object.values(facts).join(" "));
+  const anyone = new Set([...own, ...wordSet(knowledge)]);
+  const unknown = (name: string, known: Set<string>) => !NOT_A_NAME.has(name.toLowerCase()) && name.split(/[^\p{L}\p{N}]+/u).filter((part) => part.length >= 2).some((part) => !known.has(part.toLowerCase()));
+  const greeted = GREETING_NAME.exec(text)?.[1]?.split(/\s+/).at(-1);
+  if (greeted && unknown(greeted, own)) return `it addresses ${greeted}, a name not in their facts`;
+  const stranger = [...text.matchAll(TITLED_NAME)].map((match) => match[1]!).find((name) => unknown(name, anyone));
+  if (stranger) return `it names ${stranger}, who is in neither their facts nor your information`;
   return null;
 }
 

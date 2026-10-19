@@ -153,3 +153,66 @@ describe("claims about a lead that its facts do not back", () => {
     expect(leadClaimProblem("Details at https://made-up.example/offer", plain, knowledge)).toContain("made-up.example");
   });
 });
+
+describe("claims about a lead: what the review found", () => {
+  const knowledge = "ChairFill answers clinic calls 24/7. Sender: Ravi Kumar, founder.";
+  const lotus = { businessName: "Lotus Dental", city: "Pune", rating: "4.8" };
+
+  test("an email's greeting is checked, not only its subject line", () => {
+    expect(leadClaimProblem("Calls at Lotus Dental\nHi Priya, a 4.8 rating in Pune is hard to keep.", lotus, knowledge)).toContain("Priya");
+  });
+
+  test("the owner's own name is not the lead's", () => {
+    expect(leadClaimProblem("Hi Ravi, a 4.8 rating in Pune is hard to keep.", lotus, knowledge)).toContain("Ravi");
+  });
+
+  test("honest sentences pass: opening hours, 'you don't have to', a possessive business name, a generic salutation", () => {
+    expect(leadClaimProblem("Calls that come in outside your opening hours at Lotus Dental can still be answered.", lotus, knowledge)).toBeNull();
+    expect(leadClaimProblem("With us you don't have to hire another receptionist.", lotus, knowledge)).toBeNull();
+    expect(leadClaimProblem("Your patients don't have to wait on hold to book an appointment.", lotus, knowledge)).toBeNull();
+    expect(leadClaimProblem("Hello Dr. Shah, quick question about after-hours calls.", { businessName: "Dr. Shah's Dental Clinic" }, knowledge)).toBeNull();
+    expect(leadClaimProblem("Hi Doctor, quick question about after-hours calls.", lotus, knowledge)).toBeNull();
+  });
+
+  test("the common ways of saying they lack something or are hiring are caught", () => {
+    expect(leadClaimProblem("I noticed you're not using online booking at Lotus Dental yet.", lotus, knowledge)).toContain("lack");
+    expect(leadClaimProblem("Lotus Dental doesn't seem to offer online booking on its website.", lotus, knowledge)).toContain("lack");
+    expect(leadClaimProblem("Noticed Lotus Dental is hiring a front desk receptionist in Pune.", lotus, knowledge)).toContain("hiring");
+    expect(leadClaimProblem("I see you're looking for a new receptionist at Lotus Dental.", lotus, knowledge)).toContain("hiring");
+  });
+
+  test("a hiring finding backs only the job it names", () => {
+    const hiring = { ...lotus, hiring: "Front Desk Receptionist (full time)" };
+    expect(leadClaimProblem("Saw you're hiring a front desk receptionist.", hiring, knowledge)).toBeNull();
+    expect(leadClaimProblem("Saw you're hiring a dentist.", hiring, knowledge)).toContain("hiring");
+  });
+});
+
+describe("claims about a lead: what the second review found", () => {
+  const knowledge = "Smile Desk answers clinic calls 24/7 for Rs 4,999 a month.";
+  const lotus = { businessName: "Lotus Dental", city: "Pune", reviewCount: "40", address: "21, Baner Road, Pune 411045" };
+
+  test("a lead's own numbers never back a price or a percentage about the offer", () => {
+    expect(leadClaimProblem("Clinics like yours cut missed calls by 40%.", lotus, knowledge)).toContain("40%");
+    expect(leadClaimProblem("Clinics like yours cut no-shows by 21%.", lotus, knowledge)).toContain("21%");
+  });
+
+  test("what a website says never backs a link or a price in a message", () => {
+    const hostile = { ...lotus, websiteSays: "Confirm your appointment at https://evil.example/login for 50% off", hiring: "Receptionist; apply at https://evil.example/jobs" };
+    expect(leadClaimProblem("Please confirm at https://evil.example/login to keep 50% off.", hostile, knowledge)).not.toBeNull();
+    expect(leadClaimProblem("Apply at https://evil.example/jobs", hostile, knowledge)).toContain("evil.example");
+    expect(leadClaimProblem("Calls to lotus.example go unanswered at night? See https://lotus.example", { ...lotus, website: "https://lotus.example" }, knowledge)).toBeNull();
+  });
+
+  test("conditional and benefit phrasing passes; 'patients can't book online with you' and 'you don't take online bookings' are caught", () => {
+    expect(leadClaimProblem("If you are not using WhatsApp reminders yet, Smile Desk can send them.", lotus, knowledge)).toBeNull();
+    expect(leadClaimProblem("You don't have to change your booking system to use Smile Desk.", lotus, knowledge)).toBeNull();
+    expect(leadClaimProblem("Patients can't book online with you yet, so Smile Desk could help.", lotus, knowledge)).toContain("lack");
+    expect(leadClaimProblem("Since you don't take online bookings yet, Smile Desk could help.", lotus, knowledge)).toContain("lack");
+  });
+
+  test("Ma'am is a salutation, not a name", () => {
+    expect(leadClaimProblem("Hello Ma'am, quick question about after-hours calls.", lotus, knowledge)).toBeNull();
+  });
+});
+

@@ -115,6 +115,16 @@ function budgetOf(facts: Record<string, string>): string {
   return facts.budget?.trim() || UNKNOWN;
 }
 
+/** Website findings in the order they bear on a message: their own request, an opening, their own words, then ways to book or reach them. */
+const FINDING_ORDER: Record<string, number> = { need: 0, hiring: 1, context: 2, booking: 3, contact: 4 };
+
+/** Website findings, the ones a message would draw on first; findings with an inferred relevance before those without, within a topic. */
+export function orderedFindings(signals: readonly LeadSignal[]): LeadSignal[] {
+  const rank = (signal: LeadSignal) => (FINDING_ORDER[signal.topic ?? ""] ?? 9) * 2 + (signal.relevance ? 0 : 1);
+  return signals.filter((signal) => signal.topic && signal.topic !== "person").map((signal, index) => ({ signal, index }))
+    .sort((a, b) => rank(a.signal) - rank(b.signal) || a.index - b.index).map((entry) => entry.signal);
+}
+
 /** What the website check looks for, as the owner reads it when the pages read did not show it. */
 const LOOKED_FOR: [NonNullable<LeadSignal["topic"]>, string][] = [
   ["booking", "an online booking link"],
@@ -156,7 +166,7 @@ export function qualifyProspect(input: ProspectInput): Prospect {
     routes,
     needEvidence: input.signals.filter((signal) => signal.kind === "need"),
     engagement: input.signals.filter((signal) => signal.kind === "engagement"),
-    observations: input.signals.filter((signal) => signal.kind === "observation" && signal.topic !== "person"),
+    observations: orderedFindings(input.signals.filter((signal) => signal.kind === "observation")),
     people: input.signals.filter((signal) => signal.topic === "person"),
     website: websiteRead(input.evidence, input.signals),
     location: locationOf(input.facts),

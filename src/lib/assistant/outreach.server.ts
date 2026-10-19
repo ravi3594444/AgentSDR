@@ -25,6 +25,7 @@ import { instagramUsername } from "@/lib/instagram/parse";
 import { featureEnabled } from "@/lib/features/flags.server";
 import { requeueRunAutopilot } from "./autopilotRun.server";
 import { eligibleAudienceMembers, memberInsights, summarizeAudience } from "./audiences.server";
+import { orderedFindings } from "./qualification";
 import { countReasons } from "./audiences";
 import { availableTokens, leadTextKey, MAX_PERSONAL, perLeadSteps, personalizationKey, settleGroups, templateTokens, type LeadApproach } from "./messages";
 import { displayBusinessName, pitchProblems } from "./pitch";
@@ -397,8 +398,7 @@ export async function prepareOutreach(input: PrepareInput): Promise<Proposal> {
   for (const sample of samples) {
     const signals = insights.get(memberOf.get(sample.personId) ?? "")?.signals ?? [];
     sample.why = leadPlans[sample.personId]?.reason || null;
-    sample.observed = signals
-      .filter((signal) => signal.topic && signal.topic !== "person")
+    sample.observed = orderedFindings(signals)
       .slice(0, 3)
       .map((signal) => ({ text: signal.text, sourceUrl: signal.sourceUrl, relevance: signal.relevance ?? null, need: signal.kind === "need" }));
   }

@@ -24,7 +24,7 @@ import { searchTiles } from "./geocode";
 import { cleanBusinessName, mapsSearchPhrase, parseMapsCsvDetailed, rankEmails, type MapsPlace } from "./mapsResults";
 import { createMapsJob, downloadMapsResults, getMapsJobStatus, mapsScraperUrl, MapsScraperError } from "./mapsScraper.server";
 import { collectWebsiteContacts, type PageFetchOptions } from "./websiteContacts.server";
-import { offerFocus, websiteNotes, type OfferFocus, type WebsiteProfile } from "./websiteProfile";
+import { offerFocus, recipientFields, websiteNotes, type OfferFocus, type WebsiteProfile } from "./websiteProfile";
 import { getBusinessProfile } from "@/lib/assistant/profile.server";
 import { instagramResearchHold } from "./instagramEligibility";
 
@@ -1045,10 +1045,15 @@ async function savePlace(place: EnrichedPlace, payload: DiscoveryPayload): Promi
   const person = await withLeadTransaction(async (tx) => {
     if (place.origin) return upsertInstagramProspect(tx, place.origin.username, { email, phone, fullName: place.displayName, raw, source: personSource, company: { name: place.displayName, domain: place.domain, linkedinUrl: place.companyLinkedin } });
     if (email) {
+      // The website's person names the row only when the address is theirs, and never over a name or title it already has.
+      const [existing] = named.recipient
+        ? await tx.select({ fullName: people.fullName, firstName: people.firstName, lastName: people.lastName, title: people.title }).from(people)
+          .where(and(inOrg(people), sql`lower(${people.email}) = ${email.toLowerCase()}`)).limit(1)
+        : [];
       return upsertPerson(tx, {
         email,
         phone,
-        ...(named.recipient ? { fullName: named.recipient.name, title: named.recipient.role } : {}),
+        ...recipientFields(named.recipient, existing ?? null),
         company: { name: place.displayName, domain: place.domain, linkedinUrl: place.companyLinkedin },
         raw,
         source: personSource,

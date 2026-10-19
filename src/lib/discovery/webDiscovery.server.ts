@@ -47,7 +47,7 @@ import { tavilyConnection, tavilySearchesToday } from "@/lib/tavily/tavily.serve
 import { TinyfishWaitError } from "@/lib/tinyfish/tinyfish.server";
 import { searchWeb, webSearchAvailability, WebSearchUnavailableError, type WebSearchProvider } from "./webSearch.server";
 import { collectWebsiteContacts, fetchPublicPage } from "./websiteContacts.server";
-import { offerFocus, websiteNotes, type OfferFocus, type WebsiteProfile } from "./websiteProfile";
+import { offerFocus, recipientFields, websiteNotes, type OfferFocus, type WebsiteProfile } from "./websiteProfile";
 import { instagramCommenterHold, instagramResearchHold } from "./instagramEligibility";
 import { mentionsPlace } from "@/lib/apify/mapping";
 
@@ -954,7 +954,8 @@ async function saveLead(lead: FoundLead, payload: Payload, context: { job: Assis
     const company = lead.kind === "directory_contact" ? null : { name: lead.name, domain: lead.domain, linkedinUrl: lead.companyLinkedin };
     const person = await withLeadTransaction(async (tx) => {
       if (username) return upsertInstagramProspect(tx, username, { email, phone, company, raw, source: PERSON_SOURCE });
-      if (email) return upsertPerson(tx, { email, phone, company, raw, source: PERSON_SOURCE, ...(notes.recipient ? { fullName: notes.recipient.name, title: notes.recipient.role } : {}) });
+      // A new person (an existing one was matched above): named after the website's person only when the address is theirs.
+      if (email) return upsertPerson(tx, { email, phone, company, raw, source: PERSON_SOURCE, ...recipientFields(notes.recipient, null) });
       const created = await findOrCreateContactPerson(tx, {
         fullName: null,
         phone: phone!,

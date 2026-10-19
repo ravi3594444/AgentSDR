@@ -1,4 +1,6 @@
 import type { BusinessProfile, LeadSignal } from "@/lib/assistant/schema";
+import type { CanonicalPersonInput } from "@/lib/leads/records";
+import { cleanString } from "@/lib/grid/sanitize";
 import { cleanEmail, cleanLinkedinUrl, contactPageLinks, hrefs, MAX_TEXT_SCAN, visibleText, withoutElements } from "./contacts";
 
 /**
@@ -106,21 +108,35 @@ function matching(text: string, terms: readonly string[]): string[] {
   return terms.filter((term) => present.has(term));
 }
 
+/** The first `length` characters, never ending in half of a character (a lone surrogate jsonb refuses). */
+function cut(text: string, length: number): string {
+  const out = text.slice(0, length);
+  return /[\uD800-\uDBFF]$/.test(out) ? out.slice(0, -1) : out;
+}
+
 function clip(text: string, limit = 200): string {
   if (text.length <= limit) return text;
-  const cut = text.slice(0, limit);
-  const space = cut.lastIndexOf(" ");
-  return `${(space > limit / 2 ? cut.slice(0, space) : cut).replace(/[\s,;:–—-]+$/, "")}…`;
+  const head = cut(text, limit);
+  const space = head.lastIndexOf(" ");
+  return `${(space > limit / 2 ? head.slice(0, space) : head).replace(/[\s,;:–—-]+$/, "")}…`;
 }
+
+/** A link or an address in a line: such a line is a contact detail, never a finding or a role a writer may repeat. */
+const LINKISH = /https?:\/\/|\bwww\.|[\w.+-]+@[\w-]+\.[\w.]+/i;
 
 // ── Pages as lines ──────────────────────────────────────────────────────────
 
 type Anchor = { href: string; text: string };
-export type PageLine = { text: string; anchors: Anchor[] };
+/** One line of a page: its text, its inline pieces (a card's name and role in two spans), and its links. */
+export type PageLine = { text: string; parts: string[]; anchors: Anchor[] };
 type PageScan = { lines: PageLine[]; description: string | null; contactForm: boolean };
 
 /** Tags that end a line of text: a card's name and its role are separate lines. */
 const BLOCK_TAGS = new Set(["p", "div", "li", "ul", "ol", "h1", "h2", "h3", "h4", "h5", "h6", "br", "hr", "tr", "td", "th", "table", "section", "article", "header", "footer", "nav", "aside", "main", "dt", "dd", "dl", "blockquote", "figcaption", "figure", "form", "label", "button", "address", "option", "select"]);
+/** Inline elements whose edges separate a line's pieces: <span>Asha Kulkarni</span> <span>Founder</span>. */
+const PIECE_TAGS = new Set(["span", "small", "strong", "b", "em", "i", "cite", "sup", "sub", "font", "mark", "time", "a"]);
+const PIECE = "\u0001";
+const MAX_PARTS = 20;
 const TAG_NAME = /^(\/?)([a-zA-Z][a-zA-Z0-9]*)/;
 const HREF_ATTRIBUTE = /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i;
 const CONTENT_ATTRIBUTE = /\bcontent\s*=\s*(?:"([^"]*)"|'([^']*)')/i;
@@ -128,8 +144,10 @@ const DESCRIPTION_META = /\b(?:name|property)\s*=\s*["']?(?:og:)?description["'\
 
 function lineText(raw: string): string {
   // Tags are already gone: entities are decoded only where there are some.
-  const text = (/[&<]/.test(raw) ? visibleText(raw) : raw.replace(/\s+/g, " ")).trim();
-  return text.length > MAX_LINE ? text.slice(0, MAX_LINE) : text;
+  const plain = raw.includes(PIECE) ? raw.replaceAll(PIECE, " ") : raw;
+  // An entity can decode to a NUL or a lone surrogate, which jsonb refuses: such text would fail every save of the job.
+  const text = cleanString((/[&<]/.test(plain) ? visibleText(plain) : plain.replace(/\s+/g, " ")).trim());
+  return text.length > MAX_LINE ? cut(text, MAX_LINE) : text;
 }
 
 /**
@@ -165,7 +183,8 @@ function scanPage(html: string): PageScan {
       return;
     }
     const value = lineText(text);
-    if (value || anchors.length) lines.push({ text: value, anchors });
+    const parts = text.includes(PIECE) ? text.split(PIECE, MAX_PARTS).map(lineText).filter(Boolean) : value ? [value] : [];
+    if (value || anchors.length) lines.push({ text: value, parts, anchors });
     scanned += text.length;
     text = "";
     anchors = [];
@@ -195,6 +214,7 @@ function scanPage(html: string): PageScan {
     const name = parsed[2]!.toLowerCase();
     if (name === "a") {
       closeAnchor();
+      text += PIECE;
       const href = closing ? null : HREF_ATTRIBUTE.exec(tag);
       if (href) open = { href: href[1] ?? href[2] ?? href[3] ?? "", from: text.length };
       continue;
@@ -202,15 +222,16 @@ function scanPage(html: string): PageScan {
     if (name === "meta") {
       if (!description && DESCRIPTION_META.test(tag)) {
         const content = CONTENT_ATTRIBUTE.exec(tag);
-        const value = content ? visibleText(content[1] ?? content[2] ?? "").trim() : "";
-        if (value) description = clip(value);
+        const value = content ? cleanString(visibleText(content[1] ?? content[2] ?? "").trim()) : "";
+        if (value && !LINKISH.test(value)) description = clip(value);
       }
       continue;
     }
+    // A form to write a message in; a newsletter or login form has no text area.
     if (name === "form") inForm = !closing;
-    else if (inForm && !closing && (name === "textarea" || (name === "input" && /\btype\s*=\s*["']?email\b/i.test(tag)))) contactForm = true;
+    else if (inForm && !closing && name === "textarea") contactForm = true;
     if (BLOCK_TAGS.has(name)) flush();
-    else text += " ";
+    else text += PIECE_TAGS.has(name) ? PIECE : " ";
   }
   flush();
   return { lines, description, contactForm };
@@ -260,12 +281,13 @@ function sameSiteLinks(html: string, pageUrl: string, path: RegExp): string[] {
 /**
  * The same-site pages to read after the home page, at most `limit` (the
  * reader's existing budget): one contact page, one about or team page and
- * one careers page when the home page links them, then the contact, about
- * and imprint pages it always read.
+ * (unless `careers` is false) one careers page when the home page links
+ * them, then the contact, about and imprint pages it always read.
  */
-export function profilePageLinks(html: string, pageUrl: string, limit = 3): string[] {
+export function profilePageLinks(html: string, pageUrl: string, limit = 3, options: { careers?: boolean } = {}): string[] {
   const out: string[] = [];
-  for (const path of [CONTACT_PATH, PEOPLE_PATH, CAREERS_PATH]) {
+  // A careers page is read only when hiring could matter to the offer (an organization with no saved offer has none to match).
+  for (const path of options.careers === false ? [CONTACT_PATH, PEOPLE_PATH] : [CONTACT_PATH, PEOPLE_PATH, CAREERS_PATH]) {
     const link = sameSiteLinks(html, pageUrl, path).find((url) => !out.includes(url));
     if (link) out.push(link);
   }
@@ -310,7 +332,17 @@ const CHAT_LABEL: Record<string, string> = {
   "cdn.livechatinc.com": "LiveChat",
 };
 const HIRING_CUE = /\b(?:we(?:['’]re| are) hiring|now hiring|hiring (?:an?|for)\b|join our team|(?:we(?:['’]re| are)) looking for (?:an?|new)\b|open (?:positions?|roles?)|vacanc(?:y|ies)|job openings?|current openings?)/i;
-const NEED_CUE = /\b(?:request for (?:proposals?|quotations?|quotes?)|rfp|rfq|tenders? (?:for|notice|invited)|e-?tender|(?:we are|we['’]re|currently) (?:seeking|looking for|inviting) (?:an? |new |qualified |reliable )?(?:vendors?|suppliers?|agenc(?:y|ies)|partners?|contractors?|service providers?|consultants?|bids?|quotations?|proposals?)|call for (?:suppliers|vendors|proposals|tenders)|invit(?:e|es|ing) (?:bids|quotations|proposals|tenders))\b/i;
+/**
+ * The business itself asking for suppliers: "we are seeking a vendor", "we
+ * invite proposals", "tenders invited". Never a bare "request a quote", which
+ * is how a supplier invites its own customers.
+ */
+const NEED_CUE = /\b(?:(?:we|we are|we['’]re|we are currently|we['’]re currently) (?:seeking|looking for|inviting|invite) (?:an? |new |qualified |reliable |external )?(?:vendors?|suppliers?|agenc(?:y|ies)|contractors?|service providers?|consultants?|bids?|quotations?|quotes?|proposals?|tenders?)|call for (?:suppliers|vendors|proposals|tenders)|tenders? (?:are )?invited|(?:issued|issuing|published|publishing) (?:an? |our )?(?:rfp|rfq|request for (?:proposals?|quotations?)))\b/i;
+/** A question to the site's visitors, or its own reseller or affiliate programme: the site selling, not asking. */
+const NOT_A_REQUEST = /\?|\b(?:resell|resellers?|affiliates?|franchise|referrals?|distributors?)\b/i;
+/** Words that make a line a job: a hiring line or a careers-page listing must name one (messages.ts checks claims with them too). */
+export const JOB_TITLES = String.raw`(?:receptionists?|assistants?|managers?|executives?|coordinators?|developers?|engineers?|nurses?|hygienists?|technicians?|associates?|specialists?|consultants?|officers?|interns?|internship|representatives?|agents?|clerks?|administrators?|accountants?|designers?|writers?|analysts?|supervisors?|operators?|drivers?|cooks?|chefs?|cleaners?|therapists?|physiotherapists?|dentists?|doctors?|teachers?|tutors?|trainers?|cashiers?|telecallers?|callers?|attendants?|helpers?|apprentices?|marketers?|salesperson|sales (?:executive|associate|representative|manager)|front desk|front office|back office)`;
+const JOB_WORDS = new RegExp(`\\b${JOB_TITLES}\\b`, "i");
 /** A line that is a contact detail or a link, not a job or a sentence about the business. */
 const NOT_PROSE = /\d{4,}|@|https?:|^(?:call|email|phone|tel|contact|address|follow)\b/i;
 const QUOTED = /^["“”‘’'—–-]/;
@@ -351,7 +383,9 @@ function pageObservations(scan: PageScan, html: string, pageUrl: string, focus: 
       if (!/^https?:$/.test(url.protocol)) continue;
       const host = url.hostname.toLowerCase();
       const bare = host.replace(/^www\./, "");
-      const booking = BOOKING_HOSTS.find(([pattern]) => pattern.test(host));
+      // A page of the business on a booking service, not the service's own home page.
+      const specific = url.pathname.replace(/\/+$/, "") !== "" || !/^(?:(?:www|book|meetings|app)\.)?[^.]+\.[^.]+$/.test(host);
+      const booking = specific ? BOOKING_HOSTS.find(([pattern]) => pattern.test(host)) : undefined;
       if (booking) {
         out.push({ topic: "booking", text: `Online booking link (${booking[1]})`, sourceUrl: pageUrl, uncertainty: "a booking link on the page; the booking page itself was not opened", relevance: null });
       } else if (bare === "wa.me" || (/^(?:api\.|web\.)?whatsapp\.com$/.test(bare) && /\/send\b/.test(url.pathname))) {
@@ -376,16 +410,16 @@ function pageObservations(scan: PageScan, html: string, pageUrl: string, focus: 
     if (!text) return;
     const cue = HIRING_CUE.test(text);
     if (cue) lastHiringCue = index;
-    if (QUOTED.test(text)) return;
+    if (QUOTED.test(text) || LINKISH.test(text)) return;
     const offerWords = matching(text, focus.offer);
     if (!offerWords.length) return;
-    if (NEED_CUE.test(text)) {
+    if (NEED_CUE.test(text) && !NOT_A_REQUEST.test(text)) {
       out.push({ topic: "need", text: clip(text, 240), sourceUrl: pageUrl, uncertainty: "stated on their website, undated; it may already be closed", relevance: relevanceText(offerWords) });
       return;
     }
-    // A job: a line that says so, or on a careers page a short line soon after its "we're hiring".
+    // A job: a line that says so, or on a careers page a short line soon after its "we're hiring"; either names one.
     const listedJob = careersPage && index - lastHiringCue <= 12 && text.length <= 100 && !NOT_PROSE.test(text);
-    if ((cue || listedJob) && !NOT_PROSE.test(text.slice(0, 20))) {
+    if ((cue || listedJob) && JOB_WORDS.test(text) && !NOT_PROSE.test(text.slice(0, 20))) {
       out.push({
         topic: "hiring",
         text: clip(text),
@@ -407,25 +441,39 @@ function pageObservations(scan: PageScan, html: string, pageUrl: string, focus: 
 
 const HONORIFIC = /^(?:dr|mr|mrs|ms|miss|prof|er|adv)\.?$/i;
 const NAME_TOKEN = /^(?:[A-Z][a-zA-Z'’-]{1,24}|[A-Z]\.)$/;
-/** Words that are never part of a person's name on a business's page. */
+/** Words that are never part of a person's name on a business's page: menus, headings, job titles. */
 const NOT_NAME = new Set([
-  "about", "academy", "all", "and", "appointment", "appointments", "at", "book", "by", "call", "care", "center", "centre", "ceo", "chat", "clinic",
-  "co", "contact", "copyright", "dental", "dentist", "director", "email", "for", "founder", "group", "home", "hospital", "in", "inc", "llc", "llp",
-  "ltd", "manager", "meet", "more", "now", "of", "online", "our", "owner", "partner", "policy", "privacy", "private", "profile", "pvt", "read", "reserved",
-  "rights", "salon", "school", "services", "solutions", "studio", "team", "technologies", "terms", "the", "us", "view", "welcome", "with", "your",
+  "about", "academy", "account", "address", "all", "and", "appointment", "appointments", "assistant", "associate", "at", "award", "awards", "blog",
+  "board", "book", "by", "call", "care", "career", "careers", "center", "centre", "ceo", "chairman", "chat", "clients", "clinic", "co", "college",
+  "company", "conditions", "consultant", "contact", "cookie", "cookies", "coordinator", "copyright", "dental", "dentist", "designer", "desk",
+  "developer", "director", "directions", "doctor", "doctors", "email", "engineer", "events", "executive", "faq", "for", "founder", "founders", "front",
+  "full", "gallery", "get", "group", "head", "history", "home", "hospital", "hours", "hygienist", "in", "inc", "institute", "intern", "jobs", "junior",
+  "lead", "leadership", "learn", "llc", "llp", "location", "locations", "login", "ltd", "management", "manager", "map", "marketing", "medical", "meet",
+  "member", "members", "menu", "message", "mission", "more", "new", "news", "now", "nurse", "of", "office", "officer", "online", "opening", "openings",
+  "our", "owner", "part", "partner", "partners", "people", "phone", "policy", "portfolio", "president", "pricing", "principal", "privacy", "private",
+  "products", "profile", "pvt", "quote", "read", "receptionist", "register", "request", "reserved", "reviews", "rights", "salon", "sales", "school",
+  "senior", "services", "share", "shop", "sign", "sitemap", "solutions", "spa", "specialist", "staff", "statement", "store", "studio", "subscribe",
+  "support", "team", "technician", "technologies", "terms", "testimonials", "the", "therapist", "time", "today", "trust", "university", "us", "values",
+  "view", "vision", "welcome", "with", "your",
 ]);
-const ROLE = String.raw`(?:co-?founder|founder|owner|proprietor|ceo|chief executive(?: officer)?|chief [a-z]+ officer|cto|cfo|coo|cmo|managing director|medical director|clinical director|creative director|director|managing partner|senior partner|founding partner|partner|principal|president|vice president|head of [a-z&]+(?: [a-z&]+){0,2}|(?:practice|office|clinic|operations|general|marketing|sales|business|front desk|hospital|branch|store|studio|centre|center|restaurant|hotel|salon) manager)`;
-const ROLE_START = new RegExp(`^(?:the |our )?${ROLE}\\b`, "i");
-const NOT_A_ROLE = /\b(?:with us|join|contact|call|book|learn|read|view|apply)\b|\s(?:at|@)\s/i;
+const ROLE = String.raw`(?:co-?founder|founder|owner|proprietor|ceo|chief executive(?: officer)?|chief [a-z]+ officer|cto|cfo|coo|cmo|managing director|medical director|clinical director|creative director|director|managing partner|senior partner|founding partner|partner|principal|president|vice president|head of (?!at\b)[a-z&]+(?: (?!at\b|of\b)[a-z&]+){0,2}|(?:practice|office|clinic|operations|general|marketing|sales|business|front desk|hospital|branch|store|studio|centre|center|restaurant|hotel|salon) manager)`;
+/** A role at the start of a text, ending there as a word: never "Director's Message" or "Partnership". */
+const ROLE_MATCH = new RegExp(`^(?:the |our )?${ROLE}(?![\\w'’])`, "i");
+/** Roles that make a card on a page other than a team or about page worth reading: the business's owners. */
+const OWNER_ROLES = /^(?:co-?founder|founder|owner|proprietor|ceo|chief executive|managing director|director|principal|president|managing partner|founding partner)\b/i;
+/** What may follow a role after a comma: a profession ("Founder, Orthodontist"), never a company ("CEO, Acme Corp"). */
+const PROFESSION = /^(?:lead |chief |senior |consultant |head )?(?:dentist|orthodontist|endodontist|periodontist|prosthodontist|doctor|physician|surgeon|consultant|lawyer|attorney|advocate|architect|engineer|designer|therapist|physiotherapist|coach|trainer|chef|pharmacist|veterinarian|accountant|chartered accountant)s?\b/i;
+const NOT_A_ROLE = /\b(?:with us|join|contact|call|book|learn|read|view|apply)\b|\s@\s|https?:\/\/|\bwww\.|@/i;
 const SPLIT_NAME_ROLE = /^(.{3,60}?)\s*(?:,|\s[-–—|]\s|\()\s*(.{3,80}?)\)?$/;
 const SPLIT_ROLE_NAME = /^(.{3,40}?)\s*(?::|\s[-–—|]\s)\s*(.{3,60})$/;
 const FOUNDED_BY = /\b([Ff]ounded|[Ss]tarted|[Ee]stablished|[Oo]wned)(?: in \d{4})? by ((?:(?:Dr|Mr|Mrs|Ms|Prof)\.?\s+)?[A-Z][a-zA-Z'’-]+(?:\s+[A-Z][a-zA-Z'’-]+){0,3})/;
-const IS_ROLE = /^((?:(?:Dr|Mr|Mrs|Ms|Prof)\.?\s+)?[A-Z][a-zA-Z'’-]+(?:\s+[A-Z][a-zA-Z'’-]+){0,3}),? (?:is|was) (?:the |our |a )?(co-?founder|founder|owner|proprietor|managing director|director|ceo|principal|president|managing partner)\b/;
+const IS_ROLE = /^((?:(?:Dr|Mr|Mrs|Ms|Prof)\.?\s+)?[A-Z][a-zA-Z'’-]+(?:\s+[A-Z][a-zA-Z'’-]+){0,3}),? (?:is|was) (?:the |our |a )?(co-?founder|founder|owner|proprietor|managing director|director|ceo|principal|president|managing partner)\b(.{0,120})/;
 /** "BDS, MDS", "MBA": qualifications between a name and its role. */
 const DEGREES = /^[A-Z][A-Za-z.()]{1,6}(?:\s*[,&/]\s*[A-Z][A-Za-z.()]{1,6}){0,4}$/;
 /** Local parts of a general inbox: never one person's address. */
 const GENERIC_LOCAL = /^(?:info|contact|contacts|contactus|hello|hi|office|admin|reception|frontdesk|front\.desk|enquiry|enquiries|inquiry|inquiries|support|help|sales|appointment|appointments|booking|bookings|team|mail|care|customercare|service|services|clinic|accounts|billing|hr|careers|jobs|marketing|media|press|general|connect|ask|query|queries|feedback|orders?|admissions?)$/i;
 const EMAIL_IN_LINE = /(?<![A-Z0-9._%+-])[A-Z0-9._%+-]{1,64}@[A-Z0-9.-]{1,253}\.[A-Z]{2,24}/gi;
+const THIS_BUSINESS = /^(?:this|the|our) (?:clinic|practice|company|business|firm|studio|salon|agency|centre|center|hospital|restaurant|store|shop|school|academy|team)\b/i;
 
 /** A person's name as written ("Dr. Asha Kulkarni", "ROHAN DESHPANDE" → "Rohan Deshpande"), or null. */
 function personName(raw: string): string | null {
@@ -440,85 +488,184 @@ function personName(raw: string): string | null {
   return [title, ...words].filter(Boolean).join(" ");
 }
 
-/** A role as written, when the whole text is one ("Founder & Lead Dentist"), or null. */
-function roleOf(raw: string): string | null {
+/** Whether a company a page names ("of Lotus Yoga Studio") is the business whose site it is, by its domain. */
+function sameBusiness(phrase: string, pageUrl: string): boolean {
+  if (THIS_BUSINESS.test(phrase.trim())) return true;
+  let host: string;
+  try {
+    host = new URL(pageUrl).hostname.replace(/^www\./, "");
+  } catch {
+    return false;
+  }
+  const label = host.split(".")[0]!.replace(/[^a-z0-9]/g, "");
+  const letters = phrase.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const first = phrase.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)[0] ?? "";
+  return label.length >= 3 && (letters.includes(label) || (first.length >= 4 && label.includes(first)));
+}
+
+/**
+ * A role as written when the whole text is one ("Founder & Lead Dentist",
+ * "Our Founder" → "Founder"), or null. A role at another company ("CEO, Acme
+ * Corp", "Owner of Bloom Florists") is not this business's.
+ */
+function roleOf(raw: string, pageUrl: string): string | null {
   const text = raw.trim().replace(/[.;:,]+$/, "");
-  if (!text || text.length > 80 || !ROLE_START.test(text) || NOT_A_ROLE.test(text)) return null;
-  return clip(text, 60);
+  if (!text || text.length > 80 || NOT_A_ROLE.test(text)) return null;
+  const match = ROLE_MATCH.exec(text);
+  if (!match) return null;
+  const rest = text.slice(match[0].length);
+  if (rest) {
+    const joined = /^\s*(?:&|and|\/|\|)\s*(.{2,40})$/.exec(rest);
+    const listed = /^\s*,\s*(.{2,40})$/.exec(rest);
+    const at = /^\s+(?:of|at)\s+(.{2,60})$/.exec(rest);
+    const fits = joined ? !/,|\b(?:of|at)\s+[A-Z]/.test(joined[1]!) : listed ? ROLE_MATCH.test(listed[1]!) || PROFESSION.test(listed[1]!) : at ? sameBusiness(at[1]!, pageUrl) : false;
+    if (!fits) return null;
+  }
+  const role = text.replace(/^(?:the|our)\s+/i, "");
+  return clip(`${role[0]!.toUpperCase()}${role.slice(1)}`, 60);
 }
 
 function nameKey(name: string): string {
   return name.toLowerCase().replace(/^(?:dr|mr|mrs|ms|miss|prof|er|adv)\.?\s+/, "");
 }
 
-/** Whether an address is this person's own: not a general inbox, and it carries their first or last name. */
+/** A name's first and last name, without an honorific or initials ("Dr. Asha Kulkarni" → asha, kulkarni). */
+function nameParts(name: string): { first: string; last: string } | null {
+  const words = nameKey(name).split(" ").map((word) => word.replace(/[^a-z]/g, "")).filter((word) => word.length >= 2);
+  return words.length ? { first: words[0]!, last: words.at(-1)! } : null;
+}
+
+/**
+ * Whether an address is this person's own: not a general inbox, and built
+ * from their name (tom@, tom.reid@, treid@, tomreid@, reid.t@), not merely
+ * containing part of it (customerservice@ is not Tom's, tomas@ is not Tom's).
+ */
 function ownAddress(email: string, name: string): boolean {
   const local = email.split("@")[0]!.toLowerCase();
   if (GENERIC_LOCAL.test(local)) return false;
-  const parts = nameKey(name).split(" ").map((part) => part.replace(/[^a-z]/g, "")).filter((part) => part.length >= 3);
-  return parts.some((part) => local.includes(part));
+  const parts = nameParts(name);
+  if (!parts) return false;
+  const { first, last } = parts;
+  const tokens = local.split(/[^a-z]+/).filter(Boolean);
+  if (tokens.some((token) => token === first || token === last)) return true;
+  const joined = tokens.join("");
+  return [`${first}${last}`, `${last}${first}`, `${first[0]}${last}`, `${first}${last[0]}`, `${last}${first[0]}`].includes(joined);
 }
 
 type Found = { name: string; role: string; line: number; roleLine: number };
+type PageKind = { people: boolean; pageUrl: string };
 
-/** Who a line names with a role: "Name, Role", "Role: Name", "founded by Name", "Name is the founder", or a name over its role. */
-function personAt(lines: PageLine[], index: number): Found | null {
-  const text = lines[index]!.text;
+/**
+ * Who a line names with a role: "Name, Role", "Role: Name", "founded by
+ * Name", "Name is the founder", a name and a role side by side in one line,
+ * or a card's name with its role on the line below or above it. On a page
+ * that is not a team, about or contact page only an owner's card counts, and
+ * never one right after a paragraph (a testimonial's author).
+ */
+function personAt(lines: PageLine[], index: number, page: PageKind, taken: ReadonlySet<number>): Found | null {
+  const line = lines[index]!;
+  const text = line.text;
   if (!text || QUOTED.test(text) || text.length > MAX_LINE) return null;
   // A testimonial's author: the line after a quotation.
   if (/["”’]\s*$/.test(lines[index - 1]?.text ?? "")) return null;
+  const found = (name: string, role: string, roleLine = index): Found => ({ name, role, line: index, roleLine });
   const founded = FOUNDED_BY.exec(text);
   if (founded) {
     const name = personName(founded[2]!);
-    if (name) return { name, role: founded[1]!.toLowerCase() === "owned" ? "Owner" : "Founder", line: index, roleLine: index };
+    if (name) return found(name, founded[1]!.toLowerCase() === "owned" ? "Owner" : "Founder");
   }
   const is = IS_ROLE.exec(text);
   if (is) {
     const name = personName(is[1]!);
-    if (name) return { name, role: roleOf(is[2]!) ?? is[2]!, line: index, roleLine: index };
+    // "… is the founder of <company>": only of the business whose site this is.
+    const of = /^\s+(?:of|at)\s+([^.,;]{2,80})/.exec(is[3] ?? "");
+    if (name && (!of || sameBusiness(of[1]!, page.pageUrl))) return found(name, roleOf(is[2]!, page.pageUrl) ?? is[2]!);
   }
   if (text.length > 140) return null;
+  for (let piece = 0; piece + 1 < line.parts.length; piece += 1) {
+    const [first, second] = [line.parts[piece]!, line.parts[piece + 1]!];
+    const nameFirst = personName(first);
+    const roleSecond = nameFirst ? roleOf(second, page.pageUrl) : null;
+    if (nameFirst && roleSecond && (page.people || OWNER_ROLES.test(roleSecond))) return found(nameFirst, roleSecond);
+    const roleFirst = roleOf(first, page.pageUrl);
+    const nameSecond = roleFirst ? personName(second) : null;
+    if (nameSecond && roleFirst && (page.people || OWNER_ROLES.test(roleFirst))) return found(nameSecond, roleFirst);
+  }
   const nameRole = SPLIT_NAME_ROLE.exec(text);
   if (nameRole) {
     const name = personName(nameRole[1]!);
-    const role = name ? roleOf(nameRole[2]!) : null;
-    if (name && role) return { name, role, line: index, roleLine: index };
+    const role = name ? roleOf(nameRole[2]!, page.pageUrl) : null;
+    if (name && role) return found(name, role);
   }
   const roleName = SPLIT_ROLE_NAME.exec(text);
   if (roleName) {
-    const role = roleOf(roleName[1]!);
+    const role = roleOf(roleName[1]!, page.pageUrl);
     const name = role ? personName(roleName[2]!) : null;
-    if (name && role && role.length <= 40) return { name, role, line: index, roleLine: index };
+    if (name && role && role.length <= 40) return found(name, role);
   }
   const name = personName(text);
   if (!name) return null;
+  const roleAt = (at: number): string | null => {
+    const candidate = lines[at]?.text ?? "";
+    return at >= 0 && !taken.has(at) && candidate && candidate.length <= 60 ? roleOf(candidate, page.pageUrl) : null;
+  };
+  let below: { role: string; at: number } | null = null;
   for (let next = index + 1; next <= index + 2 && next < lines.length; next += 1) {
-    const candidate = lines[next]!.text;
-    if (!candidate) continue;
-    const role = candidate.length <= 60 ? roleOf(candidate) : null;
-    if (role) return { name, role, line: index, roleLine: next };
+    const role = roleAt(next);
+    if (role) {
+      below = { role, at: next };
+      break;
+    }
     // A qualification line may sit between the name and the role; anything else ends the card.
-    if (!DEGREES.test(candidate)) break;
+    if (!DEGREES.test(lines[next]!.text)) break;
   }
-  return null;
+  const aboveRole = roleAt(index - 1);
+  const above = aboveRole ? { role: aboveRole, at: index - 1 } : null;
+  // Roles above names ("Founder / Asha / Practice Manager / Rohan"): the role below is the next card's when a name follows it.
+  const pick = below && above ? (personName(lines[below.at + 1]?.text ?? "") ? above : below) : below ?? above;
+  if (!pick) return null;
+  if (!page.people) {
+    const before = lines[Math.min(index, pick.at) - 1]?.text ?? "";
+    if (!OWNER_ROLES.test(pick.role) || before.length > 80 || SENTENCE_END.test(before)) return null;
+  }
+  return found(name, pick.role, pick.at);
 }
 
 function peopleOf(lines: PageLine[], pageUrl: string): NamedPerson[] {
+  let path = "";
+  try {
+    path = new URL(pageUrl).pathname;
+  } catch {
+    return [];
+  }
+  // A careers page lists jobs, a testimonials page other people.
+  if (CAREERS_PATH.test(path) || /testimonial|review/i.test(path)) return [];
+  const page: PageKind = { people: PEOPLE_PATH.test(path) || CONTACT_PATH.test(path), pageUrl };
   const found: Found[] = [];
+  const taken = new Set<number>();
   for (let index = 0; index < lines.length && found.length < MAX_PEOPLE * 2; index += 1) {
-    const person = personAt(lines, index);
+    const person = personAt(lines, index, page, taken);
     if (!person) continue;
     found.push(person);
-    index = person.roleLine;
+    taken.add(person.roleLine);
+    index = Math.max(index, person.roleLine);
   }
   const out: NamedPerson[] = [];
   for (const [position, person] of found.entries()) {
     if (out.some((existing) => nameKey(existing.name) === nameKey(person.name))) continue;
-    // Their card: from the name to a few lines after the role, never into the next person's.
-    const end = Math.min(person.roleLine + 4, (found[position + 1]?.line ?? lines.length) - 1, lines.length - 1);
+    // Their card: from the name (or the role above it) to at most three lines after, ending where another name or role begins.
+    const next = found[position + 1];
+    const nextStart = next ? Math.min(next.line, next.roleLine) : lines.length;
+    const first = Math.min(person.line, person.roleLine);
+    let last = Math.max(person.line, person.roleLine);
+    for (let at = last + 1; at <= last + 3 && at < nextStart; at += 1) {
+      const text = lines[at]!.text;
+      if (text && (personName(text) || (text.length <= 60 && roleOf(text, pageUrl)))) break;
+      last = at;
+    }
     let email: string | null = null;
     let linkedin: string | null = null;
-    for (let index = person.line; index <= end; index += 1) {
+    for (let index = first; index <= last; index += 1) {
       const line = lines[index]!;
       const addresses = [
         ...line.anchors.filter((anchor) => /^mailto:/i.test(anchor.href)).map((anchor) => cleanEmail(anchor.href)),
@@ -538,7 +685,6 @@ function peopleOf(lines: PageLine[], pageUrl: string): NamedPerson[] {
 
 /** The people one page names with a role, each with only the contacts in their own card. */
 export function namedPeople(html: string, pageUrl: string): NamedPerson[] {
-  if (/testimonial|review/i.test(pageUrl)) return [];
   return peopleOf(scanPage(html).lines, pageUrl);
 }
 
@@ -562,7 +708,6 @@ export function readWebsite(pages: readonly { url: string; html: string }[], foc
       observations.push(item);
       count[item.topic] += 1;
     }
-    if (/testimonial|review/i.test(page.url)) continue;
     for (const person of peopleOf(scan.lines, page.url)) {
       if (people.length >= MAX_PEOPLE) break;
       const existing = people.find((item) => nameKey(item.name) === nameKey(person.name));
@@ -577,6 +722,29 @@ export function readWebsite(pages: readonly { url: string; html: string }[], foc
   return { checkedAt, pagesRead: pages.map((page) => page.url), observations, people };
 }
 
+/**
+ * The name and title a lead's Person row takes from the person its website
+ * names, when the lead's address is theirs: first and last name without the
+ * honorific (a greeting reads "Asha", never "Dr."), and only what the row
+ * does not have yet, so a contact the organization already named keeps its
+ * own name and title.
+ */
+export function recipientFields(
+  recipient: NamedPerson | null,
+  existing: { fullName: string | null; firstName: string | null; lastName: string | null; title: string | null } | null,
+): Pick<CanonicalPersonInput, "fullName" | "firstName" | "lastName" | "title"> {
+  if (!recipient) return {};
+  const out: Pick<CanonicalPersonInput, "fullName" | "firstName" | "lastName" | "title"> = {};
+  if (!existing?.fullName?.trim() && !existing?.firstName?.trim() && !existing?.lastName?.trim()) {
+    const words = recipient.name.split(" ").filter((word) => !HONORIFIC.test(word));
+    out.fullName = recipient.name;
+    out.firstName = words[0] ?? null;
+    out.lastName = words.length > 1 ? words.slice(1).join(" ") : null;
+  }
+  if (!existing?.title?.trim()) out.title = recipient.role;
+  return out;
+}
+
 export type WebsiteNotes = {
   /** For the lead's insights: observations, people, and an explicit request as a need. */
   signals: LeadSignal[];
@@ -587,6 +755,9 @@ export type WebsiteNotes = {
 };
 
 const SOURCE = "the business's website";
+
+/** The lead facts websiteNotes writes: what a site said, which never backs a link or a price in a message (messages.ts). */
+export const WEBSITE_FACT_KEYS = ["decisionMakers", "hiring", "booking", "contactOptions", "websiteSays", "websiteNeed"] as const;
 
 /**
  * A read website as a lead's signals and facts. `recipientEmail` is the

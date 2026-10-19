@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { namedPeople, offerFocus, pageLines, profilePageLinks, readWebsite, websiteNotes, type WebsiteProfile } from "./websiteProfile";
+import { namedPeople, offerFocus, pageLines, profilePageLinks, readWebsite, recipientFields, websiteNotes, type WebsiteProfile } from "./websiteProfile";
 
 const AT = "2026-10-19T08:00:00.000Z";
 const receptionist = offerFocus({
@@ -64,6 +64,11 @@ describe("profilePageLinks", () => {
   test("without a careers page the remaining slot is filled the way contact pages always were", () => {
     const html = `<a href="/kontakt">Kontakt</a><a href="/team">Team</a><a href="/impressum">Impressum</a><a href="https://other.example/contact">x</a>`;
     expect(profilePageLinks(html, "https://acme.de/", 3)).toEqual(["https://acme.de/kontakt", "https://acme.de/team", "https://acme.de/impressum"]);
+  });
+
+  test("with no saved offer to match hiring against, the careers page's slot goes to a contact or about page", () => {
+    const html = `<a href="/careers">Careers</a><a href="/contact">Contact</a><a href="/about">About</a><a href="/team">Team</a>`;
+    expect(profilePageLinks(html, "https://acme.example/", 3, { careers: false })).toEqual(["https://acme.example/contact", "https://acme.example/about", "https://acme.example/team"]);
   });
 
   test("never more than the limit", () => {
@@ -159,6 +164,132 @@ describe("namedPeople", () => {
   test("one line: 'Name, Role' and 'Role: Name'; a role at another company is not theirs", () => {
     expect(namedPeople("<p>Vikram Patil, Managing Director</p><p>Owner: Neha Gokhale</p><p>Sanjay Bhide, Head of Sales at Other Corp</p>", "https://x.example/about").map((person) => [person.name, person.role]))
       .toEqual([["Vikram Patil", "Managing Director"], ["Neha Gokhale", "Owner"]]);
+  });
+});
+
+describe("whose address it is", () => {
+  const emailOf = (html: string) => namedPeople(html, "https://reidplumbing.example/team").map((person) => [person.name, person.email]);
+
+  test("an address is a person's own only when it is built from their name, not when it merely contains part of it", () => {
+    expect(emailOf(`<h3>Tom Reid</h3><p>Owner</p><p>Write to customerservice@reidplumbing.example</p>`)).toEqual([["Tom Reid", null]]);
+    for (const own of ["tom", "tom.reid", "treid", "tomreid", "reid.t", "reid"]) {
+      expect(emailOf(`<h3>Tom Reid</h3><p>Owner</p><a href="mailto:${own}@reidplumbing.example">Email</a>`)).toEqual([["Tom Reid", `${own}@reidplumbing.example`]]);
+    }
+    expect(emailOf(`<h3>Dr. Asha Rao</h3><p>Founder</p><a href="mailto:dr.rao@clinic.example">Email</a>`)).toEqual([["Dr. Asha Rao", "dr.rao@clinic.example"]]);
+  });
+
+  test("a colleague's address in the next card is not theirs, even when their names look alike", () => {
+    expect(emailOf(`<h3>Tom Reid</h3><p>Owner</p><h3>Tomas</h3><p>Office assistant</p><a href="mailto:tomas@reidplumbing.example">tomas@reidplumbing.example</a>`)).toEqual([["Tom Reid", null]]);
+  });
+});
+
+describe("only the business's own people, each with their own role and contacts", () => {
+  const people = (html: string, url = "https://shahdental.example/our-team") => namedPeople(html, url).map((person) => [person.name, person.role, person.email]);
+
+  test("a card ends where the next person's begins, even one whose role is not a decision-maker's", () => {
+    expect(people(`<div><h3>Dr. Anil Shah</h3><p>Founder</p></div><div><h3>Dr. Priya Shah</h3><p>Orthodontist</p><a href="mailto:priya.shah@shahdental.example">priya.shah@shahdental.example</a><a href="https://www.linkedin.com/in/priya-shah">in</a></div>`))
+      .toEqual([["Dr. Anil Shah", "Founder", null]]);
+    expect(namedPeople(`<div><h3>Dr. Anil Shah</h3><p>Founder</p></div><div><h3>Dr. Priya Shah</h3><p>Orthodontist</p><a href="https://www.linkedin.com/in/priya-shah">in</a></div>`, "https://shahdental.example/team")[0]?.linkedin).toBeNull();
+    expect(people(`<div><h3>Ravi Kumar</h3><p>Managing Director</p></div><div><h3>Ravindra Patil</h3><p>Accountant</p><p>ravindra@acme.example</p></div>`)).toEqual([["Ravi Kumar", "Managing Director", null]]);
+  });
+
+  test("a general inbox named after the business is not the founder's", () => {
+    expect(people(`<div><h3>Dr. Anil Shah</h3><p>Founder &amp; Chief Dentist</p><p>Shah Dental Clinic, Baner</p><p>Email: <a href="mailto:shahdentalclinic@gmail.com">shahdentalclinic@gmail.com</a></p></div>`))
+      .toEqual([["Dr. Anil Shah", "Founder & Chief Dentist", null]]);
+  });
+
+  test("a role above the name, as a label or as a heading, goes to that name", () => {
+    const expected = [["Asha Kulkarni", "Founder", null], ["Rohan Deshpande", "Practice Manager", null]];
+    expect(people(`<div><span>Founder</span><h3>Asha Kulkarni</h3></div><div><span>Practice Manager</span><h3>Rohan Deshpande</h3></div>`)).toEqual(expected);
+    expect(people(`<h2>Our Founder</h2><h3>Asha Kulkarni</h3><h2>Our Practice Manager</h2><h3>Rohan Deshpande</h3>`)).toEqual(expected);
+  });
+
+  test("a name and its role in one line's inline elements", () => {
+    expect(people(`<div><span class="name">Asha Kulkarni</span> <span class="role">Founder</span></div><h4>Rohan Deshpande <small>Practice Manager</small></h4>`))
+      .toEqual([["Asha Kulkarni", "Founder", null], ["Rohan Deshpande", "Practice Manager", null]]);
+  });
+
+  test("a testimonial's author and another company's staff are not this business's people", () => {
+    const page = `<h2>What our clients say</h2><div><p>Working with them doubled our patient bookings in three months.</p><h5>John Smith</h5><span>CEO, Acme Corp</span></div>
+      <div><p>The best agency we have hired.</p><cite>Priya Sharma, Owner of Bloom Florists</cite></div><p>Meera Rao is the founder of Lotus Yoga Studio in Baner.</p>`;
+    expect(people(page, "https://agency.example/")).toEqual([]);
+    expect(people(`<p>Meera Rao is the founder of Lotus Yoga Studio in Baner.</p>`, "https://lotusyoga.example/about")).toEqual([["Meera Rao", "Founder", null]]);
+  });
+
+  test("menus, headings and job titles are not people", () => {
+    expect(people(`<nav><ul><li><a href="/board">Board Members</a></li><li><a href="/dm">Director's Message</a></li><li><a href="/mv">Mission Statement</a></li><li><a href="/pm">Principal's Desk</a></li></ul></nav>`, "https://school.example/")).toEqual([]);
+    expect(people(`<ul><li>Sales Executive</li><li>Sales Manager</li><li>Senior Developer</li><li>Marketing Manager</li></ul>`, "https://acme.example/team")).toEqual([]);
+    expect(people(`<h3>Asha Kulkarni</h3><p>Founder</p>`, "https://acme.example/careers")).toEqual([]);
+    expect(people(`<h1>Founded By Local Parents</h1><p>Owned By Taj Hotels</p>`, "https://x.example/about")).toEqual([]);
+  });
+});
+
+describe("observations the review found too eager", () => {
+  const topicsOf = (html: string, url = "https://printco.example/") => readWebsite([{ url, html }], receptionist, AT).observations.map((item) => [item.topic, item.text]);
+
+  test("a supplier inviting its own customers to ask for a quote is not a need; a request for suppliers is", () => {
+    expect(topicsOf(`<p>Call us today or send a request for quote about call answering.</p>`).filter(([topic]) => topic === "need")).toEqual([]);
+    expect(topicsOf(`<p>We invite proposals for after-hours call answering.</p>`).filter(([topic]) => topic === "need")).toHaveLength(1);
+  });
+
+  test("a site asking its visitors, or recruiting resellers, is not asking for suppliers", () => {
+    for (const line of [
+      "Are you currently looking for a partner to answer your calls? Talk to us.",
+      "Are you currently seeking vendors for call answering? We can help.",
+      "We are looking for partners: call centres that want to resell our appointment booking app.",
+      "Download our free RFP template for call answering services.",
+    ]) expect(topicsOf(`<p>${line}</p>`).filter(([topic]) => topic === "need")).toEqual([]);
+  });
+
+  test("hiring is a job: not clinic hours or a booking button on a careers page, not 'join our team of patients'", () => {
+    expect(topicsOf(`<h1>Careers</h1><p>We're hiring!</p><h4>Clinic Hours</h4><p>Mon–Sat</p><a href="/book">Book an Appointment</a>`, "https://smile.example/careers").filter(([topic]) => topic === "hiring")).toEqual([]);
+    expect(topicsOf(`<p>Join our team of patients who never miss an appointment and always get a call back.</p>`).filter(([topic]) => topic === "hiring")).toEqual([]);
+  });
+
+  test("a newsletter or login form is not a contact form", () => {
+    expect(topicsOf(`<form action="/subscribe"><input type="email" name="email"><button>Subscribe</button></form>`).filter(([topic]) => topic === "contact")).toEqual([]);
+  });
+
+  test("a booking vendor's own home page is not the business's booking link", () => {
+    expect(topicsOf(`Works with <a href="https://calendly.com/">Calendly</a> and <a href="https://www.zocdoc.com/">Zocdoc</a>`).filter(([topic]) => topic === "booking")).toEqual([]);
+    expect(topicsOf(`<a href="https://smile.setmore.com/">Book</a>`).filter(([topic]) => topic === "booking")).toEqual([["booking", "Online booking link (Setmore)"]]);
+  });
+});
+
+describe("what a site can put into a lead", () => {
+  test("a NUL or a lone surrogate in a page never reaches what is stored (jsonb refuses both)", () => {
+    const profile = readWebsite([{ url: "https://smile.example/", html: `<meta name="description" content="Family dental clinic&#0; in Pune &#55296;"><h3>Dr. Asha&#0; Kulkarni</h3><p>Founder</p>` }], receptionist, AT);
+    const stored = JSON.stringify(websiteNotes(profile, null));
+    expect(stored).not.toContain("\\u0000");
+    expect(stored).not.toMatch(/\\ud[89ab][0-9a-f]{2}(?!\\ud[c-f])/i);
+    expect(profile.observations.find((item) => item.topic === "context")?.text).toContain("Family dental clinic");
+  });
+
+  test("a line cut to length never ends in half a character", () => {
+    const profile = readWebsite([{ url: "https://smile.example/", html: `<meta name="description" content="${"x".repeat(199)}😀 and more">` }], receptionist, AT);
+    expect(JSON.stringify(profile)).not.toMatch(/\\ud83d(?!\\ude)/i);
+  });
+
+  test("a role never carries a link or an address", () => {
+    expect(namedPeople(`<h3>Tom Reid</h3><p>Owner &amp; www.evil.example/pay</p>`, "https://reid.example/team")).toEqual([]);
+  });
+});
+
+describe("recipientFields", () => {
+  const asha = { name: "Dr. Asha Kulkarni", role: "Founder", email: "asha@smile.example", linkedin: null, sourceUrl: "https://smile.example/team" };
+
+  test("a new person takes the name without the honorific as first and last name, and the role as title", () => {
+    expect(recipientFields(asha, null)).toEqual({ fullName: "Dr. Asha Kulkarni", firstName: "Asha", lastName: "Kulkarni", title: "Founder" });
+  });
+
+  test("a person the organization already has keeps its own name and title; only empty fields are filled", () => {
+    expect(recipientFields(asha, { fullName: "Asha Kulkarni-Rao", firstName: "Asha", lastName: "Kulkarni-Rao", title: "Clinic Director" })).toEqual({});
+    expect(recipientFields(asha, { fullName: null, firstName: null, lastName: null, title: "Clinic Director" })).toEqual({ fullName: "Dr. Asha Kulkarni", firstName: "Asha", lastName: "Kulkarni" });
+    expect(recipientFields(asha, { fullName: "Asha K", firstName: null, lastName: null, title: null })).toEqual({ title: "Founder" });
+  });
+
+  test("no named person: nothing", () => {
+    expect(recipientFields(null, null)).toEqual({});
   });
 });
 

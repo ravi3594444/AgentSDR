@@ -390,7 +390,7 @@ export async function collectWebsiteContacts(website: string, options: PageFetch
   }
   if (!home) return { contacts: [], pagesRead, error: "the website did not return a web page", profile: null };
   read(home);
-  for (const link of profilePageLinks(home.html, home.url, 3)) {
+  for (const link of profilePageLinks(home.html, home.url, 3, { careers: focus.offer.length > 0 })) {
     if (pagesRead.includes(link)) continue;
     try {
       const page = await fetchPublicPage(link, options);
@@ -401,5 +401,8 @@ export async function collectWebsiteContacts(website: string, options: PageFetch
       // One unreadable contact page does not lose what the others had.
     }
   }
-  return { contacts: [...contacts.values()], pagesRead, error: null, profile: readWebsite(pages, focus, checkedAt) };
+  // A page that redirected to another host is that host's, not the business's: its contacts are kept as before, its people and openings are not.
+  const site = new URL(home.url).hostname.replace(/^www\./, "");
+  const ownPages = pages.filter((page) => new URL(page.url).hostname.replace(/^www\./, "") === site);
+  return { contacts: [...contacts.values()], pagesRead, error: null, profile: readWebsite(ownPages, focus, checkedAt) };
 }

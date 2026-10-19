@@ -102,6 +102,11 @@ describe("what a business's own website shows", () => {
     expect(countProspects([prospect]).withNeedEvidence).toBe(0);
   });
 
+  test("findings are listed in the order a message would use them: an opening and their own words before booking and contact options", () => {
+    const prospect = qualifyProspect(member({ evidence: [website], signals: [observation("contact", "WhatsApp chat link"), observation("booking", "Online booking link (Calendly)"), { ...observation("context", "A family dental clinic in Baner."), relevance: null }, observation("hiring", "Front Desk Receptionist")] }));
+    expect(prospect.observations.map((signal) => signal.topic)).toEqual(["hiring", "context", "booking", "contact"]);
+  });
+
   test("an explicit request for suppliers on their website is need evidence", () => {
     const request = { ...observation("context", "We are seeking a vendor for call answering."), kind: "need" as const, topic: "need" as const };
     expect(qualifyProspect(member({ evidence: [website], signals: [request] })).needEvidence).toHaveLength(1);

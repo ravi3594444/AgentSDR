@@ -219,6 +219,20 @@ describe("collectWebsiteContacts", () => {
     expect(result.profile?.people).toEqual([{ name: "Dr. Sara Mehta", role: "Founder", email: "sara@lotus.example", linkedin: null, sourceUrl: "https://lotus.example/team" }]);
   });
 
+  test("a page that redirected to another host is not read as the business's own", async () => {
+    const pages: Record<string, Response | (() => Response)> = {};
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url === "https://smile.example/") return new Response(`<a href="/team">Team</a><a href="/careers">Careers</a>`, { status: 200, headers: { "content-type": "text/html" } });
+      if (url === "https://smile.example/team") return new Response(null, { status: 301, headers: { location: "https://jobs-board.example/team" } });
+      if (url === "https://jobs-board.example/team") return new Response(`<h3>Raj Mehta</h3><p>CEO</p><a href="mailto:raj@jobs-board.example">raj@jobs-board.example</a>`, { status: 200, headers: { "content-type": "text/html" } });
+      return pages[url] ? (pages[url] as Response) : new Response("missing", { status: 404 });
+    }) as typeof fetch;
+    const result = await collectWebsiteContacts("https://smile.example/", { fetchImpl, allowPrivate: true }, offerFocus({ offer: "AI receptionist" }));
+    expect(result.profile?.people).toEqual([]);
+    expect(result.profile?.pagesRead).toEqual(["https://smile.example/"]);
+  });
+
   test("a site that cannot be read has no profile", async () => {
     const fetchImpl = (async () => new Response("down", { status: 503 })) as unknown as typeof fetch;
     const result = await collectWebsiteContacts("https://down.example/", { fetchImpl, allowPrivate: true });

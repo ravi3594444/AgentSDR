@@ -23,7 +23,9 @@
  *   campaign or enrollment; nothing was sent;
  * - one clinic's own website is read once per page: what it shows (an
  *   opening that matches the offer, a named founder) reaches the plan's
- *   sample as a possible fit, never interest; a line its facts back is kept,
+ *   sample as a possible fit, never interest; the founder's own address is a
+ *   contact the owner already named, who keeps that name and title; a line
+ *   its facts back is kept,
  *   and a line claiming what they do not (hiring, missing online booking, a
  *   price) never reaches a plan or the texts written at Start;
  * - a second organization sees and changes nothing of the first.
@@ -126,7 +128,7 @@ const json = (status: number, body: unknown) => new Response(JSON.stringify(body
 const SMILE_SITE = `https://smile-${stamp}.test/`;
 const SITE_PAGES: Record<string, string> = {
   [SMILE_SITE]: `<html><head><meta name="description" content="Smile Dental Clinic: family dentistry in Koregaon Park, Pune."></head><body><a href="/team">Our team</a><a href="/careers">Careers</a><a href="https://calendly.com/smile-${stamp}">Book online</a></body></html>`,
-  [`${SMILE_SITE}team`]: `<h2>Our Team</h2><div><h3>Dr. Kavya Joshi</h3><p>Founder</p></div>`,
+  [`${SMILE_SITE}team`]: `<h2>Our Team</h2><div><h3>Dr. Kavya Joshi</h3><p>Founder</p><a href="mailto:kavya@smile-${stamp}.test">kavya@smile-${stamp}.test</a></div>`,
   [`${SMILE_SITE}careers`]: `<h1>Careers</h1><p>We're hiring</p><ul><li>Front Desk Coordinator – appointment reminders and recalls</li></ul>`,
 };
 const pageReads: string[] = [];
@@ -264,6 +266,8 @@ await runInOrganization(a.org.id, async () => {
   await db.insert(gridProviderCredentials).values({ providerId: provider!.id, encryptedPayload: encryptIntegrationCredentials({ apiKey: "full-flow-check", dsn: "https://unipile.invalid" }) });
   const [account] = await db.insert(whatsappAccounts).values({ organizationId: a.org.id, unipileAccountId: `full-flow-${stamp}`, name: "Clinic sales", phone: "+919800000077", status: "connected", connectedAt: new Date(Date.now() - 5 * 86_400_000) }).returning();
   await updateBusinessProfile({ businessName: "ChairFill", offer: "WhatsApp appointment reminders that fill empty chair hours for dental clinics", senderName: "Ravi" }, a.owner.id);
+  // A contact the owner already has, named and titled their own way: the clinic's founder, by the address the clinic's website gives her.
+  const [kavya] = await db.insert(people).values({ organizationId: a.org.id, email: `kavya@smile-${stamp}.test`, fullName: "Kavya Joshi-Rao", firstName: "Kavya", lastName: "Joshi-Rao", title: "Clinic Director", source: "manual" }).returning();
 
   // ---------------------------------------------------------- 1. the prompt, the search and the objective
   const thread = await createThread(a.owner.id);
@@ -301,7 +305,9 @@ await runInOrganization(a.org.id, async () => {
   check("a line its facts do not back (hiring, missing booking, a price) never reaches a plan", !UNBACKED.test(JSON.stringify(plan1!.plan)), JSON.stringify(plan1!.plan.samples.map((sample) => sample.messages[0]?.body)));
   const [smileMember] = await db.select().from(schema.leadAudienceMembers)
     .where(and(eq(schema.leadAudienceMembers.organizationId, a.org.id), sql`${schema.leadAudienceMembers.facts} ->> 'website' = ${SMILE_SITE}`));
-  check("the founder its website names is a fact for the writers; the clinic's lead stays the clinic", smileMember?.facts.decisionMakers === "Dr. Kavya Joshi (Founder)" && smileMember.name === "Smile Dental Clinic" && smileMember.facts.booking === "Online booking link (Calendly)", JSON.stringify({ name: smileMember?.name, facts: smileMember?.facts }));
+  const [kavyaNow] = await db.select().from(people).where(eq(people.id, kavya!.id));
+  check("the founder's own address is a contact the owner already has: that person is the lead, and keeps the owner's name and title", smileMember?.personId === kavya!.id && kavyaNow?.fullName === "Kavya Joshi-Rao" && kavyaNow.firstName === "Kavya" && kavyaNow.lastName === "Joshi-Rao" && kavyaNow.title === "Clinic Director" && smileMember.facts.decisionMakers === undefined && smileMember.facts.booking === "Online booking link (Calendly)",
+    JSON.stringify({ member: smileMember?.personId === kavya!.id, person: [kavyaNow?.fullName, kavyaNow?.firstName, kavyaNow?.lastName, kavyaNow?.title], facts: smileMember?.facts }));
 
   // ---------------------------------------------------------- 4. continuation: short of the target, the request goes on by itself
   replies = turn("Searching again with other words.", [{ tool: "find_leads", args: { what: "dentists", where: "Pune", contactAfter: true, channels: ["whatsapp"] } }]);
