@@ -2,45 +2,43 @@ import "server-only";
 
 import { resolveTimeZone } from "@/lib/timeZone";
 import { sql, type SQL } from "drizzle-orm";
-import {
-  dayCount,
-  MAX_ANALYTICS_RANGE_DAYS,
-  previousRange,
-  WEEKLY_BUCKET_AFTER_DAYS,
-  type AnalyticsRange,
-} from "./contract";
+import { daysWindow, type ReportWindow } from "@/lib/reporting/metrics";
+import { inWindow, organizationTimeZone } from "@/lib/reporting/metrics.server";
+import { previousRange, type AnalyticsRange } from "./contract";
+import { analyticsRange, AnalyticsRangeError } from "./range";
 
 /**
  * Shared server helpers for the analytics queries. Every view file takes an
  * AnalyticsRange and builds its SQL from these, so "in range" and "which day"
- * mean the same thing everywhere.
+ * mean the same thing everywhere — and the same as on Overview: a range is
+ * whole local days in the organization's business time zone, turned into
+ * [from, to) instants by the shared calendar (src/lib/reporting/metrics.ts).
  */
 
-export class AnalyticsRangeError extends Error {}
+export { AnalyticsRangeError, resolveTimeZone };
 
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+/**
+ * ?range= (a preset or from..to) or ?from&to, in the organization's time
+ * zone unless ?tz= overrides it. Reads the organization's zone, so it runs
+ * inside the organization scope.
+ */
+export async function parseAnalyticsRange(params: URLSearchParams, now = new Date()): Promise<AnalyticsRange> {
+  return analyticsRange(params, await organizationTimeZone(), now);
+}
 
-export { resolveTimeZone };
+/** The range as the shared window: [from 00:00, to+1 00:00) in its zone, as instants. */
+export function rangeWindow(range: Pick<AnalyticsRange, "from" | "to" | "tz">): ReportWindow & { from: Date } {
+  return daysWindow(range, range.tz);
+}
 
-/** Validates ?from&to&tz into a range; weekly buckets past WEEKLY_BUCKET_AFTER_DAYS. */
-export function parseAnalyticsRange(params: URLSearchParams): AnalyticsRange {
-  const from = params.get("from") ?? "";
-  const to = params.get("to") ?? "";
-  if (!DATE_RE.test(from) || !DATE_RE.test(to) || Number.isNaN(Date.parse(from)) || Number.isNaN(Date.parse(to))) {
-    throw new AnalyticsRangeError("from and to must be dates as YYYY-MM-DD");
-  }
-  if (from > to) throw new AnalyticsRangeError("from must not be after to");
-  const days = dayCount(from, to);
-  if (days > MAX_ANALYTICS_RANGE_DAYS) {
-    throw new AnalyticsRangeError(`The range can be at most ${MAX_ANALYTICS_RANGE_DAYS} days`);
-  }
-  return { from, to, tz: resolveTimeZone(params.get("tz")), bucket: days > WEEKLY_BUCKET_AFTER_DAYS ? "week" : "day" };
+/** The equally long range just before, as the shared window. */
+export function previousWindow(range: Pick<AnalyticsRange, "from" | "to" | "tz">): ReportWindow & { from: Date } {
+  return daysWindow(previousRange(range), range.tz);
 }
 
 /** `column` (a timestamptz) falls inside [from 00:00, to+1 00:00) in the range's zone. Parameterised. */
 export function inRange(column: SQL | SQL.Aliased | unknown, range: Pick<AnalyticsRange, "from" | "to" | "tz">): SQL {
-  return sql`(${column} >= (${range.from}::date)::timestamp AT TIME ZONE ${range.tz}
-    AND ${column} < ((${range.to}::date + 1)::timestamp AT TIME ZONE ${range.tz}))`;
+  return inWindow(sql`${column}`, rangeWindow(range));
 }
 
 /** The same window for the equally long period just before the range. */

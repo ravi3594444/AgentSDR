@@ -33,10 +33,10 @@ const SEND_KEYS: SeriesKeys<"firstTouch" | "followUp"> = {
 const REPLY_KEYS: SeriesKeys<"replies"> = { replies: { label: "Replies", color: EMAIL } };
 
 const HINTS = {
-  sent: "Emails sent in this period, first touches and follow-ups both.",
-  contacted: "Distinct leads who were sent their first email in this period.",
-  replied: "Distinct people in an email campaign who sent an inbound email reply in this period.",
-  replyRate: "Replied divided by leads contacted, for the same period.",
+  sent: "Emails the provider accepted in this period, first touches and follow-ups both. Failed sends are not sends. Overview counts the same.",
+  contacted: "Distinct people sent at least one email in this period.",
+  replied: "People emailed in this period who replied by email after their first email in it.",
+  replyRate: "Replied divided by people contacted by email, for the same period. Overview uses the same definition.",
   bounced: "Addresses added to the suppression list as bounced in this period.",
   unsubscribed: "Addresses added to the suppression list as unsubscribed in this period.",
 };
@@ -62,7 +62,7 @@ export function EmailView({ data, loading }: ViewProps<"email">) {
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-12 lg:gap-5">
       <KpiStrip className="lg:col-span-12" columns={6}>
         <KpiCell icon={RiMailSendLine} label="Emails sent" value={formatCompact(kpis.sent.value)} metric={kpis.sent} hint={HINTS.sent} context={vsPrevious(kpis.sent)} spark={totalsSpark(data.sends)} />
-        <KpiCell icon={RiUserSharedLine} label="Leads contacted" value={formatCompact(kpis.contacted.value)} metric={kpis.contacted} hint={HINTS.contacted} context={vsPrevious(kpis.contacted)} />
+        <KpiCell icon={RiUserSharedLine} label="People contacted" value={formatCompact(kpis.contacted.value)} metric={kpis.contacted} hint={HINTS.contacted} context={vsPrevious(kpis.contacted)} />
         <KpiCell icon={RiChat1Line} label="Replied" value={formatCompact(kpis.replied.value)} metric={kpis.replied} hint={HINTS.replied} context={`of ${formatCompact(kpis.contacted.value)} contacted`} spark={data.replies.points.map((p) => p.replies)} />
         <KpiCell icon={RiPercentLine} label="Reply rate" value={formatPercent(kpis.replyRate.value)} metric={kpis.replyRate} hint={HINTS.replyRate} context={kpis.replyRate.previous === null ? undefined : `vs ${formatPercent(kpis.replyRate.previous)} previous period`} />
         <KpiCell icon={RiMailForbidLine} label="Bounced" value={formatCompact(kpis.bounced.value)} metric={kpis.bounced} upIsGood={false} hint={HINTS.bounced} context={vsPrevious(kpis.bounced)} />
@@ -100,8 +100,8 @@ export function EmailView({ data, loading }: ViewProps<"email">) {
       <ChartCard
         className="lg:col-span-8"
         title="Replies"
-        description={`Inbound email replies each ${unit}.`}
-        legend={<SeriesStats items={[{ label: "Replies", color: EMAIL, value: formatCompact(repliesTotal), metric: kpis.replied }]} />}
+        description={`Inbound email messages each ${unit}, the replies Overview counts for email.`}
+        legend={<SeriesStats items={[{ label: "Replies", color: EMAIL, value: formatCompact(repliesTotal) }]} />}
         loading={loading}
         table={<TimeSeriesTable series={data.replies} keys={REPLY_KEYS} bucket={range.bucket} caption="Email replies" />}
       >

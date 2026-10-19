@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { RiArrowRightSLine, RiChat3Line, RiChatNewLine, RiCheckLine, RiErrorWarningLine, RiLoader4Line, RiPhoneLine, RiPhoneFill, RiQuestionLine, RiTimeLine, RiUserReceived2Line, RiWhatsappLine, RiMessage2Line, RiPercentLine, RiVoiceprintLine } from "@remixicon/react";
+import { RiArrowRightSLine, RiChat3Line, RiChatNewLine, RiCheckDoubleLine, RiCheckLine, RiErrorWarningLine, RiEyeLine, RiLoader4Line, RiPhoneLine, RiPhoneFill, RiQuestionLine, RiReplyLine, RiSendPlaneLine, RiTimeLine, RiUserFollowLine, RiUserReceived2Line, RiWhatsappLine, RiMessage2Line, RiPercentLine, RiVoiceprintLine } from "@remixicon/react";
 import * as Table from "@/components/alignui/table";
 import type { WhatsappAnalytics, WhatsappCallOutcome } from "@/lib/analytics/contract";
 import { cn } from "@/utils/cn";
@@ -20,8 +20,10 @@ import type { ViewProps } from "./types";
 import { BRAND } from "@/lib/brand";
 
 /**
- * WhatsApp: two areas. Calls (KPI strip, calls chart, outcomes, campaigns) and
- * Messages (KPI strip, sent vs received, numbers).
+ * WhatsApp: three areas. Campaign outreach (the shared sent, delivered, read,
+ * contacted, replied and reply rate Overview shows too), Calls (KPI strip,
+ * calls chart, outcomes, campaigns) and Chat messages (every message in the
+ * chats, whoever wrote it: KPI strip, sent vs received, numbers).
  *
  * Colours: Connected / Sent use the WhatsApp channel colour. Received is
  * violet (categorical slot 7), not a channel colour. Call outcomes other than
@@ -56,8 +58,14 @@ const HINTS = {
   connectRate: "Connected calls divided by calls placed.",
   talk: "Total time on connected calls.",
   avg: "Talk time divided by connected calls.",
-  sent: `Outbound messages: sent by ${BRAND.shortName}, or typed on the phone or in WhatsApp Web.`,
+  sent: `Every outbound chat message on linked numbers: campaign sends, replies, and messages typed on the phone or in WhatsApp Web.`,
   received: "Inbound messages from leads.",
+  campaignSent: "Campaign messages WhatsApp accepted in this period. Failed and uncertain sends are not sends. Overview counts the same.",
+  delivered: "Of those sends, the ones WhatsApp reported delivered (a read receipt counts too). Delivered is not proof that a person saw it.",
+  read: "Of those sends, the ones with a read receipt.",
+  contacted: "Distinct people sent at least one campaign message in this period.",
+  replied: "People sent a campaign message in this period who replied on WhatsApp after their first send in it.",
+  campaignReplyRate: "Replied divided by people contacted on WhatsApp, for the same period. Overview uses the same definition.",
   replyRate: "Of chats where you sent a message in this period, the share that got a later reply from the lead.",
   newChats: `Chats ${BRAND.shortName} started in this period (the first message was sent from ${BRAND.shortName}).`,
 };
@@ -84,6 +92,16 @@ export function WhatsappView({ data, loading }: ViewProps<"whatsapp">) {
 
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-12 lg:gap-5">
+      <SectionHeading title="Campaign outreach" description="Campaign messages WhatsApp accepted, their receipts, and who replied. The same figures as Overview." />
+      <KpiStrip className="lg:col-span-12" columns={6}>
+        <KpiCell icon={RiSendPlaneLine} label="Sent" value={formatCompact(kpis.sent.value)} metric={kpis.sent} hint={HINTS.campaignSent} context={vsPrevious(kpis.sent)} />
+        <KpiCell icon={RiCheckDoubleLine} label="Delivered" value={formatCompact(kpis.delivered.value)} metric={kpis.delivered} hint={HINTS.delivered} context={`of ${formatCompact(kpis.sent.value)} sent`} />
+        <KpiCell icon={RiEyeLine} label="Read" value={formatCompact(kpis.read.value)} metric={kpis.read} hint={HINTS.read} context={`of ${formatCompact(kpis.sent.value)} sent`} />
+        <KpiCell icon={RiUserFollowLine} label="People contacted" value={formatCompact(kpis.contacted.value)} metric={kpis.contacted} hint={HINTS.contacted} context={vsPrevious(kpis.contacted)} />
+        <KpiCell icon={RiReplyLine} label="Replied" value={formatCompact(kpis.replied.value)} metric={kpis.replied} hint={HINTS.replied} context={`of ${formatCompact(kpis.contacted.value)} contacted`} />
+        <KpiCell icon={RiPercentLine} label="Reply rate" value={formatPercent(kpis.replyRate.value)} metric={nullable(kpis.replyRate)} hint={HINTS.campaignReplyRate} context="replied / contacted" />
+      </KpiStrip>
+
       <SectionHeading title="Calls" description={`Voice calls placed from ${BRAND.shortName} and recorded in WhatsApp Web.`} />
       <KpiStrip className="lg:col-span-12" columns={5}>
         <KpiCell icon={RiPhoneLine} label="Calls placed" value={formatCompact(kpis.calls.value)} metric={kpis.calls} hint={HINTS.calls} context={vsPrevious(kpis.calls)} spark={placedSpark} />
@@ -114,10 +132,10 @@ export function WhatsappView({ data, loading }: ViewProps<"whatsapp">) {
 
       <CampaignsTable campaigns={data.campaigns} loading={loading} />
 
-      <SectionHeading title="Messages" description="Text chats on linked numbers, by direction." />
+      <SectionHeading title="Chat messages" description="Every text message in chats on linked numbers, by direction, whoever wrote it." />
       <KpiStrip className="lg:col-span-12" columns={4}>
-        <KpiCell icon={RiMessage2Line} label="Messages sent" value={formatCompact(kpis.messagesSent.value)} metric={kpis.messagesSent} hint={HINTS.sent} context={vsPrevious(kpis.messagesSent)} spark={data.messages.points.map((p) => p.sent)} />
-        <KpiCell icon={RiUserReceived2Line} label="Messages received" value={formatCompact(kpis.messagesReceived.value)} metric={kpis.messagesReceived} hint={HINTS.received} context={vsPrevious(kpis.messagesReceived)} spark={data.messages.points.map((p) => p.received)} />
+        <KpiCell icon={RiMessage2Line} label="Chat messages out" value={formatCompact(kpis.messagesSent.value)} metric={kpis.messagesSent} hint={HINTS.sent} context={vsPrevious(kpis.messagesSent)} spark={data.messages.points.map((p) => p.sent)} />
+        <KpiCell icon={RiUserReceived2Line} label="Chat messages in" value={formatCompact(kpis.messagesReceived.value)} metric={kpis.messagesReceived} hint={HINTS.received} context={vsPrevious(kpis.messagesReceived)} spark={data.messages.points.map((p) => p.received)} />
         <KpiCell icon={RiChat3Line} label="Chat reply rate" value={formatPercent(kpis.chatReplyRate.value)} metric={nullable(kpis.chatReplyRate)} hint={HINTS.replyRate} context="of chats you wrote in" />
         <KpiCell icon={RiChatNewLine} label="New chats" value={formatCompact(kpis.newChats.value)} metric={kpis.newChats} hint={HINTS.newChats} context={vsPrevious(kpis.newChats)} />
       </KpiStrip>

@@ -9,7 +9,8 @@ import { describeOpening, describeWeeklyHours, sendingWindow } from "@/lib/chann
 import { isMigrationControlPaused } from "@/lib/migration/controls";
 import { mailboxProviderConnected } from "@/lib/outreach/mailboxProviders";
 import { mailboxes } from "@/lib/outreach/schema";
-import { resolveTimeZone } from "@/lib/timeZone";
+import { windowJson, type CurrentCounts, type LeadSources, type PeriodMetrics, type ReportWindowJson } from "@/lib/reporting/metrics";
+import { currentCounts, inWindow, leadSources, organizationTimeZone, periodMetrics, reportFilter } from "@/lib/reporting/metrics.server";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { emailSendingStatus, mailboxDailyRoom } from "./sendingStatus";
 import { listRuns, reportRun } from "./outreach.server";
@@ -18,27 +19,29 @@ import {
   figure,
   money,
   ORGANIZATION_SCOPE,
+  percent,
   periodFor,
   scopeIsEmpty,
   scopeLabel,
-  summarizeSources,
   type ChannelSending,
   type Period,
   type PeriodKind,
   type ResultsScope,
-  type SourceYield,
 } from "./results";
 import { assistantJobs, assistantMessages, outreachRuns } from "./schema";
 
 /**
- * The owner's results for a period, from what the app recorded: sends from
- * each engine's send records (so someone contacted stays counted after they
- * unsubscribe or change status), replies from the CRM's inbound messages,
- * interest from applied classifications, decisions and automatic replies
- * from the assistant's own ledgers, AI spending from recorded provider
- * costs. LinkedIn connection requests are counted apart from messages.
- * Drafts are never sends; interested is never a sale; a running plan is
- * not a send. A figure the app does not record is null ("not measured").
+ * The owner's results for a period, from what the app recorded. The figures
+ * Analytics shows too (sends and their receipts, replies, people contacted
+ * and replied, the reply rate, lead sources, and what waits right now) come
+ * from the shared definitions in src/lib/reporting/metrics.server.ts, for the
+ * same window in the same time zone; see `metrics` and `now`. The rest is
+ * Overview's own: interest from applied classifications, decisions and
+ * automatic replies from the assistant's ledgers, AI spending from recorded
+ * provider costs. LinkedIn connection requests are counted apart from
+ * messages. Drafts are never sends; interested is never a sale; a running
+ * plan is not a send. A figure the app does not record is null ("not
+ * measured"). Reading results starts, approves and sends nothing.
  *
  * A scope narrower than the organization (results.ts ResultsScope) limits
  * every ledger query to the runs, lead lists and jobs of one run, request
@@ -48,36 +51,53 @@ import { assistantJobs, assistantMessages, outreachRuns } from "./schema";
  * organization-wide.
  */
 
+export { organizationTimeZone };
+
 export type Results = {
   period: Period;
+  /** The period as the shared window: [from, to) instants and the time zone it is cut in. */
+  window: ReportWindowJson;
   scope: { kind: ResultsScope["kind"]; label: string; runs: number; jobs: number; empty: boolean };
+  /** The shared period figures, exactly as Analytics reads them for the same window. */
+  metrics: PeriodMetrics;
+  /** The shared counts right now, whatever the period. */
+  now: CurrentCounts;
   leads: {
+    /** Each person once, however many sources found them (metrics.leadSources). */
+    found: number;
+    qualified: number;
+    contactable: number;
+    /** List memberships the searches added, and those the owner's lists added. */
     discovered: number;
     imported: number;
     duplicates: number;
-    usable: number;
+    /** Found but not contactable: businesses not saved as a lead, and people without an open route. */
     leftOut: number;
     leftOutReasons: { reason: string; count: number }[];
-    /** What each source produced, and how much of it can be reached. */
-    bySource: SourceYield[];
+    /** Qualified and contactable people per source and provider. */
+    sources: LeadSources;
   };
   outreach: {
     peopleContacted: number;
     emailsSent: number;
     whatsappSent: number;
+    whatsappDelivered: number;
+    whatsappRead: number;
     instagramSent: number;
     linkedinInvitations: number;
     linkedinMessages: number;
     repliesReceived: number;
     peopleReplied: number;
+    contactedWhoReplied: number;
+    replyRate: number | null;
     interested: number;
     automaticReplies: number;
     repliesByYou: number;
   };
   interestedPeople: { name: string; what: string | null; at: string }[];
   /**
-   * What waits for the owner: replies to review and reply decisions (Needs
-   * you), and, apart from those, plans prepared and waiting for Start.
+   * What waits for the owner now: replies to review and reply decisions
+   * (Needs you), and, apart from those, plans prepared and waiting for Start.
    */
   attention: {
     repliesWaiting: number;
@@ -87,6 +107,7 @@ export type Results = {
     plansAwaitingStart: number;
     plansAwaiting: { id: string; name: string }[];
   };
+  /** Leads still in a sequence, now. */
   pending: { emailFollowUps: number; whatsappFollowUps: number; linkedinSteps: number; instagramDms: number };
   /** Snapshot of recorded sending gates, not worker liveness. */
   sending: { email: ChannelSending; whatsapp: ChannelSending };
@@ -109,22 +130,7 @@ async function one(query: SQL): Promise<Row> {
 
 const n = (value: unknown) => Number(value ?? 0) || 0;
 
-export async function organizationTimeZone(): Promise<string> {
-  const rules = await channelRules("general").catch(() => null);
-  return resolveTimeZone(typeof rules?.timeZone === "string" ? rules.timeZone : "UTC");
-}
-
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function uuidArray(values: readonly string[]): SQL {
-  const valid = [...new Set(values.filter((value) => UUID.test(value)))];
-  return valid.length ? sql`ARRAY[${sql.join(valid.map((value) => sql`${value}`), sql`, `)}]::uuid[]` : sql`ARRAY[]::uuid[]`;
-}
-
-function textArray(values: readonly string[]): SQL {
-  const unique = [...new Set(values)];
-  return unique.length ? sql`ARRAY[${sql.join(unique.map((value) => sql`${value}`), sql`, `)}]::text[]` : sql`ARRAY[]::text[]`;
-}
 
 /** One run's scope: the run, its lead list, and the jobs that searched for it or launch it. */
 export async function runScope(runId: string): Promise<ResultsScope | null> {
@@ -187,56 +193,35 @@ async function withLaunchJobs(scope: ResultsScope): Promise<ResultsScope> {
 export async function results(kind: PeriodKind, now = new Date(), scope: ResultsScope = ORGANIZATION_SCOPE): Promise<Results> {
   const period = periodFor(kind, await organizationTimeZone(), now);
   const org = currentOrganizationId();
-  const from = period.from;
-  const to = period.to;
   const ts = (value: Date) => sql`${value.toISOString()}::timestamptz`;
-  const inRange = (column: SQL) => (from ? sql`${column} >= ${ts(from)} AND ${column} < ${ts(to)}` : sql`${column} < ${ts(to)}`);
+  const inRange = (column: SQL) => inWindow(column, period);
   const utc = (column: SQL) => sql`(${column} AT TIME ZONE 'UTC')`;
 
   // The scope, as conditions every ledger query adds (nothing for the whole organization).
-  const scoped = scope.kind !== "organization";
-  const scopeRuns = scoped && scope.runIds.length
-    ? await db.select({ id: outreachRuns.id, campaigns: outreachRuns.campaigns }).from(outreachRuns).where(and(inOrg(outreachRuns), inArray(outreachRuns.id, scope.runIds)))
-    : [];
-  const campaignsOf = (channel: "email" | "whatsapp" | "linkedin") => scopeRuns.flatMap((run) => (run.campaigns[channel] ? [run.campaigns[channel]!] : []));
-  const R = uuidArray(scope.runIds);
-  const A = uuidArray(scope.audienceIds);
-  const J = uuidArray(scope.jobIds);
-  const E = uuidArray(campaignsOf("email"));
-  const W = uuidArray(campaignsOf("whatsapp"));
-  const L = textArray(campaignsOf("linkedin"));
-  const only = (condition: SQL) => (scoped ? sql` AND ${condition}` : sql``);
-  const runPeople = sql`(SELECT rl.person_id FROM outreach_run_leads rl WHERE rl.organization_id = ${org} AND rl.run_id = ANY(${R}))`;
+  const f = await reportFilter(scope);
+  const { only, runPeople } = f;
+  const R = f.runs;
+  const A = f.audiences;
+  const J = f.jobs;
+  const E = f.emailCampaigns;
+  const W = f.whatsappCampaigns;
+  const L = f.linkedinCampaigns;
+
+  // The figures both pages show, from the shared definitions.
+  const [metrics, nowCounts, sources] = await Promise.all([periodMetrics(period, f), currentCounts(f), leadSources(period, f)]);
 
   const [members, reasons, discoveryDuplicates, listDuplicates] = await Promise.all([
-    rows(sql`SELECT source, status, count(*)::int AS n FROM lead_audience_members WHERE organization_id = ${org} AND ${inRange(sql`created_at`)}${only(sql`audience_id = ANY(${A})`)} GROUP BY source, status`),
+    rows(sql`SELECT (source = 'list') AS listed, count(*)::int AS n FROM lead_audience_members WHERE organization_id = ${org} AND ${inRange(sql`created_at`)}${only(sql`audience_id = ANY(${A})`)} GROUP BY 1`),
     rows(sql`SELECT reason, count(*)::int AS n FROM lead_audience_members WHERE organization_id = ${org} AND status = 'excluded' AND ${inRange(sql`created_at`)}${only(sql`audience_id = ANY(${A})`)} GROUP BY reason ORDER BY n DESC LIMIT 6`),
     one(sql`SELECT coalesce(sum((result->>'duplicates')::int), 0)::int AS n FROM assistant_jobs WHERE organization_id = ${org} AND kind IN ('discovery', 'linkedin_search') AND status = 'succeeded' AND ${inRange(sql`finished_at`)}${only(sql`id = ANY(${J})`)}`),
     one(sql`SELECT coalesce(sum((criteria->'imported'->>'updated')::int), 0)::int AS n FROM lead_audiences WHERE organization_id = ${org} AND source = 'list' AND ${inRange(sql`created_at`)}${only(sql`id = ANY(${A})`)}`),
   ]);
-  const memberCount = (filter: (row: Row) => boolean) => members.filter(filter).reduce((sum, row) => sum + n(row.n), 0);
+  const memberCount = (listed: boolean) => members.filter((row) => Boolean(row.listed) === listed).reduce((sum, row) => sum + n(row.n), 0);
 
-  const emailSends = sql`SELECT l.person_id FROM outreach_emails e JOIN outreach_leads l ON l.id = e.lead_id JOIN outreach_campaigns c ON c.id = l.campaign_id
-    WHERE c.organization_id = ${org} AND e.status = 'sent' AND ${inRange(sql`e.sent_at`)}${only(sql`c.id = ANY(${E})`)}`;
-  const whatsappSends = sql`SELECT l.person_id FROM whatsapp_campaign_sends s JOIN whatsapp_campaign_leads l ON l.id = s.lead_id JOIN whatsapp_campaigns c ON c.id = l.campaign_id
-    WHERE c.organization_id = ${org} AND s.status = 'sent' AND ${inRange(sql`s.sent_at`)}${only(sql`c.id = ANY(${W})`)}`;
-  const linkedinSends = sql`SELECT l."personId" AS person_id, m.type FROM "Message" m JOIN "Lead" l ON l.id = m."leadId"
-    WHERE m."organizationId" = ${org} AND m."linkedinMessageId" IS NOT NULL AND m."duplicateOfMessageId" IS NULL
-      AND m.type IN ('INVITATION', 'ACCEPTANCE', 'FOLLOW_UP_1', 'FOLLOW_UP_2', 'FOLLOW_UP_3') AND ${inRange(utc(sql`m."createdAt"`))}${only(sql`l."campaignId" = ANY(${L})`)}`;
-
-  const instagramSends = sql`SELECT q.person_id FROM instagram_outreach_queue q WHERE q.organization_id=${org} AND q.status='sent' AND ${inRange(sql`q.sent_at`)}${only(sql`q.run_id = ANY(${R})`)}`;
-
-  const [email, whatsapp, instagram, linkedin, contacted, crmSends, inbound, interested, interestedPeople] = await Promise.all([
-    one(sql`SELECT count(*)::int AS n FROM (${emailSends}) x`),
-    one(sql`SELECT count(*)::int AS n FROM (${whatsappSends}) x`),
-    one(sql`SELECT count(*)::int AS n FROM (${instagramSends}) x`),
-    one(sql`SELECT count(*) FILTER (WHERE type = 'INVITATION')::int AS invitations, count(*) FILTER (WHERE type <> 'INVITATION')::int AS messages FROM (${linkedinSends}) x`),
-    one(sql`SELECT count(DISTINCT person_id)::int AS n FROM (${emailSends} UNION ALL ${whatsappSends} UNION ALL ${instagramSends} UNION ALL SELECT person_id FROM (${linkedinSends}) li) x`),
+  const [crmSends, interested, interestedPeople] = await Promise.all([
     one(sql`SELECT count(*) FILTER (WHERE a.idempotency_key LIKE 'autopilot:%')::int AS auto, count(*) FILTER (WHERE a.idempotency_key NOT LIKE 'autopilot:%')::int AS manual
       FROM crm_send_attempts a JOIN crm_drafts d ON d.id = a.draft_id JOIN crm_records r ON r.id = d.crm_record_id
       WHERE r.organization_id = ${org} AND a.status IN ('sent', 'reconciled') AND ${inRange(sql`a.created_at`)}${only(sql`r.person_id IN ${runPeople}`)}`),
-    one(sql`SELECT count(*)::int AS messages, count(DISTINCT m.person_id)::int AS people FROM crm_conversation_messages m JOIN crm_conversations c ON c.id = m.conversation_id
-      WHERE c.organization_id = ${org} AND m.direction = 'inbound' AND ${inRange(sql`m.sent_at`)}${only(sql`m.person_id IN ${runPeople}`)}`),
     one(sql`SELECT count(DISTINCT cl.crm_record_id)::int AS n FROM crm_classifications cl JOIN crm_records r ON r.id = cl.crm_record_id
       WHERE r.organization_id = ${org} AND cl.applied_category_key = 'interested' AND cl.status IN ('auto_applied', 'accepted') AND ${inRange(sql`cl.created_at`)}${only(sql`r.person_id IN ${runPeople}`)}`),
     rows(sql`SELECT DISTINCT ON (r.id) coalesce(p.full_name, p.raw->>'businessName', p.email, p.phone, 'A lead') AS name, s.key AS what, cl.created_at AS at
@@ -245,16 +230,8 @@ export async function results(kind: PeriodKind, now = new Date(), scope: Results
       ORDER BY r.id, cl.created_at DESC LIMIT 20`),
   ]);
 
-  const [waiting, decisions, held, pending, optedOut, suppressed, runLeadsStopped, failures, usage, research, awaiting] = await Promise.all([
-    one(sql`SELECT count(*)::int AS n FROM crm_drafts d JOIN crm_records r ON r.id = d.crm_record_id WHERE r.organization_id = ${org} AND d.status = 'awaiting_review'${only(sql`r.person_id IN ${runPeople}`)}`),
-    rows(sql`SELECT kind, count(*)::int AS n FROM owner_decisions WHERE organization_id = ${org} AND status = 'open'${only(sql`(run_id = ANY(${R}) OR person_id IN ${runPeople})`)} GROUP BY kind ORDER BY n DESC`),
+  const [held, optedOut, suppressed, runLeadsStopped, failures, usage, research] = await Promise.all([
     rows(sql`SELECT coalesce(reason, 'held') AS reason, count(*)::int AS n FROM autopilot_replies WHERE organization_id = ${org} AND status = 'held' AND ${inRange(sql`updated_at`)}${only(sql`run_id = ANY(${R})`)} GROUP BY 1 ORDER BY n DESC LIMIT 6`),
-    one(sql`SELECT
-        (SELECT count(*) FROM outreach_leads l JOIN outreach_campaigns c ON c.id = l.campaign_id WHERE c.organization_id = ${org} AND c.status = 'active' AND l.sequence_status IN ('pending', 'initial_sent', 'in_follow_up')${only(sql`c.id = ANY(${E})`)})::int AS email,
-        (SELECT count(*) FROM whatsapp_campaign_leads l JOIN whatsapp_campaigns c ON c.id = l.campaign_id WHERE c.organization_id = ${org} AND c.status = 'active' AND l.status IN ('queued', 'in_sequence')${only(sql`c.id = ANY(${W})`)})::int AS whatsapp,
-        (SELECT count(*) FROM "Lead" l JOIN "Campaign" c ON c.id = l."campaignId" WHERE l."organizationId" = ${org} AND c.status = 'ACTIVE'
-           AND l.status IN ('PENDING', 'REQUEST_SENT', 'CONNECTED', 'ACCEPT_MESSAGE_SENT', 'FOLLOW_UP_1_SENT', 'FOLLOW_UP_2_SENT')${only(sql`c.id = ANY(${L})`)})::int AS linkedin,
-        (SELECT count(*) FROM instagram_outreach_queue q JOIN outreach_runs r ON r.id=q.run_id WHERE q.organization_id=${org} AND r.status='running' AND q.status IN ('queued','resolving','sending')${only(sql`q.run_id = ANY(${R})`)})::int AS instagram`),
     one(sql`SELECT count(*)::int AS n FROM crm_person_contact_policies cp JOIN people p ON p.id = cp.person_id WHERE p.organization_id = ${org} AND cp.do_not_contact AND ${inRange(sql`cp.set_at`)}${only(sql`cp.person_id IN ${runPeople}`)}`),
     rows(sql`SELECT reason, count(*)::int AS n FROM outreach_suppression_list WHERE organization_id = ${org} AND ${inRange(sql`created_at`)}${only(sql`lower(email) IN (SELECT lower(p.email) FROM people p WHERE p.organization_id = ${org} AND p.email IS NOT NULL AND p.id IN ${runPeople})`)} GROUP BY reason ORDER BY n DESC`),
     one(sql`SELECT count(*)::int AS n FROM outreach_run_leads WHERE organization_id = ${org} AND status <> 'active' AND ${inRange(sql`updated_at`)}${only(sql`run_id = ANY(${R})`)}`),
@@ -277,8 +254,6 @@ export async function results(kind: PeriodKind, now = new Date(), scope: Results
     rows(sql`SELECT kind, coalesce(sum(cost_usd), 0)::float AS usd, count(*)::int AS calls, count(*) FILTER (WHERE cost_usd IS NULL)::int AS unknown
       FROM assistant_usage WHERE organization_id = ${org} AND ${inRange(sql`created_at`)}${only(sql`run_id = ANY(${R})`)} GROUP BY kind`),
     one(sql`SELECT coalesce(sum(cost_usd), 0)::float AS usd FROM lead_research WHERE organization_id = ${org} AND ${inRange(sql`created_at`)}${only(sql`company_id IN (SELECT p.company_id FROM lead_audience_members m JOIN people p ON p.id = m.person_id WHERE m.organization_id = ${org} AND m.audience_id = ANY(${A}))`)}`).catch(() => ({ usd: 0 })),
-    // Plans prepared and waiting for Start, now: not reply decisions, and not sends.
-    rows(sql`SELECT id, name, count(*) OVER ()::int AS total FROM outreach_runs WHERE organization_id = ${org} AND status = 'proposed'${only(sql`id = ANY(${R})`)} ORDER BY created_at DESC LIMIT 5`),
   ]);
 
   // Limits now.
@@ -309,6 +284,7 @@ export async function results(kind: PeriodKind, now = new Date(), scope: Results
 
   // The snapshot measures connection and campaign windows; the worker still
   // checks due leads, per-account gaps, warm-up and new-chat limits before POST.
+  const whatsappQueued = nowCounts.stillToSend.whatsapp;
   const whatsappHours = whatsappRules.sendingHours;
   const whatsappWindow = sendingWindow(whatsappHours, now);
   const whatsappBlockedBy: ChannelSending["blockedBy"] = isMigrationControlPaused("whatsappOutbound")
@@ -317,7 +293,7 @@ export async function results(kind: PeriodKind, now = new Date(), scope: Results
       ? "no_sender"
       : !whatsappWindow.open
         ? "outside_hours"
-        : n(pending.whatsapp) <= 0
+        : whatsappQueued <= 0
           ? "nothing_queued"
           : null;
   const whatsappSending: ChannelSending = {
@@ -326,11 +302,11 @@ export async function results(kind: PeriodKind, now = new Date(), scope: Results
     nextOpenAt: whatsappWindow.opensAt?.toISOString() ?? null,
     nextOpenLabel: whatsappWindow.opensAt && whatsappHours ? describeOpening(whatsappWindow.opensAt, whatsappHours.timezone) : null,
     hours: describeWeeklyHours(whatsappHours),
-    queued: n(pending.whatsapp),
+    queued: whatsappQueued,
     detail: "the sender still checks due times, account gaps, warm-up and new-chat limits",
   };
 
-  const runList = scoped ? scope.runIds.slice(0, 50) : (await listRuns(10)).map((run) => run.id);
+  const runList = f.scoped ? scope.runIds.slice(0, 50) : (await listRuns(10)).map((run) => run.id);
   const runs: Results["runs"] = [];
   for (const runId of runList) {
     if (runs.length >= 10) break;
@@ -347,41 +323,53 @@ export async function results(kind: PeriodKind, now = new Date(), scope: Results
 
   return {
     period,
+    window: windowJson(period),
     scope: { kind: scope.kind, label: scopeLabel(scope), runs: scope.runIds.length, jobs: scope.jobIds.length, empty: scopeIsEmpty(scope) },
+    metrics,
+    now: nowCounts,
     leads: {
-      discovered: memberCount((row) => row.source !== "list"),
-      imported: memberCount((row) => row.source === "list"),
+      found: sources.total.found,
+      qualified: sources.total.qualified,
+      contactable: sources.total.contactable,
+      discovered: memberCount(false),
+      imported: memberCount(true),
       duplicates: n(discoveryDuplicates.n) + n(listDuplicates.n),
-      usable: memberCount((row) => row.status === "eligible"),
-      leftOut: memberCount((row) => row.status === "excluded"),
+      leftOut: Math.max(0, sources.total.found - sources.total.contactable),
       leftOutReasons: reasons.map((row) => ({ reason: String(row.reason ?? "unknown"), count: n(row.n) })),
-      bySource: summarizeSources(
-        members.map((row) => ({ source: String(row.source ?? "unknown"), status: String(row.status ?? ""), count: n(row.n) })),
-      ),
+      sources,
     },
     outreach: {
-      peopleContacted: n(contacted.n),
-      emailsSent: n(email.n),
-      whatsappSent: n(whatsapp.n),
-      instagramSent: n(instagram.n),
-      linkedinInvitations: n(linkedin.invitations),
-      linkedinMessages: n(linkedin.messages),
-      repliesReceived: n(inbound.messages),
-      peopleReplied: n(inbound.people),
+      peopleContacted: metrics.peopleContacted.total,
+      emailsSent: metrics.sent.byChannel.email,
+      whatsappSent: metrics.sent.byChannel.whatsapp,
+      whatsappDelivered: metrics.delivered.byChannel.whatsapp ?? 0,
+      whatsappRead: metrics.read.byChannel.whatsapp ?? 0,
+      instagramSent: metrics.sent.byChannel.instagram,
+      linkedinInvitations: metrics.sent.linkedinInvitations,
+      linkedinMessages: metrics.sent.linkedinMessages,
+      repliesReceived: metrics.replies.total,
+      peopleReplied: metrics.peopleReplied.total,
+      contactedWhoReplied: metrics.contactedWhoReplied.total,
+      replyRate: metrics.replyRate.total,
       interested: n(interested.n),
       automaticReplies: n(crmSends.auto),
       repliesByYou: n(crmSends.manual),
     },
     interestedPeople: interestedPeople.map((row) => ({ name: String(row.name), what: row.what ? String(row.what).replace(/_/g, " ") : null, at: new Date(String(row.at)).toISOString() })),
     attention: {
-      repliesWaiting: n(waiting.n),
-      openDecisions: decisions.reduce((sum, row) => sum + n(row.n), 0),
-      byKind: decisions.map((row) => ({ kind: String(row.kind), count: n(row.n) })),
+      repliesWaiting: nowCounts.draftsAwaitingReview,
+      openDecisions: nowCounts.openDecisions,
+      byKind: nowCounts.decisionsByKind,
       heldByAutopilot: held.map((row) => ({ reason: String(row.reason), count: n(row.n) })),
-      plansAwaitingStart: n(awaiting[0]?.total),
-      plansAwaiting: awaiting.map((row) => ({ id: String(row.id), name: String(row.name) })),
+      plansAwaitingStart: nowCounts.plansAwaitingStart,
+      plansAwaiting: nowCounts.plansAwaiting,
     },
-    pending: { emailFollowUps: n(pending.email), whatsappFollowUps: n(pending.whatsapp), linkedinSteps: n(pending.linkedin), instagramDms: n(pending.instagram) },
+    pending: {
+      emailFollowUps: nowCounts.stillToSend.email,
+      whatsappFollowUps: nowCounts.stillToSend.whatsapp,
+      linkedinSteps: nowCounts.stillToSend.linkedin,
+      instagramDms: nowCounts.stillToSend.instagram,
+    },
     sending: { email: emailSending, whatsapp: whatsappSending },
     stopped: {
       optedOut: n(optedOut.n),
@@ -419,20 +407,22 @@ export function resultsText(r: Results): string {
   const a = r.attention;
   const scoped = r.scope.kind !== "organization";
   const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
+  const sources = r.leads.sources;
+  const needsYou = r.now.needsYou;
   const lines = [
     `Results for ${r.period.label} (${r.period.timeZone})${scoped ? `, ${r.scope.label} only` : ""}:`,
     ...(r.scope.empty
       ? [`Nothing is recorded for ${r.scope.label} yet: no search or plan of it is saved, so its figures below are 0. The whole organization's results include other work.`]
       : []),
-    `Leads: ${r.leads.discovered} found by search, ${r.leads.imported} from your lists, ${r.leads.duplicates} duplicates merged, ${r.leads.usable} contactable, ${r.leads.leftOut} left out${r.leads.leftOutReasons.length ? ` (${r.leads.leftOutReasons.slice(0, 3).map((x) => `${x.count} × ${x.reason}`).join("; ")})` : ""}.`,
-    ...(r.leads.bySource.length
-      ? [`Sources: ${r.leads.bySource.map((s) => `${s.label} ${s.contactable}/${s.found} with a contact route`).join("; ")}.`]
+    `Leads: ${r.leads.found} found, ${r.leads.qualified} qualified, ${r.leads.contactable} contactable (each person counted once); ${r.leads.discovered} added by searches, ${r.leads.imported} from your lists, ${r.leads.duplicates} duplicates merged, ${r.leads.leftOut} left out${r.leads.leftOutReasons.length ? ` (${r.leads.leftOutReasons.slice(0, 3).map((x) => `${x.count} × ${x.reason}`).join("; ")})` : ""}.`,
+    ...(sources.rows.length
+      ? [`Sources: ${sources.rows.map((s) => `${s.label} ${s.qualified} qualified, ${s.contactable} contactable`).join("; ")}${sources.multiSource.people ? `; ${plural(sources.multiSource.people, "person")} found by more than one source, counted once` : ""}.`]
       : []),
-    `Outreach: ${o.peopleContacted} people contacted; ${o.emailsSent} emails, ${o.whatsappSent} WhatsApp messages, ${o.linkedinInvitations} LinkedIn connection requests, ${o.linkedinMessages} LinkedIn messages and ${o.instagramSent} initial Instagram DMs confirmed sent.`,
+    `Outreach: ${o.peopleContacted} people contacted; ${o.emailsSent} emails, ${o.whatsappSent} WhatsApp messages, ${o.linkedinInvitations} LinkedIn connection requests, ${o.linkedinMessages} LinkedIn messages and ${o.instagramSent} initial Instagram DMs confirmed sent.${o.whatsappSent ? ` WhatsApp reported ${o.whatsappDelivered} of them delivered and ${o.whatsappRead} read; other channels report no receipts.` : ""}`,
     ...(r.runs.length ? [`Plans started${scoped ? "" : " (latest)"}: ${r.runs.map(runPhrase).join("; ")}.`] : []),
-    `Replies: ${o.repliesReceived} received from ${o.peopleReplied} people; ${o.interested} interested${r.interestedPeople.length ? ` (${r.interestedPeople.slice(0, 5).map((p) => p.name).join(", ")})` : ""}. Answered: ${o.automaticReplies} automatically, ${o.repliesByYou} by you.`,
-    `Waiting for you: ${a.repliesWaiting} replies to review, ${plural(a.openDecisions, "reply decision")}${a.byKind.length ? ` (${a.byKind.map((x) => `${x.count} ${x.kind.replace(/_/g, " ")}`).join(", ")})` : ""}; separately, ${plural(a.plansAwaitingStart, "plan")} waiting for your Start${a.plansAwaiting.length ? ` (${a.plansAwaiting.map((plan) => `“${plan.name}”`).join(", ")}${a.plansAwaitingStart > a.plansAwaiting.length ? ", …" : ""})` : ""}.`,
-    `Still to send: ${r.pending.emailFollowUps} email leads, ${r.pending.whatsappFollowUps} WhatsApp leads, ${r.pending.linkedinSteps} LinkedIn leads in sequence, ${r.pending.instagramDms} initial Instagram DMs.`,
+    `Replies: ${o.repliesReceived} received from ${o.peopleReplied} people; ${o.contactedWhoReplied} of the ${o.peopleContacted} people contacted replied (reply rate ${percent(o.replyRate)}); ${o.interested} interested${r.interestedPeople.length ? ` (${r.interestedPeople.slice(0, 5).map((p) => p.name).join(", ")})` : ""}. Answered: ${o.automaticReplies} automatically, ${o.repliesByYou} by you.`,
+    `Waiting for you now: ${a.repliesWaiting} replies to review, ${plural(a.openDecisions, "reply decision")}${a.byKind.length ? ` (${a.byKind.map((x) => `${x.count} ${x.kind.replace(/_/g, " ")}`).join(", ")})` : ""}${needsYou !== a.openDecisions ? `, ${needsYou} of them needing you (the rest are reports)` : ""}; separately, ${plural(a.plansAwaitingStart, "plan")} waiting for your Start${a.plansAwaiting.length ? ` (${a.plansAwaiting.map((plan) => `“${plan.name}”`).join(", ")}${a.plansAwaitingStart > a.plansAwaiting.length ? ", …" : ""})` : ""}.`,
+    `Still to send now: ${r.pending.emailFollowUps} email leads, ${r.pending.whatsappFollowUps} WhatsApp leads, ${r.pending.linkedinSteps} LinkedIn leads in sequence, ${r.pending.instagramDms} initial Instagram DMs.`,
     `Stopped: ${r.stopped.optedOut} opted out${r.stopped.suppressed.length ? `, ${r.stopped.suppressed.map((x) => `${x.count} ${x.reason}`).join(", ")}` : ""}.`,
     r.failures.length ? `Failures: ${r.failures.slice(0, 4).map((f) => `${f.count} ${f.channel} (${f.reason})`).join("; ")}.` : "Failures: none recorded.",
     `AI spending recorded${scoped ? " against these plans" : ""}: ${money(r.spending.aiRecordedUsd)} over ${r.spending.aiCalls} assistant calls${r.spending.aiCallsWithoutCost ? ` (${r.spending.aiCallsWithoutCost} without a reported cost)` : ""}; research ${money(r.spending.researchUsd)}.`,

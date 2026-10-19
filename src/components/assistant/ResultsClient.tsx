@@ -11,7 +11,9 @@ import { EmptyState } from "@/components/page/EmptyState";
 import { WorkspaceNavigation, WorkspaceStats } from "@/components/page/WorkspaceNavigation";
 import { useRecordChanged } from "@/components/crm/recordEvents";
 import NeedsYouList, { type NeedsYouPayload } from "@/components/assistant/NeedsYouList";
-import { describeChannelSending, figure, money, PERIOD_KINDS, type PeriodKind } from "@/lib/assistant/results";
+import { LeadSourcesTable } from "@/components/reporting/LeadSourcesTable";
+import { MetricDefinitions, SHARED_METRIC_KEYS } from "@/components/reporting/MetricDefinitions";
+import { describeChannelSending, figure, money, percent, PERIOD_KINDS, type PeriodKind } from "@/lib/assistant/results";
 import type { Results } from "@/lib/assistant/results.server";
 import { cn } from "@/utils/cn";
 
@@ -19,7 +21,10 @@ import { cn } from "@/utils/cn";
  * The owner's results: leads, outreach, replies, what waits for them,
  * failures, spending and limits, for a period in the business's time zone,
  * plus the daily summaries. Every figure comes from recorded events; one
- * the app does not measure says so.
+ * the app does not measure says so. The figures Analytics shows too come
+ * from the shared definitions (src/lib/reporting/metrics.ts), and what waits
+ * right now is labelled apart from the period's totals. Loading or
+ * refreshing reads only.
  */
 
 type Decision = { id: string; kind: string; reason: string; decision: string; crmRecordId: string | null; createdAt: string };
@@ -33,6 +38,14 @@ const PERIOD_LABEL: Record<PeriodKind, string> = {
   last_7_days: "7 days",
   last_30_days: "30 days",
   all_time: "All time",
+};
+
+/** The Analytics preset that covers the same days (src/lib/analytics/range.ts); all time has none. */
+const ANALYTICS_RANGE: Partial<Record<PeriodKind, string>> = {
+  today: "today",
+  yesterday: "yesterday",
+  last_7_days: "7d",
+  last_30_days: "30d",
 };
 
 function Section({ title, children, className, collapsible = false }: { title: string; children: React.ReactNode; className?: string; collapsible?: boolean }) {
@@ -81,7 +94,10 @@ export default function ResultsClient({ initial }: { initial: ResultsPayload }) 
       <header className="flex flex-wrap items-center gap-3">
         <Link href="/assistant" className="inline-flex items-center gap-1 text-label-xs text-text-sub-600 hover:text-text-strong-950"><RiArrowLeftLine className="size-4" /> Assistant</Link>
         <h1 className="text-[26px] font-semibold tracking-[-0.035em] text-text-strong-950">Overview</h1>
-        <p className="text-paragraph-xs text-text-soft-400">{r.period.label} · {r.period.timeZone}</p>
+        <p className="text-paragraph-xs text-text-soft-400">{r.period.label} · {r.period.timeZone} (business time zone)</p>
+        {ANALYTICS_RANGE[r.period.kind] && (
+          <Link href={`/analytics?range=${ANALYTICS_RANGE[r.period.kind]}`} className="text-label-xs text-text-sub-600 underline underline-offset-4 hover:text-text-strong-950">Same period in Analytics</Link>
+        )}
         <div role="group" aria-label="Filter results by period" className="ml-auto flex flex-wrap gap-1 rounded-lg bg-bg-weak-50 p-1">
           {PERIOD_KINDS.map((kind) => (
             <button key={kind} type="button" aria-pressed={r.period.kind === kind} disabled={loading} onClick={() => void load(kind)}
@@ -96,15 +112,30 @@ export default function ResultsClient({ initial }: { initial: ResultsPayload }) 
 
       <NeedsYouList initial={initial.needsYou ?? null} />
 
-      <WorkspaceStats items={[
-        { label: "Leads found", value: r.leads.discovered, detail: `${r.leads.usable} contactable` },
-        { label: "People contacted", value: o.peopleContacted, detail: "At least one confirmed send" },
-        { label: "Replies", value: o.repliesReceived, detail: `From ${o.peopleReplied} people` },
-        { label: "Interested", value: o.interested, detail: "An enquiry, not a sale" },
-      ]} />
+      <section aria-labelledby="results-now" className="border-b border-stroke-soft-200 pb-1">
+        <h2 id="results-now" className="text-label-sm text-text-strong-950">Right now <span className="ml-1 text-paragraph-xs font-normal text-text-soft-400">current counts, not limited to the period</span></h2>
+        <WorkspaceStats className="py-3" items={[
+          { label: "Needs you", value: r.now.needsYou, detail: "Open decisions" },
+          { label: "Drafts to review", value: r.now.draftsAwaitingReview, detail: "Replies waiting" },
+          { label: "Action required", value: r.now.actionRequired, detail: `${r.now.followUpsDue} follow-ups due` },
+          { label: "Plans waiting", value: r.now.plansAwaitingStart, detail: "For your Start" },
+          { label: "Still to send", value: r.now.stillToSend.email + r.now.stillToSend.whatsapp + r.now.stillToSend.linkedin + r.now.stillToSend.instagram, detail: "Leads in sequences" },
+        ]} />
+      </section>
+
+      <section aria-labelledby="results-period">
+        <h2 id="results-period" className="text-label-sm text-text-strong-950">In this period <span className="ml-1 text-paragraph-xs font-normal text-text-soft-400">{r.period.label}</span></h2>
+        <WorkspaceStats className="py-3" items={[
+          { label: "Leads found", value: r.leads.found, detail: `${r.leads.qualified} qualified · ${r.leads.contactable} contactable` },
+          { label: "People contacted", value: o.peopleContacted, detail: "At least one accepted send" },
+          { label: "Replies", value: o.repliesReceived, detail: `From ${o.peopleReplied} people` },
+          { label: "Reply rate", value: percent(o.replyRate), detail: `${o.contactedWhoReplied} of ${o.peopleContacted} contacted replied` },
+          { label: "Interested", value: o.interested, detail: "An enquiry, not a sale" },
+        ]} />
+      </section>
       <div className="flex flex-wrap gap-x-6 gap-y-2 border-y border-stroke-soft-200 py-3 text-paragraph-xs text-text-sub-600">
         <span>Email sent <strong className="ml-1 text-text-strong-950">{o.emailsSent}</strong></span>
-        <span>WhatsApp sent <strong className="ml-1 text-text-strong-950">{o.whatsappSent}</strong></span>
+        <span>WhatsApp sent <strong className="ml-1 text-text-strong-950">{o.whatsappSent}</strong>{o.whatsappSent > 0 && <span className="ml-1">({o.whatsappDelivered} delivered · {o.whatsappRead} read)</span>}</span>
         <span>LinkedIn <strong className="ml-1 text-text-strong-950">{o.linkedinInvitations} requests · {o.linkedinMessages} messages</strong></span>
         <span>Instagram DMs <strong className="ml-1 text-text-strong-950">{o.instagramSent}</strong></span>
         <span>Answered <strong className="ml-1 text-text-strong-950">{o.automaticReplies} by AI · {o.repliesByYou} by you</strong></span>
@@ -117,37 +148,9 @@ export default function ResultsClient({ initial }: { initial: ResultsPayload }) 
           <Link href="/crm/pipeline" className="mt-4 inline-block text-label-xs text-text-strong-950 underline underline-offset-4">Open leads &amp; replies</Link>
         </Section>
         <Section title="Where leads came from">
-          {r.leads.bySource.length ? (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[24rem] text-left text-paragraph-xs">
-                <thead>
-                  <tr className="text-text-soft-400">
-                    <th className="py-1 pr-3 font-normal">Source</th>
-                    <th className="pr-3 text-right font-normal">Found</th>
-                    <th className="pr-3 text-right font-normal">Contactable</th>
-                    <th className="text-right font-normal">Left out</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {r.leads.bySource.map((s) => (
-                    <tr key={s.source} className="border-t border-stroke-soft-200 text-text-strong-950">
-                      <td className="py-1.5 pr-3">{s.label}</td>
-                      <td className="pr-3 text-right tabular-nums">{s.found}</td>
-                      <td className="pr-3 text-right tabular-nums">{s.contactable}</td>
-                      <td className="text-right tabular-nums">{s.leftOut}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <p className="mt-1 text-paragraph-xs text-text-soft-400">
-                Counts show saved audience records with an available contact route. They do not confirm delivery or interest.
-              </p>
-            </div>
-          ) : (
-            <p className="text-paragraph-xs text-text-soft-400">No leads were found or imported in this period.</p>
-          )}
+          <LeadSourcesTable sources={r.leads.sources} empty="No leads were found or imported in this period." />
         </Section>
-        <Section title="Still to send">
+        <Section title="Still to send (now)">
           <p className="text-paragraph-xs">{r.pending.emailFollowUps} email leads, {r.pending.whatsappFollowUps} WhatsApp leads and {r.pending.linkedinSteps} LinkedIn leads are still in their sequences (active campaigns, now). {r.pending.instagramDms} initial Instagram DMs are queued or being submitted.</p>
           <p className="mt-1 text-paragraph-xs text-text-soft-400">Email {describeChannelSending(r.sending.email)}.</p>
           <p className="text-paragraph-xs text-text-soft-400">WhatsApp {describeChannelSending(r.sending.whatsapp)}.</p>
@@ -204,6 +207,13 @@ export default function ResultsClient({ initial }: { initial: ResultsPayload }) 
             </table>
           </div>
         ) : <EmptyState compact icon={RiMailSendLine} title="No outreach runs in this period" description="Try another date range, or open the assistant to plan your next outreach." action={<Link href="/assistant" className="rounded-lg bg-bg-strong-950 px-4 py-2 text-label-xs text-text-white-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-base">Open assistant</Link>} />}
+      </Section>
+
+      <Section title="How these figures are counted" collapsible>
+        <p className="mb-3 text-paragraph-xs text-text-soft-400">
+          The same definitions as Analytics, for whole local days in {r.period.timeZone}. A send counts once its provider accepted it; queued, failed and uncertain sends never do.
+        </p>
+        <MetricDefinitions keys={SHARED_METRIC_KEYS} />
       </Section>
 
       <Section title="Daily summaries" collapsible>

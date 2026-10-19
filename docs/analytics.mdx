@@ -12,14 +12,15 @@ Analytics shows how conversations turn into meetings and customers, and which ch
 
 ## Pick a period
 
-The date control at the top right sets the period for everything below it. Choose **Last 7 days**, **Last 30 days** (the default), **Last 90 days**, **This month** or **Last month**, or enter a **Custom range** with a start and end date and choose **Apply range**. A custom range can span at most 180 days.
+The date control at the top right sets the period for everything below it. Choose **Today**, **Yesterday**, **Last 7 days**, **Last 30 days** (the default), **Last 90 days**, **This month** or **Last month**, or enter a **Custom range** with a start and end date and choose **Apply range**. A custom range can span at most 180 days.
 
-- Days are cut in your browser's time zone.
+- Days are whole days in your organization's time zone (**Settings**, **Organization**, **General**), the same zone the assistant's **Overview** uses. **Today**, **Yesterday**, **Last 7 days** and **Last 30 days** cover exactly the same days on both pages, so the same figure for the same period is the same number on both.
+- A link can name another zone with `?tz=`, for example `?tz=Europe/London`. The page then says it is an override and names your organization's zone beside it.
 - Charts show one point a day for ranges up to 62 days, and one point a week for longer ranges.
 - The refresh button reloads the numbers, and a label next to the tabs shows how long ago they loaded.
 - The page remembers the view and period in its address, so you can bookmark or share a link to it.
 
-Cards that describe the present, such as Needs attention, mailbox capacity and account lists, say "right now, regardless of the date range" and do not change with the period.
+Cards that describe the present, such as Needs attention, mailbox capacity and account lists, say "now" or "right now, regardless of the date range" and do not change with the period. **How these figures are counted**, at the foot of the Overview tab, lists each shared definition.
 
 ## Compare with the previous period
 
@@ -33,7 +34,9 @@ The **Overview** tab starts with the conversations in your CRM and then shows wh
 
 | Figure | What it counts |
 |---|---|
+| **Contacted** | Distinct people with at least one outreach message the provider accepted in the period. Queued, failed and uncertain sends are not sends. |
 | **Replies** | Inbound messages received in CRM conversations in the period, on any channel. |
+| **Reply rate** | People contacted in the period who replied after their first send in it, divided by people contacted. |
 | **Positive** | Distinct CRM records moved into Interested or Customer in the period. |
 | **Meetings** | Distinct CRM records moved into a meeting or demo stage in the period. No-shows are not counted. |
 | **Customers** | Distinct CRM records moved into Customer in the period. |
@@ -50,15 +53,19 @@ Positive, Meetings and Customers count records that moved into the stage during 
 
 ### Channels and funnel
 
-Under **Outreach**, the **Channels** table compares **Email**, **LinkedIn** and **WhatsApp** by people **Reached**, **Replied**, **Reply rate** and **Positive**. Select a row to open that channel's tab. Reached counts distinct people with any outbound touch in the period: an email, a LinkedIn invitation or message, a WhatsApp call or an outbound WhatsApp message.
+Under **Outreach**, the **Channels** table compares **Email**, **LinkedIn** and **WhatsApp** (and **Instagram** when it has activity) by messages **Sent**, people **Contacted**, **Replied**, **Reply rate** and **Positive**. Select a row to open that channel's tab. Sent counts outreach messages the provider accepted: emails, WhatsApp campaign messages, LinkedIn invitations, acceptance messages and follow-ups, and initial Instagram DMs. Contacted counts distinct people sent at least one of them; Replied counts those people who replied on that channel after their first send in the period. Calls and messages typed on the phone are not outreach sends; the WhatsApp tab counts them separately.
 
-The **Conversion funnel** runs from Reached to Replied, Positive, Meeting and Customer. Its counts are for the period. They are not one group of people followed from first touch to customer, so a later stage can include people you reached before the period began.
+The **Conversion funnel** runs from Contacted to Replied, Positive, Meeting and Customer. Its counts are for the period. They are not one group of people followed from first touch to customer, so a later stage can include people you contacted before the period began.
+
+**Where leads came from** lists, per source and provider (for example **Google Maps through the built-in scraper**, **Instagram through Apify** or **Website search through TinyFish**), the leads **Found**, **Qualified** (saved as a lead: an open business or profile that matched) and **Contactable** (with an open contact route and not Do Not Contact). A person found by several sources is listed under each, and counted once in the total.
 
 ## Needs attention
 
-**Needs attention** lists what is open right now, with a count for each and a link to where you can fix it:
+**Needs attention now** lists what is open right now, with a count for each and a link to where you can fix it. These are the same counts the navigation badges and the assistant's Overview show:
 
-- **Action required**, conversations waiting on you, opens the queue.
+- **Needs you**, open decisions waiting for you, such as missing information or a meeting. Interested and opt-out reports are not counted.
+- **Action required**, conversations in the queue, opens the queue.
+- **Plans waiting for Start**, outreach plans prepared and waiting for you. Nothing is sent for them until you start them.
 - **Follow-ups due**, follow-ups drafted or past their time.
 - **Drafts to review**, AI replies waiting for approval.
 - **Failing mailboxes**, email accounts that cannot send, opens **Settings**, **Mailboxes**.
@@ -73,19 +80,21 @@ Each channel has its own tab with a figure strip, a chart and per-campaign detai
 
 <AccordionGroup>
   <Accordion title="Email">
-    **Emails sent** (first touches and follow-ups), **Leads contacted** (distinct leads sent a first email), **Replied** (distinct people who sent an inbound email reply), **Reply rate** (replied divided by leads contacted), **Bounced** and **Unsubscribed** (addresses added to the suppression list in the period).
+    **Emails sent** (first touches and follow-ups the provider accepted), **People contacted** (distinct people sent at least one email), **Replied** (of them, people who replied by email after their first email in the period), **Reply rate** (replied divided by people contacted), **Bounced** and **Unsubscribed** (addresses added to the suppression list in the period).
 
     Opens and clicks are not recorded, so there are no open or click rates. **Mailbox capacity today** shows what each mailbox has sent against its daily limit, and **Campaigns** lists sends for the period alongside all-time leads, replies and bounces.
   </Accordion>
   <Accordion title="LinkedIn">
-    **Invites sent**, **Accepted** (counted when the accept is recorded, which can be for an earlier invite), **Acceptance rate** (accepted divided by invites sent), **Messages sent** (after a connection), **Replied** and **Reply rate**. LinkedIn reply rate divides by accepted connections, not by invites sent.
+    **Invites sent** and **Messages sent** (the acceptance message and follow-ups) count what LinkedIn accepted from the sender. **Accepted** is counted when the accept is recorded, which can be for an earlier invite; **Acceptance rate** is accepted divided by invites sent. **Replied** counts people sent an invitation or message in the period who replied on LinkedIn after it, and **Reply rate** divides them by the people contacted on LinkedIn.
 
     **Accounts** and **Daily invite capacity** show connection state and today's invitations against each account's limit.
   </Accordion>
   <Accordion title="WhatsApp">
+    **Campaign outreach** covers campaign messages WhatsApp accepted (**Sent**), how many WhatsApp reported **Delivered** and **Read**, **People contacted**, **Replied** and **Reply rate**, defined as on the other tabs. Delivered is not proof that a person saw the message.
+
     **Calls** covers **Calls placed**, **Connected**, **Connect rate**, **Talk time** and **Avg call**, with **Call outcomes**: Connected, Did not pick up, Not on WhatsApp, Failed and In progress. Calls counted are those placed from AgentSDR.
 
-    **Messages** covers **Messages sent** (sent by AgentSDR or typed on the phone or WhatsApp Web), **Messages received**, **Chat reply rate** (of chats you wrote in during the period, the share that got a later reply) and **New chats** (started from AgentSDR).
+    **Chat messages** covers **Chat messages out** (every outbound message: campaign sends, replies, and messages typed on the phone or WhatsApp Web), **Chat messages in**, **Chat reply rate** (of chats you wrote in during the period, the share that got a later reply) and **New chats** (started from AgentSDR).
   </Accordion>
 </AccordionGroup>
 

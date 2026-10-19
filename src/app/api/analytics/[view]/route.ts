@@ -17,8 +17,9 @@ const LOADERS: Record<AnalyticsView, (range: AnalyticsRange) => Promise<Analytic
 };
 
 /**
- * GET /api/analytics/{overview|email|linkedin|whatsapp}?from=YYYY-MM-DD&to=YYYY-MM-DD&tz=Area/City
- * Behind the site auth like every other /api route (src/proxy.ts).
+ * GET /api/analytics/{overview|email|linkedin|whatsapp}?range=7d (a preset, or YYYY-MM-DD..YYYY-MM-DD)
+ * or ?from=YYYY-MM-DD&to=YYYY-MM-DD; &tz=Area/City overrides the organization's business time zone.
+ * Behind the site auth like every other /api route (src/proxy.ts). Read-only.
  */
 export async function GET(request: NextRequest, context: { params: Promise<{ view: string }> }) {
   const { view } = await context.params;
@@ -26,8 +27,10 @@ export async function GET(request: NextRequest, context: { params: Promise<{ vie
     return Response.json({ error: `Unknown analytics view: ${view}` }, { status: 404 });
   }
   try {
-    const range = parseAnalyticsRange(request.nextUrl.searchParams);
-    return await withOrgContext(request, async () => Response.json(await LOADERS[view as AnalyticsView](range)));
+    return await withOrgContext(request, async () => {
+      const range = await parseAnalyticsRange(request.nextUrl.searchParams);
+      return Response.json(await LOADERS[view as AnalyticsView](range));
+    });
   } catch (error) {
     const denied = authContextErrorResponse(error);
     if (denied) return denied;

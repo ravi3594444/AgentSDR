@@ -4,6 +4,8 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentOrganizationId } from "@/lib/tenancy/scope";
 import { MAX_LEAD_RETRIES } from "@/lib/linkedin/inviteRetry";
+import type { PeriodMetrics } from "@/lib/reporting/metrics";
+import { LINKEDIN_OUTREACH_TYPES, periodMetrics, reportFilter } from "@/lib/reporting/metrics.server";
 import {
   bucketFor,
   bucketStarts,
@@ -12,7 +14,7 @@ import {
   type AnalyticsRange,
   type LinkedinAnalytics,
 } from "./contract";
-import { inCurrentOrPreviousRange, inPreviousRange, inRange, localDay, num, runLimited } from "./server";
+import { inCurrentOrPreviousRange, inPreviousRange, inRange, localDay, num, previousWindow, rangeWindow, runLimited } from "./server";
 
 const CAMPAIGN_ROW_CAP = 25;
 
@@ -33,13 +35,10 @@ type MessageRow = {
   d: string | null;
   total: boolean;
   invites: unknown;
-  invites_prev: unknown;
-  messages: unknown;
-  messages_prev: unknown;
   messaged: unknown;
-  replied: unknown;
-  replied_prev: unknown;
 };
+
+type ReplyRow = { d: string; replied: unknown };
 
 type AcceptedRow = { d: string | null; total: boolean; accepted: unknown; accepted_prev: unknown };
 
@@ -66,10 +65,10 @@ type CampaignRow = {
 type CampaignInviteRow = { campaign_id: string; d: string; invites: unknown };
 
 /**
- * LinkedIn view. Five queries, at most three in flight (runLimited):
- *  1. "Message" (canonical rows only): invites, outbound messages, distinct messaged and
- *     replied leads for both periods, plus a per-day split (the GROUPING SETS total row
- *     has `total = true`).
+ * LinkedIn view. Eight statements, at most three in flight (runLimited):
+ *  1. "Message" (canonical rows LinkedIn accepted only, as the shared send definition
+ *     counts them): invites and distinct messaged leads, per day and in total (the
+ *     GROUPING SETS total row has `total = true`).
  *  2. Accepted connections, same shape. An acceptance is timestamped
  *     COALESCE(Lead.acceptMessageSentAt, Connection.connectedAt): acceptMessageSentAt is
  *     set on every processed acceptance, with or without acceptance text
@@ -79,15 +78,19 @@ type CampaignInviteRow = { campaign_id: string; d: string; invites: unknown };
  *  3. Accounts now.
  *  4. Campaigns with lead counts (all time).
  *  5. Invites per campaign per day (Lead.requestSentAt) for sentInRange ordering and trend.
+ *  6. Inbound LinkedIn messages per day (the shared reply ledger), for the chart.
+ *  7–8. The shared figures (src/lib/reporting/metrics.server.ts) for the range and the one
+ *     before: invitations and messages sent, people contacted, contacted who replied,
+ *     reply rate — the same numbers Overview shows for LinkedIn.
  *
- * Replied is distinct leads with a RECEIVED message. The per-day series counts distinct
- * leads per day and buckets sum those, so in weekly mode a lead replying on two days
- * counts twice in the chart; the KPI and funnel use the true distinct count.
+ * The chart's replies are messages; the KPI and the funnel use the shared distinct count
+ * of contacted people who replied.
  *
  * Indexes that would help at scale: "Message" (type, createdAt), "Lead" (requestSentAt).
  */
 export async function getLinkedinAnalytics(range: AnalyticsRange): Promise<LinkedinAnalytics> {
   const org = currentOrganizationId();
+  const filter = await reportFilter();
   const msgTs = utc(sql`m."createdAt"`);
   const acceptTs = utc(sql`COALESCE(l."acceptMessageSentAt", c."connectedAt")`);
   const inviteTs = utc(sql`l."requestSentAt"`);
@@ -99,19 +102,14 @@ export async function getLinkedinAnalytics(range: AnalyticsRange): Promise<Linke
       () =>
         db.execute<MessageRow>(sql`
           SELECT d, GROUPING(d) = 1 AS total,
-            count(*) FILTER (WHERE type = 'INVITATION' AND ${inRange(sql`ts`, range)})::int AS invites,
-            count(*) FILTER (WHERE type = 'INVITATION' AND ${inPreviousRange(sql`ts`, range)})::int AS invites_prev,
-            count(*) FILTER (WHERE type NOT IN ('INVITATION', 'RECEIVED') AND ${inRange(sql`ts`, range)})::int AS messages,
-            count(*) FILTER (WHERE type NOT IN ('INVITATION', 'RECEIVED') AND ${inPreviousRange(sql`ts`, range)})::int AS messages_prev,
-            count(DISTINCT lead_id) FILTER (WHERE type NOT IN ('INVITATION', 'RECEIVED') AND ${inRange(sql`ts`, range)})::int AS messaged,
-            count(DISTINCT lead_id) FILTER (WHERE type = 'RECEIVED' AND ${inRange(sql`ts`, range)})::int AS replied,
-            count(DISTINCT lead_id) FILTER (WHERE type = 'RECEIVED' AND ${inPreviousRange(sql`ts`, range)})::int AS replied_prev
+            count(*) FILTER (WHERE type = 'INVITATION')::int AS invites,
+            count(DISTINCT lead_id) FILTER (WHERE type <> 'INVITATION')::int AS messaged
           FROM (
-            SELECT m.type, m."leadId" AS lead_id, ${msgTs} AS ts, ${localDay(msgTs, range)} AS d
+            SELECT m.type, m."leadId" AS lead_id, ${localDay(msgTs, range)} AS d
             FROM "Message" m
             WHERE m."organizationId" = ${org} AND m."duplicateOfMessageId" IS NULL
-              AND (m.type <> 'RECEIVED' OR m."leadId" IS NOT NULL)
-              AND ${inCurrentOrPreviousRange(msgTs, range)}
+              AND m.type IN ${LINKEDIN_OUTREACH_TYPES} AND m."linkedinMessageId" IS NOT NULL
+              AND ${inRange(msgTs, range)}
           ) t
           GROUP BY GROUPING SETS ((), (d))
         `),
@@ -179,6 +177,16 @@ export async function getLinkedinAnalytics(range: AnalyticsRange): Promise<Linke
           WHERE l."organizationId" = ${org} AND l."campaignId" IS NOT NULL AND ${inRange(inviteTs, range)}
           GROUP BY l."campaignId", d
         `),
+      () =>
+        db.execute<ReplyRow>(sql`
+          SELECT ${localDay(sql`m.sent_at`, range)} AS d, count(*)::int AS replied
+          FROM crm_conversation_messages m
+          WHERE m.direction = 'inbound' AND m.channel = 'linkedin' AND ${inRange(sql`m.sent_at`, range)}
+            AND m.conversation_id IN (SELECT id FROM crm_conversations WHERE organization_id = ${org})
+          GROUP BY 1
+        `),
+      () => periodMetrics(rangeWindow(range), filter),
+      () => periodMetrics(previousWindow(range), filter),
     ],
     3,
   );
@@ -187,18 +195,21 @@ export async function getLinkedinAnalytics(range: AnalyticsRange): Promise<Linke
   const accountRows = results[2] as AccountRow[];
   const campaignRows = results[3] as CampaignRow[];
   const inviteRows = results[4] as CampaignInviteRow[];
+  const replyRows = results[5] as ReplyRow[];
+  const current = results[6] as PeriodMetrics;
+  const previous = results[7] as PeriodMetrics;
 
   const mTotal = messageRows.find((r) => r.total);
   const mDays = messageRows.filter((r) => !r.total && r.d !== null) as Array<MessageRow & { d: string }>;
   const aTotal = acceptedRows.find((r) => r.total);
   const aDays = acceptedRows.filter((r) => !r.total && r.d !== null) as Array<AcceptedRow & { d: string }>;
 
-  const invites = num(mTotal?.invites);
-  const invitesPrev = num(mTotal?.invites_prev);
+  const invites = current.sent.linkedinInvitations;
+  const invitesPrev = previous.sent.linkedinInvitations;
   const accepted = num(aTotal?.accepted);
   const acceptedPrev = num(aTotal?.accepted_prev);
-  const replied = num(mTotal?.replied);
-  const repliedPrev = num(mTotal?.replied_prev);
+  const replied = current.contactedWhoReplied.byChannel.linkedin;
+  const repliedPrev = previous.contactedWhoReplied.byChannel.linkedin;
 
   const starts = bucketStarts(range);
   const trends = new Map<string, Map<string, number>>();
@@ -243,16 +254,18 @@ export async function getLinkedinAnalytics(range: AnalyticsRange): Promise<Linke
       invites: { value: invites, previous: invitesPrev },
       accepted: { value: accepted, previous: acceptedPrev },
       acceptanceRate: { value: ratio(accepted, invites), previous: ratio(acceptedPrev, invitesPrev) },
-      messages: { value: num(mTotal?.messages), previous: num(mTotal?.messages_prev) },
+      messages: { value: current.sent.linkedinMessages, previous: previous.sent.linkedinMessages },
+      contacted: { value: current.peopleContacted.byChannel.linkedin, previous: previous.peopleContacted.byChannel.linkedin },
       replied: { value: replied, previous: repliedPrev },
-      replyRate: { value: ratio(replied, accepted), previous: ratio(repliedPrev, acceptedPrev) },
+      replyRate: { value: current.replyRate.byChannel.linkedin, previous: previous.replyRate.byChannel.linkedin },
     },
     activity: toSeries(
       ["invites", "accepted", "replied"] as const,
       range,
       [
-        ...mDays.map((r) => ({ date: r.d, invites: num(r.invites), replied: num(r.replied) })),
+        ...mDays.map((r) => ({ date: r.d, invites: num(r.invites) })),
         ...aDays.map((r) => ({ date: r.d, accepted: num(r.accepted) })),
+        ...replyRows.map((r) => ({ date: r.d, replied: num(r.replied) })),
       ],
     ),
     funnel: [
