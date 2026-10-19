@@ -255,7 +255,12 @@ export async function prepareOutreach(input: PrepareInput): Promise<Proposal> {
   const instructions = input.instructions?.trim() || null;
   const memberByPerson = new Map(members.map((member) => [member.personId, member]));
   const leadRows = await loadPeople(assignments.map((assignment) => assignment.personId));
-  const nameOf = (personId: string) => memberByPerson.get(personId)?.name ?? leadRows.get(personId)?.person.fullName ?? "Lead";
+  // A business found on Maps with only a phone has no person name: its business name, not its number, names it.
+  const nameOf = (personId: string) => {
+    const person = leadRows.get(personId)?.person;
+    const business = typeof person?.raw.businessName === "string" && person.raw.businessName.trim() ? person.raw.businessName.trim() : null;
+    return person?.fullName ?? business ?? memberByPerson.get(personId)?.name ?? "Lead";
+  };
 
   // 1. Sort the leads: what kind each is, and whether it gets its group's
   // message, one written for it alone, or nothing (with the reason).
