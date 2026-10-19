@@ -19,7 +19,9 @@ import {
   parseObjectiveControls,
   spendFromLedgers,
   spendRoom,
+  SPEND_CAP_COVERS,
   usd,
+  webSearchLedger,
   type ContactRoutes,
   type ControlDefaults,
   type LedgerRow,
@@ -57,8 +59,12 @@ export const SEARCH_JOB_KINDS = ["discovery", "linkedin_search", "web_discovery"
 
 type Executor = Pick<typeof db, "select">;
 
-/** Checks paid work against the request's spend cap inside the caller's reservation transaction (row-locking the objective). */
-export type SpendGuard = (tx: Executor, wantUsd: number) => Promise<SpendRoom>;
+/**
+ * Checks paid work against the request's spend cap inside the caller's
+ * reservation transaction (serialized per request). `credits`: work priced
+ * in credits, not dollars (Tavily), which only a free-only ($0) cap refuses.
+ */
+export type SpendGuard = (tx: Executor & Pick<typeof db, "execute">, wantUsd: number, options?: { credits?: boolean }) => Promise<SpendRoom>;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** The driver's first look, after the request's own turn has started its searches. */
@@ -66,16 +72,31 @@ const FIRST_LOOK_MS = 30_000;
 /** How long a stopped objective waits for searches already running before it reports anyway. */
 const SETTLE_MS = 30 * 60_000;
 
-/** Whether a job serves the request (its own id, or the outreach request id of a "find and contact" search). */
-function servesRequest(requestId: string): SQL {
-  return sql`(${assistantJobs.payload} ->> 'requestMessageId' = ${requestId} or ${assistantJobs.payload} -> 'contactAfter' ->> 'requestId' = ${requestId})`;
+/** The request a job's payload serves, in SQL: the same rule as jobRequestId. */
+export function jobRequestSql(): SQL {
+  return sql`coalesce(${assistantJobs.payload} ->> 'requestMessageId', ${assistantJobs.payload} -> 'contactAfter' ->> 'requestId')`;
 }
 
-/** The request a job serves, from its payload. */
+/** Whether a job serves the request (jobRequestId): each search serves exactly one. */
+function servesRequest(requestId: string): SQL {
+  return sql`${jobRequestSql()} = ${requestId}`;
+}
+
+/**
+ * The one request a job serves, from its payload: the request it was
+ * started for (requestMessageId), else, for a job from before that was
+ * recorded, the request its "find and contact" plan answers. Spend, leads,
+ * coverage and refusals all read it, so a search never counts under two.
+ */
 export function jobRequestId(job: { payload: unknown }): string | null {
   const payload = (job.payload ?? {}) as { requestMessageId?: unknown; contactAfter?: { requestId?: unknown } | null };
   if (typeof payload.requestMessageId === "string") return payload.requestMessageId;
   return typeof payload.contactAfter?.requestId === "string" ? payload.contactAfter.requestId : null;
+}
+
+/** Serializes every paid check of one request (objective or not), inside the caller's transaction. */
+async function lockRequestSpend(tx: Pick<typeof db, "execute">, requestId: string): Promise<void> {
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`request-spend:${currentOrganizationId()}:${requestId}`}, 0))`);
 }
 
 async function tolerant<T>(read: () => Promise<T>, missing: T): Promise<T> {
@@ -173,7 +194,10 @@ export async function ensureObjective(input: { requestMessageId: string | null |
 export function controlsSentence(objective: Pick<Objective, "leadTarget" | "timeLimitMinutes" | "spendCapUsd" | "controls">): string {
   const named = objective.controls.named ?? { target: false, time: false, spend: false };
   const tag = (fromOwner: boolean) => (fromOwner ? "" : " (default)");
-  return `This request keeps searching on its own until it has ${objective.leadTarget} qualified leads${tag(named.target)}, for up to ${formatDuration(objective.timeLimitMinutes * 60_000)}${tag(named.time)}, spending at most ${objective.spendCapUsd > 0 ? usd(objective.spendCapUsd) : "nothing (free sources only)"}${tag(named.spend)} on paid sources; the owner can name other limits in a request, or pause or cancel it, and gets one final report.`;
+  const spend = objective.spendCapUsd > 0
+    ? `spending at most ${usd(objective.spendCapUsd)}${tag(named.spend)} on paid sources`
+    : `on free sources only (a $0 spend cap${tag(named.spend)}: no Apify, Treg, browser, Tavily or AI web research)`;
+  return `This request keeps searching on its own until it has ${objective.leadTarget} qualified leads${tag(named.target)}, for up to ${formatDuration(objective.timeLimitMinutes * 60_000)}${tag(named.time)}, ${spend}; the owner can name other limits in a request, or pause or cancel it, and gets one final report. ${SPEND_CAP_COVERS}`;
 }
 
 // ── What it found and spent ──────────────────────────────────────────────────
@@ -258,13 +282,9 @@ export async function objectiveSpend(objective: Pick<Objective, "requestMessageI
   for (const row of usage) rows.push({ ledger: "usage", ...row });
   for (const job of children) {
     if (job.kind !== "web_discovery") continue;
-    const payload = (job.payload ?? {}) as { searches?: { costUsd?: unknown }[]; searchProvider?: unknown; queries?: unknown[] };
-    const result = (job.result ?? {}) as { costUsd?: unknown };
-    const cost = typeof result.costUsd === "number"
-      ? result.costUsd
-      : (payload.searches ?? []).reduce((sum, search) => sum + (typeof search.costUsd === "number" ? search.costUsd : 0), 0);
-    if (cost > 0) rows.push({ ledger: "ai_search", costUsd: cost });
-    if (payload.searchProvider === "tavily") rows.push({ ledger: "tavily_job", credits: Array.isArray(payload.queries) ? payload.queries.length : 0 });
+    const payload = (job.payload ?? {}) as Parameters<typeof webSearchLedger>[0];
+    const result = (job.result ?? {}) as { searches?: unknown };
+    rows.push(...webSearchLedger({ ...payload, searches: payload.searches ?? result.searches }));
   }
   return spendFromLedgers(rows);
 }
@@ -280,16 +300,77 @@ export async function objectiveSpend(objective: Pick<Objective, "requestMessageI
 export async function objectiveSpendGuard(requestId: string | null | undefined): Promise<SpendGuard | undefined> {
   const objective = await objectiveForRequest(requestId);
   if (!objective) return undefined;
-  return async (tx, wantUsd) => {
+  return async (tx, wantUsd, options) => {
+    await lockRequestSpend(tx, objective.requestMessageId);
     const [row] = await tx.select().from(assistantObjectives)
       .where(and(inOrg(assistantObjectives), eq(assistantObjectives.id, objective.id))).for("update");
     if (!row) return { ok: true, maxUsd: Number.POSITIVE_INFINITY };
     if (row.status === "paused") return { ok: false, wait: true, reason: "the owner paused this request's research" };
     if (row.status === "stopped") return { ok: false, wait: false, reason: `this request's research has stopped (${stopText(row)})` };
     if (Date.now() >= row.deadlineAt.getTime()) return { ok: false, wait: false, reason: "this request's time limit has passed" };
+    if (options?.credits) return creditRoom(row.spendCapUsd);
     const spend = await objectiveSpend(row, tx);
     return spendRoom({ capUsd: row.spendCapUsd, settledUsd: spend.settledUsd, reservedUsd: spend.reservedUsd, wantUsd });
   };
+}
+
+/** Work priced in credits (Tavily): refused only by a free-only cap; the dollars cap does not measure it. */
+function creditRoom(capUsd: number): SpendRoom {
+  return capUsd > 0 ? { ok: true, maxUsd: Number.POSITIVE_INFINITY } : spendRoom({ capUsd, settledUsd: 0, reservedUsd: 0, wantUsd: 0 });
+}
+
+/** The owner message a request is, in this organization: its text and chat. */
+async function requestMessage(requestId: string): Promise<{ content: string; threadId: string } | null> {
+  const [message] = await db.select({ content: assistantMessages.content, threadId: assistantMessages.threadId, role: assistantMessages.role })
+    .from(assistantMessages).where(and(inOrg(assistantMessages), eq(assistantMessages.id, requestId))).limit(1);
+  return message?.role === "user" ? message : null;
+}
+
+/**
+ * The request's spend cap: its objective's, else the budget its own words
+ * name (parseObjectiveControls), else the organization's default. Null when
+ * the id is not an owner message here.
+ */
+export async function requestSpendCap(requestId: string | null | undefined): Promise<number | null> {
+  if (!requestId || !UUID.test(requestId)) return null;
+  const objective = await objectiveForRequest(requestId);
+  if (objective) return objective.spendCapUsd;
+  const message = await requestMessage(requestId);
+  return message ? parseObjectiveControls(message.content, await objectiveDefaults()).spendCapUsd : null;
+}
+
+/**
+ * The spend guard of paid work a request's turn does itself (a Treg call,
+ * the browser), which starts no search and so no objective: the
+ * objective's guard when its research has one; otherwise the cap the
+ * request names or the default, against the same ledgers, serialized by
+ * the same per-request lock. It creates nothing.
+ */
+export async function requestSpendGuard(requestId: string | null | undefined): Promise<SpendGuard | undefined> {
+  const objectiveGuard = await objectiveSpendGuard(requestId);
+  if (objectiveGuard) return objectiveGuard;
+  const capUsd = await requestSpendCap(requestId);
+  if (capUsd === null || !requestId) return undefined;
+  return async (tx, wantUsd, options) => {
+    await lockRequestSpend(tx, requestId);
+    if (options?.credits) return creditRoom(capUsd);
+    const spend = await objectiveSpend({ requestMessageId: requestId }, tx);
+    return spendRoom({ capUsd, settledUsd: spend.settledUsd, reservedUsd: spend.reservedUsd, wantUsd });
+  };
+}
+
+/**
+ * Why paid work for the request may not go on right now (its research is
+ * paused, has stopped, or its time passed), or null. For steps of work
+ * already reserved, such as the browser after it opened.
+ */
+export async function requestHoldReason(requestId: string | null | undefined): Promise<string | null> {
+  const objective = await objectiveForRequest(requestId);
+  if (!objective) return null;
+  if (objective.status === "paused") return "the owner paused this request's research";
+  if (objective.status === "stopped") return `this request's research has stopped (${stopText(objective)})`;
+  if (Date.now() >= objective.deadlineAt.getTime()) return "this request's time limit has passed";
+  return null;
 }
 
 function stopText(objective: Pick<Objective, "stopReason" | "stopDetail">): string {

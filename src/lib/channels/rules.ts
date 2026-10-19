@@ -369,7 +369,7 @@ export const CHANNEL_RULES = {
       key: "objectiveSpendUsd",
       kind: "number",
       label: "Spend a request may use",
-      help: "The most one request's research may spend on paid sources (Apify runs, Treg calls, the metered browser) when the request names no budget. 0 keeps every request on free sources. Each provider's own budget still applies.",
+      help: "The most one request may spend on paid sources when it names no budget: Apify runs, Treg calls, browser minutes and AI web research (held at an estimate until the provider reports the cost). Tavily searches are counted in credits under your daily Tavily cap instead, and the AI model's own use for chat and writing is not counted (your AI provider bills it). 0 keeps every request on free sources only: TinyFish, the built-in Google Maps scraper, LinkedIn search, Hacker News and Stack Exchange. Each provider's own budget still applies.",
       unit: "USD",
       default: 5,
       min: 0,

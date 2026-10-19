@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  AI_SEARCH_ESTIMATE_USD,
   continuationNote,
   limitReached,
   nextDriverStep,
@@ -8,8 +9,10 @@ import {
   outcomeOf,
   parseObjectiveControls,
   reasonText,
+  requestSpendLine,
   spendFromLedgers,
   spendRoom,
+  webSearchLedger,
   type Continuation,
   type DriverFacts,
 } from "./objective";
@@ -141,6 +144,43 @@ describe("spend: reserve then settle, from the ledgers", () => {
     const room = spendRoom({ capUsd: 0, settledUsd: 0, reservedUsd: 0, wantUsd: 0.01 });
     expect(room).toMatchObject({ ok: false, wait: false });
     expect(room.ok ? "" : room.reason).toMatch(/free sources/);
+  });
+});
+
+describe("a website search's spend: AI web research at its cost or estimate, Tavily in credits made", () => {
+  const search = (provider: string | null, costUsd: number | null, extra: Record<string, unknown> = {}) => ({ query: "q", sources: 3, provider, model: "m", costUsd, error: null, ...extra });
+
+  test("reported costs count as settled spend", () => {
+    const spend = spendFromLedgers(webSearchLedger({ searchProvider: "openrouter", searches: [search("openrouter", 0.012), search("openrouter", 0.018)], searchIndex: 2 }));
+    expect(spend.aiSearchUsd).toBe(0.03);
+    expect(spend.settledUsd).toBe(0.03);
+    expect(spend.reservedUsd).toBe(0);
+  });
+
+  test("a search under way is held at its estimate until it reports; one whose cost never came back counts at its estimate", () => {
+    const underWay = spendFromLedgers(webSearchLedger({ searchProvider: "aimlapi", searches: [search("aimlapi", 0.01)], searchIndex: 1, searchStarted: 1, searchEstimateUsd: AI_SEARCH_ESTIMATE_USD }));
+    expect(underWay.reservedUsd).toBe(AI_SEARCH_ESTIMATE_USD);
+    expect(underWay.totalUsd).toBe(0.06);
+    expect(underWay.settledUsd).toBe(0.01);
+    const lost = spendFromLedgers(webSearchLedger({ searchProvider: "openrouter", searches: [search(null, null, { error: "interrupted", estimateUsd: 0.05 }), search("openrouter", null)], searchIndex: 2, searchStarted: 1 }));
+    expect(lost.aiSearchUsd).toBe(0.1);
+    expect(lost.uncertainUsd).toBe(0.1);
+    expect(lost.reservedUsd).toBe(0);
+  });
+
+  test("Tavily counts one credit per search made (and one under way), not per query planned; TinyFish is free", () => {
+    const tavily = spendFromLedgers(webSearchLedger({ searchProvider: "tavily", searches: [search("tavily", null), search(null, null, { error: "timeout" })], searchIndex: 2, searchStarted: 2 }));
+    expect(tavily.tavilyCredits).toBe(3);
+    expect(tavily.totalUsd).toBe(0);
+    const notYet = spendFromLedgers(webSearchLedger({ searchProvider: "tavily", searches: [], searchIndex: 0 }));
+    expect(notYet.tavilyCredits).toBe(0);
+    const free = spendFromLedgers(webSearchLedger({ searchProvider: "tinyfish", searches: [search("tinyfish", 0), search("tinyfish", 0)], searchIndex: 2, searchStarted: 1 }));
+    expect(free.totalUsd).toBe(0);
+    expect(free.tavilyCredits).toBe(0);
+  });
+
+  test("a TinyFish wait (searchStarted -1) holds nothing", () => {
+    expect(webSearchLedger({ searchProvider: "openrouter", searches: [], searchIndex: 0, searchStarted: -1 })).toEqual([]);
   });
 });
 
@@ -288,6 +328,23 @@ describe("wording", () => {
     expect(text).toMatch(/^Research finished: the target was reached/);
     expect(text).toMatch(/26 qualified leads of the 25 wanted\./);
     expect(text).toMatch(/Recorded spend: \$0\.00/);
+  });
+
+  test("the report says what the cap counts, keeps Tavily in credits, and never claims nothing was spent when something was", () => {
+    const tavily = spendFromLedgers([{ ledger: "tavily_job", credits: 4 }, { ledger: "ai_search", costUsd: 0.05, state: "uncertain" }]);
+    const text = objectiveReportText({ request: "x", reason: "sources_exhausted", detail: "", leads: 3, leadTarget: 25, routes: { email: 3, whatsapp: 0, linkedin: 0, instagram: 0 }, spend: tavily, spendCapUsd: 5, sources, web: null, stillRunning: 0 });
+    expect(text).toMatch(/\$0\.05 of the \$5\.00 cap \(AI web research \$0\.05, \$0\.05 counted at an estimate because the provider did not report the cost\); 4 Tavily credits, limited by your daily Tavily cap/);
+    expect(text).toMatch(/AI model's own use for chat and writing is not in this figure/);
+    const freeOnly = objectiveReportText({ request: "x", reason: "sources_exhausted", detail: "", leads: 0, leadTarget: 25, routes: { email: 0, whatsapp: 0, linkedin: 0, instagram: 0 }, spend: spendFromLedgers([]), spendCapUsd: 0, sources, web: null, stillRunning: 0 });
+    expect(freeOnly).toMatch(/Recorded spend: nothing \(free sources only\)/);
+    const note = continuationNote({ request: "x", n: 1, leads: 0, leadTarget: 25, spend: spendFromLedgers([{ ledger: "treg", status: "succeeded", costUsd: 0.02, ceilingUsd: 0.5 }]), spendCapUsd: 0, msLeft: 60_000, sources, web: null });
+    expect(note).toMatch(/Spent \$0\.02 \(free sources only/);
+    expect(note).not.toMatch(/Spent nothing/);
+  });
+
+  test("Activity's request spend line", () => {
+    expect(requestSpendLine(1.2, 5)).toBe("$1.20 of $5.00 spent");
+    expect(requestSpendLine(0, 0)).toBe("free sources only, nothing spent");
   });
 
   test("a source's recorded reason is said once, and cut at a word", () => {

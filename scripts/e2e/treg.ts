@@ -195,6 +195,28 @@ await runInOrganization(a.org.id, async () => {
   check("treg_call returns the answer with what it cost", callTool.ok && callTool.summary.includes(`jane@acme-${stamp}.example`) && /charged \$0\.0005/.test(callTool.summary), callTool.summary.slice(0, 200));
   const badTool = await runTool("treg_call", { endpointId: "treg.people.email.find", query: "domain=acme.example" }, context);
   check("treg_call refuses arguments of the wrong shape before calling", !badTool.ok && badTool.refused === true);
+
+  // ------------------------------------------------------------ the request's own spend cap, with no lead search behind it
+  await saveTregSettings({ dailyCapUsd: 2 }, a.owner.id);
+  const { addMessage } = await import("@/lib/assistant/threads.server");
+  const { objectiveForRequest } = await import("@/lib/assistant/objective.server");
+  const asked = await addMessage({ threadId: thread.id, role: "user", content: "look up these Instagram profiles, spend up to $0.02", createdBy: a.owner.id });
+  const askedContext = { threadId: thread.id, userId: a.owner.id, ownerText: asked.content, requestMessageId: asked.id, searchRequestId: asked.id };
+  const lookups: { ok: boolean; summary: string }[] = [];
+  for (let n = 0; n < 12; n += 1) {
+    const result = await runTool("treg_call", { endpointId: "treg.instagram.user.profile", query: { username: `glow.salon.${n}` } }, askedContext);
+    lookups.push(result);
+    if (!result.ok) break;
+  }
+  const spentForRequest = (await db.select({ cost: tregCalls.costUsd }).from(tregCalls).where(and(eq(tregCalls.organizationId, a.org.id), eq(tregCalls.requestId, asked.id)))).reduce((sum, row) => sum + (row.cost ?? 0), 0);
+  const stopped = lookups.at(-1)!;
+  check("a request's Treg calls stop at the budget it names, though no lead search made it an objective",
+    lookups.length > 1 && !stopped.ok && /spend cap of \$0\.02 leaves \$0\.008, less than the \$0\.01/.test(stopped.summary) && spentForRequest <= 0.02 + 1e-9 && !(await objectiveForRequest(asked.id)),
+    `${lookups.length} calls, $${spentForRequest.toFixed(6)} recorded; last: ${stopped.summary}`);
+  const freeOnly = await addMessage({ threadId: thread.id, role: "user", content: "find Jane's work email but don't spend anything", createdBy: a.owner.id });
+  const callsBefore = treg.calls.length;
+  const refusedFree = await runTool("treg_call", { endpointId: "treg.people.email.find", body: { full_name: "Jane Doe", domain: "acme.example" } }, { threadId: thread.id, userId: a.owner.id, ownerText: freeOnly.content, requestMessageId: freeOnly.id, searchRequestId: freeOnly.id });
+  check("a free-only request ($0) makes no Treg call at all", !refusedFree.ok && /limited to free sources/.test(refusedFree.summary) && treg.calls.length === callsBefore, refusedFree.summary);
 });
 
 // ------------------------------------------------------------ the second organization

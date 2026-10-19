@@ -144,7 +144,7 @@ const { saveApifySettings, startTrackedRun, sweepStaleRuns } = await import("@/l
 const { setApifyApiBase } = await import("@/services/apify");
 const { setDiscoveryPageOptions } = await import("@/lib/discovery/discovery.server");
 const { setFeature, clearFeatureCache } = await import("@/lib/features/flags.server");
-const { runAgentTurn } = await import("@/lib/assistant/agent.server");
+const { continueAfterEvent, runAgentTurn } = await import("@/lib/assistant/agent.server");
 const { createThread, listMessages } = await import("@/lib/assistant/threads.server");
 const { runOneAssistantStep, reconcileAssistantJobReports } = await import("@/lib/assistant/worker");
 const { registerAssistantJobs, reportFinishedJob } = await import("@/lib/assistant/register.server");
@@ -599,6 +599,25 @@ await runInOrganization(a.org.id, async () => {
     const reports = await reportsOf(thread.id, objective.id);
     check("one report, however often a restart, the reconciliation or a duplicate callback asks", reports.length === 1 && (await jobRow(driver.id)).status === "succeeded", String(reports.length));
     check("…and it covers both searches and the leads they found", /12 qualified leads of the 25 wanted; 13 still to find/.test(reports[0]?.content ?? ""), reports[0]?.content ?? "");
+  }
+
+  // ---------------------------------------------------------- 6a. a turn a finished job started serves that job's request
+  {
+    const thread = await createThread(a.owner.id);
+    const requestId = await ask(thread.id, "find opticians in Pune", turn("", [{ tool: "find_leads", args: { what: "opticians", where: "Pune" } }]));
+    const later = await ask(thread.id, "thanks", [reply("You're welcome.")]);
+    // A search of the request ended (here, as a finished job's event would): the assistant continues on its own.
+    replies = turn("Trying eye clinics too.", [{ tool: "find_leads", args: { what: "eye clinics", where: "Pune" } }]);
+    await continueAfterEvent(thread.id, requestId);
+    const started = (await db.select().from(schema.assistantJobs).where(and(eq(schema.assistantJobs.organizationId, a.org.id), eq(schema.assistantJobs.threadId, thread.id), eq(schema.assistantJobs.kind, "discovery"))))
+      .find((job) => (job.payload as { criteria?: { what?: string } }).criteria?.what === "eye clinics");
+    const tool = (await listMessages(thread.id, 500)).filter((row) => row.tool === "find_leads").at(-1);
+    check("a turn a finished job started files its search under that job's request, not the owner's later message",
+      (started?.payload as { requestMessageId?: string } | undefined)?.requestMessageId === requestId && later !== requestId && (tool?.toolResult as { requestId?: string } | null)?.requestId === requestId && !(await objectives.objectiveForRequest(later)),
+      JSON.stringify({ request: (started?.payload as { requestMessageId?: string } | undefined)?.requestMessageId, expected: requestId, later, tool: (tool?.toolResult as { requestId?: string } | null)?.requestId }));
+    const objective = await objectives.objectiveForRequest(requestId);
+    await objectives.setObjectiveState(objective!.id, "cancel", { name: null });
+    await db.update(schema.assistantJobs).set({ status: "cancelled" }).where(and(eq(schema.assistantJobs.organizationId, a.org.id), eq(schema.assistantJobs.threadId, thread.id), inArray(schema.assistantJobs.status, ["queued", "running"])));
   }
 
   // ---------------------------------------------------------- nothing left open

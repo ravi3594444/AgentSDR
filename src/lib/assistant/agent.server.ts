@@ -19,10 +19,10 @@ import { localDate } from "./results";
 import { organizationTimeZone } from "./results.server";
 import type { TurnEnd } from "./objective";
 import { objectiveForRequest } from "./objective.server";
-import { assistantJobs, type AssistantAttachment, type BusinessProfile } from "./schema";
+import { assistantJobs, assistantMessages, type AssistantAttachment, type BusinessProfile } from "./schema";
 import { addMessage, claimThread, listMessages, releaseThread, touchThread, updateMessage } from "./threads.server";
 import { recordUsage } from "./usage.server";
-import { runTool, setupSnapshot, toolCatalog, toolNamesFor, type ToolContext, type ToolResult } from "./tools.server";
+import { runTool, searchRequestId, setupSnapshot, toolCatalog, toolNamesFor, type ToolContext, type ToolResult } from "./tools.server";
 import { observationKey } from "./observation";
 import { closeBrowser } from "@/lib/browser/browser.server";
 import { instagramCapabilityProblem } from "./instagramContacts";
@@ -69,7 +69,7 @@ function systemPrompt(features: FeatureState, autonomy: AutonomyCaps | null = nu
     "12. For results (leads found, messages sent, replies, interested people, what waits for the owner, spending), call report; never estimate figures yourself. If asked why messages are queued, call diagnose_delivery once and report its recorded blockers. Sending hours use the sender's configured timezone, never a lead's city. Do not repeat report, list_runs or check_setup merely to say you are checking; they cannot reveal a new cause without new data. Stop once the available evidence is reported.",
     "13. When the owner greets you, thanks you or chats, answer in one or two warm, natural sentences and offer the one next step that fits them: with an empty BUSINESS PROFILE, ask what the business sells and to whom (or to attach a brochure or a contact list); with a complete one, offer to find customers or show results. Run no tools for small talk, and never save information the owner did not give.",
     "14. suggestions: up to three short replies the owner might send next, in their own words and language (e.g. \"We sell dental equipment servicing in Pune\", \"Find dental clinics in Pune and contact them\", \"Show today's results\"). Suggest only what you could act on; none while a plan card waits for Start or a decision card waits for an answer.",
-    "15. A request that finds leads is pursued to an end: it keeps going by itself until it has its lead target, its time limit or spend cap is reached, nothing else fits, or the owner pauses or cancels it (control_research), and it ends with one report. The owner can name the limits in the request (\"find 50…\", \"within 2 hours\", \"spend up to $10\"); otherwise Settings → Organization has the defaults. The first search's TOOL line says which apply: tell the owner once. When an EVENT says the request is continuing on its own, pick the next source or a different query by the yields it lists, start it (with contactAfter when the request asked to contact people), and say in one sentence what you started; never repeat a search that already ran. When nothing else fits the request, start nothing and say so in one sentence.",
+    "15. A request that finds leads is pursued to an end: it keeps going by itself until it has its lead target, its time limit or spend cap is reached, nothing else fits, or the owner pauses or cancels it (control_research), and it ends with one report. The owner can name the limits in the request (\"find 50…\", \"within 2 hours\", \"spend up to $10\"); otherwise Settings → Organization has the defaults. The first search's TOOL line says which apply: tell the owner once. When an EVENT says the request is continuing on its own, pick the next source or a different query by the yields it lists, start it (with contactAfter when the request asked to contact people), and say in one sentence what you started; never repeat a search that already ran. When nothing else fits the request, start nothing and say so in one sentence. The spend cap counts Apify runs, Treg calls, browser minutes and AI web research; a $0 cap means free sources only (TinyFish, the built-in Google Maps scraper, LinkedIn search, Hacker News and Stack Exchange), so paid tools are refused for it; Tavily is shown in credits under its own daily cap, and your own model use is not counted. When the owner's new message adds to a request whose research is still running in this chat (\"use Instagram too\", \"add Mumbai as well\"), pass sameRequest true on that search so it counts toward the same request and its limits; a request whose research has stopped takes no more searches, and a new message then starts a new request.",
     ...(autonomy ? ["", ...autonomousRules(autonomy), "These autonomous rules override rules 2, 5, 10, 11 and 14 where they differ: plans start on their own, you do not offer and wait, and you keep going."] : []),
     "",
     "TOOLS",
@@ -119,10 +119,12 @@ async function ownerDocumentsText(maxChars = 60_000): Promise<string> {
 export async function runToolInThread(context: ToolContext, tool: string, args: Record<string, unknown>): Promise<ToolResult> {
   const row = await addMessage({ threadId: context.threadId, role: "tool", tool, toolInput: args, status: "running", content: "" });
   const result = await runTool(tool, args, context);
+  // The request the tool served, so what the assistant did for a request is counted by its id (coverage.server.ts webToolUse).
+  const requestId = searchRequestId(context);
   await updateMessage(row.id, {
     status: result.ok ? "ok" : "error",
     content: result.summary,
-    toolResult: { summary: result.summary, ...(result.display ? { display: result.display } : {}), ...(result.data ? { data: result.data } : {}), ...(result.refused ? { hidden: true } : {}) },
+    toolResult: { summary: result.summary, ...(result.display ? { display: result.display } : {}), ...(result.data ? { data: result.data } : {}), ...(result.refused ? { hidden: true } : {}), ...(requestId ? { requestId } : {}) },
   });
   return result;
 }
@@ -150,6 +152,13 @@ export async function runAgentTurn(input: {
    * for it), and onEnd records how it ended before the chat is let go.
    */
   continuation?: { requestMessageId: string; request: string; outreach: boolean; onEnd: (end: TurnEnd) => Promise<void> };
+  /**
+   * A turn a finished job started (continueAfterEvent): the owner request
+   * that job served. Its searches and paid work serve that request, and its
+   * words are the owner's text, whatever the owner wrote since. Not a
+   * driver continuation: nothing about the chat's claim or its end changes.
+   */
+  eventRequestId?: string | null;
 }): Promise<TurnEnd> {
   if (!input.continuation && !(await claimThread(input.threadId))) throw new AssistantBusyError();
   let heartbeat: ReturnType<typeof setInterval> | null = null;
@@ -178,8 +187,10 @@ export async function runAgentTurn(input: {
     const history = await listMessages(input.threadId, 40);
     const lastOwnerIndex = history.map((message) => message.role).lastIndexOf("user");
     const continuation = input.continuation ?? null;
+    // A turn a finished job started serves that job's request (an owner message of this chat), like a continuation does.
+    const eventRequest = !continuation && input.text === null && input.eventRequestId ? await ownerMessageInThread(input.threadId, input.eventRequestId) : null;
     // A continuation serves its own request, whatever the owner wrote since.
-    const ownerText = continuation?.request ?? input.text ?? history[lastOwnerIndex]?.content ?? "";
+    const ownerText = continuation?.request ?? input.text ?? eventRequest?.content ?? history[lastOwnerIndex]?.content ?? "";
     // The assistant's last words before the owner's message: a "yes" to an offer of outreach is a request for it.
     const lastAssistantText = [...history.slice(0, Math.max(0, lastOwnerIndex))].reverse().find((message) => message.role === "assistant")?.content ?? null;
     // In Autonomous mode the owner's request to contact people stands for the work that follows it.
@@ -188,10 +199,10 @@ export async function runAgentTurn(input: {
     const outreachRequest = continuation ? (continuation.outreach ? continuation.request : null) : requestIndex === null ? null : history[requestIndex]!.content;
     // The owner's message that asked, by id: one Start may cover the plans of exactly this request.
     const outreachRequestId = continuation ? (continuation.outreach ? continuation.requestMessageId : null) : requestIndex === null ? null : history[requestIndex]!.id;
-    const requestMessageId = continuation?.requestMessageId ?? (lastOwnerIndex >= 0 ? history[lastOwnerIndex]!.id : null);
+    const requestMessageId = continuation?.requestMessageId ?? eventRequest?.id ?? (lastOwnerIndex >= 0 ? history[lastOwnerIndex]!.id : null);
     const outreachResearch = outreachRequestId && !continuation ? await objectiveForRequest(outreachRequestId).catch(() => null) : null;
     const searchRequestId = searchRequestFor({
-      continuationRequestId: continuation?.requestMessageId ?? null,
+      continuationRequestId: continuation?.requestMessageId ?? eventRequest?.id ?? null,
       latestOwnerId: lastOwnerIndex >= 0 ? history[lastOwnerIndex]!.id : null,
       outreachRequestId,
       outreachPending: requestIndex !== null && requestIndex === pendingIndex,
@@ -388,6 +399,14 @@ export async function runAgentTurn(input: {
   }
 }
 
+/** An owner message of this chat, by id (the request a finished job served), or null. */
+async function ownerMessageInThread(threadId: string, messageId: string): Promise<{ id: string; content: string } | null> {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(messageId)) return null;
+  const [row] = await db.select({ id: assistantMessages.id, content: assistantMessages.content }).from(assistantMessages)
+    .where(and(inOrg(assistantMessages), eq(assistantMessages.id, messageId), eq(assistantMessages.threadId, threadId), eq(assistantMessages.role, "user"))).limit(1);
+  return row ?? null;
+}
+
 /** In Autonomous mode, starts the plan a tool just prepared; true when it started (or the chat is not autonomous). */
 async function startedOnItsOwn(threadId: string, autonomous: boolean, data: Record<string, unknown> | undefined): Promise<boolean> {
   if (!autonomous) return true;
@@ -406,9 +425,9 @@ async function startedOnItsOwn(threadId: string, autonomous: boolean, data: Reco
  * into the thread (a search finished), the way it would after an owner
  * message. Skipped when a turn is already running: that turn sees the event.
  */
-export async function continueAfterEvent(threadId: string): Promise<void> {
+export async function continueAfterEvent(threadId: string, requestId: string | null = null): Promise<void> {
   try {
-    await runAgentTurn({ threadId, userId: null, text: null });
+    await runAgentTurn({ threadId, userId: null, text: null, eventRequestId: requestId });
   } catch (error) {
     if (!(error instanceof AssistantBusyError)) console.error("[assistant] continuing after an event failed:", error);
   }

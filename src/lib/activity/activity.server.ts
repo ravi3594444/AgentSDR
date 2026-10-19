@@ -4,6 +4,7 @@ import { and, desc, eq, gte, inArray, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { assistantJobs, assistantThreads, outreachRuns } from "@/lib/assistant/schema";
 import { displayThreadTitle } from "@/lib/assistant/agent";
+import { requestSpendLine } from "@/lib/assistant/objective";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { crmNeedsYouSql, RAW_RECORD_COLUMNS } from "@/lib/crm/actionGroups.server";
 import { contactDisplayName } from "@/lib/crm/contactName";
@@ -60,6 +61,11 @@ const JOB_TITLES: Record<string, string> = {
   objective: "Lead request",
 };
 
+/** A lead request's spend against its cap ("$1.20 of $5.00 spent"), from its driver job's progress or result. */
+function spendOf(facts: { spentUsd?: unknown; spendCapUsd?: unknown }): string | null {
+  return typeof facts.spentUsd === "number" && typeof facts.spendCapUsd === "number" ? requestSpendLine(facts.spentUsd, facts.spendCapUsd) : null;
+}
+
 function iso(value: Date | null | undefined): string | null {
   return value ? value.toISOString() : null;
 }
@@ -77,10 +83,13 @@ export async function listWork(now = new Date()): Promise<WorkItem[]> {
     .orderBy(desc(outreachRuns.createdAt)).limit(40);
   const items: WorkItem[] = [];
   for (const { job, threadTitle } of jobs) {
-    const { state, reason } = jobState(job, now);
+    const { state, reason: stateReason } = jobState(job, now);
     const payload = (job.payload ?? {}) as { phrase?: unknown; criteria?: { customers?: unknown; where?: unknown } };
-    const progress = (job.progress ?? {}) as { source?: unknown; leads?: unknown };
-    const result = (job.result ?? {}) as { found?: unknown; eligible?: unknown };
+    const progress = (job.progress ?? {}) as { source?: unknown; leads?: unknown; spentUsd?: unknown; spendCapUsd?: unknown };
+    const result = (job.result ?? {}) as { found?: unknown; eligible?: unknown; spentUsd?: unknown; spendCapUsd?: unknown };
+    // A lead request says what it spent of its cap.
+    const spent = job.kind === "objective" ? spendOf(result) ?? spendOf(progress) : null;
+    const reason = spent ? [stateReason, spent].filter(Boolean).join("; ") : stateReason;
     const phrase = typeof payload.phrase === "string" ? payload.phrase : null;
     items.push({
       id: job.id,

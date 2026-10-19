@@ -9,7 +9,7 @@ import { continueAfterEvent, runToolInThread } from "./agent.server";
 import { coverageLineForJob } from "./coverage.server";
 import { autoStartPlan, threadAutonomy } from "./autonomy.server";
 import { runLinkedinSearchStep } from "./linkedinSearch.server";
-import { failObjective, nudgeObjective, objectiveForJob, objectiveHold, postObjectiveReport } from "./objective.server";
+import { failObjective, jobRequestId, nudgeObjective, objectiveForJob, objectiveHold, postObjectiveReport } from "./objective.server";
 import { runObjectiveStep } from "./objectiveDriver.server";
 import { runOutreachStartStep } from "./outreach.server";
 import { applyRequestApproval } from "./requestApproval.server";
@@ -197,7 +197,7 @@ export async function reportFinishedJob(job: AssistantJob): Promise<void> {
   if (search && !found) {
     // Autonomous mode: a search that failed or found nobody still wakes the assistant, to try elsewhere
     // (an objective's driver does that for its own request, once its searches are done).
-    if (!driven && (await threadAutonomy(job.threadId)).on) void continueAfterEvent(job.threadId);
+    if (!driven && (await threadAutonomy(job.threadId)).on) void continueAfterEvent(job.threadId, jobRequestId(job));
     return;
   }
   if (!search || job.status !== "succeeded" || !job.audienceId) return;
@@ -280,7 +280,7 @@ async function followUpSearch(job: AssistantJob, threadId: string, contactAfter:
     // The objective's driver continues its request once the plan is made (it waits for owed plans).
     if (driven) return;
     // Otherwise (or when the plan could not be made) the assistant picks up where the owner left it.
-    await continueAfterEvent(threadId);
+    await continueAfterEvent(threadId, jobRequestId(job));
   } catch (error) {
     console.error("[assistant] following up a finished search failed:", error);
   }

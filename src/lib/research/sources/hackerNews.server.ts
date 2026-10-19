@@ -5,7 +5,7 @@ import { blockQuota, reserveQuota, settleQuota } from "@/lib/quota/quota.server"
 import { HACKER_NEWS_LIMITS, HACKER_NEWS_PROVIDER, HACKER_NEWS_SCOPE, RESEARCH_API_PRODUCT } from "./catalog";
 import { ResearchSourceError, ResearchSourceWaitError } from "./errors";
 import { commentIdsToRead, hackerNewsApiUrl, parseHackerNewsItem, type HackerNewsItem, type HackerNewsThread } from "./hackerNews";
-import { getJson, mapWithLimit, type ResearchCallContext } from "./http.server";
+import { getJson, mapWithLimit, usageDetail, type ResearchCallContext } from "./http.server";
 
 /**
  * Reads a Hacker News thread through the official API: the item (one
@@ -22,7 +22,7 @@ const LABEL = "Hacker News API";
 function reserve(units: number, context: ResearchCallContext, detail: Record<string, unknown>) {
   return reserveQuota({
     provider: HACKER_NEWS_PROVIDER, product: RESEARCH_API_PRODUCT, scopeKey: HACKER_NEWS_SCOPE, units,
-    limits: HACKER_NEWS_LIMITS, label: LABEL, jobId: context.jobId, threadId: context.threadId, detail,
+    limits: HACKER_NEWS_LIMITS, label: LABEL, jobId: context.jobId, threadId: context.threadId, detail: usageDetail(context, detail),
   });
 }
 

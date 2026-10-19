@@ -174,6 +174,29 @@ await runInOrganization(a.org.id, async () => {
   const [failedUsage] = await db.select().from(providerUsage).where(and(eq(providerUsage.organizationId, a.org.id), eq(providerUsage.product, "browser"))).orderBy(desc(providerUsage.createdAt)).limit(1);
   check("an empty TinyFish Wallet: not opened, never topped up, no minutes counted", !poor.ok && /Wallet/.test(poor.summary) && /never tops it up/.test(poor.summary) && failedUsage?.status === "failed" && failedUsage.usedUnits === 0, poor.summary);
   createAnswer = () => json(201, { session_id: `br-b-${calls.length}`, cdp_url: `wss://cdp.tf.test/b${calls.length}`, base_url: "https://cdp.tf.test" });
+
+  // ---------------------------------------------------------- the request it serves: its spend cap and its pause
+  const { addMessage } = await import("@/lib/assistant/threads.server");
+  const { ensureObjective, objectiveForRequest, setObjectiveState } = await import("@/lib/assistant/objective.server");
+  const { assistantJobs } = await import("@/lib/assistant/schema");
+  const asking = (content: string) => addMessage({ threadId: thread.id, role: "user", content, createdBy: a.owner.id });
+  const requestCtx = (message: { id: string; content: string }) => ({ threadId: thread.id, userId: a.owner.id, ownerText: message.content, requestMessageId: message.id, searchRequestId: message.id });
+  const freeAsk = await asking("go through that directory's next pages, free sources only");
+  const createsBeforeFree = creates();
+  const freeOnly = await runTool("browser_open", { url: "https://example.com/agents" }, requestCtx(freeAsk));
+  check("a free-only request ($0 cap) opens no browser, though no lead search made it an objective", !freeOnly.ok && /limited to free sources/.test(freeOnly.summary) && creates() === createsBeforeFree && !(await objectiveForRequest(freeAsk.id)), freeOnly.summary);
+  const ask = await asking("find agents in Baner from that directory");
+  const openedForRequest = await runTool("browser_open", { url: "https://example.com/agents" }, requestCtx(ask));
+  // The request's research, as its first lead search would have made it; then the owner pauses it.
+  const ensured = await ensureObjective({ requestMessageId: ask.id, threadId: thread.id, userId: a.owner.id });
+  await db.update(assistantJobs).set({ status: "cancelled" }).where(and(eq(assistantJobs.organizationId, a.org.id), eq(assistantJobs.kind, "objective")));
+  await setObjectiveState(ensured!.objective.id, "pause", { name: null });
+  const heldStep = await runTool("browser_click", { n: 1 }, requestCtx(ask));
+  const [stillOpen] = await db.select().from(browserSessions).where(and(eq(browserSessions.organizationId, a.org.id), eq(browserSessions.status, "open")));
+  check("while the request's research is paused, no browser step runs and its browser is closed, so the minutes stop", openedForRequest.ok && !heldStep.ok && /paused/.test(heldStep.summary) && /browser was closed/.test(heldStep.summary) && !stillOpen, heldStep.summary);
+  const heldOpen = await runTool("browser_open", { url: "https://example.com/agents" }, requestCtx(ask));
+  check("…and none opens until it is resumed", !heldOpen.ok && /paused/.test(heldOpen.summary), heldOpen.summary);
+  await setObjectiveState(ensured!.objective.id, "cancel", { name: null });
 });
 
 await runInOrganization(b.org.id, async () => {

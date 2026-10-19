@@ -42,6 +42,7 @@ function progressOf(facts: ObjectiveFacts, waiting: string | null): Record<strin
     leads: facts.leads,
     leadTarget: facts.objective.leadTarget,
     spentUsd: facts.spend.totalUsd,
+    spendCapUsd: facts.objective.spendCapUsd,
     ...(waiting ? { waiting: { kind: "objective", reason: waiting } } : {}),
   };
 }
@@ -187,7 +188,7 @@ async function report(objective: Objective): Promise<StepOutcome> {
   return {
     next: "done",
     progress: { ...progressOf(facts, null), stage: "done" },
-    result: { objectiveId: objective.id, stopReason: objective.stopReason, leads: facts.leads, leadTarget: objective.leadTarget, spentUsd: facts.spend.totalUsd },
+    result: { objectiveId: objective.id, stopReason: objective.stopReason, leads: facts.leads, leadTarget: objective.leadTarget, spentUsd: facts.spend.totalUsd, spendCapUsd: objective.spendCapUsd },
   };
 }
 

@@ -132,6 +132,12 @@ export function usd(value: number): string {
   return `$${(Math.round(value * 100) / 100).toFixed(2)}`;
 }
 
+/** usd, with a tenth of a cent when whole cents would hide the difference (a few cents left of a cap). */
+function usdExact(value: number): string {
+  const cents = Math.round(value * 1_000) / 10;
+  return Number.isInteger(cents) ? usd(value) : `$${(Math.round(value * 1_000) / 1_000).toFixed(3)}`;
+}
+
 /**
  * Ledger rows that serve one request: its jobs' Apify runs, its Treg calls,
  * its metered provider use (provider_usage), the AI web research its website
@@ -141,8 +147,48 @@ export type LedgerRow =
   | { ledger: "apify"; status: string; usageUsd: number | null; maxChargeUsd: number }
   | { ledger: "treg"; status: string; costUsd: number | null; ceilingUsd: number }
   | { ledger: "usage"; provider: string; product: string; status: string; units: number; usedUnits: number | null }
-  | { ledger: "ai_search"; costUsd: number }
+  /** AI web research: its reported cost, or its estimate while it is under way ("open") or when its cost never came back ("uncertain"). */
+  | { ledger: "ai_search"; costUsd: number; state?: "open" | "uncertain" }
   | { ledger: "tavily_job"; credits: number };
+
+/**
+ * What one AI web research search (OpenRouter or AI/ML API, inside a website
+ * search) is held at against the request's cap before it is made, and
+ * counted at when its cost never comes back. A typical one reports a cent
+ * or two; the estimate stays above that so the cap is not overrun.
+ */
+export const AI_SEARCH_ESTIMATE_USD = 0.05;
+
+/** The website search providers whose searches are paid in dollars (AI web research). */
+export const AI_SEARCH_PROVIDERS: readonly string[] = ["openrouter", "aimlapi"];
+
+type WebSearchRecord = { provider?: unknown; costUsd?: unknown; estimateUsd?: unknown };
+
+/**
+ * A website search job's spend, from what it recorded: each AI web research
+ * search at its reported cost, else at its estimate (it may have been
+ * charged), the one under way at its estimate (held until it reports), and
+ * one Tavily credit per Tavily search made, not per query planned.
+ */
+export function webSearchLedger(payload: { searchProvider?: unknown; searches?: unknown; searchStarted?: unknown; searchIndex?: unknown; searchEstimateUsd?: unknown }): LedgerRow[] {
+  const searches = (Array.isArray(payload.searches) ? payload.searches : []) as WebSearchRecord[];
+  const ai = AI_SEARCH_PROVIDERS.includes(String(payload.searchProvider));
+  const rows: LedgerRow[] = [];
+  let reported = 0;
+  for (const search of searches) {
+    if (typeof search.costUsd === "number") reported += search.costUsd;
+    else if (ai) rows.push({ ledger: "ai_search", costUsd: typeof search.estimateUsd === "number" ? search.estimateUsd : AI_SEARCH_ESTIMATE_USD, state: "uncertain" });
+  }
+  if (reported > 0) rows.push({ ledger: "ai_search", costUsd: reported });
+  const started = typeof payload.searchStarted === "number" && payload.searchStarted >= 0 && payload.searchStarted >= (typeof payload.searchIndex === "number" ? payload.searchIndex : 0)
+    && payload.searchStarted >= searches.length;
+  if (started && ai) rows.push({ ledger: "ai_search", costUsd: typeof payload.searchEstimateUsd === "number" ? payload.searchEstimateUsd : AI_SEARCH_ESTIMATE_USD, state: "open" });
+  if (payload.searchProvider === "tavily") {
+    const credits = searches.length + (started ? 1 : 0);
+    if (credits) rows.push({ ledger: "tavily_job", credits });
+  }
+  return rows;
+}
 
 export type SpendBreakdown = {
   apifyUsd: number;
@@ -195,6 +241,8 @@ export function spendFromLedgers(rows: readonly LedgerRow[]): SpendBreakdown {
       if (row.status === "uncertain") spend.uncertainUsd += amount;
     } else if (row.ledger === "ai_search") {
       spend.aiSearchUsd += row.costUsd;
+      if (row.state === "open") spend.reservedUsd += row.costUsd;
+      if (row.state === "uncertain") spend.uncertainUsd += row.costUsd;
     } else {
       spend.tavilyCredits += row.credits;
     }
@@ -230,7 +278,7 @@ export function spendRoom(input: { capUsd: number; settledUsd: number; reservedU
   const left = capUsd - settledUsd - reservedUsd;
   if (left + EPSILON < Math.max(input.wantUsd, 0.01)) {
     if (reservedUsd > EPSILON) return { ok: false, wait: true, reason: `this request's other paid work holds ${usd(reservedUsd)} of its ${usd(capUsd)} spend cap until it settles` };
-    return { ok: false, wait: false, reason: `this request's spend cap of ${usd(capUsd)} leaves ${usd(Math.max(0, left))}, less than the ${usd(input.wantUsd)} this needs` };
+    return { ok: false, wait: false, reason: `this request's spend cap of ${usd(capUsd)} leaves ${usdExact(Math.max(0, left))}, less than the ${usdExact(Math.max(input.wantUsd, 0.01))} this needs` };
   }
   return { ok: true, maxUsd: round6(Math.max(0, left)) };
 }
@@ -412,9 +460,23 @@ function spendText(spend: SpendBreakdown, capUsd: number): string {
     spend.aiSearchUsd ? `AI web research ${usd(spend.aiSearchUsd)}` : null,
   ].filter(Boolean);
   const held = spend.reservedUsd ? `, ${usd(spend.reservedUsd)} of it held by paid work still open` : "";
-  const uncertain = spend.uncertainUsd ? `, ${usd(spend.uncertainUsd)} kept because a provider's answer was lost` : "";
-  const tavily = spend.tavilyCredits ? `; ${plural(spend.tavilyCredits, "Tavily credit")} (priced by your Tavily plan)` : "";
-  return `${usd(spend.totalUsd)} of the ${usd(capUsd)} cap${parts.length ? ` (${parts.join(", ")}${held}${uncertain})` : held || uncertain ? ` (${(held + uncertain).slice(2)})` : ""}${tavily}`;
+  const uncertain = spend.uncertainUsd ? `, ${usd(spend.uncertainUsd)} counted at an estimate because the provider did not report the cost` : "";
+  const tavily = spend.tavilyCredits ? `; ${plural(spend.tavilyCredits, "Tavily credit")}, limited by your daily Tavily cap rather than this one` : "";
+  const amount = capUsd > 0 ? `${usd(spend.totalUsd)} of the ${usd(capUsd)} cap` : `${spend.totalUsd > 0 ? usd(spend.totalUsd) : "nothing"} (free sources only)`;
+  return `${amount}${parts.length ? ` (${parts.join(", ")}${held}${uncertain})` : held || uncertain ? ` (${(held + uncertain).slice(2)})` : ""}${tavily}`;
+}
+
+/**
+ * What a request's spend cap covers, said wherever the cap is: the paid
+ * sources counted in dollars, Tavily shown in credits, and the AI model's
+ * own use, which is not counted.
+ */
+export const SPEND_CAP_COVERS = "It counts Apify runs, Treg calls, browser minutes and AI web research (held at an estimate until the provider reports its cost); Tavily searches are shown in credits and limited by your daily Tavily cap; the AI model's own use for chat and writing is not counted (your AI provider bills it).";
+
+/** A request's spend for Activity and the chat: "$1.20 of $5.00 spent", or free sources only. */
+export function requestSpendLine(spentUsd: number, capUsd: number): string {
+  if (capUsd <= 0) return spentUsd > 0 ? `${usd(spentUsd)} spent (free sources only)` : "free sources only, nothing spent";
+  return `${usd(spentUsd)} of ${usd(capUsd)} spent`;
 }
 
 /**
@@ -436,7 +498,7 @@ export function continuationNote(input: {
   const request = input.request.replace(/\s+/g, " ").trim().slice(0, 200);
   return [
     `Continuing your request “${request}” on its own (step ${input.n}): ${input.leads} of ${input.leadTarget} qualified leads so far, ${Math.max(0, input.leadTarget - input.leads)} to go.`,
-    `Spent ${input.spendCapUsd > 0 ? `${usd(input.spend.totalUsd)} of ${usd(input.spendCapUsd)}` : "nothing (free sources only)"}; ${formatDuration(input.msLeft)} left.`,
+    `Spent ${input.spendCapUsd > 0 ? `${usd(input.spend.totalUsd)} of ${usd(input.spendCapUsd)} on paid sources` : `${input.spend.totalUsd > 0 ? usd(input.spend.totalUsd) : "nothing"} (free sources only: no Apify, Treg, browser, Tavily or AI web research)`}${input.spend.tavilyCredits ? ` and ${plural(input.spend.tavilyCredits, "Tavily credit")}` : ""}; ${formatDuration(input.msLeft)} left.`,
     `Searched so far — ${sourcesText(input.sources, input.web)}.`,
     "Next: another source or a different query, chosen by these yields; a search that already ran is not repeated, and when nothing else fits the request the research stops here.",
   ].join(" ");
@@ -481,7 +543,7 @@ export function objectiveReportText(input: {
     `${head}: ${why} (request “${request}”).`,
     `${plural(input.leads, "qualified lead")} of the ${input.leadTarget} wanted${remaining ? `; ${remaining} still to find` : ""}.${routes.length ? ` Contact routes: ${routes.join(", ")}.` : ""}`,
     `Searched — ${sourcesText(input.sources, input.web)}.`,
-    `Recorded spend: ${spendText(input.spend, input.spendCapUsd)}.`,
+    `Recorded spend: ${spendText(input.spend, input.spendCapUsd)}. The AI model's own use for chat and writing is not in this figure; your AI provider bills it.`,
     input.stillRunning ? `${plural(input.stillRunning, "search", "searches")} still running when it stopped; ${input.stillRunning === 1 ? "its" : "their"} leads are saved as ${input.stillRunning === 1 ? "it finishes" : "they finish"}.` : null,
     "Every lead found is kept: the lead lists are in this chat, and the people in Leads.",
   ].filter(Boolean).join(" ");

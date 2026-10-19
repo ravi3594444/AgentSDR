@@ -829,6 +829,116 @@ try {
   await runInOrganization(orgs.A, async () => {
     check("F: another organization sees none of F's findings", (await audienceProspects(audienceF)) === null);
   });
+
+  // ------------------------------------------------------------ G: the request's spend cap and state, search by search
+  const [orgG] = await db.insert(organizations).values({ name: `Web discovery check G ${stamp}`, slug: `web-discovery-g-${stamp}` }).returning();
+  checkOrganizations.push(orgG!.id);
+  const { addMessage } = await import("@/lib/assistant/threads.server");
+  const { objectiveForRequest, objectiveView, setObjectiveState } = await import("@/lib/assistant/objective.server");
+  const asked = (threadId: string, content: string) => addMessage({ threadId, role: "user", content });
+  const askedCtx = (threadId: string, message: { id: string; content: string }) => ({ threadId, userId: null, ownerText: message.content, requestMessageId: message.id, searchRequestId: message.id });
+  // The objective drivers are not under test here: they are cancelled so the worker never takes one.
+  const parkDrivers = () => db.update(assistantJobs).set({ status: "cancelled" }).where(and(eq(assistantJobs.organizationId, orgG!.id), eq(assistantJobs.kind, "objective"), inArray(assistantJobs.status, ["queued", "running"])));
+  const jobOf = (result: { data?: Record<string, unknown> }) => String(result.data?.jobId ?? "");
+  const cancelJob = (id: string) => db.update(assistantJobs).set({ status: "cancelled" }).where(eq(assistantJobs.id, id));
+  const g = { capped: "", cappedRequest: "", paused: "", pausedRequest: "", pausedObjective: "" };
+  await runInOrganization(orgG!.id, async () => {
+    await setFeature("web_discovery", true, null);
+    const connectionId = await aiConnection("openrouter");
+    await saveByokSettings({ connectionId, providers: ["openai"], modelsByProvider: { openai: ["openai/gpt-5-mini"] }, defaultModel: { provider: "openai", modelId: "openai/gpt-5-mini" }, transcriptionModel: null, researchModel: null, researchDailyLimit: 25, byokOnlyConfirmed: true });
+    const thread = await createThread(null);
+    const capped = await asked(thread.id, "Find dental clinics in Baner, Pune, spend up to $0.06");
+    const started = await runTool("find_customers_on_web", { customers: "dental clinics", where: "Baner, Pune", maxResults: 5 }, askedCtx(thread.id, capped));
+    await parkDrivers();
+    g.capped = jobOf(started);
+    g.cappedRequest = capped.id;
+  });
+  // AI web research is held at its estimate ($0.05) before each search: the second no longer fits a $0.06 cap.
+  const aiBeforeG = aiCalls.length;
+  const runG = await runJob(g.capped);
+  const resultG = (runG.job.result ?? {}) as { note?: string | null; searches?: unknown[] };
+  check("G: AI web research stops at the request's spend cap mid-search: the next search is not made, and the job goes on with what it found",
+    runG.job.status === "succeeded" && aiCalls.length - aiBeforeG === 1 && (resultG.searches ?? []).length === 1 && /The other 1 search was not made: this request's spend cap of \$0\.06 leaves \$0\.047, less than the \$0\.05 this needs\./.test(resultG.note ?? ""),
+    JSON.stringify({ status: runG.job.status, calls: aiCalls.length - aiBeforeG, note: resultG.note, error: runG.job.error }));
+  await runInOrganization(orgG!.id, async () => {
+    const view = await objectiveView(g.cappedRequest);
+    check("G: …the request's recorded spend is what the search reported, within its cap", view?.spentUsd === 0.013 && view.spendCapUsd === 0.06, JSON.stringify({ spent: view?.spentUsd, cap: view?.spendCapUsd }));
+  });
+
+  // Paused between two searches: the next waits (nothing bought); resumed, it runs; cancelled, the rest are not made.
+  await runInOrganization(orgG!.id, async () => {
+    const pausedThread = await createThread(null);
+    const pausedAsk = await asked(pausedThread.id, "Find dental clinics in Aundh, Pune");
+    g.paused = jobOf(await runTool("find_customers_on_web", { customers: "dental clinics", where: "Aundh, Pune", maxResults: 5 }, askedCtx(pausedThread.id, pausedAsk)));
+    await parkDrivers();
+    g.pausedRequest = pausedAsk.id;
+    g.pausedObjective = (await objectiveForRequest(pausedAsk.id))!.id;
+  });
+  await runJob(g.paused, "searching");
+  await runInOrganization(orgG!.id, () => setObjectiveState(g.pausedObjective, "pause", { name: null }));
+  await parkDrivers();
+  const aiBeforePause = aiCalls.length;
+  const due = () => db.update(assistantJobs).set({ runAfter: new Date() }).where(eq(assistantJobs.id, g.paused));
+  await due();
+  await runOneAssistantStep({ jobId: g.paused });
+  const [heldJob] = await db.select().from(assistantJobs).where(eq(assistantJobs.id, g.paused));
+  check("G: a paused request's next paid search waits, and nothing is bought", heldJob?.status === "queued" && heldJob.stage === "searching" && aiCalls.length === aiBeforePause && /the next search waits: the owner paused this request's research/.test(JSON.stringify(heldJob.progress)), JSON.stringify({ status: heldJob?.status, progress: heldJob?.progress }));
+  await runInOrganization(orgG!.id, () => setObjectiveState(g.pausedObjective, "resume", { name: null }));
+  await parkDrivers();
+  await due();
+  await runOneAssistantStep({ jobId: g.paused });
+  check("G: …resumed, it searches", aiCalls.length === aiBeforePause + 1, String(aiCalls.length - aiBeforePause));
+  await runInOrganization(orgG!.id, () => setObjectiveState(g.pausedObjective, "cancel", { name: null }));
+  await parkDrivers();
+  const cancelledRun = await runJob(g.paused);
+  check("G: …cancelled, its remaining searches are not made and what it found is kept",
+    cancelledRun.job.status === "succeeded" && aiCalls.length === aiBeforePause + 1 && /(?:was|were) not made: this request's research has stopped \(cancelled by the owner\)/.test(String((cancelledRun.job.result as { note?: unknown } | null)?.note ?? "")),
+    JSON.stringify({ status: cancelledRun.job.status, calls: aiCalls.length - aiBeforePause, note: (cancelledRun.job.result as { note?: unknown } | null)?.note }));
+
+  await runInOrganization(orgG!.id, async () => {
+    // A free-only request ($0): website search here runs on OpenRouter, which is paid, so it is refused at the start.
+    const freeThread = await createThread(null);
+    const free = await asked(freeThread.id, "Find dental clinics in Wakad, Pune, free sources only");
+    const jobsBefore = (await db.select({ id: assistantJobs.id }).from(assistantJobs).where(and(inOrg(assistantJobs), eq(assistantJobs.kind, "web_discovery")))).length;
+    const refusedFree = await runTool("find_customers_on_web", { customers: "dental clinics", where: "Wakad, Pune" }, askedCtx(freeThread.id, free));
+    await parkDrivers();
+    const jobsAfter = (await db.select({ id: assistantJobs.id }).from(assistantJobs).where(and(inOrg(assistantJobs), eq(assistantJobs.kind, "web_discovery")))).length;
+    check("G: a free-only request makes no paid AI web search: refused at the start, no job", !refusedFree.ok && /limited to free sources/.test(refusedFree.summary) && /TinyFish Search is free/.test(refusedFree.summary) && jobsAfter === jobsBefore, refusedFree.summary);
+
+    // One request per search: a new request while an earlier outreach request stands is filed under the new one, in both places.
+    const idThread = await createThread(null);
+    const outreachAsk = await asked(idThread.id, "Find dental clinics in Pune and email them");
+    const newAsk = await asked(idThread.id, "Also look in Hadapsar");
+    const filed = await runTool("find_customers_on_web", { customers: "dental clinics", where: "Hadapsar, Pune", maxResults: 5, contactAfter: true },
+      { threadId: idThread.id, userId: null, ownerText: newAsk.content, outreachRequest: outreachAsk.content, outreachRequestId: outreachAsk.id, requestMessageId: newAsk.id, searchRequestId: newAsk.id });
+    await parkDrivers();
+    const [filedJob] = await db.select().from(assistantJobs).where(eq(assistantJobs.id, jobOf(filed)));
+    const filedPayload = (filedJob?.payload ?? {}) as { requestMessageId?: string; contactAfter?: { requestId?: string } };
+    check("G: a search serves one request: its own id and its plan's request are the same, and only that request has research",
+      filed.ok && filedPayload.requestMessageId === newAsk.id && filedPayload.contactAfter?.requestId === newAsk.id && Boolean(await objectiveForRequest(newAsk.id)) && !(await objectiveForRequest(outreachAsk.id)),
+      JSON.stringify({ ok: filed.ok, summary: filed.summary.slice(0, 160), payload: { requestMessageId: filedPayload.requestMessageId, contactAfter: filedPayload.contactAfter } }));
+    await cancelJob(jobOf(filed));
+
+    // A follow-up that adds a source joins the request still running in the chat (sameRequest), never a stopped one.
+    const joinThread = await createThread(null);
+    const first = await asked(joinThread.id, "Find dental clinics in Kothrud, Pune");
+    const firstSearch = await runTool("find_customers_on_web", { customers: "dental clinics", where: "Kothrud, Pune", maxResults: 5 }, askedCtx(joinThread.id, first));
+    await parkDrivers();
+    await cancelJob(jobOf(firstSearch));
+    const followUp = await asked(joinThread.id, "Use Instagram too");
+    const joined = await runTool("find_customers_on_web", { customers: "dental clinics", where: "Kothrud, Pune", maxResults: 5, sameRequest: true }, askedCtx(joinThread.id, followUp));
+    await parkDrivers();
+    const [joinedJob] = await db.select().from(assistantJobs).where(eq(assistantJobs.id, jobOf(joined)));
+    check("G: \"use Instagram too\" with sameRequest joins the request still running: its target, time and cap, no new request",
+      joined.ok && (joinedJob?.payload as { requestMessageId?: string } | undefined)?.requestMessageId === first.id && !(await objectiveForRequest(followUp.id)),
+      JSON.stringify({ ok: joined.ok, summary: joined.summary.slice(0, 160), request: (joinedJob?.payload as { requestMessageId?: string } | undefined)?.requestMessageId }));
+    await cancelJob(jobOf(joined));
+    await setObjectiveState((await objectiveForRequest(first.id))!.id, "cancel", { name: null });
+    await parkDrivers();
+    const late = await asked(joinThread.id, "And Baner as well");
+    const refusedJoin = await runTool("find_customers_on_web", { customers: "dental clinics", where: "Baner, Pune", maxResults: 5, sameRequest: true }, askedCtx(joinThread.id, late));
+    check("G: …and is refused once that request's research has stopped, saying a new request starts new research", !refusedJoin.ok && /has stopped \(cancelled by the owner\)/.test(refusedJoin.summary) && /without sameRequest/.test(refusedJoin.summary), refusedJoin.summary);
+  });
 } catch (error) {
   console.error(error);
   failures += 1;

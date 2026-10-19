@@ -253,6 +253,30 @@ await runInOrganization(b.org.id, async () => {
     await addMessage({ threadId: thread.id, role: "tool", tool: "web_search", toolInput: { query: "dentists Mumbai" }, status: "ok", content: search.summary, toolResult: { summary: search.summary } });
     const bounded = (await requestCoverageFor(request.id)).find((entry) => entry.platform === "web");
     check("a follow-up's searches count for the request; a later request's reads and searches do not", bounded?.state === "searched" && bounded.detail === "2 web searches, 1 page read", JSON.stringify(bounded));
+
+    // Tool results now carry the request they served: counted by that id, wherever in the chat they fall.
+    await addMessage({ threadId: thread.id, role: "tool", tool: "read_webpage", toolInput: { url: "https://example.com/late" }, status: "ok", content: read.summary, toolResult: { summary: read.summary, requestId: request.id } });
+    // Inside this request's time window, but recorded for the later request: not counted here.
+    const { assistantMessages } = await import("@/lib/assistant/schema");
+    await db.insert(assistantMessages).values({ organizationId: a.org.id, threadId: thread.id, role: "tool", tool: "web_search", toolInput: { query: "dentists Mumbai list" }, status: "ok", content: search.summary, toolResult: { summary: search.summary, requestId: nextRequest.id }, createdAt: new Date(request.createdAt.getTime() + 1) });
+    const byId = (await requestCoverageFor(request.id)).find((entry) => entry.platform === "web");
+    check("a result recorded with the request's id counts for it even after a later request; one recorded for the later request does not", byId?.detail === "2 web searches, 2 pages read", JSON.stringify(byId));
+
+    // A free-only request ($0 cap): web_search uses TinyFish's free search, never Tavily's paid credits.
+    const { requestSpendCap } = await import("@/lib/assistant/objective.server");
+    const freeAsk = await addMessage({ threadId: thread.id, role: "user", content: "find real estate agents in Pune, free sources only", createdBy: a.owner.id });
+    const freeContext = { threadId: thread.id, userId: a.owner.id, ownerText: freeAsk.content, requestMessageId: freeAsk.id, searchRequestId: freeAsk.id };
+    const freeSearch = await runTool("web_search", { query: "real estate agents Pune" }, freeContext);
+    check("a free-only request ($0 cap) still searches the web through TinyFish, which is free", (await requestSpendCap(freeAsk.id)) === 0 && freeSearch.ok && /TinyFish Search/.test(freeSearch.summary), freeSearch.summary.slice(0, 120));
+    const { tavilySettings } = await import("@/lib/tavily/schema");
+    const { encryptIntegrationCredential } = await import("@/lib/integrations/credentials");
+    await tf.saveTinyfishSettings({ useForWebSearch: false }, a.owner.id);
+    await db.insert(tavilySettings).values({ organizationId: a.org.id, encryptedKey: encryptIntegrationCredential(`tvly-free-only-check-${stamp}`), keyHint: "…heck", dailySearches: 10 });
+    const sentBefore = calls.length;
+    const paidSearch = await runTool("web_search", { query: "real estate agents Pune" }, freeContext);
+    check("…and with only Tavily left, it refuses rather than spend Tavily credits", !paidSearch.ok && /limited to free sources/.test(paidSearch.summary) && /Tavily/.test(paidSearch.summary) && calls.length === sentBefore, paidSearch.summary);
+    await db.delete(tavilySettings).where(eq(tavilySettings.organizationId, a.org.id));
+    await tf.saveTinyfishSettings({ useForWebSearch: true }, a.owner.id);
     coverageRequestId = request.id;
   });
   const seenByB = await runInOrganization(b.org.id, () => requestCoverageFor(coverageRequestId));

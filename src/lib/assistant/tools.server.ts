@@ -52,7 +52,7 @@ import { audienceProspects } from "./qualification.server";
 import { diagnoseDelivery } from "./deliveryDiagnostics.server";
 import { parseInstagramContacts } from "./instagramContacts";
 import { createInstagramContactsAudience } from "./instagramContacts.server";
-import { controlsSentence, ensureObjective, objectiveForRequest, objectiveLine, objectiveSpendGuard, objectiveStartProblem, setObjectiveState, threadObjectives } from "./objective.server";
+import { controlsSentence, ensureObjective, objectiveForRequest, objectiveLine, objectiveStartProblem, requestHoldReason, requestSpendCap, requestSpendGuard, setObjectiveState, threadObjectives } from "./objective.server";
 
 /**
  * What the assistant can do, and nothing else. Each tool is a call into an
@@ -91,7 +91,7 @@ export type ToolContext = {
  * searchRequestFor), else the outreach request when there is one (its plans
  * share it), else the owner's latest message.
  */
-function searchRequestId(context: ToolContext): string | null {
+export function searchRequestId(context: ToolContext): string | null {
   return context.searchRequestId ?? context.outreachRequestId ?? context.requestMessageId ?? null;
 }
 
@@ -308,7 +308,21 @@ function browserResult(verb: string, snapshot: PageSnapshot, problem: string | n
   };
 }
 
+/**
+ * The browser is paid by the minute for the request it serves: while that
+ * request's research is paused, or once it stopped or its time passed, no
+ * step runs and the chat's browser is closed, so it stops costing.
+ */
+async function browserHold(context: ToolContext): Promise<ToolResult | null> {
+  const reason = await requestHoldReason(searchRequestId(context));
+  if (!reason) return null;
+  const minutes = await closeBrowser(context.threadId);
+  return { ok: false, summary: `Not run: ${reason}.${minutes === null ? "" : " The chat's browser was closed."}` };
+}
+
 async function runBrowserStep(context: ToolContext, verb: string, action: BrowserAction): Promise<ToolResult> {
+  const held = await browserHold(context);
+  if (held) return held;
   try {
     const { snapshot, problem } = await browserAct(context.threadId, action, browserNavigationProblem);
     return browserResult(verb, snapshot, problem);
@@ -436,7 +450,7 @@ export const TOOLS: Record<string, Tool> = {
       if (area?.refused) throw new ToolArgumentError(area.problem);
       if (area) return { ok: false, summary: area.problem };
       if (args.provider !== undefined && args.provider !== null && args.provider !== "apify") throw new ToolArgumentError("provider may only be 'apify' (when the owner asked for Apify); leave it out otherwise");
-      const contactAfter = request ? { channels: channels(args) ?? null, ownerRequest: request, requestId: context.outreachRequestId ?? undefined } : null;
+      const contactAfter = request ? { channels: channels(args) ?? null, ownerRequest: request, requestId: searchRequestId(context) ?? undefined } : null;
       const objective = await searchObjective(context);
       if (objective.problem) return objectiveRefusal(objective.problem);
       try {
@@ -471,7 +485,7 @@ export const TOOLS: Record<string, Tool> = {
       const requested = Number(args.maxResults ?? 30);
       const maxResults = Number.isFinite(requested) ? Math.min(100, Math.max(5, Math.round(requested))) : 30;
       const request = args.contactAfter === true ? requireOutreachRequest(context) : null;
-      const contactAfter = request ? { channels: channels(args) ?? ["instagram", "email", "whatsapp"], ownerRequest: request, requestId: context.outreachRequestId ?? undefined } : null;
+      const contactAfter = request ? { channels: channels(args) ?? ["instagram", "email", "whatsapp"], ownerRequest: request, requestId: searchRequestId(context) ?? undefined } : null;
       const objective = await searchObjective(context);
       if (objective.problem) return objectiveRefusal(objective.problem);
       try {
@@ -510,7 +524,7 @@ export const TOOLS: Record<string, Tool> = {
       const requested = Number(args.maxResults ?? 30);
       const maxResults = Number.isFinite(requested) ? Math.min(100, Math.max(5, Math.round(requested))) : 30;
       const request = args.contactAfter === true ? requireOutreachRequest(context) : null;
-      const contactAfter = request ? { channels: channels(args) ?? (platform === "instagram" ? ["instagram", "email", "whatsapp"] : null), ownerRequest: request, requestId: context.outreachRequestId ?? undefined } : null;
+      const contactAfter = request ? { channels: channels(args) ?? (platform === "instagram" ? ["instagram", "email", "whatsapp"] : null), ownerRequest: request, requestId: searchRequestId(context) ?? undefined } : null;
       const objective = await searchObjective(context);
       if (objective.problem) return objectiveRefusal(objective.problem);
       try {
@@ -548,7 +562,7 @@ export const TOOLS: Record<string, Tool> = {
       if ("error" in criteria) throw new ToolArgumentError(criteria.error);
       if (args.contactAfter !== undefined && typeof args.contactAfter !== "boolean") throw new ToolArgumentError("contactAfter must be true or false");
       const request = args.contactAfter === true ? requireOutreachRequest(context) : null;
-      const contactAfter = request ? { channels: channels(args) ?? null, ownerRequest: request, requestId: context.outreachRequestId ?? undefined } : null;
+      const contactAfter = request ? { channels: channels(args) ?? null, ownerRequest: request, requestId: searchRequestId(context) ?? undefined } : null;
       const objective = await searchObjective(context);
       if (objective.problem) return objectiveRefusal(objective.problem);
       try {
@@ -610,7 +624,8 @@ export const TOOLS: Record<string, Tool> = {
       if (body && JSON.stringify(body).length > 4_000) throw new ToolArgumentError("body is too large (4,000 characters at most)");
       try {
         const requestId = searchRequestId(context);
-        const outcome = await callTregEndpoint({ endpointId: args.endpointId, query, body, threadId: context.threadId, requestId, spendGuard: await objectiveSpendGuard(requestId) });
+        // The request's spend cap applies with or without a lead search behind it (requestSpendGuard).
+        const outcome = await callTregEndpoint({ endpointId: args.endpointId, query, body, threadId: context.threadId, requestId, spendGuard: await requestSpendGuard(requestId) });
         const id = outcome.endpoint?.id ?? String(args.endpointId ?? "");
         if (!outcome.ok) {
           return { ok: false, summary: `Treg ${id} not used: ${outcome.reason}.${outcome.costUsd ? ` Counted: $${outcome.costUsd}.` : ""}`, display: `Not used: ${outcome.reason}` };
@@ -771,7 +786,10 @@ export const TOOLS: Record<string, Tool> = {
       const page = args.page === undefined ? 0 : Number(args.page);
       if (!Number.isInteger(page) || page < 0 || page > 3) throw new ToolArgumentError("page must be a whole number from 0 to 3");
       try {
-        const { provider, hits } = await generalWebSearch({ query, country: country?.toUpperCase() ?? null, page, purpose: text(args, "purpose") }, { threadId: context.threadId, requestId: searchRequestId(context) });
+        const requestId = searchRequestId(context);
+        // A free-only request ($0 cap) searches only with TinyFish's free searches, never Tavily's paid credits.
+        const freeOnly = (await requestSpendCap(requestId)) === 0;
+        const { provider, hits } = await generalWebSearch({ query, country: country?.toUpperCase() ?? null, page, purpose: text(args, "purpose") }, { threadId: context.threadId, requestId, freeOnly });
         const name = webSearchProviderName(provider);
         const lines = hits.map((hit, index) => `${index + 1}. ${hit.title ?? "(no title)"} — ${hit.url}${hit.snippet ? ` — ${hit.snippet}` : ""}${hit.date ? ` (${hit.date})` : ""}`);
         return {
@@ -814,14 +832,15 @@ export const TOOLS: Record<string, Tool> = {
       }
       // Why the usual reader was not used, said in "via" so the model knows which source read the page.
       const notes: string[] = [];
-      const source = await readResearchSource(url, { threadId: context.threadId });
+      const requestId = searchRequestId(context);
+      const source = await readResearchSource(url, { threadId: context.threadId, requestId });
       if (source?.kind === "page") return pageResult({ ...source.page, contacts: [] });
       if (source?.kind === "missing") return { ok: false, summary: `Could not open ${url.toString()}: ${source.summary}` };
       if (source?.kind === "fallback") notes.push(source.note);
       const via = (reader: "TinyFish" | "direct") => (notes.length ? `${reader} (${notes.join("; ")}; read ${reader === "TinyFish" ? "through TinyFish" : "directly"} instead)` : reader);
       if (await tinyfishConnection()) {
         try {
-          const { pages, failures } = await fetchWithTinyfish([url.toString()], { threadId: context.threadId });
+          const { pages, failures } = await fetchWithTinyfish([url.toString()], { threadId: context.threadId, ...(requestId ? { detail: { requestId } } : {}) });
           const page = pages[0];
           if (page) {
             const refused = await redirectRefusal(url, page.finalUrl);
@@ -877,7 +896,9 @@ export const TOOLS: Record<string, Tool> = {
       if (blocked) return { ok: false, summary: `Not opened: ${blocked}.` };
       try {
         const requestId = searchRequestId(context);
-        const opened = await openBrowser(url.toString(), context.threadId, browserNavigationProblem, { requestId, spendGuard: await objectiveSpendGuard(requestId) });
+        const held = await browserHold(context);
+        if (held) return held;
+        const opened = await openBrowser(url.toString(), context.threadId, browserNavigationProblem, { requestId, spendGuard: await requestSpendGuard(requestId) });
         const allowance = opened.allowance;
         return browserResult(opened.reused ? "Opened in the chat's browser" : "Opened a browser", opened.snapshot, opened.problem, opened.reused ? "" : ` (paid by the minute; ${allowance.usedToday} of today's ${allowance.minutesPerDay} browser minutes reserved or used)`);
       } catch (error) {
@@ -945,7 +966,7 @@ export const TOOLS: Record<string, Tool> = {
       const objective = await searchObjective(context);
       if (objective.problem) return objectiveRefusal(objective.problem);
       const started = await startLinkedinSearch({ keywords, maxResults }, context, {
-        contactAfter: args.contactAfter === true ? { channels: ["linkedin"], ownerRequest: requireOutreachRequest(context), requestId: context.outreachRequestId ?? undefined } : null,
+        contactAfter: args.contactAfter === true ? { channels: ["linkedin"], ownerRequest: requireOutreachRequest(context), requestId: searchRequestId(context) ?? undefined } : null,
         requestMessageId: searchRequestId(context),
       });
       return withControls({
@@ -1250,6 +1271,40 @@ export const TOOLS: Record<string, Tool> = {
     },
   },
 };
+
+/**
+ * The request a follow-up joins (sameRequest): the newest research in this
+ * chat that is still running or paused, so "use Instagram too" adds a source
+ * to that request and shares its target, time and spend cap. Never one that
+ * stopped: a new message after that is a new request.
+ */
+async function joinedRequest(context: ToolContext): Promise<{ requestId: string } | { problem: string }> {
+  const current = searchRequestId(context);
+  const [latest] = await threadObjectives(context.threadId, 1);
+  if (!latest) return { problem: "Not started: no earlier request's research is running or paused in this chat, so there is nothing to add this search to. Search again without sameRequest; it starts a new request." };
+  if (latest.requestMessageId === current) return { requestId: latest.requestMessageId };
+  if (latest.status === "stopped") {
+    return { problem: `Not started: the earlier request's research has stopped (${latest.stopDetail ?? latest.stopReason?.replace(/_/g, " ") ?? "stopped"}), so it takes no more searches. Search again without sameRequest; it starts a new request with its own limits.` };
+  }
+  return { requestId: latest.requestMessageId };
+}
+
+/** A search tool a follow-up may add to the request still running in its chat (sameRequest), else as it is. */
+function joinable(tool: Tool): Tool {
+  return {
+    ...tool,
+    arguments: `${tool.arguments}, sameRequest (optional true: only when the owner's new message adds to a request whose research is still running in this chat, e.g. "use Instagram too"; the search then counts toward that request's target, time and spend cap)`,
+    run: async (args, context) => {
+      if (args.sameRequest === undefined || args.sameRequest === false) return tool.run(args, context);
+      if (args.sameRequest !== true) throw new ToolArgumentError("sameRequest must be true or false");
+      const joined = await joinedRequest(context);
+      if ("problem" in joined) return { ok: false, summary: joined.problem };
+      return tool.run(args, { ...context, searchRequestId: joined.requestId });
+    },
+  };
+}
+
+for (const name of ["find_leads", "find_instagram_prospects", "find_social_leads", "find_customers_on_web", "find_linkedin_leads"]) TOOLS[name] = joinable(TOOLS[name]!);
 
 export const TOOL_NAMES = Object.keys(TOOLS);
 

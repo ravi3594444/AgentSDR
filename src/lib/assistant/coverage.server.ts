@@ -6,22 +6,23 @@ import { inOrg } from "@/lib/tenancy/scope";
 import { coverageLine, namedPlatforms, requestCoverage, type PlatformCoverage, type WebToolUse } from "./coverage";
 import { assistantJobs, assistantMessages } from "./schema";
 
+/** The one request a job serves, in SQL (objective.server.ts jobRequestId: its own request, else an older job's contactAfter request). */
+const jobRequest = sql`coalesce(${assistantJobs.payload}->>'requestMessageId', ${assistantJobs.payload}->'contactAfter'->>'requestId')`;
+
 /** Whether a search job serves the owner message in `assistant_messages.id` (the outer row). */
 const servedByAJob = () => exists(db.select({ one: sql`1` }).from(assistantJobs).where(and(
   inOrg(assistantJobs),
-  or(
-    sql`${assistantJobs.payload}->>'requestMessageId' = ${assistantMessages.id}::text`,
-    sql`${assistantJobs.payload}->'contactAfter'->>'requestId' = ${assistantMessages.id}::text`,
-  ),
+  sql`${jobRequest} = ${assistantMessages.id}::text`,
 )));
 
 /**
- * The web searches and page reads that succeeded in the request's chat from
- * the request until the owner's next request (an owner message a search was
- * started for); a follow-up such as "yes" in between is not one, so what
- * runs after it still counts. They start no job, so without them a request
- * naming the web would read "not started" however much the assistant
- * searched it.
+ * The web searches and page reads that succeeded for the request: those
+ * recorded with its id (toolResult.requestId), and, for results recorded
+ * before tool results carried one, those in its chat from the request until
+ * the owner's next request (an owner message a search was started for); a
+ * follow-up such as "yes" in between is not one, so what runs after it
+ * still counts. They start no job, so without them a request naming the
+ * web would read "not started" however much the assistant searched it.
  */
 export async function webToolUse(request: { id: string; threadId: string; createdAt: Date }): Promise<WebToolUse> {
   const [nextRequest] = await db.select({ createdAt: assistantMessages.createdAt }).from(assistantMessages)
@@ -41,8 +42,14 @@ export async function webToolUse(request: { id: string; threadId: string; create
       eq(assistantMessages.role, "tool"),
       eq(assistantMessages.status, "ok"),
       inArray(assistantMessages.tool, ["web_search", "read_webpage"]),
-      gte(assistantMessages.createdAt, request.createdAt),
-      nextRequest ? lt(assistantMessages.createdAt, nextRequest.createdAt) : undefined,
+      or(
+        sql`${assistantMessages.toolResult}->>'requestId' = ${request.id}`,
+        and(
+          sql`${assistantMessages.toolResult}->>'requestId' is null`,
+          gte(assistantMessages.createdAt, request.createdAt),
+          nextRequest ? lt(assistantMessages.createdAt, nextRequest.createdAt) : undefined,
+        ),
+      ),
     ))
     .groupBy(assistantMessages.tool);
   const count = (tool: string) => Number(rows.find((row) => row.tool === tool)?.n ?? 0);
@@ -72,10 +79,7 @@ export async function requestCoverageFor(requestMessageId: string): Promise<Plat
     error: assistantJobs.error,
   }).from(assistantJobs).where(and(
     inOrg(assistantJobs),
-    or(
-      sql`${assistantJobs.payload}->>'requestMessageId' = ${requestMessageId}`,
-      sql`${assistantJobs.payload}->'contactAfter'->>'requestId' = ${requestMessageId}`,
-    ),
+    sql`${jobRequest} = ${requestMessageId}`,
   )).orderBy(desc(assistantJobs.createdAt)).limit(40);
   return requestCoverage(named, jobs as Parameters<typeof requestCoverage>[1], named.includes("web") ? await webToolUse(message) : null);
 }
@@ -83,6 +87,7 @@ export async function requestCoverageFor(requestMessageId: string): Promise<Plat
 /** The coverage line for the request a finished job served, or null when its request named fewer than two platforms. */
 export async function coverageLineForJob(job: { payload: unknown }): Promise<string | null> {
   const payload = (job.payload ?? {}) as { requestMessageId?: unknown; contactAfter?: { requestId?: unknown } | null };
+  // The same rule as objective.server.ts jobRequestId (not imported: that module reads this one).
   const id = typeof payload.requestMessageId === "string" ? payload.requestMessageId : typeof payload.contactAfter?.requestId === "string" ? payload.contactAfter.requestId : null;
   if (!id) return null;
   return coverageLine(await requestCoverageFor(id));

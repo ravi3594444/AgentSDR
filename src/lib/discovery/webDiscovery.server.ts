@@ -7,7 +7,8 @@ import { AIML_PROVIDER_KEY, AIML_PROVIDER_NAME } from "@/lib/ai/aimlapi-types";
 import { db } from "@/lib/db";
 import { addAudienceMembers, createAudience, type NewMember } from "@/lib/assistant/audiences.server";
 import { getBusinessProfile } from "@/lib/assistant/profile.server";
-import { objectiveStartProblem } from "@/lib/assistant/objective.server";
+import { AI_SEARCH_ESTIMATE_USD, type SpendRoom } from "@/lib/assistant/objective";
+import { jobRequestId, objectiveSpendGuard, objectiveStartProblem, requestSpendCap } from "@/lib/assistant/objective.server";
 import { assistantJobs, leadAudienceMembers, type AudienceChannel, type ContactEvidence, type LeadSignal } from "@/lib/assistant/schema";
 import type { AssistantJob, StepOutcome } from "@/lib/assistant/worker";
 import { findOrCreateContactPerson } from "@/lib/calls/campaigns";
@@ -45,7 +46,7 @@ import {
 import { tavilyCapProblem } from "@/lib/tavily/catalog";
 import { tavilyConnection, tavilySearchesToday } from "@/lib/tavily/tavily.server";
 import { TinyfishWaitError } from "@/lib/tinyfish/tinyfish.server";
-import { searchWeb, webSearchAvailability, WebSearchUnavailableError, type WebSearchProvider } from "./webSearch.server";
+import { searchWeb, webSearchAvailability, webSearchProviderName, WebSearchUnavailableError, type WebSearchProvider } from "./webSearch.server";
 import { collectWebsiteContacts, fetchPublicPage } from "./websiteContacts.server";
 import { offerFocus, recipientFields, websiteNotes, type OfferFocus, type WebsiteProfile } from "./websiteProfile";
 import { instagramCommenterHold, instagramResearchHold } from "./instagramEligibility";
@@ -159,7 +160,16 @@ type FoundLead = {
   profile?: WebsiteProfile | null;
 };
 
-type SearchRecord = { query: string; sources: number; provider: string | null; model: string | null; costUsd: number | null; error: string | null };
+type SearchRecord = {
+  query: string;
+  sources: number;
+  provider: string | null;
+  model: string | null;
+  costUsd: number | null;
+  error: string | null;
+  /** What an AI web research search was held at; it counts at this when its cost never came back. */
+  estimateUsd?: number;
+};
 type Tally = { eligible: number; excluded: number; duplicates: number; alreadyKnown: number; withEmail: number; withPhoneOnly: number; withInstagram: number; instagramOnly: number; needSignals: number; ownBusiness?: number };
 
 type Payload = {
@@ -186,6 +196,10 @@ type Payload = {
   searchProvider?: string | null;
   /** The search a step started paying for, saved before the call: a retried step never buys it again. */
   searchStarted?: number;
+  /** What that search is held at against the request's spend cap until it reports its cost (AI web research). */
+  searchEstimateUsd?: number;
+  /** Why the remaining searches were not made (the request's spend cap, or its research stopped). */
+  searchesStopped?: string;
   /** The owner's message this search serves (its request's per-platform coverage). */
   requestMessageId?: string | null;
   /** The search job that handed its request to this one, which finds it here if it runs again. */
@@ -295,8 +309,13 @@ export async function startWebDiscovery(
   const availability = await webSearchAvailability();
   if (!availability.available) throw new WebDiscoveryUnavailableError(availability.reason ?? "No web search is set up.");
   // A request paused, stopped or at its limit starts no new search, including one another search hands over.
-  const closed = await objectiveStartProblem(options.requestMessageId ?? options.contactAfter?.requestId ?? null);
+  const requestId = options.requestMessageId ?? options.contactAfter?.requestId ?? null;
+  const closed = await objectiveStartProblem(requestId);
   if (closed) throw new WebDiscoveryUnavailableError(`Not started: ${closed}.`);
+  // A free-only request ($0 cap) pays for no search: here website search is free only through TinyFish.
+  if (availability.provider !== "tinyfish" && (await requestSpendCap(requestId)) === 0) {
+    throw new WebDiscoveryUnavailableError(`Not started: this request is limited to free sources (its spend cap is $0), and website search here runs on ${webSearchProviderName(availability.provider)}, which is paid. TinyFish Search is free: an owner or admin connects it in Settings → Organization → TinyFish. Or name a budget in the request.`);
+  }
   const readiness = await instagramReadiness();
   const instagram = { usable: readiness.usable, reason: readiness.reason };
   const queries = buildSearchQueries({ customers: criteria.customers, offer: criteria.offer, where: criteria.where, language: criteria.language, instagram: instagram.usable });
@@ -434,6 +453,57 @@ async function savePayload(job: AssistantJob, patch: Partial<Payload>): Promise<
 
 const INTERRUPTED_SEARCH = "this search stopped after it was sent to the provider and is not repeated, so it is never paid for twice";
 
+/** How a website search provider charges: TinyFish's searches are free, Tavily's take credits, AI web research is paid in dollars. */
+function searchPrice(provider: unknown): { kind: "free" | "credits" | "usd" } {
+  if (provider === "tinyfish") return { kind: "free" };
+  if (provider === "tavily") return { kind: "credits" };
+  return { kind: "usd" };
+}
+
+/**
+ * Records that the next search is about to be made (searchStarted, and
+ * what it is held at), once the request's spend guard allows it, in one
+ * transaction: the guard serializes the request's paid work, so two
+ * searches cannot both pass its cap. A paused request holds it; a stopped
+ * one, a used cap or a free-only cap refuses it. TinyFish's free searches
+ * pass no guard.
+ */
+async function reserveSearch(job: AssistantJob, index: number): Promise<SpendRoom> {
+  const payload = payloadOf(job);
+  const price = searchPrice(payload.searchProvider);
+  const estimateUsd = price.kind === "usd" ? AI_SEARCH_ESTIMATE_USD : 0;
+  const guard = price.kind === "free" ? undefined : await objectiveSpendGuard(jobRequestId(job));
+  return db.transaction(async (tx) => {
+    const room: SpendRoom = guard ? await guard(tx, estimateUsd, { credits: price.kind === "credits" }) : { ok: true, maxUsd: Number.POSITIVE_INFINITY };
+    if (!room.ok) return room;
+    const patch: Partial<Payload> = { searchStarted: index, searchEstimateUsd: estimateUsd };
+    await tx.update(assistantJobs)
+      .set({ payload: sql`${assistantJobs.payload} || ${JSON.stringify(patch)}::jsonb`, heartbeatAt: new Date() })
+      .where(and(inOrg(assistantJobs), eq(assistantJobs.id, job.id), job.lockedBy ? eq(assistantJobs.lockedBy, job.lockedBy) : sql`false`));
+    return room;
+  });
+}
+
+/**
+ * The request's spend cap or state refused the next search: the remaining
+ * ones are not made. With searches already made the job goes on with what
+ * they found, and says why it stopped; with none it is not searched.
+ */
+function stopSearching(job: AssistantJob, payload: Payload, searches: SearchRecord[], reason: string): StepOutcome {
+  const left = payload.queries.length - searches.length;
+  if (!searches.length) {
+    return { next: "done", progress: { stage: "done" }, result: { audienceId: job.audienceId, phrase: payload.phrase, found: 0, eligible: 0, notSearched: true, note: `Not searched: ${reason}.` } };
+  }
+  const common = { searches, candidates: payload.candidates ?? [], skipped: payload.skipped ?? [], skippedCount: payload.skippedCount ?? 0 };
+  const stopped = `The other ${left} search${left === 1 ? " was" : "es were"} not made: ${reason}.`;
+  return {
+    next: "stage",
+    stage: "reading",
+    payload: { ...common, searchIndex: payload.queries.length, readIndex: 0, leads: [], searchesStopped: stopped },
+    progress: { stage: "reading", searches: payload.queries.length, searchesDone: searches.length, candidates: common.candidates.length, read: 0 },
+  };
+}
+
 async function stageSearching(job: AssistantJob, heartbeat: () => Promise<void>): Promise<StepOutcome> {
   // The feature may have been switched off since the last search: stop before paying for another.
   if (!(await featureEnabled("web_discovery"))) {
@@ -443,17 +513,24 @@ async function stageSearching(job: AssistantJob, heartbeat: () => Promise<void>)
   const index = payload.searchIndex ?? 0;
   const query = payload.queries[index];
   const searches = [...(payload.searches ?? [])];
+  const estimate = searchPrice(payload.searchProvider).kind === "usd" ? { estimateUsd: AI_SEARCH_ESTIMATE_USD } : {};
   if (query && payload.searchStarted === index) {
     // A step that started this paid search stopped before saving its result (a crash, a database
     // error): it may have been billed, so it is recorded as interrupted rather than bought again.
-    searches.push({ query, sources: 0, provider: null, model: null, costUsd: null, error: INTERRUPTED_SEARCH });
+    searches.push({ query, sources: 0, provider: null, model: null, costUsd: null, error: INTERRUPTED_SEARCH, ...estimate });
   } else if (query) {
     const owner = await ownerIdentity(payload.criteria);
-    // Saved before the call: if this step dies after paying, the retry sees it (above).
-    await savePayload(job, { searchStarted: index });
+    // Saved before the call, once the request's spend cap allows it: if this step dies after paying, the retry sees it (above).
+    const room = await reserveSearch(job, index);
+    if (!room.ok) {
+      if (room.wait) {
+        return { next: "wait", delayMs: 60_000, progress: { stage: "searching", searches: payload.queries.length, searchesDone: index, candidates: (payload.candidates ?? []).length, waiting: { kind: "paused", reason: `the next search waits: ${room.reason}` } } };
+      }
+      return stopSearching(job, payload, searches, room.reason);
+    }
     try {
       const result = await searchWeb(query, { provider: (payload.searchProvider ?? null) as WebSearchProvider | null, keywords: payload.keywordQueries?.[index] ?? null, jobId: job.id });
-      searches.push({ query, sources: result.sources.length, provider: result.provider, model: result.model, costUsd: result.costUsd, error: result.sources.length ? null : "the provider returned no web sources" });
+      searches.push({ query, sources: result.sources.length, provider: result.provider, model: result.model, costUsd: result.costUsd, error: result.sources.length ? null : "the provider returned no web sources", ...(result.costUsd === null ? estimate : {}) });
       for (const source of result.sources) {
         const origin: Origin = { query, url: source.url, title: source.title, snippet: source.snippet };
         const kind = classifySourceUrl(source.url);
@@ -477,7 +554,7 @@ async function stageSearching(job: AssistantJob, heartbeat: () => Promise<void>)
         const delayMs = Math.max(1_000, error.until.getTime() - Date.now());
         return { next: "wait", delayMs, payload: { searchStarted: -1 }, progress: { stage: "searching", searches: payload.queries.length, searchesDone: index, candidates: (payload.candidates ?? []).length, waiting: { kind: "quota", provider: "tinyfish", until: error.until.toISOString(), reason: error.reason } } };
       }
-      searches.push({ query, sources: 0, provider: null, model: null, costUsd: null, error: message(error).slice(0, 300) });
+      searches.push({ query, sources: 0, provider: null, model: null, costUsd: null, error: message(error).slice(0, 300), ...estimate });
     }
     // The paid result is stored at once, before anything else can fail this step.
     await savePayload(job, { searches, candidates: payload.candidates ?? [], skipped: payload.skipped ?? [], skippedCount: payload.skippedCount ?? 0, searchIndex: index + 1 });
@@ -1048,6 +1125,7 @@ async function stageSaving(job: AssistantJob, heartbeat: () => Promise<void>): P
       : `The web search for “${payload.phrase}” returned no pages. Try other words or a wider area.`);
   }
   if (instagramSkipped) notes.push(`${instagramSkipped} Instagram page${instagramSkipped === 1 ? " was" : "s were"} not read: ${payload.instagram.reason ?? "Instagram is not available"}.`);
+  if (payload.searchesStopped) notes.push(payload.searchesStopped);
   return {
     next: "done",
     progress: { ...progress, stage: "done" },

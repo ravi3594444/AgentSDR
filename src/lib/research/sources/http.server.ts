@@ -1,7 +1,13 @@
 import "server-only";
 
 /** Who a source call is for: the assistant thread or job, kept on the ledger row. */
-export type ResearchCallContext = { threadId?: string | null; jobId?: string | null };
+/** Who a read serves; `requestId` (the owner's request) goes into its usage row, so the request's own research is counted. */
+export type ResearchCallContext = { threadId?: string | null; jobId?: string | null; requestId?: string | null };
+
+/** The usage row's detail with the request it served, when there is one. */
+export function usageDetail(context: ResearchCallContext, detail: Record<string, unknown>): Record<string, unknown> {
+  return context.requestId ? { ...detail, requestId: context.requestId } : detail;
+}
 
 const TIMEOUT_MS = 10_000;
 const USER_AGENT = "AgentSDR research reader";

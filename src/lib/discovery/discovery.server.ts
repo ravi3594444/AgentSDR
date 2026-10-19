@@ -13,7 +13,7 @@ import { people } from "@/lib/leads/schema";
 import { upsertInstagramProspect } from "@/lib/instagram/prospects.server";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { apifyReadiness, pollTrackedRun, startTrackedRun } from "@/lib/apify/apify.server";
-import { objectiveSpendGuard } from "@/lib/assistant/objective.server";
+import { jobRequestId, objectiveSpendGuard } from "@/lib/assistant/objective.server";
 import { APIFY_ACTORS, APIFY_LIMITS, type ApifyActorKey } from "@/lib/apify/catalog";
 import { hashtagsFor, mentionsPlace, placesFromFacebookItems, placesFromLinkedinCompanyItems, placesFromMapsItems, postsFromHashtagItems, profilesFromItems, usernamesFromSearchItems, type InstagramPost } from "@/lib/apify/mapping";
 import { needSignal } from "./webDiscovery";
@@ -46,7 +46,8 @@ import { instagramResearchHold } from "./instagramEligibility";
  * off, not set up, over budget or out of credit — or its run ends with
  * nothing — the same job falls back to the self-hosted scraper, and without
  * one to website search, keeping the customer type, the place and the
- * owner's request (contactAfter.requestId), so a plan made from the fallback
+ * owner's request (requestMessageId, and contactAfter.requestId, which the
+ * search tools set to the same request), so a plan made from the fallback
  * inherits that request's approval like any other. A run cut short (its
  * spending cap, a timeout) keeps what it already found ("partial").
  *
@@ -437,9 +438,9 @@ function payloadOf(job: AssistantJob): DiscoveryPayload {
   return job.payload as unknown as DiscoveryPayload;
 }
 
-/** The owner's request a search serves: the outreach request of a "find and contact" search, else its own request id. */
+/** The owner's request a search serves: one per search, the same rule its objective's spend and leads read (jobRequestId). */
 function requestOf(payload: DiscoveryPayload): string | null {
-  return payload.contactAfter?.requestId ?? payload.requestMessageId ?? null;
+  return jobRequestId({ payload });
 }
 
 async function stageQueued(job: AssistantJob): Promise<StepOutcome> {

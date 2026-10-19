@@ -3,7 +3,7 @@ import "server-only";
 import { blockQuota, reserveQuota, settleQuota } from "@/lib/quota/quota.server";
 import { RESEARCH_API_PRODUCT, STACK_EXCHANGE_CACHE_MS, STACK_EXCHANGE_LIMITS, STACK_EXCHANGE_PROVIDER, STACK_EXCHANGE_SCOPE } from "./catalog";
 import { ResearchSourceError, ResearchSourceWaitError } from "./errors";
-import { getJson, type JsonAnswer, type ResearchCallContext } from "./http.server";
+import { getJson, usageDetail, type JsonAnswer, type ResearchCallContext } from "./http.server";
 import { parseStackExchangeAnswer, stackExchangeApiUrl, stackExchangeWait, type StackExchangeQuestion, type StackExchangeRef } from "./stackExchange";
 
 /**
@@ -43,7 +43,7 @@ export async function readStackExchangeQuestion(ref: StackExchangeRef, context: 
   const reservation = await reserveQuota({
     provider: STACK_EXCHANGE_PROVIDER, product: RESEARCH_API_PRODUCT, scopeKey: STACK_EXCHANGE_SCOPE, units: 1,
     limits: STACK_EXCHANGE_LIMITS, label: LABEL, jobId: context.jobId, threadId: context.threadId,
-    detail: { site: ref.site, question: ref.id },
+    detail: usageDetail(context, { site: ref.site, question: ref.id }),
   });
   if (!reservation.ok) throw new ResearchSourceWaitError(SOURCE, reservation.until, reservation.reason);
   let answer: JsonAnswer;

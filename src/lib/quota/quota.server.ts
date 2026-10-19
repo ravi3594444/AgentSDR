@@ -63,7 +63,7 @@ export type ReserveInput = {
    * request's spend cap for paid work (objective.server.ts). A reason refuses
    * the reservation.
    */
-  guard?: (tx: Pick<typeof db, "select">) => Promise<string | null>;
+  guard?: (tx: Pick<typeof db, "select" | "execute">) => Promise<string | null>;
 };
 
 /** Takes `units` from the scope's quota and opens a ledger row, or says until when to wait. */

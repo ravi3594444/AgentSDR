@@ -283,9 +283,13 @@ export async function generalSearchRoute(): Promise<GeneralSearchRoute> {
 export type GeneralSearchInput = { query: string; country?: string | null; page?: number | null; purpose?: string | null };
 
 /** One search for the assistant; throws TinyfishWaitError while TinyFish asks to wait, and a plain Error with the reason otherwise. */
-export async function generalWebSearch(input: GeneralSearchInput, context: { threadId?: string | null; requestId?: string | null } = {}): Promise<{ provider: "tinyfish" | "tavily"; hits: (ResearchSource & { site?: string | null; date?: string | null })[] }> {
+export async function generalWebSearch(input: GeneralSearchInput, context: { threadId?: string | null; requestId?: string | null; freeOnly?: boolean } = {}): Promise<{ provider: "tinyfish" | "tavily"; hits: (ResearchSource & { site?: string | null; date?: string | null })[] }> {
   const route = await generalSearchRoute();
   if (route.provider === null) throw new WebSearchUnavailableError(route.reason);
+  // A request limited to free sources ($0 spend cap) never uses Tavily's paid credits.
+  if (route.provider === "tavily" && context.freeOnly) {
+    throw new WebSearchUnavailableError("this request is limited to free sources (its spend cap is $0); web search here would use Tavily's paid credits, and TinyFish's free search is not connected or is off for web search (Settings → Organization → TinyFish)");
+  }
   const query = input.query.replace(/\s+/g, " ").trim().slice(0, MAX_QUERY_LENGTH);
   if (route.provider === "tinyfish") {
     const hits = await searchWithTinyfish({ query, location: input.country ?? null, page: input.page ?? null, purpose: input.purpose ?? null }, { threadId: context.threadId ?? null, ...(context.requestId ? { detail: { requestId: context.requestId } } : {}) });
