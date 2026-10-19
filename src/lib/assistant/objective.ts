@@ -46,7 +46,7 @@ export function isLeadFindingRequest(text: string): boolean {
   const words = text.replace(/\s+/g, " ").trim();
   if (!words || /\bcontact\s+(?:page|details|information|info|link)\b/i.test(words)) return false;
   const intent = /\b(?:find|source|research|identify|discover|prospect|need|want|looking\s+for|look\s+for|search(?:\s+for)?|build\s+(?:a\s+)?list|get\s+me|give\s+me)\b/i.test(words);
-  const buyer = /\b(?:leads?|prospects?|potential\s+customers?|new\s+customers?|buyers?|businesses|companies|contacts?|decision\s+makers?|clients?)\b/i.test(words);
+  const buyer = /\b(?:leads?|prospects?|potential\s+customers?|new\s+customers?|buyers?|businesses|companies|contacts?|decision\s+makers?|clients?|suppliers?|vendors?|manufacturers?|retailers?|distributors?|agents?|contractors?|consultants?|clinics?|dentists?|doctors?|restaurants?|salons?|agencies|shops?|stores?|firms|providers?|installers?|plumbers?|lawyers?|accountants?|architects?|builders?|schools?|hotels?|gyms?)\b/i.test(words);
   if (intent && buyer) return true;
   // Industry/category searches (“find dentists in Patna”) are also lead
   // requests; require an explicit finding verb and a place-like qualifier to
