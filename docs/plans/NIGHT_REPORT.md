@@ -283,7 +283,234 @@ columns.
 **Live check pending:** one real web search for your target customers, then
 open "Review the leads" and the plan card.
 
-## Tenancy isolation
+## Deployment readiness, 19 October (`1b45c88`, `c191f6b`, `ab84f96`)
+
+You accepted rules-based website extraction, with named decision-makers kept
+on the business lead. Keyword matches stay relevance hints: they choose which
+findings are recorded and never make a lead ineligible (web-discovery check F:
+Maple Smiles has no matching finding and is still eligible). Further profiling
+and routing website WhatsApp links stay deferred.
+
+### What changed
+
+**Worker recovery (`1b45c88`).** Before this, the worker saved a step's
+result outside its error handling. If the database refused it, the job stayed
+"running" and was taken again every 3 minutes, forever.
+- A refused save now runs the step again after 10 s, 20 s, 40 s, then 60 s.
+  The payload earlier steps saved is kept, and Activity shows "Retrying" with
+  the reason.
+- After 5 attempts the job fails with "Stopped: its result could not be saved
+  after 5 attempts (reason). Work saved before this step is kept." It posts
+  one report.
+- A job claimed 8 times without a step finishing fails without running
+  again. That covers a process killed mid-step, for example out of memory.
+- Results are cleaned before they are saved (NUL bytes, lone surrogates), and
+  errors are clipped to 2,000 characters.
+- A failed query's error keeps only the database's reason. The new check
+  found that the driver's message carried the whole statement, with the
+  step's lead data, into the job and its chat report.
+- A re-run never pays twice:
+  - an Instagram profiles run is read again, or, once it has failed, not
+    restarted;
+  - leads already written are skipped;
+  - a launch whose run is already running reports done, not failed;
+  - a hand-off to website search finds the search it already started;
+  - a LinkedIn search batch is saved on the job as soon as it is made.
+
+**Request spend (`ab84f96`).**
+- One request per search. A "find and contact" search files its follow-up
+  plan under the request it serves. Spend, leads, coverage and refusals all
+  read one rule, so a search no longer counts under two requests. The plan
+  starts on its own only under that request's approval, so this narrows
+  auto-start rather than widening it.
+- AI web research inside a website search is held at $0.05 against the
+  request's cap before each search, in the same transaction that records the
+  search as started.
+  - A used cap stops the remaining searches; the job goes on with what it
+    found and says why.
+  - A paused request holds the next search; a stopped one ends it.
+  - A search whose cost never comes back counts at the estimate.
+  - Tavily credits count searches made, not queries planned.
+- A $0 cap is free sources only, and is enforced.
+  - Refused: Tavily (`web_search` and website search), AI web research,
+    Apify, Treg and the browser.
+  - Allowed: TinyFish, the built-in Maps scraper, LinkedIn search and HN/Stack
+    Exchange.
+- Treg calls and the browser pass the request's cap even when no lead search
+  made the request an objective. The cap is the budget the request names, or
+  your default. One per-request lock serializes every paid check of the
+  request. Browser steps stop, and the browser closes, while the request is
+  paused or after it stopped.
+- Tool results, page reads and HN/SE reads record their request id, and web
+  use is counted by it. Older rows still use the time window. This retires
+  decision 50.
+- A turn a finished job starts serves that job's request.
+- `sameRequest`: a follow-up such as "use Instagram too" joins the request
+  still running in the chat, never a stopped one.
+- Wording, wherever a cap is shown:
+  - what it counts: Apify, Treg, browser minutes and AI web research;
+  - Tavily, shown in credits under its own daily cap;
+  - the AI model's own use, which is not counted.
+  - "Nothing" is said only when nothing was spent.
+  - Activity shows "$1.20 of $5.00 spent" on a lead request.
+
+**Deploy script (`c191f6b`).** `docker/deploy.sh` replaces the earlier
+commands. In those, `|| break` exited 0 after a failed migration, so the
+images switched anyway. They also left out the Maps scraper's compose file,
+ran `git reset --hard` over the VM's edits, had no rollback, ran `docker exec`
+without `DATABASE_URL`, and did nothing about memory. The seven migrations
+now set `lock_timeout = 10s` and `statement_timeout = 60s`, so they fail fast
+instead of queueing behind the running worker. The image is labelled with
+its commit. The build heap (4096 MB) and the memory the script requires
+(7 GB) come from the build measured below. A 3072 MB heap fails.
+
+### Checks, kept apart by kind
+
+**Code commit tested: `ab84f96`.** No application code changed after it.
+- One later commit sets `docker/deploy.sh`'s heap and memory defaults from
+  the measured build below. It is checked by `deploy.test.ts` (22 pass) and
+  shellcheck.
+- The other later commits are the reports and the code graph.
+
+1. **Gates in this container (local Postgres 16, fresh database), on `ab84f96`.**
+   - `tsc --noEmit` and eslint pass.
+   - Unit tests: 1789 pass, 0 fail.
+   - `docker/deploy.test.ts`: 22 pass, with stub `docker`, `git` and `curl`.
+     They cover:
+     - a failed backup, build or migration never reaching `up -d`;
+     - the discovery file being passed;
+     - the scraper restarted after a failed build;
+     - low memory aborting;
+     - a failed health or revision check rolling back;
+     - edits kept: patch saved, fast-forward only.
+   - Upgrade path: the base branch's schema, then the 7 migrations twice. Both
+     rounds pass, `db:check` passes, and the result equals a fresh install.
+   - e2e: 18 suites, 959 checks, 0 failures.
+
+     | Suite | Checks | Suite | Checks |
+     | --- | --- | --- | --- |
+     | metrics-parity | 36 | objective | 68 |
+     | full-flow | 26 | tinyfish | 44 |
+     | activity | 42 | research-sources | 42 |
+     | workspace-replay | 107 | browser | 23 |
+     | reply-agent | 105 | apify | 73 |
+     | delivery-evidence | 30 | web-discovery | 110 |
+     | autonomous | 70 | treg | 37 |
+     | assistant-intake | 44 | worker-recovery (new) | 20 |
+     | assistant | 73 | assistant-recovery | 9 |
+
+2. **Production-build checks in this container, on `ab84f96`.** This is not
+   the Docker image: it is the same build step and the same server command,
+   run here.
+   - Build: as the Dockerfile's builder stage. First `bun run
+     package:recorder`, then `next build --webpack` under Node 22.22.
+     - With a **3072 MB** heap per Node process, the deploy script's first
+       default, a webpack worker **ran out of heap and the build failed**
+       (226 s; 5.3 GB summed RSS when it died). The script's default is now
+       4096 MB, the Dockerfile's.
+     - With **4096 MB** it passed in 313 s. The machine's memory in use rose
+       from 743 MB to 6,774 MB (about 6.0 GB for the build), and the largest
+       worker reached 5.9 GB RSS. Sampled every second over the build's
+       process tree.
+     - So the script now asks for 7 GB of MemAvailable + SwapFree (measured
+       with the scraper still running). On the 8 GB VM that means adding the
+       4 GB swap file it describes.
+   - Server: `bun server.js` (Bun 1.4.2), run from `.next/standalone`
+     laid out as the runner stage copies it, with `NODE_ENV=production` and
+     every sender paused.
+     - `/sign-in` answers 200.
+     - The log shows `[assistant/worker] starting`.
+     - The server's RSS after starting is about 455–480 MB.
+   - Tenancy isolation against it: no isolation failures.
+     - A had 1,136 fingerprints from 65 tables.
+     - The positive control found A's own data in 35 of 69 plain GET routes.
+     - Checked as B: 120 reads, 103 writes and 69 pages.
+     - The same 16 items to review as before; see Tenancy isolation below.
+   - Smoke, signed in: `/assistant`, `/activity`, `/analytics`, `/leads`
+     and `/settings` each answered 200, with no page error and no failed
+     request to the app.
+     - On `/leads`, the demo data's avatars (randomuser.me) and Google
+       favicons did not load. This container's TLS proxy blocks other hosts
+       for the headless browser.
+     - The server log had no error line during the smoke. During the
+       isolation run it logged two validation refusals ("delivered must be a
+       boolean", "enabled must be boolean"): the check's deliberately invalid
+       writes, refused as they should be.
+   - Screenshots, retaken after the ordering fix, at desktop (1280 px) and
+     phone (390 px) widths: no horizontal overflow, no page errors.
+     - The plan card's sample is built the way `prepare_outreach` builds it
+       (`orderedFindings`, first three). It shows the lead's own request
+       first, then the hiring finding, then the description.
+     - On the phone, the chat's floating "Jump to latest" button covers the
+       card's last line until you scroll; that control predates the branch.
+   - The page reader's pinned DNS lookup is exercised under Bun by `bun test`
+     (`websiteContacts.server.test.ts`).
+3. **Docker image checks: not run.** This container has no Docker daemon. The
+   image build, the migrations in one-off containers, the switch, the
+   revision label and the rollback are exercised only with stubs
+   (`deploy.test.ts`). They are pending on the VM: the script's own checks,
+   then the running-image checks below.
+4. **Live checks: pending.** Your list below.
+
+### Deploying on the VM
+
+`docker/deploy.sh` does the whole upgrade and stops before switching images
+if a backup, the build or a migration fails. Run it inside tmux or screen on
+the VM: a dropped SSH session would stop it halfway. The commands to run, in
+order, are in "Your morning list"; what the script does is in its header.
+
+**By hand, if you cannot use the script.** Run these one at a time, in the
+checkout, and stop at the first that fails:
+
+```sh
+C="docker compose -f docker-compose.yml -f docker-compose.build.yml -f docker-compose.discovery.yml"
+REV=$(git rev-parse HEAD); TS=$(date -u +%Y%m%d-%H%M%S); mkdir -p deploy-backups
+git diff --binary HEAD > deploy-backups/vm-local-$TS.patch          # your VM edits, kept
+$C exec -T db pg_dump -U agentsdr --format=custom agentsdr > deploy-backups/agentsdr-$TS.dump
+$C exec -T db pg_restore --list < deploy-backups/agentsdr-$TS.dump > /dev/null && echo backup ok
+docker tag "$(docker inspect --format '{{.Image}}' "$($C ps -q app)")" agentsdr:rollback-$TS
+$C stop gmaps-scraper                                              # frees up to 1.5 GB for the build
+$C build --build-arg GIT_SHA=$REV --build-arg NEXT_BUILD_HEAP_MB=4096 app
+for m in add-tinyfish add-research-sources add-browser-sessions add-wrong-number \
+         add-activity add-assistant-job-reports add-objectives; do
+  $C run --rm --no-deps -T app bun scripts/$m.ts || { echo "STOP: $m failed"; break; }
+done
+# Only if every migration printed its "ready" line:
+$C up -d --no-build
+```
+
+- If the build or a migration fails, run `docker tag agentsdr:rollback-$TS
+  agentsdr:local` and `$C start gmaps-scraper`. The old app is still
+  serving. The tag makes sure no later `up -d` starts the unmigrated image.
+- To roll back after the switch: `docker tag agentsdr:rollback-$TS
+  agentsdr:local && $C up -d --no-build app`. The migrations can stay: they
+  are additive, and the old image runs on them.
+
+### Running-image checks
+
+After the script's own checks pass (or after the manual switch):
+
+```sh
+C="docker compose -f docker-compose.yml -f docker-compose.build.yml -f docker-compose.discovery.yml"
+$C ps                                    # app, db and gmaps-scraper all running
+docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' $($C ps -q app)
+$C exec app printenv AGENTSDR_REVISION GMAPS_SCRAPER_URL    # the same commit; http://gmaps-scraper:8080
+$C logs --since 15m app | grep -F '[assistant/worker] starting'
+$C exec db psql -U agentsdr agentsdr -Atc "select to_regclass('tinyfish_settings'), to_regclass('research_settings'), to_regclass('browser_sessions'), to_regclass('crm_wrong_routes'), to_regclass('activity_seen'), to_regclass('assistant_objectives')"
+$C exec db psql -U agentsdr agentsdr -Atc "select count(*) from information_schema.columns where (table_name, column_name) in (('assistant_jobs','report_key'), ('assistant_jobs','reported_at'), ('treg_calls','request_id'))"
+$C exec db psql -U agentsdr agentsdr -Atc "select pg_get_constraintdef(oid) from pg_constraint where conname = 'assistant_jobs_kind_chk'"
+docker stats --no-stream                 # the app idles at about 0.5 GB
+```
+
+Expected results:
+- The revision is the deployed commit, the full hash.
+- The table query prints six names, none empty; the column query prints `3`.
+- The constraint includes `'objective'`.
+- `/activity`, `/assistant/results` and `/analytics` load.
+
+## Tenancy isolation (website-observations commit, under Node)
+
+The run above, under `bun server.js` on `ab84f96`, found the same 16 items.
 
 Run on 19 October against a **production build** of the final commit,
 started as the Docker image starts it (`node .next/standalone/server.js`)
@@ -314,7 +541,7 @@ server's error page, served while it was out of memory. The isolation check
 now records the response body of every such item, fails on any unanswered
 request, and runs against a production build.
 
-## Gates on the final commit
+## Gates on the website-observations commit
 
 All on the final tree, on a fresh local database:
 - `tsc --noEmit`: pass. eslint on every TypeScript file the branch changed
@@ -344,12 +571,12 @@ All on the final tree, on a fresh local database:
 Not run here: the live scripts (`tinyfish-live`, `aiml-live`), which need
 keys and spend; they passed on 18 October on the test keys.
 
-## Before you deploy this branch
+## What the seven migrations add
 
-Run the migrations in this order, in the running container
-(`docker exec <container> bun scripts/<name>.ts`) or against the database.
-Each one is safe to re-run. The new code reads these tables and columns, so
-run them all before the new image takes traffic.
+`docker/deploy.sh` runs them in this order, in one-off containers of the new
+image, before it takes traffic. Each one is safe to re-run, and each is
+additive (new tables and columns), so the old version keeps running while
+they run.
 
 1. `add-tinyfish.ts`: `tinyfish_settings`, `provider_usage`, `provider_quota_state`
 2. `add-research-sources.ts`: `research_settings`
@@ -359,81 +586,73 @@ run them all before the new image takes traffic.
 6. `add-assistant-job-reports.ts`: `assistant_jobs.report_key`, `reported_at`. The worker writes these columns.
 7. `add-objectives.ts`: `assistant_objectives`, the `objective` job kind, `treg_calls.request_id`. Search tools create objectives and Treg calls write the column.
 
-The image now ships all seven (`Dockerfile`, `.dockerignore`). All are
-additive (new tables and columns), so the running old version is unaffected
-while they run.
-
-### Deployment commands (build from source with Docker Compose)
-
-Adjust paths and the compose files to your VM; these follow
-`docs/self-hosting/docker-compose.mdx`.
-
-```sh
-cd /path/to/AgentSDR
-git fetch origin claude/dreamy-fermi-h5woha
-git checkout claude/dreamy-fermi-h5woha
-git reset --hard origin/claude/dreamy-fermi-h5woha     # the final commit; check `git log -1`
-
-# 1. Back up the database first.
-docker compose exec db pg_dump -U agentsdr agentsdr > agentsdr-$(date +%F)-before-upgrade.sql
-
-# 2. Build the new image (the old container keeps serving).
-docker compose -f docker-compose.yml -f docker-compose.build.yml build app
-
-# 3. Migrations, in order, with the new image, before it takes traffic.
-for m in add-tinyfish add-research-sources add-browser-sessions add-wrong-number \
-         add-activity add-assistant-job-reports add-objectives; do
-  docker compose -f docker-compose.yml -f docker-compose.build.yml run --rm app bun scripts/$m.ts || break
-done
-
-# 4. Switch to the new image.
-docker compose -f docker-compose.yml -f docker-compose.build.yml up -d app
-```
-
-Without Compose: run each migration in a one-off container of the new image
-with the production `DATABASE_URL`
-(`docker run --rm -e DATABASE_URL=… <image> bun scripts/<name>.ts`), or,
-after the switch, `docker exec <container> bun scripts/<name>.ts`.
-
-### Running-image checks
-
-1. The image is the new one:
-   `docker compose exec app ls scripts/add-objectives.ts` lists the file, and
-   `docker compose exec app sh -c 'grep -rlF "Outside sending hours" .next | head -1'` and
-   `docker compose exec app sh -c 'grep -rlF "Same period in Analytics" .next | head -1'`
-   each print a file (Activity's and Overview's new wording, compiled in).
-2. The migrations ran:
-   `docker compose exec db psql -U agentsdr agentsdr -Atc "select to_regclass('tinyfish_settings'), to_regclass('research_settings'), to_regclass('browser_sessions'), to_regclass('crm_wrong_routes'), to_regclass('activity_seen'), to_regclass('assistant_objectives')"`
-   prints six names, none empty, and
-   `… -Atc "select count(*) from information_schema.columns where (table_name, column_name) in (('assistant_jobs','report_key'), ('assistant_jobs','reported_at'), ('treg_calls','request_id'))"`
-   prints `3`.
-3. The app: the container is healthy and its log shows the workers starting
-   (`[assistant/worker] starting`) with no schema error. `/activity`,
-   `/assistant/results` and `/analytics` load. Overview and Analytics give the
-   same Today and Last 7 days figures. Analytics names your organization's
-   time zone.
-4. In a new chat, "find 5 dental clinics in Pune" (free sources): the first
-   search's result says "until it has 5 qualified leads"; Activity lists a
-   "Lead request"; the chat ends with one "Research finished" or
-   "Research stopped" report with the stop reason.
-
 ## Your morning list
 
 Deployment and live acceptance are **pending** until you run them.
+
 1. **Rotate both keys** shared in the chat (TinyFish and AI/ML API). They were
    kept in a scratch file outside the repository and never committed, but they
    were in the conversation.
-2. Deploy as above, then work through the running-image checks.
-3. Settings → Organization → TinyFish: paste the new key (one free search
+2. **Deploy on the VM**, in the checkout Docker Compose runs from:
+
+   ```sh
+   cd /path/to/AgentSDR
+   git status --short          # your edits: they are kept, never reset or stashed
+   git fetch origin +refs/heads/claude/dreamy-fermi-h5woha:refs/remotes/origin/claude/dreamy-fermi-h5woha
+   git switch claude/dreamy-fermi-h5woha 2>/dev/null || git switch --track origin/claude/dreamy-fermi-h5woha
+   git merge --ff-only origin/claude/dreamy-fermi-h5woha
+   git log -1 --format='%H %s' # the commit named in the reply that came with this report
+   free -m                     # "available" plus swap "free" must reach 7 GB
+   tmux new -s deploy          # or: screen -S deploy
+   docker/deploy.sh
+   ```
+
+   - If `free -m` shows less than 7 GB, add a 4 GB swap file first (once; it
+     survives reboots):
+
+     ```sh
+     sudo fallocate -l 4G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
+     echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+     ```
+
+   - If git refuses to switch or fast-forward because a file you edited also
+     changed:
+     1. Save your edits: `git diff > ~/vm-edits.patch`.
+     2. Undo that file: `git checkout -- <file>`.
+     3. Run the commands again.
+     4. Re-apply what you still need: `git apply --3way ~/vm-edits.patch`.
+   - The script uses `docker-compose.yml`, `docker-compose.build.yml` and
+     `docker-compose.discovery.yml`, unless `COMPOSE_FILE` is set in `.env`
+     (for example, for an external database).
+   - It ends with the deployed commit, the backup file, the rollback tag and
+     the check commands.
+3. Work through the running-image checks above.
+4. Settings → Organization → TinyFish: paste the new key (one free search
    verifies it). Browser minutes stay at 0 unless you want the browser tools.
-4. Live research pilot on both buyer examples with a spend cap in the
-   request, for example "find 20 real estate agents in Pune who might buy AI
-   automation, spend up to $3". Check the final report's sources, leads,
-   spend and stop reason against Activity and the lead lists.
-5. An Instagram-only prospect reaching an approved Instagram plan through the
-   connected Unipile account, with one recipient you approve.
-6. Send one test inbound reply to a plan in Review mode and check Action
-   required, Activity → Replies and the plan card agree.
+5. Live acceptance, in a new chat:
+   1. **Free sources only.** Ask "find 5 dental clinics in Pune, free sources
+      only".
+      - The first search's result says "on free sources only (a $0 spend
+        cap…)".
+      - No Apify, Treg, Tavily or AI web research is used.
+      - The final report says "Recorded spend: nothing (free sources only)".
+   2. **A capped request.** Ask "find 20 real estate agents in Pune who might
+      buy AI automation, spend up to $3".
+      - Activity's Lead request shows "$x of $3.00 spent".
+      - While it runs, say "use Instagram too". The new search counts toward
+        the same request: still one Lead request in Activity.
+      - The final report's sources, leads, spend and stop reason match
+        Activity and the lead lists.
+   3. **A restart mid-search.** Run `docker compose … restart app` during a
+      running search.
+      - It resumes and finishes.
+      - No second Apify run appears for it in Settings → Apify.
+   4. **One real web search.** Open "Review the leads" and the plan card:
+      "Why this lead" and the website findings are shown.
+   5. **An Instagram-only prospect** reaching an approved Instagram plan
+      through the connected Unipile account, with one recipient you approve.
+   6. **A test inbound reply** to a plan in Review mode. Action required,
+      Activity → Replies and the plan card agree.
 
 ## Known gaps and failures
 
@@ -444,14 +663,30 @@ Deployment and live acceptance are **pending** until you run them.
   structured-call fix was verified on it only.
 - The manual Start button still enrolls everyone, overlaps included; only
   Autonomous and request-approval starts leave overlaps out.
-- Web-search coverage of a request is counted until your next request in the
-  same chat (decision 50).
-- Requests served only by `web_search`/`read_webpage` start no objective; a
-  follow-up such as "use Instagram too" counts as a new request. Changing a
-  running request's limits needs a new request. Pause and cancel are a chat
-  tool and an API route, not buttons yet.
-- Tavily, AI web-research cost before it is reported, and model tokens are
-  outside a request's dollar cap (decision 41).
+- Requests served only by `web_search`, `read_webpage`, Treg or the browser
+  start no objective: there is no lead target and no final report. Their Treg
+  and browser spend is capped by the request's budget (decision 74).
+- Changing a running request's limits needs a new request. Pause and cancel
+  are a chat tool and an API route, not buttons yet.
+- `sameRequest` relies on the model: it joins only when the model passes the
+  flag for a follow-up.
+- Some spend is outside the dollar cap or estimated (decisions 72, 78):
+  - Tavily is counted in credits under its own daily cap. That daily cap
+    still reserves a website search's planned queries when the search starts.
+  - Model tokens are not counted.
+  - AI web research counts at $0.05 a search until the provider reports its
+    cost.
+- Paid work needs at least $0.01 of a request's cap left, so a request a
+  fraction of a cent short is refused even for a $0.002 Treg call
+  (decision 79).
+- A turn a finished job starts serves that job's request, even if you have
+  started another request since (decision 77).
+- Two recoveries trade completeness for never paying twice:
+  - When a launch's own summary could not be saved, the step reports done
+    with the channels it started but without per-channel lead counts (they
+    are on the plan card).
+  - When an Instagram profiles run failed and its step runs again, the
+    accounts are saved from what their posts show, unread.
 - Loading Overview settles decisions you already answered in the chat (a
   database write; it never starts, approves or sends anything).
 - Analytics has no run, request or chat filter. Delivery and read receipts
@@ -468,10 +703,11 @@ Deployment and live acceptance are **pending** until you run them.
   from your saved offer. A named person is a fact on the business's lead, not
   a separate contactable person; a WhatsApp number on a site is a finding,
   not yet a route.
-- A job whose stage result cannot be saved (a database refusal of its
-  payload) stays claimed and is retried every 3 minutes without counting
-  toward its failure limit. This predates the branch; the website change no
-  longer feeds it page text that could trigger it.
+- The Docker image itself was not built here (no Docker daemon). The build
+  step and `bun server.js` were checked in this container, and the deploy
+  script only with stubs. Its first real run is on your VM.
+- The image build takes about 6 GB, so the 8 GB VM needs the 4 GB swap file.
+  The script refuses to build without enough memory.
 - On a desktop record page both "Leads & replies" and "Pipeline" are
   highlighted in the sidebar (both point at `/crm/pipeline`); this predates
   the branch.

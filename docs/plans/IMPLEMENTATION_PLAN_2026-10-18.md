@@ -816,6 +816,18 @@ and sends/replies, and a final report survives reload/restart and AI failure.
 Compare qualified yield, duplicate rate, cost and completion time. Add another
 provider only if those results show a specific coverage/reliability gap.
 
+### Status, 19 October (deployment readiness)
+
+- Items 2–4 are implemented and pass with fake providers on a local
+  database; the deployment-readiness work (`1b45c88` worker recovery,
+  `ab84f96` request spend, `c191f6b` deploy script) is checked on code commit
+  `ab84f96`. The night report says which checks ran where: in this
+  container's gates, against a production build served by `bun server.js`,
+  and what is left for the Docker image on the VM.
+- Items 1 and 5, and every live check, are pending: they need the deployed
+  image, your keys and your approval (the night report's morning list).
+- Further website profiling and routing website WhatsApp links are deferred.
+
 ## References to recheck before provider changes
 
 Provider references were checked on 17 October 2026. TinyFish pricing and the
