@@ -409,12 +409,49 @@ function isSourceTool(tool: string | null): boolean {
   return tool === "read_webpage" || tool === "web_search" || tool === "treg_call" || Boolean(tool?.startsWith("browser_"));
 }
 
+function parsedLink(value: string): URL | null {
+  try {
+    return new URL(value);
+  } catch {
+    return null;
+  }
+}
+
+const LINK_IN_TEXT = /https?:\/\/[^\s"'<>]+/gi;
+
+/**
+ * A page read's or browser page's result as a source: what the page
+ * returned (its text, title, contacts and the links it lists), with the
+ * page's own address cut to its path. The query string and fragment are
+ * what the model wrote when it asked for the page, so reading
+ * "…/search?q=info@guessed.in" grounds neither that address nor its site.
+ * A link on the page back to that same address (a "#top" link resolves to
+ * all of it) is cut the same way.
+ */
+function pageSourceText(text: string, pageUrl: unknown): string {
+  const page = typeof pageUrl === "string" ? parsedLink(pageUrl) : null;
+  if (!page) return text;
+  const bare = `${page.origin}${page.pathname}`;
+  const samePage = (value: string) => {
+    const link = parsedLink(value);
+    return Boolean(link && link.origin === page.origin && link.pathname === page.pathname && link.search === page.search);
+  };
+  return text.replace(LINK_IN_TEXT, (match) => {
+    // Punctuation after a link in the summary ("…/search?q=x. Text:") is not part of it, though a query may end in some too.
+    for (let end = match.length; end > 0 && (end === match.length || /[.,;:!?)\]”]/.test(match[end]!)); end -= 1) {
+      if (samePage(match.slice(0, end))) return `${bare}${match.slice(end)}`;
+    }
+    return match;
+  });
+}
+
 /**
  * What contacts, links and business information may come from (actionsProblem's
  * ownerCorpus): what the owner wrote or attached, their saved documents, and
  * the successful results of reading or searching. A web search counts only
  * for what it returned: its summary repeats the query the model wrote, and a
- * guessed address or domain searched for is not thereby given.
+ * guessed address or domain searched for is not thereby given. A page read
+ * counts for the page, not for the query string the model opened it with.
  */
 export function groundingCorpus(messages: readonly Pick<TranscriptMessage, "role" | "tool" | "status" | "content" | "toolResult">[], documentsText = ""): string {
   return messages
@@ -427,7 +464,14 @@ export function groundingCorpus(messages: readonly Pick<TranscriptMessage, "role
           .map((hit) => [hit.title, hit.url, hit.snippet].filter((part) => typeof part === "string").join(" — "))
           .join("\n");
       }
-      return `${message.content} ${typeof message.toolResult?.summary === "string" ? message.toolResult.summary : ""}`;
+      const summary = typeof message.toolResult?.summary === "string" ? message.toolResult.summary : "";
+      const text = `${message.content} ${summary}`;
+      if (message.tool === "read_webpage" || message.tool?.startsWith("browser_")) {
+        // The address the page was read at: its data, or where the summary names it ("Read <url>", "Page: <url>").
+        const named = message.tool === "read_webpage" ? /^Read (\S+)/.exec(summary || message.content) : /^Page: (\S+)/m.exec(summary || message.content);
+        return pageSourceText(text, (message.toolResult?.data as { url?: unknown } | undefined)?.url ?? named?.[1]);
+      }
+      return text;
     })
     .join("\n") + `\n${documentsText}`;
 }

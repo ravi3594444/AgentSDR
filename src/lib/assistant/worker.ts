@@ -3,7 +3,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { and, asc, eq, gte, inArray, isNotNull, isNull, lt, or, sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { runInOrganization } from "@/lib/tenancy/scope";
+import { maybeCurrentOrganizationId, runInOrganization } from "@/lib/tenancy/scope";
 import { assistantJobs, type AssistantJobKind } from "./schema";
 
 /**
@@ -178,11 +178,15 @@ export function followUpDue(now = new Date()): SQL {
  * process stopped after the report, before what follows it was done).
  * Jobs finished in the last `graceMs` are left to the normal path. Returns
  * how many were handed over; the listener's claims keep each report and
- * each follow-up single.
+ * each follow-up single. The worker runs it outside any organization scope;
+ * called inside one, it takes only that organization's jobs (another's
+ * could not run there, and would only crowd its own out of the batch).
  */
 export async function reconcileAssistantJobReports(graceMs = REPORT_GRACE_MS, now = new Date()): Promise<number> {
   if (!onFinished) return 0;
+  const scoped = maybeCurrentOrganizationId();
   const recent = and(
+    scoped ? eq(assistantJobs.organizationId, scoped) : undefined,
     isNotNull(assistantJobs.threadId),
     gte(assistantJobs.finishedAt, new Date(now.getTime() - REPORT_WINDOW_MS)),
     lt(assistantJobs.finishedAt, new Date(now.getTime() - graceMs)),

@@ -192,12 +192,22 @@ async function followUpSearch(job: AssistantJob, threadId: string, contactAfter:
         const heartbeat = claimed ? setInterval(() => void touchThread(threadId).catch(() => undefined), 60_000) : null;
         // The switch as it is now, after the wait.
         autonomous = (await threadAutonomy(threadId)).on;
+        // Made or refused, it is no longer owed (recorded before the chat is released, so whoever takes it next sees it done).
+        let finished = false;
+        const finish = async () => {
+          if (finished) return;
+          finished = true;
+          await finishFollowUp(job).catch((error) => console.error("[assistant] recording a search's follow-up as done failed:", error));
+        };
         try {
           prepared = await runToolInThread(
             { threadId, userId: job.createdBy, ownerText: contactAfter.ownerRequest ?? "", authorizedBy: "search", outreachRequestId: contactAfter.requestId ?? null, autonomous },
             "prepare_outreach",
             { audienceId: job.audienceId, ownerRequest: contactAfter.ownerRequest ?? null, ...(contactAfter.channels?.length ? { channels: contactAfter.channels } : {}), ...(autonomous ? { autopilot: true } : {}) },
           );
+          // Done as soon as the plan is written: a stop during what follows (the start, the approval, the event)
+          // must not leave it owed, or the reconciliation would prepare a second plan.
+          await finish();
           if (prepared.ok) {
             const runId = typeof prepared.data?.runId === "string" ? prepared.data.runId : null;
             // Autonomous mode: every start goes through the capped path (autoStartPlan posts why one waits).
@@ -222,8 +232,8 @@ async function followUpSearch(job: AssistantJob, threadId: string, contactAfter:
           }
         } finally {
           if (heartbeat) clearInterval(heartbeat);
-          // Made or refused, it is no longer owed (released after, so whoever takes the chat next sees it done).
-          await finishFollowUp(job).catch((error) => console.error("[assistant] recording a search's follow-up as done failed:", error));
+          // Also when writing the plan failed.
+          await finish();
           if (claimed) await releaseThread(threadId);
         }
       } finally {

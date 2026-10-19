@@ -22,7 +22,11 @@
  * search promised is owed with its report, in the same commit: a restart
  * after the report (before the plan, or while writing it) leaves it to the
  * reconciliation, which prepares it once, and never while another process
- * still works on it. And reports scoped to one request exclude other runs'
+ * still works on it; once the plan is written it is recorded done, before
+ * what follows it, so a stop there cannot make a second plan. Reconciled
+ * outside any organization scope (as the worker does), each job is handled
+ * in its own organization; called inside one, it takes that organization's
+ * jobs only. And reports scoped to one request exclude other runs'
  * work, counting reply decisions apart from plans waiting for Start; a
  * results question with nothing of its own recorded is answered for the
  * organization; and a chat's report counts the plans prepared or shown in
@@ -36,6 +40,8 @@
  * Creates its own organizations ("Autonomous check …", "Overlap check …")
  * and leaves them behind. Refuses a non-local DATABASE_URL.
  */
+import { AsyncResource } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 import { and, count, eq, inArray, sql } from "drizzle-orm";
 
 if (!/@(localhost|127\.0\.0\.1)[:/]/.test(process.env.DATABASE_URL ?? "")) {
@@ -63,9 +69,17 @@ const { claimJobReport, onAssistantJobFinished, reconcileAssistantJobReports, re
 const { registerAssistantJobs, reportFinishedJob } = await import("@/lib/assistant/register.server");
 const { requestScope, results, threadScope } = await import("@/lib/assistant/results.server");
 const { runToolInThread } = await import("@/lib/assistant/agent.server");
-const { runTool } = await import("@/lib/assistant/tools.server");
+const { runTool, TOOLS } = await import("@/lib/assistant/tools.server");
 const linkedin = await import("@/lib/linkedin/schema");
 type OutreachPlan = import("@/lib/assistant/schema").OutreachPlan;
+
+/**
+ * The worker's reconciliation as the worker runs it: outside any
+ * organization scope, each job in its own organization. Bound here, at the
+ * top level, so calling it from inside an organization's block still runs
+ * it outside that scope.
+ */
+const reconcileAll = AsyncResource.bind((graceMs: number) => reconcileAssistantJobReports(graceMs));
 
 let failures = 0;
 function check(label: string, ok: boolean, detail = "") {
@@ -81,6 +95,7 @@ await db.insert(members).values([
   { organizationId: org!.id, userId: member!.id, role: "member" },
 ]);
 console.log(`Organization ${org!.name} (${org!.id})`);
+let otherOrganizationThreadId = "";
 
 await runInOrganization(org!.id, async () => {
   const orgId = currentOrganizationId();
@@ -188,6 +203,8 @@ await runInOrganization(org!.id, async () => {
   await setThreadAutonomous(thread.id, false, member!.id);
   const after = await proposed(P.slice(25, 27));
   check("turned off, plans wait for the Start button again", !(await autoStartPlan(thread.id, after.id)).started && (await runRow(after.id)).status === "proposed");
+  // A chat of this organization for the reconciliation checks run in the next one's scope.
+  otherOrganizationThreadId = (await createThread(owner!.id)).id;
 });
 
 // ==================================================================== overlaps, restarts, durable and scoped reports
@@ -403,16 +420,16 @@ await runInOrganization(org2!.id, async () => {
   const crashed = await jobRow(lost!.id);
   check("durable report: the job finished with its report key, but the listener died before posting", crashed.status === "succeeded" && crashed.reportKey === `assistant_job:${lost!.id}:succeeded` && crashed.reportedAt === null && (await quietEvents()).length === 0);
   onAssistantJobFinished(reportFinishedJob);
-  const handed = await reconcileAssistantJobReports(0);
+  const handed = await reconcileAll(0);
   const reported = await jobRow(lost!.id);
   let quietNow = await quietEvents();
   check("durable report: the worker's reconciliation posts it, exactly once", handed >= 1 && quietNow.length === 1 && /Durable report check/.test(quietNow[0]!.content) && reported.reportedAt instanceof Date && (quietNow[0]!.toolResult as { reportKey?: string } | null)?.reportKey === reported.reportKey, `${handed} handed, ${quietNow.length} events`);
-  await reconcileAssistantJobReports(0);
+  await reconcileAll(0);
   await reportFinishedJob(reported);
   quietNow = await quietEvents();
   check("durable report: reconciling again and a duplicate callback post nothing more", quietNow.length === 1);
   const [twin] = await db.insert(schema.assistantJobs).values({ organizationId: orgId, kind: "web_discovery", status: "succeeded", stage: "done", threadId: quiet.id, payload: {}, progress: {}, result: { found: 0, note: "Twin report check." }, finishedAt: new Date(Date.now() - 1_000), reportKey: `assistant_job:twin-${stamp}:succeeded` }).returning();
-  await Promise.all([reportFinishedJob(twin!), reportFinishedJob(twin!), reconcileAssistantJobReports(0)]);
+  await Promise.all([reportFinishedJob(twin!), reportFinishedJob(twin!), reconcileAll(0)]);
   check("durable report: callbacks at the same moment post one report", (await quietEvents()).filter((event) => /Twin report check/.test(event.content)).length === 1);
   const claimedTwice = await claimJobReport(twin!, async () => undefined);
   check("durable report: a reported job cannot be claimed again", claimedTwice === false);
@@ -420,7 +437,7 @@ await runInOrganization(org2!.id, async () => {
     { organizationId: orgId, kind: "web_discovery", status: "succeeded", stage: "done", threadId: quiet.id, payload: {}, progress: {}, result: { found: 0, note: "Legacy report check." }, finishedAt: new Date(Date.now() - 60 * 60_000) },
     { organizationId: orgId, kind: "web_discovery", status: "failed", stage: "searching", threadId: quiet.id, payload: {}, progress: {}, error: "Stale report check.", finishedAt: new Date(Date.now() - 25 * 60 * 60_000), reportKey: `assistant_job:stale-${stamp}:failed` },
   ]);
-  await reconcileAssistantJobReports(0);
+  await reconcileAll(0);
   check("durable report: jobs finished before report keys existed, or more than a day ago, are not replayed", !(await quietEvents()).some((event) => /Legacy report check|Stale report check/.test(event.content)));
 
   // ------------------------------------------------------------ the plan a "find and contact" search promised
@@ -454,17 +471,90 @@ await runInOrganization(org2!.id, async () => {
   const lostWhileWriting = await contactSearch({ reportedAt: new Date(Date.now() - 15 * 60_000), progress: { followUp: "preparing", followUpAt: minutesAgo(10) } });
   const stillWriting = await contactSearch({ reportedAt: new Date(Date.now() - 60_000), progress: { followUp: "preparing", followUpAt: minutesAgo(0) } });
   const eventsBefore = (await quietEvents()).length;
-  await reconcileAssistantJobReports(0);
+  await reconcileAll(0);
   check("follow-up: a restart after the report commits: the reconciliation prepares the plan", (await followedUp(lostAfterReport)) === "done" && (await planAttempts(lostAfterReport)) === 1, `${await followUpOf(lostAfterReport)} ${await planAttempts(lostAfterReport)}`);
   check("follow-up: a restart while the plan was being written: taken over once its lease is stale", (await followedUp(lostWhileWriting)) === "done" && (await planAttempts(lostWhileWriting)) === 1, `${await followUpOf(lostWhileWriting)} ${await planAttempts(lostWhileWriting)}`);
   check("follow-up: one another process is still writing is left to it", (await followUpOf(stillWriting)) === "preparing" && (await planAttempts(stillWriting)) === 0);
   check("follow-up: no report is posted again", (await quietEvents()).length === eventsBefore && !(await events(lostAfterReport.threadId!)).some((event) => /web search/i.test(event.content)));
-  await reconcileAssistantJobReports(0);
+  await reconcileAll(0);
   await reportFinishedJob(await jobRow(lostAfterReport.id));
   await new Promise((resolve) => setTimeout(resolve, 500));
   check("follow-up: reconciling again and a duplicate callback prepare nothing more", (await planAttempts(lostAfterReport)) === 1 && (await planAttempts(lostWhileWriting)) === 1 && (await planAttempts(live)) === 1 && (await planAttempts(stillWriting)) === 0);
   // Leave nothing owed for a later reconciliation (it covers every organization).
   await db.update(schema.assistantJobs).set({ progress: { followUp: "done" } }).where(eq(schema.assistantJobs.id, stillWriting.id));
+
+  // ------------------------------------------------------------ a stop after the plan was written
+  // Once prepare_outreach has written the plan, the follow-up is done: a stop before what follows it (the
+  // request approval, an Autonomous start, the "plan ready" event) must not leave it owed or preparing, or
+  // the reconciliation would prepare a second plan. Stand-ins: a prepare_outreach that writes its plan at
+  // once, and a trigger that notes the follow-up's state as the "plan ready" event is written.
+  const written = await contactSearch({ reportedAt: new Date(Date.now() - 60_000), progress: { followUp: "owed" } });
+  const prepareOutreach = TOOLS.prepare_outreach!.run;
+  TOOLS.prepare_outreach!.run = async () => ({ ok: true, summary: "The outreach plan is ready (stand-in).", data: { runId: randomUUID() } });
+  await db.execute(sql.raw(`
+    CREATE OR REPLACE FUNCTION autonomous_check_plan_${stamp}() RETURNS trigger AS $$
+    BEGIN
+      UPDATE assistant_jobs SET progress = progress || jsonb_build_object('followUpAtPlanEvent', progress ->> 'followUp') WHERE id = '${written.id}';
+      RETURN NEW;
+    END $$ LANGUAGE plpgsql;
+    CREATE TRIGGER autonomous_check_plan_${stamp} AFTER INSERT ON assistant_messages
+      FOR EACH ROW WHEN (NEW.thread_id = '${written.threadId}' AND NEW.role = 'event') EXECUTE FUNCTION autonomous_check_plan_${stamp}();`));
+  try {
+    await reportFinishedJob(written);
+    for (let round = 0; round < 150 && !((await followUpOf(written)) === "done" && (await events(written.threadId!)).length); round += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+  } finally {
+    TOOLS.prepare_outreach!.run = prepareOutreach;
+    await db.execute(sql.raw(`DROP TRIGGER IF EXISTS autonomous_check_plan_${stamp} ON assistant_messages; DROP FUNCTION IF EXISTS autonomous_check_plan_${stamp}();`));
+  }
+  const atPlanEvent = ((await jobRow(written.id)).progress as { followUpAtPlanEvent?: string }).followUpAtPlanEvent ?? null;
+  const planEvents = (await events(written.threadId!)).map((event) => event.content);
+  check("a stop after the plan was written: the follow-up is already done when the request approval and the \"plan ready\" event follow",
+    atPlanEvent === "done" && (await followUpOf(written)) === "done" && (await planAttempts(written)) === 1 && planEvents.length === 1 && /outreach plan for these leads is ready/.test(planEvents[0]!),
+    JSON.stringify({ atPlanEvent, followUp: await followUpOf(written), attempts: await planAttempts(written), events: planEvents }));
+
+  // ------------------------------------------------------------ reconciling inside one organization's scope
+  // The worker reconciles outside any scope, each job in its own organization (reconcileAll above). Called
+  // inside one organization's scope, it takes that organization's jobs only: another organization's (here 20
+  // unreported jobs and a follow-up left owed, all older than this one's) are skipped, neither refused one by
+  // one nor crowding this organization's out of the batch.
+  const othersUnreported = await db.insert(schema.assistantJobs).values(Array.from({ length: 20 }, (_, index) => ({
+    organizationId: org!.id, kind: "web_discovery" as const, status: "succeeded" as const, stage: "done", threadId: otherOrganizationThreadId, payload: {}, progress: {},
+    result: { found: 0, note: `Other organization's report ${index}.` }, finishedAt: new Date(Date.now() - (60 + index) * 60_000), reportKey: `assistant_job:other-${stamp}-${index}:succeeded`,
+  }))).returning();
+  const [otherOwed] = await db.insert(schema.assistantJobs).values({
+    organizationId: org!.id, kind: "web_discovery", status: "succeeded", stage: "done", threadId: otherOrganizationThreadId, payload: {}, progress: { followUp: "owed" },
+    result: { found: 0 }, finishedAt: new Date(Date.now() - 90 * 60_000), reportKey: `assistant_job:other-owed-${stamp}:succeeded`, reportedAt: new Date(Date.now() - 90 * 60_000),
+  }).returning();
+  const otherIds = [...othersUnreported.map((job) => job.id), otherOwed!.id];
+  try {
+    const [ownUnreported] = await db.insert(schema.assistantJobs).values({ organizationId: orgId, kind: "web_discovery", status: "succeeded", stage: "done", threadId: quiet.id, payload: {}, progress: {}, result: { found: 0, note: "In-scope report check." }, finishedAt: new Date(Date.now() - 1_000), reportKey: `assistant_job:in-scope-${stamp}:succeeded` }).returning();
+    const ownOwed = await contactSearch({ reportedAt: new Date(Date.now() - 60_000), progress: { followUp: "owed" } });
+    const logged: string[] = [];
+    const consoleError = console.error;
+    console.error = (...args: unknown[]) => {
+      logged.push(args.map(String).join(" "));
+      consoleError(...args);
+    };
+    let handedInScope = 0;
+    try {
+      handedInScope = await reconcileAssistantJobReports(0);
+    } finally {
+      console.error = consoleError;
+    }
+    const others = await db.select().from(schema.assistantJobs).where(inArray(schema.assistantJobs.id, otherIds));
+    check("reconciling inside one organization's scope: another organization's jobs are skipped, not refused",
+      !logged.some((line) => /Refusing to switch organization scope/.test(line)) && others.every((job) => job.reportedAt === null || (job.progress as { followUp?: string }).followUp === "owed"),
+      logged.filter((line) => /Refusing/.test(line)).length ? `${logged.filter((line) => /Refusing/.test(line)).length} refused` : "");
+    check("…and they do not crowd this organization's own report and follow-up out",
+      handedInScope >= 2 && (await jobRow(ownUnreported!.id)).reportedAt instanceof Date && (await quietEvents()).some((event) => /In-scope report check/.test(event.content)) && (await followedUp(ownOwed)) === "done" && (await planAttempts(ownOwed)) === 1,
+      `${handedInScope} handed, follow-up ${await followUpOf(ownOwed)}`);
+    await reconcileAll(0);
+    const othersAfter = await db.select().from(schema.assistantJobs).where(inArray(schema.assistantJobs.id, othersUnreported.map((job) => job.id)));
+    check("reconciling outside any scope, as the worker does, reports the other organization's jobs in their own organization", othersAfter.every((job) => job.reportedAt instanceof Date), `${othersAfter.filter((job) => job.reportedAt instanceof Date).length} of ${othersAfter.length}`);
+  } finally {
+    // Leave nothing due for a later reconciliation (it covers every organization).
+    await db.update(schema.assistantJobs).set({ progress: { followUp: "done" }, reportedAt: new Date() }).where(inArray(schema.assistantJobs.id, otherIds));
+  }
 
   // ------------------------------------------------------------ reports scoped to one request
   const [firstLead] = campaignLeads;

@@ -433,6 +433,71 @@ describe("groundingCorpus: what the owner wrote and what sources returned", () =
     expect(corpus).toContain("₹2,499");
     expect(corpus).not.toContain("guess.example");
   });
+
+  // Written as tools.server.ts pageResult and browserResult write them: the page's own address is the one the model asked for.
+  const pageRead = (url: string, page: { title: string; contacts?: string[]; links?: string[]; text: string }) => {
+    const summary = `Read ${url} “${page.title}” via TinyFish (${page.text.length} characters). Contacts on the page: ${page.contacts?.join(", ") || "none"}. Links on the page: ${page.links?.join(" ") || "none"}. Text: ${page.text}`;
+    const contacts = (page.contacts ?? []).map((contact) => ({ kind: contact.split(" ")[0], value: contact.split(" ").slice(1).join(" ") }));
+    return { role: "tool" as const, tool: "read_webpage", status: "ok", content: summary, toolResult: { summary, data: { url, title: page.title, contacts, links: page.links ?? [] } } };
+  };
+  const browserPage = (url: string, page: { title: string; elements: string[]; text: string }) => {
+    const summary = `Opened a browser.\nPage: ${url} “${page.title}”\nElements: ${page.elements.join(" ") || "none"}\nText: ${page.text}`;
+    return { role: "tool" as const, tool: "browser_open", status: "ok", content: summary, toolResult: { summary, data: { url, title: page.title, elements: page.elements.length } } };
+  };
+  const listedOn = "find the email of Acme Dental, Pune and contact them. They are listed on knowndir.example";
+  const addPhoneGuess = { tool: "add_contacts", args: { contacts: [{ phone: "+91 98220 11111", name: "Acme Dental" }], contactAfter: true } };
+
+  test("a page's own address grounds nothing the model put in its query string or fragment", () => {
+    const guessed = "https://www.knowndir.example/search?q=info@acmedental.in&phone=+919822011111";
+    const read = groundingCorpus([owner(listedOn), pageRead(guessed, {
+      title: "Search",
+      // A "#main" link resolves to the whole address the page was opened at.
+      links: [`${guessed}#main`, "https://www.knowndir.example/about"],
+      text: "No listings match your search.",
+    })]);
+    const opened = groundingCorpus([owner(listedOn), browserPage(`https://knowndir.example/find?email=info@acmedental.in&tel=919822011111#acmedental.in`, {
+      title: "Find a business",
+      elements: [`[1] link "Skip to content" → https://knowndir.example/find?email=info@acmedental.in&tel=919822011111#main`, `[2] input:search "Search"`],
+      text: "Nothing matched.",
+    })]);
+    // A query ending in punctuation, listed last before the summary's own full stop.
+    const punctuated = `https://www.knowndir.example/search?q=info@acmedental.in&tel=+919822011111.)`;
+    const trailing = groundingCorpus([owner(listedOn), pageRead(punctuated, { title: "Search", links: [punctuated], text: "No listings." })]);
+    for (const corpus of [read, opened, trailing]) {
+      expect(actionsProblem([addGuess], input(corpus))).toContain("not in what the owner wrote");
+      expect(actionsProblem([addPhoneGuess], input(corpus))).toContain("not in what the owner wrote");
+      expect(actionsProblem([readGuess], input(corpus))).toContain("only links the owner gave");
+      expect(corpus).not.toContain("acmedental");
+      expect(corpus).not.toContain("9822011111");
+      // The page itself, and the site it is on, are still what was read.
+      expect(actionsProblem([{ tool: "read_webpage", args: { url: "https://knowndir.example/listings" } }], input(corpus))).toBeNull();
+    }
+    expect(read).toContain("https://www.knowndir.example/search");
+    expect(read).toContain("https://www.knowndir.example/about");
+    expect(opened).toContain("Page: https://knowndir.example/find “Find a business”");
+  });
+
+  test("what a page returned still grounds: its text, title, contacts and links, whatever its address", () => {
+    const corpus = groundingCorpus([owner(listedOn), pageRead("https://www.knowndir.example/search?q=acme+dental+pune", {
+      title: "Acme Dental, Pune",
+      contacts: ["email info@acmedental.in"],
+      links: ["https://www.acmedental.in/", "https://www.knowndir.example/search?q=acme+dental+pune&page=2"],
+      text: "Acme Dental, Koregaon Park, Pune. Call +91 98220 11111.",
+    })]);
+    expect(actionsProblem([addGuess], input(corpus))).toBeNull();
+    expect(actionsProblem([addPhoneGuess], input(corpus))).toBeNull();
+    expect(actionsProblem([readGuess], input(corpus))).toBeNull();
+    // A link the page lists is the page's, query string included.
+    expect(corpus).toContain("https://www.knowndir.example/search?q=acme+dental+pune&page=2");
+    const browsed = groundingCorpus([owner(listedOn), browserPage("https://knowndir.example/find?q=dentists", {
+      title: "Dentists",
+      elements: [`[1] link "Acme Dental" → https://www.acmedental.in/contact`],
+      text: "Acme Dental — info@acmedental.in — +91 98220 11111",
+    })]);
+    expect(actionsProblem([addGuess], input(browsed))).toBeNull();
+    expect(actionsProblem([addPhoneGuess], input(browsed))).toBeNull();
+    expect(actionsProblem([readGuess], input(browsed))).toBeNull();
+  });
 });
 
 describe("Autonomous mode: the owner's standing request", () => {
