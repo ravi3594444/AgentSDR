@@ -30,13 +30,15 @@ export async function diagnoseDelivery(runId?: string) {
         .where(and(inOrg(outreachRuns), eq(outreachRuns.id, runId)))
     : [];
   if (runId && !run) throw new Error("No such outreach run");
+  // A plan's senders are only those of the channels it uses (channels, not campaigns: a starting plan has none yet).
+  const sendsOn = (channel: "email" | "instagram") => !run || run.channels.includes(channel);
   const emailCampaign = run?.campaigns.email ?? null;
   const campaignScope = run
     ? emailCampaign
       ? sql`c.id::text=${emailCampaign}`
       : sql`false`
     : sql`true`;
-  const mailboxList = await db.select().from(mailboxes).where(inOrg(mailboxes));
+  const mailboxList = sendsOn("email") ? await db.select().from(mailboxes).where(inOrg(mailboxes)) : [];
   const [google, unipile] = await Promise.all([
     mailboxProviderConnected("google"),
     mailboxProviderConnected("unipile"),
@@ -93,7 +95,7 @@ export async function diagnoseDelivery(runId?: string) {
     gates: string[];
   }[] = [];
   let instagramErrors: { status: string; reason: string; n: number }[] = [];
-  if ((await featureEnabled("instagram")) && (await instagramOutreachReady())) {
+  if (sendsOn("instagram") && (await featureEnabled("instagram")) && (await instagramOutreachReady())) {
     const rules = await channelRules("instagram");
     const accounts = await db.execute<{
       id: string;
@@ -141,12 +143,10 @@ export async function diagnoseDelivery(runId?: string) {
   }
   const whatsapp = await whatsappSenders(run?.campaigns.whatsapp ?? null, Boolean(run), now);
   const instagramRules = instagram.length ? await channelRules("instagram") : null;
-  // A plan's senders are only those of the channels it uses (channels, not campaigns: a starting plan has none yet).
-  const sendsOn = (channel: "email" | "instagram") => !run || run.channels.includes(channel);
   const senders: SenderStatus[] = [
-    ...(sendsOn("email") ? email : []).map((m) => emailSenderStatus({ mailbox: m.mailbox, workingHours: m.workingHours, nextEmailTime: m.nextSendAt ? new Date(m.nextSendAt) : null, gates: m.gates, queued: m.activeQueue, now })),
+    ...email.map((m) => emailSenderStatus({ mailbox: m.mailbox, workingHours: m.workingHours, nextEmailTime: m.nextSendAt ? new Date(m.nextSendAt) : null, gates: m.gates, queued: m.activeQueue, now })),
     ...whatsapp,
-    ...(sendsOn("instagram") ? instagram : []).map((a): SenderStatus => {
+    ...instagram.map((a): SenderStatus => {
       const hours = instagramRules?.sendingHours ? mailboxHoursFromWeekly(instagramRules.sendingHours) : null;
       const nextSend = a.gates.find((gate) => gate.startsWith("Next send allowed at "))?.slice("Next send allowed at ".length) ?? null;
       // Only the hours and the per-account gap have a known end here.
@@ -180,7 +180,7 @@ export async function diagnoseDelivery(runId?: string) {
     ),
     "This snapshot does not measure worker liveness or confirm future delivery. Lead cities do not determine a sender's sending timezone.",
   ];
-  if (!email.length) lines.splice(1, 0, "No email mailbox is configured.");
+  if (!email.length && sendsOn("email")) lines.splice(1, 0, "No email mailbox is configured.");
   return {
     at: now.toISOString(),
     runStatus: run?.status ?? null,
