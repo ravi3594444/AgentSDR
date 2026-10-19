@@ -92,11 +92,21 @@ export function mailboxHoursFromWeekly(hours: WeeklyHours): WorkingHours {
 }
 
 /**
+ * True if a sending window is open at `at` and stays open after it. A window
+ * ending at 00:00 ("until midnight") contains its closing instant, since the
+ * end is inclusive, but nothing can be sent in it.
+ */
+export function isWindowOpenFrom(workingHours: WorkingHours, at: Date): boolean {
+  return isWithinWorkingHours(workingHours, at) && isWithinWorkingHours(workingHours, new Date(at.getTime() + 1));
+}
+
+/**
  * When the next sending window opens, in its own time zone: null when `now`
- * is already inside one, or when no day is enabled. Looks a week ahead.
+ * is already inside one that stays open, or when no day is enabled. Looks a
+ * week ahead.
  */
 export function nextWindowStart(workingHours: WorkingHours, now: Date = new Date()): Date | null {
-  if (isWithinWorkingHours(workingHours, now)) return null;
+  if (isWindowOpenFrom(workingHours, now)) return null;
   try {
     const zonedNow = toZonedTime(now, workingHours.timezone);
     for (let offset = 0; offset <= 7; offset++) {
@@ -105,7 +115,7 @@ export function nextWindowStart(workingHours: WorkingHours, now: Date = new Date
       if (!day?.enabled) continue;
       // An overnight window also covers its own day's early morning (isWithinDayWindow), so a later day can open at midnight.
       const midnight = fromZonedTime(setTime(zonedDay, { hours: 0, minutes: 0, seconds: 0, milliseconds: 0 }), workingHours.timezone);
-      if (offset > 0 && isWithinWorkingHours(workingHours, midnight)) return midnight;
+      if (offset > 0 && isWindowOpenFrom(workingHours, midnight)) return midnight;
       const { hours, minutes } = parseHHmm(day.from);
       const start = fromZonedTime(setTime(zonedDay, { hours, minutes, seconds: 0, milliseconds: 0 }), workingHours.timezone);
       if (start > now) return start;

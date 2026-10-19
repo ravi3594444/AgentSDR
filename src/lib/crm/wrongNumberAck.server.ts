@@ -15,7 +15,8 @@ import { lockCrmRecord, type CrmRecord } from "./records";
 import { withCrmTransaction, type CrmExecutor, type CrmTransaction } from "./repository";
 import { crmClassifications, crmConversationMessages, crmConversations, crmDrafts, crmRecords, crmSubcategories, crmWrongRoutes } from "./schema";
 import { sendDraft, type CrmSendAdapter } from "./send";
-import { ACK_CLAIMABLE, candidateRoutes, closingAcknowledgement, isWrongRouteChannel, type WrongRouteAckStatus, type WrongRouteChannel } from "./wrongNumber";
+import { whatsappAccounts, whatsappChats, whatsappMessages } from "@/lib/whatsapp/schema";
+import { ACK_CLAIMABLE, candidateRoutes, closingAcknowledgement, detectsOptOutWording, isWrongRouteChannel, normalizeRoute, type WrongRouteAckStatus, type WrongRouteChannel } from "./wrongNumber";
 import { findWrongRoutes, recordWrongRouteInTransaction, setAcknowledgementInTransaction, type CrmWrongRoute } from "./wrongRoutes";
 
 /**
@@ -100,16 +101,58 @@ async function loadScope(executor: CrmExecutor, messageId: string): Promise<Scop
     personId: row.record.personId,
     email: row.person.email,
   };
-  const routes = candidateRoutes(channel, {
-    providerContactId: row.conversation.providerContactId,
-    email: row.person.email,
-    phone: row.person.phone,
-    linkedinUrl: row.person.linkedinUrl,
-  });
+  const routes = channel === "whatsapp"
+    ? await whatsappRoutes(executor, messageId, row.conversation, row.person.phone)
+    : candidateRoutes(channel, {
+      providerContactId: row.conversation.providerContactId,
+      email: row.person.email,
+      phone: row.person.phone,
+      linkedinUrl: row.person.linkedinUrl,
+    });
   // The route already recorded, when the chat runs into one (a repeat, a
   // duplicate record's chat with the same number); else the chat's own.
   const known = await findWrongRoutes(executor, { channel, routes, personId: row.record.personId });
   return { ...scope, route: known[0]?.route ?? routes[0] ?? null };
+}
+
+/**
+ * The WhatsApp routes of the number that wrote, its own first. The chat
+ * row WhatsApp delivered the message on knows that number when AgentSDR
+ * opened the chat with it, even after the chat moved to a privacy id
+ * ("…@lid"); a privacy-id chat with no known number is recorded by the id
+ * itself, never by the Person's phone, which may be another number (an
+ * operator's correction). Without a chat row (a message recorded on the CRM
+ * only) the conversation's contact and the Person's phone are all there is.
+ */
+async function whatsappRoutes(
+  executor: CrmExecutor,
+  messageId: string,
+  conversation: { providerContactId: string | null; providerThreadId: string | null; accountRef: string },
+  personPhone: string | null,
+): Promise<string[]> {
+  const organizationId = currentOrganizationId();
+  const [byMessage] = await executor.select({ phone: whatsappChats.phone, providerId: whatsappChats.providerId })
+    .from(whatsappMessages)
+    .innerJoin(whatsappChats, eq(whatsappChats.id, whatsappMessages.chatId))
+    .innerJoin(whatsappAccounts, eq(whatsappAccounts.id, whatsappChats.accountId))
+    .where(and(eq(whatsappMessages.crmConversationMessageId, messageId), eq(whatsappAccounts.organizationId, organizationId)))
+    .limit(1);
+  const [byThread] = byMessage || !conversation.providerThreadId ? [] : await executor.select({ phone: whatsappChats.phone, providerId: whatsappChats.providerId })
+    .from(whatsappChats)
+    .innerJoin(whatsappAccounts, eq(whatsappAccounts.id, whatsappChats.accountId))
+    .where(and(
+      eq(whatsappChats.unipileChatId, conversation.providerThreadId),
+      eq(whatsappAccounts.unipileAccountId, conversation.accountRef),
+      eq(whatsappAccounts.organizationId, organizationId),
+    ))
+    .limit(1);
+  const chat = byMessage ?? byThread ?? null;
+  const unique = (values: (string | null | undefined)[]) => [...new Set(values.map((value) => normalizeRoute("whatsapp", value)).filter((route): route is string => Boolean(route)))];
+  const contact = normalizeRoute("whatsapp", conversation.providerContactId) ?? normalizeRoute("whatsapp", chat?.providerId);
+  const privacyId = Boolean(contact?.endsWith("@lid"));
+  if (chat?.phone) return unique([chat.phone, privacyId ? null : contact]);
+  if (!privacyId) return unique([contact, personPhone]);
+  return chat ? unique([contact]) : unique([personPhone, contact]);
 }
 
 /** What stops the acknowledgement, read again before every step that could send it. */
@@ -261,6 +304,9 @@ export async function closeWrongNumber(input: CloseWrongNumberInput, deps: { sen
   const scope = await loadScope(db, input.messageId);
   if (!scope) return null;
   const { text } = closingAcknowledgement(input.acknowledgement, scope.leadMessage, scope.channel);
+  // An explicit stop in the same message means Do Not Contact and no apology,
+  // whoever read it: the caller's reading or the message's own words.
+  const optOut = input.optOut || detectsOptOutWording(scope.leadMessage);
   const actorType = input.source === "human" ? "authenticated_operator" : "ai";
   const actorRef = input.source === "reply_agent" ? AUTOPILOT_ACTOR : input.source === "human" ? input.actorRef ?? null : input.model ?? "classifier";
 
@@ -268,7 +314,7 @@ export async function closeWrongNumber(input: CloseWrongNumberInput, deps: { sen
   //    write the acknowledgement draft in the same transaction.
   const step: Step = await withCrmTransaction(async (tx) => {
     const { pipelineId } = await lockCrmRecord(tx, scope.recordId);
-    if (input.optOut) {
+    if (optOut) {
       await setPersonDoNotContactInTransaction(tx, {
         personId: scope.personId,
         reason: "Wrong number, and they asked not to be contacted (read in their reply)",
@@ -278,7 +324,7 @@ export async function closeWrongNumber(input: CloseWrongNumberInput, deps: { sen
       });
     }
     if (!scope.route) return { row: null, created: false, dispatch: null };
-    const blocker = await ackBlocker(tx, scope, input.optOut);
+    const blocker = await ackBlocker(tx, scope, optOut);
     const membership = await runMembershipFor(tx, scope.personId, scope.channel, scope.conversationId);
     const automatic = Boolean(membership?.automatic && membership.runStatus === "running" && membership.leadStatus === "active" && input.sendAllowed);
     const reviewReason = input.source !== "human" && membership?.automatic && membership.runStatus === "running" && !input.sendAllowed
@@ -301,7 +347,7 @@ export async function closeWrongNumber(input: CloseWrongNumberInput, deps: { sen
     });
     // Read again: Do Not Contact moves the record's context on.
     const record = await lockCrmRecord(tx, scope.recordId);
-    if (!input.optOut) await applyWrongNumberClassification(tx, record, scope.messageId);
+    if (!optOut) await applyWrongNumberClassification(tx, record, scope.messageId);
     const row = recorded.row;
 
     if (recorded.created) {

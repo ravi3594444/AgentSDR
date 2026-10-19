@@ -88,6 +88,21 @@ describe("sender status", () => {
     expect(status.nextAt).toBe("2026-10-19T00:00:00.000Z");
   });
 
+  test("a mailbox whose window runs until midnight is never promised that midnight", () => {
+    const untilMidnight = mailboxHoursFromWeekly({ timezone: "UTC", days: [1, 2, 3, 4, 5], start: "09:00", end: "00:00" });
+    const hours = emailSenderStatus({ mailbox: "late@example.com", workingHours: untilMidnight, nextEmailTime: null, gates: [{ code: "hours", reason: "Outside this mailbox's sending hours (UTC)" }], queued: 1, now: new Date("2026-10-17T07:00:00Z") });
+    expect(hours.nextAt).toBe("2026-10-19T09:00:00.000Z");
+    // Its daily limit used on Monday afternoon: Tuesday 00:00 is only Monday's window closing, so Tuesday 09:00.
+    const capacity = emailSenderStatus({ mailbox: "late@example.com", workingHours: untilMidnight, nextEmailTime: null, gates: [{ code: "capacity", reason: "Mailbox has used its daily limit of 30 (UTC)" }], queued: 1, now: new Date("2026-10-19T15:00:00Z") });
+    expect(capacity.nextAt).toBe("2026-10-20T09:00:00.000Z");
+  });
+
+  test("a mailbox at its daily limit in an overnight window may send again from the next local midnight", () => {
+    const nights = mailboxHoursFromWeekly({ timezone: "UTC", days: [1, 2, 3, 4, 5], start: "21:00", end: "06:00" });
+    const status = emailSenderStatus({ mailbox: "nights@example.com", workingHours: nights, nextEmailTime: null, gates: [{ code: "capacity", reason: "Mailbox has used its daily limit of 30 (UTC)" }], queued: 1, now: new Date("2026-10-19T22:00:00Z") });
+    expect(status.nextAt).toBe("2026-10-20T00:00:00.000Z");
+  });
+
   test("a mailbox at its daily limit waits for the next day's window in its time zone", () => {
     const status = emailSenderStatus({ mailbox: "ravi@example.in", workingHours: india, nextEmailTime: null, gates: [{ code: "capacity", reason: "Mailbox has used its daily limit of 30 (Asia/Kolkata)" }], queued: 4, now: new Date("2026-10-19T10:00:00Z") });
     expect(status.nextAt).toBe("2026-10-20T03:30:00.000Z");

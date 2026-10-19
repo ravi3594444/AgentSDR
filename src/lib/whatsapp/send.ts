@@ -345,10 +345,14 @@ async function assertNotDoNotContact(personId: string | null): Promise<void> {
   }
 }
 
-/** A number recorded as a wrong number takes nothing more, from a campaign or a person (its one apology goes through the CRM). */
-async function assertNotWrongNumber(phone: string | null): Promise<void> {
-  const route = normalizeRoute("whatsapp", phone);
-  const refusal = route ? await wrongRouteSendRefusal(db, { channel: "whatsapp", routes: [route] }) : null;
+/**
+ * A number recorded as a wrong number takes nothing more, from a campaign or
+ * a person (its one apology goes through the CRM). A chat addressed by a
+ * privacy id ("…@lid") is checked by that id as well as by its number.
+ */
+async function assertNotWrongNumber(phone: string | null, providerId: string | null = null): Promise<void> {
+  const routes = [...new Set([normalizeRoute("whatsapp", phone), normalizeRoute("whatsapp", providerId)].filter((route): route is string => Boolean(route)))];
+  const refusal = routes.length ? await wrongRouteSendRefusal(db, { channel: "whatsapp", routes }) : null;
   if (refusal) throw new WhatsappSendRefusedError(refusal, 409, null, "wrong_number");
 }
 
@@ -443,7 +447,7 @@ export async function sendWhatsapp(request: SendWhatsappRequest): Promise<SendWh
   });
   personId = links.personId;
   await assertNotDoNotContact(personId);
-  await assertNotWrongNumber(phone);
+  await assertNotWrongNumber(phone, chat?.providerId ?? null);
 
   const sent = await performWhatsappSend({
     account,

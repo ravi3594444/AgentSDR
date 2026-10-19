@@ -9,7 +9,7 @@
 import { addDays, set as setTime } from "date-fns";
 import { fromZonedTime, toZonedTime } from "date-fns-tz";
 import type { WorkingHours } from "@/lib/outreach/schema";
-import { isWithinWorkingHours, nextWindowStart } from "@/lib/outreach/workingHours";
+import { isWindowOpenFrom, isWithinWorkingHours, nextWindowStart } from "@/lib/outreach/workingHours";
 import { NEW_CHAT_WINDOW_MS, secondsUntilNextSend, warmUpEndsAt, type WhatsappGuardrails } from "@/lib/whatsapp/guardrails";
 
 export type RunAuthorization = {
@@ -101,7 +101,7 @@ function latest(dates: (Date | null)[]): Date | null {
 function nextDayWindow(hours: WorkingHours, now: Date): Date | null {
   try {
     const midnight = fromZonedTime(setTime(addDays(toZonedTime(now, hours.timezone), 1), { hours: 0, minutes: 0, seconds: 0, milliseconds: 0 }), hours.timezone);
-    return isWithinWorkingHours(hours, midnight) ? midnight : nextWindowStart(hours, midnight);
+    return isWindowOpenFrom(hours, midnight) ? midnight : nextWindowStart(hours, midnight);
   } catch {
     return null;
   }

@@ -9,7 +9,8 @@
  *   reported, then a read receipt), never "seen";
  * - an uncertain send shown as such, never resent;
  * - a plan's senders only on the channels it uses (no unrelated mailbox or
- *   Instagram account), and a plan whose launch failed never called started;
+ *   Instagram account, on the card or in what diagnose_delivery tells the
+ *   model), and a plan whose launch failed never called started;
  * - a second organization reading nothing.
  * No message is sent and no provider is called.
  *
@@ -121,10 +122,18 @@ await runInOrganization(a.org.id, async () => {
   check("its two leads are counted as waiting", sender?.queued === 2);
   check("the summary never infers a time zone from leads", /Lead cities do not determine/.test(diagnostics.summary) && /Asia\/Kolkata/.test(diagnostics.summary));
   check("a WhatsApp plan lists no mailbox or Instagram account it does not send from", diagnostics.senders.every((entry) => entry.channel === "whatsapp"), diagnostics.senders.map((entry) => `${entry.channel} ${entry.account}`).join("; "));
-  const emailSenders = (await diagnoseDelivery(seeded.emailPlan.id)).senders;
+  // What diagnose_delivery hands the model for that plan: no other channel's account in its data or its summary.
+  const names = (summary: string) => ({ mailbox: summary.includes(seeded.mailbox.emailAddress), instagram: summary.includes(`@${seeded.instagram.username}`), noMailbox: summary.includes("No email mailbox is configured") });
+  check("…nor does its diagnosis data", diagnostics.email.length === 0 && diagnostics.instagram.length === 0 && diagnostics.instagramErrors.length === 0, `email ${diagnostics.email.map((m) => m.mailbox).join(", ")}; instagram ${diagnostics.instagram.map((i) => i.account).join(", ")}`);
+  check("…nor its diagnosis summary", JSON.stringify(names(diagnostics.summary)) === JSON.stringify({ mailbox: false, instagram: false, noMailbox: false }), diagnostics.summary);
+  const emailPlan = await diagnoseDelivery(seeded.emailPlan.id);
+  const emailSenders = emailPlan.senders;
   check("an email plan lists the mailboxes, not the Instagram accounts", emailSenders.some((entry) => entry.channel === "email" && entry.account === seeded.mailbox.emailAddress) && emailSenders.every((entry) => entry.channel === "email"), emailSenders.map((entry) => `${entry.channel} ${entry.account}`).join("; "));
-  const everySender = (await diagnoseDelivery()).senders;
+  check("…and so do its diagnosis data and summary", emailPlan.email.some((m) => m.mailbox === seeded.mailbox.emailAddress) && emailPlan.instagram.length === 0 && JSON.stringify(names(emailPlan.summary)) === JSON.stringify({ mailbox: true, instagram: false, noMailbox: false }), emailPlan.summary);
+  const organizationWide = await diagnoseDelivery();
+  const everySender = organizationWide.senders;
   check("the organization's own snapshot still lists every mailbox and Instagram account", everySender.some((entry) => entry.channel === "email" && entry.account === seeded.mailbox.emailAddress) && everySender.some((entry) => entry.channel === "instagram" && entry.account === `@${seeded.instagram.username}`), everySender.map((entry) => `${entry.channel} ${entry.account}`).join("; "));
+  check("…in its summary too", names(organizationWide.summary).mailbox && names(organizationWide.summary).instagram, organizationWide.summary);
 
   await saveChannelRules("whatsapp", { sendingHours: null }, a.owner.id);
   const anyTime = (await diagnoseDelivery(seeded.started.id)).senders.find((entry) => entry.channel === "whatsapp");

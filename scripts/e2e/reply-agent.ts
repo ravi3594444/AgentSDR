@@ -64,7 +64,7 @@ const { setPersonDoNotContact } = await import("@/lib/crm/policies");
 const { loadPersonFacts } = await import("@/lib/assistant/audiences.server");
 const { contactChannels } = await import("@/lib/assistant/audiences");
 const { findWrongRoutes, wrongRouteSendRefusal } = await import("@/lib/crm/wrongRoutes");
-const { wrongRouteAckLabel } = await import("@/lib/crm/wrongNumber");
+const { candidateRoutes, wrongRouteAckLabel } = await import("@/lib/crm/wrongNumber");
 const { getCrmRecordWorkspace, listCrmActions } = await import("@/lib/crm/queries");
 const { applyHumanClassification } = await import("@/lib/crm/operations");
 const { discardDraft } = await import("@/lib/crm/drafts");
@@ -291,7 +291,7 @@ await runInOrganization(org!.id, async () => {
   // ============================================================ wrong number (WhatsApp)
   const waAccount = `wa-agent-check-${stamp}`;
   const phoneOf = (index: number) => `+9198${String(stamp).slice(-6)}${String(index).padStart(2, "0")}`;
-  const waPersons = await db.insert(people).values(Array.from({ length: 28 }, (_, index) => ({
+  const waPersons = await db.insert(people).values(Array.from({ length: 31 }, (_, index) => ({
     organizationId: orgId,
     phone: phoneOf(index),
     fullName: `Dr Wrong ${index + 1}`,
@@ -310,7 +310,7 @@ await runInOrganization(org!.id, async () => {
   await db.insert(schema.outreachRunLeads).values([
     ...autoIdx.map((index) => ({ organizationId: orgId, runId: waAuto!.id, personId: W[index]!, channel: "whatsapp" as const })),
     ...reviewIdx.map((index) => ({ organizationId: orgId, runId: waReview!.id, personId: W[index]!, channel: "whatsapp" as const })),
-    // W[13], W[18], W[20], W[21] and W[22] are in no run: the classifier path, Review semantics.
+    // W[13], W[18], W[20], W[21], W[22], W[28], W[29] and W[30] are in no run: the classifier path, Review semantics.
   ]);
 
   const waSends: { body: string; phone: string | null; thread: string | null }[] = [];
@@ -552,6 +552,32 @@ await runInOrganization(org!.id, async () => {
   await waClassify(lidDup.message.id);
   check("…and the same number's chat under its phone id gets no second apology", sentTo(17) === 0 && waSends.length === waBefore + 1 && (await routesOfPerson(17)).length === 0, `${sentTo(17)} sent, ${(await routesOfPerson(17)).length} more routes`);
 
+  // ------------------------------------------------------------ a privacy-id (@lid) chat as WhatsApp delivers it: its own chat row
+  const { whatsappAccounts, whatsappChats, whatsappMessages } = await import("@/lib/whatsapp/schema");
+  const [waAccountRow] = await db.insert(whatsappAccounts).values({ organizationId: orgId, unipileAccountId: waAccount, name: "Reply agent check number", phone: "+919800099999", status: "connected", connectedAt: new Date(Date.now() - 3 * 86_400_000) }).returning();
+  const lidInbound = async (index: number, body: string, lid: string, chatPhone: string | null) => {
+    const inbound = await waInbound(index, body, undefined, phoneOf(index), lid);
+    const [chat] = await db.insert(whatsappChats).values({ accountId: waAccountRow!.id, unipileChatId: `wa-chat-${index}-${stamp}`, providerId: lid, phone: chatPhone, personId: W[index]! }).returning();
+    await db.insert(whatsappMessages).values({ chatId: chat!.id, unipileMessageId: `wa-pm-lid-${index}-${stamp}`, direction: "inbound", origin: "lead", body, sentAt: new Date(), crmConversationMessageId: inbound.message.id });
+    return inbound;
+  };
+  // W[29]: the chat AgentSDR opened with +…29 is now addressed by a privacy id; the operator has since corrected the Person's phone to another number.
+  const correctedPhone = `+9197${String(stamp).slice(-6)}77`;
+  await db.update(people).set({ phone: correctedPhone }).where(eq(people.id, W[29]!));
+  const lidWithPhone = await lidInbound(29, "Wrong number", `${String(stamp).slice(-6)}290000000@lid`, phoneOf(29));
+  await waClassify(lidWithPhone.message.id, { complete: standInClassifier });
+  const lidPhoneRoutes = (await routesOfPerson(29)).map((item) => item.route);
+  check("a privacy-id chat records the number that wrote (its chat's number), not the Person's corrected phone", lidPhoneRoutes.length === 1 && lidPhoneRoutes[0] === phoneOf(29).replace(/\D/g, ""), lidPhoneRoutes.join(","));
+  check("…so the corrected number stays open", !(await wrongRouteSendRefusal(db, { channel: "whatsapp", routes: [correctedPhone.replace(/\D/g, "")] })));
+  // W[30]: a lead who wrote first through a privacy id, no number known anywhere.
+  await db.update(people).set({ phone: null }).where(eq(people.id, W[30]!));
+  const bareLid = `${String(stamp).slice(-6)}300000000@lid`;
+  const lidNoPhone = await lidInbound(30, "Wrong number", bareLid, null);
+  await waClassify(lidNoPhone.message.id, { complete: standInClassifier });
+  const lidOnlyRoutes = (await routesOfPerson(30)).map((item) => item.route);
+  check("a privacy-id chat with no known number records the id itself, so it is not left open", lidOnlyRoutes.length === 1 && lidOnlyRoutes[0] === bareLid, lidOnlyRoutes.join(",") || "nothing recorded");
+  check("…and a send to that chat is refused", Boolean(await wrongRouteSendRefusal(db, { channel: "whatsapp", routes: candidateRoutes("whatsapp", { providerContactId: bareLid }) })));
+
   // ------------------------------------------------------------ opt-out wording the classifier's own rule misses
   waBefore = waSends.length;
   const strangerStop = await waInbound(18, "This isn't Priya's number anymore, please stop texting me");
@@ -590,6 +616,15 @@ await runInOrganization(org!.id, async () => {
   check("confirming Wrong Number after the apology was drafted keeps exactly one, written for the new context", drafts.length === 1 && route?.ackStatus === "drafted" && route.ackDraftId === drafts[0]?.id && drafts[0]?.expectedContextVersion === confirmed.contextVersion && (await initialDrafts(decided.message.id)) === 0, `${drafts.length} awaiting, route ${route?.ackStatus}`);
   if (drafts[0]) await sendDraft({ draftId: drafts[0].id, revision: drafts[0].revision, idempotencyKey: `confirm-approve-${stamp}`, requestId: crypto.randomUUID(), actorRef: null }, { send: waSend });
   check("…which a person then approves: sent once", sentTo(21) === 1 && (await routeOf(21))?.ackStatus === "sent", `${sentTo(21)} sent, ${(await routeOf(21))?.ackStatus}`);
+
+  // ------------------------------------------------------------ a person confirms "Wrong Number" on a message that also says stop
+  const stopSendsBefore = waSends.length;
+  const unsureStop = await waInbound(28, "This isn't Priya's number anymore, please stop texting me");
+  await waClassify(unsureStop.message.id, { complete: unsureClassifier });
+  const stopRecord = (await recordOf(28))!;
+  await applyHumanClassification({ recordId: stopRecord.id, categoryKey: "other", subcategoryId: wrongNumberSubId, expectedContextVersion: stopRecord.contextVersion });
+  route = await routeOf(28);
+  check("a person confirming Wrong Number on a message that says \"stop texting me\" sets Do Not Contact and drafts no apology", waSends.length === stopSendsBefore && await isPersonDoNotContact(db, W[28]!) && route?.ackStatus === "blocked" && (await awaitingDrafts(28)).length === 0, `${route?.ackStatus ?? "no route"}: ${route?.ackReason ?? ""}; DNC ${await isPersonDoNotContact(db, W[28]!)}; ${(await awaitingDrafts(28)).length} awaiting`);
 
   // ------------------------------------------------------------ a person discards the apology
   waBefore = waSends.length;
