@@ -9,7 +9,8 @@
 import { addDays, set as setTime } from "date-fns";
 import { fromZonedTime, toZonedTime } from "date-fns-tz";
 import type { WorkingHours } from "@/lib/outreach/schema";
-import { isWindowOpenFrom, isWithinWorkingHours, nextWindowStart } from "@/lib/outreach/workingHours";
+import { isWindowOpenFrom, isWithinWorkingHours, mailboxHoursFromWeekly, nextWindowStart } from "@/lib/outreach/workingHours";
+import { formatWorkingHoursSummary, hasWorkingHoursConfigured, isWithinWorkingHours as isWithinLinkedinHours, parseHHmmToMinutes, parseWorkDays, type WorkingHoursFields } from "@/lib/linkedin/workingHours";
 import { NEW_CHAT_WINDOW_MS, secondsUntilNextSend, warmUpEndsAt, type WhatsappGuardrails } from "@/lib/whatsapp/guardrails";
 
 export type RunAuthorization = {
@@ -81,7 +82,7 @@ export function coveringApproval<T extends { approvedAt: string; expiresAt: stri
 }
 
 export type SenderStatus = {
-  channel: "email" | "whatsapp" | "instagram";
+  channel: "email" | "whatsapp" | "instagram" | "linkedin";
   account: string;
   /** The IANA time zone of the sender's configured sending hours; null when no hours are set (any time). */
   timezone: string | null;
@@ -187,5 +188,69 @@ export function whatsappSenderStatus(input: {
     nextAt: next?.toISOString() ?? null,
     queued: input.queued,
     note: newChats >= guardrails.newChatsPerDay || warmUp ? "Follow-ups in chats already open are not held by the new-chat limits." : null,
+  };
+}
+
+/**
+ * When a LinkedIn account's working hours next open: the same window the
+ * LinkedIn engine checks (runOutreach: the account's own hours, else the
+ * organization's), as weekly hours. Null when it runs any time.
+ */
+function linkedinNextWindow(hours: WorkingHoursFields, now: Date): Date | null {
+  if (!hasWorkingHoursConfigured(hours)) return null;
+  const start = hours.workStartTime ?? "09:00";
+  const end = hours.workEndTime ?? "18:00";
+  if (parseHHmmToMinutes(start) === parseHHmmToMinutes(end)) return null;
+  // Probe minute by minute from the next window start the shared helper gives,
+  // since its end is inclusive where the engine's is exclusive.
+  const weekly = mailboxHoursFromWeekly({ timezone: hours.workTimezone!, days: parseWorkDays(hours.workDays), start, end });
+  const next = nextWindowStart(weekly, now);
+  return next && isWithinLinkedinHours(hours, next) ? next : null;
+}
+
+/** One LinkedIn account of a plan, from the same checks the LinkedIn engine (runOutreach, sendInvitations) makes. */
+export function linkedinSenderStatus(input: {
+  account: string;
+  status: string;
+  limitReached: boolean;
+  unipileConnected: boolean;
+  paused: boolean;
+  hours: WorkingHoursFields;
+  nextAllowedRun: Date | null;
+  invitationsToday: number;
+  invitationsPerDay: number;
+  /** The start of the next day the engine counts invitations by. */
+  nextDayStart: Date;
+  queued: number;
+  now: Date;
+}): SenderStatus {
+  const { now } = input;
+  const gates: string[] = [];
+  let open = false;
+  const times: (Date | null)[] = [];
+  if (!input.unipileConnected) { gates.push("Unipile is disconnected"); open = true; }
+  if (input.status !== "CONNECTED") { gates.push(`The account is ${input.status.toLowerCase().replace(/_/g, " ")}`); open = true; }
+  if (input.limitReached) { gates.push("LinkedIn reported this account's invitation limit"); open = true; }
+  if (input.paused) { gates.push("LinkedIn outbound is paused by the server's migration controls"); open = true; }
+  const configured = hasWorkingHoursConfigured(input.hours);
+  if (configured && !isWithinLinkedinHours(input.hours, now)) {
+    gates.push(`Outside working hours (${formatWorkingHoursSummary(input.hours)})`);
+    times.push(linkedinNextWindow(input.hours, now));
+  }
+  if (input.nextAllowedRun && input.nextAllowedRun > now) times.push(input.nextAllowedRun);
+  if (input.invitationsToday >= input.invitationsPerDay) {
+    gates.push(`${input.invitationsToday} of ${input.invitationsPerDay} invitations sent today`);
+    const tomorrow = input.nextDayStart;
+    times.push(configured && !isWithinLinkedinHours(input.hours, tomorrow) ? linkedinNextWindow(input.hours, tomorrow) : tomorrow);
+  }
+  const next = open || times.some((time) => time === null) ? null : latest(times);
+  return {
+    channel: "linkedin",
+    account: input.account,
+    timezone: configured ? input.hours.workTimezone : null,
+    gates,
+    nextAt: next?.toISOString() ?? null,
+    queued: input.queued,
+    note: input.invitationsToday >= input.invitationsPerDay ? "Follow-up messages to accepted invitations are not held by the invitation limit." : null,
   };
 }
