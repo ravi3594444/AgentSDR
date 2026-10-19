@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { canCancelJob, jobState, OPEN_STATES, REPLY_STATE_LABELS, repliesSeenUntil, replyState, runState, WORK_STATE_LABELS, type JobFacts } from "./status";
+import { canCancelJob, jobState, OPEN_STATES, planCounts, planState, REPLY_STATE_LABELS, repliesSeenUntil, replyState, runState, WORK_STATE_LABELS, type JobFacts } from "./status";
+import type { SenderStatus } from "@/lib/assistant/runEvidence";
 
 const now = new Date("2026-10-18T12:00:00Z");
 const job = (facts: Partial<JobFacts>): JobFacts => ({ status: "queued", runAfter: null, heartbeatAt: null, attempts: 0, progress: null, result: null, ...facts });
@@ -44,8 +45,9 @@ test("an outreach plan's state: proposed needs Start; running is working, not a 
 });
 
 test("open states are exactly the ones that can still change on their own", () => {
+  // A partial job is finished; a partial plan is still running, and planState says so itself.
   for (const state of Object.keys(WORK_STATE_LABELS) as (keyof typeof WORK_STATE_LABELS)[]) {
-    expect(OPEN_STATES.has(state)).toBe(!["completed", "not_searched", "failed", "cancelled"].includes(state));
+    expect(OPEN_STATES.has(state)).toBe(!["completed", "partial", "not_searched", "failed", "cancelled"].includes(state));
   }
 });
 
@@ -103,4 +105,50 @@ test("an open owner decision keeps the newest reply in Needs you after the assis
   expect(replyState({ answered: true, latest: true, workflowState: "idle", needsYou: true })).toBe("needs_you");
   expect(replyState({ answered: true, latest: false, workflowState: "idle", needsYou: true })).toBe("answered");
   expect(replyState({ answered: true, latest: true, workflowState: "idle", needsYou: false })).toBe("answered");
+});
+
+describe("partial work and sending hours are told apart from done and working", () => {
+  test("a search cut short, or with some of its searches failed, is partial with the reason; its leads are kept", () => {
+    const cut = jobState(job({ status: "succeeded", progress: { stage: "done", partial: true }, result: { found: 7 } }), now);
+    expect(cut.state).toBe("partial");
+    expect(cut.reason).toContain("cut short");
+    const someFailed = jobState(job({ status: "succeeded", result: { found: 4, searches: [{ query: "a", error: null }, { query: "b", error: "TinyFish answered 503" }, { query: "c", error: null }] } }), now);
+    expect(someFailed).toEqual({ state: "partial", reason: "1 of 3 searches failed (TinyFish answered 503); what the others found is kept" });
+    expect(jobState(job({ status: "succeeded", result: { found: 4, searches: [{ query: "a", error: null }] } }), now).state).toBe("completed");
+    expect(OPEN_STATES.has("partial")).toBe(false);
+  });
+
+  const sender = (gates: string[], nextAt: string | null = null): SenderStatus => ({ channel: "whatsapp", account: "+91 98220 11111", timezone: "Asia/Kolkata", gates, nextAt, queued: 3, note: null });
+
+  test("a running plan whose every sender is outside its hours says so, with the earliest next send", () => {
+    const linkedinAccount: SenderStatus = { ...sender(["Outside working hours (Mon–Fri 09:00–18:00 America/New_York)"], "2026-10-18T13:00:00.000Z"), channel: "linkedin", account: "Ravi" };
+    const state = planState({ status: "running", error: null, senders: [sender(["Outside campaign sending hours (Asia/Kolkata)"], "2026-10-19T03:30:00.000Z"), linkedinAccount] }, now);
+    expect(state).toEqual({ state: "outside_hours", reason: "every sender is outside its sending hours; the next send is allowed at 2026-10-18T13:00:00.000Z", open: true });
+    expect(WORK_STATE_LABELS.outside_hours).toBe("Outside sending hours");
+  });
+
+  test("outside its hours and also held by something with no known end (a disconnection) names every hold, not only the hours", () => {
+    const held = planState({ status: "running", error: null, senders: [sender(["Unipile is disconnected", "Outside working hours (Mon–Fri 09:00–18:00 UTC)"], null)] }, now);
+    expect(held).toEqual({ state: "executing", reason: "no sender can send right now: Unipile is disconnected; Outside working hours (Mon–Fri 09:00–18:00 UTC)", open: true });
+  });
+
+  test("one sender inside its hours keeps the plan working; every sender held by something else names the holds", () => {
+    expect(planState({ status: "running", error: null, senders: [sender(["Outside campaign sending hours (Asia/Kolkata)"]), sender([])] }, now).state).toBe("executing");
+    const held = planState({ status: "running", error: null, senders: [sender(["Daily limit of 25 new chats used"], "2026-10-19T03:30:00.000Z")] }, now);
+    expect(held.state).toBe("executing");
+    expect(held.reason).toBe("no sender can send right now: Daily limit of 25 new chats used; the next send is allowed at 2026-10-19T03:30:00.000Z");
+  });
+
+  test("a running plan with a channel that failed to launch is partial and still open; without senders it is working", () => {
+    expect(planState({ status: "running", error: "email: no mailbox is connected", senders: [sender([])] }, now)).toEqual({ state: "partial", reason: "running on its other channels; email: no mailbox is connected", open: true });
+    expect(planState({ status: "running", error: null, senders: null }, now).state).toBe("executing");
+    expect(planState({ status: "paused", error: null, senders: null }, now)).toEqual({ state: "paused", reason: null, open: true });
+    expect(planState({ status: "stopped", error: null, senders: null }, now).open).toBe(false);
+  });
+
+  test("a plan's counts: contacted means accepted for sending at least, never an uncertain or failed send; replied is a recorded reply", () => {
+    const tones = ["waiting", "sent", "sent", "replied", "good", "failed", "stopped"] as const;
+    expect(planCounts(tones.map((tone) => ({ progress: { tone, text: "" } })))).toEqual({ leads: 7, contacted: 4, replied: 2 });
+    expect(planCounts([])).toEqual({ leads: 0, contacted: 0, replied: 0 });
+  });
 });
