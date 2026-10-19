@@ -207,6 +207,82 @@ The isolation check itself had two flaws, found when it was run again today:
 It is now run against a production build instead of a dev server. On demand,
 the dev server compiled every route and grew past the memory limit.
 
+## Website observations, 19 October, after the plan (`dd1846b`, `26f524a`, `ba88880`)
+
+You asked for the website reader to keep what a business's own site shows
+that bears on your offer, carry it through to qualification, plan previews
+and drafting, and never let an unsupported claim reach a lead. Harvey was a
+reference only; no Harvey material is in the repository and nothing depends
+on it.
+
+**What already existed (baseline `299fd14`, unchanged until this work):**
+- The reader fetched the home page and up to 3 same-site contact, about or
+  team pages, behind the public-address guard.
+- From those pages it kept only emails, phones and LinkedIn links, then threw
+  the HTML away.
+- Site leads had `signals: []`. Personal `/in/` links were dropped.
+- There was no name or role extraction.
+- The insights table, the need/engagement split, the prospects list and the
+  writers already existed. The writers saw only `facts`, and "use only the
+  facts" was a rule in the prompt, not in code.
+
+**What changed:**
+- **Reading.** `websiteProfile.ts` (new, pure) reads findings from the same
+  responses: booking and contact options, relevant hiring, an explicit
+  request for suppliers, the site's own description, and named people with
+  their roles. Each finding keeps its page, the time it was read and how sure
+  it is. The page budget is unchanged. Its slots go to a contact, an
+  about/team and (when an offer is saved) a careers page.
+- **Storage.** Findings are insights signals (kind `observation`, or `need`
+  for a supplier request) and short writer facts. The website evidence item
+  records when the site was read and which pages. A Person row takes a named
+  person's name and title only when the address it uses is that person's own,
+  and only into fields it does not already have.
+- **Display and drafting.**
+  - The lead review shows the findings apart from need evidence, and "not
+    found on the N pages read" only for a site that was read.
+  - Plan samples show why that lead was chosen and what its site showed.
+  - Start writes from the same facts as the preview.
+  - `leadClaimProblem` refuses, then leaves out, a line or first message with
+    an unsupported price, percentage, link, hiring claim, name or claim that
+    the lead lacks something.
+- **Retries.** Members and their insights are now written in one
+  transaction, so a retried save can no longer lose a lead's evidence.
+
+**Review.** Four adversarial reviewers (extraction, persistence, honesty,
+security) reproduced 22 findings in the first commit, a few of them overlapping; all are fixed in
+`26f524a` and `ba88880`, each with a test. The serious ones:
+- a NUL in page text would have made every save of the job fail and its
+  sites be re-read every 3 minutes;
+- a crawled page could back the link or price it planted;
+- a colleague's or general inbox was taken for a person's own;
+- testimonial authors and menu labels were read as people.
+
+Decisions 59–68 record the defaults.
+
+**Verified (fake providers, local database):**
+- `tsc` and eslint pass; 1756 unit tests pass.
+- `web-discovery` 101 checks, including 16 new ones:
+  - each page is fetched once;
+  - people are associated correctly;
+  - evidence and its read time survive a stale-claim takeover and a retried
+    save;
+  - another organization sees nothing.
+- `full-flow` 24, including 6 new ones:
+  - findings reach the plan sample as a possible fit;
+  - an existing contact keeps its name;
+  - an unbacked line never reaches a plan or the texts written at Start.
+- `assistant` 73 and `apify` 70 pass.
+- All 16 suites passed on `dd1846b`, the upgrade path matches a fresh
+  install, and isolation on the production build of `dd1846b` had no
+  failures. Isolation on the production build of `26f524a`: no failures, and the same 16 review items in untouched routes.
+
+**No migration.** The new fields are optional keys in existing jsonb
+columns.
+
+**Live check pending:** one real web search for your target customers, then
+open "Review the leads" and the plan card.
+
 ## Tenancy isolation
 
 Run on 19 October against a **production build** of the final commit,
@@ -387,6 +463,15 @@ Deployment and live acceptance are **pending** until you run them.
 - Three routes answer 200 to another organization for one of your ids
   without returning your data (listed under Tenancy isolation); a 404 would be
   more correct.
+- Website findings are read by rules, not a model: a site whose team page
+  uses unusual markup may show no people, and relevance is matching words
+  from your saved offer. A named person is a fact on the business's lead, not
+  a separate contactable person; a WhatsApp number on a site is a finding,
+  not yet a route.
+- A job whose stage result cannot be saved (a database refusal of its
+  payload) stays claimed and is retried every 3 minutes without counting
+  toward its failure limit. This predates the branch; the website change no
+  longer feeds it page text that could trigger it.
 - On a desktop record page both "Leads & replies" and "Pipeline" are
   highlighted in the sidebar (both point at `/crm/pipeline`); this predates
   the branch.
