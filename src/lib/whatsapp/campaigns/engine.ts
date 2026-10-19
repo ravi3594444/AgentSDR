@@ -364,7 +364,8 @@ async function processLead(
 
   let response: Awaited<ReturnType<SendFunction>>;
   try {
-    response = await send({ personId: picked.personId, accountId: account.id, text });
+    // Recorded on the CRM as a campaign step, not as the owner's own answer.
+    response = await send({ personId: picked.personId, accountId: account.id, text, crmOrigin: "campaign" });
   } catch (error) {
     return handleSendFailure(error, picked, claimId, now, result);
   }

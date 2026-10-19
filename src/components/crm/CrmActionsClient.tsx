@@ -223,6 +223,9 @@ export function CrmActionsClient() {
   // A view or filter picked while a list is loading must not be overwritten by
   // the earlier request's answer when that one returns last.
   const [responses] = useState(createResponseGate);
+  // The list shown now, for a count refresh scheduled from an earlier render's closure.
+  const queryRef = useRef(query);
+  useEffect(() => { queryRef.current = query; }, [query]);
   const load = useCallback(async (offset: number) => {
     const firstPage = offset === 0;
     const ticket = firstPage ? responses.restart() : responses.follow();
@@ -246,7 +249,11 @@ export function CrmActionsClient() {
       setLoaded(true);
       if (firstPage) responses.land(ticket);
     } catch (cause) {
-      if (responses.isCurrent(ticket)) setError(errorMessage(cause));
+      if (responses.isCurrent(ticket)) {
+        setError(errorMessage(cause));
+        // The rows on screen are the previous list's; Retry, not Load more, is the way on.
+        if (firstPage) setHasMore(false);
+      }
     } finally {
       if (responses.isCurrent(ticket)) { setLoading(false); setLoadingMore(false); }
     }
@@ -265,18 +272,20 @@ export function CrmActionsClient() {
   // moment after a burst of edits keeps the strip honest without a read per click.
   const summaryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (summaryTimer.current) clearTimeout(summaryTimer.current); }, []);
-  // The view counts come with the list; after an edit one small read refreshes them.
+  // The view counts come with the list; after an edit one small read refreshes
+  // them, for the list shown when it runs: the timer and a row's mutation hold
+  // the closure of an earlier render, whose query may be a view since left.
   const reloadCounts = useCallback(async () => {
     const ticket = responses.follow();
     if (ticket === null) return;
     try {
-      const params = new URLSearchParams(query);
+      const params = new URLSearchParams(queryRef.current);
       params.delete("scope");
       params.set("limit", "1");
       const body = asObject(await crmFetch(`/actions?${params}`));
       if (responses.isCurrent(ticket) && body.scopeCounts) setScopeCounts(body.scopeCounts as ScopeCounts);
     } catch { /* They refresh with the list. */ }
-  }, [query, responses]);
+  }, [responses]);
   const onMutated = useCallback(() => {
     if (summaryTimer.current) clearTimeout(summaryTimer.current);
     summaryTimer.current = setTimeout(() => { void reloadSummary(); void reloadCounts(); }, 1500);
@@ -356,7 +365,8 @@ export function CrmActionsClient() {
               scope={view === "actions" ? undefined : view}
               empty={empty}
             />
-            {hasMore && <LoadMoreOnScroll onLoadMore={loadMore} busy={loadingMore} />}
+            {/* Busy while a first page loads too: no next page follows until it lands, and the observer re-arms then. */}
+            {hasMore && <LoadMoreOnScroll onLoadMore={loadMore} busy={loadingMore || loading} />}
           </>}
       </FramePanel>
     </Frame>

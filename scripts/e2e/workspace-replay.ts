@@ -19,9 +19,10 @@
  * Not Contact closure, a duplicate and a delayed webhook, an unavailable
  * provider, an unnamed lead shown by business and route, Instagram in the
  * channel filter and the accounts badge, a WhatsApp campaign step that is
- * never read as the owner's answer, the Errors filter narrowing Needs you and
- * All replies (with counts that match), and a second organization that sees
- * and counts nothing.
+ * never read as the owner's answer (one sent through the real sendWhatsapp to
+ * a stand-in Unipile keeps that label after the lead is removed from the
+ * campaign), the Errors filter narrowing Needs you and All replies (with
+ * counts that match), and a second organization that sees and counts nothing.
  *
  * Creates its own organizations ("Workspace replay …") and leaves them.
  * Refuses a non-local DATABASE_URL.
@@ -34,11 +35,19 @@ if (!/@(localhost|127\.0\.0\.1)[:/]/.test(process.env.DATABASE_URL ?? "")) {
 }
 
 // ------------------------------------------------------------ no provider is reachable
+// Except a stand-in Unipile, on a host that cannot resolve, that accepts a message into an existing chat and
+// nothing else: the one campaign step sent through the real sendWhatsapp goes there.
+const FAKE_UNIPILE = "https://unipile-workspace-replay.invalid";
+const unipileSends: string[] = [];
 const blocked: string[] = [];
 const realFetch = globalThis.fetch;
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
   if (url.hostname === "localhost" || url.hostname === "127.0.0.1") return realFetch(input, init);
+  if (url.origin === FAKE_UNIPILE && (init?.method ?? "GET").toUpperCase() === "POST" && /^\/api\/v1\/chats\/[^/]+\/messages$/.test(url.pathname)) {
+    unipileSends.push(init?.body instanceof FormData ? String(init.body.get("text") ?? "") : "");
+    return new Response(JSON.stringify({ object: "MessageSent", message_id: `wa-replay-unipile-${stamp}-${unipileSends.length}` }), { status: 201, headers: { "content-type": "application/json" } });
+  }
   blocked.push(`${(init?.method ?? "GET").toUpperCase()} ${url.origin}${url.pathname}`);
   throw new TypeError(`The workspace replay check allows no outgoing request (${url.origin})`);
 }) as typeof fetch;
@@ -51,6 +60,10 @@ const crm = await import("@/lib/crm/schema");
 const schema = await import("@/lib/assistant/schema");
 const { whatsappAccounts, whatsappMessages, whatsappChats, whatsappCampaigns, whatsappCampaignLeads, whatsappCampaignSends } = await import("@/lib/whatsapp/schema");
 const { recordWhatsappOutboundInCrm } = await import("@/lib/whatsapp/crmBridge");
+const { sendWhatsapp } = await import("@/lib/whatsapp/send");
+const { removeWhatsappCampaignLead } = await import("@/lib/whatsapp/campaigns/campaigns.server");
+const { gridProviderCredentials, gridProviders } = await import("@/lib/grid/schema");
+const { encryptIntegrationCredentials } = await import("@/lib/integrations/credentials");
 const { instagramAccounts } = await import("@/lib/instagram/schema");
 const { runInOrganization, currentOrganizationId } = await import("@/lib/tenancy/scope");
 const { ensureCrmDefaults } = await import("@/lib/crm/defaults");
@@ -64,7 +77,7 @@ const { isPersonDoNotContact } = await import("@/lib/crm/policies");
 const { ingestWhatsappWebhook } = await import("@/lib/whatsapp/messages");
 const { getCrmRecordWorkspace, listCrmActions } = await import("@/lib/crm/queries");
 const { loadConversationSummaries } = await import("@/lib/crm/conversationSummary.server");
-const { outboundActor } = await import("@/lib/crm/conversationSummary");
+const { conversationSummary, outboundActor } = await import("@/lib/crm/conversationSummary");
 const { loadNavBadges } = await import("@/lib/nav/badges.server");
 const { listReplies } = await import("@/lib/activity/activity.server");
 type AgentModel = import("@/lib/assistant/replyAgent/agent.server").AgentModel;
@@ -433,8 +446,9 @@ await runInOrganization(A.org.id, async () => {
 
   // ============================================================ a WhatsApp campaign step after a reply on another channel
   // The lead replied by email; a WhatsApp campaign (an assistant run's WhatsApp leg is one) later sends its step
-  // through sendWhatsapp, which records it on that same record as origin agentsdr. The rows below are what that
-  // send and the campaign engine write; nothing is sent.
+  // through sendWhatsapp, which records it on that same record. The rows below are what that send and the campaign
+  // engine wrote before steps carried the CRM origin "campaign" (origin agentsdr, told apart by the send row);
+  // nothing is sent. Organization C below sends one through the real sendWhatsapp.
   const campaignLead = await lead("campaign", 7, { fullName: "Dr Campaign", email: `dr-campaign-${stamp}@workspace-replay.test` });
   const emailReply = await ingestInboundReply({ personId: campaignLead.personId, channel: "email", accountRef: `replay-mailbox-${stamp}@workspace-replay.test`, providerThreadId: `replay-email-thread-${stamp}`, providerContactId: `dr-campaign-${stamp}@workspace-replay.test`, idempotencyKey: `email:replay-${stamp}`, bodyText: "Sounds interesting, tell me more.", sentAt: new Date(Date.now() - 60_000) });
   recordIds.push(emailReply.record.id);
@@ -483,6 +497,52 @@ await runInOrganization(A.org.id, async () => {
   check("Errors: each view's count is its list's", needsYouErrors.scopeCounts?.needs_you === needsYouErrors.total && repliesErrors.scopeCounts?.replies === repliesErrors.total && queueErrors.scopeCounts?.actions === queueErrors.total,
     `needs you ${needsYouErrors.scopeCounts?.needs_you}/${needsYouErrors.total}, replies ${repliesErrors.scopeCounts?.replies}/${repliesErrors.total}, queue ${queueErrors.scopeCounts?.actions}/${queueErrors.total}`);
   await db.update(crm.crmRecords).set({ workflowState: takenRecord.workflowState }).where(and(eq(crm.crmRecords.organizationId, orgId), eq(crm.crmRecords.id, takenRecord.id)));
+});
+
+// ============================================================ a campaign step keeps its label after the lead leaves the campaign
+// The campaign engine sends its step through the real sendWhatsapp (to the stand-in Unipile) with the CRM origin
+// "campaign", then writes its send row. "Remove from campaign" deletes the lead and, by cascade, that row: the step
+// must still read as a campaign message, never as the owner's answer. Its own organization, so the stand-in Unipile
+// connection touches nothing above; it is removed again at the end.
+const C = await organization("c");
+await runInOrganization(C.org.id, async () => {
+  const orgId = currentOrganizationId();
+  await ensureCrmDefaults();
+  const [provider] = await db.insert(gridProviders).values({ organizationId: orgId, key: "platform-unipile", name: "Unipile (workspace replay)" }).returning();
+  await db.insert(gridProviderCredentials).values({ providerId: provider!.id, encryptedPayload: encryptIntegrationCredentials({ baseUrl: FAKE_UNIPILE, apiKey: "workspace-replay" }) });
+  const [account] = await db.insert(whatsappAccounts).values({ organizationId: orgId, unipileAccountId: `wa-replay-c-${stamp}`, name: "Ravi", phone: "+919800000002", status: "connected", connectedAt: new Date(Date.now() - 7 * 86_400_000) }).returning();
+  try {
+    const phone = phoneOf(8);
+    const email = `dr-removed-${stamp}@workspace-replay.test`;
+    const [person] = await db.insert(people).values({ organizationId: orgId, phone, fullName: "Dr Removed", email, source: "workspace-replay" }).returning({ id: people.id });
+    const reply = await ingestInboundReply({ personId: person!.id, channel: "email", accountRef: `replay-mailbox-c-${stamp}@workspace-replay.test`, providerThreadId: `replay-email-thread-c-${stamp}`, providerContactId: email, idempotencyKey: `email:replay-c-${stamp}`, bodyText: "Sounds interesting, tell me more.", sentAt: new Date(Date.now() - 60_000) });
+    // Where a classified reply waits on a person: an answer settles it.
+    await db.update(crm.crmRecords).set({ workflowState: "action_required" }).where(and(eq(crm.crmRecords.organizationId, orgId), eq(crm.crmRecords.id, reply.record.id)));
+    await db.insert(whatsappChats).values({ accountId: account!.id, unipileChatId: `wa-replay-chat-removed-${stamp}`, providerId: `${phone.replace(/\D/g, "")}@s.whatsapp.net`, phone, personId: person!.id });
+    const stepBody = "Hi Dr Removed, Ravi from Bright Path. Same-week servicing for dental chairs in Pune.";
+    const [campaign] = await db.insert(whatsappCampaigns).values({ organizationId: orgId, name: "Replay campaign (lead removed)", status: "active", steps: [{ id: "replay-removed-step-1", body: stepBody, delayHours: 0 }] }).returning();
+    const [enrolled] = await db.insert(whatsappCampaignLeads).values({ campaignId: campaign!.id, personId: person!.id, phone, status: "in_sequence", accountId: account!.id }).returning();
+    // What engine.ts sends for a step, then the send row it writes.
+    const sent = await sendWhatsapp({ personId: person!.id, accountId: account!.id, text: stepBody, crmOrigin: "campaign" });
+    await db.insert(whatsappCampaignSends).values({ leadId: enrolled!.id, step: 0, stepId: "replay-removed-step-1", status: "sent", accountId: account!.id, whatsappMessageId: sent.message.id, body: stepBody, sentAt: new Date() });
+    const [settled] = await db.select().from(crm.crmRecords).where(and(eq(crm.crmRecords.organizationId, orgId), eq(crm.crmRecords.id, reply.record.id)));
+    check("Campaign step through sendWhatsapp: Unipile got it once, and it settled the reply as a Messages-tab send does", unipileSends.length === 1 && unipileSends[0] === stepBody && settled?.workflowState === "idle", `${unipileSends.length} send(s), record ${settled?.workflowState}`);
+    const before = (await getCrmRecordWorkspace(reply.record.id)).summary as ConversationSummary;
+    check("Campaign step through sendWhatsapp: read as a campaign message", before.answer.label === "Campaign message sent", before.headline);
+
+    await removeWhatsappCampaignLead(campaign!.id, enrolled!.id);
+    const sendRowsLeft = Number((await db.select({ n: count() }).from(whatsappCampaignSends).where(eq(whatsappCampaignSends.leadId, enrolled!.id)))[0]?.n ?? 0);
+    const after = await getCrmRecordWorkspace(reply.record.id);
+    const summary = after.summary as ConversationSummary;
+    check("Removed from the campaign: its send rows are gone, the step still reads as a campaign message", sendRowsLeft === 0 && summary.answer.label === "Campaign message sent" && summary.answer.actor === null && !summary.headline.includes("Answered by you"), `${sendRowsLeft} send row(s) left, ${summary.headline}`);
+    const row = (await listCrmActions({ scope: "replies", limit: 200 })).actions.find((item) => item.id === reply.record.id);
+    check("Removed from the campaign: the All replies row says the same", row?.summary?.answer.label === "Campaign message sent" && !row.summary.headline.includes("Answered by you"), row?.summary?.headline ?? "(none)");
+    const timeline = conversationSummary(after.timeline as Parameters<typeof conversationSummary>[0]);
+    check("Removed from the campaign: the record page's own reading of the timeline agrees", timeline.answered && timeline.answerLabel === "Campaign message sent", timeline.answerLabel);
+  } finally {
+    await db.delete(gridProviders).where(eq(gridProviders.id, provider!.id));
+    await db.update(whatsappAccounts).set({ status: "disconnected" }).where(eq(whatsappAccounts.id, account!.id));
+  }
 });
 
 // ============================================================ a second organization sees and counts nothing

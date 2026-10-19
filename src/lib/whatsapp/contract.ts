@@ -158,5 +158,11 @@ export type SendWhatsappRequest = {
   /** Links the message to the call it follows up, when sent from Calling. */
   callSessionId?: string | null;
   campaignContactId?: string | null;
+  /**
+   * Set by the campaign engine only (the HTTP API refuses the field): the CRM
+   * records the send as a campaign step (raw.origin "campaign") rather than as
+   * a person's send from AgentSDR ("agentsdr"). It settles the record the same.
+   */
+  crmOrigin?: "campaign";
 };
 export type SendWhatsappResponse = { chat: WhatsappChatSummary; message: WhatsappMessage };
