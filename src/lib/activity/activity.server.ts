@@ -57,6 +57,7 @@ const JOB_TITLES: Record<string, string> = {
   linkedin_search: "LinkedIn people search",
   apify_instagram: "Instagram search",
   outreach_start: "Starting outreach",
+  objective: "Lead request",
 };
 
 function iso(value: Date | null | undefined): string | null {
@@ -78,7 +79,7 @@ export async function listWork(now = new Date()): Promise<WorkItem[]> {
   for (const { job, threadTitle } of jobs) {
     const { state, reason } = jobState(job, now);
     const payload = (job.payload ?? {}) as { phrase?: unknown; criteria?: { customers?: unknown; where?: unknown } };
-    const progress = (job.progress ?? {}) as { source?: unknown };
+    const progress = (job.progress ?? {}) as { source?: unknown; leads?: unknown };
     const result = (job.result ?? {}) as { found?: unknown; eligible?: unknown };
     const phrase = typeof payload.phrase === "string" ? payload.phrase : null;
     items.push({
@@ -95,7 +96,8 @@ export async function listWork(now = new Date()): Promise<WorkItem[]> {
       threadTitle: job.threadId ? displayThreadTitle(threadTitle) : null,
       startedAt: job.createdAt.toISOString(),
       updatedAt: iso(job.finishedAt ?? job.heartbeatAt),
-      found: typeof result.found === "number" ? result.found : null,
+      // A lead request counts the qualified leads its searches found so far.
+      found: typeof result.found === "number" ? result.found : job.kind === "objective" && typeof progress.leads === "number" ? progress.leads : null,
       eligible: typeof result.eligible === "number" ? result.eligible : null,
       runId: null,
       runStatus: null,

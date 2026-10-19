@@ -437,7 +437,7 @@ export function continuationNote(input: {
   ].join(" ");
 }
 
-const STOP_WORDS: Record<StopReason, string> = {
+export const STOP_WORDS: Record<StopReason, string> = {
   target_reached: "the target was reached",
   sources_exhausted: "no further source was left to try",
   budget_spent: "the spend cap was used",

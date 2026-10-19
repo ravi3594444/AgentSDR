@@ -5,6 +5,8 @@
  * confirmed send. Pure and client-safe; activity.server.ts reads the rows.
  */
 
+import { outcomeOf, STOP_REASONS, STOP_WORDS, type StopReason } from "@/lib/assistant/objective";
+
 export type WorkState =
   | "queued"
   | "executing"
@@ -61,6 +63,7 @@ export function jobState(job: JobFacts, now: Date): { state: WorkState; reason: 
   switch (job.status) {
     case "succeeded":
       if (job.result?.notSearched === true || job.result?.handedToJobId) return { state: "not_searched", reason: typeof job.result?.note === "string" ? job.result.note : null };
+      if (typeof job.result?.stopReason === "string") return requestOutcome(job.result);
       return partialSearch(job) ?? { state: "completed", reason: null };
     case "failed":
       return { state: "failed", reason: null };
@@ -71,6 +74,8 @@ export function jobState(job: JobFacts, now: Date): { state: WorkState; reason: 
         ? { state: "stale", reason: "no worker has reported on it for a few minutes; it is picked up again automatically" }
         : { state: "executing", reason: null };
     default: {
+      // A request's driver: its searches run, or the assistant picks the next one; the request is being worked on.
+      if (waiting?.kind === "objective") return { state: "executing", reason };
       if (waiting?.kind === "slot") return { state: "waiting_slot", reason };
       if (waiting?.kind === "quota") return { state: "waiting_quota", reason };
       if (typeof job.progress?.lastError === "string" && job.attempts > 0) return { state: "retrying", reason: job.progress.lastError };
@@ -78,6 +83,16 @@ export function jobState(job: JobFacts, now: Date): { state: WorkState; reason: 
       return { state: "queued", reason: null };
     }
   }
+}
+
+/** How an owner request's research ended (the objective job's result): short of its target with the reason it stopped is partly done. */
+function requestOutcome(result: Record<string, unknown>): { state: WorkState; reason: string | null } {
+  const reason = result.stopReason as StopReason;
+  if (!STOP_REASONS.includes(reason)) return { state: "completed", reason: null };
+  const found = typeof result.leads === "number" && typeof result.leadTarget === "number" ? `${result.leads} of ${result.leadTarget} leads; ` : "";
+  const outcome = outcomeOf(reason);
+  if (outcome === "completed") return { state: "completed", reason: found ? `${found}${STOP_WORDS[reason]}` : null };
+  return { state: outcome, reason: `${found}stopped because ${STOP_WORDS[reason]}` };
 }
 
 /**

@@ -151,3 +151,19 @@ describe("partial work and sending hours are told apart from done and working", 
     expect(planCounts([])).toEqual({ leads: 0, contacted: 0, replied: 0 });
   });
 });
+
+describe("an owner request's research (its objective job)", () => {
+  test("while its searches run or the assistant picks the next source, it is working, with what it waits for", () => {
+    expect(jobState(job({ runAfter: new Date(now.getTime() + 60_000), progress: { stage: "watching", leads: 12, leadTarget: 40, waiting: { kind: "objective", reason: "the assistant is choosing the next source" } } }), now))
+      .toEqual({ state: "executing", reason: "the assistant is choosing the next source" });
+  });
+
+  test("stopped short of its target it is partly done with the real reason; the target reached is done; cancelled and failed say so", () => {
+    expect(jobState(job({ status: "succeeded", result: { stopReason: "budget_spent", leads: 18, leadTarget: 40 } }), now)).toEqual({ state: "partial", reason: "18 of 40 leads; stopped because the spend cap was used" });
+    expect(jobState(job({ status: "succeeded", result: { stopReason: "time_limit", leads: 3, leadTarget: 25 } }), now).reason).toBe("3 of 25 leads; stopped because the time limit passed");
+    expect(jobState(job({ status: "succeeded", result: { stopReason: "sources_exhausted", leads: 0, leadTarget: 25 } }), now).state).toBe("partial");
+    expect(jobState(job({ status: "succeeded", result: { stopReason: "target_reached", leads: 41, leadTarget: 40 } }), now)).toEqual({ state: "completed", reason: "41 of 40 leads; the target was reached" });
+    expect(jobState(job({ status: "succeeded", result: { stopReason: "cancelled", leads: 5, leadTarget: 40 } }), now).state).toBe("cancelled");
+    expect(jobState(job({ status: "succeeded", result: { stopReason: "failed", leads: 5, leadTarget: 40 } }), now).state).toBe("failed");
+  });
+});
