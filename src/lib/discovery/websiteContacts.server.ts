@@ -10,11 +10,14 @@ import { assertPublicUrl, isBlockedAddress } from "@/lib/grid/runners/http";
 import { BRAND } from "@/lib/brand";
 import { publicAppUrl } from "@/lib/http/publicAppUrl";
 import { isRedditHost } from "@/lib/research/sources/reddit";
-import { contactPageLinks, extractContacts, type FoundContact } from "./contacts";
+import { extractContacts, type FoundContact } from "./contacts";
+import { profilePageLinks, readWebsite, type OfferFocus, type WebsiteProfile } from "./websiteProfile";
 
 /**
  * Reads a business's own website for the contact details it publishes:
- * the home page, then up to three same-site contact/about/imprint pages.
+ * the home page, then up to three same-site contact/about/team/careers pages
+ * (websiteProfile.ts chooses them). What those same pages show for the
+ * owner's offer is read from the same responses, never fetched again.
  * Every request is to a public address, small (1.5 MB), short (10 s) and
  * identified by its User-Agent. Nothing is guessed: a site that publishes no
  * address yields none.
@@ -357,10 +360,16 @@ export type WebsiteContacts = {
   pagesRead: string[];
   /** Why the site could not be read at all, when it could not. */
   error: string | null;
+  /** What the pages read show for the owner's offer (websiteProfile.ts); null when the site could not be read. */
+  profile: WebsiteProfile | null;
 };
 
-export async function collectWebsiteContacts(website: string, options: PageFetchOptions = {}): Promise<WebsiteContacts> {
+const NO_FOCUS: OfferFocus = { offer: [], customers: [] };
+
+export async function collectWebsiteContacts(website: string, options: PageFetchOptions = {}, focus: OfferFocus = NO_FOCUS): Promise<WebsiteContacts> {
+  const checkedAt = new Date().toISOString();
   const pagesRead: string[] = [];
+  const pages: { url: string; html: string }[] = [];
   const contacts = new Map<string, FoundContact>();
   const keep = (found: FoundContact[]) => {
     for (const contact of found) {
@@ -368,24 +377,29 @@ export async function collectWebsiteContacts(website: string, options: PageFetch
       if (!contacts.has(key)) contacts.set(key, contact);
     }
   };
+  const read = (page: { url: string; html: string }) => {
+    pagesRead.push(page.url);
+    pages.push(page);
+    keep(extractContacts(page.html, page.url));
+  };
   let home;
   try {
     home = await fetchPublicPage(website, options);
   } catch (error) {
-    return { contacts: [], pagesRead, error: error instanceof Error ? error.message : String(error) };
+    return { contacts: [], pagesRead, error: error instanceof Error ? error.message : String(error), profile: null };
   }
-  if (!home) return { contacts: [], pagesRead, error: "the website did not return a web page" };
-  pagesRead.push(home.url);
-  keep(extractContacts(home.html, home.url));
-  for (const link of contactPageLinks(home.html, home.url, 3)) {
+  if (!home) return { contacts: [], pagesRead, error: "the website did not return a web page", profile: null };
+  read(home);
+  for (const link of profilePageLinks(home.html, home.url, 3)) {
+    if (pagesRead.includes(link)) continue;
     try {
       const page = await fetchPublicPage(link, options);
-      if (!page) continue;
-      pagesRead.push(page.url);
-      keep(extractContacts(page.html, page.url));
+      // A page that redirected to one already read adds nothing.
+      if (!page || pagesRead.includes(page.url)) continue;
+      read(page);
     } catch {
       // One unreadable contact page does not lose what the others had.
     }
   }
-  return { contacts: [...contacts.values()], pagesRead, error: null };
+  return { contacts: [...contacts.values()], pagesRead, error: null, profile: readWebsite(pages, focus, checkedAt) };
 }

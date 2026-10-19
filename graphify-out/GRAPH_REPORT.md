@@ -1,40 +1,40 @@
 # Graph Report - AgentSDR  (2026-10-19)
 
 ## Corpus Check
-- 1764 files · ~2,035,839 words
+- 1766 files · ~2,046,864 words
 - Verdict: corpus is large enough that graph structure adds value.
 - Unclassified: 18 file(s) not represented in the graph (top: (none) 10, .css 3, .example 1)
 
 ## Summary
-- 12177 nodes · 41364 edges · 347 communities (328 shown, 19 thin omitted)
-- Extraction: 99% EXTRACTED · 1% INFERRED · 0% AMBIGUOUS · INFERRED: 415 edges (avg confidence: 0.89)
+- 12238 nodes · 41524 edges · 355 communities (333 shown, 22 thin omitted)
+- Extraction: 99% EXTRACTED · 1% INFERRED · 0% AMBIGUOUS · INFERRED: 419 edges (avg confidence: 0.89)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `8cb9d261`
+- Built from commit: `b4437b74`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
 ## Community Hubs (Navigation)
-- withLinkedinOrg
+- connectionList.server.ts
 - categories.ts
-- crm/send.ts
-- ref_remixicon_react
+- crm/schema.ts
+- Frame
 - CrmActionsClient.tsx
 - MessagesLayout.tsx
 - Frame
 - WorkbookListClient.tsx
 - next
 - CampaignClient.tsx
-- cn
+- leads/LeadsClient.tsx
 - Skeleton
 - grid/columns.ts
-- tenancy/scope.ts
+- inOrg
 - alignui/badge.tsx
 - objective.server.ts
 - GridClient.tsx
 - WhatsappCampaignsClient.tsx
-- linkedin/CampaignsClient.tsx
+- requirePageOrgContext
 - grid/worker.ts
 - assistant/agent.server.ts
 - crm.ts
@@ -43,13 +43,13 @@
 - replyAgent/agent.server.ts
 - ref_fs
 - autopilotRun.server.ts
-- crm/schema.ts
+- crm/queue.ts
 - ref_pg
 - hackerNews.ts
 - assistant/http.server.ts
 - inquiries.server.ts
 - background.ts
-- runners/types.ts
+- grid/types.ts
 - treg.server.ts
 - workspace.ts
 - campaigns.server.ts
@@ -57,10 +57,10 @@
 - integrations/catalog.ts
 - endpoints.server.ts
 - flags.server.ts
-- LinkedInCampaignWizard.tsx
-- connections/page.tsx
+- cn.ts
+- JobsClient.tsx
 - websiteContacts.server.ts
-- ref_bun
+- diagnose-whatsapp-replies.ts
 - geocode.server.ts
 - unipile.instagram.ts
 - calls/campaigns.ts
@@ -71,18 +71,18 @@
 - wa-agent.ts
 - grid/types.ts
 - navConfig.ts
-- writer.server.ts
+- assistant/outreach.server.ts
 - backfill-campaign-people.ts
 - coverage.server.ts
 - whatsapp/send.ts
 - ref_node_path
 - core.ts
 - register.server.ts
-- inOrg
-- tables.ts
+- autonomy.server.ts
+- authContextErrorResponse
 - connectionList.server.ts
 - dailyRollover.ts
-- runInOrganization
+- ResultsClient.tsx
 - whatsapp.ts
 - SignInForm.tsx
 - searchBatches.ts
@@ -97,55 +97,55 @@
 - configuration.md
 - outreach/campaigns.ts
 - mode.ts
-- tools.server.ts
+- engine.ts
 - LiquidEngine
 - unipileMail.ts
 - wa-hook.ts
-- contacts.ts
+- websiteProfile.ts
 - ref_node_assert
-- test-people-crm-e2e.ts
+- results.server.ts
 - readiness.ts
-- useOrgAccess.ts
-- organizations.server.ts
+- SettingsPage
+- endpoint.ts
 - server-only
 - transcription.ts
-- PermanentRunError
+- server-only
 - draft.ts
-- leadStage.ts
+- classify.ts
 - whatsapp/parse.ts
 - importLeads.ts
 - linkedin.ts
 - flags.server.ts
 - WhatsappMessagesClient.tsx
-- inbox/FilterPanel.tsx
+- send.server.ts
 - diagnose-instagram-delivery.ts
 - development.md
-- engine.ts
+- outreach/campaigns/[id]/route.ts
 - FormSkeleton
 - structuredCompletion.ts
 - tenancy/registry.ts
 - analytics/contract.ts
-- CrmConfigurationValidationError
-- test-integrations-live.ts
+- knowledge/[id]/route.ts
+- connections.ts
 - settings.server.ts
 - app/layout.tsx
 - AnalyticsClient.tsx
-- providers.ts
-- InquiriesSettings.tsx
+- qualification/campaigns.ts
+- LeadActivityPanel.tsx
 - AssistantClient.tsx
-- SearchBatchDetailClient.tsx
+- searchLeadLimit.ts
 - instagram.ts
 - docs/README.md
-- mapping.ts
+- checkPhone
 - handoff.server.ts
 - web-discovery.ts
 - e2e/objective.ts
 - LeadDetailPanel.tsx
 - manifest.json
-- conversations.ts
+- replyBridge.ts
 - [tableId]/export/route.ts
 - peopleImport.server.ts
-- crm/queries.ts
+- actions/route.ts
 - tinyfish.server.ts
 - hackerNews.server.ts
 - README.md
@@ -159,20 +159,20 @@
 - NotesTasksClient.tsx
 - react
 - linkedin/LeadsClient.tsx
-- platform/credentials.ts
+- currentOrganizationId
 - migrationParity.ts
 - PlatformConnection.tsx
 - campaigns/CampaignDetailClient.tsx
-- assistant/messages.ts
+- services/tinyfish.ts
 - ingest.server.ts
 - instagram/parse.ts
 - unsubscribeToken.ts
 - audit-legacy-linkedin-identifiers.ts
 - workspace-replay.ts
-- qualification/campaigns.ts
-- callApiErrorResponse
-- linkedin/schema.ts
-- runLeads.ts
+- jobRunner.ts
+- RulesSettingsPage
+- leads/schema.ts
+- metrics.server.ts
 - cn
 - e2e/apify.ts
 - People Migration Cutover, Rollback, and Reconciliation Runbook
@@ -181,7 +181,7 @@
 - scripts
 - analytics/route.ts
 - DetailsPanel.tsx
-- contacts.ts
+- apollo.ts
 - update.ts
 - intake.ts
 - Releasing
@@ -192,26 +192,26 @@
 - Implementation plan: 22nd X AI Outreach
 - Product requirements: 22nd X AI Outreach
 - full-flow.ts
-- lusha/actions.ts
+- qualify.ts
 - Session 5: routine automation, reliable controls and results
-- ingest.server.ts
+- existingLeads.server.ts
 - SettingsSkeletons.tsx
 - 4. Execution phases
 - compilerOptions
 - Enrichment layer ("Clay in AgentSDR")
-- runners/http.ts
+- LiveCallStrip.tsx
 - ReplyComposer.tsx
-- auth/setup.ts
+- setupInput.ts
 - activity.server.ts
 - whatsapp/accounts.ts
 - socialAdapters.ts
 - Changelog
-- apollo/actions.ts
+- mailboxProviders.ts
 - sendFromInbox.test.ts
 - ToolMessage
 - devDependencies
 - audit-linkedin-message-duplicates.ts
-- outreachHistory.ts
+- crm/queries.ts
 - export-people-migration-reconciliation.ts
 - replyAgent/agent.ts
 - rotate-integration-credentials.ts
@@ -221,7 +221,7 @@
 - production.mdx
 - add-mailboxes.ts
 - PageContainer
-- CrmAiInstructions.tsx
+- calling/CampaignsClient.tsx
 - Filters.tsx
 - SettingsShell.tsx
 - InboxClient.tsx
@@ -229,15 +229,15 @@
 - Session 1 status
 - app/campaigns/page.tsx
 - Instagram, inquiry intake and website discovery
-- unipile.instagramProfiles.ts
+- crmFollowUp.ts
 - leads/import/route.ts
 - precompute-category-counts.js
 - Owner setup: 22nd X AI Outreach
 - unsubscribe/page.tsx
-- CampaignLeadsTab.tsx
+- leadsTemplate.ts
 - tables/overview.mdx
-- reply-agent.ts
-- decisions.server.ts
+- ai/server/types.ts
+- run-search-queue/route.ts
 - audit-email-people-parity.ts
 - ActionsMenu.tsx
 - Badge.tsx
@@ -245,7 +245,7 @@
 - package.json
 - test-linkedin-webhook-inbox-fixture.sh
 - linkedin/leads/loading.tsx
-- InboxShell.tsx
+- EmailThread.tsx
 - assistant.ts
 - StatCard.tsx
 - linkedInAccountSelect.ts
@@ -255,14 +255,13 @@
 - Unified People Migration: Remediation and Cutover Plan
 - Next session: one reliable lead-to-outreach flow
 - Use AI columns
-- research.server.ts
+- crm/context.ts
 - ref_bun_test
-- AgentSDR_v2
+- slots.ts
 - reporting/metrics.ts
 - InstagramMessagesClient.tsx
 - email/campaigns.mdx
 - custom-fields.mdx
-- IMPLEMENTATION_PLAN.md
 - Session 3: the complete messaging workflow
 - docker-compose.mdx
 - enrichment.mdx
@@ -272,7 +271,7 @@
 - Import into a campaign
 - Issue triage
 - whatsapp/accounts.mdx
-- columns/[id]/route.ts
+- instagram/accounts.ts
 - handoff.ts
 - AgentSDR glossary
 - Contributing to AgentSDR
@@ -294,24 +293,24 @@
 - Night report, 18–19 October 2026
 - Skeletons.tsx
 - domains/page.tsx
-- lib/queries.ts
+- CrmRecordModal.tsx
 - mark-linkedin-message-duplicates.ts
 - pipeline.mdx
 - inbox.mdx
-- requireOrgContext
-- 3. What was built: the assistant's two starting points
+- CrmSettingsClient.tsx
+- crm/ai/types.ts
 - ai/catalog.ts
 - AgentSDR documentation
-- app/leads/page.tsx
-- Page design contract
-- CreateCampaignForm.tsx
+- jobs.ts
+- unipile.instagramProfiles.ts
+- instrumentation.ts
 - action-required.mdx
 - knowledge.mdx
 - Issue 1 — Schema preparation currently creates constraints too early
 - transcription.ts
 - openrouter-runner.ts
 - entrypoint.sh
-- platform/verify.ts
+- instagramChannel.test.ts
 - Issue 2 — 48 duplicate automated LinkedIn message groups
 - Issue 3 — 7,226 conflicting legacy raw values
 - Issue 5 — Cross-channel identity conflicts
@@ -329,35 +328,43 @@
 - Issue 13 — A full application shutdown can lose webhooks
 - Issue 14 — Rollback compatibility must be proven
 - Issue 16 — Staging rehearsal and production operations
-- AppearanceSettings.tsx
+- prepare-public-repo.ts
 - whatsapp/client.ts
 - Agent instructions
 - Vendored dependencies
 - postcss.config.mjs
 - integrations/README.md
 - mark-linkedin-message-duplicates.ts
-- leads/columns/route.ts
-- profile.ts
-- rocketreach/actions.ts
-- ToolArgumentError
-- autonomous.ts
-- CategoryFilter.tsx
+- CallSessionBadge.tsx
+- assistant/schema.ts
+- browser.ts
+- migrate-env-to-integrations.ts
+- e2e/treg.ts
+- call-recorder/route.ts
 - templates.ts
-- assistant-chat-live.ts
-- finalize-lead-tables.ts
-- spreadsheetUploadProblem
-- instagramContacts.ts
+- 10. Build phases
+- Production cutover — single workspace → organizations
+- outreach.test.ts
+- help.mdx
 - 4. Session 1 work packages, in order
-- add-apps-array.js
-- auth-policies.ts
-- actions.test.mjs
+- ai-provider.mdx
+- package.ts
+- add-apollo-lead-columns.js
 - dokploy.mdx
 - queue/template/route.ts
-- 4. Storage: JSONB rows, not dynamic DDL
-- Issue 4 — Identity matching needs one deterministic rule
+- add-mailbox-working-hours.js
+- alter-qualification-tables.js
 - 4. Session 1: owner-usable release
 - settings/whatsapp-calling/page.tsx
-- gridRowToPersonInput
+- CallingSkeletons.tsx
+- Decisions taken on the night of 18 October 2026
+- from-source.mdx
+- 5. Execution: a Postgres work queue
+- create-people-crm-core.ts
+- transcriptState.ts
+- 5. First-release experience
+- instagramEligibility.ts
+- watchRegistration.ts
 
 ## God Nodes (most connected - your core abstractions)
 1. `inOrg()` - 758 edges
@@ -376,445 +383,445 @@
   docs/product/SESSION_STATUS.md → src/components/settings/RequiresPlatform.tsx
 - `Follow-up: AI/ML API as a second AI provider` --references--> `getAiRuntime()`  [INFERRED]
   docs/product/SESSION_STATUS.md → src/lib/ai/server/runtime.ts
+- `Final review of day two (`502f71d`, `171c3b6`, `8cb9d26`)` --references--> `searchRequestFor()`  [INFERRED]
+  docs/plans/NIGHT_REPORT.md → src/lib/assistant/agent.ts
 - `Follow-up: the first real WhatsApp message (2026-10-15)` --references--> `availableTokens()`  [INFERRED]
   docs/product/SESSION_STATUS.md → src/lib/assistant/messages.ts
 - `Implemented and verified locally` --references--> `report()`  [INFERRED]
   docs/plans/IMPLEMENTATION_PLAN_2026-10-18.md → src/lib/assistant/objectiveDriver.server.ts
-- `What was built` --references--> `report()`  [INFERRED]
-  docs/product/SESSION_STATUS.md → src/lib/assistant/objectiveDriver.server.ts
 
 ## Import Cycles
 - None detected.
 
-## Communities (347 total, 19 thin omitted)
+## Communities (355 total, 22 thin omitted)
 
-### Community 0 - "withLinkedinOrg"
-Cohesion: 0.04
-Nodes (99): Sender loop (`src/lib/whatsapp/campaigns/engine.ts`), GET(), GET(), DEFAULT_FIELDS, GET(), labelFor(), POST(), POST() (+91 more)
+### Community 0 - "connectionList.server.ts"
+Cohesion: 0.05
+Nodes (56): 6. Instagram messages through Unipile, dynamic, GET(), dynamic, GET(), POST(), GET(), dynamic (+48 more)
 
 ### Community 1 - "categories.ts"
-Cohesion: 0.10
-Nodes (59): parseAddCampaignContactRequest(), parseCreateCampaignRequest(), parseLogCallMessageRequest(), parseUpdateCampaignContactPersonRequest(), parseSetLeadStageRequest(), parseStartCallRequest(), POST(), POST() (+51 more)
+Cohesion: 0.07
+Nodes (108): API (`src/app/api/whatsapp/campaigns`), parseAddCampaignContactRequest(), POST(), parseCreateCampaignRequest(), POST(), parseLogCallMessageRequest(), POST(), parseUpdateCampaignContactPersonRequest() (+100 more)
 
-### Community 2 - "crm/send.ts"
-Cohesion: 0.06
-Nodes (99): main(), dryRun, main(), partA(), partB(), partA(), applyStageInTransaction(), createSubcategory() (+91 more)
+### Community 2 - "crm/schema.ts"
+Cohesion: 0.03
+Nodes (258): dryRun, main(), ChannelTotals, main(), seedCrmSetup(), dryRun, main(), partA() (+250 more)
 
-### Community 3 - "ref_remixicon_react"
-Cohesion: 0.02
-Nodes (136): ActivityPage(), dynamic, metadata, contentType, size, CallingLayout(), dynamic, metadata (+128 more)
+### Community 3 - "Frame"
+Cohesion: 0.03
+Nodes (158): dynamic, InstagramMessagesPage(), metadata, dynamic, dynamic, dynamic, dynamic, InquiriesSettingsPage() (+150 more)
 
 ### Community 4 - "CrmActionsClient.tsx"
 Cohesion: 0.02
-Nodes (201): CrmActionsPage(), metadata, CrmPipelinePage(), metadata, CrmRecordPage(), CrmSequencesPage(), metadata, CrmRecordModalPage() (+193 more)
+Nodes (235): @radix-ui/react-tabs, ActivityPage(), dynamic, metadata, CrmActionsPage(), metadata, CrmPipelinePage(), metadata (+227 more)
 
 ### Community 5 - "MessagesLayout.tsx"
-Cohesion: 0.09
-Nodes (31): Bubble(), ChatComposer(), ComposerDraftBanner(), DaySeparator(), ExpandableText(), isLongText(), MessageCaption(), Kbd() (+23 more)
+Cohesion: 0.08
+Nodes (42): CrmCategoryControl(), CrmCategoryOption, CrmDraftCard(), crmSequenceLine(), InboxCrmStrip(), Bubble(), ChatComposer(), ComposerDraftBanner() (+34 more)
 
 ### Community 6 - "Frame"
 Cohesion: 0.04
-Nodes (167): recharts, dynamic, InstagramMessagesPage(), metadata, dynamic, dynamic, metadata, Page() (+159 more)
+Nodes (148): recharts, BarList(), BarListItem, CapacityMeter(), TONES, ChartCard(), ChartLegend(), LegendItem (+140 more)
 
 ### Community 7 - "WorkbookListClient.tsx"
 Cohesion: 0.12
 Nodes (23): MoveToFolderDialog(), pathOf(), NewWorkbookDialog(), createBlank(), createFromFile(), createWorkbook(), folderContents(), formatDate() (+15 more)
 
 ### Community 8 - "next"
-Cohesion: 0.03
-Nodes (153): next, GET(), GET(), DELETE(), POST(), GET(), GET(), GET() (+145 more)
+Cohesion: 0.02
+Nodes (125): Multi-tenancy: everything belongs to an organization, Directory map, `src/app/api`, `src/lib/<domain>`, Code conventions, The pieces, next, POST() (+117 more)
 
 ### Community 9 - "CampaignClient.tsx"
-Cohesion: 0.04
-Nodes (135): CallCampaignPage(), CallCampaignsPage(), metadata, dynamic, dynamic, metadata, Page(), ErrorState() (+127 more)
+Cohesion: 0.07
+Nodes (68): CallCampaignPage(), attemptHint(), Avatar(), AVATAR_TONES, AvatarInner(), bareDomain(), CallStatusBadge(), CampaignStatusBadge() (+60 more)
 
-### Community 10 - "cn"
-Cohesion: 0.03
-Nodes (126): @radix-ui/react-slot, @radix-ui/react-tabs, ActivityClient(), Channel, CHANNELS, chatHref(), readJson(), REPLY_TONE (+118 more)
+### Community 10 - "leads/LeadsClient.tsx"
+Cohesion: 0.06
+Nodes (65): Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow, CompaniesTable() (+57 more)
 
 ### Community 11 - "Skeleton"
-Cohesion: 0.16
-Nodes (21): Loading(), Loading(), Loading(), CampaignDetailLoading(), CampaignsLoading(), NewLinkedInCampaignLoading(), ConnectionsLoading(), JobsLoading() (+13 more)
+Cohesion: 0.20
+Nodes (14): CampaignsLoading(), NewLinkedInCampaignLoading(), ConnectionsLoading(), JobsLoading(), SearchBatchLoading(), SearchLoading(), WebhooksLoading(), Loading() (+6 more)
 
 ### Community 12 - "grid/columns.ts"
-Cohesion: 0.04
-Nodes (117): RFC-6901, xlsx, resolveCell(), RUN_COLUMN_TYPES, POST(), HEADERS, getAiModel(), promptColumnKeys() (+109 more)
+Cohesion: 0.06
+Nodes (72): RFC-6901, xlsx, POST(), HEADERS, getAiModel(), promptColumnKeys(), AiColumnInput, assertUsable() (+64 more)
 
-### Community 13 - "tenancy/scope.ts"
-Cohesion: 0.02
-Nodes (174): RFC-3464, drizzle-orm, BOUNCE_LOCAL_PARTS, main(), dryRun, main(), apply, BOUNCE_LOCAL_PARTS (+166 more)
+### Community 13 - "inOrg"
+Cohesion: 0.03
+Nodes (154): Data model overview, drizzle-orm, BOUNCE_LOCAL_PARTS, apply, main(), BOUNCE_LOCAL_PARTS, BOUNCE_LOCAL_PARTS, finalizeDemo() (+146 more)
 
 ### Community 14 - "alignui/badge.tsx"
-Cohesion: 0.06
-Nodes (55): AVATAR_ROOT_NAME, AvatarImage, AvatarImageProps, AvatarIndicator(), AvatarRoot, AvatarRootProps, AvatarSharedProps, AvatarStatus() (+47 more)
+Cohesion: 0.04
+Nodes (69): @radix-ui/react-slot, @radix-ui/react-tooltip, AVATAR_ROOT_NAME, AvatarImage, AvatarImageProps, AvatarIndicator(), AvatarRoot, AvatarRootProps (+61 more)
 
 ### Community 15 - "objective.server.ts"
 Cohesion: 0.05
-Nodes (80): Ctx, dynamic, GET(), POST(), clamp(), ContactRoutes, Continuation, continuationNote() (+72 more)
+Nodes (96): Ctx, dynamic, GET(), POST(), clamp(), ContactRoutes, Continuation, continuationNote() (+88 more)
 
 ### Community 16 - "GridClient.tsx"
 Cohesion: 0.03
-Nodes (114): react-dom, AddColumnMenu(), CellDetailsPanel(), CellDetailsSelection, CellRun, copyValue(), DetailsResponse, displayValue() (+106 more)
+Nodes (130): react-dom, AddColumnMenu(), CellDetailsPanel(), CellDetailsSelection, CellRun, copyValue(), DetailsResponse, displayValue() (+122 more)
 
 ### Community 17 - "WhatsappCampaignsClient.tsx"
-Cohesion: 0.06
-Nodes (80): dynamic, metadata, WhatsappCampaignPage(), dynamic, metadata, NewWhatsappCampaignPage(), dynamic, metadata (+72 more)
-
-### Community 18 - "linkedin/CampaignsClient.tsx"
 Cohesion: 0.05
-Nodes (57): CrmSequencePage(), BACK, CrmSequenceEditor(), delayInMinutes(), DelayUnit, EditorStep, followUpStep(), formatSpan() (+49 more)
+Nodes (88): dynamic, metadata, WhatsappCampaignPage(), dynamic, metadata, NewWhatsappCampaignPage(), dynamic, metadata (+80 more)
+
+### Community 18 - "requirePageOrgContext"
+Cohesion: 0.02
+Nodes (147): dynamic, GettingStartedPage(), metadata, Section(), Step(), ConnectionsPage(), dynamic, initialsOf() (+139 more)
 
 ### Community 19 - "grid/worker.ts"
-Cohesion: 0.04
-Nodes (84): quickjs-emscripten, DELETE(), hasRequiredInputs(), POST(), validateEnrichmentAccounts(), CascadeColumn, cascadeTargets(), readyDependents() (+76 more)
+Cohesion: 0.05
+Nodes (81): PATCH(), queueDependents(), hasRequiredInputs(), POST(), validateEnrichmentAccounts(), CascadeColumn, cascadeTargets(), changedCellUpdates() (+73 more)
 
 ### Community 20 - "assistant/agent.server.ts"
-Cohesion: 0.05
-Nodes (82): input, Reply, actionsProblem(), actsOnOutreach(), AgentAction, AgentReply, agentReplySchema(), cleanSuggestions() (+74 more)
+Cohesion: 0.04
+Nodes (94): features, systemPrompt, userPrompt, StructuredCompletionRuntime, input, Reply, actionsProblem(), actsOnOutreach() (+86 more)
 
 ### Community 21 - "crm.ts"
 Cohesion: 0.05
-Nodes (65): AFTERNOON, atWork(), awaitingDraft(), backdateConfiguration(), buildPlans(), businessTime(), cap(), Chan (+57 more)
+Nodes (64): AFTERNOON, atWork(), awaitingDraft(), backdateConfiguration(), buildPlans(), businessTime(), cap(), Chan (+56 more)
 
 ### Community 22 - "webDiscovery.ts"
 Cohesion: 0.05
-Nodes (70): instagramCommenterHold(), instagramResearchHold(), instagramTarget, addCandidate(), Candidate, candidateKey(), ContactAfter, emptyTally() (+62 more)
+Nodes (98): ApifyAllowanceInput, firstString(), InstagramProfile, Json, num(), placesFromFacebookItems(), placesFromLinkedinCompanyItems(), placesFromMapsItems() (+90 more)
 
 ### Community 23 - "calls/contract.ts"
-Cohesion: 0.05
-Nodes (56): extensionAlive(), onMessage(), reply(), scope, LiveCallCandidate, selectLiveCallId(), NOW, COLOR (+48 more)
+Cohesion: 0.06
+Nodes (60): CreateCampaignModal(), CallButtonInner(), Phase, TextField(), readVersion(), abandonCall(), callsFetch(), createCampaign() (+52 more)
 
 ### Community 24 - "replyAgent/agent.server.ts"
-Cohesion: 0.05
-Nodes (87): Decided by the owner, Decisions taken on the night of 18 October 2026, Defaults taken on 19 October, Defaults taken overnight, CHANNEL_RULES, AGENT_ACTIONS, AGENT_CATEGORIES, AgentAction (+79 more)
+Cohesion: 0.03
+Nodes (136): wrongChannelsOf(), alreadyRewritten(), AutopilotDependencies, AutopilotOutcome, handOff(), loadState(), recordHold(), reportInterest() (+128 more)
 
 ### Community 25 - "ref_fs"
 Cohesion: 0.03
-Nodes (58): { Client }, envContent, envPath, fs, path, { Client }, envPath, fs (+50 more)
+Nodes (54): { Client }, COUNTRIES, envContent, fs, path, { Client }, envPath, fs (+46 more)
 
 ### Community 26 - "autopilotRun.server.ts"
 Cohesion: 0.06
-Nodes (66): alreadyRewritten(), AutopilotDependencies, AutopilotOutcome, handOff(), loadState(), recordHold(), reportInterest(), requeueRunAutopilot() (+58 more)
+Nodes (58): Follow-up: the assistant never goes quiet (2026-10-16), CHANNEL_RULES, personalLineProblem(), AGENT_ACTIONS, AGENT_CATEGORIES, AgentAction, AgentChannel, AgentDecision (+50 more)
 
-### Community 27 - "crm/schema.ts"
-Cohesion: 0.03
-Nodes (106): dryRun, dryRun, main(), partB(), main(), DraftRevisionRequest, MessageParticipants, enqueueAutopilotInTransaction() (+98 more)
+### Community 27 - "crm/queue.ts"
+Cohesion: 0.08
+Nodes (37): check(), runScenario(), WAIT_MS, waitFor(), main(), claimCrmJobs(), claimOwner(), completeCrmJob() (+29 more)
 
 ### Community 28 - "ref_pg"
 Cohesion: 0.03
-Nodes (19): @paralleldrive/cuid2, pg, STATEMENTS, DEFAULT_STAGE_RANKS, WIDENED, TABLES, FINAL_INDEXES, PREPARED_INDEXES (+11 more)
+Nodes (23): @paralleldrive/cuid2, pg, STATEMENTS, DEFAULT_STAGE_RANKS, WIDENED, TABLES, FINAL_INDEXES, PREPARED_INDEXES (+15 more)
 
 ### Community 29 - "hackerNews.ts"
 Cohesion: 0.10
-Nodes (40): publicLinks(), HACKER_NEWS_MAX_COMMENTS, ResearchPage, day(), HACKER_NEWS_API, HackerNewsItem, hackerNewsItemId(), hackerNewsItemUrl() (+32 more)
+Nodes (39): HACKER_NEWS_MAX_COMMENTS, ResearchPage, day(), HACKER_NEWS_API, HackerNewsItem, hackerNewsItemId(), hackerNewsItemUrl(), hackerNewsPage() (+31 more)
 
 ### Community 30 - "assistant/http.server.ts"
-Cohesion: 0.10
-Nodes (37): dynamic, POST(), Ctx, dynamic, GET(), attachmentSummary(), dynamic, POST() (+29 more)
+Cohesion: 0.06
+Nodes (55): dynamic, POST(), Ctx, dynamic, POST(), Ctx, dynamic, POST() (+47 more)
 
 ### Community 31 - "inquiries.server.ts"
-Cohesion: 0.09
-Nodes (43): cleanJson(), cleanString(), cleanFieldMap(), DroppedValue, fieldsFromJson(), fieldsFromPairs(), FieldTier, FlatField (+35 more)
+Cohesion: 0.07
+Nodes (55): fail(), POST(), readBody(), tokenOf(), FeatureDisabledError, cleanJson(), cleanString(), DroppedValue (+47 more)
 
 ### Community 32 - "background.ts"
-Cohesion: 0.08
-Nodes (50): activeCallWrites, awaitingReturn, callForTab(), clearActiveCall(), endCall(), finishActiveCall(), focusApp(), focusTab() (+42 more)
+Cohesion: 0.07
+Nodes (54): activeCallWrites, awaitingReturn, callForTab(), clearActiveCall(), endCall(), finishActiveCall(), focusApp(), focusTab() (+46 more)
 
-### Community 33 - "runners/types.ts"
-Cohesion: 0.09
-Nodes (46): enrichmentRunner, EnrichmentSession, RunContext, CellResult, CellStatus, CurrencyConfig, EnrichmentConfig, FormulaLookupRef (+38 more)
+### Community 33 - "grid/types.ts"
+Cohesion: 0.05
+Nodes (63): ColumnConfigDialog(), ColumnPicker(), emptySubscribe(), Field(), formatPreview(), HeaderPair, PreviewState, askModel() (+55 more)
 
 ### Community 34 - "treg.server.ts"
-Cohesion: 0.08
-Nodes (42): Objectives: one request pursued to an end, Call, CATALOG, stamp, treg, SpendGuard, callCeilingUsd(), callProblem() (+34 more)
+Cohesion: 0.10
+Nodes (45): Objectives: one request pursued to an end, failure(), GET(), PUT(), SpendGuard, featureEnabled(), callCeilingUsd(), callProblem() (+37 more)
 
 ### Community 35 - "workspace.ts"
 Cohesion: 0.06
 Nodes (57): addMs(), count(), workTime(), Account, ANGLE_BY_INDUSTRY, apolloDebug(), apolloTrace(), BADGES (+49 more)
 
 ### Community 36 - "campaigns.server.ts"
-Cohesion: 0.06
-Nodes (76): launchWhatsapp(), addPeopleToWhatsappCampaign(), archiveWhatsappCampaign(), assertAccountsInOrg(), assertSteps(), assertUuidShape(), campaignLeadInOrg(), CampaignRow (+68 more)
+Cohesion: 0.04
+Nodes (115): POST(), PATCH(), GET(), POST(), DELETE(), Params, GET(), Params (+107 more)
 
 ### Community 37 - "discovery.server.ts"
 Cohesion: 0.08
-Nodes (55): InstagramPost, NewMember, apifyFallbackNote(), apifyMapsFallback(), apifyStage(), ContactAfter, DISCOVERY_SOURCE, discoveryAvailability() (+47 more)
+Nodes (57): hashtagsFor(), InstagramPost, mentionsPlace(), apifyFallbackNote(), apifyMapsFallback(), apifyStage(), ContactAfter, DISCOVERY_SOURCE (+49 more)
 
 ### Community 38 - "integrations/catalog.ts"
-Cohesion: 0.07
-Nodes (32): APOLLO, ACTION_CATEGORIES, compatibleColumns(), INTEGRATIONS, CLEANLIST, CONTACTOUT, FINDYMAIL, FULLENRICH (+24 more)
+Cohesion: 0.03
+Nodes (84): actionArgIndex, ActionResult, APOLLO_ORDER, apolloPrerequisites(), baseInputs(), extractApolloArtifacts(), inputIssues(), integrationArgIndex (+76 more)
 
 ### Community 39 - "endpoints.server.ts"
-Cohesion: 0.07
-Nodes (53): The pieces, Ctx, POST(), Ctx, DELETE(), PATCH(), GET(), POST() (+45 more)
+Cohesion: 0.09
+Nodes (40): Ctx, POST(), Ctx, DELETE(), PATCH(), GET(), SOURCES, cleanName() (+32 more)
 
 ### Community 40 - "flags.server.ts"
-Cohesion: 0.15
-Nodes (20): dynamic, GET(), failure(), GET(), PUT(), NavData, defaultFeatureState(), FEATURE_KEYS (+12 more)
+Cohesion: 0.18
+Nodes (17): dynamic, GET(), failure(), GET(), PUT(), defaultFeatureState(), FEATURE_KEYS, FeatureInfo (+9 more)
 
-### Community 41 - "LinkedInCampaignWizard.tsx"
-Cohesion: 0.06
-Nodes (44): NewLinkedInCampaignPage(), AddPeopleToCampaignModal(), PersonRow, CampaignCsvMappingDialog(), Channel, CHANNEL_NAME, exampleFor(), FIELDS (+36 more)
+### Community 41 - "cn.ts"
+Cohesion: 0.05
+Nodes (59): dynamic, AiSettingsPage(), dynamic, metadata, AiBrandIcon(), AzureMark(), Brand, brandFor() (+51 more)
 
-### Community 42 - "connections/page.tsx"
-Cohesion: 0.07
-Nodes (50): ConnectionsPage(), dynamic, initialsOf(), Props, timeAgo(), dynamic, JobsPage(), Props (+42 more)
+### Community 42 - "JobsClient.tsx"
+Cohesion: 0.24
+Nodes (11): ago(), duration(), fmt(), JOB_LABELS, JobLog, JobRun, JobsClient(), LEVEL_TAG (+3 more)
 
 ### Community 43 - "websiteContacts.server.ts"
 Cohesion: 0.06
-Nodes (45): enrichPlace(), Answer, assertPublicPageUrl(), collectWebsiteContacts(), decode(), DECODED_ENCODINGS, decodedBody(), fetchAnswer() (+37 more)
+Nodes (47): Answer, assertPublicPageUrl(), collectWebsiteContacts(), decode(), DECODED_ENCODINGS, decodedBody(), fetchAnswer(), fetchPublicPage() (+39 more)
 
-### Community 44 - "ref_bun"
-Cohesion: 0.07
-Nodes (17): STATEMENTS, TABLES, STATEMENTS, EXPECTED_TABLES, TABLES, WIDENED, STATEMENTS, STATEMENTS (+9 more)
+### Community 44 - "diagnose-whatsapp-replies.ts"
+Cohesion: 0.48
+Nodes (6): last4(), main(), Row, say(), short(), when()
 
 ### Community 45 - "geocode.server.ts"
 Cohesion: 0.17
 Nodes (17): checkSearchArea(), distanceMeters(), GeoArea, MAX_SEARCH_HALF_DIAGONAL_KM, MAX_TILES, parseNominatim(), PLACES_PER_SEARCH, searchAreaProblem() (+9 more)
 
 ### Community 46 - "unipile.instagram.ts"
-Cohesion: 0.11
-Nodes (30): POST(), definiteInstagramRefusal(), deliverInitialInstagramDm(), InitialDm, InitialDmEffects, instagramRecipient, job, call() (+22 more)
+Cohesion: 0.13
+Nodes (29): Platform integrations, not env, How per-organization integrations work, POST(), instagramRecipient, PlatformNotConnectedError, requirePlatformCredentials(), call(), createInstagramHostedAuthLink() (+21 more)
 
 ### Community 47 - "calls/campaigns.ts"
-Cohesion: 0.07
-Nodes (64): PATCH(), addCampaignContact(), archiveCampaign(), assertCampaignExists(), assertPersonInOrg(), assertUuidShape(), CallCampaignContactRow, CallCampaignRow (+56 more)
+Cohesion: 0.08
+Nodes (57): DELETE(), GET(), parseStatus(), parseUpdateCampaignRequest(), PATCH(), DELETE(), GET(), parseManualCallStatus() (+49 more)
 
 ### Community 48 - "grid/schema.ts"
-Cohesion: 0.08
-Nodes (43): dynamic, GridIndexPage(), GridLoader(), WorkbookClient, MoveTableDialog(), renderBranch(), toggle(), WorkbookRow (+35 more)
+Cohesion: 0.10
+Nodes (30): GridLoader(), WorkbookClient, MoveTableDialog(), renderBranch(), toggle(), WorkbookRow, SheetIcon(), SheetCacheEntry (+22 more)
 
 ### Community 49 - "sessions.ts"
-Cohesion: 0.08
-Nodes (50): POST(), GET(), POST(), POST(), GET(), GET(), POST(), CallStartedRequest (+42 more)
+Cohesion: 0.07
+Nodes (66): @aws-sdk/s3-request-presigner, POST(), GET(), POST(), POST(), GET(), POST(), GET() (+58 more)
 
 ### Community 50 - "leads/columns.ts"
-Cohesion: 0.13
-Nodes (23): addColumn(), assertKnownColumns(), checkDrift(), ColumnDrift, ColumnRow, coreEnsured, ensureCoreColumns(), listColumns() (+15 more)
+Cohesion: 0.06
+Nodes (65): AgentSDR_v2, Autonomous mode and the outreach writer, Drizzle is the only ORM, graphify, LinkedIn ids are `text`, not `uuid`, Outreach merge fields, Schema layout, `scripts/` is database migration history (+57 more)
 
 ### Community 51 - "whatsapp/messages.ts"
-Cohesion: 0.06
-Nodes (50): hasConnectedWhatsappAccount(), WhatsappCampaignSendStatus, BackfillWhatsappAccountResponse, ListWhatsappChatsResponse, PersonWhatsappThreadResponse, SendWhatsappRequest, SendWhatsappResponse, WHATSAPP_ACCOUNT_STATUSES (+42 more)
+Cohesion: 0.08
+Nodes (44): pickRepresentativeRecord(), hasConnectedWhatsappAccount(), BackfillWhatsappAccountResponse, ListWhatsappChatsResponse, WHATSAPP_ACCOUNT_STATUSES, WHATSAPP_MIN_SECONDS_BETWEEN_SENDS, WHATSAPP_NEW_CHAT_WARMUP_HOURS, WHATSAPP_NEW_CHATS_PER_DAY (+36 more)
 
 ### Community 52 - "wa-agent.ts"
-Cohesion: 0.12
-Nodes (42): chatTitle(), clickChatLink(), closeContactForm(), commonAncestor(), confirmedTitles, describeButtons(), dial(), elementWithText() (+34 more)
+Cohesion: 0.10
+Nodes (47): chatTitle(), clickChatLink(), closeContactForm(), commonAncestor(), confirmedTitles, describeButtons(), dial(), elementWithText() (+39 more)
 
 ### Community 53 - "grid/types.ts"
-Cohesion: 0.13
-Nodes (18): GET(), POST(), AiDialog(), setOutput(), caretRect(), fieldKey(), OpenRouterChoice, OUTPUT_TYPES (+10 more)
+Cohesion: 0.17
+Nodes (12): AiDialog(), setOutput(), caretRect(), fieldKey(), OpenRouterChoice, OUTPUT_TYPES, Section(), AiModelChoice (+4 more)
 
 ### Community 54 - "navConfig.ts"
-Cohesion: 0.09
-Nodes (34): CommandPalette(), change(), go(), activeHref(), allLinks(), featureOn(), NAV_FOOTER, NAV_SECTIONS (+26 more)
+Cohesion: 0.08
+Nodes (39): @radix-ui/react-dialog, CommandPalette(), change(), go(), activeHref(), allLinks(), featureOn(), NAV_FOOTER (+31 more)
 
-### Community 55 - "writer.server.ts"
-Cohesion: 0.12
-Nodes (35): completeStructured(), LeadApproach, FIRST_MESSAGE_LIMITS, firstWord(), lineClash(), longestList(), MAX_LIST_ITEMS, messageSentences() (+27 more)
+### Community 55 - "assistant/outreach.server.ts"
+Cohesion: 0.06
+Nodes (87): completeStructured(), eligibleAudienceMembers(), memberInsights(), inquiryRunMembers(), ABSENCE_CLAIMS, availableTokens(), BASE_TOKENS, ensureSignOff() (+79 more)
 
 ### Community 56 - "backfill-campaign-people.ts"
-Cohesion: 0.12
-Nodes (33): hash(), identitiesFromLeadData(), main(), APPLY, assertSchemaPrepared(), canonicalLinkedinFromLegacy(), duplicatePlannedMemberships(), emailFromLegacy() (+25 more)
+Cohesion: 0.09
+Nodes (49): hash(), identitiesFromLeadData(), main(), APPLY, assertSchemaPrepared(), canonicalLinkedinFromLegacy(), duplicatePlannedMemberships(), emailFromLegacy() (+41 more)
 
 ### Community 57 - "coverage.server.ts"
 Cohesion: 0.16
 Nodes (20): CoverageJob, coverageLine(), jobState(), NAMED, namedPlatforms(), Platform, PLATFORM_LABELS, PlatformCoverage (+12 more)
 
 ### Community 58 - "whatsapp/send.ts"
-Cohesion: 0.09
-Nodes (48): libphonenumber-js, asCountryCode(), normalizePhone(), PhoneCheck, whatsappDigits(), wrongRouteSendRefusal(), findWhatsappAccountByUnipileId(), getDefaultWhatsappAccountRow() (+40 more)
+Cohesion: 0.11
+Nodes (38): findWhatsappAccountByUnipileId(), getDefaultWhatsappAccountRow(), getWhatsappAccountRow(), mergedChatPatch(), SendWhatsappRequest, SendWhatsappResponse, deliverWhatsappFromCrm(), WhatsappSendRefusedError (+30 more)
 
 ### Community 59 - "ref_node_path"
 Cohesion: 0.04
-Nodes (36): dist, files, filesUnder(), out, zippable, fflate, db, db (+28 more)
+Nodes (28): db, STATEMENTS, TABLES, db, db, STATEMENTS, EXPECTED_TABLES, TABLES (+20 more)
 
 ### Community 60 - "core.ts"
-Cohesion: 0.07
-Nodes (47): AI_INSTRUCTIONS, CITY_FOR_COUNTRY, COMPANIES, COMPANY_ROWS, companyDomain(), CompanySeed, FEMALE_FIRST, Industry (+39 more)
+Cohesion: 0.06
+Nodes (55): AI_INSTRUCTIONS, CITY_FOR_COUNTRY, COMPANIES, COMPANY_ROWS, companyDomain(), CompanySeed, FEMALE_FIRST, Industry (+47 more)
 
 ### Community 61 - "register.server.ts"
 Cohesion: 0.07
-Nodes (59): continueAfterEvent(), threadAutonomy(), DriverStep, failObjective(), nudgeObjective(), Objective, postObjectiveReport(), readyToReport() (+51 more)
+Nodes (48): halfLaunchedPlan(), OutreachPlan, propose(), reconcileAll, runningPlan(), stamp, continueAfterEvent(), threadAutonomy() (+40 more)
 
-### Community 62 - "inOrg"
-Cohesion: 0.02
-Nodes (219): Fix Autonomous handoff and report accuracy, Follow-up: the assistant sorts the leads itself; better replies (2026-10-15), finalizeDemo(), main(), Ctx, dynamic, POST(), readEvent() (+211 more)
+### Community 62 - "autonomy.server.ts"
+Cohesion: 0.08
+Nodes (62): Fix Autonomous handoff and report accuracy, Ctx, dynamic, POST(), loadPersonFacts(), autoStartProblem(), AutoStartOutcome, autoStartPlan() (+54 more)
 
-### Community 63 - "tables.ts"
-Cohesion: 0.10
-Nodes (39): PATCH(), queueDependents(), GET(), dynamic, WorkbookPage(), changedCellUpdates(), CellInput, coerceCellInput() (+31 more)
+### Community 63 - "authContextErrorResponse"
+Cohesion: 0.06
+Nodes (104): DELETE(), DELETE(), GET(), PATCH(), GET(), POST(), GET(), POST() (+96 more)
 
 ### Community 64 - "connectionList.server.ts"
-Cohesion: 0.09
-Nodes (31): dynamic, errorResponse(), GET(), maxDuration, Params, POST(), CompanyResearchModal(), hostOf() (+23 more)
+Cohesion: 0.08
+Nodes (47): dynamic, errorResponse(), GET(), maxDuration, Params, POST(), hostOf(), plainAnswer() (+39 more)
 
 ### Community 65 - "dailyRollover.ts"
-Cohesion: 0.11
-Nodes (38): ClaimResult, claimSlot(), finishSlot(), isMissingTable(), lastStarts(), pruneClaims(), warnMissingTable(), organizationDays() (+30 more)
+Cohesion: 0.15
+Nodes (27): migrationMutationBlockReason(), renewMailboxWatches(), ClaimResult, claimSlot(), finishSlot(), isMissingTable(), lastStarts(), pruneClaims() (+19 more)
 
-### Community 66 - "runInOrganization"
+### Community 66 - "ResultsClient.tsx"
 Cohesion: 0.07
-Nodes (69): Multi-tenancy: everything belongs to an organization, API (`src/app/api/whatsapp/campaigns`), POST(), POST(), PATCH(), POST(), POST(), Context (+61 more)
+Nodes (39): dynamic, GET(), dynamic, metadata, ResultsPage(), CHANNEL, Item(), act() (+31 more)
 
 ### Community 67 - "whatsapp.ts"
-Cohesion: 0.07
-Nodes (42): replyText(), atBiz(), Beat, CAMPAIGN_A_STEPS, CAMPAIGN_B_STEPS, ChatPlan, digitsOf(), fillCall() (+34 more)
+Cohesion: 0.06
+Nodes (44): Rng, atBiz(), Beat, CAMPAIGN_A_STEPS, CAMPAIGN_B_STEPS, ChatPlan, digitsOf(), fillCall() (+36 more)
 
 ### Community 68 - "SignInForm.tsx"
 Cohesion: 0.15
 Nodes (24): AcceptInvitationPage(), Invitation, ForgotPasswordPage(), OnboardingPage(), ResetPasswordPage(), ResetPasswordForm(), SetupForm(), accessRequestHref() (+16 more)
 
 ### Community 69 - "searchBatches.ts"
-Cohesion: 0.08
-Nodes (46): DELETE(), isStringArray(), POST(), DELETE(), isUrlRows(), POST(), DELETE(), GET() (+38 more)
+Cohesion: 0.13
+Nodes (27): DELETE(), isStringArray(), POST(), DELETE(), isUrlRows(), POST(), DELETE(), GET() (+19 more)
 
 ### Community 70 - "webSearch.server.ts"
 Cohesion: 0.06
-Nodes (46): failure(), GET(), PUT(), AiConnection, ByokSettings, webDiscoveryLine(), GeneralSearchInput, generalSearchRoute (+38 more)
+Nodes (52): GET(), failure(), GET(), PUT(), getByokSettings(), ByokSettings, setupSnapshot(), startWebDiscovery() (+44 more)
 
 ### Community 71 - "leadImport.ts"
 Cohesion: 0.10
-Nodes (28): POST(), cell(), EmailCsvMapping, importLeadsForCampaign(), ImportResult, MAX_IMPORT_ROWS, normalizeHeader(), ParsedRow (+20 more)
+Nodes (29): Implemented (commits), POST(), importRuns, cell(), EmailCsvMapping, importLeadsForCampaign(), ImportResult, MAX_IMPORT_ROWS (+21 more)
 
 ### Community 72 - "self-hosting.md"
 Cohesion: 0.04
-Nodes (47): Check that it works, Connect Cloudflare R2, Next, Overview, Troubleshooting, Check that it works, Next, Troubleshooting (+39 more)
+Nodes (47): Check that it works, Connect Cloudflare R2, Next, Overview, Troubleshooting, Check that it works, Next, Overview (+39 more)
 
 ### Community 73 - "overview.ts"
-Cohesion: 0.12
-Nodes (30): GET(), outcomeForGroup(), contactCallStatusForCall(), ContactCallStatus, addGroup(), CallGroup, CallOutcome, Counts (+22 more)
+Cohesion: 0.14
+Nodes (27): GET(), contactCallStatusForCall(), ContactCallStatus, addGroup(), CallGroup, CallOutcome, Counts, DUE_SQL() (+19 more)
 
 ### Community 74 - "dependencies"
 Cohesion: 0.04
 Nodes (52): dependencies, ag-grid-community, ag-grid-react, @anthropic-ai/sdk, @aws-sdk/client-s3, @aws-sdk/s3-request-presigner, axios, better-auth (+44 more)
 
 ### Community 75 - "aimlapi-types.ts"
-Cohesion: 0.07
-Nodes (45): openai, features, systemPrompt, userPrompt, GET(), PUT(), saveAimlSettings(), AIML_BASE_URL (+37 more)
+Cohesion: 0.09
+Nodes (43): Follow-up: Claude and other tool-calling models on AI/ML API (2026-10-17), GET(), PUT(), saveAimlSettings(), GET(), AIML_BASE_URL, AIML_MODELS_DOCS_URL, AIML_PROVIDER_KEY (+35 more)
 
 ### Community 76 - "apify.server.ts"
 Cohesion: 0.09
-Nodes (39): AccountLimits, apifyReadiness, ApifySettingsError, apifySettingsView(), bounded(), finishRow(), monthStart(), monthUsage() (+31 more)
+Nodes (40): AccountLimits, apifyReadiness, ApifySettingsError, apifySettingsView(), bounded(), finishRow(), monthStart(), monthUsage() (+32 more)
 
 ### Community 77 - "rules.ts"
-Cohesion: 0.15
-Nodes (24): Ctx, failure(), GET(), PUT(), CHANNEL_RULES, ChannelRuleValues, CHANNELS, ClockRule (+16 more)
+Cohesion: 0.14
+Nodes (25): Ctx, failure(), GET(), PUT(), Channel, CHANNEL_RULES, ChannelRuleValues, CHANNELS (+17 more)
 
 ### Community 78 - "configuration.md"
 Cohesion: 0.04
-Nodes (53): `AGENTSDR_SKIP_DB_SETUP`, Auth and sign-up, `AUTH_EMAIL_FROM`, `AUTH_SIGNUP`, `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, `COMPOSE_FILE` (Docker Compose with your own PostgreSQL), `CRON_SECRET` (+45 more)
+Nodes (48): `AGENTSDR_SKIP_DB_SETUP`, Auth and sign-up, `AUTH_EMAIL_FROM`, `AUTH_SIGNUP`, `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, `COMPOSE_FILE` (Docker Compose with your own PostgreSQL), `CRON_SECRET` (+40 more)
 
 ### Community 79 - "outreach/campaigns.ts"
-Cohesion: 0.05
-Nodes (66): POST(), CAMPAIGN_STATUSES, DELETE(), GET(), PATCH(), GET(), POST(), CampaignDetailPage() (+58 more)
+Cohesion: 0.10
+Nodes (39): GET(), GET(), GET(), GET(), GET(), POST(), GET(), CampaignDetailPage() (+31 more)
 
 ### Community 80 - "mode.ts"
-Cohesion: 0.07
-Nodes (37): dynamic, GET(), publicOrigin(), register(), advanceDemoClock(), DemoClock, readClock(), SKIP_TABLES (+29 more)
+Cohesion: 0.08
+Nodes (36): dynamic, GET(), publicOrigin(), dynamic, SetupPage(), SignInPage(), SignUpPage(), safeFrom() (+28 more)
 
-### Community 81 - "tools.server.ts"
+### Community 81 - "engine.ts"
 Cohesion: 0.03
-Nodes (121): date-fns-tz, dynamic, GET(), AccountUpdate, PATCH(), dynamic, metadata, ResultsPage() (+113 more)
+Nodes (132): Integrations store, date-fns, date-fns-tz, AccountUpdate, hoursSummary(), resolveProfiles(), sendFollowUps(), runOrganizationOutreach() (+124 more)
 
 ### Community 82 - "LiquidEngine"
-Cohesion: 0.08
-Nodes (24): Home(), metadata, FAQ, LandingPage(), ReplyPreview(), TOUR, WorkspacePreview(), Arrow() (+16 more)
+Cohesion: 0.11
+Nodes (17): Arrow(), clamp(), compile(), computeRect(), DEFAULTS, EngineOptions, hexToRgb(), injectFonts() (+9 more)
 
 ### Community 83 - "unipileMail.ts"
-Cohesion: 0.12
-Nodes (35): nodemailer, resolveExtraRecipients(), asAddressList(), dedupeAddresses(), EmailAddress, isValidEmail(), MAX_REPLY_EXTRA_RECIPIENTS, normalizeEmail() (+27 more)
+Cohesion: 0.15
+Nodes (28): asAddressList(), dedupeAddresses(), EmailAddress, isValidEmail(), MAX_REPLY_EXTRA_RECIPIENTS, MessageRecipients, normalizeEmail(), recipientsFromRaw() (+20 more)
 
 ### Community 84 - "wa-hook.ts"
-Cohesion: 0.10
-Nodes (37): callDocuments(), CallUi, clockSeconds(), Connect, describe(), Disconnect, findEndButtonIn(), findStatusText() (+29 more)
+Cohesion: 0.11
+Nodes (36): callDocuments(), CallUi, clockSeconds(), Connect, describe(), Disconnect, findEndButtonIn(), findStatusText() (+28 more)
 
-### Community 85 - "contacts.ts"
-Cohesion: 0.08
-Nodes (44): RFC-5321, cleanLinkedinUrl(), contactLinkSequence(), contactPageLinks(), decodeEntities(), DOT_TOKEN, DOT_TOKEN_GLOBAL, emailMatchesDomain() (+36 more)
+### Community 85 - "websiteProfile.ts"
+Cohesion: 0.05
+Nodes (66): RFC-5321, cleanLinkedinUrl(), contactPageLinks(), decodeEntities(), DOT_TOKEN, DOT_TOKEN_GLOBAL, extractContacts(), FoundContact (+58 more)
 
 ### Community 86 - "ref_node_assert"
-Cohesion: 0.10
-Nodes (22): AiInstructionsPurpose, formatAiInstructions(), MAX_AI_INSTRUCTION_BLOCKS, MAX_AI_INSTRUCTION_CONTENT_LENGTH, MAX_AI_INSTRUCTION_TITLE_LENGTH, MAX_AI_INSTRUCTIONS_TOTAL_LENGTH, PREAMBLES, renderAiInstructions() (+14 more)
+Cohesion: 0.11
+Nodes (18): GET(), PUT(), AiInstructionsPurpose, MAX_AI_INSTRUCTION_BLOCKS, MAX_AI_INSTRUCTION_CONTENT_LENGTH, MAX_AI_INSTRUCTION_TITLE_LENGTH, MAX_AI_INSTRUCTIONS_TOTAL_LENGTH, PREAMBLES (+10 more)
 
-### Community 87 - "test-people-crm-e2e.ts"
+### Community 87 - "results.server.ts"
 Cohesion: 0.10
-Nodes (39): seedCrmSetup(), applyTaxonomy(), describeDelay(), describeSequence(), FollowUpStep, ImmediateStep, sameSteps(), TAXONOMY (+31 more)
+Nodes (37): listRuns(), ChannelSending, ORGANIZATION_SCOPE, ResultsScope, scopeIsEmpty(), scopeLabel(), n(), one() (+29 more)
 
 ### Community 88 - "readiness.ts"
 Cohesion: 0.13
 Nodes (33): aiReadiness(), buildReadiness(), campaignsReadiness(), CHANNEL_LABEL, day(), emailReadiness(), forRole(), GmailWatchFacts (+25 more)
 
-### Community 89 - "useOrgAccess.ts"
-Cohesion: 0.10
-Nodes (24): better-auth, GET, POST, FullOrg, OrgInvitation, OrgMember, Permissions, authEmail (+16 more)
+### Community 89 - "SettingsPage"
+Cohesion: 0.03
+Nodes (77): dynamic, dynamic, dynamic, dynamic, dynamic, dynamic, dynamic, dynamic (+69 more)
 
-### Community 90 - "organizations.server.ts"
-Cohesion: 0.04
-Nodes (117): main(), assert(), body, main(), values, POST(), POST(), POST() (+109 more)
+### Community 90 - "endpoint.ts"
+Cohesion: 0.16
+Nodes (21): main(), POST(), POST(), POST(), POST(), POST(), INSTAGRAM_WEBHOOK_REPLAY_SCOPE, InstagramReplaySummary (+13 more)
 
 ### Community 91 - "server-only"
-Cohesion: 0.08
-Nodes (32): @anthropic-ai/sdk, server-only, runAnthropic(), callGemini(), GeminiPart, GeminiResponse, runGoogle(), runGoogleImage() (+24 more)
+Cohesion: 0.10
+Nodes (15): verifyApolloCredentials(), verifyContactOutCredentials(), verifyFindymailCredentials(), verifyFullEnrichCredentials(), verifyHunterCredentials(), verifyIcypeasCredentials(), verifyLeadMagicCredentials(), verifyLushaCredentials() (+7 more)
 
 ### Community 92 - "transcription.ts"
-Cohesion: 0.16
-Nodes (22): backoffMs(), EMPTY_COUNTERS, plural(), ProviderRefusal, QuotaCounters, quotaDecision, QuotaLimits, released() (+14 more)
+Cohesion: 0.14
+Nodes (25): backoffMs(), EMPTY_COUNTERS, plural(), ProviderRefusal, QuotaCounters, quotaDecision, QuotaLimits, released() (+17 more)
 
-### Community 93 - "PermanentRunError"
-Cohesion: 0.12
-Nodes (49): responsePointerFromOutputKey(), PermanentRunError, assertCleanlistResponse(), buildSearchFilters(), capitalize(), cleanlistErrorMessage(), COMPANY_FILTER_MAP, enrichCompany() (+41 more)
+### Community 93 - "server-only"
+Cohesion: 0.05
+Nodes (137): server-only, enrichmentRunner, EnrichmentSession, PermanentRunError, RunContext, CellResult, EnrichmentConfig, PendingCellResult (+129 more)
 
 ### Community 94 - "draft.ts"
-Cohesion: 0.05
-Nodes (60): AcceptedDraftClassification, buildDraftPrompt(), BuiltDraftPrompt, cleanOptionalText(), cleanRequiredText(), completedActionsFor(), completeDraftWithOpenRouter(), CrmDraftContent (+52 more)
+Cohesion: 0.10
+Nodes (33): AcceptedDraftClassification, buildDraftPrompt(), BuiltDraftPrompt, cleanOptionalText(), cleanRequiredText(), completedActionsFor(), completeDraftWithOpenRouter(), CrmDraftContent (+25 more)
 
-### Community 95 - "leadStage.ts"
-Cohesion: 0.05
-Nodes (81): CallTranscript, LEAD_STAGE_CATEGORIES, LeadStageCategory, callFollowUpUpdate(), FollowUpRecordState, FollowUpRecordUpdate, syncCallFollowUp(), DUE (+73 more)
+### Community 95 - "classify.ts"
+Cohesion: 0.15
+Nodes (17): activeTaxonomy(), CATEGORY_KEYS, classificationChannelNotes(), classifierJsonSchema(), classifyCrmReply(), completeClassificationWithOpenRouter(), isPlainObject(), OUTPUT_KEYS (+9 more)
 
 ### Community 96 - "whatsapp/parse.ts"
-Cohesion: 0.12
-Nodes (31): WhatsappAccountStatus, asObject(), Attendee, date(), decideIngest(), flag(), IngestDecision, Json (+23 more)
+Cohesion: 0.11
+Nodes (32): WhatsappAccountStatus, asObject(), Attendee, date(), decideIngest(), ECHO_MATCH_WINDOW_MS, flag(), IngestDecision (+24 more)
 
 ### Community 97 - "importLeads.ts"
 Cohesion: 0.12
-Nodes (31): POST(), normalizeLinkedinApiHint(), LeadMutationContext, buildFailedLeadsExcelBuffer(), FAILED_REASON_COLUMN, FailedLeadExportRow, failedLeadsFilePayload(), mappedLeadRowToRaw() (+23 more)
+Nodes (32): POST(), LinkedinApiHint, normalizeLinkedinApiHint(), LeadMutationContext, buildFailedLeadsExcelBuffer(), FAILED_REASON_COLUMN, FailedLeadExportRow, failedLeadsFilePayload() (+24 more)
 
 ### Community 98 - "linkedin.ts"
 Cohesion: 0.13
 Nodes (31): AccountRow, ALTS, CampaignPlan, chatIdFor(), daysAgoFrac(), insertChunks(), inWindow(), leadFollowUps (+23 more)
 
 ### Community 99 - "flags.server.ts"
-Cohesion: 0.07
-Nodes (61): findInstagramAccountByUnipileId(), getInstagramAccountRow(), markInstagramAccountUnusable(), ImportInstagramHistoryResponse, INSTAGRAM_ACCOUNT_STATUSES, InstagramAccountStatus, InstagramAccountSummary, InstagramAttachment (+53 more)
+Cohesion: 0.08
+Nodes (48): POST(), POST(), GET(), GET(), getInstagramAccountRow(), ImportInstagramHistoryResponse, INSTAGRAM_ACCOUNT_STATUSES, INSTAGRAM_NO_TEXT_BODY (+40 more)
 
 ### Community 100 - "WhatsappMessagesClient.tsx"
-Cohesion: 0.15
-Nodes (33): CallingMessagesPage(), dynamic, metadata, CallButton(), CrmCategory, DoNotContactNotice(), InboxClient(), handleSendReply() (+25 more)
+Cohesion: 0.13
+Nodes (29): CallingMessagesPage(), dynamic, metadata, dynamic, InboxPage(), metadata, CallButton(), CrmCategory (+21 more)
 
-### Community 101 - "inbox/FilterPanel.tsx"
-Cohesion: 0.15
-Nodes (12): activeFilterCount(), CampaignOption, CollapsibleMultiSelect(), EMPTY_FILTERS, FilterPanel(), filtersActive(), InboxFilterState, LEAD_STATUS_GROUPS (+4 more)
+### Community 101 - "send.server.ts"
+Cohesion: 0.12
+Nodes (31): findInstagramAccountByUnipileId(), markInstagramAccountUnusable(), deliverInstagramFromCrm(), DeliverInstagramInput, DeliverInstagramResult, INSTAGRAM_MAX_MESSAGE_LENGTH, InstagramDeliveryError, InstagramRefusalReason (+23 more)
 
 ### Community 102 - "diagnose-instagram-delivery.ts"
-Cohesion: 0.13
-Nodes (25): Body, Credentials, flag(), handle(), identifier(), inspectInstagramProvider(), Lookup, main() (+17 more)
+Cohesion: 0.19
+Nodes (17): Body, Credentials, flag(), handle(), identifier(), inspectInstagramProvider(), Lookup, main() (+9 more)
 
 ### Community 103 - "development.md"
 Cohesion: 0.05
 Nodes (36): Auth and tenancy, Background work, Other parts, Overview, Request flow, Connection pool, drizzle-kit and `OWNED_TABLES`, Fresh installs: `db/` (+28 more)
 
-### Community 104 - "engine.ts"
-Cohesion: 0.11
-Nodes (33): AccountOutcome, deleteClaim(), failClaim(), handleSendFailure(), LeadRow, openLead(), pickDueLead(), processLead() (+25 more)
+### Community 104 - "outreach/campaigns/[id]/route.ts"
+Cohesion: 0.12
+Nodes (24): ids(), minutes(), seedEmail(), fillSubject(), renderStep(), slot(), CAMPAIGN_STATUSES, DELETE() (+16 more)
 
 ### Community 105 - "FormSkeleton"
-Cohesion: 0.09
-Nodes (37): browserResult(), runBrowserStep(), browserAct(), BrowserAction, browserAllowance, BrowserUnavailableError, closeBrowser(), endSession() (+29 more)
+Cohesion: 0.06
+Nodes (47): runScope(), AUDIENCE_SOURCE_WORD, browserNavigationProblem(), browserResult(), channels(), elementNumber(), runBrowserStep(), text() (+39 more)
 
 ### Community 106 - "structuredCompletion.ts"
-Cohesion: 0.09
-Nodes (35): aimlStructuredMode(), isRetryableOpenRouterError(), OpenRouterModelSelection, openRouterTokenLimit(), RESEARCH_DAILY_LIMIT_DEFAULT, RESEARCH_DAILY_LIMIT_MAX, resolveByokAllowedModelIds(), selectionKey() (+27 more)
+Cohesion: 0.07
+Nodes (33): isRetryableOpenRouterError(), normalizeByokSettings(), normalizeSelection(), OpenRouterModelSelection, OpenRouterModelSummary, OpenRouterProviderModels, openRouterTokenLimit(), RESEARCH_DAILY_LIMIT_DEFAULT (+25 more)
 
 ### Community 107 - "tenancy/registry.ts"
 Cohesion: 0.10
@@ -822,59 +829,59 @@ Nodes (24): postgres, apply, dropIfInvalid(), main(), quote(), required(), contr
 
 ### Community 108 - "analytics/contract.ts"
 Cohesion: 0.06
-Nodes (82): dynamic, GET(), LOADERS, addDays(), ANALYTICS_VIEWS, AnalyticsChannel, AnalyticsRange, AnalyticsResponseFor (+74 more)
+Nodes (79): dynamic, GET(), LOADERS, addDays(), ANALYTICS_CHANNELS, ANALYTICS_VIEWS, AnalyticsRange, AnalyticsResponse (+71 more)
 
-### Community 109 - "CrmConfigurationValidationError"
-Cohesion: 0.10
-Nodes (35): apply, CONTENT, file, seed(), TAGS, parseAccountIds(), parseCreateRequest(), parseDescription() (+27 more)
+### Community 109 - "knowledge/[id]/route.ts"
+Cohesion: 0.20
+Nodes (12): apply, CONTENT, file, seed(), TAGS, Context, GET(), saveOwnerAnswer() (+4 more)
 
-### Community 110 - "test-integrations-live.ts"
-Cohesion: 0.12
-Nodes (29): actionArgIndex, ActionResult, APOLLO_ORDER, apolloPrerequisites(), baseInputs(), extractApolloArtifacts(), inputIssues(), integrationArgIndex (+21 more)
+### Community 110 - "connections.ts"
+Cohesion: 0.15
+Nodes (22): LegacyProvider, main(), GET(), POST(), getAiProvider(), AiConnection, AiProviderConfig, createAiConnection() (+14 more)
 
 ### Community 111 - "settings.server.ts"
-Cohesion: 0.10
-Nodes (30): failure(), GET(), PUT(), browserNavigationProblem(), pageResult(), redirectRefusal(), refusedDestination(), countersOf() (+22 more)
+Cohesion: 0.14
+Nodes (20): pageResult(), redirectRefusal(), refusedDestination(), HACKER_NEWS_LIMITS, HACKER_NEWS_PROVIDER, HACKER_NEWS_SCOPE, REDDIT_NOTE_MAX, RESEARCH_API_PRODUCT (+12 more)
 
 ### Community 112 - "app/layout.tsx"
-Cohesion: 0.09
-Nodes (30): 4. Brand settings, fontSerif, metadata, RootLayout(), AppShell(), CHROMELESS_ROUTES, mayBounce(), SessionGate() (+22 more)
+Cohesion: 0.06
+Nodes (41): 4. Brand settings, fontSerif, metadata, RootLayout(), Loading(), Home(), metadata, AppShell() (+33 more)
 
 ### Community 113 - "AnalyticsClient.tsx"
-Cohesion: 0.12
-Nodes (29): AnalyticsPage(), dynamic, metadata, Search, AnalyticsClient(), Cached, DateRangeControl(), LoadingBlock() (+21 more)
+Cohesion: 0.10
+Nodes (34): AnalyticsPage(), dynamic, metadata, Search, AnalyticsClient(), Cached, DateRangeControl(), LoadingBlock() (+26 more)
 
-### Community 114 - "providers.ts"
-Cohesion: 0.12
-Nodes (21): GET(), POST(), Catalog(), ColumnMappingSelect(), EnrichmentDialog(), chooseAction(), removeFilter(), setInputColumn() (+13 more)
+### Community 114 - "qualification/campaigns.ts"
+Cohesion: 0.14
+Nodes (22): create(), GET(), POST(), APOLLO_LINK_PARAMS, buildApolloPeopleSearchUrl(), addManualCandidates(), baseCampaignName(), cleanNamePart() (+14 more)
 
-### Community 115 - "InquiriesSettings.tsx"
-Cohesion: 0.08
-Nodes (40): buildSequence(), buildTimeline(), Email, fullDate(), humanizeKey(), importedFields(), Lead, LeadActivityPanel() (+32 more)
+### Community 115 - "LeadActivityPanel.tsx"
+Cohesion: 0.14
+Nodes (18): buildSequence(), buildTimeline(), Email, fullDate(), humanizeKey(), importedFields(), Lead, LeadActivityPanel() (+10 more)
 
 ### Community 116 - "AssistantClient.tsx"
 Cohesion: 0.05
-Nodes (44): AssistantPage(), dynamic, metadata, AssistantAvatar(), AssistantClient(), pickStarter(), send(), AssistantStatePayload (+36 more)
+Nodes (43): AssistantPage(), dynamic, metadata, AssistantAvatar(), AssistantClient(), pickStarter(), send(), AssistantStatePayload (+35 more)
 
-### Community 117 - "SearchBatchDetailClient.tsx"
-Cohesion: 0.07
-Nodes (45): loadStoredRunAccountIds(), QuotaLabel(), RUN_ACCOUNTS_STORAGE_KEY, SearchAccountPicker(), renderCheckboxRow(), SearchPickerAccount, storeRunAccountIds(), BadgeColor (+37 more)
+### Community 117 - "searchLeadLimit.ts"
+Cohesion: 0.12
+Nodes (16): lucide-react, FilterSelectOption, FilterSelectProps, limitRingClass(), OptionAvatar(), defaultNavLinks, defaultPartners, NavLink (+8 more)
 
 ### Community 118 - "instagram.ts"
 Cohesion: 0.08
 Nodes (20): accountA1, accountA2, accountA3, accountHook(), beforeSendAnswer, callRoute(), chatsByAccount, countA() (+12 more)
 
 ### Community 119 - "docs/README.md"
-Cohesion: 0.06
-Nodes (25): Design history, Import and send flow, Migration and deployment order, Ownership model, Unified Lead Database, Before you ask, Contribute a fix, From inside AgentSDR (+17 more)
+Cohesion: 0.08
+Nodes (18): Design history, Import and send flow, Migration and deployment order, Ownership model, Unified Lead Database, Open source, self-hosted, your keys, The loop, Where to go next (+10 more)
 
-### Community 120 - "mapping.ts"
-Cohesion: 0.13
-Nodes (37): ApifyAllowanceInput, firstString(), hashtagsFor(), InstagramProfile, Json, mentionsPlace(), num(), placesFromFacebookItems() (+29 more)
+### Community 120 - "checkPhone"
+Cohesion: 0.14
+Nodes (22): libphonenumber-js, digitsOnly(), asCountryCode(), checkPhone(), normalizePhone(), PhoneCheck, whatsappDigits(), emailMatchesDomain() (+14 more)
 
 ### Community 121 - "handoff.server.ts"
-Cohesion: 0.10
-Nodes (34): Follow-up: replies that sell, and the handoff to a person (2026-10-15), Follow-up: the assistant never goes quiet (2026-10-16), person(), dynamic, GET(), byUrgency(), handoffLabel(), HANDOVER_INTERVAL_MS (+26 more)
+Cohesion: 0.12
+Nodes (30): dynamic, GET(), byUrgency(), handoffLabel(), HANDOVER_INTERVAL_MS, handoverMessage(), isHandoff(), LABELS (+22 more)
 
 ### Community 122 - "web-discovery.ts"
 Cohesion: 0.11
@@ -885,39 +892,39 @@ Cohesion: 0.08
 Nodes (29): apify, ApifyRun, ask(), AssistantJob, children(), continuationEnded(), csv(), events() (+21 more)
 
 ### Community 124 - "LeadDetailPanel.tsx"
-Cohesion: 0.12
-Nodes (25): Avatar(), DetailRow(), draftFromLead(), fmt(), LEAD_STATUS_LABELS, LEAD_STATUS_VARIANTS, LeadDetail, LeadDetailPanel() (+17 more)
+Cohesion: 0.13
+Nodes (20): Avatar(), DetailRow(), draftFromLead(), fmt(), LEAD_STATUS_LABELS, LEAD_STATUS_VARIANTS, LeadDetail, LeadDetailPanel() (+12 more)
 
 ### Community 125 - "manifest.json"
-Cohesion: 0.06
-Nodes (32): action, default_icon, default_title, background, service_worker, type, content_scripts, 16 (+24 more)
+Cohesion: 0.08
+Nodes (25): action, default_icon, default_title, background, service_worker, type, content_scripts, 16 (+17 more)
 
-### Community 126 - "conversations.ts"
-Cohesion: 0.05
-Nodes (67): What already exists (and is reused as is), ChannelTotals, main(), CrmConversation, CrmConversationMessage, ingestInboundReplyInTransaction(), IngestInboundReplyResult, insertConversationMessageInTransaction() (+59 more)
+### Community 126 - "replyBridge.ts"
+Cohesion: 0.06
+Nodes (69): RFC-3464, main(), main(), main(), IngestInboundReplyInput, IdentityException, identityExceptionReplayInput(), optionalText() (+61 more)
 
 ### Community 127 - "[tableId]/export/route.ts"
-Cohesion: 0.28
-Nodes (10): dynamic, ExportRequest, filenameFor(), POST(), validateStringList(), csvCell(), printableValue(), serializeCsv() (+2 more)
+Cohesion: 0.52
+Nodes (5): csvCell(), printableValue(), serializeCsv(), RFC-4180, UTF8_BOM
 
 ### Community 128 - "peopleImport.server.ts"
-Cohesion: 0.13
-Nodes (21): dynamic, importPeople(), POST(), organizationPhoneCountry(), ALIASES, cell(), customFieldKey(), ImportRow (+13 more)
+Cohesion: 0.11
+Nodes (23): createPerson(), GET(), listPeople(), POST(), organizationPhoneCountry(), ALIASES, cell(), customFieldKey() (+15 more)
 
-### Community 129 - "crm/queries.ts"
-Cohesion: 0.06
-Nodes (45): GET(), CRM_ACTION_GROUP_LABELS, CRM_ACTION_GROUPS, CrmActionGroup, isCrmActionGroup(), loadConversationSummaries(), runCoversConversation(), actionableCondition (+37 more)
+### Community 129 - "actions/route.ts"
+Cohesion: 0.24
+Nodes (9): GET(), CRM_ACTION_GROUP_LABELS, CRM_ACTION_GROUPS, CrmActionGroup, isCrmActionGroup(), CRM_ACTION_SCOPES, CRM_PIPELINE_STAGES, CrmActionScope (+1 more)
 
 ### Community 130 - "tinyfish.server.ts"
-Cohesion: 0.07
-Nodes (50): failure(), GET(), PUT(), browserMinutesHint(), browserMinutesProblem(), clean(), fetchFailureText(), keyHint() (+42 more)
+Cohesion: 0.11
+Nodes (37): failure(), GET(), PUT(), quotaState(), usedToday(), usage(), browserMinutesHint(), browserMinutesProblem() (+29 more)
 
 ### Community 131 - "hackerNews.server.ts"
-Cohesion: 0.16
-Nodes (25): blockQuota(), lockedState(), reserveQuota(), settleQuota(), writeState(), ResearchSourceError, ResearchSourceWaitError, commentIdsToRead() (+17 more)
+Cohesion: 0.17
+Nodes (24): blockQuota(), reserveQuota(), settleQuota(), writeState(), ResearchSourceError, ResearchSourceWaitError, commentIdsToRead(), hackerNewsApiUrl() (+16 more)
 
 ### Community 132 - "README.md"
-Cohesion: 0.08
+Cohesion: 0.07
 Nodes (25): Becoming a maintainer, Changes to this document, Code of conduct and security, Decision making, Governance, Roles, Community and support, Contributing (+17 more)
 
 ### Community 133 - "tenancy-isolation.ts"
@@ -929,20 +936,20 @@ Cohesion: 0.13
 Nodes (21): resolveScriptOrganization(), assertCore(), DatabaseError, errorCode(), EXPECTED_TABLES, expectRejected(), main(), runWithSavepoint() (+13 more)
 
 ### Community 135 - "auth/schema.ts"
-Cohesion: 0.08
-Nodes (21): calls, createAnswer(), json(), pageLog, stamp, stamp, dynamic, ApifyRunStatus (+13 more)
+Cohesion: 0.06
+Nodes (41): better-auth, cookie(), signIn(), stamp, stamp, GET, POST, ApifyRunStatus (+33 more)
 
 ### Community 136 - "gmail.ts"
-Cohesion: 0.15
-Nodes (17): RFC-2822, main(), buildRawEmailMessage(), extractBodyText(), fetchMessageRecipients(), fetchNewInboundMessages(), InboundMessage, isStaleHistoryCursorError() (+9 more)
+Cohesion: 0.11
+Nodes (26): RFC-2822, @aws-sdk/client-s3, googleapis, js-base64, nodemailer, buildRawEmailMessage(), extractBodyText(), fetchMessageRecipients() (+18 more)
 
 ### Community 137 - "docs.json"
 Cohesion: 0.07
 Nodes (29): colors, dark, light, primary, contextual, options, description, favicon (+21 more)
 
 ### Community 138 - "assistant.ts"
-Cohesion: 0.11
-Nodes (27): compareCandidates(), DEFAULT_KNOWLEDGE_TOKENS, estimateKnowledgeTokens(), hashExcerpt, hashKnowledgeExcerpt(), KNOWLEDGE_CHARS_PER_TOKEN, KnowledgeCandidate, KnowledgeCitation (+19 more)
+Cohesion: 0.12
+Nodes (24): compareCandidates(), DEFAULT_KNOWLEDGE_TOKENS, estimateKnowledgeTokens(), hashExcerpt, hashKnowledgeExcerpt(), KNOWLEDGE_CHARS_PER_TOKEN, KnowledgeCandidate, KnowledgeCitation (+16 more)
 
 ### Community 139 - "FormSkeleton"
 Cohesion: 0.09
@@ -950,19 +957,19 @@ Nodes (11): Loading(), Loading(), Loading(), Loading(), Loading(), Loading(), Lo
 
 ### Community 140 - "NotesTasksClient.tsx"
 Cohesion: 0.11
-Nodes (26): dynamic, metadata, NotesPage(), dynamic, metadata, TasksPage(), Item, labelOf() (+18 more)
+Nodes (23): dynamic, metadata, NotesPage(), dynamic, metadata, TasksPage(), Item, labelOf() (+15 more)
 
 ### Community 141 - "react"
-Cohesion: 0.02
-Nodes (177): react, @remixicon/react, dynamic, dynamic, metadata, NewCampaignPage(), dynamic, KnowledgePage() (+169 more)
+Cohesion: 0.03
+Nodes (102): react, @remixicon/react, NewLinkedInCampaignPage(), metadata, NewCampaignPage(), ButtonIcon(), ButtonRoot, ButtonRootProps (+94 more)
 
 ### Community 142 - "linkedin/LeadsClient.tsx"
-Cohesion: 0.10
-Nodes (26): lucide-react, FilterSelect(), FilterSelectOption, FilterSelectProps, limitRingClass(), OptionAvatar(), LeadBulkActionBar(), Account (+18 more)
+Cohesion: 0.16
+Nodes (19): class-variance-authority, FilterSelect(), LeadBulkActionBar(), Account, Avatar(), InitialData, Lead, LeadsClient() (+11 more)
 
-### Community 143 - "platform/credentials.ts"
+### Community 143 - "currentOrganizationId"
 Cohesion: 0.03
-Nodes (149): Platform integrations, not env, Integrations store, Code conventions, unipile-node-sdk, apply, env(), FROM_ENV, main() (+141 more)
+Nodes (166): Do not, Sender loop (`src/lib/whatsapp/campaigns/engine.ts`), What already exists (and is reused as is), axios, unipile-node-sdk, assert(), body, main() (+158 more)
 
 ### Community 144 - "migrationParity.ts"
 Cohesion: 0.19
@@ -970,15 +977,15 @@ Nodes (19): DbRow, hash(), main(), REPORT, action(), classifyWebhookOwnership(),
 
 ### Community 145 - "PlatformConnection.tsx"
 Cohesion: 0.04
-Nodes (65): dynamic, dynamic, dynamic, dynamic, dynamic, dynamic, dynamic, metadata (+57 more)
+Nodes (63): contentType, size, CallingLayout(), dynamic, metadata, dynamic, InstagramLayout(), metadata (+55 more)
 
 ### Community 146 - "campaigns/CampaignDetailClient.tsx"
 Cohesion: 0.13
 Nodes (16): ActiveJobInfo, CampaignDetailClient(), CampaignInfo, DebugSidePanel(), DomainRow, formatRevenue(), formatTimestamp(), JsonBlock() (+8 more)
 
-### Community 147 - "assistant/messages.ts"
-Cohesion: 0.13
-Nodes (28): availableTokens(), BASE_TOKENS, ensureSignOff(), escapeRegExp(), MAX_GROUPS, MAX_PERSONAL, personalizationKey(), personalLineProblem() (+20 more)
+### Community 147 - "services/tinyfish.ts"
+Cohesion: 0.14
+Nodes (16): TINYFISH_FETCH_URL, TinyfishProduct, Bases, call(), createTinyfishBrowserSession(), DEFAULT_BASES, deleteTinyfishBrowserSession(), LABEL (+8 more)
 
 ### Community 148 - "ingest.server.ts"
 Cohesion: 0.16
@@ -986,7 +993,7 @@ Nodes (7): Call, calls, json(), nextFetch(), nextSearch(), scope, stamp
 
 ### Community 149 - "instagram/parse.ts"
 Cohesion: 0.12
-Nodes (28): INSTAGRAM_FRESH_MESSAGE_WINDOW_MS, importChat(), insertInstagramMessage(), asObject(), Attendee, ChatOpeningCheck, clockSkewMs(), date() (+20 more)
+Nodes (29): INSTAGRAM_FRESH_MESSAGE_WINDOW_MS, asObject(), Attendee, ChatOpeningCheck, clockSkewMs(), date(), decideIngest(), deliveryReceivedAt() (+21 more)
 
 ### Community 150 - "unsubscribeToken.ts"
 Cohesion: 0.15
@@ -997,28 +1004,28 @@ Cohesion: 0.14
 Nodes (12): canonicalFromLeadData(), Classification, classifyLinkedinIdentifier(), main(), Candidate, candidates(), integerArgument(), main() (+4 more)
 
 ### Community 152 - "workspace-replay.ts"
-Cohesion: 0.07
-Nodes (20): agent, AgentModel, agentWithoutProvider, blocked, check(), ClassificationCompletion, ConversationSummary, countsAgree() (+12 more)
-
-### Community 153 - "qualification/campaigns.ts"
 Cohesion: 0.04
-Nodes (103): csvEscape(), dynamic, exportCampaigns(), GET(), csvEscape(), dynamic, exportCampaign(), GET() (+95 more)
+Nodes (37): AgentModel, answeredMidAnswer(), ClassificationCompletion, CrmJob, CrmSendAdapter, deps, inbound(), prompts (+29 more)
 
-### Community 154 - "callApiErrorResponse"
-Cohesion: 0.12
-Nodes (23): DELETE(), GET(), parseStatus(), parseUpdateCampaignRequest(), PATCH(), GET(), POST(), DELETE() (+15 more)
-
-### Community 155 - "linkedin/schema.ts"
-Cohesion: 0.04
-Nodes (66): Data model overview, gate, OutreachPlan, stamp, step, expectedOpen, hours, indiaHour (+58 more)
-
-### Community 156 - "runLeads.ts"
+### Community 153 - "jobRunner.ts"
 Cohesion: 0.11
-Nodes (20): Message campaigns, WhatsApp messaging (Unipile), A lead's journey, Next, Organizations and isolation, The system, What stops outreach to a person, Where your data lives, and what leaves your server (+12 more)
+Nodes (30): GET(), output(), POST(), run(), CampaignDomainRow, dynamic, GET(), runtime (+22 more)
+
+### Community 154 - "RulesSettingsPage"
+Cohesion: 0.09
+Nodes (17): dynamic, dynamic, dynamic, dynamic, dynamic, metadata, Page(), dynamic (+9 more)
+
+### Community 155 - "leads/schema.ts"
+Cohesion: 0.03
+Nodes (89): dryRun, main(), stamp, Check, runAutomationChecks(), ALL_DAY, stamp, expectedOpen (+81 more)
+
+### Community 156 - "metrics.server.ts"
+Cohesion: 0.14
+Nodes (22): crmActionableSql(), crmActionGroupSql(), crmNeedsYouSql(), CrmRecordColumns, CrmRecordScopeColumns, RAW_RECORD_COLUMNS, leadSourceKey(), currentCounts() (+14 more)
 
 ### Community 157 - "cn"
-Cohesion: 0.17
-Nodes (15): class-variance-authority, clsx, @radix-ui/react-dialog, tailwind-merge, Badge(), BadgeProps, badgeVariants, Dialog (+7 more)
+Cohesion: 0.20
+Nodes (13): clsx, tailwind-merge, Badge(), BadgeProps, badgeVariants, Dialog, DialogClose, DialogContent() (+5 more)
 
 ### Community 158 - "e2e/apify.ts"
 Cohesion: 0.12
@@ -1026,55 +1033,55 @@ Nodes (11): apify, AssistantJob, context, createdProviders, mapsItems, RunScript
 
 ### Community 159 - "People Migration Cutover, Rollback, and Reconciliation Runbook"
 Cohesion: 0.08
-Nodes (29): 2. The core insight: it's a column DAG, not a spreadsheet, 1. Record the untouched clone, 2. Prepare additively and prove idempotency, 3. Preview and apply reviewed cleanup, 4. Establish the authoritative behavior baseline, 5. Backfill and prove idempotency, 6. Verify behavior, then finalize, 7. Rehearse cutover and rollback (+21 more)
+Nodes (27): 1. Record the untouched clone, 2. Prepare additively and prove idempotency, 3. Preview and apply reviewed cleanup, 4. Establish the authoritative behavior baseline, 5. Backfill and prove idempotency, 6. Verify behavior, then finalize, 7. Rehearse cutover and rollback, A. Before any database write (+19 more)
 
 ### Community 160 - "mailDomain.server.ts"
 Cohesion: 0.19
 Nodes (14): RFC-7505, clearMailDomainCache(), definitelyNone(), domainCache, DomainCheck, emailDomainCheck(), hasAddressRecord(), MailDns (+6 more)
 
 ### Community 161 - "options.ts"
-Cohesion: 0.36
-Nodes (12): syncCustomBridges(), addOrigin(), removeOrigin(), render(), row(), setStatus(), BUILT_IN_ORIGINS, customOrigins() (+4 more)
+Cohesion: 0.31
+Nodes (14): refreshBridges(), syncCustomBridges(), addOrigin(), removeOrigin(), render(), row(), setStatus(), allowedOrigins() (+6 more)
 
 ### Community 162 - "scripts"
 Cohesion: 0.08
 Nodes (26): scripts, audit:email-people-parity, audit:linkedin-people-parity, build, build:recorder, cleanup:crm-identity, db:check, db:schema:dump (+18 more)
 
 ### Community 163 - "analytics/route.ts"
-Cohesion: 0.24
-Nodes (16): Do not, ActivitySlot, applyOutboundMessage(), emptySlot(), GET(), tallyOutboundTotals(), MessageType, addCalendarDays() (+8 more)
+Cohesion: 0.28
+Nodes (14): ActivitySlot, applyOutboundMessage(), emptySlot(), GET(), tallyOutboundTotals(), addCalendarDays(), CalendarDate, calendarDayBoundsInZone() (+6 more)
 
 ### Community 164 - "DetailsPanel.tsx"
-Cohesion: 0.13
-Nodes (20): categoryColor(), ContactDetails(), CrmRecordSummary, DetailsCrm, DetailsFact, Fact(), linkedinHandle(), loadRecord() (+12 more)
+Cohesion: 0.14
+Nodes (21): categoryColor(), ContactDetails(), CrmRecordSummary, DetailsCrm, DetailsFact, Fact(), linkedinHandle(), loadRecord() (+13 more)
 
-### Community 165 - "contacts.ts"
-Cohesion: 0.60
-Nodes (6): endCall(), finish(), onResult(), probe(), finish(), onResult()
+### Community 165 - "apollo.ts"
+Cohesion: 0.15
+Nodes (20): AdsCheckInput, AdsCheckResult, AdsProvider, checkAds(), getAdsProvider(), httpAdsProvider(), mockAdsProvider, apolloSearchWithDebug() (+12 more)
 
 ### Community 166 - "update.ts"
-Cohesion: 0.22
-Nodes (17): refreshBridges(), allowedOrigins(), chooseFolder(), download(), FolderHandle, notThisExtension(), openStore(), PermissionMode (+9 more)
+Cohesion: 0.26
+Nodes (15): chooseFolder(), download(), FolderHandle, notThisExtension(), openStore(), PermissionMode, render(), running (+7 more)
 
 ### Community 167 - "intake.ts"
-Cohesion: 0.10
-Nodes (21): deliver(), janeBody, json(), manage(), Reply, stamp, fail(), POST() (+13 more)
+Cohesion: 0.15
+Nodes (6): deliver(), janeBody, json(), manage(), Reply, stamp
 
 ### Community 168 - "Releasing"
 Cohesion: 0.29
 Nodes (7): Changelog, Container image, Publishing the public repository, Release checklist, Releasing, Security fixes, Versioning
 
 ### Community 169 - "InboxShell.tsx"
-Cohesion: 0.26
-Nodes (14): crmCategoryLabel(), EmailList(), EmailRow(), GROUP_TONE, isAutomatedEmail(), leadDisplayName(), previewOf(), stackRows() (+6 more)
+Cohesion: 0.12
+Nodes (29): crmCategoryLabel(), EmailList(), EmailRow(), GROUP_TONE, isAutomatedEmail(), leadDisplayName(), previewOf(), stackRows() (+21 more)
 
 ### Community 170 - "unipileWebhooks.ts"
 Cohesion: 0.13
 Nodes (21): publicAppUrl(), INSTAGRAM_HOSTED_AUTH_RETURN_PATH, instagramHostedAuthCallbackUrls(), HOSTED_AUTH_NOTIFY_PATH, HOSTED_AUTH_RETURN_PATH, hostedAuthCallbackUrls(), original, isReplaceable() (+13 more)
 
 ### Community 171 - "conversationSummary.ts"
-Cohesion: 0.12
-Nodes (24): isHandoff(), action(), AnswerActor, answerLabel(), ConversationFacts, ConversationSummary, describeConversation(), DRAFT_LABELS (+16 more)
+Cohesion: 0.13
+Nodes (23): action(), AnswerActor, answerLabel(), ConversationFacts, ConversationSummary, describeConversation(), DRAFT_LABELS, isCampaignStep() (+15 more)
 
 ### Community 172 - "AgentSDR implementation plan: reliable lead discovery and outreach"
 Cohesion: 0.07
@@ -1085,24 +1092,24 @@ Cohesion: 0.14
 Nodes (14): 10. Primary references, 1. What to do first: fork, then clone, 2. Session 1 contract for the implementation agent, 3. Runtime setup, 5. First-session handoff files in the product repository, 6. Trial and external-access checkpoint, 8. Scope and implementation safeguards, 9. Paste-ready Session 1 instruction for your agent (+6 more)
 
 ### Community 174 - "Product requirements: 22nd X AI Outreach"
-Cohesion: 0.12
-Nodes (17): 10. Later operational milestone, 11. Product and engineering requirements, 12. Dependencies and cost handling, 13. Session 1 acceptance checklist, 14. Reference sources, 1. Product decision, 2. Users and release stages, 3. Verified starting point (+9 more)
+Cohesion: 0.15
+Nodes (13): 10. Later operational milestone, 11. Product and engineering requirements, 12. Dependencies and cost handling, 13. Session 1 acceptance checklist, 14. Reference sources, 1. Product decision, 2. Users and release stages, 3. Verified starting point (+5 more)
 
 ### Community 175 - "full-flow.ts"
-Cohesion: 0.10
-Nodes (21): AssistantJob, continuationEnded(), csv(), finishSearches(), Input, jobRow(), launch(), mapsCsv() (+13 more)
+Cohesion: 0.09
+Nodes (25): AssistantJob, continuationEnded(), csv(), finishSearches(), Input, jobRow(), launch(), leadsAsked() (+17 more)
 
-### Community 176 - "lusha/actions.ts"
-Cohesion: 0.33
-Nodes (15): collectSignals(), COMPANY_SIGNAL_TYPES, errorText(), executeCompanySignal(), executeEnrichCompany(), executeEnrichPerson(), executePersonSignals(), finish() (+7 more)
+### Community 176 - "qualify.ts"
+Cohesion: 0.16
+Nodes (19): POST(), setParent(), setParentDomain(), normalizeDomainForTargeting(), BROWSER_HEADERS, buildCandidateUrls(), checkLiveness(), DEAD_STORE_PATTERNS (+11 more)
 
 ### Community 177 - "Session 5: routine automation, reliable controls and results"
-Cohesion: 0.11
-Nodes (19): Blockers, and what resolves each, Checks run (local PostgreSQL 16), Defects found and fixed in this session, Follow-up: automatic replies without an artificial wait (2026-10-16), Follow-up: choosing cities, contacts in the chat, links (2026-10-15), Follow-up: Claude and other tool-calling models on AI/ML API (2026-10-17), Follow-up: first messages people answer, and Autonomous mode (2026-10-16), Follow-up: normal conversations before an owner handoff (2026-10-16) (+11 more)
+Cohesion: 0.10
+Nodes (21): Blockers, and what resolves each, Checks run (local PostgreSQL 16), Defects found and fixed in this session, Follow-up: automatic replies without an artificial wait (2026-10-16), Follow-up: choosing cities, contacts in the chat, links (2026-10-15), Follow-up: first messages people answer, and Autonomous mode (2026-10-16), Follow-up: normal conversations before an owner handoff (2026-10-16), Follow-up: replies that sell, and the handoff to a person (2026-10-15) (+13 more)
 
-### Community 178 - "ingest.server.ts"
-Cohesion: 0.15
-Nodes (16): mammoth, unpdf, DOCUMENT_MAX_BYTES, DOCUMENT_MAX_CHARS, documentKind, DocumentReadError, docxText(), extractDocumentText() (+8 more)
+### Community 178 - "existingLeads.server.ts"
+Cohesion: 0.05
+Nodes (60): mammoth, unpdf, SettingsRow, addAudienceMembers(), AudienceSummary, createAudience(), saveMemberInsights(), summarizeAudience() (+52 more)
 
 ### Community 179 - "SettingsSkeletons.tsx"
 Cohesion: 0.10
@@ -1117,48 +1124,48 @@ Cohesion: 0.11
 Nodes (18): compilerOptions, allowJs, esModuleInterop, incremental, isolatedModules, jsx, lib, module (+10 more)
 
 ### Community 182 - "Enrichment layer ("Clay in AgentSDR")"
-Cohesion: 0.08
-Nodes (26): 10. Build phases, 11. Risks and open questions, 12. Summary, 1. What this is, and what it is not, 3. Decisions, and why, 5. Execution: a Postgres work queue, 6. Column runners, 7. Waterfall and cost accounting (+18 more)
+Cohesion: 0.11
+Nodes (18): 11. Risks and open questions, 12. Summary, 1. What this is, and what it is not, 2. The core insight: it's a column DAG, not a spreadsheet, 3. Decisions, and why, 4. Storage: JSONB rows, not dynamic DDL, 6. Column runners, 7. Waterfall and cost accounting (+10 more)
 
-### Community 183 - "runners/http.ts"
-Cohesion: 0.30
-Nodes (14): normalizeDomain(), assertSnovResponse(), executeSnov(), extractSnovOutputs(), fetchJson(), getSnovAccessToken(), isSnovProfileNotFound(), makeSnovResult() (+6 more)
+### Community 183 - "LiveCallStrip.tsx"
+Cohesion: 0.17
+Nodes (19): CallHistoryRow(), clock(), formatCallDuration(), formatElapsed(), formatOffset(), CANCEL_PHASES, END_CALL_PHASES, LiveCallStrip() (+11 more)
 
 ### Community 184 - "ReplyComposer.tsx"
 Cohesion: 0.20
 Nodes (11): @tiptap/extension-highlight, @tiptap/extension-link, @tiptap/react, @tiptap/starter-kit, escapeHtml(), Recipient, RecipientChips(), ReplyComposer() (+3 more)
 
-### Community 185 - "auth/setup.ts"
-Cohesion: 0.10
-Nodes (27): POST(), create(), onName(), dynamic, SetupPage(), submit(), SignInPage(), SignUpPage() (+19 more)
+### Community 185 - "setupInput.ts"
+Cohesion: 0.16
+Nodes (13): POST(), create(), onName(), submit(), createInitialAdmin(), SetupAlreadyDoneError, MIN_PASSWORD_LENGTH, SetupInput (+5 more)
 
 ### Community 186 - "activity.server.ts"
-Cohesion: 0.08
-Nodes (45): dynamic, POST(), CHANNELS, dynamic, GET(), cancelJob(), iso(), JOB_TITLES (+37 more)
+Cohesion: 0.06
+Nodes (46): gate, OutreachPlan, stamp, step, dynamic, POST(), CHANNELS, dynamic (+38 more)
 
 ### Community 187 - "whatsapp/accounts.ts"
-Cohesion: 0.14
-Nodes (20): GET(), defaultLockKey(), ensureDefaultAccount(), listWhatsappAccounts(), setDefaultWhatsappAccount(), setWhatsappNewChatsPerDay(), syncWhatsappAccounts(), toWhatsappAccountSummary() (+12 more)
+Cohesion: 0.17
+Nodes (18): defaultLockKey(), ensureDefaultAccount(), listWhatsappAccounts(), setDefaultWhatsappAccount(), setWhatsappNewChatsPerDay(), syncWhatsappAccounts(), toWhatsappAccountSummary(), WhatsappAccountRow (+10 more)
 
 ### Community 188 - "socialAdapters.ts"
 Cohesion: 0.18
 Nodes (6): configuredSocialAdapters(), MetaGraphCredentials, metaGraphHashtagAdapter(), normalizeHashtag(), SocialKeywordAdapter, SocialMediaItem
 
 ### Community 189 - "Changelog"
-Cohesion: 0.06
-Nodes (30): [0.1.0] - 2026-10-06, [0.2.0] - 2026-10-08, [0.3.0] - 2026-10-08, [0.3.1] - 2026-10-08, Added, Added, Added, Changed (+22 more)
+Cohesion: 0.12
+Nodes (17): [0.1.0] - 2026-10-06, [0.2.0] - 2026-10-08, [0.3.0] - 2026-10-08, [0.3.1] - 2026-10-08, Added, Added, Added, Changed (+9 more)
 
-### Community 190 - "apollo/actions.ts"
-Cohesion: 0.29
-Nodes (13): APOLLO_HANDLERS, ApolloRequest, buildApolloRequest(), compactRecord(), contactFields(), contactOutput(), executeApollo(), extractApolloOutputs() (+5 more)
+### Community 190 - "mailboxProviders.ts"
+Cohesion: 0.15
+Nodes (21): SendEmailParams, SendEmailResult, Mailbox, MAILBOX_PROVIDER_PLATFORM, mailboxState(), readableUnipileError(), REPLY_TARGET_REFUSED, retestUnipileMailbox() (+13 more)
 
 ### Community 191 - "sendFromInbox.test.ts"
 Cohesion: 0.24
 Nodes (9): InboxCrmConversation, InboxSendConnection, InboxSendDependencies, InboxSendError, InboxSentMessage, sendFromLinkedinInbox(), connection, crmConversation (+1 more)
 
 ### Community 192 - "ToolMessage"
-Cohesion: 0.15
-Nodes (23): ActivityRow(), AuthorizationLine(), Card(), dateTime(), DecisionCard(), act(), DiscoveryCard(), InquiryRunCard() (+15 more)
+Cohesion: 0.14
+Nodes (25): ActivityRow(), AudienceSummary(), Card(), DecisionCard(), act(), DiscoveryCard(), hostOf(), InquiryRunCard() (+17 more)
 
 ### Community 193 - "devDependencies"
 Cohesion: 0.12
@@ -1168,9 +1175,9 @@ Nodes (17): devDependencies, drizzle-kit, eslint, eslint-config-next, fflate, pg
 Cohesion: 0.23
 Nodes (9): AuditRow, AUTOMATED_TYPES, AutomatedMessageType, main(), Recommendation, recommendSurvivor(), redact(), RedactedMessage (+1 more)
 
-### Community 195 - "outreachHistory.ts"
-Cohesion: 0.15
-Nodes (18): InsertConversationMessageInput, BackfillOutreachHistoryInput, BackfillOutreachHistoryResult, EmailOutreachRow, emailOutreachRowToMessageInput(), instagramOutreachRowToMessageInput(), LinkedinOutreachRow, linkedinOutreachRowToMessageInput() (+10 more)
+### Community 195 - "crm/queries.ts"
+Cohesion: 0.06
+Nodes (43): InsertConversationMessageInput, loadConversationSummaries(), runCoversConversation(), BackfillOutreachHistoryInput, BackfillOutreachHistoryResult, EmailOutreachRow, emailOutreachRowToMessageInput(), instagramOutreachRowToMessageInput() (+35 more)
 
 ### Community 196 - "export-people-migration-reconciliation.ts"
 Cohesion: 0.36
@@ -1205,44 +1212,44 @@ Cohesion: 0.31
 Nodes (7): capitalize(), DOMAINS, file, main(), Result, signatureFor(), TARGETS
 
 ### Community 204 - "PageContainer"
-Cohesion: 0.17
-Nodes (15): Loading(), Loading(), CrmRecordLoading(), Loading(), Loading(), CrmRecordModalLoading(), ActionsPageSkeleton(), BoardSkeleton() (+7 more)
+Cohesion: 0.16
+Nodes (20): Loading(), Loading(), Loading(), CrmRecordLoading(), Loading(), Loading(), CampaignDetailLoading(), CrmRecordModalLoading() (+12 more)
 
-### Community 205 - "CrmAiInstructions.tsx"
-Cohesion: 0.15
-Nodes (18): dynamic, dynamic, InstructionsPage(), metadata, IconButton(), INSTRUCTION_SECTIONS, InstructionField, InstructionRow() (+10 more)
+### Community 205 - "calling/CampaignsClient.tsx"
+Cohesion: 0.14
+Nodes (18): CallCampaignsPage(), metadata, mergeRefs(), SegmentedControlContent, SegmentedControlList, SegmentedControlTrigger, CampaignsClient(), createdOn() (+10 more)
 
 ### Community 206 - "Filters.tsx"
-Cohesion: 0.15
-Nodes (12): ALL_APPS, AppFilter(), fmt(), Props, COUNTRY_OPTIONS, DIR_OPTIONS, Filters(), Label() (+4 more)
+Cohesion: 0.08
+Nodes (28): ALL_APPS, AppFilter(), fmt(), Props, COUNTRY_OPTIONS, CreateCampaignForm(), Label(), MODE_OPTIONS (+20 more)
 
 ### Community 207 - "SettingsShell.tsx"
-Cohesion: 0.16
-Nodes (16): SettingsModalLayout(), metadata, SettingsLayout(), itemPages(), SETTINGS_HOME, SettingsNavItem, SettingsTab, visibleSettingsNav() (+8 more)
+Cohesion: 0.14
+Nodes (18): SettingsModalLayout(), metadata, SettingsLayout(), itemPages(), SETTINGS_HOME, SettingsNavItem, SettingsTab, visibleSettingsNav() (+10 more)
 
 ### Community 208 - "InboxClient.tsx"
-Cohesion: 0.09
-Nodes (28): dynamic, InboxPage(), metadata, CrmCategoryControl(), CrmCategoryOption, CrmDraftCard(), crmSequenceLine(), InboxCrmStrip() (+20 more)
+Cohesion: 0.08
+Nodes (26): activeFilterCount(), CampaignOption, CollapsibleMultiSelect(), EMPTY_FILTERS, FilterPanel(), filtersActive(), InboxFilterState, LEAD_STATUS_GROUPS (+18 more)
 
 ### Community 209 - "WhatsApp message campaigns"
-Cohesion: 0.16
-Nodes (11): Follow-up: email through Unipile (no domain needed), Data model (`src/lib/whatsapp/schema.ts`, `scripts/create-whatsapp-campaign-tables.ts`), Out of scope for the first cut, Pages, WhatsApp message campaigns, call(), cookiesFrom(), privileged (+3 more)
+Cohesion: 0.09
+Nodes (21): Message campaigns, WhatsApp messaging (Unipile), A lead's journey, Next, Organizations and isolation, The system, What stops outreach to a person, Where your data lives, and what leaves your server (+13 more)
 
 ### Community 210 - "Session 1 status"
 Cohesion: 0.14
 Nodes (14): Checks, Commits (on top of `bdbf5ef`), Completed PRD requirements, Defects fixed, Docker build in this sandbox, Exact start and rebuild commands, Follow-up: AI/ML API as a second AI provider, Import and permission evidence (+6 more)
 
 ### Community 211 - "app/campaigns/page.tsx"
-Cohesion: 0.32
-Nodes (5): CampaignsPage(), dynamic, CampaignListClient(), StatusBadge(), listCampaigns()
+Cohesion: 0.24
+Nodes (7): CampaignsPage(), dynamic, CampaignListClient(), CampaignRow, StatusBadge(), DeleteCampaignButton(), listCampaigns()
 
 ### Community 212 - "Instagram, inquiry intake and website discovery"
-Cohesion: 0.15
-Nodes (13): 1. Verified provider capabilities (checked 2026-10-16), 2. Required versus optional integrations, 4. Website and directory discovery (optional), 5. Website-form inquiries: one-time setup, 6. Instagram messages through Unipile, 7. Apify (optional, paid discovery provider), 8. Validation: simulated versus live, Instagram, inquiry intake and website discovery (+5 more)
+Cohesion: 0.08
+Nodes (23): 1. Verified provider capabilities (checked 2026-10-16), 2. Required versus optional integrations, 3. What was built: the assistant's two starting points, 4. Website and directory discovery (optional), 5. Website-form inquiries: one-time setup, 7. Apify (optional, paid discovery provider), 8. Validation: simulated versus live, "Find potential customers for me" (optional) (+15 more)
 
-### Community 213 - "unipile.instagramProfiles.ts"
-Cohesion: 0.33
-Nodes (6): envPath, fs, main(), path, postgres, sql
+### Community 213 - "crmFollowUp.ts"
+Cohesion: 0.16
+Nodes (16): applyCallResultToContact(), contactInScope(), UNANSWERED, callFollowUpUpdate(), FollowUpRecordState, FollowUpRecordUpdate, DUE, idle (+8 more)
 
 ### Community 214 - "leads/import/route.ts"
 Cohesion: 0.33
@@ -1260,33 +1267,33 @@ Nodes (13): 0. Get the code onto `main`, 1. Run it with Docker Compose (recommen
 Cohesion: 0.47
 Nodes (3): dynamic, UnsubscribePage(), UnsubscribeClient()
 
-### Community 218 - "CampaignLeadsTab.tsx"
-Cohesion: 0.14
-Nodes (18): GET(), CampaignLead, CampaignLeadsTab(), CrossCampaignNotice, InitialLeadsPage, LeadAvatar(), LeadsPagination, LinkedInAccount (+10 more)
+### Community 218 - "leadsTemplate.ts"
+Cohesion: 0.60
+Nodes (3): GET(), buildLeadsTemplateBuffer(), TEMPLATE_SAMPLE_ROW
 
 ### Community 219 - "tables/overview.mdx"
 Cohesion: 0.15
 Nodes (12): Add data, Auto-run, Cell status, Column types, Create a workbook, Related, Retries, Running columns (+4 more)
 
-### Community 220 - "reply-agent.ts"
-Cohesion: 0.10
-Nodes (12): AgentModel, answeredMidAnswer(), ClassificationCompletion, CrmJob, CrmSendAdapter, deps, inbound(), prompts (+4 more)
+### Community 220 - "ai/server/types.ts"
+Cohesion: 0.21
+Nodes (16): openai, runAnthropic(), callGemini(), GeminiPart, GeminiResponse, runGoogle(), runGoogleImage(), asPermanent() (+8 more)
 
-### Community 221 - "decisions.server.ts"
-Cohesion: 0.19
-Nodes (17): Ctx, dynamic, POST(), Ctx, dynamic, POST(), answerDecision(), ANSWERS_TAGS (+9 more)
+### Community 221 - "run-search-queue/route.ts"
+Cohesion: 0.17
+Nodes (17): handle(), isStringArray(), POST(), isStringArray(), POST(), isStringArray(), isUrlRows(), POST() (+9 more)
 
 ### Community 222 - "audit-email-people-parity.ts"
-Cohesion: 0.33
-Nodes (9): compareEmailParityRow(), legacyEmailVariables(), main(), ParityRow, pendingSteps(), SequenceStep, substituteVariables(), base (+1 more)
+Cohesion: 0.26
+Nodes (11): compareEmailParityRow(), legacyEmailVariables(), main(), ParityRow, pendingSteps(), SequenceStep, substituteVariables(), base (+3 more)
 
 ### Community 226 - "package.json"
 Cohesion: 0.04
-Nodes (52): OWNED_TABLES, eslintConfig, nextConfig, bugs, url, description, engines, bun (+44 more)
+Nodes (49): OWNED_TABLES, eslintConfig, nextConfig, bugs, url, description, engines, bun (+41 more)
 
-### Community 229 - "InboxShell.tsx"
-Cohesion: 0.17
-Nodes (19): EmailThread(), formatAddresses(), formatTimestamp(), MessageCard(), splitQuoted(), ThreadMessage, threadSubject(), ActiveFilterChips() (+11 more)
+### Community 229 - "EmailThread.tsx"
+Cohesion: 0.36
+Nodes (9): EmailThread(), formatAddresses(), formatTimestamp(), MessageCard(), splitQuoted(), ThreadMessage, threadSubject(), fullTime() (+1 more)
 
 ### Community 230 - "assistant.ts"
 Cohesion: 0.11
@@ -1297,8 +1304,8 @@ Cohesion: 0.17
 Nodes (12): 1. Correction, 2. Warning, 3. Temporary Ban, 4. Permanent Ban, Attribution, Contributor Covenant Code of Conduct, Enforcement, Enforcement Guidelines (+4 more)
 
 ### Community 240 - "Unified People Migration: Remediation and Cutover Plan"
-Cohesion: 0.25
-Nodes (8): Execution order, Final go/no-go rule, Objective, Priority summary, Recommended defaults requiring explicit approval, Required implementation work before migration approval, Target model, Unified People Migration: Remediation and Cutover Plan
+Cohesion: 0.17
+Nodes (12): Acceptance gate, Execution order, Final go/no-go rule, Issue 4 — Identity matching needs one deterministic rule, Objective, Priority summary, Recommended defaults requiring explicit approval, Remediation (+4 more)
 
 ### Community 241 - "Next session: one reliable lead-to-outreach flow"
 Cohesion: 0.17
@@ -1308,25 +1315,25 @@ Nodes (12): Core web access: search, read and interact, Current baseline, Enough
 Cohesion: 0.17
 Nodes (11): Add one, Before you start, Cost, How it runs, How results and errors behave, HTTP API columns, Referencing other columns, Related (+3 more)
 
-### Community 243 - "research.server.ts"
-Cohesion: 0.22
-Nodes (15): assistantUsage, UsageKind, responseCostUsd(), researchCostUsd(), listCompanyResearch(), missingTable(), providerFailure(), researchCompany() (+7 more)
+### Community 243 - "crm/context.ts"
+Cohesion: 0.26
+Nodes (17): ClassificationContextInput, boundedText(), buildClassificationContext(), campaignSnapshot(), cleanText(), companySnapshot(), estimateContextTokens(), fitBaseSnapshot() (+9 more)
 
 ### Community 244 - "ref_bun_test"
-Cohesion: 0.18
-Nodes (10): createResponseGate(), ResponseGate, deferred(), list(), load(), reloadCounts(), scheduleCounts(), Page (+2 more)
+Cohesion: 0.38
+Nodes (8): createResponseGate(), ResponseGate, deferred(), list(), load(), reloadCounts(), scheduleCounts(), Page
 
-### Community 245 - "AgentSDR_v2"
-Cohesion: 0.12
-Nodes (15): AgentSDR_v2, Autonomous mode and the outreach writer, graphify, Outreach merge fields, Schema layout, `scripts/` is database migration history, Sending rules, not constants, `.server.ts` siblings exist for a reason (+7 more)
+### Community 245 - "slots.ts"
+Cohesion: 0.22
+Nodes (17): PLATFORM_JOBS, platformJob, dailyAt(), everyMinutes(), formatter(), formatters, latestDailySlot(), latestDueSlot() (+9 more)
 
 ### Community 246 - "reporting/metrics.ts"
-Cohesion: 0.07
-Nodes (49): crmActionableSql(), crmActionGroupSql(), CrmRecordColumns, CrmRecordScopeColumns, RAW_RECORD_COLUMNS, assemblePeriodMetrics(), ChannelCounts, dayStart() (+41 more)
+Cohesion: 0.10
+Nodes (33): Period, periodFor(), PeriodKind, RESULTS_SCOPE_KINDS, ResultsScopeKind, summaryDay(), ANALYTICS_PRESET, assemblePeriodMetrics() (+25 more)
 
 ### Community 247 - "InstagramMessagesClient.tsx"
-Cohesion: 0.17
-Nodes (22): FilterField(), FilterPopover(), InlineError(), withRecencyBreaks(), InstagramTag(), accountLabel(), chatTitle(), dayKey() (+14 more)
+Cohesion: 0.16
+Nodes (24): FilterField(), FilterPopover(), RowMeta(), RowsSkeleton(), ThreadHeader(), withRecencyBreaks(), InstagramTag(), accountLabel() (+16 more)
 
 ### Community 248 - "email/campaigns.mdx"
 Cohesion: 0.18
@@ -1336,13 +1343,9 @@ Nodes (10): Build the sequence, Create a campaign, How sending works, Merge fiel
 Cohesion: 0.18
 Nodes (10): Add a field, Built-in fields, Change a field's type, Keys never change, Related, Remove, restore and delete, Rename a field, The Lead columns page (+2 more)
 
-### Community 250 - "IMPLEMENTATION_PLAN.md"
-Cohesion: 0.20
-Nodes (4): Diagnostics and verification, Identity and delivery, Instagram outbound, Upgrade and use
-
 ### Community 251 - "Session 3: the complete messaging workflow"
-Cohesion: 0.13
-Nodes (15): Blockers, and exactly what resolves them, Checks run, Checks run (all on a disposable local PostgreSQL 16), Implemented (commits), Known limitations, Known limitations of this session's work, Live channel evidence, Session 3: the complete messaging workflow (+7 more)
+Cohesion: 0.14
+Nodes (14): Blockers, and exactly what resolves them, Checks run, Checks run (all on a disposable local PostgreSQL 16), Known limitations, Known limitations of this session's work, Live channel evidence, Session 3: the complete messaging workflow, Session 4: the owner's assistant (AI lead hunting and outreach) (+6 more)
 
 ### Community 252 - "docker-compose.mdx"
 Cohesion: 0.18
@@ -1376,13 +1379,13 @@ Nodes (9): Closing the loop, Discussions, Issue triage, Labels, Response expecta
 Cohesion: 0.20
 Nodes (9): Before you start, Change the defaults, Link a number, Messages and where they come from, Number actions, Related, Set a limit for one number, The guards (+1 more)
 
-### Community 260 - "columns/[id]/route.ts"
-Cohesion: 0.31
-Nodes (15): DELETE(), PATCH(), GET(), archiveColumn(), changeColumnType(), ColumnError, convertedValueSql(), dropColumn() (+7 more)
+### Community 260 - "instagram/accounts.ts"
+Cohesion: 0.21
+Nodes (16): POST(), handle(), HANDLED_STATUSES, POST(), resolveOrganization(), applyInstagramAccountOwner(), listInstagramAccounts(), setInstagramInquiryIntake() (+8 more)
 
 ### Community 261 - "handoff.ts"
-Cohesion: 0.24
-Nodes (10): agentState(), ReplyRecord, replyState, seconds(), Row, runReplies(), RunReply, base (+2 more)
+Cohesion: 0.31
+Nodes (8): NO_ANSWER_NEEDED, agentState(), ReplyRecord, replyState, seconds(), base, now, wrongNumberState()
 
 ### Community 262 - "AgentSDR glossary"
 Cohesion: 0.22
@@ -1417,12 +1420,12 @@ Cohesion: 0.22
 Nodes (4): Input, prompts, root, stamp
 
 ### Community 270 - "instagram/http.ts"
-Cohesion: 0.17
-Nodes (20): POST(), PATCH(), GET(), POST(), POST(), GET(), GET(), requireFeature() (+12 more)
+Cohesion: 0.18
+Nodes (15): PATCH(), GET(), OrgContext, assertSameOriginMutation(), CrmRequestError, crmRequestErrorResponse(), forwardedTargetOrigin(), isInternalHostname() (+7 more)
 
 ### Community 271 - "leads/records.ts"
-Cohesion: 0.12
-Nodes (38): main(), findOrCreateContactPerson(), Contact, DAILY_CONTACT_LIMIT_REASON, fillBlanks(), FormInquiryResult, INTAKE_FORM_PERSON_SOURCE, INTAKE_NEW_CONTACTS_PER_DAY (+30 more)
+Cohesion: 0.11
+Nodes (37): create(), GET(), list(), POST(), dynamic, LeadsPage(), metadata, LeadsTab (+29 more)
 
 ### Community 272 - "analytics.mdx"
 Cohesion: 0.25
@@ -1453,20 +1456,20 @@ Cohesion: 0.25
 Nodes (7): AI drafts, Connections, How messages get here, Read conversations, Related, Replies in the CRM, Reply
 
 ### Community 279 - "Night report, 18–19 October 2026"
-Cohesion: 0.13
-Nodes (14): Before you deploy this branch, Day two, 19 October: finishing the plan, Deployment commands (build from source with Docker Compose), Gates on the final commit, Known gaps and failures, Night report, 18–19 October 2026, Review of the whole night's work, Round one of fixes (`0634a6d`) (+6 more)
+Cohesion: 0.12
+Nodes (15): Before you deploy this branch, Day two, 19 October: finishing the plan, Deployment commands (build from source with Docker Compose), Final review of day two (`502f71d`, `171c3b6`, `8cb9d26`), Gates on the final commit, Known gaps and failures, Night report, 18–19 October 2026, Review of the whole night's work (+7 more)
 
 ### Community 280 - "Skeletons.tsx"
-Cohesion: 0.23
-Nodes (9): Loading(), Loading(), Loading(), Loading(), Loading(), Loading(), isChromeless(), DetailPageSkeleton() (+1 more)
+Cohesion: 0.33
+Nodes (5): Loading(), Loading(), Loading(), Loading(), ListPageSkeleton()
 
 ### Community 281 - "domains/page.tsx"
-Cohesion: 0.23
-Nodes (12): DomainsPage(), getQueryParams(), Params, SearchParams, TableSection(), NavContext, NavCtx, NavigationProvider() (+4 more)
+Cohesion: 0.10
+Nodes (26): dynamic, csvEscape(), dynamic, GET(), DomainsPage(), getQueryParams(), Params, SearchParams (+18 more)
 
-### Community 282 - "lib/queries.ts"
-Cohesion: 0.18
-Nodes (11): DomainsTable(), fmt(), PageBtn(), Props, ExportModal(), PRESETS, Props, DomainsParams (+3 more)
+### Community 282 - "CrmRecordModal.tsx"
+Cohesion: 0.19
+Nodes (16): CrmRecordModalLayout(), CrmRecordModal(), initials(), QueueControls(), QueueNav, recordHref(), UpNext(), useQueueNavigation() (+8 more)
 
 ### Community 283 - "mark-linkedin-message-duplicates.ts"
 Cohesion: 0.29
@@ -1480,33 +1483,33 @@ Nodes (6): Move a lead yourself, Related, The board and the list, The default pi
 Cohesion: 0.29
 Nodes (6): Folders, Read and reply, Related, Replies in the CRM, Tasks and notes, What lands here
 
-### Community 286 - "requireOrgContext"
-Cohesion: 0.19
-Nodes (12): Directory map, `src/app/api`, `src/lib/<domain>`, GET(), csvEscape(), dynamic, GET(), DELETE() (+4 more)
+### Community 286 - "CrmSettingsClient.tsx"
+Cohesion: 0.16
+Nodes (16): dynamic, dynamic, LeadCategoriesPage(), metadata, categories, Category, CategoryKey, CategorySection() (+8 more)
 
-### Community 287 - "3. What was built: the assistant's two starting points"
-Cohesion: 0.29
-Nodes (7): 3. What was built: the assistant's two starting points, "Find potential customers for me" (optional), Inquiry runs: the scope for answering inquiries automatically, One Start for a whole request, Qualification before outreach, Reusing what the business already told AgentSDR, "Use my existing leads or inquiries"
+### Community 287 - "crm/ai/types.ts"
+Cohesion: 0.16
+Nodes (16): LEAD_STAGE_CATEGORIES, LeadStageCategory, DO_NOT_CONTACT_SUBCATEGORY_KEY, BuiltClassificationContext, ClassificationCampaignSummary, ClassificationCategory, ClassificationCompanyProfile, ClassificationContextSnapshot (+8 more)
 
 ### Community 288 - "ai/catalog.ts"
-Cohesion: 0.24
-Nodes (8): AIMLAPI_PROVIDER, ANTHROPIC_PROVIDER, GOOGLE_PROVIDER, OPENAI_PROVIDER, OPENROUTER_PROVIDER, AiModelDefinition, AiProviderDefinition, AiUseCase
+Cohesion: 0.23
+Nodes (9): AIML_KEYS_URL, AIMLAPI_PROVIDER, ANTHROPIC_PROVIDER, GOOGLE_PROVIDER, OPENAI_PROVIDER, OPENROUTER_PROVIDER, AiModelDefinition, AiProviderDefinition (+1 more)
 
 ### Community 289 - "AgentSDR documentation"
 Cohesion: 0.29
 Nodes (7): AgentSDR documentation, Design history, Developing, Maintainers, Product guides, Reference, Using and self-hosting
 
-### Community 290 - "app/leads/page.tsx"
-Cohesion: 0.21
-Nodes (12): list(), dynamic, LeadsPage(), metadata, LeadsTab, PAGE_SIZE, crmProjectionForPeople(), campaignMemberships() (+4 more)
+### Community 290 - "jobs.ts"
+Cohesion: 0.18
+Nodes (14): pruneJobHistory(), pruneWebhookEvents(), resetDailyLimits(), ResetDailyLimitsOptions, retentionCutoff(), currentRun, Persist, startTrackedJob() (+6 more)
 
-### Community 291 - "Page design contract"
-Cohesion: 0.29
-Nodes (6): Filters, Page design contract, Rules, States, Tables, Type and colour
+### Community 291 - "unipile.instagramProfiles.ts"
+Cohesion: 0.22
+Nodes (13): first(), getInstagramPost(), getInstagramProfile(), InstagramCommentRead, instagramCommentsFrom(), instagramPostFrom(), InstagramPostRead, instagramProfileFrom() (+5 more)
 
-### Community 292 - "CreateCampaignForm.tsx"
-Cohesion: 0.19
-Nodes (9): COUNTRY_OPTIONS, CreateCampaignForm(), Label(), MODE_OPTIONS, PLATFORM_OPTIONS, TARGET_MODE_OPTIONS, Props, Select() (+1 more)
+### Community 292 - "instrumentation.ts"
+Cohesion: 0.18
+Nodes (11): POST(), register(), safeTick(), startInternalOutreachScheduler(), TICK_INTERVAL_MS, runSchedulerTick(), Environment, OFF (+3 more)
 
 ### Community 293 - "action-required.mdx"
 Cohesion: 0.33
@@ -1521,20 +1524,20 @@ Cohesion: 0.33
 Nodes (5): Acceptance gate, Files, Issue 1 — Schema preparation currently creates constraints too early, Remediation, Stop condition
 
 ### Community 296 - "transcription.ts"
-Cohesion: 0.23
-Nodes (11): audioFormatFor(), buildTranscriptionPrompt(), CallSessionRow, claimForRetry(), finish(), ParsedTranscript, parseTranscriptResponse(), STALE_CLAIM_INTERVAL (+3 more)
+Cohesion: 0.21
+Nodes (14): CallTranscript, audioFormatFor(), buildTranscriptionPrompt(), CallSessionRow, claimForRetry(), finish(), ParsedTranscript, parseTranscriptResponse() (+6 more)
 
 ### Community 297 - "openrouter-runner.ts"
-Cohesion: 0.12
-Nodes (21): AI_PROVIDERS, AI/ML API, BYOK-only requirement, Columns, OpenRouter, Use AI, errorStatus(), isTransientOpenRouterError() (+13 more)
+Cohesion: 0.17
+Nodes (16): AI_PROVIDERS, strictImageProviderRouting(), errorStatus(), isTransientOpenRouterError(), generateOpenRouterImage(), auditError(), chatRunner(), runAimlApi (+8 more)
 
 ### Community 298 - "entrypoint.sh"
 Cohesion: 0.40
 Nodes (4): BETTER_AUTH_URL, NEXT_PUBLIC_APP_URL, OPENROUTER_SITE_URL, entrypoint.sh script
 
-### Community 299 - "platform/verify.ts"
-Cohesion: 0.30
-Nodes (10): @aws-sdk/client-s3, googleapis, PlatformCredentials, googleServiceAccount(), GoogleServiceAccountKey, r2Client(), verifyGoogle(), verifyPlatformCredentials() (+2 more)
+### Community 299 - "instagramChannel.test.ts"
+Cohesion: 0.24
+Nodes (11): draftChannelConstraints(), validateDraftOutput(), CRM_CHANNELS, crmChannelHasSubject(), crmChannelLabel(), crmChannelSendProvider(), isCrmChannel(), WhatsappOutreachRow (+3 more)
 
 ### Community 300 - "Issue 2 — 48 duplicate automated LinkedIn message groups"
 Cohesion: 0.40
@@ -1604,77 +1607,77 @@ Nodes (4): Acceptance gate, Issue 14 — Rollback compatibility must be proven, 
 Cohesion: 0.50
 Nodes (4): Immediate rollback triggers, Issue 16 — Staging rehearsal and production operations, Production runbook, Staging rehearsal
 
-### Community 317 - "AppearanceSettings.tsx"
-Cohesion: 0.30
-Nodes (8): AppearancePage(), metadata, AppearanceSettings(), useTheme(), OPTIONS, ThemePreview(), ThemeSwitch(), ThemeToggleButton()
+### Community 317 - "prepare-public-repo.ts"
+Cohesion: 0.19
+Nodes (10): commands, report, reportPath, results, args(), EXCLUDE, listFiles(), main() (+2 more)
 
 ### Community 318 - "whatsapp/client.ts"
-Cohesion: 0.32
-Nodes (11): backfillWhatsappAccount(), getPersonWhatsappThread(), getWhatsappChat(), jsonFetch(), listWhatsappAccounts(), listWhatsappChats(), markWhatsappChatRead(), sendWhatsapp() (+3 more)
+Cohesion: 0.22
+Nodes (16): PersonWhatsappPanel(), useVisiblePolling(), WHATSAPP_POLL_INTERVAL_MS, WhatsappComposer(), backfillWhatsappAccount(), getPersonWhatsappThread(), getWhatsappChat(), jsonFetch() (+8 more)
 
 ### Community 324 - "mark-linkedin-message-duplicates.ts"
 Cohesion: 0.29
 Nodes (8): buildDecisions(), confirmationArgument(), decideDuplicateGroup(), DuplicateDecision, loadDuplicateRows(), main(), MessageRow, numericArgument()
 
-### Community 325 - "leads/columns/route.ts"
-Cohesion: 0.36
-Nodes (8): create(), GET(), list(), POST(), columnErrorResponse(), isLeadEntity(), LeadColumnType, PG_TYPE_FOR_COLUMN_TYPE
-
-### Community 326 - "profile.ts"
-Cohesion: 0.24
-Nodes (10): CHANNELS, GROUNDING_STOPWORDS, nextStepOf(), PROFILE_LABELS, PROFILE_TEXT_FIELDS, profileKnowledgeText(), significantWords(), stem() (+2 more)
-
-### Community 327 - "rocketreach/actions.ts"
-Cohesion: 0.36
-Nodes (9): asRecords(), execute(), firstRecord(), pendingStatus(), personParams(), requestRocketReach(), ROCKETREACH_HANDLERS, runRocketReach() (+1 more)
-
-### Community 328 - "ToolArgumentError"
+### Community 325 - "CallSessionBadge.tsx"
 Cohesion: 0.25
-Nodes (9): Drizzle is the only ORM, LinkedIn ids are `text`, not `uuid`, The lead database is the one exception, channels(), elementNumber(), text(), ToolArgumentError, uuid() (+1 more)
+Nodes (7): LiveCallCandidate, selectLiveCallId(), NOW, COLOR, CALL_STATUS_LABEL, CALL_STATUS_TONE, CallStatus
 
-### Community 329 - "autonomous.ts"
-Cohesion: 0.28
-Nodes (6): halfLaunchedPlan(), OutreachPlan, propose(), reconcileAll, runningPlan(), stamp
+### Community 326 - "assistant/schema.ts"
+Cohesion: 0.04
+Nodes (71): aiSource, Row, say(), shown(), stamp, Ctx, dynamic, GET() (+63 more)
 
-### Community 330 - "CategoryFilter.tsx"
+### Community 327 - "browser.ts"
+Cohesion: 0.22
+Nodes (5): calls, createAnswer(), json(), pageLog, stamp
+
+### Community 328 - "migrate-env-to-integrations.ts"
+Cohesion: 0.36
+Nodes (9): apply, env(), FROM_ENV, main(), migratePlatform(), migrateTranscriptionModel(), overwrite, getPlatformIntegration() (+1 more)
+
+### Community 329 - "e2e/treg.ts"
+Cohesion: 0.22
+Nodes (4): Call, CATALOG, stamp, treg
+
+### Community 330 - "call-recorder/route.ts"
 Cohesion: 0.28
-Nodes (7): CategoryFilter(), CategorySelect(), CountMap, fmt(), NULL_CATEGORY, Props, SelectProps
+Nodes (7): dynamic, GET(), ZIP_PATH, LATEST_RECORDER_VERSION, RECORDER_DOWNLOAD_PATH, RECORDER_SELF_UPDATE_VERSION, RECORDER_SETUP_PATH
 
 ### Community 331 - "templates.ts"
 Cohesion: 0.39
 Nodes (7): CONTACT_CALL_STATUS_DEFINITIONS, CONTACT_CALL_STATUSES, followUpMessageFor(), greetingName(), renderTemplate(), TemplateLead, lead()
 
-### Community 332 - "assistant-chat-live.ts"
-Cohesion: 0.29
-Nodes (5): aiSource, Row, say(), shown(), stamp
+### Community 332 - "10. Build phases"
+Cohesion: 0.25
+Nodes (8): 10. Build phases, Phase 0 — Open-source preparation (parallel, low effort), Phase 1 — Tables, grid, manual columns *(no execution at all)*, Phase 2 — Queue, DAG, HTTP runner, Phase 3 — AI runner, Phase 4 — Waterfall and cost accounting, Phase 5 — Push to outreach and CRM, Phase 6 — Deferred
 
-### Community 333 - "finalize-lead-tables.ts"
+### Community 333 - "Production cutover — single workspace → organizations"
+Cohesion: 0.25
+Nodes (8): 0. Before you start, 1. Backup (rollback point), 2. Expand (old code still live — safe), 3. Deploy the new code, 4. Contract (new code live), 5. Afterwards, Production cutover — single workspace → organizations, Rollback
+
+### Community 334 - "outreach.test.ts"
 Cohesion: 0.36
-Nodes (7): assertPrepared(), Blocker, BLOCKER_QUERIES, findBlockers(), findInvalidIndexes(), main(), UNIQUE_INDEXES
+Nodes (5): definiteInstagramRefusal(), deliverInitialInstagramDm(), InitialDm, InitialDmEffects, job
 
-### Community 334 - "spreadsheetUploadProblem"
-Cohesion: 0.39
-Nodes (6): POST(), submit(), megabytes(), SPREADSHEET_EXTENSIONS, spreadsheetUploadProblem(), UNREADABLE_UPLOAD_MESSAGE
-
-### Community 335 - "instagramContacts.ts"
-Cohesion: 0.46
-Nodes (6): instagramCapabilityProblem(), instagramContactUsername(), MAX_INSTAGRAM_CHAT_CONTACTS, parseInstagramContacts(), RESERVED, ungroundedInstagramContacts()
+### Community 335 - "help.mdx"
+Cohesion: 0.29
+Nodes (6): Before you ask, Contribute a fix, From inside AgentSDR, Security problems, What happens after you report, What makes a bug report easy to fix
 
 ### Community 336 - "4. Session 1 work packages, in order"
 Cohesion: 0.29
 Nodes (7): 4. Session 1 work packages, in order, A. Establish the baseline, B. Fix the spreadsheet dependency and importer regressions, C. Apply the owner branding, D. Add a thin Getting Started experience, E. Keep owner control simple and verify the core workflow, F. Verify, build the product image and hand off
 
-### Community 337 - "add-apps-array.js"
+### Community 337 - "ai-provider.mdx"
 Cohesion: 0.29
-Nodes (5): { Client }, COUNTRIES, envContent, fs, path
+Nodes (6): Provider pinning, Related, Set it up, Transcription model, What uses AI, When something is missing
 
-### Community 338 - "auth-policies.ts"
-Cohesion: 0.33
-Nodes (3): cookie(), signIn(), stamp
+### Community 338 - "package.ts"
+Cohesion: 0.29
+Nodes (6): dist, files, filesUnder(), out, zippable, fflate
 
-### Community 339 - "actions.test.mjs"
-Cohesion: 0.33
-Nodes (3): CLEANLIST_HANDLERS, REQUIRED_SCOPES, verifyCleanlistCredentials()
+### Community 339 - "add-apollo-lead-columns.js"
+Cohesion: 0.29
+Nodes (5): { Client }, envContent, envPath, fs, path
 
 ### Community 340 - "dokploy.mdx"
 Cohesion: 0.33
@@ -1684,41 +1687,65 @@ Nodes (5): Backups, Check that it works, Next, Overview, Troubleshooting
 Cohesion: 0.60
 Nodes (3): GET(), buildSearchQueueTemplateBuffer(), TEMPLATE_SAMPLE_ROW
 
-### Community 342 - "4. Storage: JSONB rows, not dynamic DDL"
-Cohesion: 0.50
-Nodes (4): 4. Storage: JSONB rows, not dynamic DDL, Indexing, Schema, updatedAt()
+### Community 342 - "add-mailbox-working-hours.js"
+Cohesion: 0.29
+Nodes (5): { Client }, DEFAULT_WORKING_HOURS, envPath, fs, path
 
-### Community 343 - "Issue 4 — Identity matching needs one deterministic rule"
-Cohesion: 0.50
-Nodes (4): Acceptance gate, Issue 4 — Identity matching needs one deterministic rule, Remediation, Stop condition
+### Community 343 - "alter-qualification-tables.js"
+Cohesion: 0.29
+Nodes (5): { Client }, envContent, envPath, fs, path
 
 ### Community 344 - "4. Session 1: owner-usable release"
 Cohesion: 0.50
 Nodes (4): 4.1 Required scope, 4.2 Small improvements allowed after required work passes, 4.3 Session 1 boundary, 4. Session 1: owner-usable release
 
-### Community 346 - "gridRowToPersonInput"
-Cohesion: 0.67
-Nodes (3): gridRowToPersonInput(), stringCell(), templateVariableKey()
+### Community 346 - "CallingSkeletons.tsx"
+Cohesion: 0.48
+Nodes (4): Loading(), Loading(), CallingDetailSkeleton(), CallingListSkeleton()
+
+### Community 347 - "Decisions taken on the night of 18 October 2026"
+Cohesion: 0.33
+Nodes (5): Decided by the owner, Decisions taken on the night of 18 October 2026, Defaults taken on 19 October, Defaults taken overnight, Website observations (19 October, after the plan)
+
+### Community 348 - "from-source.mdx"
+Cohesion: 0.33
+Nodes (5): Check that it works, Next, Overview, Run it under a process manager, Scheduled jobs from outside
+
+### Community 349 - "5. Execution: a Postgres work queue"
+Cohesion: 0.40
+Nodes (5): 5. Execution: a Postgres work queue, The cascade, The constraint this must respect, The queue, The worker
+
+### Community 350 - "create-people-crm-core.ts"
+Cohesion: 0.40
+Nodes (3): EXPECTED_CONSTRAINTS, EXPECTED_TABLES, EXPECTED_TRIGGERS
+
+### Community 351 - "transcriptState.ts"
+Cohesion: 0.60
+Nodes (3): CallSummary, TRANSCRIPT_STUCK_AFTER_MS, transcriptLooksStuck()
+
+### Community 352 - "5. First-release experience"
+Cohesion: 0.50
+Nodes (4): 5. First-release experience, Connection details, Everyday use, Owner setup
 
 ## Knowledge Gaps
 - **36 isolated node(s):** `BETTER_AUTH_URL`, `NEXT_PUBLIC_APP_URL`, `OPENROUTER_SITE_URL`, `@formulajs/formulajs`, `@tiptap/pm` (+31 more)
-  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 3756 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
-- **19 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 3784 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
+- **22 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `next` connect `next` to `withLinkedinOrg`, `categories.ts`, `ref_remixicon_react`, `CrmActionsClient.tsx`, `MessagesLayout.tsx`, `Frame`, `WorkbookListClient.tsx`, `CampaignClient.tsx`, `cn`, `grid/columns.ts`, `tenancy/scope.ts`, `objective.server.ts`, `WhatsappCampaignsClient.tsx`, `linkedin/CampaignsClient.tsx`, `grid/worker.ts`, `assistant/http.server.ts`, `endpoints.server.ts`, `flags.server.ts`, `LinkedInCampaignWizard.tsx`, `connections/page.tsx`, `calls/campaigns.ts`, `grid/schema.ts`, `sessions.ts`, `grid/types.ts`, `navConfig.ts`, `inOrg`, `tables.ts`, `connectionList.server.ts`, `runInOrganization`, `SignInForm.tsx`, `searchBatches.ts`, `webSearch.server.ts`, `leadImport.ts`, `overview.ts`, `aimlapi-types.ts`, `rules.ts`, `outreach/campaigns.ts`, `mode.ts`, `tools.server.ts`, `LiquidEngine`, `organizations.server.ts`, `WhatsappMessagesClient.tsx`, `analytics/contract.ts`, `settings.server.ts`, `app/layout.tsx`, `providers.ts`, `AssistantClient.tsx`, `SearchBatchDetailClient.tsx`, `instagram.ts`, `handoff.server.ts`, `manifest.json`, `[tableId]/export/route.ts`, `peopleImport.server.ts`, `crm/queries.ts`, `tinyfish.server.ts`, `react`, `linkedin/LeadsClient.tsx`, `platform/credentials.ts`, `PlatformConnection.tsx`, `campaigns/CampaignDetailClient.tsx`, `unsubscribeToken.ts`, `qualification/campaigns.ts`, `callApiErrorResponse`, `linkedin/schema.ts`, `analytics/route.ts`, `DetailsPanel.tsx`, `intake.ts`, `auth/setup.ts`, `activity.server.ts`, `Filters.tsx`, `SettingsShell.tsx`, `InboxClient.tsx`, `CampaignLeadsTab.tsx`, `decisions.server.ts`, `package.json`, `InstagramMessagesClient.tsx`, `columns/[id]/route.ts`, `instagram/http.ts`, `Skeletons.tsx`, `domains/page.tsx`, `lib/queries.ts`, `requireOrgContext`, `CreateCampaignForm.tsx`, `leads/columns/route.ts`, `spreadsheetUploadProblem`, `queue/template/route.ts`, `settings/whatsapp-calling/page.tsx`?**
-  _High betweenness centrality (0.099) - this node is a cross-community bridge._
+- **Why does `next` connect `next` to `connectionList.server.ts`, `categories.ts`, `Frame`, `CrmActionsClient.tsx`, `MessagesLayout.tsx`, `Frame`, `WorkbookListClient.tsx`, `CampaignClient.tsx`, `leads/LeadsClient.tsx`, `grid/columns.ts`, `inOrg`, `objective.server.ts`, `WhatsappCampaignsClient.tsx`, `requirePageOrgContext`, `grid/worker.ts`, `calls/contract.ts`, `assistant/http.server.ts`, `inquiries.server.ts`, `treg.server.ts`, `campaigns.server.ts`, `integrations/catalog.ts`, `endpoints.server.ts`, `flags.server.ts`, `JobsClient.tsx`, `calls/campaigns.ts`, `grid/schema.ts`, `sessions.ts`, `leads/columns.ts`, `grid/types.ts`, `navConfig.ts`, `autonomy.server.ts`, `authContextErrorResponse`, `connectionList.server.ts`, `ResultsClient.tsx`, `SignInForm.tsx`, `searchBatches.ts`, `webSearch.server.ts`, `overview.ts`, `aimlapi-types.ts`, `rules.ts`, `outreach/campaigns.ts`, `mode.ts`, `engine.ts`, `ref_node_assert`, `SettingsPage`, `endpoint.ts`, `importLeads.ts`, `flags.server.ts`, `WhatsappMessagesClient.tsx`, `outreach/campaigns/[id]/route.ts`, `analytics/contract.ts`, `knowledge/[id]/route.ts`, `connections.ts`, `app/layout.tsx`, `qualification/campaigns.ts`, `AssistantClient.tsx`, `searchLeadLimit.ts`, `instagram.ts`, `handoff.server.ts`, `peopleImport.server.ts`, `actions/route.ts`, `tinyfish.server.ts`, `react`, `currentOrganizationId`, `PlatformConnection.tsx`, `campaigns/CampaignDetailClient.tsx`, `unsubscribeToken.ts`, `jobRunner.ts`, `leads/schema.ts`, `analytics/route.ts`, `DetailsPanel.tsx`, `intake.ts`, `qualify.ts`, `setupInput.ts`, `activity.server.ts`, `calling/CampaignsClient.tsx`, `Filters.tsx`, `SettingsShell.tsx`, `InboxClient.tsx`, `app/campaigns/page.tsx`, `leadsTemplate.ts`, `run-search-queue/route.ts`, `package.json`, `InstagramMessagesClient.tsx`, `instagram/accounts.ts`, `leads/records.ts`, `domains/page.tsx`, `CrmRecordModal.tsx`, `instrumentation.ts`, `whatsapp/client.ts`, `assistant/schema.ts`, `call-recorder/route.ts`, `queue/template/route.ts`, `settings/whatsapp-calling/page.tsx`?**
+  _High betweenness centrality (0.112) - this node is a cross-community bridge._
 - **Are the 3 inferred relationships involving `currentOrganizationId()` (e.g. with `Multi-tenancy: everything belongs to an organization` and `Request flow`) actually correct?**
   _`currentOrganizationId()` has 3 INFERRED edges - model-reasoned connections that need verification._
 - **What connects `BETTER_AUTH_URL`, `NEXT_PUBLIC_APP_URL`, `OPENROUTER_SITE_URL` to the rest of the system?**
   _36 weakly-connected nodes found - possible documentation gaps or missing edges._
-- **Should `withLinkedinOrg` be split into smaller, more focused modules?**
-  _Cohesion score 0.036785285885645745 - nodes in this community are weakly interconnected._
-- **Why does `inOrg()` connect `inOrg` to `withLinkedinOrg`, `categories.ts`, `crm/send.ts`, `next`, `grid/columns.ts`, `tenancy/scope.ts`, `objective.server.ts`, `grid/worker.ts`, `assistant/agent.server.ts`, `crm.ts`, `webDiscovery.ts`, `replyAgent/agent.server.ts`, `autopilotRun.server.ts`, `crm/schema.ts`, `assistant/http.server.ts`, `inquiries.server.ts`, `treg.server.ts`, `campaigns.server.ts`, `discovery.server.ts`, `endpoints.server.ts`, `flags.server.ts`, `LinkedInCampaignWizard.tsx`, `connections/page.tsx`, `calls/campaigns.ts`, `grid/schema.ts`, `sessions.ts`, `leads/columns.ts`, `whatsapp/messages.ts`, `grid/types.ts`, `coverage.server.ts`, `whatsapp/send.ts`, `register.server.ts`, `searchBatches.ts`, `webSearch.server.ts`, `leadImport.ts`, `aimlapi-types.ts`, `apify.server.ts`, `outreach/campaigns.ts`, `tools.server.ts`, `unipileMail.ts`, `ref_node_assert`, `test-people-crm-e2e.ts`, `organizations.server.ts`, `transcription.ts`, `draft.ts`, `leadStage.ts`, `importLeads.ts`, `flags.server.ts`, `engine.ts`, `FormSkeleton`, `CrmConfigurationValidationError`, `settings.server.ts`, `providers.ts`, `mapping.ts`, `handoff.server.ts`, `conversations.ts`, `peopleImport.server.ts`, `crm/queries.ts`, `tinyfish.server.ts`, `hackerNews.server.ts`, `gmail.ts`, `platform/credentials.ts`, `qualification/campaigns.ts`, `callApiErrorResponse`, `linkedin/schema.ts`, `analytics/route.ts`, `intake.ts`, `activity.server.ts`, `whatsapp/accounts.ts`, `outreachHistory.ts`, `app/campaigns/page.tsx`, `decisions.server.ts`, `research.server.ts`, `reporting/metrics.ts`, `columns/[id]/route.ts`, `instagram/http.ts`, `leads/records.ts`, `requireOrgContext`, `app/leads/page.tsx`, `transcription.ts`?**
-  _High betweenness centrality (0.081) - this node is a cross-community bridge._
+- **Should `connectionList.server.ts` be split into smaller, more focused modules?**
+  _Cohesion score 0.05030181086519115 - nodes in this community are weakly interconnected._
+- **Why does `inOrg()` connect `inOrg` to `connectionList.server.ts`, `categories.ts`, `crm/schema.ts`, `next`, `grid/columns.ts`, `objective.server.ts`, `requirePageOrgContext`, `grid/worker.ts`, `assistant/agent.server.ts`, `crm.ts`, `webDiscovery.ts`, `replyAgent/agent.server.ts`, `assistant/http.server.ts`, `inquiries.server.ts`, `grid/types.ts`, `treg.server.ts`, `campaigns.server.ts`, `discovery.server.ts`, `integrations/catalog.ts`, `endpoints.server.ts`, `flags.server.ts`, `calls/campaigns.ts`, `grid/schema.ts`, `sessions.ts`, `leads/columns.ts`, `whatsapp/messages.ts`, `assistant/outreach.server.ts`, `backfill-campaign-people.ts`, `coverage.server.ts`, `whatsapp/send.ts`, `core.ts`, `register.server.ts`, `autonomy.server.ts`, `authContextErrorResponse`, `connectionList.server.ts`, `dailyRollover.ts`, `ResultsClient.tsx`, `searchBatches.ts`, `webSearch.server.ts`, `leadImport.ts`, `aimlapi-types.ts`, `apify.server.ts`, `outreach/campaigns.ts`, `engine.ts`, `ref_node_assert`, `results.server.ts`, `SettingsPage`, `endpoint.ts`, `transcription.ts`, `importLeads.ts`, `flags.server.ts`, `send.server.ts`, `outreach/campaigns/[id]/route.ts`, `FormSkeleton`, `knowledge/[id]/route.ts`, `connections.ts`, `settings.server.ts`, `qualification/campaigns.ts`, `handoff.server.ts`, `replyBridge.ts`, `peopleImport.server.ts`, `tinyfish.server.ts`, `hackerNews.server.ts`, `react`, `currentOrganizationId`, `workspace-replay.ts`, `jobRunner.ts`, `leads/schema.ts`, `metrics.server.ts`, `analytics/route.ts`, `qualify.ts`, `existingLeads.server.ts`, `activity.server.ts`, `whatsapp/accounts.ts`, `mailboxProviders.ts`, `crm/queries.ts`, `app/campaigns/page.tsx`, `crmFollowUp.ts`, `run-search-queue/route.ts`, `instagram/accounts.ts`, `leads/records.ts`, `jobs.ts`, `transcription.ts`, `assistant/schema.ts`?**
+  _High betweenness centrality (0.094) - this node is a cross-community bridge._
 - **Should `categories.ts` be split into smaller, more focused modules?**
-  _Cohesion score 0.1002710027100271 - nodes in this community are weakly interconnected._
-- **Why does `drizzle-orm` connect `tenancy/scope.ts` to `withLinkedinOrg`, `categories.ts`, `crm/send.ts`, `next`, `grid/columns.ts`, `objective.server.ts`, `grid/worker.ts`, `assistant/agent.server.ts`, `crm.ts`, `webDiscovery.ts`, `replyAgent/agent.server.ts`, `autopilotRun.server.ts`, `crm/schema.ts`, `assistant/http.server.ts`, `inquiries.server.ts`, `treg.server.ts`, `workspace.ts`, `campaigns.server.ts`, `discovery.server.ts`, `endpoints.server.ts`, `flags.server.ts`, `connections/page.tsx`, `calls/campaigns.ts`, `grid/schema.ts`, `sessions.ts`, `leads/columns.ts`, `whatsapp/messages.ts`, `backfill-campaign-people.ts`, `coverage.server.ts`, `whatsapp/send.ts`, `core.ts`, `register.server.ts`, `inOrg`, `tables.ts`, `connectionList.server.ts`, `dailyRollover.ts`, `whatsapp.ts`, `searchBatches.ts`, `webSearch.server.ts`, `leadImport.ts`, `overview.ts`, `apify.server.ts`, `outreach/campaigns.ts`, `mode.ts`, `tools.server.ts`, `ref_node_assert`, `test-people-crm-e2e.ts`, `useOrgAccess.ts`, `organizations.server.ts`, `transcription.ts`, `draft.ts`, `leadStage.ts`, `importLeads.ts`, `flags.server.ts`, `engine.ts`, `FormSkeleton`, `analytics/contract.ts`, `CrmConfigurationValidationError`, `providers.ts`, `instagram.ts`, `handoff.server.ts`, `web-discovery.ts`, `e2e/objective.ts`, `conversations.ts`, `peopleImport.server.ts`, `crm/queries.ts`, `auth/schema.ts`, `assistant.ts`, `platform/credentials.ts`, `ingest.server.ts`, `workspace-replay.ts`, `qualification/campaigns.ts`, `linkedin/schema.ts`, `e2e/apify.ts`, `analytics/route.ts`, `intake.ts`, `full-flow.ts`, `auth/setup.ts`, `activity.server.ts`, `whatsapp/accounts.ts`, `outreachHistory.ts`, `replyAgent/agent.ts`, `reply-agent.ts`, `decisions.server.ts`, `package.json`, `assistant.ts`, `research.server.ts`, `ref_bun_test`, `reporting/metrics.ts`, `metrics-parity.ts`, `handoff.ts`, `leads/records.ts`, `lib/queries.ts`, `requireOrgContext`, `transcription.ts`, `autonomous.ts`, `assistant-chat-live.ts`, `auth-policies.ts`?**
-  _High betweenness centrality (0.073) - this node is a cross-community bridge._
+  _Cohesion score 0.068202430618538 - nodes in this community are weakly interconnected._
+- **Why does `pg` connect `ref_pg` to `test-people-crm-core.ts`, `migrationParity.ts`, `audit-legacy-linkedin-identifiers.ts`, `ref_fs`, `backfill-campaign-people.ts`, `ref_node_path`, `audit-linkedin-message-duplicates.ts`, `export-people-migration-reconciliation.ts`, `mark-linkedin-message-duplicates.ts`, `rotate-integration-credentials.ts`, `rollback-people-migration.ts`, `add-apollo-lead-columns.js`, `add-mailbox-working-hours.js`, `alter-qualification-tables.js`, `leads/import/route.ts`, `create-people-crm-core.ts`, `audit-email-people-parity.ts`, `package.json`, `connections.ts`?**
+  _High betweenness centrality (0.078) - this node is a cross-community bridge._

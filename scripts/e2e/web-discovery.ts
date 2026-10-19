@@ -109,6 +109,25 @@ const PAGES: Record<string, { status: number; html: string; location?: string }>
       <li><a href="https://www.justdial.com/Pune/Bright-Smile-${tag}">Bright Smile on Justdial</a></li>
     </ol><footer>Corrections: <a href="mailto:editor@${host("pune-guide")}">editor@${host("pune-guide")}</a></footer></body></html>`,
   },
+  // F: what a business's own website shows (websiteProfile.ts), read from the pages the contact reader fetches.
+  [site("aurora")]: {
+    status: 200,
+    html: `<html><head><title>Aurora Dental | Baner</title><meta name="description" content="Aurora Dental is a family dental clinic in Baner, Pune.">
+      <script src="https://embed.tawk.to/aurora/default"></script></head><body>
+      <nav><a href="/">Home</a><a href="/blog">Blog</a><a href="/team">Our team</a><a href="/careers">Careers</a><a href="/contact">Contact</a></nav>
+      <a href="https://calendly.com/aurora-${tag}/checkup">Book an appointment</a> <a href="https://wa.me/919822044044">WhatsApp us</a>
+      <footer><a href="mailto:hello@${host("aurora")}">hello@${host("aurora")}</a></footer></body></html>`,
+  },
+  [`${site("aurora")}contact`]: { status: 200, html: `<form action="/send"><input type="email" name="email"><textarea name="message"></textarea></form><p>We are seeking a vendor for after-hours call answering.</p><a href="tel:+912025559999">020 2555 9999</a>` },
+  [`${site("aurora")}team`]: {
+    status: 200,
+    html: `<h2>Our Team</h2>
+      <div class="card"><h3>Dr. Nisha Rao</h3><p>Founder</p><a href="mailto:nisha@${host("aurora")}">nisha@${host("aurora")}</a> <a href="https://www.linkedin.com/in/nisha-rao-${tag}/">LinkedIn</a></div>
+      <div class="card"><h3>Kunal Shah</h3><p>Practice Manager</p><a href="mailto:info@${host("aurora")}">info@${host("aurora")}</a></div>`,
+  },
+  [`${site("aurora")}careers`]: { status: 200, html: `<h1>Careers</h1><p>We're hiring!</p><ul><li>Front Desk Receptionist (full time)</li><li>Dental Hygienist</li></ul>` },
+  [`${site("aurora")}blog`]: { status: 200, html: `<p>Not read: the blog is not one of the pages a website check reads.</p>` },
+  [site("maple")]: { status: 200, html: `<h1>Maple Smiles</h1><div><h3>Dr. Leela Iyer</h3><p>Owner</p><a href="mailto:leela@${host("maple")}">Write to Dr. Iyer</a></div>` },
   [site("invented-clinic")]: { status: 200, html: `<a href="mailto:boss@${host("invented-clinic")}">boss</a>` },
   [site("made-up")]: { status: 200, html: `<a href="mailto:boss@${host("made-up")}">boss</a>` },
 };
@@ -289,6 +308,7 @@ const { saveTavilySettings, tavilySettingsView, TavilySettingsError } = await im
 const { webSearchAvailability } = await import("@/lib/discovery/webSearch.server");
 const { setWebDiscoveryMailCheck, startWebDiscovery, normalizeWebCriteria, WebDiscoveryUnavailableError, INSTAGRAM_PROFILE_ONLY_REASON, MAX_OPEN_WEB_DISCOVERIES, MAX_WEB_DISCOVERIES_PER_DAY } = await import("@/lib/discovery/webDiscovery.server");
 const { instagramCommenterHold } = await import("@/lib/discovery/instagramEligibility");
+const { audienceProspects } = await import("@/lib/assistant/qualification.server");
 
 setDiscoveryPageOptions({ allowPrivate: true });
 setTavilyApiBase(TAVILY);
@@ -713,6 +733,101 @@ try {
   });
   await runInOrganization(orgs.A, async () => {
     check("Tavily: another organization's key is never used (A keeps its own AI search)", (await webSearchAvailability()).provider === "openrouter");
+  });
+
+  // ------------------------------------------------------------ F: what a business's own website shows, saved and retried
+  const [orgF] = await db.insert(organizations).values({ name: `Web discovery check F ${stamp}`, slug: `web-discovery-f-${stamp}` }).returning();
+  checkOrganizations.push(orgF!.id);
+  let jobF = "";
+  let audienceF = "";
+  await runInOrganization(orgF!.id, async () => {
+    await setFeature("web_discovery", true, null);
+    await saveChannelRules("general", { defaultPhoneCountry: "IN" }, null);
+    const connectionId = await aiConnection("openrouter");
+    await saveByokSettings({
+      connectionId,
+      providers: ["openai"],
+      modelsByProvider: { openai: ["openai/gpt-5-mini"] },
+      defaultModel: { provider: "openai", modelId: "openai/gpt-5-mini" },
+      transcriptionModel: null,
+      researchModel: null,
+      researchDailyLimit: 25,
+      byokOnlyConfirmed: true,
+    });
+    // F's own saved business information: what the website findings are matched against.
+    await db.insert(assistantProfiles).values({ organizationId: currentOrganizationId(), profile: { businessName: "Front Desk AI", offer: "An AI receptionist that answers every call and books appointments", problemsSolved: "Missed calls after hours", targetCustomers: "Dental clinics in Pune" } });
+    const criteria = normalizeWebCriteria({ customers: "dental clinics", where: "Baner, Pune", maxResults: 5 });
+    if ("error" in criteria) throw new Error(criteria.error);
+    ({ jobId: jobF, audienceId: audienceF } = await startWebDiscovery(criteria, { threadId: null, userId: null }));
+  });
+  // The search is the fixtures' own; before reading, its candidates become two websites to profile.
+  await runJob(jobF, "reading");
+  const origin = (slug: string, title: string) => ({ query: "dental clinics in Baner, Pune", url: site(slug), title, snippet: "Family dental clinic in Baner" });
+  const candidatesF = [
+    { kind: "own_site", url: site("aurora"), origin: origin("aurora", "Aurora Dental | Baner") },
+    { kind: "own_site", url: site("maple"), origin: origin("maple", "Maple Smiles") },
+  ];
+  await db.update(assistantJobs).set({ payload: sql`${assistantJobs.payload} || ${JSON.stringify({ candidates: candidatesF, readIndex: 0, leads: [], skipped: [], skippedCount: 0 })}::jsonb` }).where(eq(assistantJobs.id, jobF));
+  const requestsBeforeF = pageRequests.length;
+  await runJob(jobF, "saving");
+  const readF = pageRequests.slice(requestsBeforeF);
+  const auroraPages = [site("aurora"), `${site("aurora")}contact`, `${site("aurora")}team`, `${site("aurora")}careers`];
+  check("F: each page of a website is fetched once, and its observations come from those same responses", JSON.stringify([...readF].sort()) === JSON.stringify([...auroraPages, site("maple")].sort()), readF.join(", "));
+  check("F: within the same budget (home + 3 pages); a blog page and outside links (booking, WhatsApp, LinkedIn) are never fetched", !readF.includes(`${site("aurora")}blog`) && !blocked.some((request) => /calendly|wa\.me|linkedin|tawk/.test(request)), blocked.join(", "));
+  const [readJob] = await db.select().from(assistantJobs).where(eq(assistantJobs.id, jobF));
+  const payloadLeads = ((readJob!.payload as { leads?: { website: string | null; profile?: { checkedAt: string; observations: unknown[] } | null }[] }).leads ?? []);
+  const readAt = payloadLeads.find((lead) => lead.website === site("aurora"))?.profile?.checkedAt ?? "";
+  check("F: what the website showed is kept in the job's payload with the time it was read", Boolean(readAt) && (payloadLeads.find((lead) => lead.website === site("aurora"))?.profile?.observations.length ?? 0) > 0, JSON.stringify(payloadLeads.map((lead) => lead.profile?.checkedAt)));
+  // The worker that read the websites dies before saving; another takes its stale claim over.
+  await db.update(assistantJobs).set({ status: "running", lockedBy: "worker-that-died", heartbeatAt: new Date(Date.now() - 10 * 60_000), runAfter: new Date() }).where(eq(assistantJobs.id, jobF));
+  const requestsBeforeSave = pageRequests.length;
+  const runF = await runJob(jobF);
+  check("F: the stale claim is taken over; saving reads no page again", runF.job.status === "succeeded" && pageRequests.length === requestsBeforeSave, `${runF.job.status} ${runF.job.error ?? ""}; ${pageRequests.length - requestsBeforeSave} page reads`);
+
+  const loadF = () => runInOrganization(orgF!.id, async () => {
+    const rows = await db.select().from(leadAudienceMembers).where(and(inOrg(leadAudienceMembers), eq(leadAudienceMembers.audienceId, audienceF)));
+    const insights = await memberInsights(rows.map((row) => row.id));
+    const persons = await db.select().from(people).where(inOrg(people));
+    return { rows: rows.map((row) => ({ ...row, signals: insights.get(row.id)?.signals ?? [] })), persons };
+  });
+  const savedF = await loadF();
+  const personF = (email: string) => savedF.persons.find((person) => person.email === email);
+  const aurora = savedF.rows.find((row) => row.personId === personF(`hello@${host("aurora")}`)?.id);
+  const auroraPerson = personF(`hello@${host("aurora")}`);
+  const topics = (topic: string) => aurora?.signals.filter((signal) => signal.topic === topic) ?? [];
+  check("F: a general address leaves the lead the business: no person's name or title on it", aurora?.status === "eligible" && auroraPerson?.fullName === null && auroraPerson.title === null, JSON.stringify({ name: auroraPerson?.fullName, title: auroraPerson?.title }));
+  const nisha = topics("person").find((signal) => signal.person?.name === "Dr. Nisha Rao");
+  const kunal = topics("person").find((signal) => signal.person?.name === "Kunal Shah");
+  check("F: named people keep only the contacts in their own card; the general inbox beside a name is not theirs", nisha?.person?.role === "Founder" && nisha.person.email === `nisha@${host("aurora")}` && nisha.person.linkedin === `https://www.linkedin.com/in/nisha-rao-${tag}` && kunal?.person?.role === "Practice Manager" && kunal.person.email === null, JSON.stringify(topics("person").map((signal) => signal.person)));
+  check("F: the people are facts for the writers, never the address's owner", aurora?.facts.decisionMakers === "Dr. Nisha Rao (Founder); Kunal Shah (Practice Manager)", aurora?.facts.decisionMakers ?? "missing");
+  check("F: relevant hiring, booking and contact options, each with its page", topics("hiring")[0]?.text === "Front Desk Receptionist (full time)" && topics("hiring")[0]?.sourceUrl === `${site("aurora")}careers` && topics("booking")[0]?.text === "Online booking link (Calendly)"
+    && ["WhatsApp chat link (+919822044044)", "Live chat on the website (tawk.to)", "Contact form"].every((text) => topics("contact").some((signal) => signal.text === text)), JSON.stringify(aurora?.signals.map((signal) => [signal.topic, signal.text])));
+  check("F: an explicit request for a supplier is the only need; every other finding is an observation", topics("need").length === 1 && topics("need")[0]!.kind === "need" && (aurora?.signals ?? []).filter((signal) => signal.topic !== "need").every((signal) => signal.kind === "observation") && Number((runF.job.result as Record<string, unknown>).needSignals) === 1, JSON.stringify(aurora?.signals.map((signal) => [signal.kind, signal.topic])));
+  const website = aurora?.evidence.find((item) => item.kind === "website");
+  check("F: every finding keeps the read time and how sure it is; the website evidence names the pages read", Boolean(aurora?.signals.length) && aurora!.signals.every((signal) => signal.observedAt === readAt && signal.at === null && (signal.uncertainty?.length ?? 0) > 10 && signal.sourceUrl?.startsWith(site("aurora")))
+    && website?.checkedAt === readAt && JSON.stringify(website.pagesRead) === JSON.stringify(auroraPages), JSON.stringify({ readAt, website }));
+  check("F: the facts the writers see state what was found, never that something is missing", Object.values(aurora?.facts ?? {}).every((value) => !/\b(?:no|not found|without|lacks?|missing)\b/i.test(value)), JSON.stringify(aurora?.facts));
+  const maplePerson = personF(`leela@${host("maple")}`);
+  const maple = savedF.rows.find((row) => row.personId === maplePerson?.id);
+  check("F: a person's own address makes the lead that person, named and titled, linked to the business", maplePerson?.fullName === "Dr. Leela Iyer" && maplePerson.title === "Owner" && Boolean(maplePerson.companyId) && maple?.status === "eligible" && maple.facts.decisionMakers === undefined, JSON.stringify({ name: maplePerson?.fullName, title: maplePerson?.title, company: maplePerson?.companyId, facts: maple?.facts }));
+
+  // The saving step runs again (a retry after a crash past its writes): nothing is added twice and the evidence is unchanged.
+  await db.update(assistantJobs).set({ status: "queued", stage: "saving", runAfter: new Date(), lockedBy: null, heartbeatAt: null, finishedAt: null, payload: sql`${assistantJobs.payload} || ${JSON.stringify({ saveIndex: 0, createdIds: [], memberIds: [] })}::jsonb` }).where(eq(assistantJobs.id, jobF));
+  const rerun = await runJob(jobF);
+  const againF = await loadF();
+  const auroraAgain = againF.rows.find((row) => row.id === aurora?.id);
+  check("F: a retried save adds no member, person or insight, and keeps the first read's evidence", rerun.job.status === "succeeded" && againF.rows.length === savedF.rows.length && againF.persons.length === savedF.persons.length
+    && JSON.stringify(auroraAgain?.signals) === JSON.stringify(aurora?.signals) && JSON.stringify(auroraAgain?.evidence) === JSON.stringify(aurora?.evidence), JSON.stringify({ status: rerun.job.status, members: [savedF.rows.length, againF.rows.length], persons: [savedF.persons.length, againF.persons.length] }));
+
+  await runInOrganization(orgF!.id, async () => {
+    const view = await audienceProspects(audienceF);
+    const auroraView = view?.prospects.find((prospect) => prospect.personId === auroraPerson?.id);
+    const mapleView = view?.prospects.find((prospect) => prospect.personId === maplePerson?.id);
+    check("F: qualification shows the findings apart from need evidence, and the lead stays a potential match", auroraView?.status === "potential_match" && auroraView.needEvidence.length === 1 && auroraView.observations.length >= 5 && auroraView.people.length === 2 && auroraView.website?.notFound.length === 0, JSON.stringify({ status: auroraView?.status, need: auroraView?.needEvidence.length, observations: auroraView?.observations.length, website: auroraView?.website }));
+    check("F: what the pages read did not show is 'not found on the pages read', only for a site that was read", JSON.stringify(mapleView?.website?.notFound) === JSON.stringify(["an online booking link", "hiring that matches your offer"]) && mapleView?.website?.pages.length === 1, JSON.stringify(mapleView?.website));
+  });
+  await runInOrganization(orgs.A, async () => {
+    check("F: another organization sees none of F's findings", (await audienceProspects(audienceF)) === null);
   });
 } catch (error) {
   console.error(error);

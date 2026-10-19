@@ -203,7 +203,8 @@ export function visibleText(html: string): string {
   return decodeEntities(withoutTags(withoutElements(html, ["script", "style", "noscript"]))).replace(/\s+/g, " ");
 }
 
-function hrefs(html: string): string[] {
+/** Every href on a page, entity-decoded, in page order. */
+export function hrefs(html: string): string[] {
   const out: string[] = [];
   for (const match of html.matchAll(/href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi)) {
     const value = match[1] ?? match[2] ?? match[3];

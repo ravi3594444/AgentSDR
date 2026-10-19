@@ -24,6 +24,8 @@ import { searchTiles } from "./geocode";
 import { cleanBusinessName, mapsSearchPhrase, parseMapsCsvDetailed, rankEmails, type MapsPlace } from "./mapsResults";
 import { createMapsJob, downloadMapsResults, getMapsJobStatus, mapsScraperUrl, MapsScraperError } from "./mapsScraper.server";
 import { collectWebsiteContacts, type PageFetchOptions } from "./websiteContacts.server";
+import { offerFocus, websiteNotes, type OfferFocus, type WebsiteProfile } from "./websiteProfile";
+import { getBusinessProfile } from "@/lib/assistant/profile.server";
 import { instagramResearchHold } from "./instagramEligibility";
 
 /**
@@ -102,6 +104,8 @@ type EnrichedPlace = MapsPlace & {
   websitePhones: { value: string; sourceUrl: string }[];
   companyLinkedin: string | null;
   websiteError: string | null;
+  /** What its own website showed for the owner's offer, as read (kept in the payload, so a retry keeps the read time). */
+  websiteProfile?: WebsiteProfile | null;
   origin?: InstagramOrigin;
   /** Found on a Facebook page or a LinkedIn company page (Apify), not a Google Maps listing. */
   listing?: SocialPlatform;
@@ -876,9 +880,9 @@ export function discoveryPageOptions(): PageFetchOptions {
   return pageOptions;
 }
 
-async function enrichPlace(place: EnrichedPlace, country: string | undefined): Promise<EnrichedPlace> {
+async function enrichPlace(place: EnrichedPlace, country: string | undefined, focus: OfferFocus): Promise<EnrichedPlace> {
   if (!place.website) return place;
-  const result = await collectWebsiteContacts(place.website, pageOptions);
+  const result = await collectWebsiteContacts(place.website, pageOptions, focus);
   const emails = result.contacts.filter((contact) => contact.kind === "email").map((contact) => ({ value: contact.value, sourceUrl: contact.sourceUrl }));
   const phones = result.contacts
     .filter((contact) => contact.kind === "phone")
@@ -887,7 +891,7 @@ async function enrichPlace(place: EnrichedPlace, country: string | undefined): P
       return checked.ok ? [{ value: checked.e164, sourceUrl: contact.sourceUrl }] : [];
     });
   const linkedin = result.contacts.find((contact) => contact.kind === "linkedin" && /\/company\//.test(contact.value))?.value ?? null;
-  return { ...place, websiteEmails: emails, websitePhones: phones, companyLinkedin: place.companyLinkedin ?? linkedin, websiteError: result.error };
+  return { ...place, websiteEmails: emails, websitePhones: phones, companyLinkedin: place.companyLinkedin ?? linkedin, websiteError: result.error, websiteProfile: result.profile };
 }
 
 async function stageEnriching(job: AssistantJob, heartbeat: () => Promise<void>): Promise<StepOutcome> {
@@ -895,11 +899,12 @@ async function stageEnriching(job: AssistantJob, heartbeat: () => Promise<void>)
   const places = payload.places ?? [];
   const start = payload.enrichIndex ?? 0;
   const country = await organizationPhoneCountry();
+  const focus = offerFocus(await getBusinessProfile());
   const batch = places.slice(start, start + ENRICH_BATCH);
   const out = [...places];
   for (let index = 0; index < batch.length; index += ENRICH_CONCURRENCY) {
     const chunk = batch.slice(index, index + ENRICH_CONCURRENCY);
-    const results = await Promise.all(chunk.map((place) => enrichPlace(place, country).catch((error) => ({ ...place, websiteError: error instanceof Error ? error.message : String(error) }))));
+    const results = await Promise.all(chunk.map((place) => enrichPlace(place, country, focus).catch((error) => ({ ...place, websiteError: error instanceof Error ? error.message : String(error) }))));
     results.forEach((place, offset) => {
       out[start + index + offset] = place;
     });
@@ -936,7 +941,7 @@ export function placeEvidence(place: EnrichedPlace): ContactEvidence[] {
   const listing = place.mapsUrl;
   const listingLabel = place.origin ? "Instagram profile" : place.listing ? SOCIAL[place.listing].listingLabel : "Google Maps listing";
   const evidence: ContactEvidence[] = [];
-  if (place.website) evidence.push({ kind: "website", value: place.website, sourceUrl: listing, source: listingLabel });
+  if (place.website) evidence.push({ kind: "website", value: place.website, sourceUrl: listing, source: listingLabel, ...(place.websiteProfile ? { checkedAt: place.websiteProfile.checkedAt, pagesRead: place.websiteProfile.pagesRead } : {}) });
   if (place.phone) evidence.push({ kind: "phone", value: place.phone, sourceUrl: listing, source: listingLabel });
   const fromSite = new Map(place.websiteEmails.map((email) => [email.value, email.sourceUrl]));
   for (const email of rankEmails([...new Set([...place.emails, ...place.websiteEmails.map((e) => e.value)])], place.domain)) {
@@ -972,7 +977,15 @@ function matchReasonOf(place: EnrichedPlace, payload: DiscoveryPayload): string 
 async function savePlace(place: EnrichedPlace, payload: DiscoveryPayload): Promise<{ member: NewMember | null; outcome: "eligible" | "excluded" | "duplicate"; email: boolean; phone?: boolean; instagram?: boolean }> {
   const evidence = placeEvidence(place);
   const facts = factsOf(place);
-  const base = { source: place.origin ? "apify_instagram" : place.listing ? SOCIAL[place.listing].source : DISCOVERY_SOURCE, sourceUrl: place.mapsUrl, evidence, facts, matchReason: matchReasonOf(place, payload), signals: instagramSignals(place) };
+  // What its website showed; the lead is a named person only when the address used is that person's own.
+  const withNotes = (recipientEmail: string | null) => {
+    const notes = websiteNotes(place.websiteProfile, recipientEmail);
+    return {
+      recipient: notes.recipient,
+      base: { source: place.origin ? "apify_instagram" : place.listing ? SOCIAL[place.listing].source : DISCOVERY_SOURCE, sourceUrl: place.mapsUrl, evidence, facts: { ...facts, ...notes.facts }, matchReason: matchReasonOf(place, payload), signals: [...instagramSignals(place), ...notes.signals] },
+    };
+  };
+  let { base } = withNotes(null);
   if (place.closed) {
     const reason = place.origin ? `found on Instagram (@${place.origin.username}), ${place.closed}: nothing it publishes can be read` : `listed on Google Maps as ${place.closed.toLowerCase()}`;
     return { member: { personId: null, name: place.displayName, reason, ...base }, outcome: "excluded", email: false };
@@ -998,6 +1011,8 @@ async function savePlace(place: EnrichedPlace, payload: DiscoveryPayload): Promi
     break;
   }
   const phone = place.phone ?? place.websitePhones[0]?.value ?? null;
+  const named = withNotes(email);
+  base = named.base;
   if (!email && !phone && !place.origin) {
     const reason = emailRejected
       ? "its published email's domain does not receive mail, and it lists no phone"
@@ -1033,6 +1048,7 @@ async function savePlace(place: EnrichedPlace, payload: DiscoveryPayload): Promi
       return upsertPerson(tx, {
         email,
         phone,
+        ...(named.recipient ? { fullName: named.recipient.name, title: named.recipient.role } : {}),
         company: { name: place.displayName, domain: place.domain, linkedinUrl: place.companyLinkedin },
         raw,
         source: personSource,

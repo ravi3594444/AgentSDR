@@ -86,6 +86,34 @@ describe("qualification", () => {
   });
 });
 
+describe("what a business's own website shows", () => {
+  const read = "2026-10-19T08:00:00.000Z";
+  const website = { kind: "website" as const, value: "https://smile.example", sourceUrl: "https://directory.example/dentists-pune", source: "web search result", checkedAt: read, pagesRead: ["https://smile.example/", "https://smile.example/contact"] };
+  const observation = (topic: "hiring" | "booking" | "contact" | "context", text: string) => ({ kind: "observation" as const, topic, text, sourceUrl: "https://smile.example/careers", source: "the business's website", at: null, observedAt: read, uncertainty: "on their careers page, undated; the opening may already be filled", relevance: "inferred from matching words from your offer: receptionist" });
+  const person = { kind: "observation" as const, topic: "person" as const, text: "Dr. Asha Kulkarni — Founder", sourceUrl: "https://smile.example/team", source: "the business's website", at: null, observedAt: read, uncertainty: "named with this role on their own website", relevance: null, person: { name: "Dr. Asha Kulkarni", role: "Founder", email: null, linkedin: null } };
+
+  test("observations and people are shown apart from need evidence, and never change the status or the need count", () => {
+    const prospect = qualifyProspect(member({ evidence: [website], signals: [observation("hiring", "Front Desk Receptionist"), person] }));
+    expect(prospect.status).toBe("potential_match");
+    expect(prospect.needEvidence).toEqual([]);
+    expect(prospect.engagement).toEqual([]);
+    expect(prospect.observations.map((signal) => signal.text)).toEqual(["Front Desk Receptionist"]);
+    expect(prospect.people.map((signal) => signal.person?.name)).toEqual(["Dr. Asha Kulkarni"]);
+    expect(countProspects([prospect]).withNeedEvidence).toBe(0);
+  });
+
+  test("an explicit request for suppliers on their website is need evidence", () => {
+    const request = { ...observation("context", "We are seeking a vendor for call answering."), kind: "need" as const, topic: "need" as const };
+    expect(qualifyProspect(member({ evidence: [website], signals: [request] })).needEvidence).toHaveLength(1);
+  });
+
+  test("'not found on the pages read' only when the website was read, naming what those pages did not show", () => {
+    const prospect = qualifyProspect(member({ evidence: [website], signals: [observation("booking", "Online booking link (Calendly)")] }));
+    expect(prospect.website).toEqual({ checkedAt: read, pages: website.pagesRead, notFound: ["hiring that matches your offer", "people named with a role"] });
+    expect(qualifyProspect(member()).website).toBeNull();
+  });
+});
+
 describe("existing leads and inquiries", () => {
   test("an inquiry's own words are the evidence, quoted; an empty form proves nothing", () => {
     const at = new Date("2026-10-15T10:00:00Z");

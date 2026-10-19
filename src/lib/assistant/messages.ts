@@ -1,4 +1,5 @@
 import { draftLeaks, draftPlaceholders, unverifiedActionClaims } from "@/lib/crm/ai/grounding";
+import { unbackedLinks, unbackedNumbers } from "./replyCheck";
 import type { AudienceChannel, BusinessProfile, PlannedStep } from "./schema";
 
 /**
@@ -102,6 +103,42 @@ export function personalLineProblem(line: string): string | null {
   if (draftPlaceholders(text).length) return "no placeholders";
   if (draftLeaks(text).length) return "write to the recipient, not about the instructions";
   if (unverifiedActionClaims(text, []).length) return "do not claim anything was sent, booked or attached";
+  return null;
+}
+
+/** "You're hiring", "your job posting": what only their website's own words can back (facts.hiring). */
+const HIRING_CLAIM = /\b(?:you(?:['’]re| are) (?:hiring|recruiting)|(?:saw|noticed|see|read) (?:that )?you(?:['’]re| are)? (?:hiring|recruiting)|your (?:job (?:post|posting|ad|advert|opening|listing)|(?:open )?(?:opening|vacancy|vacancies|position)|hiring|careers? page))\b/i;
+/** That they lack something. Not finding it on the pages read is never proof it does not exist. */
+const ABSENCE_CLAIMS = [
+  /\b(?:you|your \w+(?: \w+)?)\s+(?:(?:do|does)(?:n['’]?t| not) (?:yet )?(?:have|offer|use|show|list|provide)|ha(?:ve|s)(?:n['’]?t| not) got|ha(?:ve|s) no|lacks?|(?:are|is) (?:missing|without)|(?:are|is)(?:n['’]?t| not) (?:yet )?(?:using|offering|showing))\b[^.?!]{0,40}?\b(?:booking|book|appointments?|website|site|chat|whatsapp|reviews?|presence|form|receptionist|calendar|system|scheduling)\b/i,
+  /\b(?:couldn['’]?t|could not|didn['’]?t|did not|can['’]?t|cannot|wasn['’]?t able to) (?:find|see|spot|locate)\b[^.?!]{0,50}\b(?:on|in) your (?:site|website|page|homepage|profile)\b/i,
+  /\b(?:there(?:['’]s| is) no|no) (?:online |easy |simple |clear )?(?:way to book|booking|appointment booking|website|chat|contact form|reviews?)\b[^.?!]{0,30}\b(?:on|in) your\b/i,
+];
+const GREETING_NAME = /^\s*(?:[Hh]i|[Hh]ello|[Hh]ey|[Dd]ear|[Nn]amaste|[Gg]ood (?:morning|afternoon|evening))[ ,]+((?:(?:Dr|Mr|Mrs|Ms|Prof)\.?\s+)?[A-Z][\p{L}'’-]+)/u;
+const TITLED_NAME = /\b(?:Dr|Mr|Mrs|Ms|Prof)\.?\s+([A-Z][\p{L}'’-]+)/gu;
+const NOT_A_NAME = new Set(["there", "team", "all", "everyone", "folks", "sir", "madam", "friends", "both"]);
+
+/**
+ * What a message written for one lead says about them that neither their
+ * facts nor the owner's information back, or null. In code, not only the
+ * prompt: a price, percentage or link the information does not hold; that
+ * they are hiring when their website showed no matching opening; a name
+ * that is not theirs; or that they lack something (the pages read not
+ * showing it is not proof it does not exist).
+ */
+export function leadClaimProblem(text: string, facts: Readonly<Record<string, string>>, knowledge: string): string | null {
+  const corpus = `${knowledge}\n${Object.values(facts).join("\n")}`;
+  const numbers = unbackedNumbers(text, corpus);
+  if (numbers.length) return `it gives ${numbers.slice(0, 2).join(", ")}, which neither your information nor their facts contain`;
+  const links = unbackedLinks(text, corpus);
+  if (links.length) return `it gives a link or address (${links.slice(0, 2).join(", ")}) your information does not contain`;
+  if (!facts.hiring && HIRING_CLAIM.test(text)) return "it says they are hiring, which their website did not show";
+  if (ABSENCE_CLAIMS.some((pattern) => pattern.test(text))) return "it says they lack something; not finding it on the pages read does not mean they lack it";
+  const known = new Set(corpus.toLowerCase().split(/[^\p{L}\p{N}'’-]+/u).filter(Boolean));
+  const names = [GREETING_NAME.exec(text)?.[1]?.split(/\s+/).at(-1), ...[...text.matchAll(TITLED_NAME)].map((match) => match[1])]
+    .filter((name): name is string => Boolean(name) && !NOT_A_NAME.has(name!.toLowerCase()));
+  const stranger = names.find((name) => !known.has(name.toLowerCase()));
+  if (stranger) return `it addresses ${stranger}, a name not in their facts`;
   return null;
 }
 

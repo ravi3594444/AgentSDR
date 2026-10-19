@@ -21,6 +21,11 @@
  *   launch is taken over and enrolls everyone once, in that campaign;
  * - repeating every callback and the reconciliation adds no report, plan,
  *   campaign or enrollment; nothing was sent;
+ * - one clinic's own website is read once per page: what it shows (an
+ *   opening that matches the offer, a named founder) reaches the plan's
+ *   sample as a possible fit, never interest; a line its facts back is kept,
+ *   and a line claiming what they do not (hiring, missing online booking, a
+ *   price) never reaches a plan or the texts written at Start;
  * - a second organization sees and changes nothing of the first.
  *
  *   bun run --conditions=react-server scripts/e2e/full-flow.ts
@@ -51,12 +56,21 @@ let replies: Script[] = [];
 const modelCalls: string[] = [];
 const FIRST = "Hi {{company}} team, {{line}} we help Pune clinics fill empty chair hours with patient reminders on WhatsApp. Would a short demo this week be useful?";
 const SECOND = "Just checking whether reminders for missed appointments would help your front desk. Happy to share how other clinics set it up.";
+/** A line the lead's facts back (its own website's opening), and one they never back. */
+const BACKED_LINE = "Saw you're hiring a front desk coordinator for appointment reminders.";
+const UNBACKED_LINE = "Saw you're hiring a receptionist and your clinic has no online booking; plans start at Rs 999.";
+const UNBACKED = /hiring a receptionist|no online booking|Rs 999/;
+/** Each lead the writer is asked about: its index and its facts. */
+function leadsAsked(prompt: string): { index: number; facts: Record<string, string> }[] {
+  return [...prompt.matchAll(/^(\d+)(?: \([^)]*\))?: (\{.*\})$/gm)].map((match) => ({ index: Number(match[1]), facts: JSON.parse(match[2]!) as Record<string, string> }));
+}
 /** Fixed answers for the plan writer, by what each lead index and channel it is asked about. */
 function writerAnswer(input: Input): string {
-  const indexes = [...input.userPrompt.matchAll(/^(\d+): \{/gm)].map((match) => Number(match[1]));
   switch (input.schemaName) {
     case "lead_sorting":
-      return JSON.stringify({ leads: indexes.map((index) => ({ index, group: "Dental clinics", approach: "standard", reason: "A dental clinic in Pune, as the owner asked." })) });
+      return JSON.stringify({ leads: leadsAsked(input.userPrompt).map(({ index, facts }) => (facts.hiring
+        ? { index, group: "Clinics hiring front desk staff", approach: "standard", reason: "May fit: its website lists a front desk opening for appointment reminders." }
+        : { index, group: "Dental clinics", approach: "standard", reason: "A dental clinic in Pune, as the owner asked." })) });
     case "outreach_sequences": {
       // The per-lead line's merge field is named per plan; the prompt lists it.
       const key = `${input.systemPrompt ?? ""}\n${input.userPrompt}`.match(/\{\{(p_[0-9a-f]+)\}\}/)?.[1];
@@ -65,7 +79,7 @@ function writerAnswer(input: Input): string {
     case "first_message_review":
       return JSON.stringify({ messages: [{ channel: "whatsapp", wouldReply: 4, reasons: [] }] });
     case "opening_lines":
-      return JSON.stringify({ lines: [...input.userPrompt.matchAll(/^(\d+)[:.]/gm)].map((match) => ({ index: Number(match[1]), line: "" })) });
+      return JSON.stringify({ lines: leadsAsked(input.userPrompt).map(({ index, facts }) => ({ index, line: facts.hiring ? BACKED_LINE : UNBACKED_LINE })) });
     default:
       throw new Error(`unexpected writer call ${input.schemaName}`);
   }
@@ -100,11 +114,22 @@ function mapsCsv(phrase: string): string {
     phoneSeq += 1;
     const key = `${slug(phrase)}-${index + 1}`;
     const phone = `+91 98${String(stamp % 1_000_000).padStart(6, "0").slice(0, 3)}${String(phoneSeq).padStart(5, "0")}`;
-    return csv(["1", `https://maps.google.com/?cid=${stamp}${index}${key.length}`, `${["Smile", "Pearl", "Bright", "Care", "Lotus", "Apex"][index]} Dental ${phrase.startsWith("dentists") ? "Studio" : "Clinic"}`, "Dental clinic", "Koregaon Park, Pune", "", phone, 20, 4.6, `pl-${stamp}-${key}`, `${stamp}${index}`, "", JSON.stringify({ city: "Pune", country: "IN" }), ""]);
+    // The first search's first clinic has its own website.
+    const website = index === 0 && !phrase.startsWith("dentists") ? SMILE_SITE : "";
+    return csv(["1", `https://maps.google.com/?cid=${stamp}${index}${key.length}`, `${["Smile", "Pearl", "Bright", "Care", "Lotus", "Apex"][index]} Dental ${phrase.startsWith("dentists") ? "Studio" : "Clinic"}`, "Dental clinic", "Koregaon Park, Pune", website, phone, 20, 4.6, `pl-${stamp}-${key}`, `${stamp}${index}`, "", JSON.stringify({ city: "Pune", country: "IN" }), ""]);
   });
   return [MAPS_HEADER, ...rows].join("\n");
 }
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+
+// ------------------------------------------------------------ one clinic's own website (read through the discovery page reader)
+const SMILE_SITE = `https://smile-${stamp}.test/`;
+const SITE_PAGES: Record<string, string> = {
+  [SMILE_SITE]: `<html><head><meta name="description" content="Smile Dental Clinic: family dentistry in Koregaon Park, Pune."></head><body><a href="/team">Our team</a><a href="/careers">Careers</a><a href="https://calendly.com/smile-${stamp}">Book online</a></body></html>`,
+  [`${SMILE_SITE}team`]: `<h2>Our Team</h2><div><h3>Dr. Kavya Joshi</h3><p>Founder</p></div>`,
+  [`${SMILE_SITE}careers`]: `<h1>Careers</h1><p>We're hiring</p><ul><li>Front Desk Coordinator – appointment reminders and recalls</li></ul>`,
+};
+const pageReads: string[] = [];
 const realFetch = globalThis.fetch;
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
@@ -130,6 +155,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 
 // ------------------------------------------------------------ app modules
 const { db } = await import("@/lib/db");
+const { people } = await import("@/lib/leads/schema");
 const { organizations, users, members } = await import("@/lib/auth/schema");
 const { runInOrganization } = await import("@/lib/tenancy/scope");
 const schema = await import("@/lib/assistant/schema");
@@ -149,7 +175,15 @@ const objectives = await import("@/lib/assistant/objective.server");
 const { listWork } = await import("@/lib/activity/activity.server");
 type AssistantJob = typeof schema.assistantJobs.$inferSelect;
 
-setDiscoveryPageOptions({ allowPrivate: true, fetchImpl: (async () => new Response("not found", { status: 404 })) as unknown as typeof fetch });
+setDiscoveryPageOptions({
+  allowPrivate: true,
+  fetchImpl: (async (input: RequestInfo | URL) => {
+    const url = String(input instanceof Request ? input.url : input);
+    pageReads.push(url);
+    const html = SITE_PAGES[url];
+    return html ? new Response(html, { status: 200, headers: { "content-type": "text/html" } }) : new Response("not found", { status: 404 });
+  }) as typeof fetch,
+});
 registerAssistantJobs();
 
 let failures = 0;
@@ -258,6 +292,17 @@ await runInOrganization(a.org.id, async () => {
     JSON.stringify(plan1!.plan.samples).slice(0, 300));
   check("…the sample names the clinic, not its phone number", /^[A-Z][a-z]+ Dental Clinic$/.test(plan1!.plan.samples[0]?.name ?? ""), plan1!.plan.samples[0]?.name);
 
+  // ---------------------------------------------------------- 3a. what one clinic's own website showed, through to the plan
+  check("its website: each page read once, outside links never", JSON.stringify([...pageReads].sort()) === JSON.stringify([SMILE_SITE, `${SMILE_SITE}careers`, `${SMILE_SITE}team`].sort()), pageReads.join(", "));
+  const smileSample = plan1!.plan.samples.find((sample) => sample.observed?.some((item) => item.text.startsWith("Front Desk Coordinator")));
+  check("the plan preview shows why that lead and what its website showed (its page, never as interest)", Boolean(smileSample) && /^May fit/.test(smileSample!.why ?? "") && smileSample!.observed!.some((item) => item.sourceUrl === `${SMILE_SITE}careers` && !item.need && /inferred/.test(item.relevance ?? "")),
+    JSON.stringify(plan1!.plan.samples.map((sample) => ({ name: sample.name, why: sample.why, observed: sample.observed }))));
+  check("a line its facts back is kept in that sample", smileSample?.messages[0]?.body.includes(BACKED_LINE) === true, smileSample?.messages[0]?.body);
+  check("a line its facts do not back (hiring, missing booking, a price) never reaches a plan", !UNBACKED.test(JSON.stringify(plan1!.plan)), JSON.stringify(plan1!.plan.samples.map((sample) => sample.messages[0]?.body)));
+  const [smileMember] = await db.select().from(schema.leadAudienceMembers)
+    .where(and(eq(schema.leadAudienceMembers.organizationId, a.org.id), sql`${schema.leadAudienceMembers.facts} ->> 'website' = ${SMILE_SITE}`));
+  check("the founder its website names is a fact for the writers; the clinic's lead stays the clinic", smileMember?.facts.decisionMakers === "Dr. Kavya Joshi (Founder)" && smileMember.name === "Smile Dental Clinic" && smileMember.facts.booking === "Online booking link (Calendly)", JSON.stringify({ name: smileMember?.name, facts: smileMember?.facts }));
+
   // ---------------------------------------------------------- 4. continuation: short of the target, the request goes on by itself
   replies = turn("Searching again with other words.", [{ tool: "find_leads", args: { what: "dentists", where: "Pune", contactAfter: true, channels: ["whatsapp"] } }]);
   await step(driver!.id);
@@ -321,6 +366,10 @@ await runInOrganization(a.org.id, async () => {
     .where(inArray(whatsappCampaignSends.leadId, db.select({ id: whatsappCampaignLeads.id }).from(whatsappCampaignLeads).where(inArray(whatsappCampaignLeads.campaignId, campaignIds))));
   const messages = await db.select({ n: sql<number>`count(*)::int` }).from(whatsappMessages).where(sql`${whatsappMessages.chatId} in (select c.id from whatsapp_chats c join whatsapp_accounts w on w.id = c.account_id where w.organization_id = ${a.org.id})`);
   check("nothing was sent: no send claim and no WhatsApp message", Number(sends[0]?.n) === 0 && Number(messages[0]?.n) === 0);
+  const written = await db.select({ raw: people.raw, website: sql<string | null>`${people.raw} ->> 'website'` }).from(people).where(eq(people.organizationId, a.org.id));
+  const lineKey = plan1!.plan.personalizationKey;
+  check("at Start the texts are written from the same facts: the backed line is kept, an unbacked one never stored", written.find((row) => row.website === SMILE_SITE)?.raw[lineKey] === BACKED_LINE && !written.some((row) => UNBACKED.test(JSON.stringify(row.raw))),
+    JSON.stringify(written.map((row) => row.raw[lineKey])));
 
   // ---------------------------------------------------------- 7. what the owner sees
   const work = await listWork();

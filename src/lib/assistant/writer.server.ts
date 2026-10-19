@@ -5,7 +5,7 @@ import { completeStructured } from "@/lib/ai/server/structuredCompletion";
 import { retrieveKnowledge } from "@/lib/crm/knowledge";
 import { recordUsage } from "./usage.server";
 import { parseWriterReply, writerReplyInstructions, WRITER_REPLY_SCHEMAS } from "./writerReply";
-import { CHANNEL_RULES, ensureSignOff, personalLineProblem, personalMessageProblem, sequenceProblem, type LeadApproach } from "./messages";
+import { CHANNEL_RULES, ensureSignOff, leadClaimProblem, personalLineProblem, personalMessageProblem, sequenceProblem, type LeadApproach } from "./messages";
 import { lineClash, PERSONAL_LINE_LIMITS, pitchProblems } from "./pitch";
 import { profileKnowledgeText } from "./profile";
 import type { AudienceChannel, BusinessProfile, PlannedStep } from "./schema";
@@ -211,6 +211,12 @@ export async function reviewFirstMessages(input: {
 }
 
 /**
+ * How the writers may use what a lead's own website showed (websiteProfile.ts):
+ * as a possible reason to write, never as interest, never as something lacking.
+ */
+const WEBSITE_FINDINGS_RULE = "FACTS named hiring, booking, contactOptions, websiteSays, websiteNeed and decisionMakers are what the lead's own website showed: mention one only when it bears on the offer, as something they may care about, never as them wanting to buy. Never say they lack or do not have something: their website not showing it does not mean they lack it. A person in decisionMakers may be named, but the message goes to the business's own address, not to that person's.";
+
+/**
  * One opening sentence per lead, from that lead's public facts only. A
  * lead whose facts give nothing specific gets an empty line (the template
  * reads fine without it) rather than an invented compliment.
@@ -236,6 +242,7 @@ export async function writePersonalLines(input: {
     systemPrompt: [
       "For each lead, write ONE short opening sentence that shows the message was written for them, as the sender of cold outreach. Keep it within the length given for the lead (about 120 characters for a chat message, 200 for an email).",
       "Use only that lead's FACTS below (their kind of business, city, website, rating). Never invent anything about them: no made-up news, achievements, people or numbers.",
+      WEBSITE_FINDINGS_RULE,
       "Do not praise generically and do not pitch; the rest of the message does that. If the facts give nothing specific, return an empty string for that lead.",
       "The line goes right before the MESSAGE AFTER it shown for the lead: it must read naturally in front of it, must not start the way that message's sentences start, and must not repeat its words. The owner's style applies to the message as a whole, so do not copy its opening words into the line.",
       "No placeholders, brackets or merge fields. Do not claim anything was sent or booked.",
@@ -262,8 +269,10 @@ export async function writePersonalLines(input: {
         const limit = lead?.channel ? PERSONAL_LINE_LIMITS[lead.channel] : null;
         const clash = line && lead?.messageAfter ? lineClash(line, lead.messageAfter) : null;
         const tooLong = line && limit && line.length > limit ? `keep it within ${limit} characters (it has ${line.length})` : null;
-        if (clash || tooLong) {
-          clashes.push(`Lead ${item.index}: ${[clash, tooLong].filter(Boolean).join("; ")}.`);
+        // Something about the lead its facts do not back: rewritten, and past the retries left out.
+        const unbacked = line && lead ? leadClaimProblem(line, lead.facts, input.context) : null;
+        if (clash || tooLong || unbacked) {
+          clashes.push(`Lead ${item.index}: ${[clash, tooLong, unbacked].filter(Boolean).join("; ")}.`);
           // Past the retries, a clashing line is left out: the message reads fine without it.
           lines.set(item.index, "");
           continue;
@@ -316,7 +325,7 @@ export async function sortLeads(input: {
       "approach 'standard': the group's message fits this lead. This is the default.",
       "approach 'personal': rare. Every standard message already opens with a line from the lead's address, rating and category, so choose 'personal' only when the facts show something particular to this lead that the group's message would miss (a specialty, a stated need, a detail from its website or title) and it fits the owner's offer well.",
       "approach 'skip': clearly not a fit for the owner's offer (a different kind of business, a competitor of the owner, closed, or obviously out of reach). Never skip only because little is known.",
-      "reason: one short sentence the owner reads, based only on the facts given. Never invent facts about a lead.",
+      "reason: one short sentence the owner reads, based only on the facts given. Never invent facts about a lead. A finding from their own website (hiring, booking, websiteSays, websiteNeed, decisionMakers) is a reason they may fit, never a sign they want to buy: say 'may', never 'wants' or 'needs'.",
     ].join("\n"),
     userPrompt: [
       writerReplyInstructions("lead_sorting"),
@@ -367,6 +376,7 @@ export async function writePersonalMessages(input: {
     systemPrompt: [
       "You write the FIRST cold outreach message to one lead at a time, as the business owner, for leads whose details make a tailored message worthwhile.",
       "Use only the BUSINESS INFORMATION and that lead's FACTS. Never invent facts, results, clients, prices, offers, links, news or compliments the facts do not support.",
+      WEBSITE_FINDINGS_RULE,
       "Show in the first sentence or two that it was written for them (their kind of business, what they do, their area), then the offer in one or two sentences, then one low-effort question. No hype, no exclamation marks, no merge fields, brackets or placeholders.",
       "Keep the voice and offer of the GROUP MESSAGE you are given; only make it fit this lead better. Name the one or two services that matter most to this lead, never a list, start each sentence differently, and keep a chat message short enough to read on one phone screen.",
       input.signatureAppended
@@ -392,6 +402,12 @@ export async function writePersonalMessages(input: {
         if (!lead) continue;
         const [signed] = ensureSignOff(lead.channel, [{ subject: CHANNEL_RULES[lead.channel].subject ? item.subject.trim() || null : null, body: item.body.trim(), waitDays: 0 }], input.profile, input.signatureAppended);
         if (personalMessageProblem(lead.channel, { subject: signed!.subject, body: signed!.body })) continue;
+        const unbacked = leadClaimProblem(`${signed!.subject ?? ""}\n${item.body}`, lead.facts, input.context);
+        // Past the retries, a message saying what the facts do not back is left out: the lead gets its group's.
+        if (unbacked) {
+          pitch.push(`Lead ${item.index}: ${unbacked}.`);
+          continue;
+        }
         const found = pitchProblems(lead.channel, item.body.trim(), { first: true });
         // A message still failing after the retries is left out: that lead gets the group's message.
         if (found.length) {

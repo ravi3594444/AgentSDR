@@ -146,23 +146,44 @@ export const leadAudiences = pgTable(
 export type AudienceChannel = "email" | "whatsapp" | "linkedin" | "instagram";
 
 /** Where a contact detail came from: the page or listing a person can open to check it. */
-export type ContactEvidence = { kind: "email" | "phone" | "linkedin" | "website" | "instagram"; value: string; sourceUrl: string | null; source: string };
+export type ContactEvidence = {
+  kind: "email" | "phone" | "linkedin" | "website" | "instagram";
+  value: string;
+  sourceUrl: string | null;
+  source: string;
+  /** A website that was read: when (ISO) and which of its pages (websiteProfile.ts). */
+  checkedAt?: string;
+  pagesRead?: string[];
+};
 
 /**
  * Something a lead actually said or did that bears on whether they need the
  * offer, quoted with where it was found. Only `need` signals are evidence of
  * a need: a follow, like or generic comment is recorded as `engagement` and
- * never counts as buying intent (qualification.ts).
+ * never counts as buying intent (qualification.ts). What a business's own
+ * website shows (websiteProfile.ts) is an `observation`: a reason it may
+ * fit, never interest; only an explicit request for suppliers there is a
+ * `need`.
  */
 export type LeadSignal = {
-  kind: "need" | "engagement";
-  /** Their words, exactly as found (an inquiry, a comment, a post caption). */
+  kind: "need" | "engagement" | "observation";
+  /** Their words, exactly as found (an inquiry, a comment, a post caption, a line of their website). */
   text: string;
   sourceUrl: string | null;
   /** "website form", "Instagram comment", "Instagram message", … */
   source: string;
-  /** When they said it, when known (ISO). */
+  /** When they said it, when known (ISO). Unknown for a website. */
   at: string | null;
+  /** A website finding: what it is about. */
+  topic?: "need" | "hiring" | "booking" | "contact" | "context" | "person";
+  /** When the page was read (ISO). */
+  observedAt?: string;
+  /** How sure it is, in the owner's words ("careers page undated; the opening may already be filled"). */
+  uncertainty?: string;
+  /** Why it may matter to the owner's offer, inferred from matching words; never buying interest. */
+  relevance?: string | null;
+  /** A person the website names with a role, with only the contacts shown beside their name. */
+  person?: { name: string; role: string; email: string | null; linkedin: string | null };
 };
 
 /**
@@ -355,8 +376,21 @@ export type OutreachPlan = {
   sequences: Partial<Record<AudienceChannel, PlannedStep[]>>;
   /** The per-lead line's merge key, e.g. "p_1a2b3c4d" (stored on people.raw). */
   personalizationKey: string;
-  /** A few leads' messages as they will be sent, for the owner to read. */
-  samples: { personId: string; name: string; channel: AudienceChannel; groupId?: string; approach?: "standard" | "personal"; messages: { subject: string | null; body: string }[] }[];
+  /**
+   * A few leads' messages as they will be sent, for the owner to read; with
+   * why that lead (the sorting's reason) and what its own website showed,
+   * which the messages may draw on: a possible fit, never interest.
+   */
+  samples: {
+    personId: string;
+    name: string;
+    channel: AudienceChannel;
+    groupId?: string;
+    approach?: "standard" | "personal";
+    messages: { subject: string | null; body: string }[];
+    why?: string | null;
+    observed?: { text: string; sourceUrl: string | null; relevance: string | null; need: boolean }[];
+  }[];
   limits: { maxLeads: number; emailPerMailboxPerDay: number | null; whatsappNewChatsPerDay: number | null; instagramNewChatsPerDay?: number | null };
   /** Leads left out and why, counted by reason. */
   excluded: { reason: string; count: number }[];

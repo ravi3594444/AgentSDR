@@ -13,6 +13,9 @@ import type { AudienceChannel, ContactEvidence, LeadSignal } from "./schema";
  *   evidence of need, and never changes the status.
  * - Location, budget and contact details that were not found stay
  *   "Unknown": nothing is filled in from the search words or a guess.
+ * - What a business's own website shows is an observation: a reason it may
+ *   fit, never interest. What the pages read did not show is "not found on
+ *   the pages read", never "does not exist".
  */
 
 export type ProspectStatus = "potential_match" | "inquired" | "replied" | "interested" | "excluded";
@@ -61,6 +64,12 @@ export type Prospect = {
   needEvidence: LeadSignal[];
   /** Follows, likes and generic comments: shown, never counted as intent. */
   engagement: LeadSignal[];
+  /** What their own website shows that may matter to the offer: inferred relevance, never interest. */
+  observations: LeadSignal[];
+  /** People their website names with a role. */
+  people: LeadSignal[];
+  /** Their website as read: when, which pages, and what those pages did not show (which is not proof it does not exist). */
+  website: { checkedAt: string; pages: string[]; notFound: string[] } | null;
   location: string;
   budget: string;
 };
@@ -106,6 +115,20 @@ function budgetOf(facts: Record<string, string>): string {
   return facts.budget?.trim() || UNKNOWN;
 }
 
+/** What the website check looks for, as the owner reads it when the pages read did not show it. */
+const LOOKED_FOR: [NonNullable<LeadSignal["topic"]>, string][] = [
+  ["booking", "an online booking link"],
+  ["hiring", "hiring that matches your offer"],
+  ["person", "people named with a role"],
+];
+
+function websiteRead(evidence: readonly ContactEvidence[], signals: readonly LeadSignal[]): Prospect["website"] {
+  const site = evidence.find((item) => item.kind === "website" && item.checkedAt);
+  if (!site?.checkedAt) return null;
+  const seen = new Set(signals.map((signal) => signal.topic));
+  return { checkedAt: site.checkedAt, pages: site.pagesRead ?? [], notFound: LOOKED_FOR.filter(([topic]) => !seen.has(topic)).map(([, label]) => label) };
+}
+
 export function prospectStatus(input: Pick<ProspectInput, "status" | "signals" | "crm" | "source">): ProspectStatus {
   if (input.status === "excluded") return "excluded";
   if (input.crm?.categoryKey === "interested") return "interested";
@@ -133,6 +156,9 @@ export function qualifyProspect(input: ProspectInput): Prospect {
     routes,
     needEvidence: input.signals.filter((signal) => signal.kind === "need"),
     engagement: input.signals.filter((signal) => signal.kind === "engagement"),
+    observations: input.signals.filter((signal) => signal.kind === "observation" && signal.topic !== "person"),
+    people: input.signals.filter((signal) => signal.topic === "person"),
+    website: websiteRead(input.evidence, input.signals),
     location: locationOf(input.facts),
     budget: budgetOf(input.facts),
   };

@@ -24,7 +24,7 @@ import { instagramOutreachReady, queueInstagramOutreach } from "@/lib/instagram/
 import { instagramUsername } from "@/lib/instagram/parse";
 import { featureEnabled } from "@/lib/features/flags.server";
 import { requeueRunAutopilot } from "./autopilotRun.server";
-import { eligibleAudienceMembers, summarizeAudience } from "./audiences.server";
+import { eligibleAudienceMembers, memberInsights, summarizeAudience } from "./audiences.server";
 import { countReasons } from "./audiences";
 import { availableTokens, leadTextKey, MAX_PERSONAL, perLeadSteps, personalizationKey, settleGroups, templateTokens, type LeadApproach } from "./messages";
 import { displayBusinessName, pitchProblems } from "./pitch";
@@ -391,6 +391,17 @@ export async function prepareOutreach(input: PrepareInput): Promise<Proposal> {
     const followUps = steps.slice(1).map((step) => render(step, leadVariables(row, key, "")));
     samples.push({ personId: message.personId, name: message.name, channel: message.channel, groupId: group.id, approach: "personal", messages: [{ subject: message.subject, body: message.body }, ...followUps] });
   }
+  // Why each sample lead, and what its own website showed: what its messages may draw on.
+  const memberOf = new Map(members.flatMap((member) => (member.personId ? [[member.personId, member.id] as const] : [])));
+  const insights = await memberInsights(samples.flatMap((sample) => memberOf.get(sample.personId) ?? []));
+  for (const sample of samples) {
+    const signals = insights.get(memberOf.get(sample.personId) ?? "")?.signals ?? [];
+    sample.why = leadPlans[sample.personId]?.reason || null;
+    sample.observed = signals
+      .filter((signal) => signal.topic && signal.topic !== "person")
+      .slice(0, 3)
+      .map((signal) => ({ text: signal.text, sourceUrl: signal.sourceUrl, relevance: signal.relevance ?? null, need: signal.kind === "need" }));
+  }
 
   const perChannel = (channel: AudienceChannel) => finalAssignments.filter((assignment) => assignment.channel === channel).length;
   const days = Math.max(0, ...channels.map((channel) => {
@@ -581,7 +592,8 @@ async function writeLines(runId: string, key: string, personIds: string[], start
       const channel = run.plan.assignments.find((item) => item.personId === personId)?.channel;
       return {
         index: startIndex + index,
-        facts: { ...facts.get(personId), name: rows.get(personId)?.person.fullName ?? "" },
+        // The same facts the plan's sample lines were written from.
+        facts: leadFacts(facts.get(personId) ?? {}, rows.get(personId)),
         channel,
         messageAfter: channel ? firstMessageAfterLine(run.plan.sequences[channel]?.[0], rows.get(personId), key) : "",
       };
@@ -618,7 +630,8 @@ async function writeLeadTexts(run: NonNullable<Awaited<ReturnType<typeof getRun>
       const group = plan.groups?.find((item) => item.id === plan.leadPlans?.[personId]?.groupId) ?? plan.groups?.[0];
       return {
         index: startIndex + index,
-        facts: { ...facts.get(personId), name: rows.get(personId)?.person.fullName ?? "" },
+        // The same facts the plan's sample lines were written from.
+        facts: leadFacts(facts.get(personId) ?? {}, rows.get(personId)),
         channel,
         messageAfter: channel ? firstMessageAfterLine(group?.sequences[channel]?.[0], rows.get(personId), key) : "",
       };

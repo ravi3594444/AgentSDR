@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { availableTokens, ensureSignOff, leadTextKey, MAX_GROUPS, perLeadSteps, personalMessageProblem, settleGroups, personalizationKey, personalLineProblem, sequenceProblem, templateProblem, templateTokens } from "./messages";
+import { availableTokens, ensureSignOff, leadClaimProblem, leadTextKey, MAX_GROUPS, perLeadSteps, personalMessageProblem, settleGroups, personalizationKey, personalLineProblem, sequenceProblem, templateProblem, templateTokens } from "./messages";
 
 const TOKENS = ["firstName", "company", "city", "category", "p_1a2b3c4d"];
 
@@ -112,5 +112,44 @@ describe("sorting leads into kinds", () => {
     expect(personalMessageProblem("email", { subject: null, body: "Hello" })).toContain("subject");
     expect(personalMessageProblem("whatsapp", { subject: null, body: "Hi {{company}}" })).not.toBeNull();
     expect(personalMessageProblem("linkedin", { subject: null, body: "x".repeat(300) })).toContain("280");
+  });
+});
+
+describe("claims about a lead that its facts do not back", () => {
+  const knowledge = "Smile Desk answers clinic calls 24/7 for Rs 4,999 a month. Book a demo at https://smiledesk.example/demo.";
+  const plain = { businessName: "Lotus Dental", city: "Pune", category: "Dentist", rating: "4.8" };
+  const observed = { ...plain, hiring: "Front Desk Receptionist – Full time", decisionMakers: "Dr. Asha Kulkarni (Founder)", booking: "Online booking link (Calendly)" };
+
+  test("what the facts and the owner's information back passes", () => {
+    expect(leadClaimProblem("Hi Dr. Kulkarni, a 4.8 rating in Pune is hard to keep when calls go unanswered.", observed, knowledge)).toBeNull();
+    expect(leadClaimProblem("Saw you're hiring a front desk receptionist at Lotus Dental.", observed, knowledge)).toBeNull();
+    expect(leadClaimProblem("It costs Rs 4,999 a month; see https://smiledesk.example/demo", plain, knowledge)).toBeNull();
+    expect(leadClaimProblem("Hi there, could we talk this week?", plain, knowledge)).toBeNull();
+  });
+
+  test("hiring the website did not show", () => {
+    expect(leadClaimProblem("Saw you're hiring a receptionist, so this may help.", plain, knowledge)).toContain("hiring");
+    expect(leadClaimProblem("Your job posting for a receptionist caught my eye.", plain, knowledge)).toContain("hiring");
+  });
+
+  test("anything they lack: not found on the pages read is not proof it does not exist", () => {
+    for (const text of [
+      "I noticed you don't have online booking on your website.",
+      "Your clinic has no online booking yet.",
+      "I couldn't find a booking link on your site.",
+      "There is no way to book on your website.",
+    ]) expect(leadClaimProblem(text, observed, knowledge)).toContain("lack");
+  });
+
+  test("a name that is not in their facts", () => {
+    expect(leadClaimProblem("Hi Priya, quick question about Lotus Dental.", plain, knowledge)).toContain("Priya");
+    expect(leadClaimProblem("Hello Dr. Mehta, quick question.", observed, knowledge)).toContain("Mehta");
+    expect(leadClaimProblem("Hi Lotus Dental team, quick question.", plain, knowledge)).toBeNull();
+  });
+
+  test("prices, percentages and links the information does not hold", () => {
+    expect(leadClaimProblem("Clinics like yours cut missed calls by 40%.", plain, knowledge)).toContain("40%");
+    expect(leadClaimProblem("Plans start at Rs 999.", plain, knowledge)).toContain("Rs 999");
+    expect(leadClaimProblem("Details at https://made-up.example/offer", plain, knowledge)).toContain("made-up.example");
   });
 });

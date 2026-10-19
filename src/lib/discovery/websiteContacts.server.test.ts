@@ -2,7 +2,8 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import http from "node:http";
 import type { LookupFunction } from "node:net";
 import { deflateRawSync, gzipSync } from "node:zlib";
-import { fetchPublicPage, PageRedirectRefusedError, proxiedByEnvironment, publicOnlyLookup, requestWithLookup, type Resolver } from "./websiteContacts.server";
+import { offerFocus } from "./websiteProfile";
+import { collectWebsiteContacts, fetchPublicPage, PageRedirectRefusedError, proxiedByEnvironment, publicOnlyLookup, requestWithLookup, type Resolver } from "./websiteContacts.server";
 
 /** A local server standing in for a website: it records every request it gets. */
 const hits: { host: string | undefined; path: string | undefined }[] = [];
@@ -181,5 +182,47 @@ describe("proxiedByEnvironment", () => {
     expect(proxiedByEnvironment(new URL("https://notexempt.example/"), env)).toBe(true);
     expect(proxiedByEnvironment(new URL("https://shop.example/"), { https_proxy: "http://p:1", no_proxy: "*" })).toBe(false);
     expect(proxiedByEnvironment(new URL("https://shop.example/"), {})).toBe(false);
+  });
+});
+
+describe("collectWebsiteContacts", () => {
+  const site: Record<string, string> = {
+    "https://lotus.example/": `<html><head><meta name="description" content="Lotus Dental, a family dental clinic in Baner."></head><body>
+      <a href="/contact">Contact</a><a href="/team">Team</a><a href="/careers">Careers</a><a href="/blog">Blog</a>
+      <a href="https://calendly.com/lotus/visit">Book a visit</a><a href="https://www.linkedin.com/company/lotus-dental">LinkedIn</a>
+      <a href="mailto:hello@lotus.example">hello@lotus.example</a></body></html>`,
+    "https://lotus.example/contact": `<form><input type="email" name="email"><textarea></textarea></form><a href="tel:+912012345678">Call</a>`,
+    "https://lotus.example/team": `<div><h3>Dr. Sara Mehta</h3><p>Founder</p><a href="mailto:sara@lotus.example">sara@lotus.example</a></div>`,
+    "https://lotus.example/careers": `<h1>Careers</h1><p>We're hiring!</p><ul><li>Receptionist (part time)</li></ul>`,
+  };
+
+  test("contacts and observations come from the same responses: every page is fetched once, external links never", async () => {
+    const asked: string[] = [];
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const url = String(input);
+      asked.push(url);
+      const html = site[url];
+      return html ? new Response(html, { status: 200, headers: { "content-type": "text/html" } }) : new Response("missing", { status: 404 });
+    }) as typeof fetch;
+    const focus = offerFocus({ offer: "An AI receptionist that answers every call", targetCustomers: "dental clinics" });
+    const result = await collectWebsiteContacts("https://lotus.example/", { fetchImpl, allowPrivate: true }, focus);
+    expect(asked).toEqual(["https://lotus.example/", "https://lotus.example/contact", "https://lotus.example/team", "https://lotus.example/careers"]);
+    expect(result.pagesRead).toEqual(asked);
+    expect(result.contacts.map((contact) => contact.value).sort()).toEqual(["+912012345678", "hello@lotus.example", "https://www.linkedin.com/company/lotus-dental", "sara@lotus.example"]);
+    expect(result.profile?.pagesRead).toEqual(asked);
+    expect(result.profile?.observations.map((item) => [item.topic, item.text])).toEqual([
+      ["booking", "Online booking link (Calendly)"],
+      ["context", "Lotus Dental, a family dental clinic in Baner."],
+      ["contact", "Contact form"],
+      ["hiring", "Receptionist (part time)"],
+    ]);
+    expect(result.profile?.people).toEqual([{ name: "Dr. Sara Mehta", role: "Founder", email: "sara@lotus.example", linkedin: null, sourceUrl: "https://lotus.example/team" }]);
+  });
+
+  test("a site that cannot be read has no profile", async () => {
+    const fetchImpl = (async () => new Response("down", { status: 503 })) as unknown as typeof fetch;
+    const result = await collectWebsiteContacts("https://down.example/", { fetchImpl, allowPrivate: true });
+    expect(result.profile).toBeNull();
+    expect(result.error).toContain("503");
   });
 });

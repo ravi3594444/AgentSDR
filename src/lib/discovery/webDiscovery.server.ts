@@ -47,6 +47,7 @@ import { tavilyConnection, tavilySearchesToday } from "@/lib/tavily/tavily.serve
 import { TinyfishWaitError } from "@/lib/tinyfish/tinyfish.server";
 import { searchWeb, webSearchAvailability, WebSearchUnavailableError, type WebSearchProvider } from "./webSearch.server";
 import { collectWebsiteContacts, fetchPublicPage } from "./websiteContacts.server";
+import { offerFocus, websiteNotes, type OfferFocus, type WebsiteProfile } from "./websiteProfile";
 import { instagramCommenterHold, instagramResearchHold } from "./instagramEligibility";
 import { mentionsPlace } from "@/lib/apify/mapping";
 
@@ -154,6 +155,8 @@ type FoundLead = {
   /** Why the website could not be read, when it could not. */
   error: string | null;
   facts: Record<string, string>;
+  /** What its own website showed for the owner's offer, as read (kept in the payload, so a retry keeps the read time). */
+  profile?: WebsiteProfile | null;
 };
 
 type SearchRecord = { query: string; sources: number; provider: string | null; model: string | null; costUsd: number | null; error: string | null };
@@ -510,6 +513,8 @@ type ReadOutput = { leads: FoundLead[]; candidates: Candidate[]; skipped: { url:
 
 type ReadContext = {
   country: string | undefined;
+  /** The organization's saved offer and customers, which website findings are matched against. */
+  focus: OfferFocus;
   instagram: { usable: boolean; reason: string | null; accountId: string | null; username: string | null } | null;
   owner: OwnerIdentity;
 };
@@ -526,7 +531,7 @@ function phonesOf(values: { value: string; sourceUrl: string }[], country: strin
 async function readSite(candidate: Candidate, context: ReadContext): Promise<ReadOutput> {
   const website = ownWebsite(candidate.url) ?? candidate.url;
   const domain = websiteDomain(website);
-  const result = await collectWebsiteContacts(website, discoveryPageOptions());
+  const result = await collectWebsiteContacts(website, discoveryPageOptions(), context.focus);
   const emails = result.contacts.filter((contact) => contact.kind === "email").map((contact) => ({ value: contact.value, sourceUrl: contact.sourceUrl, source: "the business's website" }));
   const phones = phonesOf(result.contacts.filter((contact) => contact.kind === "phone"), context.country, "the business's website");
   const linkedin = result.contacts.find((contact) => contact.kind === "linkedin" && /\/company\//.test(contact.value)) ?? null;
@@ -558,6 +563,7 @@ async function readSite(candidate: Candidate, context: ReadContext): Promise<Rea
       signals: [],
       error: result.error,
       facts,
+      profile: result.profile,
     }],
     candidates: [],
     skipped: [],
@@ -741,6 +747,7 @@ async function stageReading(job: AssistantJob, heartbeat: () => Promise<void>): 
   const needsInstagram = batch.some((candidate) => candidate.kind === "instagram_profile" || candidate.kind === "instagram_post");
   const context: ReadContext = {
     country: await organizationPhoneCountry(),
+    focus: offerFocus(await getBusinessProfile()),
     // Re-checked per step: the account may have been unlinked or the feature switched off.
     instagram: needsInstagram ? await instagramReadiness() : null,
     owner: await ownerIdentity(payload.criteria),
@@ -828,7 +835,7 @@ function evidenceOf(lead: FoundLead, emails: FoundContactValue[], phones: FoundC
   const evidence: ContactEvidence[] = [];
   if (lead.website) {
     const source = lead.facts.directoryPage ? "linked from a directory page" : lead.instagram ? "listed on the business's Instagram profile" : "web search result";
-    evidence.push({ kind: "website", value: lead.website, sourceUrl: lead.sourceUrl, source });
+    evidence.push({ kind: "website", value: lead.website, sourceUrl: lead.sourceUrl, source, ...(lead.profile ? { checkedAt: lead.profile.checkedAt, pagesRead: lead.profile.pagesRead } : {}) });
   }
   if (lead.instagram) evidence.push({ kind: "instagram", value: lead.instagram.url, sourceUrl: lead.instagram.sourceUrl, source: lead.instagram.source });
   for (const email of emails) evidence.push({ kind: "email", value: email.value, sourceUrl: email.sourceUrl, source: email.source });
@@ -899,8 +906,10 @@ async function saveLead(lead: FoundLead, payload: Payload, context: { job: Assis
   if (lead.kind === "directory_contact" && ownContacts && !emails.length && !phones.length) return { member: null, outcome: "own", known: false, email: false, instagramOnly: false };
   const evidence = evidenceOf(lead, emails, phones);
   const id = stableMemberId(context.job.id, context.index);
-  const base = { id, source: WEB_DISCOVERY_SOURCE, sourceUrl: lead.sourceUrl, evidence, facts: lead.facts, matchReason: lead.matchReason, signals: lead.signals };
   const email = emails[0]?.value ?? null;
+  // What its website showed; the lead is a named person only when the address used is that person's own.
+  const notes = websiteNotes(lead.profile, email);
+  const base = { id, source: WEB_DISCOVERY_SOURCE, sourceUrl: lead.sourceUrl, evidence, facts: { ...lead.facts, ...notes.facts }, matchReason: lead.matchReason, signals: [...lead.signals, ...notes.signals] };
   const phone = phones[0]?.value ?? null;
   // A comment's fallback key may be a numeric provider ID, not a username.
   const username = lead.kind === "instagram_commenter" && !lead.facts.instagramUsername ? null : instagramUsername(lead.instagram?.username);
@@ -945,7 +954,7 @@ async function saveLead(lead: FoundLead, payload: Payload, context: { job: Assis
     const company = lead.kind === "directory_contact" ? null : { name: lead.name, domain: lead.domain, linkedinUrl: lead.companyLinkedin };
     const person = await withLeadTransaction(async (tx) => {
       if (username) return upsertInstagramProspect(tx, username, { email, phone, company, raw, source: PERSON_SOURCE });
-      if (email) return upsertPerson(tx, { email, phone, company, raw, source: PERSON_SOURCE });
+      if (email) return upsertPerson(tx, { email, phone, company, raw, source: PERSON_SOURCE, ...(notes.recipient ? { fullName: notes.recipient.name, title: notes.recipient.role } : {}) });
       const created = await findOrCreateContactPerson(tx, {
         fullName: null,
         phone: phone!,
@@ -1002,7 +1011,7 @@ async function stageSaving(job: AssistantJob, heartbeat: () => Promise<void>): P
     if (saved.member) members.push(saved.member);
     if (saved.known) tally.alreadyKnown += 1;
     if (saved.instagramOnly) tally.instagramOnly += 1;
-    if (saved.member) tally.needSignals += lead.signals.some((signal) => signal.kind === "need") ? 1 : 0;
+    if (saved.member) tally.needSignals += (saved.member.signals ?? []).some((signal) => signal.kind === "need") ? 1 : 0;
     if (saved.outcome === "eligible") {
       if (saved.email) tally.withEmail += 1;
       else if (saved.phone) tally.withPhoneOnly += 1;

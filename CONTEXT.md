@@ -26,6 +26,15 @@ word means here and, where it matters, what it does not mean.
 - **Evidence**: the URL and check time that support a lead's fit, location,
   role or contact route. Evidence is not buying intent. A follow, a post or a
   question does not mean someone wants to buy.
+- **Observation**: something a business's own website shows that bears on
+  the owner's saved offer: a published booking or contact option, an opening
+  that matches the offer, an explicit request for suppliers, its own
+  description, or a person it names with a role. It keeps its page, the time
+  the page was read and how sure it is. Relevance is inferred from matching
+  words and is never buying intent; only an explicit request for suppliers
+  counts as a need. What the pages read did not show is "not found on the
+  pages read", never "does not exist". A person a website names is not the
+  owner of a general address (info@, contact@) found beside them.
 - **Qualified lead**: a person or company whose fit and contact route are
   backed by evidence, deduplicated against People and outreach history. Each
   person counts once, however many sources found them.

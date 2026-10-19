@@ -86,3 +86,12 @@ alternative. Any of them can be reversed later.
 | 57 | Contacted and replied (Activity and the plan card) come from evidence a stop leaves in place; an opt-out counts as a reply | A stopped plan still messaged those people | The lead's current status only |
 | 58 | The tenancy-isolation check counts a company domain only as that host, fails on any unanswered request, and runs against a production build | A static .xlsx's namespace matched a demo domain, and a dev server that died mid-run once passed | Dev server, substring match |
 
+## Website observations (19 October, after the plan)
+
+| # | Default | Why | Alternative |
+| --- | --- | --- | --- |
+| 59 | Website observations are read by rules from the pages the contact reader already fetched (home plus at most 3 same-site pages, now one contact, one about or team and one careers page when linked); relevance is matching words from the organization's saved offer, problems solved and target customers | No new provider, no model call or spend per site; the writer, which already makes a call, decides what to use | One cheap model call per site |
+| 60 | A person a website names with a role stays on the business's lead (insights and the writers' facts); the Person row takes their name and title only when the address the lead is written to is that person's own (in their card, carrying their name) | A general address is never an employee's; separate contactable People would mean two routes into one business and different counts | Create a Person per named decision-maker |
+| 61 | Only an explicit request for suppliers on a website is a need; hiring, booking, contact options, descriptions and people are observations, shown apart, never in the need count or the lead's status | Evidence is not buying intent (CONTEXT.md) | Treat relevant hiring as a need |
+| 62 | A drafted line or first message is refused, sent back once with the reason and then left out (the group's message is used) when it gives a price, percentage or link the information and facts do not hold, says the lead is hiring without a hiring finding, addresses a name not in the facts, or says the lead lacks something | Unsupported claims never reach a lead, and a plan never stops on it | Prompt rules only |
+| 63 | Start writes each lead's line from the same facts as the plan's samples (`leadFacts`) | The preview showed lines written from more facts than the ones sent | Keep the raw member facts at Start |

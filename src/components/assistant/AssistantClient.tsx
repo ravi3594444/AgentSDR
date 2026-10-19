@@ -234,7 +234,18 @@ function AudienceSummary({ audience }: { audience: AudienceData }) {
   );
 }
 
-type ProspectSignal = { kind: "need" | "engagement"; text: string; sourceUrl: string | null; source: string; at: string | null };
+type ProspectSignal = {
+  kind: "need" | "engagement" | "observation";
+  text: string;
+  sourceUrl: string | null;
+  source: string;
+  at: string | null;
+  topic?: string;
+  observedAt?: string;
+  uncertainty?: string;
+  relevance?: string | null;
+  person?: { name: string; role: string; email: string | null; linkedin: string | null };
+};
 type ProspectView = {
   personId: string | null;
   name: string;
@@ -247,17 +258,53 @@ type ProspectView = {
   routes: { channel: string; value: string; sourceUrl: string | null; note: string }[];
   needEvidence: ProspectSignal[];
   engagement: ProspectSignal[];
+  observations: ProspectSignal[];
+  people: ProspectSignal[];
+  website: { checkedAt: string; pages: string[]; notFound: string[] } | null;
   location: string;
   budget: string;
 };
 type ProspectsPayload = { counts: Record<string, number>; prospects: ProspectView[] };
 
+/** What the lead's own website showed, kept apart from need: each line with its page, and what the pages read did not show. */
+function WebsiteFindings({ prospect, website }: { prospect: ProspectView; website: NonNullable<ProspectView["website"]> }) {
+  const pages = `${website.pages.length} page${website.pages.length === 1 ? "" : "s"}`;
+  return (
+    <div className="mt-1 border-t border-stroke-soft-200 pt-1">
+      <p className="text-text-soft-400">Their website, read {new Date(website.checkedAt).toLocaleDateString()} ({pages}): a possible fit for your offer, not a sign they want to buy.</p>
+      {prospect.observations.map((signal, index) => (
+        <p key={`observation-${index}`} className="mt-0.5 break-words text-text-sub-600">
+          {signal.text}{" "}
+          <span className="text-text-soft-400">
+            — {signal.sourceUrl ? <a href={signal.sourceUrl} target="_blank" rel="noopener noreferrer" className="hover:underline">{hostOf(signal.sourceUrl)}</a> : signal.source}
+            {signal.relevance ? ` · ${signal.relevance}` : ""}{signal.uncertainty ? ` · ${signal.uncertainty}` : ""}
+          </span>
+        </p>
+      ))}
+      {prospect.people.length > 0 && (
+        <p className="mt-0.5 break-words text-text-sub-600">
+          Named on their website:{" "}
+          {prospect.people.map((signal, index) => (
+            <span key={`person-${index}`}>
+              {index > 0 ? "; " : ""}
+              {signal.sourceUrl ? <a href={signal.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-primary-base hover:underline">{signal.person?.name ?? signal.text}</a> : signal.person?.name ?? signal.text}
+              {signal.person ? ` (${signal.person.role}${signal.person.email ? `, ${signal.person.email}` : ""})` : ""}
+            </span>
+          ))}
+        </p>
+      )}
+      {website.notFound.length > 0 && <p className="mt-0.5 text-text-soft-400">Not found on the {pages} read (which does not mean it does not exist): {website.notFound.join(", ")}.</p>}
+    </div>
+  );
+}
+
 const PROSPECT_COLOR: Record<ProspectView["status"], "gray" | "green" | "blue" | "orange"> = { potential_match: "gray", inquired: "blue", replied: "orange", interested: "green", excluded: "gray" };
 
 /**
  * Every lead of a list before outreach: where and when it was found, why it
- * matched, how it can be reached (each detail with its page), and only the
- * lead's own words as evidence of a need. Loaded when opened.
+ * matched, how it can be reached (each detail with its page), only the
+ * lead's own words as evidence of a need, and apart from them what its own
+ * website showed (a possible fit, never interest). Loaded when opened.
  */
 function ProspectsList({ audienceId }: { audienceId: string }) {
   const [data, setData] = useState<ProspectsPayload | null>(null);
@@ -311,6 +358,7 @@ function ProspectsList({ audienceId }: { audienceId: string }) {
               ))}
               {prospect.engagement.length > 0 && <p className="mt-0.5 text-text-soft-400">{prospect.engagement.length} like{prospect.engagement.length === 1 ? "" : "s"}, follow{prospect.engagement.length === 1 ? "" : "s"} or generic comment{prospect.engagement.length === 1 ? "" : "s"} (not counted as interest)</p>}
               {!prospect.needEvidence.length && prospect.status === "potential_match" && <p className="mt-0.5 text-text-soft-400">No evidence of a need found.</p>}
+              {prospect.website && <WebsiteFindings prospect={prospect} website={prospect.website} />}
               <p className="mt-0.5 text-text-soft-400">Location: {prospect.location} · Budget: {prospect.budget}</p>
             </li>
           ))}
@@ -372,7 +420,15 @@ type ProposalData = {
   audience: { name: string; eligible: number; total: number };
   plan: {
     assignments: { channel: string }[];
-    samples: { name: string; channel: string; groupId?: string; approach?: "standard" | "personal"; messages: { subject: string | null; body: string }[] }[];
+    samples: {
+      name: string;
+      channel: string;
+      groupId?: string;
+      approach?: "standard" | "personal";
+      messages: { subject: string | null; body: string }[];
+      why?: string | null;
+      observed?: { text: string; sourceUrl: string | null; relevance: string | null; need: boolean }[];
+    }[];
     groups?: { id: string; label: string; count: number }[];
     personal?: { personId: string; name: string }[];
     skipped?: { personId: string; name: string; reason: string }[];
@@ -510,6 +566,19 @@ function ProposalCard({ message, run, canManageAutopilot, lastReplyMode, onChang
               {sample.approach === "personal" ? "Written for" : "Sample ·"} {sample.name} · {CHANNEL_LABEL[sample.channel] ?? sample.channel}
               {plan.groups && plan.groups.length > 1 && sample.groupId ? <span className="font-normal text-text-sub-600"> · {plan.groups.find((group) => group.id === sample.groupId)?.label}</span> : null}
             </summary>
+            {sample.why && <p className="mt-1.5 text-paragraph-xs text-text-sub-600">Why this lead: {sample.why}</p>}
+            {sample.observed && sample.observed.length > 0 && (
+              <div className="mt-1 text-paragraph-xs text-text-sub-600">
+                <p className="text-text-soft-400">From their website: a possible fit, not a sign they want to buy.</p>
+                {sample.observed.map((item, itemIndex) => (
+                  <p key={itemIndex} className="mt-0.5 break-words">
+                    {item.need ? "Their own request: " : ""}{item.text}
+                    {item.sourceUrl ? <> · <a href={item.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-primary-base hover:underline">{hostOf(item.sourceUrl)}</a></> : null}
+                    {item.relevance ? <span className="text-text-soft-400"> · {item.relevance}</span> : null}
+                  </p>
+                ))}
+              </div>
+            )}
             <ol className="mt-2 space-y-2">
               {sample.messages.map((msg, step) => (
                 <li key={step} className="rounded-md bg-bg-white-0 p-2.5 ring-1 ring-inset ring-stroke-soft-200">

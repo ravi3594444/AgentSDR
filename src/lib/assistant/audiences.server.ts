@@ -219,30 +219,39 @@ export async function addAudienceMembers(audienceId: string, members: readonly N
       });
     }
   }
-  let added = 0;
-  let eligible = 0;
-  const insertedIds: string[] = [];
-  for (let index = 0; index < values.length; index += 500) {
-    const inserted = await db.insert(leadAudienceMembers).values(values.slice(index, index + 500)).onConflictDoNothing()
-      .returning({ id: leadAudienceMembers.id, status: leadAudienceMembers.status });
-    added += inserted.length;
-    eligible += inserted.filter((row) => row.status === "eligible").length;
-    insertedIds.push(...inserted.map((row) => row.id));
-  }
-  await saveMemberInsights(insertedIds.flatMap((id) => {
-    const insight = insights.get(id);
-    return insight ? [{ memberId: id, matchReason: insight.matchReason ?? null, signals: insight.signals ?? [] }] : [];
-  }));
-  return { added, eligible, excluded: added - eligible };
+  // Members and their insights in one transaction: a step that dies between the two cannot leave a
+  // member without its evidence, which its retry (a no-op for the member) would never write.
+  return db.transaction(async (tx) => {
+    let added = 0;
+    let eligible = 0;
+    const insertedIds: string[] = [];
+    for (let index = 0; index < values.length; index += 500) {
+      const inserted = await tx.insert(leadAudienceMembers).values(values.slice(index, index + 500)).onConflictDoNothing()
+        .returning({ id: leadAudienceMembers.id, status: leadAudienceMembers.status });
+      added += inserted.length;
+      eligible += inserted.filter((row) => row.status === "eligible").length;
+      insertedIds.push(...inserted.map((row) => row.id));
+    }
+    await saveMemberInsights(tx, insertedIds.flatMap((id) => {
+      const insight = insights.get(id);
+      return insight ? [{ memberId: id, matchReason: insight.matchReason ?? null, signals: insight.signals ?? [] }] : [];
+    }));
+    return { added, eligible, excluded: added - eligible };
+  });
 }
 
+type Transaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
 /** Stores match reasons and signals; skipped (nothing lost but the notes) before the migration created their table. */
-async function saveMemberInsights(rows: (typeof leadAudienceMemberInsights.$inferInsert)[]): Promise<void> {
+async function saveMemberInsights(tx: Transaction, rows: (typeof leadAudienceMemberInsights.$inferInsert)[]): Promise<void> {
   if (!rows.length) return;
   try {
-    for (let index = 0; index < rows.length; index += 500) {
-      await db.insert(leadAudienceMemberInsights).values(rows.slice(index, index + 500)).onConflictDoNothing();
-    }
+    // In a savepoint, so a missing table does not abort the members' transaction.
+    await tx.transaction(async (savepoint) => {
+      for (let index = 0; index < rows.length; index += 500) {
+        await savepoint.insert(leadAudienceMemberInsights).values(rows.slice(index, index + 500)).onConflictDoNothing();
+      }
+    });
   } catch (error) {
     if (!isMissingTable(error)) throw error;
   }
@@ -313,6 +322,7 @@ export async function summarizeAudience(audienceId: string): Promise<AudienceSum
 /** The eligible people of an audience, oldest first. */
 export async function eligibleAudienceMembers(audienceId: string) {
   return db.select({
+    id: leadAudienceMembers.id,
     personId: leadAudienceMembers.personId,
     name: leadAudienceMembers.name,
     channels: leadAudienceMembers.channels,
