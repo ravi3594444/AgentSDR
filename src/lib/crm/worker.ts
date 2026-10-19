@@ -1,4 +1,5 @@
 import { runInOrganization } from "@/lib/tenancy/scope";
+import { savedErrorText } from "@/lib/grid/sanitize";
 import type { CrmJobKind } from "./schema";
 import {
   CrmJobClaimLostError,
@@ -117,7 +118,7 @@ async function runJob(job: CrmJob): Promise<void> {
     await completeCrmJob(job);
   } catch (error) {
     if (error instanceof CrmJobClaimLostError) return;
-    const message = error instanceof Error ? error.message : String(error);
+    const message = savedErrorText(error, 2_000);
     const { willRetry } = await failCrmJob(job, message, {
       permanent: error instanceof PermanentCrmJobError,
       retryAt: error instanceof RetryCrmJobLaterError ? error.retryAt : undefined,

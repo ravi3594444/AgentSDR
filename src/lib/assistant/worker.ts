@@ -3,6 +3,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { and, asc, eq, gte, inArray, isNotNull, isNull, lt, or, sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
+import { cleanJson, clippedString, savedErrorText } from "@/lib/grid/sanitize";
 import { maybeCurrentOrganizationId, runInOrganization } from "@/lib/tenancy/scope";
 import { assistantJobs, type AssistantJobKind } from "./schema";
 
@@ -22,6 +23,14 @@ import { assistantJobs, type AssistantJobKind } from "./schema";
  * nothing; and the loop reposts reports a stop between the two lost
  * (reconcileAssistantJobReports), and hands back a reported job whose
  * follow-up a stop left undone (followUpDue).
+ *
+ * Every write is bounded. What a step returns is cleaned before it is saved
+ * (NUL and lone surrogates, which Postgres refuses; errors clipped). A step
+ * whose result the database still refuses runs again with backoff, keeping
+ * the payload earlier steps saved, and the job fails after
+ * MAX_STEP_FAILURES saying why. A job claimed again and again without any
+ * step's result being saved (its process stopped mid-step, or every write
+ * was refused) fails at the claim ceiling without running its step again.
  */
 
 export type AssistantJob = typeof assistantJobs.$inferSelect;
@@ -38,6 +47,8 @@ export type StepHandler = (job: AssistantJob, heartbeat: () => Promise<void>) =>
 const POLL_MS = Number(process.env.ASSISTANT_WORKER_POLL_MS ?? 3_000);
 const STALE_MS = 3 * 60_000;
 const MAX_STEP_FAILURES = 5;
+/** The longest error a job keeps. */
+const MAX_ERROR_CHARS = 2_000;
 /** How often the loop looks for reports a stop lost, how long it leaves the normal path to post one, and how far back. */
 const RECONCILE_MS = 60_000;
 const REPORT_GRACE_MS = 30_000;
@@ -101,23 +112,46 @@ export function mergeJobProgress(prior: Record<string, unknown>, next: Record<st
   return { ...kept, ...next };
 }
 
+/** A step's error as a job keeps it and its chat report shows it (savedErrorText: never a failed query's values). */
+export function jobErrorText(error: unknown): string {
+  return savedErrorText(error, MAX_ERROR_CHARS);
+}
+
+/** How long a job waits before its step runs again, after `attempts` tries in a row that saved nothing. */
+export function retryDelayMs(attempts: number): number {
+  return Math.min(60_000, 5_000 * 2 ** attempts);
+}
+
+/**
+ * True when a job has been claimed this often without a step's result being
+ * saved. Failed steps and refused saves end the job at MAX_STEP_FAILURES on
+ * their own; only claims that never got that far (the process stopped
+ * mid-step, or the fallback write was refused too) reach this.
+ */
+export function pastClaimCeiling(attempts: number): boolean {
+  return attempts > MAX_STEP_FAILURES + 2;
+}
+
+function owned(job: AssistantJob) {
+  return and(eq(assistantJobs.id, job.id), eq(assistantJobs.lockedBy, workerId));
+}
+
 async function release(job: AssistantJob, outcome: StepOutcome, stepFailed = false): Promise<AssistantJob | null> {
   const base = { lockedBy: null, heartbeatAt: null, attempts: 0 };
-  const progress = mergeJobProgress(job.progress, outcome.progress, { stepFailed });
-  const owned = and(eq(assistantJobs.id, job.id), eq(assistantJobs.lockedBy, workerId));
+  const progress = cleanJson(mergeJobProgress(job.progress, outcome.progress, { stepFailed }));
   if (outcome.next === "wait") {
     await db.update(assistantJobs).set({
       ...base, status: "queued", progress, runAfter: new Date(Date.now() + outcome.delayMs),
-      ...(outcome.payload ? { payload: { ...job.payload, ...outcome.payload } } : {}),
-    }).where(owned);
+      ...(outcome.payload ? { payload: cleanJson({ ...job.payload, ...outcome.payload }) } : {}),
+    }).where(owned(job));
     return null;
   }
   if (outcome.next === "stage") {
     await db.update(assistantJobs).set({
       ...base, status: "queued", stage: outcome.stage, progress, runAfter: new Date(),
-      ...(outcome.payload ? { payload: { ...job.payload, ...outcome.payload } } : {}),
+      ...(outcome.payload ? { payload: cleanJson({ ...job.payload, ...outcome.payload }) } : {}),
       ...(outcome.externalId !== undefined ? { externalId: outcome.externalId } : {}),
-    }).where(owned);
+    }).where(owned(job));
     return null;
   }
   const status = outcome.next === "done" ? "succeeded" : "failed";
@@ -126,14 +160,54 @@ async function release(job: AssistantJob, outcome: StepOutcome, stepFailed = fal
     status,
     stage: outcome.next === "done" ? "done" : job.stage,
     progress,
-    result: outcome.next === "done" ? outcome.result : job.result,
-    error: outcome.next === "failed" ? outcome.error : null,
+    result: outcome.next === "done" ? cleanJson(outcome.result) : job.result,
+    error: outcome.next === "failed" ? clippedString(outcome.error, MAX_ERROR_CHARS) : null,
     finishedAt: new Date(),
     // Written with the terminal status: from here this outcome is owed one report.
     reportKey: jobReportKey(job.id, status),
     reportedAt: null,
-  }).where(owned).returning();
+  }).where(owned(job)).returning();
   return finished ?? null;
+}
+
+/** Puts a job back for its step to run again after a backoff, keeping its attempt count and everything saved. */
+async function retryLater(job: AssistantJob, lastError: string): Promise<void> {
+  await db.update(assistantJobs).set({
+    lockedBy: null, heartbeatAt: null, status: "queued", runAfter: new Date(Date.now() + retryDelayMs(job.attempts)),
+    progress: { ...job.progress, lastError: clippedString(lastError, MAX_ERROR_CHARS) },
+  }).where(owned(job));
+}
+
+/** Ends a job as failed without anything its last step returned: payload, stage and result stay as last saved. */
+async function failAsSaved(job: AssistantJob, error: string): Promise<AssistantJob | null> {
+  const [finished] = await db.update(assistantJobs).set({
+    lockedBy: null, heartbeatAt: null, status: "failed",
+    error: clippedString(error, MAX_ERROR_CHARS),
+    finishedAt: new Date(),
+    reportKey: jobReportKey(job.id, "failed"),
+    reportedAt: null,
+  }).where(owned(job)).returning();
+  return finished ?? null;
+}
+
+/**
+ * A step ran but its result could not be saved (the database refused it,
+ * or it could not be written at all). Nothing of the result is kept, so
+ * what earlier steps saved stays: the step runs again after a backoff, and
+ * after MAX_STEP_FAILURES tries the job fails saying why. If even this
+ * write is refused the job stays claimed until its heartbeat goes stale,
+ * and the claim ceiling ends it.
+ */
+async function recoverUnsaved(job: AssistantJob, reason: string): Promise<AssistantJob | null> {
+  try {
+    if (job.attempts >= MAX_STEP_FAILURES) {
+      return await failAsSaved(job, `Stopped: its result could not be saved after ${job.attempts} attempts (${reason}). Work saved before this step is kept.`);
+    }
+    await retryLater(job, `Its result could not be saved: ${reason}`);
+  } catch (error) {
+    console.error(`[assistant/worker] ${job.kind} ${job.id}: recording that its result could not be saved failed too; it is retried when its claim goes stale:`, error);
+  }
+  return null;
 }
 
 /** The report key of a job's terminal outcome. */
@@ -237,6 +311,14 @@ let lastReconcile = 0;
 export async function runOneAssistantStep(options: { jobId?: string } = {}): Promise<boolean> {
   const job = await claim(options.jobId);
   if (!job) return false;
+  let finished: AssistantJob | null = null;
+  if (pastClaimCeiling(job.attempts)) {
+    console.error(`[assistant/worker] ${job.kind} ${job.id} stage ${job.stage}: claimed ${job.attempts} times without a step finishing; stopping it`);
+    finished = await failAsSaved(job, `Stopped: it was picked up ${job.attempts - 1} times without its step finishing (the server stopped or could not save during the step). Work saved before this step is kept.`)
+      .catch((error) => { console.error(`[assistant/worker] could not stop ${job.kind} ${job.id}:`, error); return null; });
+    await report(finished);
+    return true;
+  }
   const handler = handlers.get(job.kind);
   const heartbeat = async () => {
     await db.update(assistantJobs).set({ heartbeatAt: new Date() })
@@ -250,26 +332,31 @@ export async function runOneAssistantStep(options: { jobId?: string } = {}): Pro
       : { next: "failed", error: `No handler for ${job.kind} jobs in this server` };
   } catch (error) {
     stepFailed = true;
-    const message = error instanceof Error ? error.message : String(error);
+    const message = jobErrorText(error);
     console.error(`[assistant/worker] ${job.kind} ${job.id} stage ${job.stage} failed:`, error);
-    // An unexpected error retries the same stage with backoff, a few times.
-    outcome = job.attempts >= MAX_STEP_FAILURES
-      ? { next: "failed", error: message }
-      : { next: "wait", delayMs: Math.min(60_000, 5_000 * 2 ** job.attempts), progress: { lastError: message } };
-    if (outcome.next === "wait") {
-      // Keep the attempt count across the retry (release resets it on progress).
-      await db.update(assistantJobs).set({ lockedBy: null, heartbeatAt: null, status: "queued", runAfter: new Date(Date.now() + outcome.delayMs), progress: { ...job.progress, lastError: message } })
-        .where(and(eq(assistantJobs.id, job.id), eq(assistantJobs.lockedBy, workerId)));
+    // An unexpected error retries the same stage with backoff, a few times, keeping the attempt count.
+    if (job.attempts < MAX_STEP_FAILURES) {
+      await retryLater(job, message).catch((retryError) => console.error(`[assistant/worker] ${job.kind} ${job.id}: could not queue its retry:`, retryError));
       return true;
     }
+    outcome = { next: "failed", error: message };
   }
-  const finished = await release(job, outcome, stepFailed);
-  if (finished && onFinished) {
-    await runInOrganization(finished.organizationId, () => onFinished!(finished)).catch((error) => {
-      console.error(`[assistant/worker] could not report ${finished.kind} ${finished.id}:`, error);
-    });
+  try {
+    finished = await release(job, outcome, stepFailed);
+  } catch (error) {
+    console.error(`[assistant/worker] ${job.kind} ${job.id} stage ${job.stage}: its result could not be saved:`, error);
+    finished = await recoverUnsaved(job, jobErrorText(error));
   }
+  await report(finished);
   return true;
+}
+
+/** Tells the chat about a job that just finished (its report is posted once, see claimJobReport). */
+async function report(finished: AssistantJob | null): Promise<void> {
+  if (!finished || !onFinished) return;
+  await runInOrganization(finished.organizationId, () => onFinished!(finished)).catch((error) => {
+    console.error(`[assistant/worker] could not report ${finished.kind} ${finished.id}:`, error);
+  });
 }
 
 let draining = false;

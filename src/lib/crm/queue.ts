@@ -1,5 +1,6 @@
 import { and, asc, desc, eq, inArray, lte, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
+import { clippedString } from "@/lib/grid/sanitize";
 import { crmJobs, type CrmJobKind } from "./schema";
 import { CrmConflictError, type CrmTransaction } from "./repository";
 import { currentOrganizationId } from "@/lib/tenancy/scope";
@@ -244,7 +245,7 @@ export async function failCrmJob(
   error: string,
   options: { permanent?: boolean; now?: Date; retryAt?: Date } = {},
 ): Promise<{ willRetry: boolean; runAfter: Date | null }> {
-  const cleanError = error.trim() || "Unknown CRM job failure";
+  const cleanError = clippedString(error, 2_000).trim() || "Unknown CRM job failure";
   const now = options.now ?? new Date();
   // A job that could not run yet (retryAt) is requeued for then, whatever its attempts.
   const willRetry = options.retryAt ? true : shouldRetryCrmJob(job, options.permanent);

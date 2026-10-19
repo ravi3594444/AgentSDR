@@ -24,7 +24,7 @@
  * Creates its own organizations ("Apify check A/B …") and leaves them;
  * removes the AI connection it made. Refuses a non-local DATABASE_URL.
  */
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 
 if (!/@(localhost|127\.0\.0\.1)[:/]/.test(process.env.DATABASE_URL ?? "")) {
   console.error("Refusing to run: DATABASE_URL must point at a local, disposable database.");
@@ -321,6 +321,20 @@ await runInOrganization(orgA!.id, async () => {
   check("…with the same customer type, place and request id (its plan inherits the request's approval)", webPayload.contactAfter?.requestId === "req-web" && webPayload.criteria?.customers === "dentists" && webPayload.criteria?.where === "Pune, India", JSON.stringify(webPayload));
   check("…and explains the coverage difference", /fewer than a Maps search/.test(website.note ?? "") && /Apify was not used/.test(website.note ?? ""), website.note ?? "");
   await db.update(assistantJobs).set({ status: "cancelled" }).where(eq(assistantJobs.id, website.jobId));
+  // A search job that hands its request to website search, run again because its result could not be saved: one website search, not two.
+  const [handing] = await db.insert(assistantJobs).values({
+    organizationId: currentOrganizationId(), kind: "discovery", stage: "queued",
+    payload: { criteria: criteria("dentists", "Nashik, India", 10), phrase: "dentists in Nashik, India", provider: "apify", contactAfter: contactAfter("req-handoff"), requestMessageId: "req-handoff" },
+    progress: { stage: "queued" },
+  }).returning();
+  const handedTo = (outcome: Awaited<ReturnType<typeof runDiscoveryStep>>) => (outcome.next === "done" ? outcome.result.handedToJobId : null);
+  const firstHandOff = await runDiscoveryStep(handing!, async () => {});
+  const againHandOff = await runDiscoveryStep(handing!, async () => {});
+  const handedJobs = await db.select().from(assistantJobs).where(and(inOrg(assistantJobs), sql`${assistantJobs.payload} ->> 'handedOffFrom' = ${handing!.id}`));
+  check("a search job that hands its request to website search and runs again finds the search it started: one website search, not two",
+    handedJobs.length === 1 && handedTo(firstHandOff) === handedJobs[0]!.id && handedTo(againHandOff) === handedJobs[0]!.id,
+    JSON.stringify({ created: handedJobs.length, first: handedTo(firstHandOff), again: handedTo(againHandOff), error: againHandOff.next === "failed" ? againHandOff.error : null }));
+  for (const job of handedJobs) await db.update(assistantJobs).set({ status: "cancelled" }).where(eq(assistantJobs.id, job.id));
   process.env.GMAPS_SCRAPER_URL = SCRAPER;
   apify.startError = null;
   apify.limits = { maxMonthlyUsageUsd: 50, monthlyUsageUsd: 5 };
@@ -372,6 +386,24 @@ await runInOrganization(orgA!.id, async () => {
   check("a post is a potential match, not interest; the place is unknown when not named", /potential match, not interest/.test(contactable?.matchReason ?? "") && /Unknown/.test((unreachable?.facts as Record<string, string> | undefined)?.location ?? ""), `${contactable?.matchReason} | ${JSON.stringify(unreachable?.facts)}`);
   check("a generic post caption is engagement, not a need", (unreachable?.signals ?? []).every((signal) => signal.kind === "engagement"));
   check("both Instagram runs carry the request id", [...(await db.select().from(apifyRuns).where(and(inOrg(apifyRuns), eq(apifyRuns.jobId, ig.jobId))))].every((entry) => entry.requestId === "req-ig"));
+
+  // ---------------------------------------------------------- a step that runs again does not pay for the profiles twice
+  // The worker runs a step again when its result could not be saved: here the hashtag step's outcome (profiles started) is lost.
+  apify.next.set("apify~instagram-hashtag-scraper", [{ pollsUntilDone: 1, finalStatus: "SUCCEEDED", usage: 0.05, items: [{ ownerUsername: "again.bakes", url: "https://www.instagram.com/p/c1/", caption: "Cakes across Pune", timestamp: "2026-10-10T10:00:00Z" }] }]);
+  const again = await startInstagramProspects({ what: "cake shops", where: "Pune", maxResults: 5, language: "en" }, context, { contactAfter: contactAfter("req-again") });
+  const atHashtags = await step(again.jobId);
+  const profileRuns = () => [...apify.runs.values()].filter((entry) => entry.actorId === "apify~instagram-profile-scraper").length;
+  await runDiscoveryStep(atHashtags, async () => {});
+  const startedOnce = profileRuns();
+  const [profilesRow] = await db.select().from(apifyRuns).where(and(inOrg(apifyRuns), eq(apifyRuns.jobId, again.jobId), eq(apifyRuns.actorKey, "instagram_profiles")));
+  await db.update(apifyRuns).set({ status: "succeeded", usageUsd: 0.04, finishedAt: new Date() }).where(eq(apifyRuns.id, profilesRow!.id));
+  const reread = await runDiscoveryStep(atHashtags, async () => {});
+  check("a hashtag step that runs again after its profiles run finished reads that run (free), it does not start another",
+    profileRuns() === startedOnce && reread.next === "stage" && (reread.payload?.apify as { runRowId?: string } | undefined)?.runRowId === profilesRow!.id, `${profileRuns()} vs ${startedOnce} ${JSON.stringify(reread).slice(0, 200)}`);
+  await db.update(apifyRuns).set({ status: "failed", error: "no answer from Apify for 2 hours (swept)" }).where(eq(apifyRuns.id, profilesRow!.id));
+  const notRepaid = await runDiscoveryStep(atHashtags, async () => {});
+  check("…and once that run was swept as failed, the profiles are not paid for again: the accounts go on unread, with the reason",
+    profileRuns() === startedOnce && /Profiles were not read \(an earlier attempt's run failed .*not paid for again\)/.test(JSON.stringify(notRepaid)), `${profileRuns()} vs ${startedOnce} ${JSON.stringify(notRepaid).slice(0, 300)}`);
 
   // ---------------------------------------------------------- social platforms (find_social_leads)
   let socialRefused = "";

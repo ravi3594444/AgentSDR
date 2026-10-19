@@ -27,3 +27,25 @@ export function cleanJson<T>(value: T, depth = 0): T {
   for (const [key, item] of Object.entries(value)) out[cleanString(key)] = cleanJson(item, depth + 1);
   return out as T;
 }
+
+/** cleanString, cut to at most `max` characters (an ellipsis marks the cut) without splitting a character. */
+export function clippedString(text: string, max: number): string {
+  const clean = cleanString(text);
+  if (clean.length <= max) return clean;
+  let end = max - 1;
+  const last = clean.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  return `${clean.slice(0, end)}…`;
+}
+
+/**
+ * An error as a job keeps it: its message, cleaned and clipped. A failed
+ * query's message carries the whole statement with its values (a step's
+ * result, leads' details), so the database's own reason, its cause, is kept
+ * instead.
+ */
+export function savedErrorText(error: unknown, max: number): string {
+  const failedQuery = error instanceof Error && error.message.startsWith("Failed query:") && error.cause instanceof Error;
+  const message = failedQuery ? (error.cause as Error).message : error instanceof Error ? error.message : String(error);
+  return clippedString(message, max);
+}

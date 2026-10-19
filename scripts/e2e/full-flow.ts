@@ -171,7 +171,7 @@ const { createThread, listMessages } = await import("@/lib/assistant/threads.ser
 const { runOneAssistantStep, reconcileAssistantJobReports } = await import("@/lib/assistant/worker");
 const { registerAssistantJobs, reportFinishedJob } = await import("@/lib/assistant/register.server");
 const { updateBusinessProfile } = await import("@/lib/assistant/profile.server");
-const { startOutreachRun, getRun } = await import("@/lib/assistant/outreach.server");
+const { startOutreachRun, getRun, runOutreachStartStep } = await import("@/lib/assistant/outreach.server");
 const { recordRequestApproval } = await import("@/lib/assistant/requestApproval.server");
 const objectives = await import("@/lib/assistant/objective.server");
 const { listWork } = await import("@/lib/activity/activity.server");
@@ -333,8 +333,16 @@ await runInOrganization(a.org.id, async () => {
 
   // The first launch's worker dies after it created and recorded its campaign, before activating it.
   const [launch1] = await db.select().from(schema.assistantJobs).where(eq(schema.assistantJobs.id, started.jobId));
+  const linesAsked = () => modelCalls.filter((name) => name === "opening_lines").length;
+  const linesBefore = linesAsked();
   await step(launch1!.id); // personalizing
   const halfway = await jobRow(launch1!.id);
+  // The worker runs a step again when its result could not be saved: the same personalizing step, from the row before it.
+  const linesWritten = linesAsked();
+  const rewritten = await runOutreachStartStep(launch1!, async () => {});
+  check("a personalizing step that runs again (its saved progress lost) makes no second writer call: the texts it wrote are kept",
+    linesWritten > linesBefore && linesAsked() === linesWritten && rewritten.next === "stage" && rewritten.stage === "launching",
+    JSON.stringify({ before: linesBefore, firstRun: linesWritten, rerun: linesAsked(), outcome: rewritten.next }));
   // Created the way the launch creates it (paused until activated), and recorded on the run.
   const precreated = await createWhatsappCampaign({ name: `${plan1!.name} · WhatsApp`, accountIds: [account!.id], steps: [{ id: crypto.randomUUID(), body: "Hi", delayHours: 0 }] });
   await db.update(schema.outreachRuns).set({ campaigns: { whatsapp: precreated.id } }).where(eq(schema.outreachRuns.id, plan1!.id));
@@ -348,6 +356,11 @@ await runInOrganization(a.org.id, async () => {
     JSON.stringify({ halfway: halfway.stage, first: relaunched?.status, firstError: relaunched?.error, second: second?.status, secondError: second?.error, runs: running.map((run) => run?.status) }));
   check("the taken-over launch used the campaign it had recorded, never a second one", running[0]?.campaigns.whatsapp === precreated.id,
     JSON.stringify({ recorded: precreated.id, now: running[0]?.campaigns }));
+  // The launch finished and set the run running, but saving the job's outcome failed: the step runs again.
+  const relaunchedAgain = await runOutreachStartStep(halfway, async () => {});
+  check("a launch step that runs again after the run is running reports done with what the run recorded, never failed and never a second launch",
+    relaunchedAgain.next === "done" && JSON.stringify((relaunchedAgain as { result: { started?: string[] } }).result.started) === "[\"whatsapp\"]" && (await getRun(plan1!.id))?.campaigns.whatsapp === precreated.id,
+    JSON.stringify(relaunchedAgain).slice(0, 300));
   const campaignIds = running.map((run) => run!.campaigns.whatsapp!).filter(Boolean);
   const enrolled = await db.select({ personId: whatsappCampaignLeads.personId, campaignId: whatsappCampaignLeads.campaignId }).from(whatsappCampaignLeads).where(inArray(whatsappCampaignLeads.campaignId, campaignIds));
   check("12 people enrolled, each once, 6 in each plan's campaign", enrolled.length === 12 && new Set(enrolled.map((row) => row.personId)).size === 12 && campaignIds.every((id) => enrolled.filter((row) => row.campaignId === id).length === 6),

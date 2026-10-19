@@ -91,10 +91,13 @@ function discoveryMessage(job: AssistantJob): string {
 
 function outreachMessage(job: AssistantJob): string {
   if (job.status === "failed") return `Starting the outreach failed: ${job.error ?? "unknown error"}`;
-  const result = (job.result ?? {}) as { launches?: { channel: string; added: number; skipped: number; problem: string | null }[]; autopilot?: boolean };
-  const lines = (result.launches ?? []).map((launch) => launch.problem
-    ? `${launch.channel}: not started — ${launch.problem}`
-    : `${launch.channel}: started with ${launch.added} leads${launch.skipped ? ` (${launch.skipped} skipped)` : ""}`);
+  const result = (job.result ?? {}) as { launches?: { channel: string; added: number; skipped: number; problem: string | null }[]; started?: string[]; problems?: string | null; autopilot?: boolean };
+  const lines = result.launches
+    ? result.launches.map((launch) => launch.problem
+      ? `${launch.channel}: not started — ${launch.problem}`
+      : `${launch.channel}: started with ${launch.added} leads${launch.skipped ? ` (${launch.skipped} skipped)` : ""}`)
+    // A launch whose own summary was lost (see runOutreachStartStep): what the run recorded, without per-channel counts.
+    : [`started on ${(result.started ?? []).join(", ") || "no channel"} (the lead counts are on the plan)`, ...(result.problems ? [`not started — ${result.problems}`] : [])];
   return `Outreach started. ${lines.join("; ")}.${result.autopilot ? " Ordinary replies will be answered automatically; anything unusual waits for you in Action required." : " Replies wait for you in Action required."} Messages go out within each channel's sending hours and daily limits.`;
 }
 

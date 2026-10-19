@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, eq, gte, inArray, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lt, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { featureEnabled, isMissingTable } from "@/lib/features/flags.server";
 import { decryptIntegrationCredential, encryptIntegrationCredential } from "@/lib/integrations/credentials";
@@ -208,6 +208,13 @@ export async function startTrackedRun(input: {
    * what the request has left.
    */
   spendGuard?: SpendGuard;
+  /**
+   * At most one run of this Actor for the job, ever: a step that runs again
+   * (its result could not be saved) reads the run an earlier attempt
+   * finished, free, and does not pay for another after one failed. Refused
+   * starts cost nothing and do not count.
+   */
+  oncePerJob?: boolean;
 }): Promise<StartedRun> {
   // A retried step finds the run its first attempt started rather than paying for a second.
   if (input.jobId) {
@@ -217,6 +224,13 @@ export async function startTrackedRun(input: {
     // It is never started a second time; its reserved cap stays counted until it is swept as spent.
     if (open?.status === "starting") {
       return { started: false, exhausted: false, reason: "an earlier attempt to start this Apify run lost its answer, so it may have run; it is not started again, and its reserved cap stays counted" };
+    }
+    if (input.oncePerJob) {
+      const [earlier] = await db.select().from(apifyRuns)
+        .where(and(inOrg(apifyRuns), eq(apifyRuns.jobId, input.jobId), eq(apifyRuns.actorKey, input.actor), inArray(apifyRuns.status, ["succeeded", "partial", "failed"])))
+        .orderBy(desc(apifyRuns.createdAt)).limit(1);
+      if (earlier && earlier.status !== "failed") return { started: true, row: earlier };
+      if (earlier) return { started: false, exhausted: false, reason: `an earlier attempt's run failed (${earlier.error ?? "no reason given"}); it is not paid for again` };
     }
   }
   // The account's allowance is read first (a network call, outside any transaction)…

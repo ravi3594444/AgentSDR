@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { importPeopleRows } from "@/lib/leads/peopleImport.server";
 import type { ImportRow } from "@/lib/leads/importRows";
@@ -86,7 +86,13 @@ async function cancelQueries(batchId: string): Promise<void> {
 export async function runLinkedinSearchStep(job: AssistantJob): Promise<StepOutcome> {
   const payload = job.payload as unknown as Payload;
   if (job.stage === "queued") {
-    const batchId = payload.batchId ?? (await createSearchBatch({ name: `Assistant: ${payload.keywords}`.slice(0, 120), kind: "SINGLE", accountIds: [payload.accountId], rows: [{ url: payload.url, companyName: null }] })).id;
+    let batchId = payload.batchId;
+    if (!batchId) {
+      batchId = (await createSearchBatch({ name: `Assistant: ${payload.keywords}`.slice(0, 120), kind: "SINGLE", accountIds: [payload.accountId], rows: [{ url: payload.url, companyName: null }] })).id;
+      // Saved on the job at once, not only with the step's result: a step that runs again reuses this search, never makes a second.
+      await db.update(assistantJobs).set({ payload: sql`${assistantJobs.payload} || jsonb_build_object('batchId', ${batchId}::text)` })
+        .where(and(inOrg(assistantJobs), eq(assistantJobs.id, job.id)));
+    }
     const started = await startSearchBatchRun(batchId, [payload.accountId]);
     if (!started.started) {
       // One LinkedIn search runs at a time on this server: wait for the other.

@@ -2,6 +2,7 @@ import "server-only";
 
 import { and, desc, eq, isNull, lt, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
+import { cleanJson, cleanString } from "@/lib/grid/sanitize";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { threadTitleFrom } from "./agent";
 import { assistantMessages, assistantThreads, type AssistantAttachment, type AssistantRole, type AssistantToolStatus } from "./schema";
@@ -62,10 +63,11 @@ export async function addMessage(input: {
     organizationId: currentOrganizationId(),
     threadId: input.threadId,
     role: input.role,
-    content: input.content ?? "",
+    // Cleaned (NUL, lone surrogates): a provider's or model's text inside a report must not make the post fail.
+    content: cleanString(input.content ?? ""),
     tool: input.tool ?? null,
-    toolInput: input.toolInput ?? null,
-    toolResult: input.toolResult ?? null,
+    toolInput: input.toolInput ? cleanJson(input.toolInput) : null,
+    toolResult: input.toolResult ? cleanJson(input.toolResult) : null,
     status: input.status ?? null,
     attachments: input.attachments ?? [],
     createdBy: input.createdBy ?? null,

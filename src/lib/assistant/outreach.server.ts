@@ -579,19 +579,27 @@ export async function startInquiryRun(runId: string, userId: string | null, auto
   });
 }
 
+/** True when this run's text for the lead is already saved on it (`key` is the plan's, unique to its run). */
+function written(row: PersonRow | undefined, key: string): boolean {
+  return typeof (row?.person.raw as Record<string, unknown> | null | undefined)?.[key] === "string";
+}
+
 async function writeLines(runId: string, key: string, personIds: string[], startIndex: number): Promise<number> {
   const run = await getRun(runId);
   if (!run) throw new OutreachError("The run disappeared.");
   const members = await eligibleAudienceMembers(run.audienceId);
   const facts = new Map(members.map((member) => [member.personId, member.facts]));
   const rows = await loadPeople(personIds);
+  // A batch that runs again (its saved progress was lost) skips the leads it already wrote: no second writer call for them.
+  const todo = personIds.flatMap((personId, index) => (written(rows.get(personId), key) ? [] : [{ personId, index: startIndex + index }]));
+  if (!todo.length) return personIds.length;
   const cost: WriterCost = { calls: 0, usd: null, runId };
   const lines = await writePersonalLines({
     context: await businessContext(await getBusinessProfile()),
-    leads: personIds.map((personId, index) => {
+    leads: todo.map(({ personId, index }) => {
       const channel = run.plan.assignments.find((item) => item.personId === personId)?.channel;
       return {
-        index: startIndex + index,
+        index,
         // The same facts the plan's sample lines were written from.
         facts: leadFacts(facts.get(personId) ?? {}, rows.get(personId)),
         channel,
@@ -600,8 +608,8 @@ async function writeLines(runId: string, key: string, personIds: string[], start
     }),
     cost,
   });
-  for (const [index, personId] of personIds.entries()) {
-    const line = lines.get(startIndex + index) ?? "";
+  for (const { personId, index } of todo) {
+    const line = lines.get(index) ?? "";
     await db.update(people)
       .set({ raw: sql`coalesce(${people.raw}, '{}'::jsonb) || ${JSON.stringify({ [key]: line })}::jsonb`, updatedAt: new Date() })
       .where(and(inOrg(people), eq(people.id, personId)));
@@ -620,8 +628,12 @@ async function writeLeadTexts(run: NonNullable<Awaited<ReturnType<typeof getRun>
   const key = plan.personalizationKey;
   const members = await eligibleAudienceMembers(run.audienceId);
   const facts = new Map(members.map((member) => [member.personId, member.facts]));
-  const rows = await loadPeople(personIds);
-  const standard = personIds.filter((personId) => plan.leadPlans?.[personId]?.approach !== "personal");
+  const loaded = await loadPeople(personIds);
+  // A batch that runs again (its saved progress was lost) skips the leads it already wrote: no second writer call for them.
+  const rows = new Map([...loaded].filter(([, row]) => !written(row, leadTextKey(key, 1, "body"))));
+  const todo = personIds.filter((personId) => rows.has(personId));
+  if (!todo.length) return 0;
+  const standard = todo.filter((personId) => plan.leadPlans?.[personId]?.approach !== "personal");
   const cost: WriterCost = { calls: 0, usd: null, runId: run.id };
   const lines = await writePersonalLines({
     context: await businessContext(await getBusinessProfile()),
@@ -638,7 +650,7 @@ async function writeLeadTexts(run: NonNullable<Awaited<ReturnType<typeof getRun>
     }),
     cost,
   });
-  for (const personId of personIds) {
+  for (const personId of todo) {
     const row = rows.get(personId);
     const assignment = plan.assignments.find((item) => item.personId === personId);
     if (!row || !assignment) continue;
@@ -660,7 +672,7 @@ async function writeLeadTexts(run: NonNullable<Awaited<ReturnType<typeof getRun>
       .set({ raw: sql`coalesce(${people.raw}, '{}'::jsonb) || ${JSON.stringify(patch)}::jsonb`, updatedAt: new Date() })
       .where(and(inOrg(people), eq(people.id, personId)));
   }
-  return personIds.length;
+  return todo.length;
 }
 
 function emailSequence(steps: PlannedStep[]) {
@@ -795,6 +807,12 @@ export async function runOutreachStartStep(job: AssistantJob, heartbeat: () => P
   const run = await getRun(job.runId);
   if (!run) return { next: "failed", error: "The run no longer exists." };
   if (run.status !== "starting") {
+    // The launch already ran to its end (only it moves a run on from "starting"), but saving this job's own outcome
+    // failed, so the step runs again: it reports what the launch recorded on the run rather than launching again.
+    if (job.stage === "launching" && (run.status === "running" || run.status === "paused")) {
+      return { next: "done", result: { runId: run.id, started: Object.keys(run.campaigns), problems: run.error, autopilot: run.autopilot }, progress: { stage: "running" } };
+    }
+    if (job.stage === "launching" && run.status === "failed") return { next: "failed", error: run.error ? `Nothing could be launched: ${run.error}` : "Nothing could be launched." };
     // Stopped while this launch was under way and its worker died before it could stop what it had activated: stopped here.
     if (run.status === "stopped" || run.status === "cancelled") {
       const { problems } = await stopCampaigns(run.id, run.campaigns, new Date());

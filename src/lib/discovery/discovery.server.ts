@@ -294,18 +294,27 @@ async function startWebsiteFallback(
   context: { threadId: string | null; userId: string | null },
   contactAfter: ContactAfter,
   requestMessageId: string | null = null,
+  handedOffFrom: string | null = null,
 ): Promise<(Omit<StartedDiscovery, "note"> & { note: string }) | { unavailable: string }> {
+  const note = `Searching business websites and directories for “${criteria.what}” in ${criteria.where} instead of Google Maps listings: it covers businesses the web search finds, usually fewer than a Maps search.`;
+  if (handedOffFrom) {
+    // A job's hand-off that runs again (its result could not be saved) finds the search it already started.
+    const [earlier] = await db.select({ id: assistantJobs.id, audienceId: assistantJobs.audienceId, payload: assistantJobs.payload }).from(assistantJobs)
+      .where(and(inOrg(assistantJobs), eq(assistantJobs.kind, "web_discovery"), sql`${assistantJobs.payload} ->> 'handedOffFrom' = ${handedOffFrom}`))
+      .limit(1);
+    if (earlier) return { jobId: earlier.id, audienceId: earlier.audienceId ?? "", phrase: String(earlier.payload.phrase ?? ""), provider: "website", note };
+  }
   const web = await import("./webDiscovery.server");
   const webCriteria = web.normalizeWebCriteria({ customers: criteria.what, where: criteria.where, maxResults: Math.min(40, criteria.maxResults), language: criteria.language });
   if ("error" in webCriteria) return { unavailable: webCriteria.error };
   try {
-    const started = await web.startWebDiscovery(webCriteria, context, { contactAfter, requestMessageId });
+    const started = await web.startWebDiscovery(webCriteria, context, { contactAfter, requestMessageId, handedOffFrom });
     return {
       jobId: started.jobId,
       audienceId: started.audienceId,
       phrase: started.phrase,
       provider: "website",
-      note: `Searching business websites and directories for “${criteria.what}” in ${criteria.where} instead of Google Maps listings: it covers businesses the web search finds, usually fewer than a Maps search.`,
+      note,
     };
   } catch (error) {
     // Off, not set up, or at its limit (WebDiscoveryLimitError): the owner hears which.
@@ -569,7 +578,7 @@ async function startScraperOrFallback(job: AssistantJob, notes: string[]): Promi
 
 async function handOffToWebsite(job: AssistantJob, notes: string[]): Promise<StepOutcome> {
   const payload = payloadOf(job);
-  const fallback = await startWebsiteFallback(payload.criteria, { threadId: job.threadId, userId: job.createdBy }, payload.contactAfter ?? null, payload.requestMessageId ?? null);
+  const fallback = await startWebsiteFallback(payload.criteria, { threadId: job.threadId, userId: job.createdBy }, payload.contactAfter ?? null, payload.requestMessageId ?? null, job.id);
   if ("unavailable" in fallback) {
     return { next: "failed", error: [...notes, `No other search could take it: ${fallback.unavailable}`].join(" ") };
   }
@@ -652,6 +661,8 @@ async function stageApify(job: AssistantJob): Promise<StepOutcome> {
       input: (maxItems) => ({ usernames: usernames.slice(0, maxItems) }),
       wantedItems: usernames.length,
       jobId: job.id,
+      // Started from a finished search: a re-run of that step must not pay for the profiles twice.
+      oncePerJob: true,
       requestId: requestOf(payload),
       spendGuard: await objectiveSpendGuard(requestOf(payload)),
     });
@@ -671,6 +682,8 @@ async function stageApify(job: AssistantJob): Promise<StepOutcome> {
       input: (maxItems) => ({ usernames: usernames.slice(0, maxItems) }),
       wantedItems: usernames.length,
       jobId: job.id,
+      // Started from a finished search: a re-run of that step must not pay for the profiles twice.
+      oncePerJob: true,
       requestId: requestOf(payload),
       spendGuard: await objectiveSpendGuard(requestOf(payload)),
     });
@@ -715,6 +728,7 @@ async function stageProfiles(job: AssistantJob): Promise<StepOutcome> {
     input: (maxItems) => ({ usernames: usernames.slice(0, maxItems) }),
     wantedItems: usernames.length,
     jobId: job.id,
+    oncePerJob: true,
     requestId: requestOf(payload),
     spendGuard: await objectiveSpendGuard(requestOf(payload)),
   });
