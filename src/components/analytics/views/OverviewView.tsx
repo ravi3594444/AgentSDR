@@ -6,17 +6,24 @@ import {
   RiCalendarEventLine,
   RiCheckboxCircleLine,
   RiDraftLine,
+  RiFlagLine,
   RiInboxLine,
   RiLinkedinBoxLine,
   RiMailForbidLine,
+  RiPercentLine,
   RiReplyLine,
+  RiSendPlaneLine,
   RiThumbUpLine,
   RiTimerLine,
   RiTrophyLine,
+  RiUserFollowLine,
   RiWhatsappLine,
 } from "@remixicon/react";
 import * as Table from "@/components/alignui/table";
-import type { AnalyticsView, OverviewAnalytics } from "@/lib/analytics/contract";
+import { LeadSourcesTable } from "@/components/reporting/LeadSourcesTable";
+import { MetricDefinitions, SHARED_METRIC_KEYS } from "@/components/reporting/MetricDefinitions";
+import { ANALYTICS_CHANNELS, type AnalyticsChannel, type AnalyticsView, type OverviewAnalytics } from "@/lib/analytics/contract";
+import { METRICS } from "@/lib/reporting/metrics";
 import { cn } from "@/utils/cn";
 import { ChartCard } from "../kit/ChartCard";
 import { Frame, FrameHeader, FramePanel } from "../kit/Frame";
@@ -24,24 +31,30 @@ import { FunnelChart } from "../kit/FunnelChart";
 import { KpiCell, KpiStrip } from "../kit/KpiStrip";
 import { ProgressList, type ProgressTone } from "../kit/ProgressList";
 import { SectionHeading } from "../kit/SectionHeading";
-import { CHANNEL_META, formatCompact, formatMinutes, formatPercent } from "../theme";
+import { CONVERSATION_CHANNEL_META, formatCompact, formatMinutes, formatPercent } from "../theme";
 import { AiAssistantCard, PipelineCard, SentimentCard, StageMovesCard, WorkflowCard } from "./CrmCards";
 import type { ViewProps } from "./types";
 
 /**
  * Overview, CRM first: conversation KPIs, replies by sentiment, what needs
- * attention, the pipeline and stage moves, the AI assistant and workflow.
- * Then, smaller, the outreach that fed it: a channel table and the period
- * funnel from first touch to customer.
+ * attention right now, the pipeline and stage moves, the AI assistant and
+ * workflow. Then, smaller, the outreach that fed it: a channel table, the
+ * period funnel from first contact to customer, and where leads came from.
+ * Contacted, replies, the reply rate, sends, lead sources and the "now"
+ * counts are the shared definitions Overview (/assistant/results) shows too.
  */
 
 const HINTS = {
-  replies: "Inbound messages received in CRM conversations in this period, on any channel.",
+  contacted: METRICS.peopleContacted.definition,
+  replies: METRICS.replies.definition,
+  replyRate: METRICS.replyRate.definition,
   positive: "Distinct CRM records moved into Interested or Customer in this period.",
   meetings: "Distinct CRM records moved into a meeting or demo subcategory in this period. No-shows are not counted.",
   customers: "Distinct CRM records moved into Customer in this period.",
   response: "Median time from a lead's message to your next reply in that conversation.",
 };
+
+const isAnalyticsChannel = (channel: string): channel is AnalyticsChannel => (ANALYTICS_CHANNELS as readonly string[]).includes(channel);
 
 export function OverviewView({ data, loading, onSelectView }: ViewProps<"overview">) {
   const { kpis, range, crm } = data;
@@ -51,8 +64,10 @@ export function OverviewView({ data, loading, onSelectView }: ViewProps<"overvie
 
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-12 lg:gap-5">
-      <KpiStrip className="lg:col-span-12" columns={5} compact>
+      <KpiStrip className="lg:col-span-12" columns={7} compact>
+        <KpiCell icon={RiUserFollowLine} label="Contacted" value={formatCompact(kpis.contacted.value)} metric={kpis.contacted} hint={HINTS.contacted} context={`${formatCompact(kpis.sent.value)} sent, accepted by the provider`} />
         <KpiCell icon={RiReplyLine} label="Replies" value={formatCompact(crm.kpis.replies.value)} metric={crm.kpis.replies} hint={HINTS.replies} context={`from ${formatCompact(kpis.replied.value)} ${kpis.replied.value === 1 ? "person" : "people"}`} spark={replySpark} />
+        <KpiCell icon={RiPercentLine} label="Reply rate" value={formatPercent(kpis.replyRate.value)} metric={kpis.replyRate} hint={HINTS.replyRate} context={`${formatCompact(kpis.contactedWhoReplied.value)} of ${formatCompact(kpis.contacted.value)} contacted replied`} />
         <KpiCell icon={RiThumbUpLine} label="Positive" value={formatCompact(kpis.positive.value)} metric={kpis.positive} hint={HINTS.positive} context={kpis.replied.value > 0 ? `${formatPercent(kpis.positive.value / kpis.replied.value)} of people who replied` : vsPrevious(kpis.positive)} />
         <KpiCell icon={RiCalendarEventLine} label="Meetings" value={formatCompact(kpis.meetings.value)} metric={kpis.meetings} hint={HINTS.meetings} context={vsPrevious(kpis.meetings)} />
         <KpiCell icon={RiTrophyLine} label="Customers" value={formatCompact(kpis.customers.value)} metric={kpis.customers} hint={HINTS.customers} context={vsPrevious(kpis.customers)} />
@@ -78,9 +93,24 @@ export function OverviewView({ data, loading, onSelectView }: ViewProps<"overvie
 
       <SectionHeading className="mt-2 lg:col-span-12" title="Outreach" description="Where these conversations came from. Open a channel for its detail." />
       <ChannelTable data={data} loading={loading} onSelectView={onSelectView} />
-      <ChartCard className="lg:col-span-4" title="Conversion funnel" description="From first touch to customer." loading={loading} footer="Counts for this period — not one cohort followed through.">
+      <ChartCard className="lg:col-span-4" title="Conversion funnel" description="From first contact to customer." loading={loading} footer="Counts for this period — not one cohort followed through.">
         <FunnelChart stages={data.funnel} />
       </ChartCard>
+
+      <Frame className="lg:col-span-12">
+        <FrameHeader title="Where leads came from" description="Qualified and contactable people per source and provider, in this period. Each person counts once in the total." />
+        <FramePanel className={cn("transition-opacity", loading && "opacity-60")}>
+          <LeadSourcesTable sources={data.sources} empty="No leads were found or imported in this period." />
+        </FramePanel>
+      </Frame>
+
+      <details className="border-y border-stroke-soft-200 py-4 lg:col-span-12">
+        <summary className="cursor-pointer text-label-sm text-text-strong-950">How these figures are counted</summary>
+        <p className="mb-3 mt-3 text-paragraph-xs text-text-soft-400">
+          The same definitions as Overview, for whole local days in {range.tz}{range.tzSource === "override" ? " (an override of the business time zone)" : ""}. A send counts once its provider accepted it; queued, failed and uncertain sends never do.
+        </p>
+        <MetricDefinitions keys={SHARED_METRIC_KEYS} />
+      </details>
     </div>
   );
 }
@@ -89,14 +119,15 @@ function ChannelTable({ data, loading, onSelectView }: { data: OverviewAnalytics
   const maxRate = Math.max(...data.channels.map((c) => c.replyRate ?? 0), 0.0001);
   return (
     <Frame className="lg:col-span-8">
-      <FrameHeader title="Channels" description="How each channel performed in this period. Select a row to open it." />
+      <FrameHeader title="Channels" description="Outreach per channel in this period: people contacted, and of them, who replied on that channel. Select a row to open it." />
       <FramePanel className={cn("p-2 transition-opacity sm:p-3", loading && "opacity-60")}>
       <Table.Root>
         <Table.Caption className="sr-only">Channel comparison</Table.Caption>
         <Table.Header>
           <Table.Row>
             <Table.Head scope="col">Channel</Table.Head>
-            <Table.Head scope="col" className="text-right">Reached</Table.Head>
+            <Table.Head scope="col" className="text-right">Sent</Table.Head>
+            <Table.Head scope="col" className="text-right">Contacted</Table.Head>
             <Table.Head scope="col" className="text-right">Replied</Table.Head>
             <Table.Head scope="col">Reply rate</Table.Head>
             <Table.Head scope="col" className="text-right">Positive</Table.Head>
@@ -105,19 +136,30 @@ function ChannelTable({ data, loading, onSelectView }: { data: OverviewAnalytics
         </Table.Header>
         <Table.Body spacing={4}>
           {data.channels.map((row) => {
-            const meta = CHANNEL_META[row.channel];
+            const meta = CONVERSATION_CHANNEL_META[row.channel];
             const Icon = meta.icon;
+            const view = isAnalyticsChannel(row.channel) ? row.channel : null;
             return (
-              <Table.Row key={row.channel} className="cursor-pointer" onClick={() => onSelectView?.(row.channel)}>
+              <Table.Row key={row.channel} className={cn(view && "cursor-pointer")} onClick={view ? () => onSelectView?.(view) : undefined}>
                 <Table.Cell className="h-12">
-                  <button type="button" onClick={(e) => { e.stopPropagation(); onSelectView?.(row.channel); }} className="flex items-center gap-2.5 rounded-md text-label-sm text-text-strong-950 outline-none focus-visible:ring-2 focus-visible:ring-primary-base">
-                    <span className="flex size-6 items-center justify-center rounded-md" style={{ backgroundColor: meta.color }}>
-                      <Icon className="size-4 text-white" />
+                  {view ? (
+                    <button type="button" onClick={(e) => { e.stopPropagation(); onSelectView?.(view); }} className="flex items-center gap-2.5 rounded-md text-label-sm text-text-strong-950 outline-none focus-visible:ring-2 focus-visible:ring-primary-base">
+                      <span className="flex size-6 items-center justify-center rounded-md" style={{ backgroundColor: meta.color }}>
+                        <Icon className="size-4 text-white" />
+                      </span>
+                      {meta.label}
+                    </button>
+                  ) : (
+                    <span className="flex items-center gap-2.5 text-label-sm text-text-strong-950">
+                      <span className="flex size-6 items-center justify-center rounded-md" style={{ backgroundColor: meta.color }}>
+                        <Icon className="size-4 text-white" />
+                      </span>
+                      {meta.label}
                     </span>
-                    {meta.label}
-                  </button>
+                  )}
                 </Table.Cell>
-                <Table.Cell className="h-12 text-right text-paragraph-sm tabular-nums text-text-strong-950">{formatCompact(row.reached)}</Table.Cell>
+                <Table.Cell className="h-12 text-right text-paragraph-sm tabular-nums text-text-strong-950">{formatCompact(row.sent)}</Table.Cell>
+                <Table.Cell className="h-12 text-right text-paragraph-sm tabular-nums text-text-strong-950">{formatCompact(row.contacted)}</Table.Cell>
                 <Table.Cell className="h-12 text-right text-paragraph-sm tabular-nums text-text-strong-950">{formatCompact(row.replied)}</Table.Cell>
                 <Table.Cell className="h-12">
                   <div className="flex items-center gap-3">
@@ -128,7 +170,7 @@ function ChannelTable({ data, loading, onSelectView }: { data: OverviewAnalytics
                   </div>
                 </Table.Cell>
                 <Table.Cell className="h-12 text-right text-paragraph-sm tabular-nums text-text-strong-950">{formatCompact(row.positive)}</Table.Cell>
-                <Table.Cell className="h-12 w-8 text-text-soft-400"><RiArrowRightSLine className="size-4" aria-hidden="true" /></Table.Cell>
+                <Table.Cell className="h-12 w-8 text-text-soft-400">{view && <RiArrowRightSLine className="size-4" aria-hidden="true" />}</Table.Cell>
               </Table.Row>
             );
           })}
@@ -139,12 +181,15 @@ function ChannelTable({ data, loading, onSelectView }: { data: OverviewAnalytics
   );
 }
 
-type AttentionItem = { key: keyof OverviewAnalytics["attention"]; label: string; hint: string; href: string; icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>; tone: ProgressTone };
+type AttentionKey = "needsYou" | "actionRequired" | "overdue" | "draftsAwaitingReview" | "plansAwaitingStart" | "mailboxesFailing" | "linkedinDisconnected" | "whatsappDisconnected";
+type AttentionItem = { key: AttentionKey; label: string; hint: string; href: string; icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>; tone: ProgressTone };
 
 const ATTENTION: AttentionItem[] = [
-  { key: "actionRequired", label: "Action required", hint: "Conversations waiting on you", href: "/crm/actions", icon: RiInboxLine, tone: "serious" },
-  { key: "overdue", label: "Follow-ups due", hint: "Follow-ups drafted or past their time", href: "/crm/actions", icon: RiAlarmWarningLine, tone: "critical" },
-  { key: "draftsAwaitingReview", label: "Drafts to review", hint: "AI replies waiting for approval", href: "/crm/actions", icon: RiDraftLine, tone: "warning" },
+  { key: "needsYou", label: METRICS.needsYouNow.label, hint: "Open decisions waiting for you", href: "/assistant/results", icon: RiFlagLine, tone: "serious" },
+  { key: "actionRequired", label: METRICS.actionRequiredNow.label, hint: "Conversations in the queue", href: "/crm/actions", icon: RiInboxLine, tone: "serious" },
+  { key: "overdue", label: METRICS.followUpsDueNow.label, hint: "Follow-ups drafted or past their time", href: "/crm/actions", icon: RiAlarmWarningLine, tone: "critical" },
+  { key: "draftsAwaitingReview", label: METRICS.draftsAwaitingReviewNow.label, hint: "AI replies waiting for approval", href: "/crm/actions", icon: RiDraftLine, tone: "warning" },
+  { key: "plansAwaitingStart", label: METRICS.plansAwaitingStartNow.label, hint: "Nothing is sent until you start them", href: "/assistant", icon: RiSendPlaneLine, tone: "warning" },
   { key: "mailboxesFailing", label: "Failing mailboxes", hint: "Email accounts that can't send", href: "/settings/email-accounts", icon: RiMailForbidLine, tone: "critical" },
   { key: "linkedinDisconnected", label: "LinkedIn disconnected", hint: "Accounts that need reconnecting", href: "/settings/linkedin-accounts", icon: RiLinkedinBoxLine, tone: "critical" },
   { key: "whatsappDisconnected", label: "WhatsApp disconnected", hint: "Numbers that need relinking", href: "/settings/whatsapp-accounts", icon: RiWhatsappLine, tone: "critical" },
@@ -154,7 +199,7 @@ function AttentionCard({ attention, loading }: { attention: OverviewAnalytics["a
   const anyOpen = ATTENTION.some((item) => attention[item.key] > 0);
   return (
     <Frame className="lg:col-span-4">
-      <FrameHeader title="Needs attention" description="Right now, regardless of the date range." />
+      <FrameHeader title="Needs attention now" description="Current counts, not limited to the date range. Overview shows the same." />
       <FramePanel className={cn("transition-opacity", loading && "opacity-60")}>
         {anyOpen ? (
           <ProgressList

@@ -4,6 +4,7 @@ import { RiArrowDownSLine, RiCalendarLine, RiCheckLine, RiDashboard3Line, RiRefr
 import { createElement, useCallback, useEffect, useRef, useState, useSyncExternalStore, type ComponentType } from "react";
 import * as Popover from "@/components/alignui/popover";
 import { ANALYTICS_CHANNELS, dayCount, MAX_ANALYTICS_RANGE_DAYS, type AnalyticsResponse, type AnalyticsView } from "@/lib/analytics/contract";
+import { localDate } from "@/lib/reporting/metrics";
 import { cn } from "@/utils/cn";
 import { WorkspaceNavigation } from "@/components/page/WorkspaceNavigation";
 import { ErrorState } from "./kit/ErrorState";
@@ -13,9 +14,12 @@ import { views, type ViewProps } from "./views";
 
 /**
  * The Analytics shell: title, view tabs, one date-range control, and the
- * active view. Fetches /api/analytics/{view} client-side (the time zone is the
- * browser's), keeps the previous data on screen (dimmed) while refetching, and
- * mirrors ?view= and ?range= into the URL with history.replaceState.
+ * active view. Fetches /api/analytics/{view} client-side, keeps the previous
+ * data on screen (dimmed) while refetching, and mirrors ?view= and ?range=
+ * into the URL with history.replaceState. Ranges are whole local days in the
+ * organization's business time zone, resolved by the server exactly as
+ * Overview resolves its periods; an explicit ?tz= in the page URL overrides
+ * the zone and is labelled. Loading or refreshing reads only.
  */
 
 /** Channel tabs carry their channel's icon and colour; Overview a neutral one. */
@@ -24,21 +28,28 @@ const VIEW_TABS: Array<{ view: AnalyticsView; label: string; icon: ComponentType
   ...ANALYTICS_CHANNELS.map((channel) => ({ view: channel, label: CHANNEL_META[channel].label, icon: CHANNEL_META[channel].icon, color: CHANNEL_META[channel].color })),
 ];
 
-/** "tz|YYYY-MM-DD" in the browser, or null on the server (avoids a hydration mismatch). */
-function readEnv(): string {
-  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-  const today = new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
-  return `${tz}|${today}`;
-}
 const noopSubscribe = () => () => {};
 
 type Cached = { data: AnalyticsResponse; key: string; updatedAt: number };
 
-export default function AnalyticsClient({ initialView, initialRange }: { initialView: AnalyticsView; initialRange: string }) {
+export default function AnalyticsClient({
+  initialView,
+  initialRange,
+  organizationTimeZone,
+  timeZoneOverride,
+}: {
+  initialView: AnalyticsView;
+  initialRange: string;
+  /** The organization's business time zone, which Overview reports in too. */
+  organizationTimeZone: string;
+  /** An explicit ?tz= from the page URL; labelled as an override. */
+  timeZoneOverride: string | null;
+}) {
   const [view, setView] = useState<AnalyticsView>(initialView);
   const [selection, setSelection] = useState<RangeSelection>(() => parseRange(initialRange));
-  const env = useSyncExternalStore(noopSubscribe, readEnv, () => null);
-  const [tz, today] = env ? env.split("|") : [null, null];
+  const tz = timeZoneOverride ?? organizationTimeZone;
+  // The local date in the reporting zone, read in the browser only (avoids a hydration mismatch).
+  const today = useSyncExternalStore(noopSubscribe, () => localDate(tz), () => null);
 
   const [cache, setCache] = useState<Partial<Record<AnalyticsView, Cached>>>({});
   const [settled, setSettled] = useState<{ id: string; error: string | null } | null>(null);
@@ -46,7 +57,8 @@ export default function AnalyticsClient({ initialView, initialRange }: { initial
   const [now, setNow] = useState(() => Date.now());
 
   const resolved = today ? resolveRange(selection, today) : null;
-  const fetchKey = resolved && tz ? `${resolved.from}|${resolved.to}|${tz}` : null;
+  // The server resolves the range on its own clock in the same zone; `today` keys a preset to its day.
+  const fetchKey = today ? `${serializeRange(selection)}|${timeZoneOverride ?? ""}|${today}` : null;
 
   const requestId = fetchKey ? `${view}|${fetchKey}|${reloadTick}` : null;
   const loading = requestId !== null && settled?.id !== requestId;
@@ -54,11 +66,13 @@ export default function AnalyticsClient({ initialView, initialRange }: { initial
 
   useEffect(() => {
     if (!fetchKey || !requestId) return;
-    const [from, to, zone] = fetchKey.split("|");
+    const [range, zone] = fetchKey.split("|");
+    const query = new URLSearchParams({ range });
+    if (zone) query.set("tz", zone);
     // A superseded request is ignored rather than aborted: aborting surfaced as
     // an uncaught AbortError in dev, and it never stopped the query server-side.
     let current = true;
-    fetch(`/api/analytics/${view}?${new URLSearchParams({ from, to, tz: zone })}`)
+    fetch(`/api/analytics/${view}?${query}`, { cache: "no-store" })
       .then(async (response) => {
         const body = (await response.json().catch(() => null)) as (AnalyticsResponse & { error?: string }) | { error?: string } | null;
         if (!current) return;
@@ -107,6 +121,11 @@ export default function AnalyticsClient({ initialView, initialRange }: { initial
         <div className="min-w-0">
           <h1 className="text-title-h5 text-text-strong-950">Analytics</h1>
           <p className="mt-1 max-w-2xl text-paragraph-sm text-text-sub-600">How conversations turn into meetings and customers, and which channels bring them in.</p>
+          <p className="mt-1 text-paragraph-xs text-text-soft-400">
+            {timeZoneOverride
+              ? <>Days in <span className="text-text-strong-950">{timeZoneOverride}</span>, an override from the link (?tz=); the business time zone, which Overview uses, is {organizationTimeZone}.</>
+              : <>Days in {organizationTimeZone}, the business time zone Overview uses too.</>}
+          </p>
         </div>
         <div className="flex shrink-0 items-center gap-2 self-start">
           <DateRangeControl selection={selection} resolved={resolved} today={today} onChange={changeRange} />

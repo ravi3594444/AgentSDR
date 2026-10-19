@@ -7,6 +7,8 @@ import { outcomeForCall } from "@/lib/calls/overview";
 import type { CallStatus } from "@/lib/calls/contract";
 import { warmUpEndsAt, whatsappGuardrails } from "@/lib/whatsapp/guardrails";
 import { channelRules } from "@/lib/channels/rules.server";
+import { dayStart } from "@/lib/reporting/metrics";
+import { periodMetrics, reportFilter } from "@/lib/reporting/metrics.server";
 import {
   addDays,
   previousRange,
@@ -17,7 +19,7 @@ import {
   type WhatsappAnalytics,
   type WhatsappCallOutcome,
 } from "./contract";
-import { inCurrentOrPreviousRange, inRange, localDay, num, runLimited } from "./server";
+import { inCurrentOrPreviousRange, inRange, localDay, num, previousWindow, rangeWindow, runLimited } from "./server";
 
 /** runLimited (3 in flight) that keeps each query's own row type. */
 function runQueries<const T extends readonly (() => PromiseLike<unknown>)[]>(
@@ -28,8 +30,11 @@ function runQueries<const T extends readonly (() => PromiseLike<unknown>)[]>(
 }
 
 /**
- * WhatsApp view: calls (call_sessions), messages and chats (whatsapp_*), and
- * the campaign / account snapshots. Six statements, at most three in flight.
+ * WhatsApp view: campaign sends with their receipts and replies (the shared
+ * definitions, src/lib/reporting/metrics.server.ts, for the range and the
+ * one before), calls (call_sessions), chat messages of any origin
+ * (whatsapp_*), and the campaign / account snapshots. Eight statements, at
+ * most three in flight.
  */
 
 const OUTCOME_LABELS: Record<WhatsappCallOutcome, string> = {
@@ -69,8 +74,8 @@ export function outcomeForGroup(status: string, errorClass: string): WhatsappCal
  */
 const LIVE_MESSAGE = sql`NOT (m.raw IS NULL AND m.origin <> 'agentsdr' AND m.created_at - m.sent_at > interval '1 hour')`;
 
-/** Instant at 00:00 of a YYYY-MM-DD date in the range's zone. */
-const startOf = (date: string, tz: string) => sql`((${date}::date)::timestamp AT TIME ZONE ${tz})`;
+/** Instant at 00:00 of a YYYY-MM-DD date in the range's zone, from the shared calendar. */
+const startOf = (date: string, tz: string) => sql`${dayStart(date, tz).toISOString()}::timestamptz`;
 
 type CallRow = { cur: boolean; day: string; status: string; error_class: string; calls: number; talk_ms: number };
 type CampaignCallRow = { campaign_id: string; day: string; status: string; error_class: string; calls: number };
@@ -78,6 +83,7 @@ type CampaignCallRow = { campaign_id: string; day: string; status: string; error
 export async function getWhatsappAnalytics(range: AnalyticsRange): Promise<WhatsappAnalytics> {
   const { tz } = range;
   const org = currentOrganizationId();
+  const filter = await reportFilter();
   /** Chats of this organization's WhatsApp accounts. */
   const orgChatIds = sql`(SELECT wc.id FROM whatsapp_chats wc JOIN whatsapp_accounts wa ON wa.id = wc.account_id WHERE wa.organization_id = ${org})`;
   const prev = previousRange(range);
@@ -92,7 +98,7 @@ export async function getWhatsappAnalytics(range: AnalyticsRange): Promise<Whats
   // Same definition as DUE_SQL in src/lib/calls/overview.ts.
   const due = sql`(ccc.stage <> 'done' AND ((ccc.follow_up_at IS NOT NULL AND ccc.follow_up_at < ${endOfToday}) OR (ccc.stage = 'to_call' AND ccc.follow_up_at IS NULL)))`;
 
-  const [callRows, messageRows, chatRows, campaignRows, campaignCallRows, accountRows] = await runQueries(
+  const [callRows, messageRows, chatRows, campaignRows, campaignCallRows, accountRows, current, previous] = await runQueries(
     [
       () =>
         db.execute<CallRow>(sql`
@@ -171,6 +177,8 @@ export async function getWhatsappAnalytics(range: AnalyticsRange): Promise<Whats
           FROM whatsapp_accounts a
           WHERE a.organization_id = ${org}
           ORDER BY a.is_default DESC, a.created_at ASC`),
+      () => periodMetrics(rangeWindow(range), filter),
+      () => periodMetrics(previousWindow(range), filter),
     ],
   );
 
@@ -264,6 +272,12 @@ export async function getWhatsappAnalytics(range: AnalyticsRange): Promise<Whats
       connectRate: { value: ratio(totals.cur.connected, totals.cur.calls), previous: ratio(totals.prev.connected, totals.prev.calls) },
       talkTimeMs: { value: totals.cur.talk, previous: totals.prev.talk },
       avgCallMs: { value: avg(totals.cur.talk, totals.cur.connected), previous: avg(totals.prev.talk, totals.prev.connected) },
+      sent: { value: current.sent.byChannel.whatsapp, previous: previous.sent.byChannel.whatsapp },
+      delivered: { value: current.delivered.byChannel.whatsapp ?? 0, previous: previous.delivered.byChannel.whatsapp ?? 0 },
+      read: { value: current.read.byChannel.whatsapp ?? 0, previous: previous.read.byChannel.whatsapp ?? 0 },
+      contacted: { value: current.peopleContacted.byChannel.whatsapp, previous: previous.peopleContacted.byChannel.whatsapp },
+      replied: { value: current.contactedWhoReplied.byChannel.whatsapp, previous: previous.contactedWhoReplied.byChannel.whatsapp },
+      replyRate: { value: current.replyRate.byChannel.whatsapp, previous: previous.replyRate.byChannel.whatsapp },
       messagesSent: { value: sentCur, previous: sentPrev },
       messagesReceived: { value: receivedCur, previous: receivedPrev },
       chatReplyRate: {

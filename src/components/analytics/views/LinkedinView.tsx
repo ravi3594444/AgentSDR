@@ -15,7 +15,7 @@ import { SeriesStats } from "../kit/SeriesStats";
 import { Sparkline } from "../kit/Sparkline";
 import { StatusDotBadge } from "../kit/StatusDotBadge";
 import { TickMeter } from "../kit/TickMeter";
-import { TimeSeriesChart, TimeSeriesTable, type SeriesKeys } from "../kit/TimeSeriesChart";
+import { seriesTotal, TimeSeriesChart, TimeSeriesTable, type SeriesKeys } from "../kit/TimeSeriesChart";
 import { ACCENT, CHANNEL_META, STATUS, formatCompact, formatPercent, MUTED } from "../theme";
 import type { ViewProps } from "./types";
 
@@ -31,16 +31,16 @@ const LINKEDIN = CHANNEL_META.linkedin.color;
 const ACTIVITY_KEYS: SeriesKeys<"invites" | "accepted" | "replied"> = {
   invites: { label: "Invites", color: LINKEDIN },
   accepted: { label: "Accepted", color: "#7d52f4" },
-  replied: { label: "Replied", color: CHANNEL_META.whatsapp.color },
+  replied: { label: "Replies", color: CHANNEL_META.whatsapp.color },
 };
 
 const HINTS = {
-  invites: "Connection invitations sent in this period.",
+  invites: "Connection invitations LinkedIn accepted from the sender in this period. A claim LinkedIn never confirmed is not a send. Overview counts the same.",
   accepted: "Connections accepted in this period. Counted when the accept is recorded, which can be for an invite sent earlier.",
   acceptanceRate: "Accepted divided by invites sent, for the same period.",
-  messages: "Messages sent after a connection: the acceptance message, follow-ups 1 to 3 and custom messages.",
-  replied: "Distinct leads who sent a reply in this period.",
-  replyRate: "Replied divided by accepted connections, not by invites sent.",
+  messages: "Outreach messages LinkedIn accepted: the acceptance message and follow-ups 1 to 3. Replies typed in the inbox are not outreach. Overview counts the same.",
+  replied: "People sent a LinkedIn invitation or message in this period who replied on LinkedIn after their first send in it.",
+  replyRate: "Replied divided by people contacted on LinkedIn, for the same period. Overview uses the same definition.",
 };
 
 const CAMPAIGN_STATUS = {
@@ -65,8 +65,8 @@ export function LinkedinView({ data, loading }: ViewProps<"linkedin">) {
         <KpiCell icon={RiUserAddLine} label="Accepted" value={formatCompact(kpis.accepted.value)} metric={kpis.accepted} hint={HINTS.accepted} context={vsPrevious(kpis.accepted)} spark={spark("accepted")} />
         <KpiCell icon={RiCheckDoubleLine} label="Acceptance rate" value={formatPercent(kpis.acceptanceRate.value)} metric={kpis.acceptanceRate} hint={HINTS.acceptanceRate} context={vsPreviousRate(kpis.acceptanceRate)} />
         <KpiCell icon={RiMailSendLine} label="Messages sent" value={formatCompact(kpis.messages.value)} metric={kpis.messages} hint={HINTS.messages} context={vsPrevious(kpis.messages)} />
-        <KpiCell icon={RiChat1Line} label="Replied" value={formatCompact(kpis.replied.value)} metric={kpis.replied} hint={HINTS.replied} context={`of ${formatCompact(kpis.accepted.value)} accepted`} spark={spark("replied")} />
-        <KpiCell icon={RiPercentLine} label="Reply rate" value={formatPercent(kpis.replyRate.value)} metric={kpis.replyRate} hint={HINTS.replyRate} context={kpis.replyRate.previous === null ? "replied / accepted" : `replied / accepted, vs ${formatPercent(kpis.replyRate.previous)} before`} />
+        <KpiCell icon={RiChat1Line} label="Replied" value={formatCompact(kpis.replied.value)} metric={kpis.replied} hint={HINTS.replied} context={`of ${formatCompact(kpis.contacted.value)} contacted`} spark={spark("replied")} />
+        <KpiCell icon={RiPercentLine} label="Reply rate" value={formatPercent(kpis.replyRate.value)} metric={kpis.replyRate} hint={HINTS.replyRate} context={kpis.replyRate.previous === null ? "replied / contacted" : `replied / contacted, vs ${formatPercent(kpis.replyRate.previous)} before`} />
       </KpiStrip>
 
       <ChartCard
@@ -78,9 +78,9 @@ export function LinkedinView({ data, loading }: ViewProps<"linkedin">) {
             items={(Object.keys(ACTIVITY_KEYS) as Array<keyof typeof ACTIVITY_KEYS>).map((k) => ({
               label: ACTIVITY_KEYS[k].label,
               color: ACTIVITY_KEYS[k].color,
-              // The KPI totals, not the sum of the points: replied is distinct
-              // leads per day in the series, so summing it double-counts.
-              value: formatCompact(kpis[k].value),
+              // Invites and accepts are the KPI totals; replies are inbound
+              // messages, so their total is the series' own.
+              value: formatCompact(k === "replied" ? seriesTotal(data.activity, "replied") : kpis[k].value),
             }))}
           />
         }

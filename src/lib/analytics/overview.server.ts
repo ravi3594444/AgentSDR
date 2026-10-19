@@ -2,85 +2,48 @@ import "server-only";
 
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
+import { REPORT_CHANNELS, type ReportChannel } from "@/lib/reporting/metrics";
+import { currentCounts, leadSources, periodMetrics, reportFilter } from "@/lib/reporting/metrics.server";
 import { currentOrganizationId } from "@/lib/tenancy/scope";
 import {
   ANALYTICS_CHANNELS,
   MEETING_SUBCATEGORY_KEYS,
-  ratio,
-  type AnalyticsChannel,
   type AnalyticsRange,
   type Metric,
   type OverviewAnalytics,
 } from "./contract";
 import { getCrmSummary, runQueries, STAGE_CHANGE_EVENTS } from "./crm.server";
-import { createLimiter, inCurrentOrPreviousRange, inRange, num } from "./server";
+import { createLimiter, inCurrentOrPreviousRange, inRange, num, previousWindow, rangeWindow } from "./server";
 
 /**
  * The Overview: the CRM summary plus the outreach funnel and channel table.
- * Four statements here and seven in getCrmSummary, all through one limiter:
- * at most three in flight in total. Counts are per-period events (see
- * contract.ts), so the funnel is not a cohort.
+ * Sends, replies, people contacted and replied, the reply rate, lead sources
+ * and the "now" counts are the shared definitions
+ * (src/lib/reporting/metrics.server.ts), read for the range and the equally
+ * long range before it exactly as Overview (/assistant/results) reads them.
+ * Everything goes through one limiter: at most three statements in flight.
+ * Counts are per-period events (see contract.ts), so the funnel is not a cohort.
  */
 
-/** LinkedIn message types that are outbound touches (everything except RECEIVED). */
-const LINKEDIN_OUTBOUND = sql`('INVITATION', 'ACCEPTANCE', 'FOLLOW_UP_1', 'FOLLOW_UP_2', 'FOLLOW_UP_3', 'CUSTOM_SENT')`;
-
-/**
- * Every outbound touch in the current and previous period: (channel, person, ts).
- * WhatsApp messages skip history imported by backfill (same rule as
- * whatsapp.server.ts) and chats not linked to a person.
- */
-function touches(range: AnalyticsRange) {
-  const org = currentOrganizationId();
-  return sql`
-    SELECT 'email'::text AS ch, l.person_id, e.sent_at AS ts
-    FROM outreach_emails e JOIN outreach_leads l ON l.id = e.lead_id
-    WHERE e.status = 'sent' AND ${inCurrentOrPreviousRange(sql`e.sent_at`, range)}
-      AND l.campaign_id IN (SELECT id FROM outreach_campaigns WHERE organization_id = ${org})
-    UNION ALL
-    SELECT 'linkedin', ld."personId", m."createdAt"
-    FROM "Message" m JOIN "Lead" ld ON ld.id = m."leadId"
-    WHERE m."organizationId" = ${org} AND ld."organizationId" = ${org} AND m.type IN ${LINKEDIN_OUTBOUND} AND m."duplicateOfMessageId" IS NULL
-      AND ${inCurrentOrPreviousRange(sql`m."createdAt"`, range)}
-    UNION ALL
-    SELECT 'whatsapp', s.person_id, s.created_at
-    FROM call_sessions s
-    WHERE s.organization_id = ${org} AND ${inCurrentOrPreviousRange(sql`s.created_at`, range)}
-    UNION ALL
-    SELECT 'whatsapp', c.person_id, m.sent_at
-    FROM whatsapp_messages m JOIN whatsapp_chats c ON c.id = m.chat_id
-    WHERE m.direction = 'outbound' AND c.person_id IS NOT NULL
-      AND c.account_id IN (SELECT id FROM whatsapp_accounts WHERE organization_id = ${org})
-      AND NOT (m.raw IS NULL AND m.origin <> 'agentsdr' AND m.created_at - m.sent_at > interval '1 hour')
-      AND ${inCurrentOrPreviousRange(sql`m.sent_at`, range)}`;
-}
-
-type PeopleRow = { cur: boolean; ch: string | null; people: number };
 type StageRow = { cur: boolean; ch: string | null; positive: number; meetings: number; customers: number };
 
-const emptyByChannel = () => Object.fromEntries(ANALYTICS_CHANNELS.map((c) => [c, 0])) as Record<AnalyticsChannel, number>;
+const emptyByChannel = () => Object.fromEntries(REPORT_CHANNELS.map((c) => [c, 0])) as Record<ReportChannel, number>;
+const isChannel = (ch: string | null): ch is ReportChannel => REPORT_CHANNELS.includes(ch as ReportChannel);
 
 export async function getOverviewAnalytics(range: AnalyticsRange): Promise<OverviewAnalytics> {
   const org = currentOrganizationId();
   const meetingKeys = sql.join(MEETING_SUBCATEGORY_KEYS.map((key) => sql`${key}`), sql`, `);
-
   const limit = createLimiter(3);
-  const [crm, [reachedRows, repliedRows, stageRows, attentionRows]] = await Promise.all([getCrmSummary(range, limit), runQueries(
-    limit,
-    [
-      () =>
-        // Distinct people reached: overall (ch null) and per channel.
-        db.execute<PeopleRow>(sql`
-          WITH t AS (${touches(range)})
-          SELECT ${inRange(sql`t.ts`, range)} AS cur, t.ch, count(DISTINCT t.person_id)::int AS people
-          FROM t GROUP BY GROUPING SETS ((1), (1, 2))`),
-      () =>
-        db.execute<PeopleRow>(sql`
-          SELECT ${inRange(sql`m.sent_at`, range)} AS cur, m.channel AS ch, count(DISTINCT m.person_id)::int AS people
-          FROM crm_conversation_messages m
-          WHERE m.direction = 'inbound' AND ${inCurrentOrPreviousRange(sql`m.sent_at`, range)}
-            AND m.conversation_id IN (SELECT id FROM crm_conversations WHERE organization_id = ${org})
-          GROUP BY GROUPING SETS ((1), (1, 2))`),
+  const filter = await reportFilter();
+  const window = rangeWindow(range);
+
+  const [current, previous, now, sources, crmPart, [stageRows, accountRows]] = await Promise.all([
+    periodMetrics(window, filter, limit),
+    periodMetrics(previousWindow(range), filter, limit),
+    currentCounts(filter, limit),
+    leadSources(window, filter, limit),
+    getCrmSummary(range, limit),
+    runQueries(limit, [
       () =>
         // Judgement calls: "positive"/"customer" look at the category a record
         // was moved to (a move within Interested still counts, so meetings are
@@ -97,28 +60,19 @@ export async function getOverviewAnalytics(range: AnalyticsRange): Promise<Overv
           WHERE e.organization_id = ${org} AND e.event_type IN ${STAGE_CHANGE_EVENTS} AND ${inCurrentOrPreviousRange(sql`e.created_at`, range)}
           GROUP BY GROUPING SETS ((1), (1, 2))`),
       () =>
-        // Account health; the CRM queues come from the CRM summary.
+        // Account health; the queues come from the shared current counts.
         db.execute<Record<string, number>>(sql`
           SELECT
             (SELECT count(*) FROM outreach_mailboxes WHERE organization_id = ${org} AND status = 'failed')::int AS mailboxes,
             (SELECT count(*) FROM "LinkedInAccount" WHERE "organizationId" = ${org} AND status = 'DISCONNECTED')::int AS linkedin,
             (SELECT count(*) FROM whatsapp_accounts WHERE organization_id = ${org} AND status <> 'connected')::int AS whatsapp`),
-    ],
-  )]);
-
-  const isChannel = (ch: string | null): ch is AnalyticsChannel => ANALYTICS_CHANNELS.includes(ch as AnalyticsChannel);
-  const people = (rows: PeopleRow[]) => {
-    const all = { cur: 0, prev: 0 };
-    const by = { cur: emptyByChannel(), prev: emptyByChannel() };
-    for (const row of rows) {
-      const side = row.cur ? "cur" : "prev";
-      if (row.ch === null) all[side] = num(row.people);
-      else if (isChannel(row.ch)) by[side][row.ch] = num(row.people);
-    }
-    return { all, by };
+    ]),
+  ]);
+  const crm = {
+    ...crmPart,
+    kpis: { replies: { value: current.replies.total, previous: previous.replies.total }, ...crmPart.kpis },
+    drafts: { ...crmPart.drafts, awaitingReview: now.draftsAwaitingReview },
   };
-  const reached = people([...reachedRows]);
-  const replied = people([...repliedRows]);
 
   const stage = {
     all: { cur: { positive: 0, meetings: 0, customers: 0 }, prev: { positive: 0, meetings: 0, customers: 0 } },
@@ -132,43 +86,59 @@ export async function getOverviewAnalytics(range: AnalyticsRange): Promise<Overv
     }
   }
 
-  const metric = (value: number, previous: number): Metric => ({ value, previous });
+  const metric = (value: number, before: number): Metric => ({ value, previous: before });
   const kpis: OverviewAnalytics["kpis"] = {
-    reached: metric(reached.all.cur, reached.all.prev),
-    replied: metric(replied.all.cur, replied.all.prev),
+    sent: metric(current.sent.total, previous.sent.total),
+    contacted: metric(current.peopleContacted.total, previous.peopleContacted.total),
+    replied: metric(current.peopleReplied.total, previous.peopleReplied.total),
+    contactedWhoReplied: metric(current.contactedWhoReplied.total, previous.contactedWhoReplied.total),
+    replyRate: { value: current.replyRate.total, previous: previous.replyRate.total },
     positive: metric(stage.all.cur.positive, stage.all.prev.positive),
     meetings: metric(stage.all.cur.meetings, stage.all.prev.meetings),
     customers: metric(stage.all.cur.customers, stage.all.prev.customers),
   };
 
-  const a = attentionRows[0] ?? {};
+  const a = accountRows[0] ?? {};
+  // The channel tabs' order, then Instagram when it has activity (it has no tab).
+  const shownChannels: ReportChannel[] = [
+    ...ANALYTICS_CHANNELS,
+    ...REPORT_CHANNELS.filter((channel) => !(ANALYTICS_CHANNELS as readonly string[]).includes(channel)
+      && (current.peopleContacted.byChannel[channel] > 0 || current.replies.byChannel[channel] > 0)),
+  ];
 
   return {
     view: "overview",
     range,
     kpis,
     funnel: [
-      { key: "reached", label: "Reached", value: kpis.reached.value },
-      { key: "replied", label: "Replied", value: kpis.replied.value },
+      { key: "contacted", label: "Contacted", value: kpis.contacted.value },
+      { key: "replied", label: "Replied", value: kpis.contactedWhoReplied.value },
       { key: "positive", label: "Positive", value: kpis.positive.value },
       { key: "meeting", label: "Meeting", value: kpis.meetings.value },
       { key: "customer", label: "Customer", value: kpis.customers.value },
     ],
-    channels: ANALYTICS_CHANNELS.map((channel) => ({
+    channels: shownChannels.map((channel) => ({
       channel,
-      reached: reached.by.cur[channel],
-      replied: replied.by.cur[channel],
-      replyRate: ratio(replied.by.cur[channel], reached.by.cur[channel]),
+      sent: current.sent.byChannel[channel],
+      contacted: current.peopleContacted.byChannel[channel],
+      replied: current.contactedWhoReplied.byChannel[channel],
+      replyRate: current.replyRate.byChannel[channel],
       positive: stage.positiveByChannel[channel],
     })),
     attention: {
-      actionRequired: crm.attention.actionRequired,
-      overdue: crm.attention.overdue,
-      draftsAwaitingReview: crm.drafts.awaitingReview,
+      at: now.at,
+      needsYou: now.needsYou,
+      actionRequired: now.actionRequired,
+      overdue: now.followUpsDue,
+      draftsAwaitingReview: now.draftsAwaitingReview,
+      plansAwaitingStart: now.plansAwaitingStart,
       mailboxesFailing: num(a.mailboxes),
       linkedinDisconnected: num(a.linkedin),
       whatsappDisconnected: num(a.whatsapp),
     },
+    metrics: { current, previous },
+    now,
+    sources,
     crm,
   };
 }

@@ -1,12 +1,18 @@
+import type { CurrentCounts, LeadSources, PeriodMetrics, ReportChannel } from "@/lib/reporting/metrics";
+
 /**
  * The shapes of GET /api/analytics/[view], shared by the route, the queries
  * (src/lib/analytics/*.server.ts) and the dashboard (src/components/analytics).
  * Client-safe: types and pure helpers only, no runtime imports.
  *
- * Counting conventions, so the views agree with each other:
- * - Every count is for events inside the range, bucketed in the viewer's
- *   time zone. A "funnel" is therefore period counts, not one cohort
+ * Counting conventions, so the views agree with each other and with Overview:
+ * - Every count is for events inside the range, whole local days in the
+ *   organization's business time zone (an explicit ?tz= overrides it and
+ *   is labelled). A "funnel" is therefore period counts, not one cohort
  *   followed through; the UI says so.
+ * - Sent, delivered, read, replies, people contacted and replied, the reply
+ *   rate, lead sources and the "now" counts are the shared definitions of
+ *   src/lib/reporting/metrics.ts, read the same way Overview reads them.
  * - "People" counts are distinct person ids; "messages"/"emails"/"calls" are rows.
  * - Rates are 0..1, or null when the denominator is 0.
  * - "now" snapshots (queues, capacity, pipeline) ignore the range.
@@ -27,10 +33,19 @@ export type AnalyticsRange = {
   from: string;
   /** Inclusive, YYYY-MM-DD in `tz`. */
   to: string;
-  /** IANA zone the buckets are cut in. */
+  /** IANA zone the range is cut and bucketed in. */
   tz: string;
+  /** The organization's business time zone, or an explicit ?tz= override. */
+  tzSource: "organization" | "override";
+  /** The preset the range was asked as (?range=7d), or null for explicit dates. */
+  preset: string | null;
+  /** [from, to) as ISO instants: the window every count reads. */
+  window: { from: string; to: string };
   bucket: "day" | "week";
 };
+
+/** The shared period figures for the range and for the equally long range before it. */
+export type SharedFigures = { current: PeriodMetrics; previous: PeriodMetrics };
 
 /** A number for the range, and the same number for the equally long range just before it. */
 export type Metric = {
@@ -49,7 +64,7 @@ export type BreakdownRow<K extends string = string> = { key: K; label: string; v
 
 // ---------------------------------------------------------------- overview
 
-export type FunnelStageKey = "reached" | "replied" | "positive" | "meeting" | "customer";
+export type FunnelStageKey = "contacted" | "replied" | "positive" | "meeting" | "customer";
 
 /**
  * The Overview is CRM-first: `crm` (conversations, pipeline, AI) leads, and
@@ -59,10 +74,16 @@ export type OverviewAnalytics = {
   view: "overview";
   range: AnalyticsRange;
   kpis: {
-    /** Distinct people with any outbound touch: email sent, LinkedIn invite/message, WhatsApp call or outbound message. */
-    reached: Metric;
-    /** Distinct people with an inbound reply on any channel (crm_conversation_messages, inbound). */
+    /** Provider-accepted outreach sends (shared `sent`). */
+    sent: Metric;
+    /** Distinct people with at least one provider-accepted outreach send (shared `peopleContacted`). */
+    contacted: Metric;
+    /** Distinct people with an inbound message on any channel (shared `peopleReplied`). */
     replied: Metric;
+    /** Contacted people who replied after their first send (shared `contactedWhoReplied`). */
+    contactedWhoReplied: Metric;
+    /** contactedWhoReplied / contacted (shared `replyRate`). */
+    replyRate: { value: number | null; previous: number | null };
     /** Distinct CRM records moved into Interested or Customer. */
     positive: Metric;
     /** Distinct CRM records moved into a meeting subcategory (see MEETING_SUBCATEGORY_KEYS). */
@@ -71,23 +92,35 @@ export type OverviewAnalytics = {
     customers: Metric;
   };
   funnel: Array<{ key: FunnelStageKey; label: string; value: number }>;
+  /** Per channel, from the shared figures; Instagram only when it has activity. */
   channels: Array<{
-    channel: AnalyticsChannel;
-    reached: number;
+    channel: ReportChannel;
+    sent: number;
+    contacted: number;
+    /** Contacted on this channel who replied on it after their first send. */
     replied: number;
-    /** replied / reached. */
+    /** replied / contacted. */
     replyRate: number | null;
     positive: number;
   }>;
-  /** Now, regardless of range. */
+  /** Now, regardless of range: the shared current counts, plus account health. */
   attention: {
+    at: string;
+    needsYou: number;
     actionRequired: number;
     overdue: number;
     draftsAwaitingReview: number;
+    plansAwaitingStart: number;
     mailboxesFailing: number;
     linkedinDisconnected: number;
     whatsappDisconnected: number;
   };
+  /** The shared period figures, as Overview (/assistant/results) reads them for the same window. */
+  metrics: SharedFigures;
+  /** The shared current counts. */
+  now: CurrentCounts;
+  /** Qualified and contactable people per source and provider, each person once in the total. */
+  sources: LeadSources;
   crm: CrmSummary;
 };
 
@@ -109,13 +142,13 @@ export type EmailAnalytics = {
   view: "email";
   range: AnalyticsRange;
   kpis: {
-    /** outreach_emails with status 'sent', by sent_at. */
+    /** Emails the provider accepted (shared `sent`, email). */
     sent: Metric;
-    /** Distinct leads sent step 1 in the range. */
+    /** Distinct people sent at least one email (shared `peopleContacted`, email). */
     contacted: Metric;
-    /** Distinct people in an email campaign with an inbound email reply in the range. */
+    /** Of them, people who replied by email after their first email (shared `contactedWhoReplied`, email). */
     replied: Metric;
-    /** replied / contacted for the same range; previous likewise. */
+    /** replied / contacted for the same range; previous likewise (shared `replyRate`, email). */
     replyRate: { value: number | null; previous: number | null };
     /** Suppression rows with reason 'bounced'. */
     bounced: Metric;
@@ -160,17 +193,19 @@ export type LinkedinAnalytics = {
   view: "linkedin";
   range: AnalyticsRange;
   kpis: {
-    /** Message rows of type INVITATION. */
+    /** Invitations LinkedIn accepted from the sender (shared `sent`, LinkedIn invitations). */
     invites: Metric;
     /** Connections accepted: Lead.acceptMessageSentAt in range (falls back to Connection.connectedAt). */
     accepted: Metric;
     /** accepted / invites. */
     acceptanceRate: { value: number | null; previous: number | null };
-    /** ACCEPTANCE, FOLLOW_UP_1..3 and CUSTOM_SENT messages. */
+    /** Acceptance message and follow-ups 1 to 3 LinkedIn accepted (shared `sent`, LinkedIn messages). */
     messages: Metric;
-    /** Distinct leads with a RECEIVED message. */
+    /** Distinct people sent an invitation or message (shared `peopleContacted`, LinkedIn). */
+    contacted: Metric;
+    /** Of them, people who replied on LinkedIn after their first send (shared `contactedWhoReplied`, LinkedIn). */
     replied: Metric;
-    /** replied / accepted. */
+    /** replied / contacted (shared `replyRate`, LinkedIn). */
     replyRate: { value: number | null; previous: number | null };
   };
   activity: TimeSeries<"invites" | "accepted" | "replied">;
@@ -213,7 +248,19 @@ export type WhatsappAnalytics = {
     connectRate: { value: number | null; previous: number | null };
     talkTimeMs: Metric;
     avgCallMs: { value: number | null; previous: number | null };
-    /** Outbound whatsapp_messages (origin agentsdr or phone). */
+    /** Campaign messages WhatsApp accepted (shared `sent`, WhatsApp). */
+    sent: Metric;
+    /** Of them, reported delivered or read (shared `delivered`, WhatsApp). */
+    delivered: Metric;
+    /** Of them, with a read receipt (shared `read`, WhatsApp). */
+    read: Metric;
+    /** Distinct people sent a campaign message (shared `peopleContacted`, WhatsApp). */
+    contacted: Metric;
+    /** Of them, people who replied on WhatsApp after their first send (shared `contactedWhoReplied`, WhatsApp). */
+    replied: Metric;
+    /** replied / contacted (shared `replyRate`, WhatsApp). */
+    replyRate: { value: number | null; previous: number | null };
+    /** Outbound chat messages of any origin: campaign sends, replies, and messages typed on the phone. */
     messagesSent: Metric;
     /** Inbound whatsapp_messages (origin lead). */
     messagesReceived: Metric;
@@ -256,7 +303,7 @@ export type CrmCategory = "customer" | "interested" | "not_interested" | "other"
 /** The CRM half of the Overview. */
 export type CrmSummary = {
   kpis: {
-    /** Inbound crm_conversation_messages. */
+    /** Inbound crm_conversation_messages (shared `replies`). */
     replies: Metric;
     /** crm_classifications created, excluding failed and stale. */
     classified: Metric;
@@ -284,13 +331,11 @@ export type CrmSummary = {
     sentAsIs: number;
     sentEdited: number;
     discarded: number;
-    /** Now. */
+    /** Now (shared `draftsAwaitingReview`). */
     awaitingReview: number;
   };
   /** Now. */
   workflow: Array<BreakdownRow>;
-  /** Now. */
-  attention: { actionRequired: number; overdue: number };
 };
 
 export type AnalyticsResponse = OverviewAnalytics | EmailAnalytics | LinkedinAnalytics | WhatsappAnalytics;

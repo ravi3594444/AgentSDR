@@ -1,54 +1,43 @@
-import { latestDailySlot, wallTime } from "@/lib/scheduler/slots";
-import { sourceLabel } from "./qualification";
+import { dayStart, daysWindow, localDate, presetDays, shiftDate } from "@/lib/reporting/metrics";
 
 /**
  * Reporting periods in the business's own time zone, and how results are
  * written for the owner. Pure. A figure that cannot be measured from what
  * the app records is `null` and reads "not measured", never 0.
+ *
+ * A period is whole local days, [first day 00:00, the day after the last
+ * 00:00), on the shared calendar of src/lib/reporting/metrics.ts: "today"
+ * or "the last 7 days" here is the same window Analytics reads for its
+ * preset of the same name.
  */
 
 export type PeriodKind = "today" | "yesterday" | "last_7_days" | "last_30_days" | "all_time";
 export const PERIOD_KINDS: readonly PeriodKind[] = ["today", "yesterday", "last_7_days", "last_30_days", "all_time"];
 
-export type Period = { kind: PeriodKind; from: Date | null; to: Date; timeZone: string; label: string };
-
-function dayLabel(timeZone: string, instant: Date): string {
-  const wall = wallTime(timeZone, instant.getTime());
-  return `${wall.year}-${String(wall.month).padStart(2, "0")}-${String(wall.day).padStart(2, "0")}`;
-}
-
-/** The local start of the day `daysBack` days before the day containing `now`. */
-function dayStart(timeZone: string, now: Date, daysBack: number): Date {
-  let start = latestDailySlot(timeZone, "00:00", now);
-  for (let index = 0; index < daysBack; index += 1) start = latestDailySlot(timeZone, "00:00", new Date(start.getTime() - 1));
-  return start;
-}
-
-export function periodFor(kind: PeriodKind, timeZone: string, now = new Date()): Period {
-  const today = dayStart(timeZone, now, 0);
-  switch (kind) {
-    case "today":
-      return { kind, from: today, to: now, timeZone, label: `today (${dayLabel(timeZone, today)})` };
-    case "yesterday": {
-      const from = dayStart(timeZone, now, 1);
-      return { kind, from, to: today, timeZone, label: `yesterday (${dayLabel(timeZone, from)})` };
-    }
-    case "last_7_days": {
-      const from = dayStart(timeZone, now, 6);
-      return { kind, from, to: now, timeZone, label: `the last 7 days (${dayLabel(timeZone, from)} to today)` };
-    }
-    case "last_30_days": {
-      const from = dayStart(timeZone, now, 29);
-      return { kind, from, to: now, timeZone, label: `the last 30 days (${dayLabel(timeZone, from)} to today)` };
-    }
-    default:
-      return { kind: "all_time", from: null, to: now, timeZone, label: "all time" };
-  }
-}
+export type Period = {
+  kind: PeriodKind;
+  from: Date | null;
+  to: Date;
+  timeZone: string;
+  /** The inclusive local days it covers; null for all time. */
+  days: { from: string; to: string } | null;
+  label: string;
+};
 
 /** The calendar day it is at `instant` in this time zone, e.g. "2026-10-18". */
-export function localDate(timeZone: string, instant = new Date()): string {
-  return dayLabel(timeZone, instant);
+export { localDate };
+
+export function periodFor(kind: PeriodKind, timeZone: string, now = new Date()): Period {
+  const today = localDate(timeZone, now);
+  if (kind === "all_time") return { kind, from: null, to: dayStart(shiftDate(today, 1), timeZone), timeZone, days: null, label: "all time" };
+  const days = presetDays(kind, today);
+  const { from, to } = daysWindow(days, timeZone);
+  const label = kind === "today"
+    ? `today (${today})`
+    : kind === "yesterday"
+      ? `yesterday (${days.from})`
+      : `the last ${kind === "last_7_days" ? 7 : 30} days (${days.from} to today)`;
+  return { kind, from, to, timeZone, days, label };
 }
 
 /**
@@ -90,7 +79,7 @@ export function scopeIsEmpty(scope: ResultsScope): boolean {
 /** The local calendar day a summary written at `now` covers: the day before. */
 export function summaryDay(timeZone: string, now = new Date()): { day: string; period: Period } {
   const period = periodFor("yesterday", timeZone, now);
-  return { day: dayLabel(timeZone, period.from!), period };
+  return { day: period.days!.from, period };
 }
 
 export function figure(value: number | null | undefined, unit = ""): string {
@@ -148,38 +137,8 @@ export function describeChannelSending(sending: ChannelSending): string {
   }
 }
 
-/**
- * How many leads each source produced, and how many of them can be reached.
- * The question this answers is which source is worth asking for more of:
- * Google Maps is the default only because it needs no setup, not because it
- * is the best for every kind of customer. Sorted by how many were found.
- */
-export type SourceYield = {
-  source: string;
-  /** How the source reads to the owner: "Google Maps listing", "Web search". */
-  label: string;
-  found: number;
-  contactable: number;
-  leftOut: number;
-};
-
-export function summarizeSources(
-  rows: readonly { source: string; status: string; count: number }[],
-): SourceYield[] {
-  const bySource = new Map<string, SourceYield>();
-  for (const row of rows) {
-    const source = row.source || "unknown";
-    const entry = bySource.get(source) ?? {
-      source,
-      label: sourceLabel(source),
-      found: 0,
-      contactable: 0,
-      leftOut: 0,
-    };
-    entry.found += row.count;
-    if (row.status === "eligible") entry.contactable += row.count;
-    if (row.status === "excluded") entry.leftOut += row.count;
-    bySource.set(source, entry);
-  }
-  return [...bySource.values()].sort((a, b) => b.found - a.found || a.label.localeCompare(b.label));
+/** A share as a whole percentage, "not measured" when there is no base. */
+export function percent(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "not measured";
+  return `${Math.round(value * 100)}%`;
 }

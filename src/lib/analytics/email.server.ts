@@ -2,6 +2,8 @@ import "server-only";
 
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
+import type { PeriodMetrics } from "@/lib/reporting/metrics";
+import { periodMetrics, reportFilter } from "@/lib/reporting/metrics.server";
 import { currentOrganizationId } from "@/lib/tenancy/scope";
 import {
   bucketFor,
@@ -11,23 +13,19 @@ import {
   type AnalyticsRange,
   type EmailAnalytics,
 } from "./contract";
-import { inCurrentOrPreviousRange, inPreviousRange, inRange, localDay, num, runLimited } from "./server";
+import { inCurrentOrPreviousRange, inPreviousRange, inRange, localDay, num, previousWindow, rangeWindow, runLimited } from "./server";
 
 const CAMPAIGN_ROW_CAP = 25;
 
 type EmailRow = {
   d: string | null;
   total: boolean;
-  sent: unknown;
-  sent_prev: unknown;
   first_touch: unknown;
   follow_up: unknown;
-  contacted: unknown;
-  contacted_prev: unknown;
   failed: unknown;
 };
 
-type ReplyRow = { d: string | null; total: boolean; replies: unknown; replied: unknown; replied_prev: unknown };
+type ReplyRow = { d: string; replies: unknown };
 
 type SuppressionRow = { bounced: unknown; bounced_prev: unknown; unsub: unknown; unsub_prev: unknown };
 
@@ -52,21 +50,23 @@ type MailboxRow = {
 };
 
 /**
- * Email view. Six queries, at most three in flight (runLimited):
- *  1. outreach_emails: sent / contacted / failed for both periods plus a per-day split
- *     (GROUPING SETS: the `d IS NULL` row is the total, the others are days).
- *  2. crm_conversation_messages: inbound email replies from people enrolled in an email
- *     campaign — rows per day and distinct people for both periods.
+ * Email view. Eight statements, at most three in flight (runLimited):
+ *  1. outreach_emails: first touches and follow-ups sent per day, failed in the range.
+ *  2. crm_conversation_messages: inbound email replies per day (the shared reply definition).
  *  3. outreach_suppression_list: bounced / unsubscribed for both periods.
  *  4. campaigns with lead-status counts (all time).
  *  5. sends per campaign per day in the range (feeds sentInRange and the trend).
  *  6. mailboxes now.
+ *  7–8. the shared figures (src/lib/reporting/metrics.server.ts) for the range and the one
+ *     before: sent, people contacted, contacted who replied, reply rate — the same numbers
+ *     Overview shows for email.
  *
  * Indexes that would help at scale: outreach_emails (status, sent_at),
  * crm_conversation_messages (channel, direction, sent_at).
  */
 export async function getEmailAnalytics(range: AnalyticsRange): Promise<EmailAnalytics> {
   const org = currentOrganizationId();
+  const filter = await reportFilter();
   /** Outreach leads of this organization, reached through their campaign. */
   const orgLeadIds = sql`(SELECT ol.id FROM outreach_leads ol JOIN outreach_campaigns oc ON oc.id = ol.campaign_id WHERE oc.organization_id = ${org})`;
   const sentDay = localDay(sql`e.sent_at`, range);
@@ -78,18 +78,14 @@ export async function getEmailAnalytics(range: AnalyticsRange): Promise<EmailAna
       () =>
         db.execute<EmailRow>(sql`
           SELECT d, GROUPING(d) = 1 AS total,
-            count(*) FILTER (WHERE status = 'sent' AND ${inRange(sql`sent_at`, range)})::int AS sent,
-            count(*) FILTER (WHERE status = 'sent' AND ${inPreviousRange(sql`sent_at`, range)})::int AS sent_prev,
-            count(*) FILTER (WHERE status = 'sent' AND step_number = 1 AND ${inRange(sql`sent_at`, range)})::int AS first_touch,
-            count(*) FILTER (WHERE status = 'sent' AND step_number > 1 AND ${inRange(sql`sent_at`, range)})::int AS follow_up,
-            count(DISTINCT lead_id) FILTER (WHERE status = 'sent' AND step_number = 1 AND ${inRange(sql`sent_at`, range)})::int AS contacted,
-            count(DISTINCT lead_id) FILTER (WHERE status = 'sent' AND step_number = 1 AND ${inPreviousRange(sql`sent_at`, range)})::int AS contacted_prev,
-            count(*) FILTER (WHERE status = 'failed' AND ${inRange(sql`created_at`, range)})::int AS failed
+            count(*) FILTER (WHERE status = 'sent' AND step_number = 1)::int AS first_touch,
+            count(*) FILTER (WHERE status = 'sent' AND step_number > 1)::int AS follow_up,
+            count(*) FILTER (WHERE status = 'failed')::int AS failed
           FROM (
-            SELECT e.status, e.step_number, e.lead_id, e.sent_at, e.created_at,
+            SELECT e.status, e.step_number,
               CASE WHEN e.status = 'sent' THEN ${sentDay} END AS d
             FROM outreach_emails e
-            WHERE ((e.status = 'sent' AND ${inCurrentOrPreviousRange(sql`e.sent_at`, range)})
+            WHERE ((e.status = 'sent' AND ${inRange(sql`e.sent_at`, range)})
                OR (e.status = 'failed' AND ${inRange(sql`e.created_at`, range)})
             ) AND e.lead_id IN ${orgLeadIds}
           ) t
@@ -97,19 +93,11 @@ export async function getEmailAnalytics(range: AnalyticsRange): Promise<EmailAna
         `),
       () =>
         db.execute<ReplyRow>(sql`
-          SELECT d, GROUPING(d) = 1 AS total,
-            count(*) FILTER (WHERE ${inRange(sql`sent_at`, range)})::int AS replies,
-            count(DISTINCT person_id) FILTER (WHERE ${inRange(sql`sent_at`, range)})::int AS replied,
-            count(DISTINCT person_id) FILTER (WHERE ${inPreviousRange(sql`sent_at`, range)})::int AS replied_prev
-          FROM (
-            SELECT m.person_id, m.sent_at, ${msgDay} AS d
-            FROM crm_conversation_messages m
-            WHERE m.direction = 'inbound' AND m.channel = 'email'
-              AND ${inCurrentOrPreviousRange(sql`m.sent_at`, range)}
-              AND m.conversation_id IN (SELECT id FROM crm_conversations WHERE organization_id = ${org})
-              AND EXISTS (SELECT 1 FROM outreach_leads l WHERE l.person_id = m.person_id AND l.id IN ${orgLeadIds})
-          ) t
-          GROUP BY GROUPING SETS ((), (d))
+          SELECT ${msgDay} AS d, count(*)::int AS replies
+          FROM crm_conversation_messages m
+          WHERE m.direction = 'inbound' AND m.channel = 'email' AND ${inRange(sql`m.sent_at`, range)}
+            AND m.conversation_id IN (SELECT id FROM crm_conversations WHERE organization_id = ${org})
+          GROUP BY 1
         `),
       () =>
         db.execute<SuppressionRow>(sql`
@@ -150,6 +138,8 @@ export async function getEmailAnalytics(range: AnalyticsRange): Promise<EmailAna
           WHERE organization_id = ${org}
           ORDER BY today_emails_sent DESC, email_address
         `),
+      () => periodMetrics(rangeWindow(range), filter),
+      () => periodMetrics(previousWindow(range), filter),
     ],
     3,
   );
@@ -159,17 +149,12 @@ export async function getEmailAnalytics(range: AnalyticsRange): Promise<EmailAna
   const campaignRows = results[3] as CampaignRow[];
   const campaignSendRows = results[4] as CampaignSendRow[];
   const mailboxRows = results[5] as MailboxRow[];
+  const current = results[6] as PeriodMetrics;
+  const previous = results[7] as PeriodMetrics;
 
   const emailTotal = emailRows.find((r) => r.total);
   const emailDays = emailRows.filter((r) => !r.total && r.d !== null) as Array<EmailRow & { d: string }>;
-  const replyTotal = replyRows.find((r) => r.total);
-  const replyDays = replyRows.filter((r) => !r.total && r.d !== null) as Array<ReplyRow & { d: string }>;
   const sup = suppressionRows[0];
-
-  const contacted = num(emailTotal?.contacted);
-  const contactedPrev = num(emailTotal?.contacted_prev);
-  const replied = num(replyTotal?.replied);
-  const repliedPrev = num(replyTotal?.replied_prev);
 
   const starts = bucketStarts(range);
   const trends = new Map<string, Map<string, number>>();
@@ -215,10 +200,10 @@ export async function getEmailAnalytics(range: AnalyticsRange): Promise<EmailAna
     view: "email",
     range,
     kpis: {
-      sent: { value: num(emailTotal?.sent), previous: num(emailTotal?.sent_prev) },
-      contacted: { value: contacted, previous: contactedPrev },
-      replied: { value: replied, previous: repliedPrev },
-      replyRate: { value: ratio(replied, contacted), previous: ratio(repliedPrev, contactedPrev) },
+      sent: { value: current.sent.byChannel.email, previous: previous.sent.byChannel.email },
+      contacted: { value: current.peopleContacted.byChannel.email, previous: previous.peopleContacted.byChannel.email },
+      replied: { value: current.contactedWhoReplied.byChannel.email, previous: previous.contactedWhoReplied.byChannel.email },
+      replyRate: { value: current.replyRate.byChannel.email, previous: previous.replyRate.byChannel.email },
       bounced: { value: num(sup?.bounced), previous: num(sup?.bounced_prev) },
       unsubscribed: { value: num(sup?.unsub), previous: num(sup?.unsub_prev) },
     },
@@ -230,7 +215,7 @@ export async function getEmailAnalytics(range: AnalyticsRange): Promise<EmailAna
     replies: toSeries(
       ["replies"] as const,
       range,
-      replyDays.map((r) => ({ date: r.d, replies: num(r.replies) })),
+      replyRows.map((r) => ({ date: r.d, replies: num(r.replies) })),
     ),
     failedSends: num(emailTotal?.failed),
     campaigns,

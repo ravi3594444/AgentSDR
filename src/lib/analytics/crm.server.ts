@@ -2,7 +2,6 @@ import "server-only";
 
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { crmActionGroupSql } from "@/lib/crm/actionGroups.server";
 import { currentOrganizationId } from "@/lib/tenancy/scope";
 import { ratio, toSeries, type AnalyticsRange, type BreakdownRow, type CrmCategory, type CrmSummary } from "./contract";
 import { inCurrentOrPreviousRange, inRange, localDay, num, type QueryLimiter } from "./server";
@@ -16,9 +15,12 @@ export function runQueries<const T extends readonly (() => PromiseLike<unknown>)
 }
 
 /**
- * The CRM half of the Overview: replies and classification, drafts, and the
- * pipeline snapshot. Seven statements, through the caller's limiter so they
- * share its cap with the overview's own queries.
+ * The CRM half of the Overview: replies by category and classification,
+ * drafts, and the pipeline snapshot. Seven statements, through the caller's
+ * limiter so they share its cap with the overview's own queries. What waits
+ * right now (Action required, follow-ups due, drafts to review) is the
+ * shared current count (src/lib/reporting/metrics.server.ts currentCounts),
+ * not counted here.
  */
 
 const CATEGORIES: readonly CrmCategory[] = ["customer", "interested", "not_interested", "other", "unclassified"];
@@ -27,16 +29,20 @@ const asCategory = (key: string | null): CrmCategory => (CATEGORIES.includes(key
 /** Events that move a record between stages (src/lib/crm/records.ts, operations.ts, stageMove.ts). */
 export const STAGE_CHANGE_EVENTS = sql`('classification.changed', 'stage.moved', 'classification.auto_applied')`;
 
-/**
- * Follow-ups waiting on a person — the Follow-ups due figure on Action required
- * (getCrmOverview), from the same grouping.
- */
-export const OVERDUE_SQL = sql`(${crmActionGroupSql({ id: sql.raw("r.id"), workflowState: sql.raw("r.workflow_state"), nextActionAt: sql.raw("r.next_action_at") })} = 'follow_up')`;
-
 const titleCase = (value: string) =>
   value.split("_").filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join(" ");
 
-export async function getCrmSummary(range: AnalyticsRange, limit: QueryLimiter): Promise<CrmSummary> {
+/**
+ * The CRM summary without the figures Overview shows too: the caller adds
+ * `kpis.replies` and `drafts.awaitingReview` from the shared definitions
+ * (src/lib/reporting/metrics.server.ts).
+ */
+export type CrmSummaryPart = Omit<CrmSummary, "kpis" | "drafts"> & {
+  kpis: Omit<CrmSummary["kpis"], "replies">;
+  drafts: Omit<CrmSummary["drafts"], "awaitingReview">;
+};
+
+export async function getCrmSummary(range: AnalyticsRange, limit: QueryLimiter): Promise<CrmSummaryPart> {
   const org = currentOrganizationId();
   const [inboundRows, medianRows, classRows, draftRows, pipelineRows, workflowRows, stageRows] = await runQueries(
     limit,
@@ -45,9 +51,8 @@ export async function getCrmSummary(range: AnalyticsRange, limit: QueryLimiter):
         // Judgement call: an inbound message's category is its latest usable
         // classification (applied, else proposed); failed/stale/rejected ones
         // are ignored, and no classification means "unclassified".
-        db.execute<{ cur: boolean; day: string; category: string | null; n: number }>(sql`
-          SELECT ${inRange(sql`m.sent_at`, range)} AS cur, ${localDay(sql`m.sent_at`, range)} AS day,
-                 cl.category, count(*)::int AS n
+        db.execute<{ day: string; category: string | null; n: number }>(sql`
+          SELECT ${localDay(sql`m.sent_at`, range)} AS day, cl.category, count(*)::int AS n
           FROM crm_conversation_messages m
           LEFT JOIN LATERAL (
             SELECT coalesce(c.applied_category_key, c.proposed_category_key) AS category
@@ -55,9 +60,9 @@ export async function getCrmSummary(range: AnalyticsRange, limit: QueryLimiter):
             WHERE c.message_id = m.id AND c.status IN ('auto_applied', 'accepted', 'overridden', 'proposed')
             ORDER BY c.created_at DESC LIMIT 1
           ) cl ON true
-          WHERE m.direction = 'inbound' AND ${inCurrentOrPreviousRange(sql`m.sent_at`, range)}
+          WHERE m.direction = 'inbound' AND ${inRange(sql`m.sent_at`, range)}
             AND m.conversation_id IN (SELECT id FROM crm_conversations WHERE organization_id = ${org})
-          GROUP BY 1, 2, 3`),
+          GROUP BY 1, 2`),
       () =>
         // Each inbound message, to the next outbound in its conversation;
         // inbound with no later outbound is left out.
@@ -111,9 +116,7 @@ export async function getCrmSummary(range: AnalyticsRange, limit: QueryLimiter):
             (SELECT count(*) FROM sent WHERE cur AND NOT as_is)::int AS edited,
             (SELECT count(*) FROM crm_drafts d WHERE ${inRange(sql`d.created_at`, range)}
               AND d.crm_record_id IN (SELECT id FROM crm_records WHERE organization_id = ${org}))::int AS generated,
-            (SELECT count(*) FROM crm_events e WHERE e.organization_id = ${org} AND e.event_type = 'draft.discarded' AND ${inRange(sql`e.created_at`, range)})::int AS discarded,
-            (SELECT count(*) FROM crm_drafts d WHERE d.status = 'awaiting_review'
-              AND d.crm_record_id IN (SELECT id FROM crm_records WHERE organization_id = ${org}))::int AS awaiting`),
+            (SELECT count(*) FROM crm_events e WHERE e.organization_id = ${org} AND e.event_type = 'draft.discarded' AND ${inRange(sql`e.created_at`, range)})::int AS discarded`),
       () =>
         // Open records by subcategory; a record with none is grouped by category.
         db.execute<{
@@ -128,9 +131,8 @@ export async function getCrmSummary(range: AnalyticsRange, limit: QueryLimiter):
           GROUP BY 1, 2, 3, 4, 5
           ORDER BY s.stage_rank ASC NULLS LAST, n DESC`),
       () =>
-        db.execute<{ state: string; n: number; overdue: number }>(sql`
-          SELECT r.workflow_state AS state, count(*)::int AS n,
-                 count(*) FILTER (WHERE ${OVERDUE_SQL})::int AS overdue
+        db.execute<{ state: string; n: number }>(sql`
+          SELECT r.workflow_state AS state, count(*)::int AS n
           FROM crm_records r
           WHERE r.organization_id = ${org}
           GROUP BY 1
@@ -148,18 +150,8 @@ export async function getCrmSummary(range: AnalyticsRange, limit: QueryLimiter):
     ],
   );
 
-  // ---- replies
-  let repliesCur = 0, repliesPrev = 0;
-  const categoryDays: Array<{ date: string } & Partial<Record<CrmCategory, number>>> = [];
-  for (const row of inboundRows) {
-    const n = num(row.n);
-    if (!row.cur) {
-      repliesPrev += n;
-      continue;
-    }
-    repliesCur += n;
-    categoryDays.push({ date: row.day, [asCategory(row.category)]: n });
-  }
+  // ---- replies by category (the reply count itself is the shared one)
+  const categoryDays: Array<{ date: string } & Partial<Record<CrmCategory, number>>> = inboundRows.map((row) => ({ date: row.day, [asCategory(row.category)]: num(row.n) }));
 
   const median = (cur: boolean) => {
     const row = medianRows.find((r) => r.cur === cur);
@@ -184,12 +176,9 @@ export async function getCrmSummary(range: AnalyticsRange, limit: QueryLimiter):
   });
 
   const workflow: BreakdownRow[] = workflowRows.map((row) => ({ key: row.state, label: titleCase(row.state), value: num(row.n) }));
-  const actionRequired = num(workflowRows.find((r) => r.state === "action_required")?.n);
-  const overdue = workflowRows.reduce((sum, r) => sum + num(r.overdue), 0);
 
   return {
     kpis: {
-      replies: { value: repliesCur, previous: repliesPrev },
       classified: { value: num(cls(true)?.classified), previous: num(cls(false)?.classified) },
       draftsSent: { value: num(drafts.sent_cur), previous: num(drafts.sent_prev) },
       medianFirstResponseMinutes: { value: median(true), previous: median(false) },
@@ -208,9 +197,7 @@ export async function getCrmSummary(range: AnalyticsRange, limit: QueryLimiter):
       sentAsIs: num(drafts.as_is),
       sentEdited: num(drafts.edited),
       discarded: num(drafts.discarded),
-      awaitingReview: num(drafts.awaiting),
     },
     workflow,
-    attention: { actionRequired, overdue },
   };
 }
