@@ -4,16 +4,22 @@ import { and, asc, desc, eq, exists, gt, gte, inArray, lt, ne, or, sql } from "d
 import { db } from "@/lib/db";
 import { inOrg } from "@/lib/tenancy/scope";
 import { coverageLine, namedPlatforms, requestCoverage, type PlatformCoverage, type WebToolUse } from "./coverage";
-import { assistantJobs, assistantMessages } from "./schema";
+import { assistantJobs, assistantMessages, assistantObjectives } from "./schema";
 
 /** The one request a job serves, in SQL (objective.server.ts jobRequestId: its own request, else an older job's contactAfter request). */
 const jobRequest = sql`coalesce(${assistantJobs.payload}->>'requestMessageId', ${assistantJobs.payload}->'contactAfter'->>'requestId')`;
 
 /** Whether a search job serves the owner message in `assistant_messages.id` (the outer row). */
-const servedByAJob = () => exists(db.select({ one: sql`1` }).from(assistantJobs).where(and(
-  inOrg(assistantJobs),
-  sql`${jobRequest} = ${assistantMessages.id}::text`,
-)));
+const servedByAJob = () => or(
+  exists(db.select({ one: sql`1` }).from(assistantJobs).where(and(
+    inOrg(assistantJobs),
+    sql`${jobRequest} = ${assistantMessages.id}::text`,
+  ))),
+  exists(db.select({ one: sql`1` }).from(assistantObjectives).where(and(
+    inOrg(assistantObjectives),
+    eq(assistantObjectives.requestMessageId, assistantMessages.id),
+  ))),
+);
 
 /**
  * The web searches and page reads that succeeded for the request: those
@@ -41,7 +47,7 @@ export async function webToolUse(request: { id: string; threadId: string; create
       eq(assistantMessages.threadId, request.threadId),
       eq(assistantMessages.role, "tool"),
       eq(assistantMessages.status, "ok"),
-      inArray(assistantMessages.tool, ["web_search", "read_webpage"]),
+      inArray(assistantMessages.tool, ["web_search", "read_webpage", "browser_open", "browser_read", "browser_click", "browser_fill", "browser_scroll", "treg_search", "treg_call"]),
       or(
         sql`${assistantMessages.toolResult}->>'requestId' = ${request.id}`,
         and(
@@ -53,7 +59,13 @@ export async function webToolUse(request: { id: string; threadId: string; create
     ))
     .groupBy(assistantMessages.tool);
   const count = (tool: string) => Number(rows.find((row) => row.tool === tool)?.n ?? 0);
-  return { searches: count("web_search"), pagesRead: count("read_webpage") };
+  return {
+    searches: count("web_search"),
+    pagesRead: count("read_webpage"),
+    browserActions: ["browser_open", "browser_read", "browser_click", "browser_fill", "browser_scroll"].reduce((sum, tool) => sum + count(tool), 0),
+    tregCalls: count("treg_call"),
+    tregLookups: count("treg_search"),
+  };
 }
 
 /**

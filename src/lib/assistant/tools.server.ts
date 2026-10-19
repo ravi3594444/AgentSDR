@@ -53,6 +53,7 @@ import { diagnoseDelivery } from "./deliveryDiagnostics.server";
 import { parseInstagramContacts } from "./instagramContacts";
 import { createInstagramContactsAudience } from "./instagramContacts.server";
 import { controlsSentence, ensureObjective, objectiveForRequest, objectiveLine, objectiveStartProblem, requestHoldReason, requestSpendCap, requestSpendGuard, setObjectiveState, threadObjectives } from "./objective.server";
+import { isLeadFindingRequest } from "./objective";
 
 /**
  * What the assistant can do, and nothing else. Each tool is a call into an
@@ -655,7 +656,7 @@ export const TOOLS: Record<string, Tool> = {
       let usernames: string[];
       try { usernames = parseInstagramContacts(args.usernames); }
       catch (error) { throw new ToolArgumentError(error instanceof Error ? error.message : String(error)); }
-      const saved = await createInstagramContactsAudience({ usernames, listName: text(args, "listName"), threadId: context.threadId, userId: context.userId });
+      const saved = await createInstagramContactsAudience({ usernames, listName: text(args, "listName"), threadId: context.threadId, userId: context.userId, requestId: searchRequestId(context) });
       const names = saved.usernames.map((username) => `@${username}`).join(", ");
       return {
         ok: true,
@@ -1313,29 +1314,64 @@ export function toolNamesFor(features: FeatureState): string[] {
   return Object.entries(TOOLS).filter(([, tool]) => !tool.available || tool.available(features)).map(([name]) => name);
 }
 
+const DIRECT_RESEARCH_TOOLS = new Set([
+  "web_search", "read_webpage", "browser_open", "browser_read", "browser_click",
+  "browser_fill", "browser_scroll", "treg_search", "treg_call", "add_instagram_contacts",
+]);
+const REQUEST_EXTENSIONS = /\b(?:also|too|as well|add|include|try|use|check)\b/i;
+
+/**
+ * Direct research tools have no search job of their own. Resolve their
+ * request id before execution so the objective, persisted tool result and
+ * any add_contacts list all use the same durable request identity.
+ */
+export async function researchContextForTool(name: string, context: ToolContext): Promise<{ context: ToolContext; controls: string | null; problem: string | null }> {
+  if (!DIRECT_RESEARCH_TOOLS.has(name) && name !== "add_contacts") return { context, controls: null, problem: null };
+  const requestId = searchRequestId(context);
+  const existing = requestId ? await objectiveForRequest(requestId) : null;
+  if (existing) return {
+    context: { ...context, searchRequestId: existing.requestMessageId },
+    controls: null,
+    problem: await objectiveStartProblem(existing.requestMessageId),
+  };
+
+  const extension = REQUEST_EXTENSIONS.test(context.ownerText) && !isLeadFindingRequest(context.ownerText);
+  let latestObjective: Awaited<ReturnType<typeof threadObjectives>>[number] | undefined;
+  if (extension) {
+    [latestObjective] = await threadObjectives(context.threadId, 1);
+    if (latestObjective && (latestObjective.status === "active" || latestObjective.status === "paused")) {
+      return {
+        context: { ...context, searchRequestId: latestObjective.requestMessageId },
+        controls: null,
+        problem: latestObjective.status === "paused" ? "this research request is paused; resume it before adding searches" : await objectiveStartProblem(latestObjective.requestMessageId),
+      };
+    }
+  }
+
+  // An additive follow-up after a stopped objective is a new request with its
+  // own controls, not more work under the old objective.
+  const inferredNewRequest = extension && latestObjective?.status === "stopped";
+  if ((!DIRECT_RESEARCH_TOOLS.has(name) && name !== "add_contacts") || (!isLeadFindingRequest(context.ownerText) && !inferredNewRequest)) return { context, controls: null, problem: null };
+  const ensured = await ensureObjective({ requestMessageId: requestId, threadId: context.threadId, userId: context.userId });
+  if (!ensured) return { context, controls: null, problem: null };
+  return {
+    context: { ...context, searchRequestId: ensured.objective.requestMessageId },
+    controls: ensured.created ? controlsSentence(ensured.objective) : null,
+    problem: await objectiveStartProblem(ensured.objective.requestMessageId),
+  };
+}
+
 /** Runs one tool; argument problems come back as a failed result the model can correct. */
 export async function runTool(name: string, args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
   const tool = TOOLS[name];
   if (!tool) return { ok: false, summary: `There is no tool called ${name}.` };
   try {
-    // A lead request may be researched with individual web tools instead of a
-    // discovery tool. Establish its durable request objective before those
-    // tools run, while keeping ordinary page-reading questions lightweight.
-    // Search tools continue to use searchObjective() for the same request;
-    // ensureObjective is idempotent, so this cannot create per-call objectives.
-    const individualResearchTools = new Set([
-      "web_search", "read_webpage", "browser_open", "browser_read",
-      "browser_click", "browser_fill", "browser_scroll", "treg_search", "treg_call",
-    ]);
-    const leadFindingRequest = /\\b(?:find|source|research|identify|discover|build|get me|give me)\\b.{0,100}\\b(?:leads?|prospects?|customers?|businesses|companies|buyers|contacts?)\\b|\\b(?:leads?|prospects?)\\b.{0,100}\\b(?:find|source|research|identify|discover)\\b/i.test(context.ownerText);
-    if (individualResearchTools.has(name) && leadFindingRequest) {
-      await ensureObjective({
-        requestMessageId: searchRequestId(context),
-        threadId: context.threadId,
-        userId: context.userId,
-      });
-    }
-    return await tool.run(args, context);
+    const prepared = await researchContextForTool(name, context);
+    if (prepared.problem) return objectiveRefusal(prepared.problem);
+    const result = await tool.run(args, prepared.context);
+    return prepared.controls && result.ok
+      ? { ...result, summary: `${result.summary} ${prepared.controls}` }
+      : result;
   } catch (error) {
     if (error instanceof ToolArgumentError) return { ok: false, refused: true, summary: `Not run: ${error.message.replace(/\.$/, "")}.` };
     console.error(`[assistant/tools] ${name} failed:`, error);

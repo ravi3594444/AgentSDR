@@ -13,6 +13,7 @@ export async function createInstagramContactsAudience(input: {
   listName?: string;
   threadId: string;
   userId: string | null;
+  requestId?: string | null;
 }) {
   const members = await db.transaction(async (tx) => {
     const found = [];
@@ -36,6 +37,7 @@ export async function createInstagramContactsAudience(input: {
     source: "list",
     criteria: {
       source: "chat",
+      ...(input.requestId ? { requestId: input.requestId } : {}),
       instagramUsernames: input.usernames,
       preferredChannels: ["instagram"],
     },

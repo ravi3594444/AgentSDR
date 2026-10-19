@@ -37,6 +37,24 @@ export function objectiveReportKey(objectiveId: string, reason: StopReason): str
   return `assistant_objective:${objectiveId}:${reason}`;
 }
 
+/**
+ * Whether an owner message asks to find potential customers, rather than
+ * merely read or summarize a page. Deliberately recognizes both explicit
+ * lead language and common request forms such as "find plumbers in Pune".
+ */
+export function isLeadFindingRequest(text: string): boolean {
+  const words = text.replace(/\s+/g, " ").trim();
+  if (!words || /\bcontact\s+(?:page|details|information|info|link)\b/i.test(words)) return false;
+  const intent = /\b(?:find|source|research|identify|discover|prospect|need|want|looking\s+for|look\s+for|search(?:\s+for)?|build\s+(?:a\s+)?list|get\s+me|give\s+me)\b/i.test(words);
+  const buyer = /\b(?:leads?|prospects?|potential\s+customers?|new\s+customers?|buyers?|businesses|companies|contacts?|decision\s+makers?|clients?)\b/i.test(words);
+  if (intent && buyer) return true;
+  // Industry/category searches (“find dentists in Patna”) are also lead
+  // requests; require an explicit finding verb and a place-like qualifier to
+  // avoid turning “find this website” into a long-running objective.
+  return /\b(?:find|source|research|identify|discover|prospect|look\s+for|search(?:\s+for)?)\b.{1,100}\b(?:in|near|around|across|within)\s+[A-Z][\p{L}'’.-]+/iu.test(words)
+    && !/\b(?:website|webpage|article|document|page|address|hours)\b/i.test(words);
+}
+
 // ── Controls ─────────────────────────────────────────────────────────────────
 
 export type ControlDefaults = { leadTarget: number; hours: number; spendUsd: number };
@@ -421,7 +439,7 @@ export type SourceYield = {
 export type ContactRoutes = { email: number; whatsapp: number; linkedin: number; instagram: number };
 
 /** The web searches and page reads the assistant ran itself for the request (they start no job). */
-export type WebUse = { searches: number; pagesRead: number };
+export type WebUse = { searches: number; pagesRead: number; browserActions?: number; tregCalls?: number; tregLookups?: number };
 
 function plural(n: number, word: string, many = `${word}s`): string {
   return `${n} ${n === 1 ? word : many}`;
@@ -448,7 +466,13 @@ export function sourceLine(source: SourceYield): string {
 
 function sourcesText(sources: readonly SourceYield[], web: WebUse | null): string {
   const lines = sources.map(sourceLine);
-  if (web && (web.searches || web.pagesRead)) lines.push(`the assistant's own web research: ${[web.searches ? plural(web.searches, "web search", "web searches") : null, web.pagesRead ? plural(web.pagesRead, "page") + " read" : null].filter(Boolean).join(", ")}`);
+  if (web && (web.searches || web.pagesRead || web.browserActions || web.tregCalls || web.tregLookups)) lines.push(`the assistant's direct research tools: ${[
+    web.searches ? plural(web.searches, "web search", "web searches") : null,
+    web.pagesRead ? `${plural(web.pagesRead, "page")} read` : null,
+    web.browserActions ? plural(web.browserActions, "browser action") : null,
+    web.tregLookups ? plural(web.tregLookups, "Treg catalog lookup") : null,
+    web.tregCalls ? plural(web.tregCalls, "Treg call") : null,
+  ].filter(Boolean).join(", ")}`);
   return lines.join("; ") || "nothing yet";
 }
 

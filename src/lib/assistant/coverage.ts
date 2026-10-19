@@ -74,13 +74,14 @@ function jobState(job: CoverageJob): { state: PlatformState; detail: string | nu
 }
 
 /** The web searches and page reads the assistant ran itself for a request (web_search, read_webpage); they start no job. */
-export type WebToolUse = { searches: number; pagesRead: number };
+export type WebToolUse = { searches: number; pagesRead: number; browserActions?: number; tregCalls?: number; tregLookups?: number };
 
 function webToolDetail(use: WebToolUse | null): string | null {
   if (!use) return null;
   const parts = [
     use.searches > 0 ? `${use.searches} web search${use.searches === 1 ? "" : "es"}` : null,
     use.pagesRead > 0 ? `${use.pagesRead} page${use.pagesRead === 1 ? "" : "s"} read` : null,
+    (use.browserActions ?? 0) > 0 ? `${use.browserActions} browser action${use.browserActions === 1 ? "" : "s"}` : null,
   ].filter(Boolean);
   return parts.length ? parts.join(", ") : null;
 }

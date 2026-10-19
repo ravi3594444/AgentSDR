@@ -3,6 +3,7 @@ import {
   AI_SEARCH_ESTIMATE_USD,
   continuationNote,
   limitReached,
+  isLeadFindingRequest,
   nextDriverStep,
   objectiveReportKey,
   objectiveReportText,
@@ -16,6 +17,26 @@ import {
   type Continuation,
   type DriverFacts,
 } from "./objective";
+
+describe("lead request detection for direct research tools", () => {
+  test("recognizes lead requests without requiring a discovery tool", () => {
+    for (const request of [
+      "Find 20 qualified leads for solar installers in Patna",
+      "Find dentists in Pune",
+      "Research potential customers in India",
+      "Source buyers for our wholesale business",
+      "Search dentists in Patna",
+      "I need new customers in Ranchi",
+      "Find leads from this website",
+    ]) expect(isLeadFindingRequest(request)).toBe(true);
+  });
+
+  test("keeps one-off page questions lightweight", () => {
+    for (const request of ["Read this website", "Summarize this article", "What are the opening hours on this page?"]) {
+      expect(isLeadFindingRequest(request)).toBe(false);
+    }
+  });
+});
 
 const DEFAULTS = { leadTarget: 25, hours: 4, spendUsd: 5 };
 const NOW = new Date("2026-10-19T10:00:00Z");

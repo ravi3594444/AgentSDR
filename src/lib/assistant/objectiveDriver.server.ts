@@ -51,16 +51,27 @@ async function driverFacts(objective: Objective, facts: ObjectiveFacts): Promise
   const progress = objective.progress as ObjectiveProgress;
   const turn = progress.continuation ?? null;
   const since = turn ? new Date(turn.startedAt) : null;
-  const tried = since
-    ? await db.select({ content: assistantMessages.content, toolResult: assistantMessages.toolResult }).from(assistantMessages).where(and(
+  const directResearchTools = ["web_search", "read_webpage", "browser_open", "browser_read", "browser_click", "browser_fill", "browser_scroll", "treg_search", "treg_call"];
+  const [tried, directActions] = since ? await Promise.all([
+    db.select({ content: assistantMessages.content, toolResult: assistantMessages.toolResult }).from(assistantMessages).where(and(
       inOrg(assistantMessages),
       eq(assistantMessages.threadId, objective.threadId),
       eq(assistantMessages.role, "tool"),
       eq(assistantMessages.status, "error"),
-      inArray(assistantMessages.tool, [...SEARCH_TOOLS]),
+      inArray(assistantMessages.tool, [...SEARCH_TOOLS, ...directResearchTools]),
+      sql`${assistantMessages.toolResult}->>'requestId' = ${objective.requestMessageId}`,
       gte(assistantMessages.createdAt, since),
-    ))
-    : [];
+    )),
+    db.select({ id: assistantMessages.id }).from(assistantMessages).where(and(
+      inOrg(assistantMessages),
+      eq(assistantMessages.threadId, objective.threadId),
+      eq(assistantMessages.role, "tool"),
+      eq(assistantMessages.status, "ok"),
+      inArray(assistantMessages.tool, directResearchTools),
+      sql`${assistantMessages.toolResult}->>'requestId' = ${objective.requestMessageId}`,
+      gte(assistantMessages.createdAt, since),
+    )),
+  ]) : [[], []];
   const waiting = (row: { toolResult: Record<string, unknown> | null }) => (row.toolResult?.data as { waiting?: unknown } | undefined)?.waiting === true;
   return {
     status: objective.status === "paused" ? "paused" : "active",
@@ -74,7 +85,7 @@ async function driverFacts(objective: Objective, facts: ObjectiveFacts): Promise
     followUpsPending: facts.followUpsPending,
     threadBusy: await threadBusy(objective.threadId),
     continuation: turn,
-    newSearches: since ? facts.children.filter((job) => job.createdAt.getTime() >= since.getTime()).length : 0,
+    newSearches: since ? facts.children.filter((job) => job.createdAt.getTime() >= since.getTime()).length + directActions.length : 0,
     waitRefusals: tried.filter(waiting).map((row) => row.content),
     // Argument mistakes the model corrects itself (hidden) are not a source's limitation.
     refusals: tried.filter((row) => !waiting(row) && row.toolResult?.hidden !== true).map((row) => row.content),

@@ -22,7 +22,7 @@ import { objectiveForRequest } from "./objective.server";
 import { assistantJobs, assistantMessages, type AssistantAttachment, type BusinessProfile } from "./schema";
 import { addMessage, claimThread, listMessages, releaseThread, touchThread, updateMessage } from "./threads.server";
 import { recordUsage } from "./usage.server";
-import { runTool, searchRequestId, setupSnapshot, toolCatalog, toolNamesFor, type ToolContext, type ToolResult } from "./tools.server";
+import { researchContextForTool, runTool, searchRequestId, setupSnapshot, toolCatalog, toolNamesFor, type ToolContext, type ToolResult } from "./tools.server";
 import { observationKey } from "./observation";
 import { closeBrowser } from "@/lib/browser/browser.server";
 import { instagramCapabilityProblem } from "./instagramContacts";
@@ -117,9 +117,13 @@ async function ownerDocumentsText(maxChars = 60_000): Promise<string> {
 
 /** Runs one tool and records it in the thread: a "running" card first, then its result. */
 export async function runToolInThread(context: ToolContext, tool: string, args: Record<string, unknown>): Promise<ToolResult> {
+  const prepared = await researchContextForTool(tool, context);
+  context = prepared.context;
   const row = await addMessage({ threadId: context.threadId, role: "tool", tool, toolInput: args, status: "running", content: "" });
-  const result = await runTool(tool, args, context);
-  // The request the tool served, so what the assistant did for a request is counted by its id (coverage.server.ts webToolUse).
+  let result = await runTool(tool, args, context);
+  if (prepared.controls && result.ok) result = { ...result, summary: `${result.summary} ${prepared.controls}` };
+  // Persist the canonical request id with the tool result; direct web tools do
+  // not create jobs that could otherwise associate the operation to a request.
   const requestId = searchRequestId(context);
   await updateMessage(row.id, {
     status: result.ok ? "ok" : "error",
