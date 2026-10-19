@@ -116,6 +116,40 @@ fixes:
 They also found one older gap: Stop pressed during a plan's launch did not
 stop the campaigns being created. These went into a second round, below.
 
+### Round two of fixes
+
+The first attempt stopped on the account's session limit before any change
+was committed. The safety items were then done by hand, test-first, and
+merged in `a0364c1`:
+
+- **"Stop" wins whoever confirms a wrong number.** A person confirming
+  "Wrong Number" on "This isn't Priya's number anymore, please stop texting
+  me" now sets Do Not Contact and drafts no apology. `closeWrongNumber`
+  reads the message's own opt-out wording for every caller.
+- **The number that wrote is the one blocked.** A WhatsApp chat addressed
+  by a privacy id (`@lid`) is recorded by its own chat's number. Before, it
+  used the Person's current phone, which an operator may have corrected; or,
+  with no number known anywhere, the privacy id itself. Both WhatsApp send
+  paths check a chat's privacy id as well as its number.
+- **Stop during a plan's launch.** The launch step now records whatever
+  campaigns it already created on the run and stops them, so nothing it set
+  up sends. Before, they stayed active and out of Stop's reach.
+- **No midnight promise (the regression).** A sending window that ends at
+  00:00 reports its real start as the next send. A plan's
+  `diagnose_delivery` names only its own senders.
+
+Checks after the merge:
+
+| Check | Result |
+| --- | --- |
+| Unit tests | 1559 pass |
+| reply-agent | 87 |
+| workspace-replay | 102 |
+| autonomous | 63, including a trigger-driven Stop during launch |
+| delivery-evidence | 27 |
+| assistant | 73 |
+| assistant-intake | 44 |
+
 ## Tenancy isolation
 
 `scripts/e2e/tenancy-isolation.ts` was run against a dev server on a fresh
