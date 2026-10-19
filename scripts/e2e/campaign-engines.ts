@@ -249,8 +249,10 @@ await runInOrganization(org!.id, async () => {
     check("with Unipile, a number and leads, WhatsApp launch is accepted", launched.status === "active");
 
     const waSent: string[] = [];
-    const waSend = (async (request: { personId?: string | null }) => {
+    const waOrigins: (string | undefined)[] = [];
+    const waSend = (async (request: { personId?: string | null; crmOrigin?: string }) => {
       waSent.push(request.personId ?? "");
+      waOrigins.push(request.crmOrigin);
       // whatsapp_campaign_sends.whatsapp_message_id references whatsapp_messages;
       // the real sender stores that row, this stand-in has none to point at.
       return { message: { id: null }, chat: {} };
@@ -259,6 +261,8 @@ await runInOrganization(org!.id, async () => {
 
     const w1 = await waTick();
     check("a WhatsApp tick sends one first message per number", w1.sent === 1 && waSent.length === 1, JSON.stringify(w1));
+    // So the CRM records the step as a campaign message, not as the owner's answer (crmBridge.ts).
+    check("a WhatsApp step is sent with the CRM origin \"campaign\"", waOrigins.length === 1 && waOrigins[0] === "campaign", JSON.stringify(waOrigins));
 
     await updateWhatsappCampaign(waCampaign.id, { status: "paused" });
     const w2 = await waTick();

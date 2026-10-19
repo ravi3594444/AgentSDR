@@ -197,10 +197,11 @@ async function recordForOutbound(tx: CrmTransaction, input: WhatsappCrmMessageIn
  * AgentSDR did not send (typed on the phone or in WhatsApp Web): it counts as
  * the rep having answered. So does "agentsdr" (sent from the Messages tab or
  * Calling rather than through a CRM draft) — see manualOutbound.ts for when
- * that takes the record out of Action required.
+ * that takes the record out of Action required — and "campaign" (a campaign
+ * step, which the CRM labels as one rather than as the owner's answer).
  */
 export async function recordWhatsappOutboundInCrm(
-  input: WhatsappCrmMessageInput & { origin: "agentsdr" | "phone" },
+  input: WhatsappCrmMessageInput & { origin: "agentsdr" | "phone" | "campaign" },
 ): Promise<{ crmConversationMessageId: string | null }> {
   try {
     return await withCrmTransaction(async (tx) => {

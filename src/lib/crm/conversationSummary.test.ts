@@ -12,7 +12,10 @@ describe("timeline summary (client fallback)", () => {
   test("a phone reply is identified, while an unknown sender is not attributed to the owner", () => {
     expect(conversationSummary([inbound, { ...outbound, raw: { origin: "phone" } }]).answerLabel).toBe("Answered by you");
     expect(conversationSummary([inbound, outbound]).answerLabel).toBe("Reply sent");
-    expect(conversationSummary([inbound, { ...outbound, raw: { origin: "agentsdr" }, campaignStep: true }]).answerLabel).toBe("Campaign message sent");
+  });
+
+  test("a campaign step reads as one from what the record API's timeline carries (raw.origin)", () => {
+    expect(conversationSummary([inbound, { ...outbound, idempotencyKey: "whatsapp:abc", raw: { origin: "campaign" } }]).answerLabel).toBe("Campaign message sent");
   });
 
   test("a later inbound message requires a new answer even when older events arrive out of order", () => {
@@ -36,8 +39,9 @@ describe("who sent an outbound message", () => {
     // A campaign step or copied history: unknown, never the owner.
     expect(outboundActor({ idempotencyKey: "outreach-email:1" })).toBeNull();
     expect(outboundActor({ idempotencyKey: "whatsapp:abc" })).toBeNull();
-    // A WhatsApp campaign step goes out through the same send as the Messages tab (origin agentsdr).
-    expect(outboundActor({ idempotencyKey: "whatsapp:abc", raw: { origin: "agentsdr" }, campaignStep: true })).toBeNull();
+    // A WhatsApp campaign step: recorded as one when it was sent (origin campaign), never the owner.
+    expect(outboundActor({ idempotencyKey: "whatsapp:abc", raw: { origin: "campaign" } })).toBeNull();
+    expect(outboundActor({ idempotencyKey: "whatsapp:abc", origin: "campaign" })).toBeNull();
   });
 });
 
@@ -91,6 +95,16 @@ describe("describeConversation", () => {
     // The same send from the Messages tab is the owner's.
     const own = describeConversation(facts({ latestOutbound: { ...message("out-3", "2026-10-18T15:45:00Z"), idempotencyKey: "whatsapp:unipile-msg-1", origin: "agentsdr" } }));
     expect(own.answer.label).toBe("Answered by you");
+  });
+
+  test("a campaign step recorded as one keeps its label with no campaign send row to find (the lead was removed)", () => {
+    const summary = describeConversation(facts({
+      latestOutbound: { ...message("out-3", "2026-10-18T15:45:00Z"), idempotencyKey: "whatsapp:unipile-msg-1", origin: "campaign" },
+      replyMode: "review",
+    }));
+    expect(summary.answer).toEqual({ status: "answered", actor: null, label: "Campaign message sent" });
+    expect(summary.latestOutbound?.actor).toBeNull();
+    expect(summary.headline).toBe("Campaign message sent · Waiting for their reply");
   });
 
   test("a newer inbound message is unanswered again, and being classified is not urgent", () => {

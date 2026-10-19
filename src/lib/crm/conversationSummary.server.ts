@@ -97,10 +97,12 @@ export async function loadConversationSummaries(recordIds: readonly string[], no
     return conversation?.channel === channel ? [conversation.accountRef] : [];
   }))];
   const [whatsappRefs, instagramRefs, linkedinRefs] = [refsOf("whatsapp"), refsOf("instagram"), refsOf("linkedin")];
-  // A WhatsApp outbound that is a campaign step: the same Unipile message as a
-  // step the organization's campaigns sent (sendWhatsapp records it with
-  // origin agentsdr, the same as a person's send from the Messages tab).
-  const whatsappOutboundIds = [...new Set([...outboundOf.values()].flatMap((row) => row.channel === "whatsapp" && row.providerMessageId ? [row.providerMessageId] : []))];
+  // A campaign step's send records origin "campaign". One recorded otherwise
+  // (before that origin existed, an echo that reached the CRM first as
+  // "phone", or a step copied in later by outreachHistory) is found as the
+  // same Unipile message as a step the organization's campaigns sent, while
+  // its whatsapp_campaign_sends row exists.
+  const whatsappOutboundIds = [...new Set([...outboundOf.values()].flatMap((row) => row.channel === "whatsapp" && row.providerMessageId && row.origin !== "campaign" ? [row.providerMessageId] : []))];
 
   const [memberships, wrongRoutes, whatsappRows, instagramRows, linkedinRows, campaignSteps] = await Promise.all([
     personIds.length

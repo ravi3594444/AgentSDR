@@ -469,7 +469,7 @@ export async function sendWhatsapp(request: SendWhatsappRequest): Promise<SendWh
       body: message.body,
       sentAt: message.sentAt,
       raw: null,
-      origin: "agentsdr",
+      origin: request.crmOrigin ?? "agentsdr",
     });
     if (result.crmConversationMessageId) {
       const [updated] = await db

@@ -24,18 +24,21 @@ export const REPLY_MODE_LABELS: Readonly<Record<ReplyMode, string>> = {
   takeover: "Takeover",
 };
 
-type MessageEvidence = {
-  idempotencyKey?: unknown;
-  raw?: unknown;
-  origin?: unknown;
-  /**
-   * A WhatsApp campaign step (an assistant run's WhatsApp leg is a campaign
-   * too): its send is recorded with origin `agentsdr` like the Messages tab's,
-   * so only its whatsapp_campaign_sends row tells them apart
-   * (conversationSummary.server.ts reads it).
-   */
-  campaignStep?: unknown;
-};
+type MessageEvidence = { idempotencyKey?: unknown; raw?: unknown; origin?: unknown };
+
+/** The origin a message records: the CRM row's raw.origin, or the field the server read it into. */
+function recordedOrigin(message: MessageEvidence): string | null {
+  const raw = message.raw && typeof message.raw === "object" ? message.raw as Record<string, unknown> : {};
+  return typeof message.origin === "string" ? message.origin : typeof raw.origin === "string" ? raw.origin : null;
+}
+
+/**
+ * A WhatsApp campaign step (an assistant run's WhatsApp leg is a campaign
+ * too): the campaign engine's send records it with origin `campaign`.
+ */
+export function isCampaignStep(message: MessageEvidence): boolean {
+  return recordedOrigin(message) === "campaign";
+}
 
 /**
  * Who sent an outbound message, from what the message records:
@@ -50,9 +53,7 @@ type MessageEvidence = {
  */
 export function outboundActor(message: MessageEvidence): AnswerActor | null {
   const key = typeof message.idempotencyKey === "string" ? message.idempotencyKey : "";
-  const raw = message.raw && typeof message.raw === "object" ? message.raw as Record<string, unknown> : {};
-  const origin = typeof message.origin === "string" ? message.origin : typeof raw.origin === "string" ? raw.origin : null;
-  if (message.campaignStep === true) return null;
+  const origin = recordedOrigin(message);
   if (key.startsWith("crm-send:autopilot:") || key.startsWith("crm-send:wrong-number-ack:")) return "assistant";
   if (origin === "phone" || origin === "agentsdr") return "you";
   if (key.startsWith("crm-send:")) return "you";
@@ -81,7 +82,7 @@ export function conversationSummary(messages: readonly TimelineMessage[]) {
     if (message.direction === "outbound" && (!outbound || timestamp(message) >= timestamp(outbound))) outbound = message;
   }
   const answered = Boolean(inbound && outbound && timestamp(outbound) >= timestamp(inbound));
-  return { answered, answerLabel: answerLabel(outbound ? outboundActor(outbound) : null, outbound?.campaignStep === true), lastOutboundAt: outbound?.sentAt ?? outbound?.createdAt };
+  return { answered, answerLabel: answerLabel(outbound ? outboundActor(outbound) : null, outbound ? isCampaignStep(outbound) : false), lastOutboundAt: outbound?.sentAt ?? outbound?.createdAt };
 }
 
 export type SummaryMessage = {
@@ -99,7 +100,12 @@ export type ConversationFacts = {
   workflowState: string;
   nextActionAt: Date | string | null;
   latestInbound: SummaryMessage | null;
-  latestOutbound: (SummaryMessage & MessageEvidence) | null;
+  /**
+   * `campaignStep`: a campaign step recorded under another origin (sent before
+   * steps carried `campaign`, or its echo reached the CRM first), found
+   * through its whatsapp_campaign_sends row while that row exists.
+   */
+  latestOutbound: (SummaryMessage & MessageEvidence & { campaignStep?: boolean }) | null;
   /** The newest open draft (awaiting review, failed or delivery uncertain). */
   draft: { id: string; status: string; kind: "reply" | "follow_up" | "apology" } | null;
   /** Any draft on the record awaiting review — the Needs you rule, as crmNeedsYouSql reads it. */
@@ -167,11 +173,12 @@ export function describeConversation(facts: ConversationFacts): ConversationSumm
   const inbound = facts.latestInbound;
   const outbound = facts.latestOutbound;
   const at = (message: SummaryMessage | null) => message ? new Date(message.sentAt).getTime() : Number.NaN;
-  const actor = outbound ? outboundActor(outbound) : null;
+  const campaignStep = Boolean(outbound && (outbound.campaignStep === true || isCampaignStep(outbound)));
+  const actor = outbound && !campaignStep ? outboundActor(outbound) : null;
   const answered = Boolean(inbound && outbound && at(outbound) >= at(inbound));
   const answer: ConversationSummary["answer"] = !inbound
     ? { status: "none", actor: null, label: null }
-    : answered ? { status: "answered", actor, label: answerLabel(actor, outbound?.campaignStep === true) } : { status: "unanswered", actor: null, label: null };
+    : answered ? { status: "answered", actor, label: answerLabel(actor, campaignStep) } : { status: "unanswered", actor: null, label: null };
 
   const open = facts.decisions.filter((decision) => decision.status === "open" && isHandoff(decision.kind)).sort(byUrgency);
   const reports = facts.decisions.filter((decision) => !isHandoff(decision.kind));
