@@ -267,6 +267,13 @@ export async function startTrackedRun(input: {
     return { started: true, row: updated ?? row };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    // No answer (a timeout, a dropped connection) or a server error: Apify may have started the run and be charging it.
+    // It stays "starting", its cap counted, never started again; the sweeper later counts it as spent.
+    if (error instanceof ApifyError && (error.status === null || error.status >= 500)) {
+      await db.update(apifyRuns).set({ error: `The answer to starting it was lost: ${message}`.slice(0, 500) })
+        .where(and(inOrg(apifyRuns), eq(apifyRuns.id, row.id)));
+      return { started: false, exhausted: false, reason: `starting this Apify run lost its answer (${message}), so it may have run; it is not started again, and its reserved cap stays counted` };
+    }
     const exhausted = error instanceof ApifyError && looksExhausted({ httpStatus: error.status, type: error.type, message });
     await db.update(apifyRuns).set({ status: "refused", error: message.slice(0, 500), finishedAt: new Date(), usageUsd: 0 })
       .where(and(inOrg(apifyRuns), eq(apifyRuns.id, row.id)));

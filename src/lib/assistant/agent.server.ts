@@ -9,7 +9,7 @@ import { inOrg } from "@/lib/tenancy/scope";
 import type { FeatureState } from "@/lib/features/catalog";
 import { TREG_LIMITS } from "@/lib/treg/catalog";
 import { featureState } from "@/lib/features/flags.server";
-import { actionsProblem, agentReplySchema, groundingCorpus, inquiryRepliesRequested, isSmallTalk, MAX_ACTIONS_PER_STEP, MAX_STEPS, DIRECT_CONTACT_TOOLS, nextAgentBatch, parseAgentReply, pendingOutreachRequestIndex, sameMessage, standingOutreachRequestIndex, transcriptText, unbackedClaim, type AgentReply } from "./agent";
+import { actionsProblem, agentReplySchema, groundingCorpus, searchRequestFor, inquiryRepliesRequested, isSmallTalk, MAX_ACTIONS_PER_STEP, MAX_STEPS, DIRECT_CONTACT_TOOLS, nextAgentBatch, parseAgentReply, pendingOutreachRequestIndex, sameMessage, standingOutreachRequestIndex, transcriptText, unbackedClaim, type AgentReply } from "./agent";
 import { AUTONOMOUS_MAX_STEPS, autonomousRules, SEARCH_TOOLS, searchCapProblem, type AutonomyCaps } from "./autonomy";
 import { autonomousSearchesToday, autonomyCaps, autoStartPlan, threadAutonomy } from "./autonomy.server";
 import { listAudiences } from "./audiences.server";
@@ -18,6 +18,7 @@ import { listRuns } from "./outreach.server";
 import { localDate } from "./results";
 import { organizationTimeZone } from "./results.server";
 import type { TurnEnd } from "./objective";
+import { objectiveForRequest } from "./objective.server";
 import { assistantJobs, type AssistantAttachment, type BusinessProfile } from "./schema";
 import { addMessage, claimThread, listMessages, releaseThread, touchThread, updateMessage } from "./threads.server";
 import { recordUsage } from "./usage.server";
@@ -182,12 +183,21 @@ export async function runAgentTurn(input: {
     // The assistant's last words before the owner's message: a "yes" to an offer of outreach is a request for it.
     const lastAssistantText = [...history.slice(0, Math.max(0, lastOwnerIndex))].reverse().find((message) => message.role === "assistant")?.content ?? null;
     // In Autonomous mode the owner's request to contact people stands for the work that follows it.
-    const requestIndex = continuation ? null : pendingOutreachRequestIndex(history) ?? (autonomy.on ? standingOutreachRequestIndex(history) : null);
+    const pendingIndex = continuation ? null : pendingOutreachRequestIndex(history);
+    const requestIndex = continuation ? null : pendingIndex ?? (autonomy.on ? standingOutreachRequestIndex(history) : null);
     const outreachRequest = continuation ? (continuation.outreach ? continuation.request : null) : requestIndex === null ? null : history[requestIndex]!.content;
     // The owner's message that asked, by id: one Start may cover the plans of exactly this request.
     const outreachRequestId = continuation ? (continuation.outreach ? continuation.requestMessageId : null) : requestIndex === null ? null : history[requestIndex]!.id;
     const requestMessageId = continuation?.requestMessageId ?? (lastOwnerIndex >= 0 ? history[lastOwnerIndex]!.id : null);
-    const context: ToolContext = { threadId: input.threadId, userId: input.userId, ownerText, lastAssistantText, outreachRequest, outreachRequestId, autonomous: autonomy.on, requestMessageId };
+    const outreachResearch = outreachRequestId && !continuation ? await objectiveForRequest(outreachRequestId).catch(() => null) : null;
+    const searchRequestId = searchRequestFor({
+      continuationRequestId: continuation?.requestMessageId ?? null,
+      latestOwnerId: lastOwnerIndex >= 0 ? history[lastOwnerIndex]!.id : null,
+      outreachRequestId,
+      outreachPending: requestIndex !== null && requestIndex === pendingIndex,
+      outreachResearchStopped: outreachResearch?.status === "stopped",
+    });
+    const context: ToolContext = { threadId: input.threadId, userId: input.userId, ownerText, lastAssistantText, outreachRequest, outreachRequestId, autonomous: autonomy.on, requestMessageId, searchRequestId };
     const askedForOutreach = outreachRequest !== null;
     const askedForInquiryReplies = inquiryRepliesRequested(ownerText, lastAssistantText);
     const said: string[] = [];

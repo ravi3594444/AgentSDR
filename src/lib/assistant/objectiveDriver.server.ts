@@ -78,6 +78,7 @@ async function driverFacts(objective: Objective, facts: ObjectiveFacts): Promise
     // Argument mistakes the model corrects itself (hidden) are not a source's limitation.
     refusals: tried.filter((row) => !waiting(row) && row.toolResult?.hidden !== true).map((row) => row.content),
     dry: progress.dry ?? 0,
+    pausedAt: progress.pausedAt ?? null,
   };
 }
 

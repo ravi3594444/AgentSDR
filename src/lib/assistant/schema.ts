@@ -276,6 +276,8 @@ export type ObjectiveProgress = {
   dry?: number;
   /** Why it waits now, for the chat and Activity. */
   waiting?: string | null;
+  /** When the owner last paused it (ISO): a continuation turn that ran across a pause is not judged on what it started. */
+  pausedAt?: string | null;
 };
 
 /**

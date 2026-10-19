@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { actionsProblem, agentReplySchema, cleanSuggestions, displayThreadTitle, groundingCorpus, isSmallTalk, MAX_ACTIONS_PER_REPLY, MAX_ACTIONS_PER_STEP, nextAgentBatch, outreachIntent, outreachRequested, outreachRequestProblem, parseAgentReply, pendingOutreachRequest, sameMessage, standingOutreachRequestIndex, outreachRevoked, threadTitleFrom, transcriptText, unbackedClaim, ungroundedContacts, urlGiven, type AgentReply, type TranscriptMessage } from "./agent";
+import { actionsProblem, agentReplySchema, cleanSuggestions, searchRequestFor, displayThreadTitle, groundingCorpus, isSmallTalk, MAX_ACTIONS_PER_REPLY, MAX_ACTIONS_PER_STEP, nextAgentBatch, outreachIntent, outreachRequested, outreachRequestProblem, parseAgentReply, pendingOutreachRequest, sameMessage, standingOutreachRequestIndex, outreachRevoked, threadTitleFrom, transcriptText, unbackedClaim, ungroundedContacts, urlGiven, type AgentReply, type TranscriptMessage } from "./agent";
 
 const TOOLS = ["find_leads", "save_business_info", "prepare_outreach"];
 
@@ -540,5 +540,24 @@ describe("Autonomous mode: the owner's standing request", () => {
     expect(outreachRevoked("Find more dentists and contact them")).toBe(false);
     const history = [owner("Find dentists in Pune and contact them"), tool("find_leads", { contactAfter: true }), owner("Stop contacting people for now, just find leads")];
     expect(standingOutreachRequestIndex(history)).toBeNull();
+  });
+});
+
+describe("searchRequestFor: which owner request a search serves", () => {
+  const base = { continuationRequestId: null, latestOwnerId: "m2", outreachRequestId: "m1", outreachPending: true, outreachResearchStopped: false };
+  test("a pending outreach request keeps the searches the owner's follow-ups start, so its plans and research stay one request", () => {
+    expect(searchRequestFor(base)).toBe("m1");
+    expect(searchRequestFor({ ...base, latestOwnerId: "m1" })).toBe("m1");
+  });
+  test("a request that only stands (Autonomous mode, already acted on) does not swallow a new one: the new message is its own request", () => {
+    expect(searchRequestFor({ ...base, outreachPending: false })).toBe("m2");
+  });
+  test("once the outreach request's research has stopped, a new message starts new research rather than being refused", () => {
+    expect(searchRequestFor({ ...base, outreachResearchStopped: true })).toBe("m2");
+  });
+  test("a continuation serves its own request; with no outreach request the latest message is the request", () => {
+    expect(searchRequestFor({ ...base, continuationRequestId: "m0" })).toBe("m0");
+    expect(searchRequestFor({ ...base, outreachRequestId: null })).toBe("m2");
+    expect(searchRequestFor({ ...base, outreachRequestId: null, latestOwnerId: null })).toBeNull();
   });
 });

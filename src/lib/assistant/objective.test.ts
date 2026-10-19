@@ -161,10 +161,21 @@ describe("the driver: wait, continue or stop", () => {
     waitRefusals: [],
     refusals: [],
     dry: 0,
+    pausedAt: null,
     ...over,
   });
   const turn = (over: Partial<Continuation> = {}): Continuation => ({
     n: 1, attempt: 1, startedAt: minutes(-5).toISOString(), endedAt: minutes(-1).toISOString(), end: "done", leadsAtStart: 10, judged: null, waitUntil: null, ...over,
+  });
+
+  test("a turn the owner paused part way through is not a source exhausted: after the resume the request continues, and the paused turn is not counted as dry", () => {
+    const paused = turn({ startedAt: minutes(-5).toISOString(), endedAt: minutes(-4).toISOString() });
+    const refused = ["Not started: the research for this request is paused; it continues when the owner resumes it."];
+    expect(nextDriverStep(facts({ continuation: paused, refusals: refused, pausedAt: minutes(-4.5).toISOString(), dry: 1 }))).toEqual({ kind: "continue", n: 2, attempt: 1, dry: 1 });
+    // The model read the pause and started nothing at all: the same.
+    expect(nextDriverStep(facts({ continuation: paused, pausedAt: minutes(-4.5).toISOString() }))).toEqual({ kind: "continue", n: 2, attempt: 1, dry: 0 });
+    // A pause before the turn began says nothing about it.
+    expect(nextDriverStep(facts({ continuation: paused, refusals: ["Not started: no source fits"], pausedAt: minutes(-30).toISOString() }))).toMatchObject({ kind: "stop", reason: "sources_exhausted" });
   });
 
   test("searches still running: wait", () => {

@@ -288,6 +288,8 @@ export type DriverFacts = LimitFacts & {
   refusals: string[];
   /** Continuations in a row that found no new lead. */
   dry: number;
+  /** When the owner last paused the request (ISO), or null. */
+  pausedAt: string | null;
 };
 
 export type DriverStep =
@@ -336,6 +338,9 @@ export function nextDriverStep(facts: DriverFacts): DriverStep {
     }
     if (facts.newSearches > 0 || facts.leads > turn.leadsAtStart) return { kind: "judge", judged: "productive", waitUntil: null };
     if (facts.waitRefusals.length) return { kind: "judge", judged: "waiting", waitUntil: new Date(facts.now.getTime() + SLOT_RETRY_MS) };
+    // Paused while it ran: its searches were refused for the pause (or the model, told of it, started none). Not a source exhausted:
+    // now that it is resumed the request continues, and that turn is not counted as dry.
+    if (facts.pausedAt && Date.parse(facts.pausedAt) >= Date.parse(turn.startedAt)) return { kind: "continue", n: turn.n + 1, attempt: 1, dry: facts.dry };
     const why = facts.refusals[0];
     return { kind: "stop", reason: "sources_exhausted", detail: why ? `no other source could be searched (${why.replace(/\.$/, "")})` : "the assistant found no further source or query worth searching" };
   }

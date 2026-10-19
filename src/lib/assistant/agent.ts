@@ -372,6 +372,22 @@ export function standingOutreachRequestIndex(history: readonly HistoryMessage[])
   return null;
 }
 
+/**
+ * The owner request a search serves (its objective and coverage): a
+ * continuation's own request; otherwise the outreach request, so the plans
+ * and research of one "find and contact" request stay together, unless the
+ * owner has since written a new message and that outreach request only
+ * stands (Autonomous mode, already acted on) or its research has stopped.
+ * Then the new message is a new request, rather than being filed under, or
+ * refused by, the old one.
+ */
+export function searchRequestFor(input: { continuationRequestId: string | null; latestOwnerId: string | null; outreachRequestId: string | null; outreachPending: boolean; outreachResearchStopped: boolean }): string | null {
+  if (input.continuationRequestId) return input.continuationRequestId;
+  const newer = Boolean(input.outreachRequestId && input.latestOwnerId && input.outreachRequestId !== input.latestOwnerId);
+  if (newer && (!input.outreachPending || input.outreachResearchStopped)) return input.latestOwnerId;
+  return input.outreachRequestId ?? input.latestOwnerId;
+}
+
 /** Why a tool may not prepare outreach for the owner now, or null. */
 export function outreachRequestProblem(ownerText: string, lastAssistantText?: string | null): string | null {
   return outreachRequested(ownerText, lastAssistantText)

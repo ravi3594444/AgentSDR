@@ -652,6 +652,7 @@ async function stageApify(job: AssistantJob): Promise<StepOutcome> {
       spendGuard: await objectiveSpendGuard(requestOf(payload)),
     });
     if (profiles.started) return apifyStage(profiles.row.id, "instagram_profiles", notes, { instagram: { hashtags: [], posts, search: true } });
+    if (profiles.slotsFull) return waitForProfiles(notes, { hashtags: [], posts, search: true }, profiles.reason);
     return instagramPlaces(job, posts, new Map(), [...notes, `Profiles were not read (${profiles.reason}), so only the usernames are known.`]);
   }
 
@@ -670,6 +671,7 @@ async function stageApify(job: AssistantJob): Promise<StepOutcome> {
       spendGuard: await objectiveSpendGuard(requestOf(payload)),
     });
     if (profiles.started) return apifyStage(profiles.row.id, "instagram_profiles", notes, { instagram: { hashtags: payload.instagram?.hashtags ?? [], posts } });
+    if (profiles.slotsFull) return waitForProfiles(notes, { hashtags: payload.instagram?.hashtags ?? [], posts }, profiles.reason);
     return instagramPlaces(job, posts, new Map(), [...notes, `Profiles were not read (${profiles.reason}), so only what the posts show is known.`]);
   }
 
@@ -679,6 +681,46 @@ async function stageApify(job: AssistantJob): Promise<StepOutcome> {
 function doneWithNothing(job: AssistantJob, notes: string[], notSearched = false): StepOutcome {
   const payload = payloadOf(job);
   return { next: "done", progress: { stage: "done" }, result: { audienceId: job.audienceId, phrase: payload.phrase, found: 0, eligible: 0, ...(notSearched ? { notSearched: true } : {}), note: notes.join(" ") } };
+}
+
+/**
+ * The accounts' posts are in, but their profiles cannot be read yet: every
+ * Apify slot is busy, the owner paused the request, or the request's other
+ * paid work holds the rest of its spend cap. Without its profile an account
+ * is only kept for research, so the posts are kept and the profile read is
+ * tried again (stageProfiles), rather than saving every account unread.
+ */
+function waitForProfiles(notes: string[], instagram: NonNullable<DiscoveryPayload["instagram"]>, reason: string): StepOutcome {
+  return {
+    next: "stage",
+    stage: "profiles",
+    payload: { instagram, apify: null, providerNotes: notes, waitingSince: new Date().toISOString() },
+    progress: { stage: "searching", provider: "Apify", found: new Set((instagram.posts ?? []).map((post) => post.username)).size, waiting: { kind: "slot", provider: "apify", reason: `reading the accounts' profiles waits: ${reason}` } },
+  };
+}
+
+/** Reads the profiles of the accounts a finished Instagram search found, once it may (see waitForProfiles), within the slot wait's bound. */
+async function stageProfiles(job: AssistantJob): Promise<StepOutcome> {
+  const payload = payloadOf(job);
+  const instagram = payload.instagram ?? { hashtags: [], posts: [] };
+  const posts = instagram.posts ?? [];
+  const notes = payload.providerNotes ?? [];
+  const usernames = [...new Set(posts.map((post) => post.username))].slice(0, payload.criteria.maxResults);
+  const profiles = await startTrackedRun({
+    actor: "instagram_profiles",
+    input: (maxItems) => ({ usernames: usernames.slice(0, maxItems) }),
+    wantedItems: usernames.length,
+    jobId: job.id,
+    requestId: requestOf(payload),
+    spendGuard: await objectiveSpendGuard(requestOf(payload)),
+  });
+  if (profiles.started) return apifyStage(profiles.row.id, "instagram_profiles", notes, { instagram });
+  const since = payload.waitingSince ?? new Date().toISOString();
+  if (profiles.slotsFull && Date.now() - new Date(since).getTime() <= MAX_SLOT_WAIT_MS) {
+    return { next: "wait", delayMs: SLOT_POLL_MS, payload: { waitingSince: since }, progress: { stage: "searching", provider: "Apify", found: usernames.length, waiting: { kind: "slot", provider: "apify", reason: `reading the accounts' profiles waits: ${profiles.reason}`, since } } };
+  }
+  const why = profiles.slotsFull ? `they could not be read within ${MAX_SLOT_WAIT_MS / 3_600_000} hours (${profiles.reason})` : profiles.reason;
+  return instagramPlaces(job, posts, new Map(), [...notes, `Profiles were not read (${why}), so only what the posts show is known.`]);
 }
 
 /** Instagram accounts as places to read and save: one per account, the post that matched it as evidence. */
@@ -1066,6 +1108,8 @@ export async function runDiscoveryStep(job: AssistantJob, heartbeat: () => Promi
       return stageQueued(job);
     case "apify":
       return stageApify(job);
+    case "profiles":
+      return stageProfiles(job);
     case "searching":
       return stageSearching(job);
     case "enriching":

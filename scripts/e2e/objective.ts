@@ -49,7 +49,7 @@ process.env.DISCOVERY_DNS_CHECK = "off";
 // ------------------------------------------------------------ the model, scripted
 const root = join(import.meta.dir, "..", "..");
 type Input = { userPrompt: string; schemaName?: string; accept: (text: string) => void };
-type Script = (input: Input) => string;
+type Script = (input: Input) => string | Promise<string>;
 let replies: Script[] = [];
 const prompts: string[] = [];
 mock.module(join(root, "src/lib/ai/server/structuredCompletion.ts"), () => ({
@@ -57,7 +57,7 @@ mock.module(join(root, "src/lib/ai/server/structuredCompletion.ts"), () => ({
     prompts.push(input.userPrompt);
     const next = replies.shift();
     if (!next) throw new Error(`unexpected model call: ${input.userPrompt.slice(-300)}`);
-    const text = next(input);
+    const text = await next(input);
     input.accept(text);
     return { text, model: "fixture", provider: "fixture", request: {}, response: {}, usage: {}, attempts: 1 };
   },
@@ -81,7 +81,7 @@ function mapsCsv(phrase: string): string {
 }
 
 type ApifyRun = { id: string; actorId: string; query: Record<string, string>; items: unknown[]; usage: number; datasetId: string };
-const apify = { runs: new Map<string, ApifyRun>(), posts: [] as string[], items: [] as unknown[], usage: 1 };
+const apify = { runs: new Map<string, ApifyRun>(), posts: [] as string[], items: [] as unknown[], usage: 1, loseNextStart: false };
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
 const realFetch = globalThis.fetch;
@@ -109,6 +109,12 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (method === "GET" && path === "/users/me/limits") return json(200, { data: { limits: { maxMonthlyUsageUsd: 100 }, current: { monthlyUsageUsd: 1 } } });
     const start = path.match(/^\/actors\/([^/]+)\/runs$/);
     if (method === "POST" && start) {
+      if (apify.loseNextStart) {
+        // Apify takes the start, but its answer never arrives (a timeout or a dropped connection).
+        apify.loseNextStart = false;
+        apify.posts.push(decodeURIComponent(start[1]!));
+        throw new TypeError("The socket connection was closed unexpectedly");
+      }
       const id = `run-${apify.runs.size + 1}-${stamp}`;
       apify.posts.push(decodeURIComponent(start[1]!));
       apify.runs.set(id, { id, actorId: decodeURIComponent(start[1]!), query: Object.fromEntries(url.searchParams), items: apify.items, usage: apify.usage, datasetId: `ds-${id}` });
@@ -134,7 +140,7 @@ const { organizations, users, members } = await import("@/lib/auth/schema");
 const { runInOrganization } = await import("@/lib/tenancy/scope");
 const schema = await import("@/lib/assistant/schema");
 const { apifyRuns } = await import("@/lib/apify/schema");
-const { saveApifySettings, startTrackedRun } = await import("@/lib/apify/apify.server");
+const { saveApifySettings, startTrackedRun, sweepStaleRuns } = await import("@/lib/apify/apify.server");
 const { setApifyApiBase } = await import("@/services/apify");
 const { setDiscoveryPageOptions } = await import("@/lib/discovery/discovery.server");
 const { setFeature, clearFeatureCache } = await import("@/lib/features/flags.server");
@@ -328,6 +334,35 @@ await runInOrganization(a.org.id, async () => {
     check("paid work for a stopped request is refused", !after.started && !after.slotsFull && apify.posts.length === posts, after.started ? "started" : after.reason);
   }
 
+  // ---------------------------------------------------------- 2a. a paid start whose answer never arrives: counted, never retried
+  {
+    const thread = await createThread(a.owner.id);
+    const requestId = await ask(thread.id, "find gyms in Pune on Facebook", turn("", [{ tool: "find_social_leads", args: { platform: "facebook", what: "gyms", where: "Pune" } }]));
+    const [search] = await children(requestId);
+    apify.loseNextStart = true;
+    const posts = apify.posts.length;
+    const first = await step(search!.id);
+    const [row] = await db.select().from(apifyRuns).where(eq(apifyRuns.jobId, search!.id));
+    const view = await objectives.objectiveView(requestId);
+    check("Apify's answer to a start never arrives: the run is kept as possibly started, its cap still counted",
+      apify.posts.length === posts + 1 && row?.status === "starting" && view?.reservedUsd === row.maxChargeUsd && (view?.reservedUsd ?? 0) > 0,
+      JSON.stringify({ posts: apify.posts.length - posts, status: row?.status, error: row?.error, reserved: view?.reservedUsd, job: `${first.status}/${first.stage}` }));
+    const again = await step(search!.id);
+    check("…and the search is not started again", apify.posts.length === posts + 1 && /lost its answer/.test(String((again.result as { note?: string } | null)?.note ?? again.error ?? "")),
+      JSON.stringify({ posts: apify.posts.length - posts, status: again.status, note: (again.result as { note?: string } | null)?.note ?? again.error }));
+    // Ten minutes on, the sweeper closes it as spent at its full cap: an unknown charge is never counted as nothing.
+    await db.update(apifyRuns).set({ createdAt: new Date(Date.now() - 11 * 60_000) }).where(eq(apifyRuns.id, row!.id));
+    await sweepStaleRuns();
+    const [swept] = await db.select().from(apifyRuns).where(eq(apifyRuns.id, row!.id));
+    const after = await objectives.objectiveView(requestId);
+    check("…until the sweeper closes it, counted as spent at its full cap", swept?.status === "failed" && swept.usageUsd === row!.maxChargeUsd && after?.spentUsd === row!.maxChargeUsd && after.reservedUsd === 0,
+      JSON.stringify({ status: swept?.status, usage: swept?.usageUsd, spent: after?.spentUsd, reserved: after?.reservedUsd }));
+    const objective = await objectiveOf(requestId);
+    await objectives.setObjectiveState(objective.id, "cancel", { name: null });
+    await finishSearches(requestId);
+    await step((await driverOf(objective.id)).id);
+  }
+
   // ---------------------------------------------------------- 2b. a paid start whose answer was lost: kept, never retried
   {
     const thread = await createThread(a.owner.id);
@@ -401,6 +436,96 @@ await runInOrganization(a.org.id, async () => {
       reports.length === 1 && /^Research stopped: cancelled by the owner/.test(reports[0]!.content) && /6 qualified leads of the 25 wanted/.test(reports[0]!.content), reports.map((row) => row.content).join(" | "));
     const again = await runTool("control_research", { action: "resume" }, context);
     check("a cancelled request cannot be resumed", !again.ok, again.summary);
+  }
+
+  // ---------------------------------------------------------- 4a. a new request after a stopped one, in Autonomous mode
+  {
+    const thread = await createThread(a.owner.id);
+    const first = await ask(thread.id, "find 6 florists in Pune and contact them", turn("", [{ tool: "find_leads", args: { what: "florists", where: "Pune", contactAfter: true } }]));
+    const firstObjective = await objectiveOf(first);
+    await finishSearches(first);
+    await step((await driverOf(firstObjective.id)).id);
+    check("a find-and-contact request reaches its target and stops", (await objectiveOf(first)).stopReason === "target_reached", String((await objectiveOf(first)).stopReason));
+    // In Autonomous mode that request to contact people stands for what follows; the owner then asks for something new.
+    await db.update(schema.assistantThreads).set({ autonomous: true, autonomousBy: a.owner.id, autonomousAt: new Date() }).where(eq(schema.assistantThreads.id, thread.id));
+    const second = await ask(thread.id, "now find bakeries in Pune", turn("", [{ tool: "find_leads", args: { what: "bakeries", where: "Pune" } }]));
+    const search = (await listMessages(thread.id, 500)).filter((row) => row.tool === "find_leads").at(-1);
+    const secondObjective = await objectives.objectiveForRequest(second);
+    check("…a new request is its own research, not refused by the stopped one",
+      search?.status === "ok" && (await children(second)).length === 1 && secondObjective?.status === "active" && (await objectiveOf(first)).status === "stopped",
+      JSON.stringify({ status: search?.status, summary: search?.content.slice(0, 160), searches: (await children(second)).length, objective: secondObjective?.status ?? null }));
+    await db.update(schema.assistantThreads).set({ autonomous: false }).where(eq(schema.assistantThreads.id, thread.id));
+    await objectives.setObjectiveState(secondObjective!.id, "cancel", { name: null });
+    await finishSearches(second);
+    await step((await driverOf(secondObjective!.id)).id);
+  }
+
+  // ---------------------------------------------------------- 4b. paused while a continuation turn runs
+  {
+    const thread = await createThread(a.owner.id);
+    const requestId = await ask(thread.id, "find salons in Pune", turn("", [{ tool: "find_leads", args: { what: "salons", where: "Pune" } }]));
+    const objective = await objectiveOf(requestId);
+    const driver = await driverOf(objective.id);
+    await finishSearches(requestId);
+    // The owner presses Pause while the assistant is choosing the next source: the search it picks is refused for the pause.
+    replies = [async () => {
+      await objectives.setObjectiveState(objective.id, "pause", { name: null });
+      return reply("Looking at beauty parlours too.", [{ tool: "find_leads", args: { what: "beauty parlours", where: "Pune" } }])({} as Input);
+    }, reply("")];
+    await step(driver.id);
+    await continuationEnded(requestId, 1);
+    const refused = (await listMessages(thread.id, 500)).filter((row) => row.tool === "find_leads" && row.status === "error");
+    check("paused during a continuation: the search the turn picked is refused for the pause", refused.length === 1 && /paused/.test(refused[0]!.content) && (await children(requestId)).length === 1, refused.map((row) => row.content).join(" | "));
+    await step(driver.id);
+    check("…and the request waits while paused", (await objectiveOf(requestId)).status === "paused");
+    await objectives.setObjectiveState(objective.id, "resume", { name: null });
+    replies = turn("Trying beauty parlours now.", [{ tool: "find_leads", args: { what: "beauty parlours", where: "Pune" } }]);
+    await step(driver.id);
+    const afterResume = await objectiveOf(requestId);
+    check("…resumed, it continues: the paused turn is not taken for sources exhausted", afterResume.status === "active" && !afterResume.stopReason && await continuationEnded(requestId, 2) && (await children(requestId)).length === 2,
+      JSON.stringify({ status: afterResume.status, stop: afterResume.stopReason, detail: afterResume.stopDetail, searches: (await children(requestId)).length }));
+    await objectives.setObjectiveState(objective.id, "cancel", { name: null });
+    await finishSearches(requestId);
+    await step(driver.id);
+  }
+
+  // ---------------------------------------------------------- 4c. paused while an Instagram search's posts are in: its profiles wait
+  {
+    clearFeatureCache();
+    await setFeature("instagram", true, a.owner.id);
+    clearFeatureCache();
+    await saveApifySettings({ approvedActors: ["facebook_pages", "instagram_hashtags", "instagram_profiles"] }, a.owner.id);
+    const thread = await createThread(a.owner.id);
+    apify.items = [
+      { ownerUsername: `pune.yoga.${stamp}`, url: `https://www.instagram.com/p/y1${stamp}/`, caption: "Sunrise yoga in Pune", timestamp: "2026-10-10T10:00:00Z" },
+      { ownerUsername: `flow.studio.${stamp}`, url: `https://www.instagram.com/p/y2${stamp}/`, caption: "Flow class tonight", timestamp: "2026-10-09T10:00:00Z" },
+    ];
+    const requestId = await ask(thread.id, "find yoga teachers on Instagram in Pune", turn("", [{ tool: "find_instagram_prospects", args: { what: "yoga teachers", where: "Pune" } }]));
+    const objective = await objectiveOf(requestId);
+    const [search] = await children(requestId);
+    const running = await step(search!.id);
+    check("an Instagram search's hashtag run is under way", running.stage === "apify", `${running.status}/${running.stage} ${running.error ?? ""}`);
+    // The owner pauses while it runs; its profiles would be read next.
+    await objectives.setObjectiveState(objective.id, "pause", { name: null });
+    apify.items = [
+      { username: `pune.yoga.${stamp}`, fullName: "Pune Yoga", biography: "Yoga classes in Pune · DM to book", businessEmail: `hello@puneyoga-${stamp}.test` },
+      { username: `flow.studio.${stamp}`, fullName: "Flow Studio", biography: "Yoga and pilates in Pune" },
+    ];
+    const profileRuns = () => apify.posts.filter((actor) => /profile/i.test(actor)).length;
+    const before = profileRuns();
+    const held = await step(search!.id);
+    check("paused when its posts came in: the profile read waits, and no account is saved unread",
+      held.status === "queued" && held.stage === "profiles" && profileRuns() === before && held.result === null,
+      JSON.stringify({ status: held.status, stage: held.stage, profileRuns: profileRuns() - before, result: held.result }));
+    await objectives.setObjectiveState(objective.id, "resume", { name: null });
+    await finishSearches(requestId);
+    const done = await jobRow(search!.id);
+    const result = (done.result ?? {}) as { found?: number; eligible?: number };
+    check("…resumed, the profiles are read and the verified account is a lead",
+      done.status === "succeeded" && profileRuns() === before + 1 && result.found === 2 && (result.eligible ?? 0) >= 1,
+      JSON.stringify({ status: done.status, profileRuns: profileRuns() - before, ...result }));
+    await objectives.setObjectiveState(objective.id, "cancel", { name: null });
+    await step((await driverOf(objective.id)).id);
   }
 
   // ---------------------------------------------------------- 5. full Apify slots: a wait, not a failure

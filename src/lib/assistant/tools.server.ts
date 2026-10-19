@@ -82,11 +82,17 @@ export type ToolContext = {
   autonomous?: boolean;
   /** The owner's latest message, by id: searches started for it carry it, so its per-platform coverage can be told. */
   requestMessageId?: string | null;
+  /** The request this turn's searches serve, decided once per turn (agent.ts searchRequestFor). */
+  searchRequestId?: string | null;
 };
 
-/** The request a search serves: the outreach request when there is one (its plans share it), else the owner's latest message. */
+/**
+ * The request a search serves: as the turn decided it (agent.ts
+ * searchRequestFor), else the outreach request when there is one (its plans
+ * share it), else the owner's latest message.
+ */
 function searchRequestId(context: ToolContext): string | null {
-  return context.outreachRequestId ?? context.requestMessageId ?? null;
+  return context.searchRequestId ?? context.outreachRequestId ?? context.requestMessageId ?? null;
 }
 
 /**

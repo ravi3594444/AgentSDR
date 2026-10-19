@@ -561,7 +561,9 @@ export async function setObjectiveState(objectiveId: string, action: "pause" | "
     changed = Boolean(await stopObjective(objective, "cancelled", `cancelled by ${who === "The owner" ? "the owner" : who}`));
   } else {
     const [from, to] = action === "pause" ? (["active", "paused"] as const) : (["paused", "active"] as const);
-    const rows = await db.update(assistantObjectives).set({ status: to, updatedAt: new Date() })
+    const now = new Date();
+    const rows = await db.update(assistantObjectives)
+      .set({ status: to, updatedAt: now, ...(action === "pause" ? { progress: sql`${assistantObjectives.progress} || jsonb_build_object('pausedAt', ${now.toISOString()}::text)` } : {}) })
       .where(and(inOrg(assistantObjectives), eq(assistantObjectives.id, objectiveId), eq(assistantObjectives.status, from))).returning({ id: assistantObjectives.id });
     changed = rows.length > 0;
     if (changed) {
