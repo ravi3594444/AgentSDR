@@ -10,6 +10,8 @@ import { createTinyfishBrowserSession, deleteTinyfishBrowserSession, TinyfishErr
 import { connectBrowser, type BrowserPage } from "./driver.server";
 import { browserSessions } from "./schema";
 import { BROWSER_LIMITS, fillProblem, minutesBetween, type PageSnapshot } from "./snapshot";
+import { TINYFISH_LIMITS } from "@/lib/tinyfish/catalog";
+import type { SpendGuard } from "@/lib/assistant/objective.server";
 
 /**
  * The assistant's remote browser: one TinyFish Browser session at a time
@@ -118,8 +120,10 @@ export type NavigationCheck = (url: string) => Promise<string | null>;
 /**
  * Opens `url` in the chat's browser: the session it already has, or a new
  * one when the organization's allowance and its one-at-a-time rule permit.
+ * A new session's minutes are reserved for the owner's request it serves
+ * (`requestId`) and pass that request's spend cap (`spendGuard`) first.
  */
-export async function openBrowser(url: string, threadId: string, check: NavigationCheck): Promise<{ snapshot: PageSnapshot; reused: boolean; problem: string | null; allowance: BrowserAllowance }> {
+export async function openBrowser(url: string, threadId: string, check: NavigationCheck, options: { requestId?: string | null; spendGuard?: SpendGuard } = {}): Promise<{ snapshot: PageSnapshot; reused: boolean; problem: string | null; allowance: BrowserAllowance }> {
   await sweepBrowserSessions();
   const existing = await threadSession(threadId);
   if (existing) {
@@ -141,7 +145,15 @@ export async function openBrowser(url: string, threadId: string, check: Navigati
     const [inserted] = await tx.insert(browserSessions).values({ organizationId: currentOrganizationId(), threadId, status: "opening", currentUrl: url.slice(0, 2_000) }).returning();
     return inserted!;
   });
-  const reservation = await reserveQuota({ provider: TINYFISH_PROVIDER, product: "browser", scopeKey: null, units: BROWSER_LIMITS.maxSessionMinutes, limits: {}, label: "TinyFish Browser", threadId, detail: { sessionId: row.id } });
+  const guard = options.spendGuard;
+  const reservation = await reserveQuota({
+    provider: TINYFISH_PROVIDER, product: "browser", scopeKey: null, units: BROWSER_LIMITS.maxSessionMinutes, limits: {}, label: "TinyFish Browser", threadId,
+    detail: { sessionId: row.id, ...(options.requestId ? { requestId: options.requestId } : {}) },
+    guard: guard ? async (tx) => {
+      const room = await guard(tx, BROWSER_LIMITS.maxSessionMinutes * TINYFISH_LIMITS.browserUsdPerMinute);
+      return room.ok ? null : `The browser cannot open: ${room.reason}.`;
+    } : undefined,
+  });
   if (!reservation.ok) {
     await endSession(row, { failed: reservation.reason });
     throw new BrowserUnavailableError(reservation.reason);

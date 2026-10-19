@@ -1001,7 +1001,7 @@ CREATE TABLE public.assistant_jobs (
     finished_at timestamp with time zone,
     report_key text,
     reported_at timestamp with time zone,
-    CONSTRAINT assistant_jobs_kind_chk CHECK ((kind = ANY (ARRAY['discovery'::text, 'outreach_start'::text, 'linkedin_search'::text, 'web_discovery'::text, 'apify_instagram'::text]))),
+    CONSTRAINT assistant_jobs_kind_chk CHECK ((kind = ANY (ARRAY['discovery'::text, 'outreach_start'::text, 'linkedin_search'::text, 'web_discovery'::text, 'apify_instagram'::text, 'objective'::text]))),
     CONSTRAINT assistant_jobs_status_chk CHECK ((status = ANY (ARRAY['queued'::text, 'running'::text, 'succeeded'::text, 'failed'::text, 'cancelled'::text])))
 );
 
@@ -1024,6 +1024,36 @@ CREATE TABLE public.assistant_messages (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT assistant_messages_role_chk CHECK ((role = ANY (ARRAY['user'::text, 'assistant'::text, 'tool'::text, 'event'::text]))),
     CONSTRAINT assistant_messages_status_chk CHECK (((status IS NULL) OR (status = ANY (ARRAY['running'::text, 'ok'::text, 'error'::text]))))
+);
+
+--
+-- Name: assistant_objectives; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.assistant_objectives (
+    organization_id uuid NOT NULL,
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    thread_id uuid NOT NULL,
+    request_message_id uuid NOT NULL,
+    lead_target integer NOT NULL,
+    time_limit_minutes integer NOT NULL,
+    deadline_at timestamp with time zone NOT NULL,
+    spend_cap_usd double precision NOT NULL,
+    controls jsonb DEFAULT '{}'::jsonb NOT NULL,
+    status text DEFAULT 'active'::text NOT NULL,
+    stop_reason text,
+    stop_detail text,
+    stopped_at timestamp with time zone,
+    next_eligible_at timestamp with time zone,
+    progress jsonb DEFAULT '{}'::jsonb NOT NULL,
+    report_key text,
+    reported_at timestamp with time zone,
+    created_by uuid,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT assistant_objectives_limits_chk CHECK (((lead_target >= 1) AND (time_limit_minutes >= 1) AND (spend_cap_usd >= (0)::double precision))),
+    CONSTRAINT assistant_objectives_status_chk CHECK ((status = ANY (ARRAY['active'::text, 'paused'::text, 'stopped'::text]))),
+    CONSTRAINT assistant_objectives_stop_reason_chk CHECK (((stop_reason IS NULL) OR (stop_reason = ANY (ARRAY['target_reached'::text, 'sources_exhausted'::text, 'budget_spent'::text, 'time_limit'::text, 'cancelled'::text, 'failed'::text]))))
 );
 
 --
@@ -3087,6 +3117,7 @@ CREATE TABLE public.treg_calls (
     error text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     finished_at timestamp with time zone,
+    request_id text,
     CONSTRAINT treg_calls_status_chk CHECK ((status = ANY (ARRAY['calling'::text, 'succeeded'::text, 'failed'::text])))
 );
 
@@ -3400,6 +3431,13 @@ ALTER TABLE ONLY public.assistant_jobs
 
 ALTER TABLE ONLY public.assistant_messages
     ADD CONSTRAINT assistant_messages_pkey PRIMARY KEY (id);
+
+--
+-- Name: assistant_objectives assistant_objectives_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.assistant_objectives
+    ADD CONSTRAINT assistant_objectives_pkey PRIMARY KEY (id);
 
 --
 -- Name: assistant_profiles assistant_profiles_pkey; Type: CONSTRAINT; Schema: public; Owner: -
@@ -4635,6 +4673,18 @@ CREATE INDEX assistant_messages_organization_idx ON public.assistant_messages US
 --
 
 CREATE INDEX assistant_messages_thread_idx ON public.assistant_messages USING btree (thread_id, created_at);
+
+--
+-- Name: assistant_objectives_org_request_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX assistant_objectives_org_request_uq ON public.assistant_objectives USING btree (organization_id, request_message_id);
+
+--
+-- Name: assistant_objectives_thread_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX assistant_objectives_thread_idx ON public.assistant_objectives USING btree (thread_id, created_at);
 
 --
 -- Name: assistant_threads_organization_idx; Type: INDEX; Schema: public; Owner: -
@@ -6119,6 +6169,27 @@ ALTER TABLE ONLY public.assistant_messages
 
 ALTER TABLE ONLY public.assistant_messages
     ADD CONSTRAINT assistant_messages_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES public.assistant_threads(id) ON DELETE CASCADE;
+
+--
+-- Name: assistant_objectives assistant_objectives_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.assistant_objectives
+    ADD CONSTRAINT assistant_objectives_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
+
+--
+-- Name: assistant_objectives assistant_objectives_request_message_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.assistant_objectives
+    ADD CONSTRAINT assistant_objectives_request_message_id_fkey FOREIGN KEY (request_message_id) REFERENCES public.assistant_messages(id) ON DELETE CASCADE;
+
+--
+-- Name: assistant_objectives assistant_objectives_thread_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.assistant_objectives
+    ADD CONSTRAINT assistant_objectives_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES public.assistant_threads(id) ON DELETE CASCADE;
 
 --
 -- Name: assistant_profiles assistant_profiles_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -

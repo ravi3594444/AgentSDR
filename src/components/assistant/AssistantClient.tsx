@@ -59,9 +59,19 @@ type Message = {
   createdAt: string;
 };
 
+/** Links an event carries (an objective's final report: where its saved results are), app paths only. */
+function eventLinks(message: Message): { label: string; href: string }[] {
+  const links = message.toolResult?.data?.links;
+  if (!Array.isArray(links)) return [];
+  return links.flatMap((link) => {
+    const { label, href } = (link ?? {}) as { label?: unknown; href?: unknown };
+    return typeof label === "string" && typeof href === "string" && href.startsWith("/") && !href.startsWith("//") ? [{ label, href }] : [];
+  });
+}
+
 type Job = {
   id: string;
-  kind: "discovery" | "outreach_start" | "linkedin_search" | "web_discovery" | "apify_instagram";
+  kind: "discovery" | "outreach_start" | "linkedin_search" | "web_discovery" | "apify_instagram" | "objective";
   status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
   stage: string;
   progress: Record<string, unknown>;
@@ -1166,7 +1176,9 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
     }
   }, [threadId]);
 
-  const working = sending || state.busy || state.jobs.some((job) => job.status === "queued" || job.status === "running") || Object.values(state.runs).some((run) => run.status === "starting");
+  const openJob = (job: Job) => job.status === "queued" || job.status === "running";
+  // A request's research (an "objective" job) can stay open for hours between its searches: it is polled like a live run, not as active work.
+  const working = sending || state.busy || state.jobs.some((job) => job.kind !== "objective" && openJob(job)) || Object.values(state.runs).some((run) => run.status === "starting");
   useEffect(() => {
     if (!working) return;
     const timer = setInterval(() => void refresh(false), 2_000);
@@ -1175,7 +1187,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
 
   // While a run is live, replies, answers and decisions arrive on their own: show them within seconds
   // (the reply agent answers in a few seconds; a slower refresh made instant answers look slow).
-  const live = Object.values(state.runs).some((run) => run.status === "running" || run.status === "paused");
+  const live = Object.values(state.runs).some((run) => run.status === "running" || run.status === "paused") || state.jobs.some((job) => job.kind === "objective" && openJob(job));
   useEffect(() => {
     if (working || !live) return;
     const timer = setInterval(() => void refresh(false), 4_000);
@@ -1307,7 +1319,14 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
       return (
         <div key={message.id} className="flex items-start gap-2 rounded-lg bg-bg-weak-50 px-3 py-2 text-paragraph-xs text-text-sub-600">
           <RiInformationLine className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-          <span className="min-w-0 flex-1">{message.content}</span>
+          <span className="min-w-0 flex-1">
+            {message.content}
+            {eventLinks(message).map((link) => (
+              <Link key={link.href} href={link.href} className="ml-2 whitespace-nowrap font-medium text-primary-base underline-offset-2 hover:underline">
+                {link.label}
+              </Link>
+            ))}
+          </span>
           {retry && (
             <Button.Root variant="neutral" mode="stroke" size="xxsmall" className="shrink-0" disabled={sending || state.busy} onClick={() => void retryTurn()}>
               Retry

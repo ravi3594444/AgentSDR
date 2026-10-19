@@ -58,6 +58,12 @@ export type ReserveInput = {
   threadId?: string | null;
   detail?: Record<string, unknown>;
   now?: Date;
+  /**
+   * A further check in the same transaction, before anything is taken: the
+   * request's spend cap for paid work (objective.server.ts). A reason refuses
+   * the reservation.
+   */
+  guard?: (tx: Pick<typeof db, "select">) => Promise<string | null>;
 };
 
 /** Takes `units` from the scope's quota and opens a ledger row, or says until when to wait. */
@@ -65,6 +71,8 @@ export async function reserveQuota(input: ReserveInput): Promise<QuotaReservatio
   const now = input.now ?? new Date();
   const product = `${input.provider}:${input.product}`;
   return db.transaction(async (tx) => {
+    const refused = input.guard ? await input.guard(tx) : null;
+    if (refused) return { ok: false, until: now, reason: refused } as const;
     if (input.scopeKey) {
       const decision = quotaDecision(await lockedState(tx, input.scopeKey, product), input.limits, input.units, now, input.label);
       if (!decision.ok) return decision;

@@ -41,6 +41,7 @@ scripts
 !scripts/add-research-sources.ts
 !scripts/add-browser-sessions.ts
 !scripts/add-activity.ts
+!scripts/add-objectives.ts
 
 README.md
 

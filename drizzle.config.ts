@@ -103,6 +103,7 @@ const OWNED_TABLES = [
   "lead_audiences",
   "lead_audience_members",
   "assistant_jobs",
+  "assistant_objectives",
   "outreach_runs",
   "outreach_run_leads",
   "autopilot_replies",

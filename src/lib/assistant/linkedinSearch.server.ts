@@ -33,6 +33,8 @@ type Payload = {
   batchId?: string;
   startedAt?: string;
   contactAfter?: { channels: AudienceChannel[] | null; ownerRequest?: string; requestId?: string } | null;
+  /** The owner's message this search serves: its coverage and its objective are told from it. */
+  requestMessageId?: string | null;
 };
 
 export async function linkedinSearchAvailability(): Promise<{ available: boolean; reason: string | null; accountId: string | null }> {
@@ -51,7 +53,7 @@ export function linkedinPeopleSearchUrl(keywords: string): string {
 export async function startLinkedinSearch(
   input: { keywords: string; maxResults: number },
   context: { threadId: string | null; userId: string | null },
-  options: { contactAfter?: Payload["contactAfter"] } = {},
+  options: { contactAfter?: Payload["contactAfter"]; requestMessageId?: string | null } = {},
 ): Promise<{ jobId: string; audienceId: string; url: string }> {
   const availability = await linkedinSearchAvailability();
   if (!availability.available) throw new Error(availability.reason ?? "LinkedIn search is not available.");
@@ -63,7 +65,7 @@ export async function startLinkedinSearch(
     threadId: context.threadId,
     userId: context.userId,
   });
-  const payload: Payload = { keywords: input.keywords, maxResults: input.maxResults, url, accountId: availability.accountId!, contactAfter: options.contactAfter ?? null };
+  const payload: Payload = { keywords: input.keywords, maxResults: input.maxResults, url, accountId: availability.accountId!, contactAfter: options.contactAfter ?? null, requestMessageId: options.requestMessageId ?? null };
   const [job] = await db.insert(assistantJobs).values({
     organizationId: currentOrganizationId(),
     kind: "linkedin_search",

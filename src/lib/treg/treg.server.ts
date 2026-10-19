@@ -8,6 +8,7 @@ import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { callTreg, getTregEndpoint, searchTregCatalog, TregError, verifyTregKey } from "@/services/treg";
 import { callCeilingUsd, callProblem, isCatalogId, minimumCostUsd, parseEndpoint, parseSearch, TREG_LIMITS, type TregEndpoint, type TregSettingsView } from "./catalog";
 import { tregCalls, tregSettings } from "./schema";
+import type { SpendGuard } from "@/lib/assistant/objective.server";
 
 /**
  * The organization's Treg key and its calls. A paid call is recorded in
@@ -133,6 +134,10 @@ export async function callTregEndpoint(input: {
   query: Record<string, string | string[]>;
   body: Record<string, unknown> | null;
   threadId: string | null;
+  /** The owner's request the call serves (kept on the call, so the request's spend counts it). */
+  requestId?: string | null;
+  /** The request's own spend cap (objective.server.ts), checked under the same lock as the day's cap. */
+  spendGuard?: SpendGuard;
 }): Promise<TregCallOutcome> {
   if (!isCatalogId(input.endpointId)) return { ok: false, endpoint: null, reason: "endpointId must be a Treg catalog id from treg_search (like treg.people.email.find), never a URL", costUsd: 0 };
   const { key, dailyCapUsd } = await readyKey();
@@ -150,8 +155,16 @@ export async function callTregEndpoint(input: {
     const spent = await daySpendUsd(tx);
     const problem = callProblem(endpoint, spent, dailyCapUsd);
     if (problem) return { problem } as const;
-    const ceilingUsd = callCeilingUsd(spent, dailyCapUsd);
-    const [row] = await tx.insert(tregCalls).values({ organizationId: currentOrganizationId(), threadId: input.threadId, endpointId: endpoint.id, status: "calling", ceilingUsd }).returning({ id: tregCalls.id });
+    let ceilingUsd = callCeilingUsd(spent, dailyCapUsd);
+    if (input.spendGuard) {
+      // The request's cap, read again with every open reservation: refused, held, or the ceiling lowered to what it has left.
+      const least = minimumCostUsd(endpoint) ?? 0;
+      const room = await input.spendGuard(tx, least);
+      if (!room.ok) return { problem: room.wait ? `${room.reason}; try again once it has` : room.reason } as const;
+      ceilingUsd = Math.floor(Math.min(ceilingUsd, room.maxUsd) * 1_000_000) / 1_000_000;
+      if (least > ceilingUsd) return { problem: `this request's spend cap leaves $${ceilingUsd}, less than the $${least} this call costs at least` } as const;
+    }
+    const [row] = await tx.insert(tregCalls).values({ organizationId: currentOrganizationId(), threadId: input.threadId, requestId: input.requestId ?? null, endpointId: endpoint.id, status: "calling", ceilingUsd }).returning({ id: tregCalls.id });
     return { id: row!.id, ceilingUsd, spent } as const;
   });
   if (reserved.problem !== undefined) return { ok: false, endpoint, reason: reserved.problem, costUsd: 0 };

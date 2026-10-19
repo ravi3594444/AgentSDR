@@ -283,17 +283,17 @@ export async function generalSearchRoute(): Promise<GeneralSearchRoute> {
 export type GeneralSearchInput = { query: string; country?: string | null; page?: number | null; purpose?: string | null };
 
 /** One search for the assistant; throws TinyfishWaitError while TinyFish asks to wait, and a plain Error with the reason otherwise. */
-export async function generalWebSearch(input: GeneralSearchInput, context: { threadId?: string | null } = {}): Promise<{ provider: "tinyfish" | "tavily"; hits: (ResearchSource & { site?: string | null; date?: string | null })[] }> {
+export async function generalWebSearch(input: GeneralSearchInput, context: { threadId?: string | null; requestId?: string | null } = {}): Promise<{ provider: "tinyfish" | "tavily"; hits: (ResearchSource & { site?: string | null; date?: string | null })[] }> {
   const route = await generalSearchRoute();
   if (route.provider === null) throw new WebSearchUnavailableError(route.reason);
   const query = input.query.replace(/\s+/g, " ").trim().slice(0, MAX_QUERY_LENGTH);
   if (route.provider === "tinyfish") {
-    const hits = await searchWithTinyfish({ query, location: input.country ?? null, page: input.page ?? null, purpose: input.purpose ?? null }, { threadId: context.threadId ?? null });
+    const hits = await searchWithTinyfish({ query, location: input.country ?? null, page: input.page ?? null, purpose: input.purpose ?? null }, { threadId: context.threadId ?? null, ...(context.requestId ? { detail: { requestId: context.requestId } } : {}) });
     return { provider: "tinyfish", hits };
   }
   const problem = tavilyCapProblem(await tavilySearchesToday(), 1, route.dailySearches);
   if (problem) throw new WebSearchUnavailableError(`Tavily: ${problem}`);
-  const reservation = await reserveQuota({ provider: "tavily", product: "search", scopeKey: null, units: 1, limits: {}, label: "Tavily", threadId: context.threadId ?? null, detail: { query: query.slice(0, 200) } });
+  const reservation = await reserveQuota({ provider: "tavily", product: "search", scopeKey: null, units: 1, limits: {}, label: "Tavily", threadId: context.threadId ?? null, detail: { query: query.slice(0, 200), ...(context.requestId ? { requestId: context.requestId } : {}) } });
   if (!reservation.ok) throw new WebSearchUnavailableError(reservation.reason);
   try {
     const body = await tavilySearch(route.key, query, 10);

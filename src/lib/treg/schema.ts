@@ -4,8 +4,8 @@ import { organizations } from "@/lib/auth/schema";
 
 /**
  * Treg (treg.to) as an optional, keyed tool source (catalog.ts). Created by
- * scripts/add-instagram-intake-discovery.ts; both tables are scoped by
- * organization.
+ * scripts/add-instagram-intake-discovery.ts (treg_calls.request_id by
+ * scripts/add-objectives.ts); both tables are scoped by organization.
  */
 
 /** One organization's Treg key and daily spend cap. No row: Treg is not set up. */
@@ -44,6 +44,8 @@ export const tregCalls = pgTable(
       .references(() => organizations.id),
     id: uuid("id").primaryKey().defaultRandom(),
     threadId: uuid("thread_id"),
+    /** The owner's request the call served (its message id), so the request's spend is read from here (objective.server.ts). */
+    requestId: text("request_id"),
     endpointId: text("endpoint_id").notNull(),
     status: text("status").notNull().default("calling").$type<TregCallStatus>(),
     /** The X-Treg-Route-Max-Cost the call was sent with. */
