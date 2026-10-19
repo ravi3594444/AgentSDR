@@ -150,6 +150,28 @@ Checks after the merge:
 | assistant | 73 |
 | assistant-intake | 44 |
 
+## Day two, 19 October: finishing the plan
+
+You decided decision 16 (Instagram-only prospects are eligible) and asked for
+the rest of the plan to be finished, with no further provider integrations.
+Two parts went to sub-agents in their own worktrees and databases; the rest
+was done directly. Each was gated before it was merged.
+
+| Work | Commits | What changed | Verified by |
+| --- | --- | --- | --- |
+| Decision 16 | `391785a` | An Instagram-only account is a lead when its profile was read and, for a place, names it; otherwise it is kept for research with the reason. A commenter stays for research until its own profile is checked | The 7 earlier failures pass, with new positive cases (`apify` 70, `web-discovery` 85) |
+| Final review fixes | `a3af223`, `0c67135` | A privacy-id chat keeps its number; a live wrong-number claim is retried later instead of failing; Stop takes the campaigns from its own write; a launch records each campaign before activating it and a retried launch reuses it; a page that only echoes the model's query grounds nothing | `reply-agent` 103, `autonomous` 68, unit tests (each failed before the fix) |
+| LinkedIn sending status | `c720cdb` | Plan cards show each LinkedIn account with the engine's own checks: hours, the daily invitation limit, the next allowed send | `delivery-evidence` 30 |
+| Activity states and counts | `e15415b`, `ee4b2e6` | Outside sending hours (with the next allowed send in the viewer's time), partly done, each plan's leads, contacted and replied, each request's research and how it ended | `activity` 41 |
+| Per-request controls (item 1, sub-agent) | `5e5316f`, merged `29e60af` | `assistant_objectives`: a lead target, time limit and spend cap per request; continuation across jobs without an owner message; spend reserved and settled through the existing ledgers; the stop reason stored; partial results kept; one final report | `objective` 56 |
+| Shared metrics (item 2, sub-agent) | `1637d4a`, merged `ab07da2` | One set of definitions, dates and time zone for Overview and Analytics; current counts labelled apart from period totals; per-source found, qualified and contactable people | `metrics-parity` 36 |
+| Full flow with fake providers (item 4) | `ba14585` | One request from the prompt to the final report, including continuation, Start, request approval, a launch taken over after its worker died, and repeated callbacks | `full-flow` 18 |
+| Desktop and phone checks (item 5) | `907dee2` | Plan cards, Leads & replies, Action required, a record and Activity at 1366 and 390 px. Fixed: a record's status line shrank to one word per line on a phone; the stage filter ran its counts together on a phone; "these 1 leads"; an ISO timestamp in Activity | Screenshots before and after |
+
+The full-flow test also found that a business found with only a phone was
+named by its number in plans and in the facts given to the writer; it is now
+named by its business name (`ba14585`).
+
 ## Tenancy isolation
 
 `scripts/e2e/tenancy-isolation.ts` was run against a dev server on a fresh
@@ -172,7 +194,30 @@ A 404 would be more correct for each.
 
 ## Gates on the final commit
 
-<!-- filled in at the end -->
+All on the final tree, on a fresh local database:
+- `tsc --noEmit`: pass. eslint on every TypeScript file the branch changed
+  since `299fd14` (84 files): pass.
+- Unit tests: 1676 pass, 0 fail.
+- `db:check`: all checks pass, on a fresh install and on the upgrade path.
+- Upgrade path: the base branch's `db/schema.sql`, then the 7 migrations
+  below in order, then all 7 again. Every run succeeded, and the result is
+  the same schema as a fresh install (pg_dump differs only in its random
+  `\restrict` token).
+- e2e, 16 suites, 843 checks, 0 failures:
+
+  | Suite | Checks | Suite | Checks |
+  | --- | --- | --- | --- |
+  | metrics-parity | 36 | assistant | 73 |
+  | full-flow | 18 | assistant-recovery | 9 |
+  | activity | 41 | objective | 56 |
+  | workspace-replay | 107 | tinyfish | 41 |
+  | reply-agent | 103 | research-sources | 42 |
+  | delivery-evidence | 30 | browser | 20 |
+  | autonomous | 68 | apify | 70 |
+  | assistant-intake | 44 | web-discovery | 85 |
+
+Not run here: the live scripts (`tinyfish-live`, `aiml-live`), which need
+keys and spend; they passed on 18 October on the test keys.
 
 ## Before you deploy this branch
 
@@ -189,36 +234,110 @@ run them all before the new image takes traffic.
 6. `add-assistant-job-reports.ts`: `assistant_jobs.report_key`, `reported_at`. The worker writes these columns.
 7. `add-objectives.ts`: `assistant_objectives`, the `objective` job kind, `treg_calls.request_id`. Search tools create objectives and Treg calls write the column.
 
-The image now ships all seven (`Dockerfile`, `.dockerignore`).
+The image now ships all seven (`Dockerfile`, `.dockerignore`). All are
+additive (new tables and columns), so the running old version is unaffected
+while they run.
+
+### Deployment commands (build from source with Docker Compose)
+
+Adjust paths and the compose files to your VM; these follow
+`docs/self-hosting/docker-compose.mdx`.
+
+```sh
+cd /path/to/AgentSDR
+git fetch origin claude/dreamy-fermi-h5woha
+git checkout claude/dreamy-fermi-h5woha
+git reset --hard origin/claude/dreamy-fermi-h5woha     # the final commit; check `git log -1`
+
+# 1. Back up the database first.
+docker compose exec db pg_dump -U agentsdr agentsdr > agentsdr-$(date +%F)-before-upgrade.sql
+
+# 2. Build the new image (the old container keeps serving).
+docker compose -f docker-compose.yml -f docker-compose.build.yml build app
+
+# 3. Migrations, in order, with the new image, before it takes traffic.
+for m in add-tinyfish add-research-sources add-browser-sessions add-wrong-number \
+         add-activity add-assistant-job-reports add-objectives; do
+  docker compose -f docker-compose.yml -f docker-compose.build.yml run --rm app bun scripts/$m.ts || break
+done
+
+# 4. Switch to the new image.
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d app
+```
+
+Without Compose: run each migration in a one-off container of the new image
+with the production `DATABASE_URL`
+(`docker run --rm -e DATABASE_URL=… <image> bun scripts/<name>.ts`), or,
+after the switch, `docker exec <container> bun scripts/<name>.ts`.
+
+### Running-image checks
+
+1. The image is the new one:
+   `docker compose exec app ls scripts/add-objectives.ts` lists the file, and
+   `docker compose exec app sh -c 'grep -rlF "Outside sending hours" .next | head -1'` and
+   `docker compose exec app sh -c 'grep -rlF "Same period in Analytics" .next | head -1'`
+   each print a file (Activity's and Overview's new wording, compiled in).
+2. The migrations ran:
+   `docker compose exec db psql -U agentsdr agentsdr -Atc "select to_regclass('tinyfish_settings'), to_regclass('research_settings'), to_regclass('browser_sessions'), to_regclass('crm_wrong_routes'), to_regclass('activity_seen'), to_regclass('assistant_objectives')"`
+   prints six names, none empty, and
+   `… -Atc "select count(*) from information_schema.columns where (table_name, column_name) in (('assistant_jobs','report_key'), ('assistant_jobs','reported_at'), ('treg_calls','request_id'))"`
+   prints `3`.
+3. The app: the container is healthy and its log shows the workers starting
+   (`[assistant/worker] starting`) with no schema error. `/activity`,
+   `/assistant/results` and `/analytics` load. Overview and Analytics give the
+   same Today and Last 7 days figures. Analytics names your organization's
+   time zone.
+4. In a new chat, "find 5 dental clinics in Pune" (free sources): the first
+   search's result says "until it has 5 qualified leads"; Activity lists a
+   "Lead request"; the chat ends with one "Research finished" or
+   "Research stopped" report with the stop reason.
 
 ## Your morning list
 
+Deployment and live acceptance are **pending** until you run them.
 1. **Rotate both keys** shared in the chat (TinyFish and AI/ML API). They were
    kept in a scratch file outside the repository and never committed, but they
    were in the conversation.
-2. Settings → Organization → TinyFish: paste the new key (one free search
+2. Deploy as above, then work through the running-image checks.
+3. Settings → Organization → TinyFish: paste the new key (one free search
    verifies it). Browser minutes stay at 0 unless you want the browser tools.
-3. Run the two buyer examples with a spend cap, for example "find real estate
-   agents in Pune who might buy AI automation", and read the coverage line:
-   it names each source and provider, and what was not searched and why.
-4. Send one test inbound reply to a plan in Review mode and check Action
+4. Live research pilot on both buyer examples with a spend cap in the
+   request, for example "find 20 real estate agents in Pune who might buy AI
+   automation, spend up to $3". Check the final report's sources, leads,
+   spend and stop reason against Activity and the lead lists.
+5. An Instagram-only prospect reaching an approved Instagram plan through the
+   connected Unipile account, with one recipient you approve.
+6. Send one test inbound reply to a plan in Review mode and check Action
    required, Activity → Replies and the plan card agree.
-5. Decide decision 16 in the decisions log (whether Instagram-only accounts are eligible).
 
 ## Known gaps and failures
 
-- `scripts/e2e/web-discovery.ts` (2 failures) and `scripts/e2e/apify.ts`
-  (5 failures) fail identically on the baseline `640b2d6`. They expect
-  Instagram-only accounts to be excluded or uncontactable, while the branch
-  makes them reachable by DM. Which rule is intended is your call (decision 16).
+- No live run of today's work: everything above is verified with fake
+  providers on a local database. Live acceptance is your list above.
 - The AI/ML API test key reached its all-time limit for premium models
-  (Claude Sonnet, Qwen); Claude Haiku 5.5 still answered and the fix was
-  verified on it only.
-- The manual Start button still enrols everyone, overlaps included (as
-  before tonight); only Autonomous and request-approval starts leave
-  overlaps out.
-- LinkedIn senders are not in a plan's Sending status yet; the card says so.
+  (Claude Sonnet, Qwen); Claude Haiku 5.5 still answered and the
+  structured-call fix was verified on it only.
+- The manual Start button still enrolls everyone, overlaps included; only
+  Autonomous and request-approval starts leave overlaps out.
+- Web-search coverage of a request is counted until your next request in the
+  same chat (decision 50).
+- Requests served only by `web_search`/`read_webpage` start no objective; a
+  follow-up such as "use Instagram too" counts as a new request. Changing a
+  running request's limits needs a new request. Pause and cancel are a chat
+  tool and an API route, not buttons yet.
+- Tavily, AI web-research cost before it is reported, and model tokens are
+  outside a request's dollar cap (decision 41).
+- Loading Overview settles decisions you already answered in the chat (a
+  database write; it never starts, approves or sends anything).
+- Analytics has no run, request or chat filter. Delivery and read receipts
+  are recorded for WhatsApp only.
 - Reddit has no reader by design; recording an approval enables nothing yet.
 - If the process stops between an Autonomous start and its chat event, that
   event is lost; the launch job's own "Outreach started" report still
   appears.
+- Three routes answer 200 to another organization for one of your ids
+  without returning your data (listed under Tenancy isolation); a 404 would be
+  more correct.
+- On a desktop record page both "Leads & replies" and "Pipeline" are
+  highlighted in the sidebar (both point at `/crm/pipeline`); this predates
+  the branch.

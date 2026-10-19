@@ -1,6 +1,7 @@
 /**
  * Puts one row of each table added by scripts/add-instagram-intake-discovery.ts
- * (and the new lead-list columns) into an organization, so
+ * and the later add-* migrations (and the new lead-list columns) into an
+ * organization, so
  * scripts/e2e/tenancy-isolation.ts has organization A identifiers in every
  * new table to look for in organization B's responses.
  *
@@ -39,6 +40,7 @@ const { providerUsage } = await import("@/lib/quota/schema");
 const { crmWrongRoutes } = await import("@/lib/crm/schema");
 const { activitySeen } = await import("@/lib/activity/schema");
 const { members } = await import("@/lib/auth/schema");
+const { assistantMessages, assistantObjectives, assistantThreads } = await import("@/lib/assistant/schema");
 const { eq } = await import("drizzle-orm");
 
 const stamp = Date.now();
@@ -74,6 +76,10 @@ await runInOrganization(organizationId, async () => {
   await db.insert(crmWrongRoutes).values({ organizationId, personId: person!.id, channel: "whatsapp", route: `+9190000${String(stamp % 100000).padStart(5, "0")}`, source: "human", reason: `isolation wrong number ${stamp}` });
   const [owner] = await db.select({ userId: members.userId }).from(members).where(eq(members.organizationId, organizationId)).limit(1);
   if (owner) await db.insert(activitySeen).values({ organizationId, userId: owner.userId, repliesSeenAt: new Date() }).onConflictDoNothing();
+  // An owner request pursued as an objective (scripts/add-objectives.ts), with its chat and request message.
+  const [thread] = await db.insert(assistantThreads).values({ organizationId, title: `Isolation research ${stamp}`, createdBy: owner?.userId ?? null }).returning();
+  const [request] = await db.insert(assistantMessages).values({ organizationId, threadId: thread!.id, role: "user", content: `isolation request ${stamp}`, createdBy: owner?.userId ?? null }).returning();
+  await db.insert(assistantObjectives).values({ organizationId, threadId: thread!.id, requestMessageId: request!.id, leadTarget: 25, timeLimitMinutes: 240, deadlineAt: new Date(Date.now() + 4 * 3_600_000), spendCapUsd: 5, progress: { waiting: `isolation waiting ${stamp}` } });
   console.log(`Seeded new-feature fixtures into ${organizationId}: instagram account ${account!.id}, chat ${chat!.id}, endpoint ${endpoint!.id}, audience ${audienceId}.`);
 });
 process.exit(0);

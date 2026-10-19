@@ -1,6 +1,7 @@
 # AgentSDR implementation plan: reliable lead discovery and outreach
 
-Updated: 18 October 2026, Asia/Kolkata.
+Updated: 18 October 2026, Asia/Kolkata. Implementation status added
+19 October 2026 (next section).
 
 This handoff starts from the repository plan on `claude/new-session-g5hljn`
 at `640b2d6` and incorporates the owner's live Instagram test and the review
@@ -8,12 +9,78 @@ of `pipeline-sketch.md`. The updates below include a local frontend pass and
 the remaining implementation plan. The new research/browser/Activity work is
 not implemented yet.
 
-Status: next-session research work remains planned. The owner has now tested
+Status (18 October, before implementation; see the status section below for 19 October): next-session research work remains planned. The owner has now tested
 Instagram sending and automatic replies on the VM. The frontend workspace pass
 is committed locally as `5fb1a51`; it has not been pushed or deployed. Prioritize useful,
 working behavior and small changes. Pilot one web provider for search, page reading and browser
 control: TinyFish. Select it for normal web work only after the pilot passes;
 keep existing connections and avoid adding overlapping providers.
+
+## Status on 19 October 2026: implemented, verified, pending
+
+Branch `claude/dreamy-fermi-h5woha` (pushed; nothing merged into `main`,
+nothing deployed). The code scope of this plan is implemented and verified
+locally with fake providers. **Deployment and live acceptance are pending:
+they count as done only after the owner runs them on the VM.**
+`docs/plans/NIGHT_REPORT.md` has the commits, migration order, deployment
+commands and running-image checks; `docs/plans/DECISIONS-2026-10-18.md` has
+every default taken.
+
+### Implemented and verified locally
+
+| Plan section | What is in the branch | Verified by |
+| --- | --- | --- |
+| Core web access: search, read and interact | TinyFish connection per organization; `web_search`; `read_webpage` through TinyFish Fetch with a public-address check; links on read pages become known links; browser tools over TinyFish Browser, off until minutes are allowed; Tavily kept as an explicit fallback | `tinyfish` (41 checks), `browser` (20); one live TinyFish Search, Fetch and 60-second Browser session on the test key (18 October) |
+| Source choice follows the buyer objective | Google Maps through the built-in scraper first, Apify only when asked or as the approved fallback; Instagram searches wait for an Apify slot; per-platform coverage; Hacker News and Stack Exchange within their limits; Reddit refused until its API approval is recorded | `apify` (70), `research-sources` (42), `web-discovery` (85) |
+| Instagram-only prospects (owner's decision, 19 October) | Eligible for Instagram outreach when the profile was read and, for a place, names it; otherwise kept for research with the reason | All 7 earlier Instagram failures now pass, with new positive cases (`apify`, `web-discovery`) |
+| Enough research, with clear controls | Per-request lead target, time limit and spend cap (named in the request, else Sending-rule defaults); durable continuation across jobs without an owner message; spend reserved before paid work and settled; stop at target, sources exhausted, budget, time, cancel or failure, with the stop reason stored; leads kept; exactly one final report | `objective` (56): target after a continuation, budget, lost Apify start, time limit, pause/cancel, full slots, restart mid-continuation, second organization |
+| Autonomous handoff and report accuracy | Overlap-aware Autonomous and request-approval starts; durable reports by report key; `report` tool scoped and in the organization's time zone | `autonomous` (68), `assistant` (73) |
+| Recovery from incomplete model responses | Function-named structured calls; truncated calls refused and retried; a plain failure with Retry after three attempts | `assistant-recovery` (9); one live Claude Haiku 5.5 call through AI/ML API (18 October) |
+| Visible work and useful completion; Work and replies across chats | Activity (Work and Replies, across chats): waiting for a slot or a provider limit, outside sending hours, partly done, stalled, failed; each plan's leads, contacted and replied; each request's research and how it ended | `activity` (41) |
+| Roomier workspace with frontend and backend wiring | Conversation workspace with Needs you; one set of metric definitions, dates and time zone for Overview and Analytics; current counts labelled apart from period totals; per-source found, qualified and contactable people, each person counted once | `workspace-replay` (107), `metrics-parity` (36); desktop (1366 px) and phone (390 px) screenshots of the plan cards, Leads & replies, Action required, a record and Activity, with three layout fixes |
+| Delivery and autonomy status must match actual evidence | Plan cards: who authorized sending, each sender's time zone, gate and next allowed send (email, WhatsApp, Instagram, LinkedIn), per-lead evidence accepted / delivered / read receipt, never "seen" | `delivery-evidence` (30) |
+| One brief apology for a wrong-number reply | Wrong-number routes blocked organization-wide; one apology (Automatic) or one draft (Review); "stop" means Do Not Contact | `reply-agent` (103) |
+| Implementation and acceptance, item 3 (fake providers) | One request from the prompt through research, qualification, plan, Start, request approval, launch and the final report, with continuation, a launch taken over after a worker died, duplicate callbacks, and a second organization | `full-flow` (18) |
+
+Gates on the final tree: `tsc`, eslint on every changed file, 1676 unit
+tests, `db:check`, the 16 e2e suites above (843 checks, 0 failures), and the
+upgrade path (the base branch's schema plus the 7 migrations in order, run
+twice) giving the same schema as a fresh install. The tenancy-isolation run
+against a dev server is recorded in the night report.
+
+### Pending: deployment (owner)
+
+1. Run the 7 migrations in order on the VM's database, then deploy the new
+   image (commands in the night report).
+2. Check the running image (night report, "Running-image checks").
+3. Rotate the TinyFish and AI/ML API test keys, then connect the new TinyFish
+   key in Settings.
+
+### Pending: live acceptance (owner-only, not yet passed)
+
+- Live research pilot on both buyer examples with an agreed spend cap
+  (item 5 above): saved, evidence-backed leads or an honest partial result
+  with its exact stop reason.
+- One real inbound reply in Review mode (item 5).
+- An Instagram-only prospect reaching an approved Instagram plan through the
+  connected Unipile account, live (item 1).
+- The full discovery-to-outreach path in the running image, with one
+  explicitly approved recipient (items 1 and 5).
+- A metered TinyFish Browser session from the chat, if a browser allowance is
+  set.
+
+### Known limitations kept
+
+- Web-search coverage of a request is counted until the owner's next request
+  in the same chat (decision 50).
+- Requests served only by `web_search`/`read_webpage` start no objective; a
+  follow-up message such as "use Instagram too" is a new request.
+- Tavily, AI web-research cost before it is reported, and model tokens are
+  outside the dollar cap (decision 41).
+- Analytics has no run, request or chat filter; delivery and read receipts are
+  recorded for WhatsApp only.
+- Reddit has no reader until its API approval is recorded; recording it
+  enables nothing yet.
 
 ## Current baseline
 
