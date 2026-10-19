@@ -72,8 +72,9 @@ export async function deliverWhatsappFromCrm(input: DeliverWhatsappInput): Promi
   if (personId && (await isPersonDoNotContact(db, personId))) {
     throw new WhatsappSendRefusedError("This lead is marked Do Not Contact", 409);
   }
-  const route = normalizeRoute("whatsapp", phone);
-  const wrongNumber = route ? await wrongRouteSendRefusal(db, { channel: "whatsapp", routes: [route], ackRouteId: input.wrongRouteAckId ?? null }) : null;
+  // The number and, for a chat addressed by a privacy id ("…@lid"), the id: either may be the recorded wrong route.
+  const routes = [...new Set([normalizeRoute("whatsapp", phone), normalizeRoute("whatsapp", chat?.providerId)].filter((route): route is string => Boolean(route)))];
+  const wrongNumber = routes.length ? await wrongRouteSendRefusal(db, { channel: "whatsapp", routes, ackRouteId: input.wrongRouteAckId ?? null }) : null;
   if (wrongNumber) throw new WhatsappSendRefusedError(wrongNumber, 409, null, "wrong_number");
 
   const sent = await performWhatsappSend({

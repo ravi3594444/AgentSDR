@@ -27,11 +27,14 @@ describe("routes", () => {
     expect(candidateRoutes("sms", { phone: "+919876543210" })).toEqual([]);
   });
 
-  test("a WhatsApp privacy id (@lid) is no number: the chat's route is the Person's phone", () => {
-    expect(normalizeRoute("whatsapp", "123456789012345@lid")).toBeNull();
+  test("a WhatsApp privacy id (@lid) is a route of its own, never mistaken for a number", () => {
+    expect(normalizeRoute("whatsapp", "123456789012345@lid")).toBe("123456789012345@lid");
+    expect(normalizeRoute("whatsapp", "123456789012345:7@LID")).toBe("123456789012345@lid");
     expect(normalizeRoute("whatsapp", "919876543210:12@s.whatsapp.net")).toBe("919876543210");
     expect(normalizeRoute("whatsapp", "919876543210@c.us")).toBe("919876543210");
-    expect(candidateRoutes("whatsapp", { providerContactId: "123456789012345@lid", phone: "+919876543210" })).toEqual(["919876543210"]);
+    expect(normalizeRoute("whatsapp", "group@g.us")).toBeNull();
+    // A send to a chat addressed by one checks both the id and the Person's number.
+    expect(candidateRoutes("whatsapp", { providerContactId: "123456789012345@lid", phone: "+919876543210" })).toEqual(["123456789012345@lid", "919876543210"]);
   });
 });
 
