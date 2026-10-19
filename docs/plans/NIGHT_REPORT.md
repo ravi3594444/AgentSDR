@@ -172,6 +172,41 @@ The full-flow test also found that a business found with only a phone was
 named by its number in plans and in the facts given to the writer; it is now
 named by its business name (`ba14585`).
 
+### Final review of day two (`502f71d`, `171c3b6`, `8cb9d26`)
+
+The one final check, as a bounded workflow:
+- Three reviewers covered objectives and spend; metrics and reporting; and the
+  directly written fixes.
+- A skeptic tried to refute each serious finding, two per reviewer.
+- The rest were judged here by reading the code.
+
+Results: 12 findings. 11 were real and are fixed, each with a test that
+failed first. 1 was refuted: the funnel's "% of previous" follows from
+period counts and is labelled.
+
+| Finding | Severity | Fix |
+| --- | --- | --- |
+| Pausing during a continuation turn ended the request as "sources exhausted" on resume | major | The pause time is recorded; that turn is not judged |
+| A spend-guard wait (pause, cap held) skipped Instagram profile reads, so every account was kept for research | major | A "profiles" stage keeps the posts and retries, bounded |
+| A retried launch reused its already-active LinkedIn campaign, failed the run and left it sending, beyond Stop | major | An active recorded campaign counts as launched |
+| A deferred wrong-number job was recorded as a failed classification and set the record to error | major | Deferral is not a failure |
+| In Autonomous mode a new request was filed under, and refused by, a stopped earlier one | major | The turn decides the search's request once (`searchRequestFor`) |
+| An Apify start whose answer was lost was recorded as refused at $0 | minor | It stays "starting", counted, never retried; swept as spent |
+| A deferral on a job's last attempt left it queued forever | minor | Deferral gives back the attempt |
+| A guessed phone with separators in a URL path was grounded by the page's echo | minor | Path segments with 7+ digits count as model-written |
+| The grounding strip removed a domain an earlier search had returned, and with it the page's real email | minor | Only what no earlier source gave is removed |
+| Activity and plan-card counts dropped to 0 for a stopped plan's messaged leads, and missed opt-outs | minor | Counts from evidence a stop leaves in place |
+| A Stop between recording and activating a campaign could be undone; a crash then left it active | minor | Each activation re-checks the run; a retried job stops a stopped run's campaigns |
+
+The isolation check itself had two flaws, found when it was run again today:
+- It read a static .xlsx template's XML namespace (`schemas.microsoft.com`) as
+  a demo company's domain. A domain now counts only as that host.
+- It passed when the dev server died part way through. A request that gets no
+  answer now fails the run.
+
+It is now run against a production build instead of a dev server. On demand,
+the dev server compiled every route and grew past the memory limit.
+
 ## Tenancy isolation
 
 `scripts/e2e/tenancy-isolation.ts` was run against a dev server on a fresh
@@ -196,24 +231,24 @@ A 404 would be more correct for each.
 
 All on the final tree, on a fresh local database:
 - `tsc --noEmit`: pass. eslint on every TypeScript file the branch changed
-  since `299fd14` (84 files): pass.
-- Unit tests: 1676 pass, 0 fail.
+  since `299fd14`: pass.
+- Unit tests: 1686 pass, 0 fail.
 - `db:check`: all checks pass, on a fresh install and on the upgrade path.
 - Upgrade path: the base branch's `db/schema.sql`, then the 7 migrations
   below in order, then all 7 again. Every run succeeded, and the result is
   the same schema as a fresh install (pg_dump differs only in its random
   `\restrict` token).
-- e2e, 16 suites, 843 checks, 0 failures:
+- e2e, 16 suites, 859 checks, 0 failures:
 
   | Suite | Checks | Suite | Checks |
   | --- | --- | --- | --- |
   | metrics-parity | 36 | assistant | 73 |
   | full-flow | 18 | assistant-recovery | 9 |
-  | activity | 41 | objective | 56 |
+  | activity | 42 | objective | 67 |
   | workspace-replay | 107 | tinyfish | 41 |
-  | reply-agent | 103 | research-sources | 42 |
+  | reply-agent | 105 | research-sources | 42 |
   | delivery-evidence | 30 | browser | 20 |
-  | autonomous | 68 | apify | 70 |
+  | autonomous | 70 | apify | 70 |
   | assistant-intake | 44 | web-discovery | 85 |
 
 Not run here: the live scripts (`tinyfish-live`, `aiml-live`), which need

@@ -33,20 +33,22 @@ every default taken.
 | Core web access: search, read and interact | TinyFish connection per organization; `web_search`; `read_webpage` through TinyFish Fetch with a public-address check; links on read pages become known links; browser tools over TinyFish Browser, off until minutes are allowed; Tavily kept as an explicit fallback | `tinyfish` (41 checks), `browser` (20); one live TinyFish Search, Fetch and 60-second Browser session on the test key (18 October) |
 | Source choice follows the buyer objective | Google Maps through the built-in scraper first, Apify only when asked or as the approved fallback; Instagram searches wait for an Apify slot; per-platform coverage; Hacker News and Stack Exchange within their limits; Reddit refused until its API approval is recorded | `apify` (70), `research-sources` (42), `web-discovery` (85) |
 | Instagram-only prospects (owner's decision, 19 October) | Eligible for Instagram outreach when the profile was read and, for a place, names it; otherwise kept for research with the reason | All 7 earlier Instagram failures now pass, with new positive cases (`apify`, `web-discovery`) |
-| Enough research, with clear controls | Per-request lead target, time limit and spend cap (named in the request, else Sending-rule defaults); durable continuation across jobs without an owner message; spend reserved before paid work and settled; stop at target, sources exhausted, budget, time, cancel or failure, with the stop reason stored; leads kept; exactly one final report | `objective` (56): target after a continuation, budget, lost Apify start, time limit, pause/cancel, full slots, restart mid-continuation, second organization |
-| Autonomous handoff and report accuracy | Overlap-aware Autonomous and request-approval starts; durable reports by report key; `report` tool scoped and in the organization's time zone | `autonomous` (68), `assistant` (73) |
+| Enough research, with clear controls | Per-request lead target, time limit and spend cap (named in the request, else Sending-rule defaults); durable continuation across jobs without an owner message; spend reserved before paid work and settled; stop at target, sources exhausted, budget, time, cancel or failure, with the stop reason stored; leads kept; exactly one final report | `objective` (67): target after a continuation, budget, lost Apify start (process died, or no answer), time limit, pause/cancel, a pause during a continuation, Instagram profiles held by a pause, a new request after a stopped one in Autonomous mode, full slots, restart mid-continuation, second organization |
+| Autonomous handoff and report accuracy | Overlap-aware Autonomous and request-approval starts; durable reports by report key; `report` tool scoped and in the organization's time zone | `autonomous` (70), `assistant` (73) |
 | Recovery from incomplete model responses | Function-named structured calls; truncated calls refused and retried; a plain failure with Retry after three attempts | `assistant-recovery` (9); one live Claude Haiku 5.5 call through AI/ML API (18 October) |
-| Visible work and useful completion; Work and replies across chats | Activity (Work and Replies, across chats): waiting for a slot or a provider limit, outside sending hours, partly done, stalled, failed; each plan's leads, contacted and replied; each request's research and how it ended | `activity` (41) |
+| Visible work and useful completion; Work and replies across chats | Activity (Work and Replies, across chats): waiting for a slot or a provider limit, outside sending hours, partly done, stalled, failed; each plan's leads, contacted and replied; each request's research and how it ended | `activity` (42) |
 | Roomier workspace with frontend and backend wiring | Conversation workspace with Needs you; one set of metric definitions, dates and time zone for Overview and Analytics; current counts labelled apart from period totals; per-source found, qualified and contactable people, each person counted once | `workspace-replay` (107), `metrics-parity` (36); desktop (1366 px) and phone (390 px) screenshots of the plan cards, Leads & replies, Action required, a record and Activity, with three layout fixes |
 | Delivery and autonomy status must match actual evidence | Plan cards: who authorized sending, each sender's time zone, gate and next allowed send (email, WhatsApp, Instagram, LinkedIn), per-lead evidence accepted / delivered / read receipt, never "seen" | `delivery-evidence` (30) |
-| One brief apology for a wrong-number reply | Wrong-number routes blocked organization-wide; one apology (Automatic) or one draft (Review); "stop" means Do Not Contact | `reply-agent` (103) |
+| One brief apology for a wrong-number reply | Wrong-number routes blocked organization-wide; one apology (Automatic) or one draft (Review); "stop" means Do Not Contact | `reply-agent` (105) |
 | Implementation and acceptance, item 3 (fake providers) | One request from the prompt through research, qualification, plan, Start, request approval, launch and the final report, with continuation, a launch taken over after a worker died, duplicate callbacks, and a second organization | `full-flow` (18) |
 
-Gates on the final tree: `tsc`, eslint on every changed file, 1676 unit
-tests, `db:check`, the 16 e2e suites above (843 checks, 0 failures), and the
+Gates on the final tree: `tsc`, eslint on every changed file, 1686 unit
+tests, `db:check`, the 16 e2e suites above (859 checks, 0 failures), and the
 upgrade path (the base branch's schema plus the 7 migrations in order, run
-twice) giving the same schema as a fresh install. The tenancy-isolation run
-against a dev server is recorded in the night report.
+twice) giving the same schema as a fresh install. A final review found 11
+real defects in the day's work, all fixed with tests that failed first (night
+report). The production build and the tenancy-isolation run against it are
+recorded in the night report.
 
 ### Pending: deployment (owner)
 
