@@ -39,6 +39,7 @@ import {
   type CrmCategoryKey,
 } from "@/lib/crm/schema";
 import { interruptActiveSequenceRunInTransaction } from "@/lib/crm/sequences";
+import { setAsideAcknowledgementsInTransaction } from "@/lib/crm/wrongRoutes";
 import { StaleCrmContextError, classificationApplicationDecision } from "@/lib/crm/stateMachine";
 import type { CampaignContactCrm, SetLeadStageRequest } from "./contract";
 import {
@@ -207,11 +208,12 @@ async function applyStageInTransaction(
   // The context moved on, so open drafts were written for a brief that no
   // longer applies (as operations.ts restartRecordWork does); a changed stage
   // also ends the old stage's sequence. Nothing new is started.
-  await tx.update(crmDrafts).set({ status: "stale", updatedAt: new Date() }).where(and(
+  const staled = await tx.update(crmDrafts).set({ status: "stale", updatedAt: new Date() }).where(and(
     eq(crmDrafts.crmRecordId, updated.id),
     inArray(crmDrafts.status, ["generating", "awaiting_review", "failed"]),
     ne(crmDrafts.expectedContextVersion, updated.contextVersion),
-  ));
+  )).returning({ id: crmDrafts.id });
+  await setAsideAcknowledgementsInTransaction(tx, { draftIds: staled.map((draft) => draft.id), reason: "the lead's stage was set from a call" });
   if (changed) {
     await interruptActiveSequenceRunInTransaction(tx, {
       recordId: updated.id,

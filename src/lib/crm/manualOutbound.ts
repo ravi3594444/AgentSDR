@@ -17,6 +17,7 @@ import {
   type CrmChannel,
 } from "./schema";
 import { interruptActiveSequenceRunInTransaction } from "./sequences";
+import { setAsideAcknowledgementsInTransaction } from "./wrongRoutes";
 import { inOrg } from "@/lib/tenancy/scope";
 
 /**
@@ -279,10 +280,12 @@ export async function recordManualOutboundInTransaction(
       reason: input.reason,
       contextVersion: record.contextVersion,
     });
-    await tx.update(crmDrafts).set({ status: "stale", updatedAt: now }).where(and(
+    const staled = await tx.update(crmDrafts).set({ status: "stale", updatedAt: now }).where(and(
       eq(crmDrafts.crmRecordId, record.id),
       inArray(crmDrafts.status, ["generating", "awaiting_review", "failed"]),
-    ));
+    )).returning({ id: crmDrafts.id });
+    // A wrong-number apology waiting for review is not sent on top of their answer, nor written again later.
+    await setAsideAcknowledgementsInTransaction(tx, { draftIds: staled.map((draft) => draft.id), reason: "someone answered the message by hand" });
     await settleAnsweredRecordInTransaction(tx, record, input);
   }
   return { conversation, message, duplicate: false, decision };

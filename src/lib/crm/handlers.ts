@@ -36,7 +36,7 @@ import {
   type CrmCategoryKey,
 } from "./schema";
 import { startSequenceRunInTransaction } from "./sequences";
-import { PermanentCrmJobError, registerCrmJobHandlers } from "./worker";
+import { PermanentCrmJobError, registerCrmJobHandlers, STALE_LOCK_MS } from "./worker";
 import { detectsOptOutWording, detectsWrongNumber } from "./wrongNumber";
 import { wrongRouteForConversation } from "./wrongRoutes";
 import { inOrg } from "@/lib/tenancy/scope";
@@ -298,19 +298,22 @@ type ClassificationContext = Awaited<ReturnType<typeof classificationContext>>;
  * after it): the wrong-number handling it left unfinished, if any — this
  * message's apology claimed (reserved) or mid-send (sending), or a clear
  * wrong-number reading whose route was never recorded. Null when nothing
- * was left, and the job is simply stale.
+ * was left, and the job is simply stale. "in_flight" when the claim is
+ * younger than a worker may hold a job: the job was requeued while its
+ * first worker may still be sending (a stale lock, no heartbeat), so the
+ * claim is that worker's, never taken over.
  */
 async function unfinishedWrongNumber(
   messageId: string,
   expectedContextVersion: number,
   context: ClassificationContext,
-): Promise<{ source: "reply_agent" | "classifier"; optOut: boolean } | null> {
-  const [route] = await db.select({ ackStatus: crmWrongRoutes.ackStatus, source: crmWrongRoutes.source }).from(crmWrongRoutes)
+): Promise<{ source: "reply_agent" | "classifier"; optOut: boolean } | "in_flight" | null> {
+  const [route] = await db.select({ ackStatus: crmWrongRoutes.ackStatus, ackUpdatedAt: crmWrongRoutes.ackUpdatedAt, source: crmWrongRoutes.source }).from(crmWrongRoutes)
     .where(and(inOrg(crmWrongRoutes), eq(crmWrongRoutes.messageId, messageId))).limit(1);
   if (route) {
-    return route.ackStatus === "reserved" || route.ackStatus === "sending"
-      ? { source: route.source === "reply_agent" ? "reply_agent" : "classifier", optOut: false }
-      : null;
+    if (route.ackStatus !== "reserved" && route.ackStatus !== "sending") return null;
+    if (route.ackUpdatedAt && route.ackUpdatedAt.getTime() > Date.now() - STALE_LOCK_MS) return "in_flight";
+    return { source: route.source === "reply_agent" ? "reply_agent" : "classifier", optOut: false };
   }
   if (context.routeWrong) return null;
   const [classification] = await db.select().from(crmClassifications)
@@ -332,12 +335,37 @@ async function unfinishedWrongNumber(
   return closing ? { source: fromAgent ? "reply_agent" : "classifier", optOut: context.optOutWords || context.dncIntent } : null;
 }
 
-/** The reply was answered before anyone got to it (the owner from their phone, say): it leaves "classifying" the way a manual reply settles it. */
-async function settleAnsweredReply(recordId: string, messageId: string): Promise<void> {
+/**
+ * After the reply agent, so a reply never stays "classifying": answered
+ * before anyone got to it (the owner from their phone, say), it settles the
+ * way a manual reply settles it. One the agent left without a classification
+ * (it stopped on a limit, or another worker holds the message) settles the
+ * same when it was answered meanwhile, and otherwise waits for a person in
+ * Action required. One the agent classified is left as the agent left it.
+ */
+async function settleAfterReplyAgent(recordId: string, messageId: string, answered: boolean): Promise<void> {
   await withCrmTransaction(async (tx) => {
     const record = await lockCrmRecord(tx, recordId);
     if (record.latestInboundMessageId !== messageId) return;
-    await settleAnsweredRecordInTransaction(tx, record, { reason: "answered_outside_crm", actorType: "system" });
+    const unclassified = record.workflowState === "classifying" || record.workflowState === "unclassified";
+    if (!answered && !unclassified) return;
+    if (answered || await inboundAnsweredSince(tx, record.id, messageId)) {
+      await settleAnsweredRecordInTransaction(tx, record, { reason: "answered_outside_crm", actorType: "system" });
+      return;
+    }
+    const now = new Date();
+    await tx.update(crmRecords).set({ workflowState: "action_required", nextActionAt: now, updatedAt: now }).where(eq(crmRecords.id, record.id));
+    await appendCrmEvent(tx, {
+      personId: record.personId,
+      crmRecordId: record.id,
+      pipelineId: record.pipelineId,
+      eventType: "workflow.state_changed",
+      actorType: "system",
+      fromData: { workflowState: record.workflowState, nextActionAt: record.nextActionAt },
+      toData: { workflowState: "action_required", nextActionAt: now },
+      meta: { reason: "reply_agent_left_unclassified" },
+      contextVersion: record.contextVersion,
+    });
   });
 }
 
@@ -361,6 +389,7 @@ export async function handleClassificationJob(
       // handling it left (closeWrongNumber picks up where it stopped, never
       // sends twice), else it is stale.
       const unfinished = await unfinishedWrongNumber(job.entityId, expected, context);
+      if (unfinished === "in_flight") throw new PermanentCrmJobError("Classification job context is stale; its wrong-number apology is left to the worker that claimed it");
       if (!unfinished) throw new PermanentCrmJobError("Classification job context is stale");
       await closeWrongNumber({ messageId: job.entityId, source: unfinished.source, acknowledgement: null, optOut: unfinished.optOut, sendAllowed: sending.sendAllowed }, { send: sending.send });
       return;
@@ -373,8 +402,10 @@ export async function handleClassificationJob(
     if (agent && !context.dncIntent && process.env.REPLY_AGENT !== "off") {
       const { runReplyAgent } = await import("@/lib/assistant/replyAgent/agent.server");
       const outcome = await runReplyAgent(job.entityId, agent);
-      if (outcome?.answered) await settleAnsweredReply(context.recordId, job.entityId);
-      if (outcome) return;
+      if (outcome) {
+        await settleAfterReplyAgent(context.recordId, job.entityId, Boolean(outcome.answered));
+        return;
+      }
     }
     const wrongNumberSubcategoryId = context.input.subcategories.find((subcategory) => subcategory.key === "wrong_number")?.id ?? null;
     // A route already recorded as a wrong number takes nothing more: the
@@ -452,9 +483,16 @@ export async function handleClassificationJob(
       // send) records the route and the one apology — none when the message
       // also asks to stop; an unsure one waits for a person in Action required.
       if (subcategoryKeyOf(result.subcategoryId, context.input.subcategories) === "wrong_number") {
-        return classifiedAsWrongNumber(appliedResult, result.subcategoryId, context.input.subcategories, { confidence: result.confidence, wrongNumberWords: context.wrongNumberWords })
-          ? { optOut: context.optOutWords }
-          : null;
+        if (classifiedAsWrongNumber(appliedResult, result.subcategoryId, context.input.subcategories, { confidence: result.confidence, wrongNumberWords: context.wrongNumberWords })) {
+          return { optOut: context.optOutWords };
+        }
+        // Unsure, but the rep already answered it: settled as when the answer
+        // comes after (manualOutbound.ts), so the order does not matter.
+        const unsure = await lockCrmRecord(tx, context.recordId);
+        if (await inboundAnsweredSince(tx, unsure.id, job.entityId)) {
+          await settleAnsweredRecordInTransaction(tx, unsure, { reason: "answered_outside_crm", actorType: "system" });
+        }
+        return null;
       }
       const current = await lockCrmRecord(tx, context.recordId);
       // The rep answered while this ran — e.g. straight from their phone on

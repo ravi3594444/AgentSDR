@@ -53,7 +53,7 @@ import {
 } from "./schema";
 import { assertCurrentCrmContext } from "./stateMachine";
 import { acknowledgementProblems, candidateRoutes } from "./wrongNumber";
-import { claimRouteForSendInTransaction, settleAcknowledgementInTransaction, wrongRouteSendRefusal } from "./wrongRoutes";
+import { claimRouteForSendInTransaction, setAsideAcknowledgementsInTransaction, settleAcknowledgementInTransaction, wrongRouteSendRefusal } from "./wrongRoutes";
 import { adoptCurrentSequenceStepInTransaction, interruptActiveSequenceRunInTransaction } from "./sequences";
 
 export type NormalizedCrmSendResult = {
@@ -676,11 +676,12 @@ async function finishSuccessfulSend(
         reason: "manual_outbound_send",
         contextVersion: record.contextVersion,
       });
-      await tx.update(crmDrafts).set({ status: "stale", updatedAt: now }).where(and(
+      const staled = await tx.update(crmDrafts).set({ status: "stale", updatedAt: now }).where(and(
         eq(crmDrafts.crmRecordId, record.id),
         ne(crmDrafts.id, draft.id),
         inArray(crmDrafts.status, ["generating", "awaiting_review", "failed"]),
-      ));
+      )).returning({ id: crmDrafts.id });
+      await setAsideAcknowledgementsInTransaction(tx, { draftIds: staled.map((stale) => stale.id), reason: "another reply was sent to them" });
     }
     await tx.update(crmRecords).set({
       workflowState,

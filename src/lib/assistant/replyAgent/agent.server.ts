@@ -8,6 +8,7 @@ import { AUTOPILOT_ACTOR, AUTOPILOT_LIMITS } from "@/lib/crm/autopilot";
 import { runMembershipFor } from "@/lib/crm/autopilot.server";
 import { appendCrmEvent } from "@/lib/crm/events";
 import { isPersonDoNotContact, setPersonDoNotContact } from "@/lib/crm/policies";
+import { inboundAnsweredSince, settleAnsweredRecordInTransaction } from "@/lib/crm/manualOutbound";
 import { lockCrmRecord, recordAiClassificationInTransaction } from "@/lib/crm/records";
 import { withCrmTransaction, type CrmExecutor } from "@/lib/crm/repository";
 import { crmConversationMessages, crmConversations, crmDrafts, crmRecords, crmSubcategories } from "@/lib/crm/schema";
@@ -198,6 +199,23 @@ async function finish(runRowId: string, scope: Scope, startedAt: number, values:
     updatedAt: new Date(),
   }).where(eq(replyAgentRuns.id, runRowId));
   return { status: values.status, reason: values.reason ?? null, reply: values.reply ?? null, ms };
+}
+
+/**
+ * Someone answered the message while the agent was writing (the owner from
+ * their phone, say): the agent's draft is set aside and the reply settles the
+ * way a manual reply settles it, so nothing obsolete waits in Action
+ * required. False when it was not answered (or a newer message took over).
+ */
+async function setAsideIfAnswered(scope: Scope, draftId: string): Promise<boolean> {
+  return withCrmTransaction(async (tx) => {
+    const record = await lockCrmRecord(tx, scope.recordId);
+    if (record.latestInboundMessageId !== scope.messageId || !(await inboundAnsweredSince(tx, record.id, scope.messageId))) return false;
+    await tx.update(crmDrafts).set({ status: "stale", updatedAt: new Date() })
+      .where(and(eq(crmDrafts.id, draftId), inArray(crmDrafts.status, ["generating", "awaiting_review", "failed"])));
+    await settleAnsweredRecordInTransaction(tx, record, { reason: "answered_outside_crm", actorType: "system" });
+    return true;
+  });
 }
 
 /** A card in Needs you, once per conversation and kind while one is open. */
@@ -512,7 +530,12 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
 
     const note = decision.ownerNote;
     const sendNow = membership.automatic && sendingAllowed(deps);
+    const answeredMeanwhile = async () => ({
+      ...(await finish(runRowId, scope, startedAt, { ...base, status: "stopped", reason: "it was already answered", reply, draftId: draft.id })),
+      answered: true,
+    });
     if (!sendNow) {
+      if (await setAsideIfAnswered(scope, draft.id)) return answeredMeanwhile();
       const reason = membership.automatic ? "the assistant only sends from a production server" : "the run is in Review mode: the reply waits for you in Action required";
       const decisionId = note ? await tellOwner({ scope, facts, leadName, ...ownerNoteToDecision(note.kind), note: note.note, draftId: draft.id, told: false, brief }) : null;
       return finish(runRowId, scope, startedAt, { ...base, status: "drafted", reason, reply, draftId: draft.id, decisionId });
@@ -537,6 +560,7 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
       return rows[0] ? { id: rows[0].id } as const : { held: "this reply was already sent or is being sent", tellOwner: false } as const;
     });
     if ("held" in reservation) {
+      if (await setAsideIfAnswered(scope, draft.id)) return answeredMeanwhile();
       const decisionId = reservation.tellOwner
         ? await tellOwner({ scope, facts, leadName, kind: "limit", note: reservation.held, decision: "Read the conversation and answer yourself.", draftId: draft.id, told: false, brief })
         : null;

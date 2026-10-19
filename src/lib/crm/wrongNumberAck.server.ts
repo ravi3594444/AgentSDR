@@ -366,9 +366,10 @@ export async function closeWrongNumber(input: CloseWrongNumberInput, deps: { sen
     }
 
     // The apology still waiting for review, when this route has one. A
-    // person discarding it ends it: it is never written again. Set aside by
-    // a newer message in this chat, or by a person's reclassification that
-    // moved the context on, it is written again against the current
+    // person discarding it, or setting it aside by another action (a
+    // reclassification, a stage move, an answer of their own), ends it: it is
+    // never written again. Set aside by a newer message in this chat, or by a
+    // person confirming Wrong Number, it is written again against the current
     // context: still one.
     const waiting = row.ackStatus === "drafted" && row.ackDraftId
       ? (await tx.select({ status: crmDrafts.status, aiBodyText: crmDrafts.aiBodyText, editedBodyText: crmDrafts.editedBodyText })
@@ -402,8 +403,8 @@ export async function closeWrongNumber(input: CloseWrongNumberInput, deps: { sen
         return { row, created: false, dispatch: draft ? { draftId: row.ackDraftId, revision: draft.revision } : null };
       }
       if (waiting?.status === "stale" && row.conversationId === scope.conversationId) {
-        // Set aside without a newer message (a person reclassified the
-        // reply): written again, unless something now forbids it.
+        // Set aside without a newer message (a person confirmed Wrong
+        // Number): written again, unless something now forbids it.
         if (blocker) {
           await setAcknowledgementInTransaction(tx, { id: row.id, from: ["drafted"], to: "blocked", reason: blocker });
           await settleRecord(tx, scope, false);
@@ -480,7 +481,7 @@ export async function closeWrongNumber(input: CloseWrongNumberInput, deps: { sen
       await setAcknowledgementInTransaction(tx, { id: routeId, from: ["reserved"], to: "drafted", reason: review });
       return { go: false } as const;
     }
-    await tx.insert(autopilotReplies).values({
+    const reserved = await tx.insert(autopilotReplies).values({
       organizationId,
       draftId,
       revision,
@@ -489,8 +490,10 @@ export async function closeWrongNumber(input: CloseWrongNumberInput, deps: { sen
       personId: scope.personId,
       status: "reserved",
       reason: "wrong-number acknowledgement",
-    }).onConflictDoNothing();
-    return { go: true } as const;
+    }).onConflictDoNothing().returning({ id: autopilotReplies.id });
+    // Not owned: a resumed claim whose reservation an earlier worker made;
+    // that worker's sent or reserved is never turned into failed here.
+    return { go: true, owned: reserved.length > 0 } as const;
   });
   if (!reservation.go) return outcome(scope, await reread(), step.created, text);
 
@@ -509,8 +512,10 @@ export async function closeWrongNumber(input: CloseWrongNumberInput, deps: { sen
       .where(and(eq(autopilotReplies.organizationId, organizationId), eq(autopilotReplies.draftId, draftId), eq(autopilotReplies.revision, revision)));
   } catch (error) {
     const message = (error instanceof Error ? error.message : String(error)).slice(0, 500);
-    await db.update(autopilotReplies).set({ status: "failed", reason: `the acknowledgement was not sent: ${message}`.slice(0, 1_000), updatedAt: new Date() })
-      .where(and(eq(autopilotReplies.organizationId, organizationId), eq(autopilotReplies.draftId, draftId), eq(autopilotReplies.revision, revision)));
+    if (reservation.owned) {
+      await db.update(autopilotReplies).set({ status: "failed", reason: `the acknowledgement was not sent: ${message}`.slice(0, 1_000), updatedAt: new Date() })
+        .where(and(eq(autopilotReplies.organizationId, organizationId), eq(autopilotReplies.draftId, draftId), eq(autopilotReplies.revision, revision), eq(autopilotReplies.status, "reserved")));
+    }
     // Refused before any attempt (the claim is still reserved): it never goes out.
     await withCrmTransaction(async (tx) => {
       if (await setAcknowledgementInTransaction(tx, { id: routeId, from: ["reserved"], to: "blocked", reason: `the send was refused: ${message}` })) {
