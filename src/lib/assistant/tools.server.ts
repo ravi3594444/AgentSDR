@@ -10,7 +10,7 @@ import { coverageLine } from "./coverage";
 import { requestCoverageFor } from "./coverage.server";
 import { searchAreaProblem } from "@/lib/discovery/geocode";
 import { extractContacts, publicLinks, visibleText } from "@/lib/discovery/contacts";
-import { assertPublicPageUrl, fetchPublicPage } from "@/lib/discovery/websiteContacts.server";
+import { assertPublicPageUrl, fetchPublicPage, LOGIN_WALLED_HOST, PageRedirectRefusedError } from "@/lib/discovery/websiteContacts.server";
 import { normalizeWebCriteria, startWebDiscovery, WebDiscoveryUnavailableError } from "@/lib/discovery/webDiscovery.server";
 import { generalWebSearch, webSearchAvailability, webSearchAvailabilityFrom, webSearchProviderName, WebSearchUnavailableError } from "@/lib/discovery/webSearch.server";
 import { fetchFailureText } from "@/lib/tinyfish/catalog";
@@ -126,8 +126,8 @@ function pageTitle(html: string): string {
 }
 
 const MAX_CHAT_CONTACTS = 50;
-/** Sites that need a login and forbid automated reading. */
-const LOGIN_WALLED = /(?:^|\.)(?:instagram\.com|facebook\.com|fb\.com|x\.com|twitter\.com|tiktok\.com|linkedin\.com|threads\.net)$/i;
+/** Sites that need a login and forbid automated reading (the direct reader will not follow a redirect to one either). */
+const LOGIN_WALLED = LOGIN_WALLED_HOST;
 
 /** The owner's request for outreach in this turn, or a refusal for the model. */
 function requireOutreachRequest(context: ToolContext): string {
@@ -800,6 +800,9 @@ export const TOOLS: Record<string, Tool> = {
       try {
         page = await fetchPublicPage(url.toString());
       } catch (error) {
+        // A redirect to Reddit or a login wall stopped before that host was asked for anything: refused like a link to it.
+        const refused = error instanceof PageRedirectRefusedError ? await redirectRefusal(url, error.destination.toString()) : null;
+        if (refused) return refused;
         return { ok: false, summary: `Could not open ${url.toString()}${note}: ${error instanceof Error ? error.message : String(error)}` };
       }
       if (!page) return { ok: false, summary: `${url.toString()} is not a readable web page${note}.` };

@@ -9,6 +9,7 @@ import { constants as zlibConstants, createBrotliDecompress, createGunzip, creat
 import { assertPublicUrl, isBlockedAddress } from "@/lib/grid/runners/http";
 import { BRAND } from "@/lib/brand";
 import { publicAppUrl } from "@/lib/http/publicAppUrl";
+import { isRedditHost } from "@/lib/research/sources/reddit";
 import { contactPageLinks, extractContacts, type FoundContact } from "./contacts";
 
 /**
@@ -57,6 +58,26 @@ export type PageFetchOptions = {
 const systemResolve: Resolver = (hostname) => new Promise((resolve, reject) => {
   dnsLookup(hostname, { all: true, verbatim: true }, (error, addresses) => (error ? reject(error) : resolve(addresses)));
 });
+
+/** Sites that need a login and forbid automated reading. */
+export const LOGIN_WALLED_HOST = /(?:^|\.)(?:instagram\.com|facebook\.com|fb\.com|x\.com|twitter\.com|tiktok\.com|linkedin\.com|threads\.net)$/i;
+
+/**
+ * A redirect to Reddit (no reader and no workaround, research/sources/reddit.ts)
+ * or to a login-walled site, refused before it is followed: nothing is asked
+ * of that host.
+ */
+export class PageRedirectRefusedError extends Error {
+  constructor(readonly destination: URL) {
+    super(`${destination.hostname} needs a login or may not be read; the redirect to it was not followed`);
+    this.name = "PageRedirectRefusedError";
+  }
+}
+
+function refusedDestination(url: URL): boolean {
+  const host = url.hostname.replace(/\.$/, "");
+  return isRedditHost(host) || LOGIN_WALLED_HOST.test(host);
+}
 
 function notPublic(hostname: string): Error {
   return Object.assign(new Error(`${hostname} is not a public website`), { code: "ENOTPUBLIC" });
@@ -293,7 +314,11 @@ export async function assertPublicPageUrl(rawUrl: string, options: PageFetchOpti
   }
 }
 
-/** One HTML page from a public address, following up to three redirects; null when it is not HTML. */
+/**
+ * One HTML page from a public address, following up to three redirects; null
+ * when it is not HTML. A redirect to Reddit or a login-walled site is not
+ * followed (PageRedirectRefusedError).
+ */
 export async function fetchPublicPage(rawUrl: string, options: PageFetchOptions = {}): Promise<{ url: string; html: string } | null> {
   const fixtures = Boolean(options.allowPrivate || options.fetchImpl);
   const lookup = publicOnlyLookup(options.resolve ?? systemResolve);
@@ -317,6 +342,7 @@ export async function fetchPublicPage(rawUrl: string, options: PageFetchOptions 
     if (answer.status >= 300 && answer.status < 400) {
       if (!answer.location) throw new Error(`${url.toString()} redirected without a destination`);
       url = new URL(answer.location, url);
+      if (refusedDestination(url)) throw new PageRedirectRefusedError(url);
       continue;
     }
     if (answer.status < 200 || answer.status >= 300) throw new Error(`${url.toString()} answered HTTP ${answer.status}`);

@@ -1,3 +1,4 @@
+import { BROWSER_LIMITS } from "@/lib/browser/snapshot";
 import type { ResearchSource } from "@/lib/research/schema";
 
 /**
@@ -175,6 +176,28 @@ export function fetchFailureText(failure: Pick<TinyfishFetchFailure, "code" | "s
 /** The masked form of a key shown after saving it. */
 export function keyHint(key: string): string {
   return `…${key.slice(-4)}`;
+}
+
+/**
+ * Why a browser-minutes allowance cannot be saved, or null: a whole number
+ * within TINYFISH_LIMITS, and 0 (off) or at least one session's length —
+ * each session reserves its full length up front, so fewer minutes could
+ * never open one. The settings card shows it as typed; the server refuses it.
+ */
+export function browserMinutesProblem(value: number): string | null {
+  const { min, max } = TINYFISH_LIMITS.browserMinutesPerDay;
+  if (!Number.isInteger(value) || value < min || value > max) return `Browser minutes a day must be a whole number from ${min} to ${max}`;
+  if (value > 0 && value < BROWSER_LIMITS.maxSessionMinutes) return `Browser minutes a day must be 0 (off) or at least ${BROWSER_LIMITS.maxSessionMinutes}, one session's length`;
+  return null;
+}
+
+/** The line under the settings card's browser-minutes field, for what is typed: the rule while it cannot be saved, else what it allows. */
+export function browserMinutesHint(typed: string): { problem: boolean; text: string } {
+  const minutes = Number(typed);
+  const problem = browserMinutesProblem(minutes);
+  if (problem) return { problem: true, text: `${problem}.` };
+  if (minutes === 0) return { problem: false, text: "The assistant cannot open a browser." };
+  return { problem: false, text: `Up to about $${(minutes * TINYFISH_LIMITS.browserUsdPerMinute).toFixed(2)} a day at TinyFish's $${TINYFISH_LIMITS.browserUsdPerMinute}/minute; one browser at a time.` };
 }
 
 /** A key that cannot be a TinyFish API key, or null. */

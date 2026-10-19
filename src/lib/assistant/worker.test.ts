@@ -24,4 +24,16 @@ describe("a step's progress over the job's", () => {
     const waited = { ...queued, waiting: slot };
     expect(mergeJobProgress(waited, undefined)).toBe(waited);
   });
+
+  test("an earlier step's error is dropped once a step completes without one, with or without progress", () => {
+    const failedOnce = { ...queued, lastError: "socket hang up" };
+    expect(mergeJobProgress(failedOnce, undefined)).toEqual(queued);
+    expect(mergeJobProgress(failedOnce, { stage: "searching", provider: "Apify" })).toEqual({ ...queued, stage: "searching", provider: "Apify" });
+  });
+
+  test("a step that failed keeps its error for the retry", () => {
+    const failedOnce = { ...queued, lastError: "socket hang up" };
+    expect(mergeJobProgress(failedOnce, undefined, { stepFailed: true })).toEqual(failedOnce);
+    expect(mergeJobProgress(queued, { lastError: "timeout" }, { stepFailed: true })).toEqual({ ...queued, lastError: "timeout" });
+  });
 });

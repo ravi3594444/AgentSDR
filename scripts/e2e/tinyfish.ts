@@ -241,6 +241,18 @@ await runInOrganization(b.org.id, async () => {
     const searched = await requestCoverageFor(request.id);
     const web = searched.find((entry) => entry.platform === "web");
     check("the web searches and page reads it ran count: Websites and directories searched, not 'not started'", web?.state === "searched" && web.detail === "1 web search, 1 page read" && searched.find((entry) => entry.platform === "google_maps")?.state === "not started", JSON.stringify(searched));
+
+    // A follow-up ("yes, go ahead") is not a new request: what the assistant runs after it still serves this one.
+    // A later request in the same chat (one a search was started for) ends it: its reads are its own.
+    const { assistantJobs } = await import("@/lib/assistant/schema");
+    await addMessage({ threadId: thread.id, role: "user", content: "yes, go ahead", createdBy: a.owner.id });
+    await addMessage({ threadId: thread.id, role: "tool", tool: "web_search", toolInput: { query: "real estate agency listings Pune" }, status: "ok", content: search.summary, toolResult: { summary: search.summary } });
+    const nextRequest = await addMessage({ threadId: thread.id, role: "user", content: "now find dentists in Mumbai on Google Maps", createdBy: a.owner.id });
+    await db.insert(assistantJobs).values({ organizationId: a.org.id, kind: "discovery", stage: "done", status: "cancelled", threadId: thread.id, payload: { requestMessageId: nextRequest.id, target: "maps" }, finishedAt: new Date() });
+    await addMessage({ threadId: thread.id, role: "tool", tool: "read_webpage", toolInput: { url: "https://example.com/pricing" }, status: "ok", content: read.summary, toolResult: { summary: read.summary } });
+    await addMessage({ threadId: thread.id, role: "tool", tool: "web_search", toolInput: { query: "dentists Mumbai" }, status: "ok", content: search.summary, toolResult: { summary: search.summary } });
+    const bounded = (await requestCoverageFor(request.id)).find((entry) => entry.platform === "web");
+    check("a follow-up's searches count for the request; a later request's reads and searches do not", bounded?.state === "searched" && bounded.detail === "2 web searches, 1 page read", JSON.stringify(bounded));
     coverageRequestId = request.id;
   });
   const seenByB = await runInOrganization(b.org.id, () => requestCoverageFor(coverageRequestId));
