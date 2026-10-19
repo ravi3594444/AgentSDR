@@ -337,6 +337,7 @@ async function main() {
   for (const r of all) r.methods = await methodsOf(r.file);
 
   const findings: Finding[] = [];
+  const unanswered: string[] = [];
   const call = (s: Session, method: string, url: string, body?: unknown) =>
     fetch(`${BASE}${url}`, {
       method,
@@ -351,7 +352,11 @@ async function main() {
       redirect: "manual",
       signal: AbortSignal.timeout(60_000),
     }).then(async (res) => ({ status: res.status, text: await res.text() }))
-      .catch((error: Error) => ({ status: 0, text: String(error.message) }));
+      .catch((error: Error) => {
+        // No answer is not a pass: the check did not happen (a server that died mid-run once looked clean).
+        unanswered.push(`${method} ${url}: ${error.message}`);
+        return { status: 0, text: String(error.message) };
+      });
 
   // 1. Positive control.
   const plainGets = all.filter((r) => !r.dynamic && r.methods.includes("GET"));
@@ -406,10 +411,11 @@ async function main() {
   }
 
   console.log(`checked: ${reads} reads, ${writes} writes, ${pageCount} pages as B`);
-  const order = ["CONTROL", "WRITE LEAK", "READ LEAK", "PAGE LEAK", "WRITE RESPONSE LEAK", "WRITE 2xx", "READ 2xx", "ERROR"];
+  if (unanswered.length) findings.push({ kind: "NO RESPONSE", where: `${unanswered.length} request(s) got no answer`, detail: unanswered.slice(0, 3).join(" | ") });
+  const order = ["NO RESPONSE", "CONTROL", "WRITE LEAK", "READ LEAK", "PAGE LEAK", "WRITE RESPONSE LEAK", "WRITE 2xx", "READ 2xx", "ERROR"];
   findings.sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind));
   for (const f of findings) console.log(`${f.kind.padEnd(20)} ${f.where}\n${" ".repeat(21)}${f.detail}`);
-  const fatal = findings.filter((f) => /LEAK|CONTROL/.test(f.kind));
+  const fatal = findings.filter((f) => /LEAK|CONTROL|NO RESPONSE/.test(f.kind));
   console.log(fatal.length ? `\n✗ ${fatal.length} isolation failure(s)` : `\n✓ no isolation failures (${findings.length} item(s) to review)`);
   await sql.end();
   process.exit(fatal.length ? 1 : 0);
