@@ -74,6 +74,13 @@ COPY --from=builder --chown=nextjs:nodejs /app/scripts/add-objectives.ts ./scrip
 COPY docker/entrypoint.sh /usr/local/bin/agentsdr-entrypoint
 RUN chmod 755 /usr/local/bin/agentsdr-entrypoint
 
+# The commit this image was built from. docker/deploy.sh passes it and checks
+# the running container against it. Declared last so a new value does not
+# invalidate the layers above.
+ARG GIT_SHA=unknown
+LABEL org.opencontainers.image.revision="${GIT_SHA}"
+ENV AGENTSDR_REVISION="${GIT_SHA}"
+
 USER nextjs
 EXPOSE 3000
 

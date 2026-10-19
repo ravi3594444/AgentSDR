@@ -14,6 +14,8 @@ const db = new SQL(url, { max: 1, tls: process.env.DATABASE_SSL === "disable" ? 
 try {
   const ddl = await readFile(join(import.meta.dir, "../db/migrations/20261018-activity.sql"), "utf8");
   await db.begin(async (tx) => {
+    // Fail fast rather than wait for, and hold up, the running app's locks.
+    await tx.unsafe("SET LOCAL lock_timeout = '10s'; SET LOCAL statement_timeout = '60s'").simple();
     await tx.unsafe(ddl).simple();
   });
   console.log("Activity table ready.");

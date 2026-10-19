@@ -4,6 +4,9 @@
 *.dump
 *.key
 *.pem
+# docker/deploy.sh's database dumps and saved VM edits (`*.dump` above only
+# matches at the top level).
+deploy-backups
 
 .git
 .next
