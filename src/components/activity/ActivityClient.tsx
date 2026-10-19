@@ -241,7 +241,7 @@ function WorkRow({ item, busy, onCancel, onRun }: { item: WorkItem; busy: boolea
           <p className="min-w-0 break-words text-label-sm text-text-strong-950">{item.title}</p>
           <Badge tone={WORK_TONE[item.state]}>{item.stateLabel}</Badge>
         </div>
-        {item.reason && <p className="text-paragraph-sm text-text-sub-600">{item.reason}</p>}
+        {item.reason && <p className="text-paragraph-sm text-text-sub-600">{item.reason}{item.nextAt && <>; the next send is allowed <time dateTime={item.nextAt}>{new Date(item.nextAt).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</time></>}</p>}
         <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-paragraph-xs text-text-soft-400">
           {item.source && <span>{item.source}</span>}
           {counts && <span>{counts}</span>}

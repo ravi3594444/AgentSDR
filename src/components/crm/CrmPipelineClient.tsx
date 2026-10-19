@@ -246,7 +246,7 @@ export function CrmPipelineClient() {
         actions={
           <SegmentedControl.Root value={listStage} onValueChange={(value) => setListStage(value as PipelineStage | "all")}>
             <SegmentedControl.List className="w-full sm:inline-grid sm:w-auto" aria-label="Pipeline stage">
-              {(["all", ...STAGES] as const).map((stage) => <SegmentedControl.Trigger key={stage} value={stage} className="gap-1.5 px-2 sm:px-3">
+              {(["all", ...STAGES] as const).map((stage) => <SegmentedControl.Trigger key={stage} value={stage} className="h-auto min-h-7 flex-col gap-0 whitespace-normal px-1 py-1 text-center leading-tight sm:h-7 sm:flex-row sm:gap-1.5 sm:whitespace-nowrap sm:px-3 sm:py-0">
                 {stage !== "all" && <StageGlyph stage={stage} className="hidden sm:flex" />}
                 {stage === "all" ? "All" : STAGE_META[stage].short}
                 <span className="tabular-nums text-text-soft-400">{format(countFor(stage))}</span>

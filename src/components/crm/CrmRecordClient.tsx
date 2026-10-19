@@ -278,7 +278,8 @@ export default function CrmRecordClient({ recordId, variant = "page" }: { record
 
       <div className="flex flex-wrap items-center gap-3 border-y border-stroke-soft-200 py-3">
         <ClassificationSelect record={data} categories={categories} onAction={mutate} />
-        <p role="status" className="min-w-0 flex-1 text-paragraph-xs text-text-sub-600">
+        {/* A 16rem basis: on a phone the line takes its own row instead of shrinking to a word per line. */}
+        <p role="status" className="min-w-0 grow basis-64 text-paragraph-xs text-text-sub-600">
           {data.dnc ? "Outreach stopped · Do Not Contact" : wrongRoute ? wrongRouteLine(wrongRoute) : hasDraft ? "A draft needs your attention" : summary.headline}
           {/* What happens next, when it is not the draft above: an owner decision, a classification, an uncertain send. */}
           {!hasDraft && summary.nextAction.urgent === true && <span className="text-text-strong-950"> · Next: {String(summary.nextAction.label)}</span>}

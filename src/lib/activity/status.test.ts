@@ -122,28 +122,27 @@ describe("partial work and sending hours are told apart from done and working", 
 
   test("a running plan whose every sender is outside its hours says so, with the earliest next send", () => {
     const linkedinAccount: SenderStatus = { ...sender(["Outside working hours (Mon–Fri 09:00–18:00 America/New_York)"], "2026-10-18T13:00:00.000Z"), channel: "linkedin", account: "Ravi" };
-    const state = planState({ status: "running", error: null, senders: [sender(["Outside campaign sending hours (Asia/Kolkata)"], "2026-10-19T03:30:00.000Z"), linkedinAccount] }, now);
-    expect(state).toEqual({ state: "outside_hours", reason: "every sender is outside its sending hours; the next send is allowed at 2026-10-18T13:00:00.000Z", open: true });
+    const state = planState({ status: "running", error: null, senders: [sender(["Outside campaign sending hours (Asia/Kolkata)"], "2026-10-19T03:30:00.000Z"), linkedinAccount] });
+    expect(state).toEqual({ state: "outside_hours", reason: "every sender is outside its sending hours", open: true, nextAt: "2026-10-18T13:00:00.000Z" });
     expect(WORK_STATE_LABELS.outside_hours).toBe("Outside sending hours");
   });
 
   test("outside its hours and also held by something with no known end (a disconnection) names every hold, not only the hours", () => {
-    const held = planState({ status: "running", error: null, senders: [sender(["Unipile is disconnected", "Outside working hours (Mon–Fri 09:00–18:00 UTC)"], null)] }, now);
-    expect(held).toEqual({ state: "executing", reason: "no sender can send right now: Unipile is disconnected; Outside working hours (Mon–Fri 09:00–18:00 UTC)", open: true });
+    const held = planState({ status: "running", error: null, senders: [sender(["Unipile is disconnected", "Outside working hours (Mon–Fri 09:00–18:00 UTC)"], null)] });
+    expect(held).toEqual({ state: "executing", reason: "no sender can send right now: Unipile is disconnected; Outside working hours (Mon–Fri 09:00–18:00 UTC)", open: true, nextAt: null });
   });
 
   test("one sender inside its hours keeps the plan working; every sender held by something else names the holds", () => {
-    expect(planState({ status: "running", error: null, senders: [sender(["Outside campaign sending hours (Asia/Kolkata)"]), sender([])] }, now).state).toBe("executing");
-    const held = planState({ status: "running", error: null, senders: [sender(["Daily limit of 25 new chats used"], "2026-10-19T03:30:00.000Z")] }, now);
-    expect(held.state).toBe("executing");
-    expect(held.reason).toBe("no sender can send right now: Daily limit of 25 new chats used; the next send is allowed at 2026-10-19T03:30:00.000Z");
+    expect(planState({ status: "running", error: null, senders: [sender(["Outside campaign sending hours (Asia/Kolkata)"]), sender([])] }).state).toBe("executing");
+    const held = planState({ status: "running", error: null, senders: [sender(["Daily limit of 25 new chats used"], "2026-10-19T03:30:00.000Z")] });
+    expect(held).toEqual({ state: "executing", reason: "no sender can send right now: Daily limit of 25 new chats used", open: true, nextAt: "2026-10-19T03:30:00.000Z" });
   });
 
   test("a running plan with a channel that failed to launch is partial and still open; without senders it is working", () => {
-    expect(planState({ status: "running", error: "email: no mailbox is connected", senders: [sender([])] }, now)).toEqual({ state: "partial", reason: "running on its other channels; email: no mailbox is connected", open: true });
-    expect(planState({ status: "running", error: null, senders: null }, now).state).toBe("executing");
-    expect(planState({ status: "paused", error: null, senders: null }, now)).toEqual({ state: "paused", reason: null, open: true });
-    expect(planState({ status: "stopped", error: null, senders: null }, now).open).toBe(false);
+    expect(planState({ status: "running", error: "email: no mailbox is connected", senders: [sender([])] })).toEqual({ state: "partial", reason: "running on its other channels; email: no mailbox is connected", open: true, nextAt: null });
+    expect(planState({ status: "running", error: null, senders: null }).state).toBe("executing");
+    expect(planState({ status: "paused", error: null, senders: null })).toEqual({ state: "paused", reason: null, open: true, nextAt: null });
+    expect(planState({ status: "stopped", error: null, senders: null }).open).toBe(false);
   });
 
   test("a plan's counts: contacted means accepted for sending at least, never an uncertain or failed send; replied is a recorded reply", () => {

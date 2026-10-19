@@ -521,7 +521,7 @@ function ProposalCard({ message, run, canManageAutopilot, lastReplyMode, onChang
             <input type="radio" name={`mode-${data.runId}`} className="mt-0.5" checked={mode === "review"} disabled={busy} onChange={() => setMode("review")} />
             <span><span className="text-label-xs text-text-strong-950">Review.</span> The AI drafts every reply; each waits for you in Action required.</span>
           </label>
-          <p className="text-paragraph-xs text-text-soft-400">Either way the first messages and follow-ups go out automatically to these {plan.assignments.length} leads only, within the limits above. Adding people, channels or higher limits needs a new plan you approve.</p>
+          <p className="text-paragraph-xs text-text-soft-400">Either way the first messages and follow-ups go out automatically to {plan.assignments.length === 1 ? "this one lead" : `these ${plan.assignments.length} leads`} only, within the limits above. Adding people, channels or higher limits needs a new plan you approve.</p>
           {requestHasMore && (
             <label className="flex items-start gap-2 rounded-lg p-2 text-paragraph-xs ring-1 ring-inset ring-stroke-soft-200">
               <input type="checkbox" className="mt-0.5" checked={applyToRequest} disabled={busy} onChange={(event) => setApplyToRequest(event.target.checked)} />

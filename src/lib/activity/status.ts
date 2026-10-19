@@ -138,22 +138,21 @@ function earliest(senders: readonly Sender[]): string | null {
  * diagnoseDelivery): running with a channel that failed to launch is
  * partial; running with every sender outside its hours (and held by nothing
  * without a known end) waits for them; held by anything else, it is working
- * and names the holds. `senders` null: not
- * looked at, the run's status alone.
+ * and names the holds. `nextAt` is the earliest
+ * time a sender may send again, for the page to show in the viewer's own
+ * time. `senders` null: not looked at, the run's status alone.
  */
-export function planState(input: { status: string; error: string | null; senders: readonly Sender[] | null }, now: Date): { state: WorkState; reason: string | null; open: boolean } {
-  void now;
+export function planState(input: { status: string; error: string | null; senders: readonly Sender[] | null }): { state: WorkState; reason: string | null; open: boolean; nextAt: string | null } {
   const open = ["proposed", "starting", "running", "paused"].includes(input.status);
   const state = runState(input.status);
-  if (input.status !== "running") return { state, reason: input.status === "starting" || input.status === "proposed" ? null : input.error, open };
-  if (input.error) return { state: "partial", reason: `running on its other channels; ${input.error}`, open };
+  if (input.status !== "running") return { state, reason: input.status === "starting" || input.status === "proposed" ? null : input.error, open, nextAt: null };
+  if (input.error) return { state: "partial", reason: `running on its other channels; ${input.error}`, open, nextAt: null };
   const senders = input.senders ?? [];
-  if (!senders.length || senders.some((sender) => !sender.gates.length)) return { state, reason: "sending within each channel's hours and daily limits; sent messages show in Replies and Overview", open };
-  const next = earliest(senders);
-  const when = next ? `; the next send is allowed at ${next}` : "";
+  if (!senders.length || senders.some((sender) => !sender.gates.length)) return { state, reason: "sending within each channel's hours and daily limits; sent messages show in Replies and Overview", open, nextAt: null };
+  const nextAt = earliest(senders);
   // Only hours (and holds that end at a known time): a sender also held without an end, such as a disconnection, is not merely waiting for its hours.
-  if (senders.every((sender) => sender.nextAt && sender.gates.some((gate) => HOURS_GATE.test(gate)))) return { state: "outside_hours", reason: `every sender is outside its sending hours${when}`, open };
-  return { state, reason: `no sender can send right now: ${[...new Set(senders.flatMap((sender) => sender.gates))].join("; ")}${when}`, open };
+  if (senders.every((sender) => sender.nextAt && sender.gates.some((gate) => HOURS_GATE.test(gate)))) return { state: "outside_hours", reason: "every sender is outside its sending hours", open, nextAt };
+  return { state, reason: `no sender can send right now: ${[...new Set(senders.flatMap((sender) => sender.gates))].join("; ")}`, open, nextAt };
 }
 
 /**

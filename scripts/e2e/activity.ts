@@ -236,8 +236,8 @@ await runInOrganization(a.org.id, async () => {
   const work = await listWork();
   const hours = work.find((item) => item.id === hoursCase.hoursRun.id);
   check("a running plan whose every sender is outside its hours says so, with when the next send is allowed, and keeps its controls",
-    hours?.state === "outside_hours" && hours.stateLabel === "Outside sending hours" && /next send is allowed at/.test(hours.reason ?? "") && hours.open && hours.runStatus === "running",
-    `${hours?.stateLabel}: ${hours?.reason}`);
+    hours?.state === "outside_hours" && hours.stateLabel === "Outside sending hours" && Boolean(hours.nextAt) && Date.parse(hours.nextAt!) > Date.now() && hours.open && hours.runStatus === "running",
+    `${hours?.stateLabel}: ${hours?.reason} ${hours?.nextAt}`);
   check("its counts: 5 leads, 2 contacted (an invitation sent, a reply), 1 replied; a failed send is not contacted",
     hours?.counts?.leads === 5 && hours.counts.contacted === 2 && hours.counts.replied === 1, JSON.stringify(hours?.counts));
   const part = work.find((item) => item.id === hoursCase.partRun.id);

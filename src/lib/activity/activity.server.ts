@@ -41,6 +41,8 @@ export type WorkItem = {
   /** Plans: the existing run controls apply (POST /api/assistant/runs/[id]), by the run's own status. */
   runId: string | null;
   runStatus: string | null;
+  /** Plans: the earliest time a held sender may send again, shown in the viewer's time. */
+  nextAt: string | null;
   /** Plans: their people, those contacted (accepted for sending at least) and those who replied. */
   counts: { leads: number; contacted: number; replied: number } | null;
   canCancel: boolean;
@@ -97,6 +99,7 @@ export async function listWork(now = new Date()): Promise<WorkItem[]> {
       eligible: typeof result.eligible === "number" ? result.eligible : null,
       runId: null,
       runStatus: null,
+      nextAt: null,
       counts: null,
       canCancel: canCancelJob(job),
     });
@@ -110,7 +113,7 @@ export async function listWork(now = new Date()): Promise<WorkItem[]> {
     return [run.id, snapshot?.senders ?? null] as const;
   })));
   for (const { run, threadTitle } of runs) {
-    const { state, reason, open } = planState({ status: run.status, error: run.error, senders: senders.get(run.id) ?? null }, now);
+    const { state, reason, open, nextAt } = planState({ status: run.status, error: run.error, senders: senders.get(run.id) ?? null });
     items.push({
       id: run.id,
       type: "plan",
@@ -129,6 +132,7 @@ export async function listWork(now = new Date()): Promise<WorkItem[]> {
       eligible: null,
       runId: run.id,
       runStatus: run.status,
+      nextAt,
       counts: started.includes(run.id) ? planCounts(leads[run.id] ?? []) : null,
       canCancel: false,
     });
