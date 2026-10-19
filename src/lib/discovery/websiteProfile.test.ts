@@ -193,6 +193,12 @@ describe("only the business's own people, each with their own role and contacts"
     expect(people(`<div><h3>Ravi Kumar</h3><p>Managing Director</p></div><div><h3>Ravindra Patil</h3><p>Accountant</p><p>ravindra@acme.example</p></div>`)).toEqual([["Ravi Kumar", "Managing Director", null]]);
   });
 
+  test("a LinkedIn profile in a person's card is theirs only when it carries their name", () => {
+    const linkedinOf = (slug: string) => namedPeople(`<div><h3>Dr. Anil Shah</h3><p>Founder</p><a href="https://www.linkedin.com/in/${slug}">in</a></div>`, "https://shah.example/team")[0]?.linkedin;
+    expect(linkedinOf("priya-mehta-ortho")).toBeNull();
+    expect(linkedinOf("anil-shah-dds")).toBe("https://www.linkedin.com/in/anil-shah-dds");
+  });
+
   test("a general inbox named after the business is not the founder's", () => {
     expect(people(`<div><h3>Dr. Anil Shah</h3><p>Founder &amp; Chief Dentist</p><p>Shah Dental Clinic, Baner</p><p>Email: <a href="mailto:shahdentalclinic@gmail.com">shahdentalclinic@gmail.com</a></p></div>`))
       .toEqual([["Dr. Anil Shah", "Founder & Chief Dentist", null]]);

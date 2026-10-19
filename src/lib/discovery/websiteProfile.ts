@@ -552,6 +552,13 @@ function ownAddress(email: string, name: string): boolean {
   return [`${first}${last}`, `${last}${first}`, `${first[0]}${last}`, `${first}${last[0]}`, `${last}${first[0]}`].includes(joined);
 }
 
+/** Whether a LinkedIn profile is this person's: its address carries their first or last name (/in/asha-kulkarni-dds). */
+function ownProfile(profileUrl: string, name: string): boolean {
+  const parts = nameParts(name);
+  const slug = profileUrl.split("/in/")[1]?.toLowerCase() ?? "";
+  return Boolean(parts) && slug.split(/[^a-z]+/).some((token) => token === parts!.first || token === parts!.last);
+}
+
 type Found = { name: string; role: string; line: number; roleLine: number };
 type PageKind = { people: boolean; pageUrl: string };
 
@@ -674,7 +681,7 @@ function peopleOf(lines: PageLine[], pageUrl: string): NamedPerson[] {
       email ??= addresses.find((address): address is string => Boolean(address) && ownAddress(address!, person.name)) ?? null;
       for (const anchor of line.anchors) {
         const profile = cleanLinkedinUrl(anchor.href);
-        if (!linkedin && profile?.includes("/in/")) linkedin = profile;
+        if (!linkedin && profile?.includes("/in/") && ownProfile(profile, person.name)) linkedin = profile;
       }
     }
     out.push({ name: person.name, role: person.role, email, linkedin, sourceUrl: pageUrl });
