@@ -23,6 +23,7 @@ import {
 } from "./schema";
 import { interruptActiveSequenceRunInTransaction, startSequenceRunInTransaction } from "./sequences";
 import { STAGE_MOVED_EVENT, type StageMoveNext } from "./stageMove";
+import { setAsideAcknowledgementsInTransaction } from "./wrongRoutes";
 import { db } from "@/lib/db";
 import { inOrg } from "@/lib/tenancy/scope";
 
@@ -119,6 +120,7 @@ export async function applyHumanClassification(input: {
       ...await restartRecordWorkInTransaction(tx, updated, {
         draftJob: { entityId: classificationId, requeueCompleted: true },
         actorRef: input.actorRef,
+        setAsideReason: "a person reclassified the reply",
       }),
       wrongNumberMessageId: null,
     };
@@ -145,13 +147,15 @@ export async function applyHumanClassification(input: {
  * ones, which no sequence run owns — was written for a reply brief that no
  * longer applies. Inbound replies do the same; without it the old draft
  * stays "awaiting review" and fails with a stale-context error on send.
+ * Returns the drafts it set aside.
  */
-async function staleDraftsOfOldContextInTransaction(tx: CrmTransaction, updated: CrmRecord): Promise<void> {
-  await tx.update(crmDrafts).set({ status: "stale", updatedAt: new Date() }).where(and(
+async function staleDraftsOfOldContextInTransaction(tx: CrmTransaction, updated: CrmRecord): Promise<string[]> {
+  const staled = await tx.update(crmDrafts).set({ status: "stale", updatedAt: new Date() }).where(and(
     eq(crmDrafts.crmRecordId, updated.id),
     inArray(crmDrafts.status, ["generating", "awaiting_review", "failed"]),
     ne(crmDrafts.expectedContextVersion, updated.contextVersion),
-  ));
+  )).returning({ id: crmDrafts.id });
+  return staled.map((draft) => draft.id);
 }
 
 /**
@@ -163,6 +167,9 @@ async function staleDraftsOfOldContextInTransaction(tx: CrmTransaction, updated:
  * With `draftJob: null` the reply step is skipped instead: the run starts at
  * its first follow-up, nothing is drafted now, and the record waits for that
  * follow-up to come due.
+ *
+ * A wrong-number apology among the retired drafts ends with them
+ * (`setAsideReason`), as a discard does: no later message writes it again.
  */
 async function restartRecordWorkInTransaction(
   tx: CrmTransaction,
@@ -170,9 +177,11 @@ async function restartRecordWorkInTransaction(
   input: {
     draftJob: { entityId: string; requeueCompleted: boolean } | null;
     actorRef?: string | null;
+    setAsideReason: string;
   },
 ) {
-  await staleDraftsOfOldContextInTransaction(tx, updated);
+  const staled = await staleDraftsOfOldContextInTransaction(tx, updated);
+  await setAsideAcknowledgementsInTransaction(tx, { draftIds: staled, reason: input.setAsideReason });
   if (!updated.latestInboundMessageId || await isPersonDoNotContact(tx, updated.personId)) {
     return { record: updated, sequenceRun: null };
   }
@@ -287,6 +296,7 @@ export async function moveRecordStageInTransaction(tx: CrmTransaction, input: Mo
   return restartRecordWorkInTransaction(tx, updated, {
     draftJob: input.next === "reply" ? { entityId: classification.id, requeueCompleted: true } : null,
     actorRef: input.actorRef,
+    setAsideReason: "a person moved the lead to another stage",
   });
 }
 

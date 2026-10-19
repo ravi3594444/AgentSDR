@@ -310,9 +310,20 @@ export async function settleAcknowledgementInTransaction(tx: CrmTransaction, inp
 
 /** A person discarded the acknowledgement's draft: it never goes out, and no later message writes it again. */
 export async function setAsideAcknowledgementInTransaction(tx: CrmTransaction, input: { draftId: string; reason: string }): Promise<void> {
+  await setAsideAcknowledgementsInTransaction(tx, { draftIds: [input.draftId], reason: input.reason });
+}
+
+/**
+ * A person's action made these drafts stale (a reclassification, a stage
+ * move, an answer of their own): an acknowledgement among them ends as a
+ * discard does. Only a newer message from the lead, or a person confirming
+ * the wrong number, writes a stale one again (closeWrongNumber).
+ */
+export async function setAsideAcknowledgementsInTransaction(tx: CrmTransaction, input: { draftIds: readonly string[]; reason: string }): Promise<void> {
+  if (!input.draftIds.length) return;
   const now = new Date();
   await tx.update(crmWrongRoutes).set({ ackStatus: "blocked", ackReason: input.reason.slice(0, 500), ackUpdatedAt: now, updatedAt: now })
-    .where(and(inOrg(crmWrongRoutes), eq(crmWrongRoutes.ackDraftId, input.draftId), inArray(crmWrongRoutes.ackStatus, [...ACK_CLAIMABLE])));
+    .where(and(inOrg(crmWrongRoutes), inArray(crmWrongRoutes.ackDraftId, [...input.draftIds]), inArray(crmWrongRoutes.ackStatus, [...ACK_CLAIMABLE])));
 }
 
 /** Do Not Contact was set: an acknowledgement not yet sending never goes out. */

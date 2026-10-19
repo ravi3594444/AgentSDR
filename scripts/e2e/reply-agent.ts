@@ -25,7 +25,15 @@
  * then only once; concurrent workers send one; a failed or uncertain apology
  * is never retried and the number stays stopped; a lead already marked Do
  * Not Contact, a chat the owner took over, and "Wrong number, stop messaging
- * me" get nothing (the last becomes Do Not Contact).
+ * me" get nothing (the last becomes Do Not Contact). A waiting apology that a
+ * person's reclassification, stage move or own answer sets aside ends for
+ * good; an unsure reading answered by hand settles the same in either order;
+ * a job requeued while its first worker holds a fresh claim leaves that claim
+ * alone and never marks another worker's reservation failed.
+ *
+ * Never left "classifying": the owner answering while the agent writes (its
+ * draft is set aside, the reply settles), and the daily limit stopping the
+ * agent on an ordinary message (it waits for a person, who is told).
  *
  * With AI_SOURCE_ORGANIZATION_ID it also runs a few messages through the
  * real model and prints the answers and timings.
@@ -66,7 +74,7 @@ const { contactChannels } = await import("@/lib/assistant/audiences");
 const { findWrongRoutes, wrongRouteSendRefusal } = await import("@/lib/crm/wrongRoutes");
 const { candidateRoutes, wrongRouteAckLabel } = await import("@/lib/crm/wrongNumber");
 const { getCrmRecordWorkspace, listCrmActions } = await import("@/lib/crm/queries");
-const { applyHumanClassification } = await import("@/lib/crm/operations");
+const { applyHumanClassification, moveRecordStage } = await import("@/lib/crm/operations");
 const { discardDraft } = await import("@/lib/crm/drafts");
 const { recordAiClassificationInTransaction } = await import("@/lib/crm/records");
 const { withCrmTransaction } = await import("@/lib/crm/repository");
@@ -118,7 +126,7 @@ await runInOrganization(org!.id, async () => {
   await saveDocumentKnowledge("Price list", "Monthly maintenance plan: ₹2,499 per chair per month, includes two visits. Service area: Pune and Pimpri-Chinchwad.");
   await ensureCrmDefaults();
 
-  const persons = await db.insert(people).values(Array.from({ length: 14 }, (_, index) => ({
+  const persons = await db.insert(people).values(Array.from({ length: 16 }, (_, index) => ({
     organizationId: orgId,
     email: `lead${index + 1}-${stamp}@clinic-agent.test`,
     fullName: `Dr Agent ${index + 1}`,
@@ -133,7 +141,9 @@ await runInOrganization(org!.id, async () => {
   await db.insert(schema.outreachRunLeads).values([
     ...P.slice(0, 12).map((personId) => ({ organizationId: orgId, runId: autoRun!.id, personId, channel: "email" as const })),
     { organizationId: orgId, runId: reviewRun!.id, personId: P[12]!, channel: "email" as const },
-    // P[13] is in no run: the classifier handles it.
+    // P[13] is in no run: the classifier handles it. P[14] (Automatic) and P[15] (Review) are answered by the owner mid-answer.
+    { organizationId: orgId, runId: autoRun!.id, personId: P[14]!, channel: "email" as const },
+    { organizationId: orgId, runId: reviewRun!.id, personId: P[15]!, channel: "email" as const },
   ]);
 
   let n = 0;
@@ -255,6 +265,39 @@ await runInOrganization(org!.id, async () => {
   await classify(second!.id);
   check("…and the newer message is answered with the whole conversation", sends.length === before + 1 && /CONVERSATION SO FAR[\s\S]*LEAD: Hi/.test(prompts.at(-1) ?? ""));
 
+  // ------------------------------------------------------------ the owner answers while the agent is writing
+  /** The owner replies from their own mailbox while the model is still thinking. */
+  const answeringModel = (personId: string, threadKey: string): AgentModel => async (input) => {
+    const [scoped] = await db.select({ recordId: crm.crmRecords.id }).from(crm.crmRecords)
+      .where(and(eq(crm.crmRecords.organizationId, orgId), eq(crm.crmRecords.personId, personId))).limit(1);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await withCrmTransaction((tx) => recordManualOutboundInTransaction(tx, {
+      recordId: scoped!.recordId, personId, channel: "email", accountRef: mailboxAddress, providerThreadId: `agent-${threadKey}-${stamp}`,
+      idempotencyKey: `owner-mid-answer-${threadKey}-${stamp}`, bodyText: "Ravi here, I'll call you in ten minutes.", sentAt: new Date(), reason: "manual_outbound_email", actorType: "integration",
+    }));
+    return model(input);
+  };
+  async function answeredMidAnswer(personId: string, threadKey: string) {
+    const message = await inbound(personId, "Can you call me about the plan?", threadKey);
+    const [job] = await db.select().from(crm.crmJobs).where(and(eq(crm.crmJobs.kind, "classification"), eq(crm.crmJobs.entityId, message.id))).limit(1);
+    await handleClassificationJob(job as unknown as CrmJob, { replyAgent: { ...deps, model: answeringModel(personId, threadKey) } });
+    const agentRun = await agentRow(message.id);
+    const [draftRow] = agentRun?.draftId ? await db.select().from(crm.crmDrafts).where(eq(crm.crmDrafts.id, agentRun.draftId)) : [];
+    const [recordRow] = await db.select().from(crm.crmRecords).where(and(eq(crm.crmRecords.organizationId, orgId), eq(crm.crmRecords.personId, personId)));
+    const waiting = await db.select({ id: crm.crmDrafts.id }).from(crm.crmDrafts).where(and(eq(crm.crmDrafts.crmRecordId, recordRow!.id), eq(crm.crmDrafts.status, "awaiting_review")));
+    return { agentRun, draftRow, recordRow, waiting };
+  }
+  before = sends.length;
+  const midReview = await answeredMidAnswer(P[15]!, "t-mid-review");
+  check("Review mode, the owner answers while the agent writes: its draft is set aside and the reply settles, nothing waits",
+    sends.length === before && midReview.agentRun?.status !== "drafted" && midReview.draftRow?.status === "stale" && midReview.waiting.length === 0 && midReview.recordRow?.workflowState === "idle",
+    `${midReview.agentRun?.status} / draft ${midReview.draftRow?.status} / ${midReview.waiting.length} waiting / ${midReview.recordRow?.workflowState}`);
+  before = sends.length;
+  const midAuto = await answeredMidAnswer(P[14]!, "t-mid-auto");
+  check("Automatic, the owner answers while the agent writes: nothing is sent, its draft is set aside and the reply settles",
+    sends.length === before && midAuto.draftRow?.status === "stale" && midAuto.waiting.length === 0 && midAuto.recordRow?.workflowState === "idle",
+    `${midAuto.agentRun?.status} / draft ${midAuto.draftRow?.status} / ${midAuto.waiting.length} waiting / ${midAuto.recordRow?.workflowState}`);
+
   // ------------------------------------------------------------ the classifier keeps what is not the agent's
   const taken = await inbound(P[7]!, "Hello?");
   await takeOverConversation(taken.conversationId, null);
@@ -291,7 +334,7 @@ await runInOrganization(org!.id, async () => {
   // ============================================================ wrong number (WhatsApp)
   const waAccount = `wa-agent-check-${stamp}`;
   const phoneOf = (index: number) => `+9198${String(stamp).slice(-6)}${String(index).padStart(2, "0")}`;
-  const waPersons = await db.insert(people).values(Array.from({ length: 31 }, (_, index) => ({
+  const waPersons = await db.insert(people).values(Array.from({ length: 40 }, (_, index) => ({
     organizationId: orgId,
     phone: phoneOf(index),
     fullName: `Dr Wrong ${index + 1}`,
@@ -305,12 +348,12 @@ await runInOrganization(org!.id, async () => {
   const waPlan = { ...plan, autopilot: true };
   const [waAuto] = await db.insert(schema.outreachRuns).values({ organizationId: orgId, threadId: thread.id, audienceId, name: "Automatic WhatsApp run", status: "running", channels: ["whatsapp"], plan: waPlan, autopilot: true, approvedAt: new Date(Date.now() - 60_000) }).returning();
   const [waReview] = await db.insert(schema.outreachRuns).values({ organizationId: orgId, threadId: thread.id, audienceId, name: "Review WhatsApp run", status: "running", channels: ["whatsapp"], plan: { ...waPlan, autopilot: false }, autopilot: false }).returning();
-  const autoIdx = [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 23, 24, 25, 26, 27];
+  const autoIdx = [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 23, 24, 25, 26, 27, 36, 37, 38, 39];
   const reviewIdx = [2, 19];
   await db.insert(schema.outreachRunLeads).values([
     ...autoIdx.map((index) => ({ organizationId: orgId, runId: waAuto!.id, personId: W[index]!, channel: "whatsapp" as const })),
     ...reviewIdx.map((index) => ({ organizationId: orgId, runId: waReview!.id, personId: W[index]!, channel: "whatsapp" as const })),
-    // W[13], W[18], W[20], W[21], W[22], W[28], W[29] and W[30] are in no run: the classifier path, Review semantics.
+    // W[13], W[18], W[20], W[21], W[22], W[28] to W[35] are in no run: the classifier path, Review semantics.
   ]);
 
   const waSends: { body: string; phone: string | null; thread: string | null }[] = [];
@@ -640,6 +683,48 @@ await runInOrganization(org!.id, async () => {
   await waClassify(afterDiscard.message.id, { complete: standInClassifier });
   check("…and a later message does not bring it back", waSends.length === waBefore && (await awaitingDrafts(22)).length === 0 && (await routeOf(22))?.ackStatus === "blocked" && (await recordOf(22))?.workflowState !== "action_required", `${(await awaitingDrafts(22)).length} awaiting, route ${(await routeOf(22))?.ackStatus}, ${(await recordOf(22))?.workflowState}`);
 
+  // ------------------------------------------------------------ a person's other action sets the apology aside
+  // A reclassification, a stage move and an answer by hand each make the waiting apology stale: it is set aside like a discard.
+  const interestedSubId = (await db.select({ id: crm.crmSubcategories.id }).from(crm.crmSubcategories)
+    .where(and(eq(crm.crmSubcategories.pipelineId, (await recordOf(0))!.pipelineId), eq(crm.crmSubcategories.categoryKey, "interested"))).limit(1))[0]!.id;
+  const setAsideBy: [number, string, (recordId: string, index: number) => Promise<unknown>][] = [
+    [31, "a person reclassifying the reply", async (recordId) => applyHumanClassification({ recordId, categoryKey: "not_interested", subcategoryId: null, expectedContextVersion: (await recordOf(31))!.contextVersion })],
+    [32, "a stage move", async (recordId) => moveRecordStage({ recordId, categoryKey: "interested", subcategoryId: interestedSubId, expectedContextVersion: (await recordOf(32))!.contextVersion, next: "follow_up" })],
+    [33, "an answer by hand", async (recordId, index) => withCrmTransaction((tx) => recordManualOutboundInTransaction(tx, {
+      recordId, personId: W[index]!, channel: "whatsapp", accountRef: waAccount, providerThreadId: `wa-chat-${index}-${stamp}`, providerContactId: `${phoneOf(index).replace(/\D/g, "")}@s.whatsapp.net`,
+      idempotencyKey: `wa-by-hand-${index}-${stamp}`, bodyText: "Sorry for the trouble!", sentAt: new Date(), reason: "manual_outbound_whatsapp", actorType: "integration",
+    }))],
+  ];
+  for (const [index, label, act] of setAsideBy) {
+    waBefore = waSends.length;
+    const first = await waInbound(index, "Wrong number");
+    await waClassify(first.message.id, { complete: standInClassifier });
+    const waitingBefore = (await awaitingDrafts(index)).length;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await act((await recordOf(index))!.id, index);
+    route = await routeOf(index);
+    check(`the apology set aside by ${label} is ended, not left "awaiting review"`, waitingBefore === 1 && (await awaitingDrafts(index)).length === 0 && route?.ackStatus === "blocked", `${waitingBefore} waited; route ${route?.ackStatus}: ${route?.ackReason ?? ""}`);
+    const later = await waInbound(index, "??");
+    await waClassify(later.message.id, { complete: standInClassifier });
+    check(`…and after ${label} a later message does not bring it back`, waSends.length === waBefore && (await awaitingDrafts(index)).length === 0 && (await routeOf(index))?.ackStatus === "blocked" && (await recordOf(index))?.workflowState !== "action_required", `${(await awaitingDrafts(index)).length} awaiting, route ${(await routeOf(index))?.ackStatus}, ${(await recordOf(index))?.workflowState}`);
+  }
+
+  // ------------------------------------------------------------ an unsure wrong number answered by hand: the same end whichever comes first
+  const handReply = (index: number, key: string) => withCrmTransaction(async (tx) => recordManualOutboundInTransaction(tx, {
+    recordId: (await recordOf(index))!.id, personId: W[index]!, channel: "whatsapp", accountRef: waAccount, providerThreadId: `wa-chat-${index}-${stamp}`, providerContactId: `${phoneOf(index).replace(/\D/g, "")}@s.whatsapp.net`,
+    idempotencyKey: `wa-by-hand-${key}-${stamp}`, bodyText: "Oh, sorry about that!", sentAt: new Date(), reason: "manual_outbound_whatsapp", actorType: "integration",
+  }));
+  const unsureFirstAnswered = await waInbound(34, "This is not Rahul's phone");
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  await handReply(34, "unsure-first");
+  await waClassify(unsureFirstAnswered.message.id, { complete: unsureClassifier });
+  const unsureAnsweredAfter = await waInbound(35, "This is not Rahul's phone");
+  await waClassify(unsureAnsweredAfter.message.id, { complete: unsureClassifier });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  await handReply(35, "unsure-after");
+  const unsureStates = [(await recordOf(34))?.workflowState, (await recordOf(35))?.workflowState];
+  check("an unsure wrong number answered by hand settles the same whether the answer came before or after the classification", unsureStates[0] === "idle" && unsureStates[1] === "idle" && !(await routeOf(34)) && !(await routeOf(35)) && (await classification(unsureFirstAnswered.message.id))?.status === "proposed", `answered first: ${unsureStates[0]}, answered after: ${unsureStates[1]}`);
+
   // ------------------------------------------------------------ a requeued job finishes what a crash left
   const jobOf = async (messageId: string) => (await db.select().from(crm.crmJobs).where(and(eq(crm.crmJobs.kind, "classification"), eq(crm.crmJobs.entityId, messageId))).limit(1))[0] as unknown as CrmJob;
   /** As if the worker died right after the job's classification committed. */
@@ -669,17 +754,47 @@ await runInOrganization(org!.id, async () => {
   const crashedSending = await waInbound(25, "Wrong number");
   const sendingJob = await classifiedThenCrashed(25, crashedSending.message.id);
   const sendingRoute = await closeWrongNumber({ messageId: crashedSending.message.id, source: "classifier", acknowledgement: null, optOut: false, sendAllowed: false }, { send: waSend });
-  await db.update(crm.crmWrongRoutes).set({ ackStatus: "sending" }).where(eq(crm.crmWrongRoutes.id, sendingRoute!.routeId!));
+  // A claim older than a worker can hold a job: the worker that made it is gone.
+  const abandonedAt = new Date(Date.now() - 10 * 60_000);
+  await db.update(crm.crmWrongRoutes).set({ ackStatus: "sending", ackUpdatedAt: abandonedAt }).where(eq(crm.crmWrongRoutes.id, sendingRoute!.routeId!));
   const sendingResult = await requeued(sendingJob);
   check("a requeued job after the send began marks the apology uncertain and sends nothing", sendingResult === "done" && (await routeOf(25))?.ackStatus === "uncertain" && sentTo(25) === 0, `${sendingResult}; ${(await routeOf(25))?.ackStatus}`);
   const crashedReserved = await waInbound(26, "Wrong number");
   const reservedJob = await classifiedThenCrashed(26, crashedReserved.message.id);
   const reservedRoute = await closeWrongNumber({ messageId: crashedReserved.message.id, source: "classifier", acknowledgement: null, optOut: false, sendAllowed: false }, { send: waSend });
-  await db.update(crm.crmWrongRoutes).set({ ackStatus: "reserved" }).where(eq(crm.crmWrongRoutes.id, reservedRoute!.routeId!));
+  await db.update(crm.crmWrongRoutes).set({ ackStatus: "reserved", ackUpdatedAt: abandonedAt }).where(eq(crm.crmWrongRoutes.id, reservedRoute!.routeId!));
   const reservedResult = await requeued(reservedJob);
   const reservedAgain = await requeued(reservedJob);
   check("a requeued job after the claim sends the apology once, and a second requeue nothing", reservedResult === "done" && (await routeOf(26))?.ackStatus === "sent" && sentTo(26) === 1 && /stale/i.test(reservedAgain), `${reservedResult} / ${reservedAgain}; ${(await routeOf(26))?.ackStatus}, ${sentTo(26)} sent`);
   check("…and none of them sent anything else", waSends.length === waBefore + 2, `${waSends.length - waBefore} sent`);
+
+  // A job requeued while its first worker is still alive (the lock went stale, the worker did not): a fresh claim is that worker's.
+  waBefore = waSends.length;
+  const liveSending = await waInbound(37, "Wrong number");
+  const liveSendingJob = await classifiedThenCrashed(37, liveSending.message.id);
+  const liveSendingRoute = await closeWrongNumber({ messageId: liveSending.message.id, source: "classifier", acknowledgement: null, optOut: false, sendAllowed: false }, { send: waSend });
+  await db.update(crm.crmWrongRoutes).set({ ackStatus: "sending", ackUpdatedAt: new Date() }).where(eq(crm.crmWrongRoutes.id, liveSendingRoute!.routeId!));
+  const liveSendingResult = await requeued(liveSendingJob);
+  check("a job requeued while the first worker is still sending leaves that send alone (not marked uncertain)", liveSendingResult !== "done" && (await routeOf(37))?.ackStatus === "sending" && sentTo(37) === 0, `${liveSendingResult}; ${(await routeOf(37))?.ackStatus}`);
+  const liveReserved = await waInbound(38, "Wrong number");
+  const liveReservedJob = await classifiedThenCrashed(38, liveReserved.message.id);
+  const liveReservedRoute = await closeWrongNumber({ messageId: liveReserved.message.id, source: "classifier", acknowledgement: null, optOut: false, sendAllowed: false }, { send: waSend });
+  await db.update(crm.crmWrongRoutes).set({ ackStatus: "reserved", ackUpdatedAt: new Date() }).where(eq(crm.crmWrongRoutes.id, liveReservedRoute!.routeId!));
+  const [liveReservedDraft] = await db.select().from(crm.crmDrafts).where(eq(crm.crmDrafts.id, liveReservedRoute!.draftId!));
+  await db.insert(schema.autopilotReplies).values({ organizationId: orgId, draftId: liveReservedDraft!.id, revision: liveReservedDraft!.revision, conversationId: liveReserved.conversation.id, status: "reserved", reason: "the first worker's reservation" });
+  const reservationOf = async (draftId: string) => (await db.select().from(schema.autopilotReplies).where(and(eq(schema.autopilotReplies.organizationId, orgId), eq(schema.autopilotReplies.draftId, draftId))))[0] ?? null;
+  const liveReservedResult = await requeued(liveReservedJob);
+  check("…and leaves a fresh claim it did not make to that worker: nothing sent, the reservation untouched", liveReservedResult !== "done" && sentTo(38) === 0 && (await routeOf(38))?.ackStatus === "reserved" && (await reservationOf(liveReservedDraft!.id))?.status === "reserved", `${liveReservedResult}; ${(await routeOf(38))?.ackStatus}, reservation ${(await reservationOf(liveReservedDraft!.id))?.status}`);
+  // An abandoned claim whose reservation another worker already recorded as sent: a resume whose send fails never turns it into failed.
+  const otherWorkers = await waInbound(39, "Wrong number");
+  const otherWorkersJob = await classifiedThenCrashed(39, otherWorkers.message.id);
+  const otherWorkersRoute = await closeWrongNumber({ messageId: otherWorkers.message.id, source: "classifier", acknowledgement: null, optOut: false, sendAllowed: false }, { send: waSend });
+  await db.update(crm.crmWrongRoutes).set({ ackStatus: "reserved", ackUpdatedAt: abandonedAt }).where(eq(crm.crmWrongRoutes.id, otherWorkersRoute!.routeId!));
+  const [otherWorkersDraft] = await db.select().from(crm.crmDrafts).where(eq(crm.crmDrafts.id, otherWorkersRoute!.draftId!));
+  await db.insert(schema.autopilotReplies).values({ organizationId: orgId, draftId: otherWorkersDraft!.id, revision: otherWorkersDraft!.revision, conversationId: otherWorkers.conversation.id, status: "sent", reason: "another worker's send" });
+  const refusingResume: CrmSendAdapter = async () => { throw new DefiniteCrmSendError("simulated refusal on resume"); };
+  await handleClassificationJob(otherWorkersJob, { replyAgent: { ...waDeps, send: refusingResume }, complete: standInClassifier }).catch(() => undefined);
+  check("a resumed claim whose send fails never overwrites another worker's reservation with failed", (await reservationOf(otherWorkersDraft!.id))?.status === "sent" && waSends.length === waBefore, `reservation ${(await reservationOf(otherWorkersDraft!.id))?.status}, route ${(await routeOf(39))?.ackStatus}`);
 
   // ------------------------------------------------------------ answered by hand before the job ran
   waBefore = waSends.length;
@@ -704,6 +819,11 @@ await runInOrganization(org!.id, async () => {
   route = await routeOf(23);
   check("with the daily limit reached \"Wrong number\" is still recorded: outreach stopped, the apology waits for review", waSends.length === waBefore && route?.ackStatus === "drafted" && /limit/.test(route.ackReason ?? "") && (await runLead(23))?.status === "stopped" && (await awaitingDrafts(23)).length === 1, `${route?.ackStatus ?? "no route"}: ${route?.ackReason ?? ""}`);
   check("…and filed as Wrong Number", (await classification(limited.message.id))?.proposedSubcategoryId === wrongNumberSubId);
+  const limitedQuestion = await waInbound(36, "How much is it?");
+  await waClassify(limitedQuestion.message.id);
+  check("with the daily limit reached an ordinary message is not left \"classifying\": it waits for a person, who is told",
+    (await recordOf(36))?.workflowState === "action_required" && (await agentRow(limitedQuestion.message.id))?.status === "told_owner" && Boolean(await card(W[36]!, "limit")) && waSends.length === waBefore,
+    `${(await recordOf(36))?.workflowState} / ${(await agentRow(limitedQuestion.message.id))?.status}`);
   await db.delete(schema.autopilotReplies).where(and(eq(schema.autopilotReplies.organizationId, orgId), eq(schema.autopilotReplies.reason, "limit filler")));
 
   // ------------------------------------------------------------ the real model (optional)

@@ -20,7 +20,8 @@ export function crmWorkerPositiveInteger(
 
 const POLL_INTERVAL_MS = crmWorkerPositiveInteger(process.env.CRM_WORKER_POLL_MS, 1_000, 100);
 const CONCURRENCY = crmWorkerPositiveInteger(process.env.CRM_WORKER_CONCURRENCY, 4, 1);
-const STALE_LOCK_MS = crmWorkerPositiveInteger(
+/** How long a running job may go without finishing before it is taken for dead and requeued (there is no heartbeat). */
+export const STALE_LOCK_MS = crmWorkerPositiveInteger(
   process.env.CRM_WORKER_STALE_LOCK_MS,
   5 * 60 * 1_000,
   1_000,
