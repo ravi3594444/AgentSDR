@@ -34,8 +34,13 @@
 # Settings (environment):
 #   BRANCH                     branch to deploy (claude/dreamy-fermi-h5woha; --branch wins)
 #   SKIP_GIT_UPDATE=1          deploy the checkout as it is
-#   MIN_BUILD_MEM_MB           MemAvailable + SwapFree the build needs (6144)
-#   NEXT_BUILD_HEAP_MB         heap limit of each Node process in the build (3072)
+#   MIN_BUILD_MEM_MB           MemAvailable + SwapFree the build needs (7168)
+#   NEXT_BUILD_HEAP_MB         heap limit of each Node process in the build (4096,
+#                              the Dockerfile's; 3072 runs a build worker out of heap)
+#
+# Measured on 19 October (ab84f96, Node 22, the Dockerfile's build step): with
+# a 4096 MB heap the build takes about 6.0 GB (its largest worker 5.9 GB);
+# with 3072 MB a webpack worker runs out of heap and the build fails.
 #   HEALTH_URL                 http://127.0.0.1:<PORT from .env, or 3000>/sign-in
 #   HEALTH_TIMEOUT_S           how long the new app gets to answer 200 (180)
 #   WORKER_LOG_TIMEOUT_S       how long to wait for the worker's start line (60)
@@ -132,8 +137,8 @@ parse_args() {
 
 load_settings() {
   MIGRATIONS=${MIGRATIONS-$DEFAULT_MIGRATIONS}
-  MIN_BUILD_MEM_MB=${MIN_BUILD_MEM_MB:-6144}
-  NEXT_BUILD_HEAP_MB=${NEXT_BUILD_HEAP_MB:-3072}
+  MIN_BUILD_MEM_MB=${MIN_BUILD_MEM_MB:-7168}
+  NEXT_BUILD_HEAP_MB=${NEXT_BUILD_HEAP_MB:-4096}
   HEALTH_TIMEOUT_S=${HEALTH_TIMEOUT_S:-180}
   WORKER_LOG_TIMEOUT_S=${WORKER_LOG_TIMEOUT_S:-60}
   HEALTH_INTERVAL_S=${HEALTH_INTERVAL_S:-3}
@@ -222,10 +227,10 @@ check_memory() {
   if ((available < MIN_BUILD_MEM_MB)); then
     cat >&2 <<EOF
 
-The image build needs about ${MIN_BUILD_MEM_MB} MB next to the running app;
-this VM has ${available} MB. A build that runs it out of memory can take the
-whole VM down, SSH included. Add a 4 GB swap file (once; it survives reboots),
-then run this script again:
+The image build needs about ${MIN_BUILD_MEM_MB} MB next to the running app
+(it was measured at about 6 GB); this VM has ${available} MB. A build that
+runs it out of memory can take the whole VM down, SSH included. Add a 4 GB
+swap file (once; it survives reboots), then run this script again:
 
   sudo fallocate -l 4G /swapfile
   sudo chmod 600 /swapfile

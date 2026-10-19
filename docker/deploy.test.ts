@@ -214,7 +214,7 @@ describe("docker/deploy.sh", () => {
     const verify = composeAt(run, "exec -T db pg_restore --list");
     const tag = callAt(run, /^docker tag sha256:running agentsdr:rollback-\d{8}-\d{6}$/);
     const stopScraper = composeAt(run, "stop gmaps-scraper");
-    const build = composeAt(run, `build --build-arg GIT_SHA=${REV} --build-arg NEXT_BUILD_HEAP_MB=3072 app`);
+    const build = composeAt(run, `build --build-arg GIT_SHA=${REV} --build-arg NEXT_BUILD_HEAP_MB=4096 app`);
     const firstMigration = composeAt(run, "run --rm --no-deps -T app bun scripts/add-tinyfish.ts");
     const up = composeAt(run, "up -d --no-build");
     const health = callAt(run, /^curl .*http:\/\/127\.0\.0\.1:3999\/sign-in$/);
