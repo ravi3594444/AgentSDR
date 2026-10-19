@@ -36,6 +36,9 @@ const { cancelJob, listReplies, listWork, markRepliesSeen, newRepliesCount, open
 const { loadNavBadges } = await import("@/lib/nav/badges.server");
 const { listCrmActions } = await import("@/lib/crm/queries");
 const { repliesSeenUntil } = await import("@/lib/activity/status");
+const linkedin = await import("@/lib/linkedin/schema");
+const { gridProviders, gridProviderCredentials } = await import("@/lib/grid/schema");
+const { encryptIntegrationCredentials } = await import("@/lib/integrations/credentials");
 type OutreachPlan = import("@/lib/assistant/schema").OutreachPlan;
 
 const stamp = Date.now();
@@ -59,6 +62,9 @@ const at = (offsetMs: number) => new Date(Date.now() + offsetMs);
 
 // Organization A: yesterday's chat started a plan; Priya replied to it this morning.
 const seeded = await runInOrganization(a.org.id, async () => {
+  // A stand-in Unipile connection, stored before anything reads it (reads are cached); nothing calls it.
+  const [provider] = await db.insert(gridProviders).values({ organizationId: a.org.id, key: "platform-unipile", name: "Unipile (activity check)" }).returning();
+  await db.insert(gridProviderCredentials).values({ providerId: provider!.id, encryptedPayload: encryptIntegrationCredentials({ apiKey: "activity-check", dsn: "https://unipile.invalid" }) });
   const { pipelineId } = await ensureCrmDefaults();
   const yesterday = await createThread(a.owner.id);
   await db.update(assistantThreads).set({ title: "Pune real estate agents", createdAt: at(-day) }).where(eq(assistantThreads.id, yesterday.id));
@@ -196,6 +202,51 @@ await runInOrganization(a.org.id, async () => {
   check("open work comes first", work.findIndex((item) => !item.open) === -1 || work.slice(0, work.findIndex((item) => !item.open)).every((item) => item.open));
   check("open work counts every queued or running job", (await openWorkCount()) === 3);
 });
+
+// A plan whose only sender is outside its hours, a plan that launched on one
+// channel of two, a search cut short, and each plan's counts.
+const hoursCase = await runInOrganization(a.org.id, async () => {
+  // Working hours that open two hours from now, so the account is outside them.
+  const hour = new Date().getUTCHours();
+  const clock = (h: number) => `${String(h % 24).padStart(2, "0")}:00`;
+  const end = (hour + 3) % 24 === 0 ? "23:59" : clock(hour + 3);
+  const [account] = await db.insert(linkedin.linkedInAccounts).values({ organizationId: a.org.id, linkedinId: `activity-li-${stamp}`, username: `activity-li-${stamp}`, name: "Ravi", status: "CONNECTED", workTimezone: "UTC", workStartTime: clock(hour + 2), workEndTime: end, workDays: "0,1,2,3,4,5,6", updatedAt: new Date() }).returning();
+  const [campaign] = await db.insert(linkedin.campaigns).values({ organizationId: a.org.id, name: "Activity hours check", type: "REGULAR", status: "ACTIVE", updatedAt: new Date() }).returning();
+  await db.insert(linkedin.campaignAccounts).values({ campaignId: campaign!.id, linkedinAccountId: account!.id });
+  const statuses = ["PENDING", "PENDING", "REQUEST_SENT", "REPLIED", "FAILED"] as const;
+  const leadPeople = await db.insert(people).values(statuses.map((_, index) => ({ organizationId: a.org.id, source: "list", fullName: `Hours lead ${index}`, linkedinUrl: `https://www.linkedin.com/in/activity-${stamp}-${index}` }))).returning({ id: people.id });
+  await db.insert(linkedin.leads).values(leadPeople.map((person, index) => ({ organizationId: a.org.id, personId: person.id, linkedinUrl: `https://www.linkedin.com/in/activity-${stamp}-${index}`, campaignId: campaign!.id, status: statuses[index]!, updatedAt: new Date() })));
+  const [hoursRun] = await db.insert(outreachRuns).values({
+    organizationId: a.org.id, threadId: seeded.today.id, audienceId: seeded.run.audienceId, name: "Agents on LinkedIn", status: "running", channels: ["linkedin"], campaigns: { linkedin: campaign!.id },
+    plan: {} as unknown as OutreachPlan, autopilot: false, createdBy: a.owner.id,
+  }).returning();
+  await db.insert(outreachRunLeads).values(leadPeople.map((person) => ({ organizationId: a.org.id, runId: hoursRun!.id, personId: person.id, channel: "linkedin" as const })));
+  const [partRun] = await db.insert(outreachRuns).values({
+    organizationId: a.org.id, threadId: seeded.today.id, audienceId: seeded.run.audienceId, name: "Agents by email and LinkedIn", status: "running", channels: ["email", "linkedin"],
+    error: "email: no mailbox is connected", plan: {} as unknown as OutreachPlan, autopilot: false, createdBy: a.owner.id,
+  }).returning();
+  const [cutShort] = await db.insert(assistantJobs).values({
+    organizationId: a.org.id, kind: "discovery", stage: "done", threadId: seeded.today.id, status: "succeeded", finishedAt: new Date(),
+    payload: { phrase: "agents in Wakad" }, progress: { stage: "done", partial: true }, result: { found: 6, eligible: 4 },
+  }).returning();
+  return { hoursRun: hoursRun!, partRun: partRun!, cutShort: cutShort! };
+});
+
+await runInOrganization(a.org.id, async () => {
+  const work = await listWork();
+  const hours = work.find((item) => item.id === hoursCase.hoursRun.id);
+  check("a running plan whose every sender is outside its hours says so, with when the next send is allowed, and keeps its controls",
+    hours?.state === "outside_hours" && hours.stateLabel === "Outside sending hours" && /next send is allowed at/.test(hours.reason ?? "") && hours.open && hours.runStatus === "running",
+    `${hours?.stateLabel}: ${hours?.reason}`);
+  check("its counts: 5 leads, 2 contacted (an invitation sent, a reply), 1 replied; a failed send is not contacted",
+    hours?.counts?.leads === 5 && hours.counts.contacted === 2 && hours.counts.replied === 1, JSON.stringify(hours?.counts));
+  const part = work.find((item) => item.id === hoursCase.partRun.id);
+  check("a plan running on one channel of two is Partly done, still open, with what failed", part?.state === "partial" && part.open && /email: no mailbox is connected/.test(part.reason ?? ""), `${part?.stateLabel}: ${part?.reason}`);
+  const cut = work.find((item) => item.id === hoursCase.cutShort.id);
+  check("a search cut short is Partly done, finished, and keeps what it found", cut?.state === "partial" && !cut.open && cut.found === 6 && /cut short/.test(cut.reason ?? ""), `${cut?.stateLabel}: ${cut?.reason}`);
+});
+const otherWork = await runInOrganization(b.org.id, () => listWork());
+check("another organization's Activity lists none of it", !otherWork.some((item) => [hoursCase.hoursRun.id, hoursCase.partRun.id, hoursCase.cutShort.id, seeded.run.id].includes(item.id)));
 
 // A cancel while the step is under way: the step's outcome is discarded.
 let release!: () => void;

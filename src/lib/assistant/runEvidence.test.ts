@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { mailboxHoursFromWeekly } from "@/lib/outreach/workingHours";
-import { coveringApproval, emailSenderStatus, runAuthorization, whatsappSenderStatus, type RunAuthorizationInput } from "./runEvidence";
+import { coveringApproval, emailSenderStatus, linkedinSenderStatus, runAuthorization, whatsappSenderStatus, type RunAuthorizationInput } from "./runEvidence";
 
 const base: RunAuthorizationInput = { status: "running", approvedAt: new Date("2026-10-18T10:00:00Z"), approverName: "Ravi", autonomous: false, ownApproval: null, coveringApproval: null, threadAutonomous: false };
 
@@ -107,5 +107,44 @@ describe("sender status", () => {
     const status = emailSenderStatus({ mailbox: "ravi@example.in", workingHours: india, nextEmailTime: null, gates: [{ code: "capacity", reason: "Mailbox has used its daily limit of 30 (Asia/Kolkata)" }], queued: 4, now: new Date("2026-10-19T10:00:00Z") });
     expect(status.nextAt).toBe("2026-10-20T03:30:00.000Z");
     expect(emailSenderStatus({ mailbox: "x", workingHours: india, nextEmailTime: null, gates: [{ code: "provider", reason: "google sending integration is disconnected" }], queued: 0, now: mondayEarly }).nextAt).toBeNull();
+  });
+});
+
+describe("LinkedIn sender status", () => {
+  const india = { workTimezone: "Asia/Kolkata", workStartTime: "09:00", workEndTime: "18:00", workDays: "1,2,3,4,5" };
+  const base = { account: "@ravi", status: "CONNECTED", limitReached: false, unipileConnected: true, paused: false, hours: india, nextAllowedRun: null, invitationsToday: 0, invitationsPerDay: 20, nextDayStart: new Date("2026-10-20T00:00:00Z"), queued: 12 };
+
+  test("inside its working hours with invitations left, nothing holds it", () => {
+    const status = linkedinSenderStatus({ ...base, now: new Date("2026-10-19T06:00:00Z") }); // Monday 11:30 IST
+    expect(status).toMatchObject({ channel: "linkedin", timezone: "Asia/Kolkata", gates: [], nextAt: null, queued: 12 });
+  });
+
+  test("outside its working hours it names them and the next opening, in its own time zone", () => {
+    const status = linkedinSenderStatus({ ...base, now: new Date("2026-10-19T01:00:00Z") }); // Monday 06:30 IST
+    expect(status.gates[0]).toContain("Outside working hours");
+    expect(status.gates[0]).toContain("Asia/Kolkata");
+    expect(status.nextAt).toBe("2026-10-19T03:30:00.000Z");
+  });
+
+  test("the daily invitation limit holds invitations until the next day's hours; follow-ups are not held", () => {
+    const status = linkedinSenderStatus({ ...base, invitationsToday: 20, now: new Date("2026-10-19T08:00:00Z") });
+    expect(status.gates).toEqual(["20 of 20 invitations sent today"]);
+    expect(status.nextAt).toBe("2026-10-20T03:30:00.000Z");
+    expect(status.note).toContain("Follow-up");
+  });
+
+  test("the gap between runs is a time, not a gate; a disconnected account promises no time", () => {
+    const gap = linkedinSenderStatus({ ...base, nextAllowedRun: new Date("2026-10-19T06:20:00Z"), now: new Date("2026-10-19T06:00:00Z") });
+    expect(gap.gates).toEqual([]);
+    expect(gap.nextAt).toBe("2026-10-19T06:20:00.000Z");
+    const down = linkedinSenderStatus({ ...base, status: "CREDENTIALS", now: new Date("2026-10-19T06:00:00Z") });
+    expect(down.gates).toEqual(["The account is credentials"]);
+    expect(down.nextAt).toBeNull();
+    expect(linkedinSenderStatus({ ...base, limitReached: true, now: new Date("2026-10-19T06:00:00Z") }).nextAt).toBeNull();
+  });
+
+  test("no working hours anywhere: any time, no time zone invented", () => {
+    const status = linkedinSenderStatus({ ...base, hours: { workTimezone: null, workStartTime: null, workEndTime: null, workDays: null }, now: new Date("2026-10-19T01:00:00Z") });
+    expect(status).toMatchObject({ timezone: null, gates: [], nextAt: null });
   });
 });

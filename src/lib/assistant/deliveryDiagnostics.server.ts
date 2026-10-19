@@ -1,5 +1,5 @@
 import "server-only";
-import { and, eq, sql } from "drizzle-orm";
+import { and, count, eq, gte, isNull, ne, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { channelRules } from "@/lib/channels/rules.server";
 import { featureEnabled } from "@/lib/features/flags.server";
@@ -16,7 +16,9 @@ import {
 import { isPlatformConnected } from "@/lib/platform/credentials";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { NEW_CHAT_WINDOW_MS, whatsappGuardrails } from "@/lib/whatsapp/guardrails";
-import { emailSenderStatus, whatsappSenderStatus, type SenderStatus } from "./runEvidence";
+import { campaignAccounts, leads as linkedinLeads, linkedInAccounts } from "@/lib/linkedin/schema";
+import { withOrganizationHours } from "@/lib/linkedin/workingHours";
+import { emailSenderStatus, linkedinSenderStatus, whatsappSenderStatus, type SenderStatus } from "./runEvidence";
 import { outreachRuns } from "./schema";
 
 /** Read-only snapshot. It reports stored gates, not a claim that a worker or provider is healthy. */
@@ -142,10 +144,12 @@ export async function diagnoseDelivery(runId?: string) {
     );
   }
   const whatsapp = await whatsappSenders(run?.campaigns.whatsapp ?? null, Boolean(run), now);
+  const linkedin = await linkedinSenders(run?.campaigns.linkedin ?? null, Boolean(run), now);
   const instagramRules = instagram.length ? await channelRules("instagram") : null;
   const senders: SenderStatus[] = [
     ...email.map((m) => emailSenderStatus({ mailbox: m.mailbox, workingHours: m.workingHours, nextEmailTime: m.nextSendAt ? new Date(m.nextSendAt) : null, gates: m.gates, queued: m.activeQueue, now })),
     ...whatsapp,
+    ...linkedin,
     ...instagram.map((a): SenderStatus => {
       const hours = instagramRules?.sendingHours ? mailboxHoursFromWeekly(instagramRules.sendingHours) : null;
       const nextSend = a.gates.find((gate) => gate.startsWith("Next send allowed at "))?.slice("Next send allowed at ".length) ?? null;
@@ -178,6 +182,10 @@ export async function diagnoseDelivery(runId?: string) {
       (w) =>
         `WhatsApp ${w.account}: ${w.queued} awaiting their next message. ${w.gates.join("; ") || "No recorded number gate is blocking sends"}${w.nextAt ? `; next send allowed at ${w.nextAt}` : ""}.${w.timezone ? ` Sending hours are in ${w.timezone}.` : " No campaign sending hours are set (any time)."}`,
     ),
+    ...linkedin.map(
+      (l) =>
+        `LinkedIn ${l.account}: ${l.queued} invitations waiting. ${l.gates.join("; ") || "No recorded account gate is blocking sends"}${l.nextAt ? `; next send allowed at ${l.nextAt}` : ""}.${l.timezone ? ` Working hours are in ${l.timezone}.` : " No working hours are set (any time)."}`,
+    ),
     "This snapshot does not measure worker liveness or confirm future delivery. Lead cities do not determine a sender's sending timezone.",
   ];
   if (!email.length && sendsOn("email")) lines.splice(1, 0, "No email mailbox is configured.");
@@ -191,8 +199,9 @@ export async function diagnoseDelivery(runId?: string) {
     instagramErrors,
     whatsapp,
     senders,
-    /** Channels this snapshot does not cover, so a card can say so instead of implying all is well. */
-    notCovered: run?.campaigns.linkedin ? ["linkedin"] : [],
+    linkedin,
+    /** Channels this snapshot does not cover, so a card can say so instead of implying all is well (every channel is covered now). */
+    notCovered: [] as string[],
     summary: lines.join("\n"),
   };
 }
@@ -233,5 +242,52 @@ async function whatsappSenders(campaignId: string | null, forRun: boolean, now: 
     newChatTimes: a.new_chat_times.map((time) => new Date(time)),
     queued: Number(a.queued),
     now,
+  }));
+}
+
+/**
+ * The LinkedIn accounts a run's campaign sends from (or every account of the
+ * organization), with the checks the LinkedIn engine makes before each run:
+ * working hours (the account's own, else the organization's), the gap
+ * between runs, the daily invitation limit, the account's state.
+ */
+async function linkedinSenders(campaignId: string | null, forRun: boolean, now: Date): Promise<SenderStatus[]> {
+  if (forRun && !campaignId) return [];
+  const accounts = campaignId
+    ? await db.select({ account: linkedInAccounts }).from(campaignAccounts)
+      .innerJoin(linkedInAccounts, eq(linkedInAccounts.id, campaignAccounts.linkedinAccountId))
+      .where(and(inOrg(linkedInAccounts), eq(campaignAccounts.campaignId, campaignId)))
+      .then((rows) => rows.map((row) => row.account))
+    : await db.select().from(linkedInAccounts).where(inOrg(linkedInAccounts));
+  if (!accounts.length) return [];
+  const [rules, unipile] = await Promise.all([channelRules("linkedin"), isPlatformConnected("unipile")]);
+  // The engine counts a day's invitations from the server's own midnight (sendInvitations).
+  const todayStart = new Date(now);
+  todayStart.setHours(0, 0, 0, 0);
+  const nextDayStart = new Date(todayStart.getTime() + 86_400_000);
+  return Promise.all(accounts.map(async (account) => {
+    const [sent] = await db.select({ n: count() }).from(linkedinLeads)
+      .where(and(inOrg(linkedinLeads), eq(linkedinLeads.linkedinAccountId, account.id), ne(linkedinLeads.status, "PENDING"), gte(linkedinLeads.requestSentAt, todayStart)));
+    const [waiting] = await db.select({ n: count() }).from(linkedinLeads)
+      .where(and(
+        inOrg(linkedinLeads),
+        eq(linkedinLeads.status, "PENDING"),
+        campaignId ? eq(linkedinLeads.campaignId, campaignId) : sql`true`,
+        or(eq(linkedinLeads.linkedinAccountId, account.id), isNull(linkedinLeads.linkedinAccountId)),
+      ));
+    return linkedinSenderStatus({
+      account: account.username ? `@${account.username.replace(/^@/, "")}` : account.name ?? account.id,
+      status: account.status,
+      limitReached: account.limitReached,
+      unipileConnected: unipile,
+      paused: isMigrationControlPaused("linkedinOutbound"),
+      hours: withOrganizationHours(account, rules.workingHours),
+      nextAllowedRun: account.nextAllowedRun,
+      invitationsToday: Number(sent?.n ?? 0),
+      invitationsPerDay: account.dailyInviteLimit ?? (account.isPremium ? rules.invitesPerDayPremium : rules.invitesPerDayFree),
+      nextDayStart,
+      queued: Number(waiting?.n ?? 0),
+      now,
+    });
   }));
 }

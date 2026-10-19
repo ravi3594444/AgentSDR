@@ -150,7 +150,8 @@ async function whatsappRoutes(
   const unique = (values: (string | null | undefined)[]) => [...new Set(values.map((value) => normalizeRoute("whatsapp", value)).filter((route): route is string => Boolean(route)))];
   const contact = normalizeRoute("whatsapp", conversation.providerContactId) ?? normalizeRoute("whatsapp", chat?.providerId);
   const privacyId = Boolean(contact?.endsWith("@lid"));
-  if (chat?.phone) return unique([chat.phone, privacyId ? null : contact]);
+  // The number first (the route recorded); its privacy id too, so an id recorded before the number was known is still found.
+  if (chat?.phone) return unique([chat.phone, contact]);
   if (!privacyId) return unique([contact, personPhone]);
   return chat ? unique([contact]) : unique([personPhone, contact]);
 }

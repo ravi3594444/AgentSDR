@@ -4,11 +4,11 @@ import { people } from "@/lib/leads/schema";
 import { leads as linkedinLeads } from "@/lib/linkedin/schema";
 import { outreachCampaigns, outreachLeads, outreachMailboxQueue } from "@/lib/outreach/schema";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
-import { whatsappCampaignLeads, whatsappCampaigns } from "@/lib/whatsapp/schema";
+import { whatsappAccounts, whatsappCampaignLeads, whatsappCampaigns, whatsappChats } from "@/lib/whatsapp/schema";
 import { appendCrmEvent, type CrmEventActor } from "./events";
 import { CrmConflictError, type CrmExecutor, type CrmTransaction } from "./repository";
 import { crmConversations, crmDrafts, crmRecords, crmSequenceRuns, crmSequenceStepRuns, crmWrongRoutes } from "./schema";
-import { ACK_CLAIMABLE, candidateRoutes, isWrongRouteChannel, type WrongRouteAckStatus, type WrongRouteChannel } from "./wrongNumber";
+import { ACK_CLAIMABLE, candidateRoutes, isWrongRouteChannel, normalizeRoute, type WrongRouteAckStatus, type WrongRouteChannel } from "./wrongNumber";
 
 /**
  * Wrong-number routes in the database (the rules are in wrongNumber.ts):
@@ -44,6 +44,38 @@ export async function findWrongRoutes(
   return input.forUpdate ? query.for("update") : query;
 }
 
+/**
+ * The number a WhatsApp conversation's own chat holds: the number that
+ * writes, which is the route recorded for it (wrongNumberAck.server.ts),
+ * even when the Person's phone was later corrected to another number.
+ */
+export async function whatsappConversationNumber(
+  executor: CrmExecutor,
+  conversation: { channel: string; providerThreadId?: string | null; accountRef?: string | null },
+): Promise<string | null> {
+  if (conversation.channel !== "whatsapp" || !conversation.providerThreadId || !conversation.accountRef) return null;
+  const [chat] = await executor.select({ phone: whatsappChats.phone }).from(whatsappChats)
+    .innerJoin(whatsappAccounts, eq(whatsappAccounts.id, whatsappChats.accountId))
+    .where(and(
+      eq(whatsappChats.unipileChatId, conversation.providerThreadId),
+      eq(whatsappAccounts.unipileAccountId, conversation.accountRef),
+      eq(whatsappAccounts.organizationId, currentOrganizationId()),
+    ))
+    .limit(1);
+  return normalizeRoute("whatsapp", chat?.phone);
+}
+
+/** A conversation's routes: its contact, its own chat's number (WhatsApp), and its Person's address on the channel. */
+export async function conversationRoutes(
+  executor: CrmExecutor,
+  conversation: { channel: string; providerContactId: string | null; providerThreadId?: string | null; accountRef?: string | null },
+  person: { email: string | null; phone: string | null; linkedinUrl?: string | null },
+): Promise<string[]> {
+  const chatNumber = await whatsappConversationNumber(executor, conversation);
+  const routes = candidateRoutes(conversation.channel, { providerContactId: conversation.providerContactId, email: person.email, phone: person.phone, linkedinUrl: person.linkedinUrl ?? null });
+  return [...new Set([...(chatNumber ? [chatNumber] : []), ...routes])];
+}
+
 /** The wrong route a CRM conversation (its contact, or its Person's address on the channel) runs into, if any. */
 export async function wrongRouteForConversation(executor: CrmExecutor, conversationId: string): Promise<CrmWrongRoute | null> {
   const [row] = await executor.select({ conversation: crmConversations, person: people })
@@ -52,12 +84,7 @@ export async function wrongRouteForConversation(executor: CrmExecutor, conversat
     .innerJoin(people, eq(people.id, crmRecords.personId))
     .where(and(inOrg(crmConversations), eq(crmConversations.id, conversationId))).limit(1);
   if (!row) return null;
-  const routes = candidateRoutes(row.conversation.channel, {
-    providerContactId: row.conversation.providerContactId,
-    email: row.person.email,
-    phone: row.person.phone,
-    linkedinUrl: row.person.linkedinUrl,
-  });
+  const routes = await conversationRoutes(executor, row.conversation, row.person);
   return (await findWrongRoutes(executor, { channel: row.conversation.channel, routes, personId: row.person.id }))[0] ?? null;
 }
 
@@ -74,13 +101,13 @@ export type RecordWrongRoute = Pick<CrmWrongRoute, "id" | "channel" | "route" | 
 /** For the record page: the wrong routes recorded for this lead or reached by its conversations, and which conversations they block. */
 export async function wrongRoutesForRecord(
   executor: CrmExecutor,
-  input: { person: { id: string; email: string | null; phone: string | null; linkedinUrl: string | null }; conversations: readonly { id: string; channel: string; providerContactId: string | null }[] },
+  input: { person: { id: string; email: string | null; phone: string | null; linkedinUrl: string | null }; conversations: readonly { id: string; channel: string; providerContactId: string | null; providerThreadId?: string | null; accountRef?: string | null }[] },
 ): Promise<RecordWrongRoute[]> {
-  const byConversation = input.conversations.map((conversation) => ({
+  const byConversation = await Promise.all(input.conversations.map(async (conversation) => ({
     id: conversation.id,
     channel: conversation.channel,
-    routes: candidateRoutes(conversation.channel, { providerContactId: conversation.providerContactId, email: input.person.email, phone: input.person.phone, linkedinUrl: input.person.linkedinUrl }),
-  }));
+    routes: await conversationRoutes(executor, conversation, input.person),
+  })));
   const routes = [...new Set([
     ...byConversation.flatMap((conversation) => conversation.routes),
     ...(["email", "whatsapp"] as const).flatMap((channel) => candidateRoutes(channel, input.person)),

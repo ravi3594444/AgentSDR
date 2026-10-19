@@ -653,31 +653,60 @@ function emailSequence(steps: PlannedStep[]) {
 
 type ChannelLaunch = { channel: AudienceChannel; campaignId: string | null; added: number; skipped: number; problem: string | null };
 
-async function launchEmail(name: string, steps: PlannedStep[], personIds: string[]): Promise<ChannelLaunch> {
-  const campaign = await createCampaign({ name: `${name} · email` });
-  const sequence = emailSequence(steps);
-  await updateCampaignSequence(campaign.id, sequence);
-  const added = await addPeopleToEmailCampaign(campaign.id, personIds);
-  const problems = emailLaunchProblems(await emailLaunchFacts({ id: campaign.id, sequence }));
-  if (problems.length) return { channel: "email", campaignId: campaign.id, added: added.added, skipped: added.requested - added.added, problem: problems.join(" ") };
-  await setCampaignStatus(campaign.id, "active");
-  await buildMailboxQueues({ organizationIds: [currentOrganizationId()] }).catch((error) => console.error("[assistant/outreach] queue build failed:", error));
-  return { channel: "email", campaignId: campaign.id, added: added.added, skipped: added.requested - added.added, problem: null };
+/**
+ * Records a campaign the launch just created on its run, before anything
+ * activates it, so Stop and a retried launch both find it. False once the
+ * run has left "starting": the caller then leaves the campaign inactive.
+ */
+type LaunchRecorder = (campaignId: string) => Promise<boolean>;
+
+function launchRecorder(runId: string, channel: AudienceChannel): LaunchRecorder {
+  return async (campaignId) => {
+    const [row] = await db.update(outreachRuns)
+      .set({ campaigns: sql`${outreachRuns.campaigns} || jsonb_build_object(${channel}::text, ${campaignId}::text)`, updatedAt: new Date() })
+      .where(and(inOrg(outreachRuns), eq(outreachRuns.id, runId)))
+      .returning({ status: outreachRuns.status });
+    return row?.status === "starting";
+  };
 }
 
-async function launchWhatsapp(name: string, steps: PlannedStep[], personIds: string[], accountIds: string[]): Promise<ChannelLaunch> {
-  const campaign = await createWhatsappCampaign({
+/** People in the campaign: added now, or already there from an earlier attempt of the same launch. */
+function enrolled(result: { added: number; skippedDuplicate: number }): number {
+  return result.added + result.skippedDuplicate;
+}
+
+function haltedLaunch(channel: AudienceChannel, campaignId: string, personIds: string[]): ChannelLaunch {
+  return { channel, campaignId, added: 0, skipped: personIds.length, problem: "the run was stopped while it was starting" };
+}
+
+/** `existing` is the campaign an earlier attempt of this launch created and recorded; it is reused, never created twice. */
+async function launchEmail(name: string, steps: PlannedStep[], personIds: string[], existing: string | undefined, record: LaunchRecorder): Promise<ChannelLaunch> {
+  const campaign = existing ? { id: existing } : await createCampaign({ name: `${name} · email` });
+  if (!existing && !(await record(campaign.id))) return haltedLaunch("email", campaign.id, personIds);
+  const sequence = emailSequence(steps);
+  await updateCampaignSequence(campaign.id, sequence);
+  const added = enrolled(await addPeopleToEmailCampaign(campaign.id, personIds));
+  const problems = emailLaunchProblems(await emailLaunchFacts({ id: campaign.id, sequence }));
+  if (problems.length) return { channel: "email", campaignId: campaign.id, added, skipped: personIds.length - added, problem: problems.join(" ") };
+  await setCampaignStatus(campaign.id, "active");
+  await buildMailboxQueues({ organizationIds: [currentOrganizationId()] }).catch((error) => console.error("[assistant/outreach] queue build failed:", error));
+  return { channel: "email", campaignId: campaign.id, added, skipped: personIds.length - added, problem: null };
+}
+
+async function launchWhatsapp(name: string, steps: PlannedStep[], personIds: string[], accountIds: string[], existing: string | undefined, record: LaunchRecorder): Promise<ChannelLaunch> {
+  const campaign = existing ? { id: existing } : await createWhatsappCampaign({
     name: `${name} · WhatsApp`,
     accountIds,
     steps: steps.map((step, index) => ({ id: randomUUID(), body: step.body, delayHours: index === 0 ? 0 : Math.max(1, step.waitDays * 24) })),
   });
-  const added = await addPeopleToWhatsappCampaign(campaign.id, personIds);
+  if (!existing && !(await record(campaign.id))) return haltedLaunch("whatsapp", campaign.id, personIds);
+  const added = enrolled(await addPeopleToWhatsappCampaign(campaign.id, personIds));
   try {
     await updateWhatsappCampaign(campaign.id, { status: "active" });
   } catch (error) {
-    return { channel: "whatsapp", campaignId: campaign.id, added: added.added, skipped: personIds.length - added.added, problem: error instanceof Error ? error.message : String(error) };
+    return { channel: "whatsapp", campaignId: campaign.id, added, skipped: personIds.length - added, problem: error instanceof Error ? error.message : String(error) };
   }
-  return { channel: "whatsapp", campaignId: campaign.id, added: added.added, skipped: personIds.length - added.added, problem: null };
+  return { channel: "whatsapp", campaignId: campaign.id, added, skipped: personIds.length - added, problem: null };
 }
 
 /**
@@ -685,7 +714,7 @@ async function launchWhatsapp(name: string, steps: PlannedStep[], personIds: str
  * applies the same rules (src/app/api/linkedin/campaigns/[id]/route.ts PATCH):
  * a valid sequence, connected senders, and a workable lead before ACTIVE.
  */
-async function launchLinkedin(name: string, steps: PlannedStep[], personIds: string[], accountIds: string[]): Promise<ChannelLaunch> {
+async function launchLinkedin(name: string, steps: PlannedStep[], personIds: string[], accountIds: string[], existing: string | undefined, record: LaunchRecorder): Promise<ChannelLaunch> {
   const sequence = normalizeLinkedinSequence({
     invitationMessage: steps[0]?.body ?? "",
     acceptanceMessage: steps[1]?.body ?? "",
@@ -693,7 +722,7 @@ async function launchLinkedin(name: string, steps: PlannedStep[], personIds: str
   });
   const sequenceError = linkedinSequenceError(sequence);
   if (sequenceError) return { channel: "linkedin", campaignId: null, added: 0, skipped: personIds.length, problem: sequenceError };
-  const created = await db.transaction(async (tx) => {
+  const created = existing ? { id: existing } : await db.transaction(async (tx) => {
     const [campaign] = await tx.insert(linkedinCampaigns).values({
       organizationId: currentOrganizationId(),
       name: `${name} · LinkedIn`,
@@ -707,14 +736,15 @@ async function launchLinkedin(name: string, steps: PlannedStep[], personIds: str
     if (accountIds.length) await tx.insert(campaignAccounts).values(accountIds.map((linkedinAccountId) => ({ campaignId: campaign!.id, linkedinAccountId })));
     return campaign!;
   });
-  const added = await addPeopleToLinkedinCampaign(created.id, personIds);
+  if (!existing && !(await record(created.id))) return haltedLaunch("linkedin", created.id, personIds);
+  const added = enrolled(await addPeopleToLinkedinCampaign(created.id, personIds));
   const [workable] = await db.select({ value: count() }).from(linkedinLeads)
     .where(and(inOrg(linkedinLeads), eq(linkedinLeads.campaignId, created.id), eq(linkedinLeads.status, "PENDING")));
   if (!accountIds.length || !Number(workable?.value ?? 0)) {
-    return { channel: "linkedin", campaignId: created.id, added: added.added, skipped: added.requested - added.added, problem: accountIds.length ? "no lead could be added" : "no connected LinkedIn account" };
+    return { channel: "linkedin", campaignId: created.id, added, skipped: personIds.length - added, problem: accountIds.length ? "no lead could be added" : "no connected LinkedIn account" };
   }
   await db.update(linkedinCampaigns).set({ status: "ACTIVE", updatedAt: new Date() }).where(and(inOrg(linkedinCampaigns), eq(linkedinCampaigns.id, created.id)));
-  return { channel: "linkedin", campaignId: created.id, added: added.added, skipped: added.requested - added.added, problem: null };
+  return { channel: "linkedin", campaignId: created.id, added, skipped: personIds.length - added, problem: null };
 }
 
 /** The outreach_start job: personalize in batches, then launch every channel. */
@@ -749,9 +779,12 @@ export async function runOutreachStartStep(job: AssistantJob, heartbeat: () => P
       const steps = plan.sequences[channel] ?? [];
       if (!personIds.length || !steps.length) continue;
       try {
-        if (channel === "email") launches.push(await launchEmail(run.name, steps, personIds));
-        else if (channel === "whatsapp") launches.push(await launchWhatsapp(run.name, steps, personIds, availability.whatsappAccountIds));
-        else if (channel === "linkedin") launches.push(await launchLinkedin(run.name, steps, personIds, availability.linkedinAccountIds));
+        // A launch retried after its worker died finds what it already created on the run.
+        const existing = run.campaigns[channel];
+        const record = launchRecorder(run.id, channel);
+        if (channel === "email") launches.push(await launchEmail(run.name, steps, personIds, existing, record));
+        else if (channel === "whatsapp") launches.push(await launchWhatsapp(run.name, steps, personIds, availability.whatsappAccountIds, existing, record));
+        else if (channel === "linkedin") launches.push(await launchLinkedin(run.name, steps, personIds, availability.linkedinAccountIds, existing, record));
         else {
           const rows = await loadPeople(personIds);
           const leads = personIds.flatMap((personId) => {
@@ -771,7 +804,7 @@ export async function runOutreachStartStep(job: AssistantJob, heartbeat: () => P
     const campaigns = Object.fromEntries(launches.filter((launch) => launch.campaignId).map((launch) => [launch.channel, launch.campaignId!]));
     const updated = await db.update(outreachRuns).set({
       status: launched.length ? "running" : "failed",
-      campaigns,
+      campaigns: sql`${outreachRuns.campaigns} || ${JSON.stringify(campaigns)}::jsonb`,
       error: launches.filter((launch) => launch.problem).map((launch) => `${launch.channel}: ${launch.problem}`).join(" ") || null,
       updatedAt: new Date(),
     }).where(and(inOrg(outreachRuns), eq(outreachRuns.id, run.id), eq(outreachRuns.status, "starting"))).returning({ id: outreachRuns.id });
@@ -798,8 +831,7 @@ async function haltLaunch(runId: string, launches: readonly ChannelLaunch[]): Pr
   const created = Object.fromEntries(launches.filter((launch) => launch.campaignId).map((launch) => [launch.channel, launch.campaignId!])) as Partial<Record<AudienceChannel, string>>;
   const channels = Object.keys(created);
   if (channels.length) {
-    const current = await getRun(runId);
-    await db.update(outreachRuns).set({ campaigns: { ...(current?.campaigns ?? {}), ...created }, updatedAt: new Date() })
+    await db.update(outreachRuns).set({ campaigns: sql`${outreachRuns.campaigns} || ${JSON.stringify(created)}::jsonb`, updatedAt: new Date() })
       .where(and(inOrg(outreachRuns), eq(outreachRuns.id, runId)));
     const { problems } = await stopCampaigns(runId, created, new Date());
     if (problems.length) console.error(`[outreach] run ${runId}: stopping the campaigns a halted launch created: ${problems.join("; ")}`);
@@ -874,10 +906,16 @@ export async function stopRun(runId: string): Promise<{ stopped: AudienceChannel
   if (!run) throw new OutreachError("That outreach run does not exist.");
   if (!["running", "paused", "starting"].includes(run.status)) throw new OutreachError(`This run is ${run.status}; only a running or paused run can be stopped.`);
   const now = new Date();
-  await db.update(outreachRuns).set({ status: "stopped", stoppedAt: now, updatedAt: now }).where(and(inOrg(outreachRuns), eq(outreachRuns.id, runId)));
+  // The campaigns come from the stop's own write: one a launch recorded
+  // after the read above is stopped too (a launch that records after this
+  // write sees the run stopped and halts itself).
+  const [stopped] = await db.update(outreachRuns).set({ status: "stopped", stoppedAt: now, updatedAt: now })
+    .where(and(inOrg(outreachRuns), eq(outreachRuns.id, runId), inArray(outreachRuns.status, ["running", "paused", "starting"])))
+    .returning({ campaigns: outreachRuns.campaigns });
+  if (!stopped) throw new OutreachError("This run is no longer running or paused, so it cannot be stopped.");
   await db.update(outreachRunLeads).set({ status: "stopped", stopReason: "the run was stopped", updatedAt: now })
     .where(and(inOrg(outreachRunLeads), eq(outreachRunLeads.runId, runId), eq(outreachRunLeads.status, "active")));
-  return stopCampaigns(run.id, run.campaigns, now);
+  return stopCampaigns(run.id, stopped.campaigns, now);
 }
 
 /** Stops a run's campaigns for good (see stopRun): the per-channel half, also used when a launch is halted. */

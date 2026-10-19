@@ -365,6 +365,13 @@ await runInOrganization(org2!.id, async () => {
     status: "running", stage: "launching", lockedBy: "assistant-worker-that-died", heartbeatAt: new Date(Date.now() - 10 * 60_000),
     runAfter: new Date("2000-01-01T00:00:00Z"), progress: { stage: "launching", personalized: 43, total: 43 },
   }).where(eq(schema.assistantJobs.id, launchJob!.id));
+  // Before it died it had created the LinkedIn campaign, recorded it on the
+  // run and enrolled two people, but not activated it.
+  const fortyFiveName = (await runRow(fortyFive.id)).name;
+  const [halfLaunched] = await db.insert(linkedin.campaigns).values({ organizationId: orgId, name: `${fortyFiveName} · LinkedIn`, type: "REGULAR", status: "PAUSED", invitationMessage: "Hi", updatedAt: new Date() }).returning();
+  await db.insert(linkedin.campaignAccounts).values({ campaignId: halfLaunched!.id, linkedinAccountId: account!.id });
+  await db.insert(linkedin.leads).values([L[2]!, L[3]!].map((personId, index) => ({ organizationId: orgId, personId, sourceLinkedinIdentifier: `overlap-${stamp}-${index + 2}`, campaignId: halfLaunched!.id, status: "PENDING" as const, updatedAt: new Date() })));
+  await db.update(schema.outreachRuns).set({ campaigns: { linkedin: halfLaunched!.id } }).where(eq(schema.outreachRuns.id, fortyFive.id));
   registerAssistantJobs();
   await runOneAssistantStep();
   const [relaunched] = await db.select().from(schema.assistantJobs).where(eq(schema.assistantJobs.id, launchJob!.id));
@@ -374,14 +381,18 @@ await runInOrganization(org2!.id, async () => {
   check("restart: another worker takes the launch over and launches the 43, never the 2",
     relaunched?.status === "succeeded" && r1After.status === "running" && campaignLeads.length === 43 && !campaignLeads.some((lead) => lead.personId === L[0] || lead.personId === L[1]),
     `${relaunched?.status} ${r1After.status} ${campaignLeads.length} ${relaunched?.error ?? ""}`);
+  const namesake = await db.select({ id: linkedin.campaigns.id }).from(linkedin.campaigns).where(and(eq(linkedin.campaigns.organizationId, orgId), eq(linkedin.campaigns.name, `${fortyFiveName} · LinkedIn`)));
+  check("restart: the launch reuses the campaign it had created and recorded, never a second one, and enrolls nobody twice",
+    campaignId === halfLaunched!.id && namesake.length === 1 && new Set(campaignLeads.map((lead) => lead.personId)).size === campaignLeads.length,
+    JSON.stringify({ campaignId, halfLaunched: halfLaunched!.id, campaigns: namesake.length }));
   const launchReports = (await events()).filter((event) => /Outreach started\. linkedin: started with 43 leads/.test(event.content));
   check("restart: the launch is reported once, under its report key", launchReports.length === 1 && relaunched?.reportKey === `assistant_job:${launchJob!.id}:succeeded` && relaunched?.reportedAt instanceof Date && (launchReports[0]!.toolResult as { reportKey?: string } | null)?.reportKey === relaunched?.reportKey, `${launchReports.length}`);
 
   // ------------------------------------------------------------ Stop pressed while the plan is launching
-  // The owner's Stop lands right after the launch activated the LinkedIn
-  // campaign and before it recorded it on the run: a stand-in for that
-  // moment, a trigger that flips the run to stopped as the campaign goes
-  // ACTIVE, only for this run, removed again below.
+  // The owner's Stop lands as the launch activates the LinkedIn campaign
+  // (recorded on the run a moment before): a stand-in for that moment, a
+  // trigger that flips the run to stopped as the campaign goes ACTIVE, only
+  // for this run, removed again below.
   const [leftJob] = await jobsOf(left.id);
   await db.update(schema.assistantJobs).set({ status: "queued", stage: "launching", lockedBy: null, heartbeatAt: null, runAfter: new Date("1999-12-31T00:00:00Z"), progress: { stage: "launching" } })
     .where(eq(schema.assistantJobs.id, leftJob!.id));

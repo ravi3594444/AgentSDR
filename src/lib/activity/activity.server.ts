@@ -8,7 +8,9 @@ import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { crmNeedsYouSql, RAW_RECORD_COLUMNS } from "@/lib/crm/actionGroups.server";
 import { contactDisplayName } from "@/lib/crm/contactName";
 import { activitySeen } from "./schema";
-import { CANCELLABLE_JOB_KINDS, canCancelJob, jobState, OPEN_STATES, REPLY_STATE_LABELS, replyState, runState, WORK_STATE_LABELS, type ReplyState, type WorkState } from "./status";
+import { diagnoseDelivery } from "@/lib/assistant/deliveryDiagnostics.server";
+import { runLeads } from "@/lib/assistant/runLeads.server";
+import { CANCELLABLE_JOB_KINDS, canCancelJob, jobState, OPEN_STATES, planCounts, planState, REPLY_STATE_LABELS, replyState, WORK_STATE_LABELS, type ReplyState, type WorkState } from "./status";
 
 /**
  * Activity: the organization's background work and the replies it brought,
@@ -36,10 +38,16 @@ export type WorkItem = {
   updatedAt: string | null;
   found: number | null;
   eligible: number | null;
-  /** Plans: the existing run controls apply (POST /api/assistant/runs/[id]). */
+  /** Plans: the existing run controls apply (POST /api/assistant/runs/[id]), by the run's own status. */
   runId: string | null;
+  runStatus: string | null;
+  /** Plans: their people, those contacted (accepted for sending at least) and those who replied. */
+  counts: { leads: number; contacted: number; replied: number } | null;
   canCancel: boolean;
 };
+
+/** Running plans whose senders Activity looks at (the newest), so the list stays a quick read. */
+const SENDER_CHECKS = 5;
 
 const JOB_TITLES: Record<string, string> = {
   discovery: "Lead search",
@@ -88,11 +96,21 @@ export async function listWork(now = new Date()): Promise<WorkItem[]> {
       found: typeof result.found === "number" ? result.found : null,
       eligible: typeof result.eligible === "number" ? result.eligible : null,
       runId: null,
+      runStatus: null,
+      counts: null,
       canCancel: canCancelJob(job),
     });
   }
+  const started = runs.filter(({ run }) => run.status !== "proposed" && run.status !== "cancelled").map(({ run }) => run.id);
+  // Every lead, not the card's first 200, so a large plan's counts are whole.
+  const leads = await runLeads(started, Number.POSITIVE_INFINITY);
+  const senders = new Map(await Promise.all(runs.filter(({ run }) => run.status === "running").slice(0, SENDER_CHECKS).map(async ({ run }) => {
+    // A snapshot that cannot be read leaves the plan's state to its status.
+    const snapshot = await diagnoseDelivery(run.id).catch(() => null);
+    return [run.id, snapshot?.senders ?? null] as const;
+  })));
   for (const { run, threadTitle } of runs) {
-    const state = runState(run.status);
+    const { state, reason, open } = planState({ status: run.status, error: run.error, senders: senders.get(run.id) ?? null }, now);
     items.push({
       id: run.id,
       type: "plan",
@@ -101,8 +119,8 @@ export async function listWork(now = new Date()): Promise<WorkItem[]> {
       source: null,
       state,
       stateLabel: WORK_STATE_LABELS[state],
-      reason: run.status === "running" ? "sending within each channel's hours and daily limits; sent messages show in Replies and Overview" : run.error ?? null,
-      open: OPEN_STATES.has(state),
+      reason,
+      open,
       threadId: run.threadId,
       threadTitle: run.threadId ? displayThreadTitle(threadTitle) : null,
       startedAt: run.createdAt.toISOString(),
@@ -110,6 +128,8 @@ export async function listWork(now = new Date()): Promise<WorkItem[]> {
       found: null,
       eligible: null,
       runId: run.id,
+      runStatus: run.status,
+      counts: started.includes(run.id) ? planCounts(leads[run.id] ?? []) : null,
       canCancel: false,
     });
   }

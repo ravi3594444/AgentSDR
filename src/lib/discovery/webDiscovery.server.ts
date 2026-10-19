@@ -46,6 +46,8 @@ import { tavilyConnection, tavilySearchesToday } from "@/lib/tavily/tavily.serve
 import { TinyfishWaitError } from "@/lib/tinyfish/tinyfish.server";
 import { searchWeb, webSearchAvailability, WebSearchUnavailableError, type WebSearchProvider } from "./webSearch.server";
 import { collectWebsiteContacts, fetchPublicPage } from "./websiteContacts.server";
+import { instagramCommenterHold, instagramResearchHold } from "./instagramEligibility";
+import { mentionsPlace } from "@/lib/apify/mapping";
 
 /**
  * Lead discovery from a description of the owner's customers, through a
@@ -895,6 +897,15 @@ async function saveLead(lead: FoundLead, payload: Payload, context: { job: Assis
   if (!email && !phone && !username) {
     const { reason, instagramOnly } = noContactReason(lead, rejected, ownContacts);
     return { member: { personId: null, name: lead.name, reason, ...base }, outcome: "excluded", known: false, email: false, instagramOnly };
+  }
+  // An Instagram-only lead is reached by DM through the connected Instagram account once a plan is
+  // approved, so it is a lead when verified: a profile read through Unipile that names the place.
+  // A commenter's profile is not read, and an unplaced profile is not placed: both are kept for research.
+  if (!email && !phone && username && (lead.kind === "instagram_commenter" || lead.kind === "instagram_profile")) {
+    const hold = lead.kind === "instagram_commenter"
+      ? instagramCommenterHold(lead.sourceUrl)
+      : instagramResearchHold({ profileRead: true, placeNamed: mentionsPlace(payload.criteria.where ?? "", lead.facts.instagramBio, lead.name), where: payload.criteria.where });
+    if (hold) return { member: { personId: null, name: lead.name, reason: hold, ...base }, outcome: "excluded", known: false, email: false, instagramOnly: true };
   }
   const memberIds = new Set(payload.memberIds ?? []);
   const createdIds = new Set(payload.createdIds ?? []);

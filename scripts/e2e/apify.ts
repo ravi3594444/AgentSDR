@@ -356,19 +356,19 @@ await runInOrganization(orgA!.id, async () => {
     ],
   }]);
   const ig = await startInstagramProspects({ what: "home bakers", where: "Pune", hashtags: ["PuneHomeBaker"], maxResults: 10, language: "en" }, context, { contactAfter: contactAfter("req-ig") });
-  check("Instagram prospect search runs on Apify, and says that finding is not contacting", ig.provider === "apify" && /does not give a way to contact them/.test(ig.note ?? ""), ig.note ?? "");
+  check("Instagram prospect search runs on Apify, and says that finding is not contacting: a DM needs a connected sender and an approved plan", ig.provider === "apify" && /Instagram DMs require a connected Instagram sender and an approved outreach plan/.test(ig.note ?? ""), ig.note ?? "");
   const igJob = await runToEnd(ig.jobId);
   const igResult = (igJob.result ?? {}) as Record<string, unknown>;
   const hashtagRun = [...apify.runs.values()].find((entry) => entry.actorId === "apify~instagram-hashtag-scraper");
   const profileRun = [...apify.runs.values()].find((entry) => entry.actorId === "apify~instagram-profile-scraper");
   check("hashtags keep the owner's own and the customer type in the place", (hashtagRun?.input.hashtags as string[] | undefined)?.join(",") === "punehomebaker,punehomebaker,homebakerpune,homebaker".split(",").filter((tag, index, all) => all.indexOf(tag) === index).join(","), JSON.stringify(hashtagRun?.input.hashtags));
   check("profiles are read once per account (posts deduplicated)", JSON.stringify(profileRun?.input.usernames) === JSON.stringify(["sweet.treats", "crumbs.and.co"]), JSON.stringify(profileRun?.input.usernames));
-  check("two accounts found; one contactable by the email its profile publishes; one with no supported channel", igJob.status === "succeeded" && igResult.found === 2 && igResult.eligible === 1 && igResult.withEmail === 1 && igResult.instagramOnly === 1, JSON.stringify(igResult));
+  check("two accounts found; the one naming Pune is a lead (with the email its profile publishes); the other, Instagram-only and not naming Pune, is kept for research", igJob.status === "succeeded" && igResult.found === 2 && igResult.eligible === 1 && igResult.withEmail === 1 && igResult.instagramOnly === 1, JSON.stringify(igResult));
   const igMembers = await memberInsightsOf(ig.audienceId);
   const contactable = igMembers.find((member) => member.personId);
   const unreachable = igMembers.find((member) => !member.personId);
   check("the contactable one's email is sourced to the Instagram profile it was published on", JSON.stringify(contactable?.evidence ?? []).includes("\"source\":\"Instagram profile\"") && JSON.stringify(contactable?.evidence ?? []).includes("instagram.com/sweet.treats"), JSON.stringify(contactable?.evidence));
-  check("the other is excluded: found on Instagram but no supported channel (AgentSDR cannot start Instagram chats)", /no supported channel/.test(unreachable?.reason ?? "") && /cannot start Instagram chats/.test(unreachable?.reason ?? ""), unreachable?.reason ?? "");
+  check("the other is kept for research because its location is not verified (a hashtag does not place it), never called uncontactable", /location is not verified/.test(unreachable?.reason ?? "") && /kept for research/.test(unreachable?.reason ?? "") && !/cannot|no supported channel/.test(unreachable?.reason ?? "") && JSON.stringify(unreachable?.evidence ?? []).includes("instagram.com/crumbs.and.co"), unreachable?.reason ?? "");
   check("a post is a potential match, not interest; the place is unknown when not named", /potential match, not interest/.test(contactable?.matchReason ?? "") && /Unknown/.test((unreachable?.facts as Record<string, string> | undefined)?.location ?? ""), `${contactable?.matchReason} | ${JSON.stringify(unreachable?.facts)}`);
   check("a generic post caption is engagement, not a need", (unreachable?.signals ?? []).every((signal) => signal.kind === "engagement"));
   check("both Instagram runs carry the request id", [...(await db.select().from(apifyRuns).where(and(inOrg(apifyRuns), eq(apifyRuns.jobId, ig.jobId))))].every((entry) => entry.requestId === "req-ig"));
@@ -428,7 +428,7 @@ await runInOrganization(orgA!.id, async () => {
   const liMembers = await memberInsightsOf(li.audienceId);
   check("a LinkedIn company is contacted by the email its own website publishes, and keeps its LinkedIn page", liJob.status === "succeeded" && Boolean(liMembers[0]?.personId) && JSON.stringify(liMembers[0]?.evidence ?? []).includes("sales@acmerobotics.example") && JSON.stringify(liMembers[0]?.evidence ?? []).includes("linkedin.com/company/acme-robotics"), JSON.stringify(liMembers[0]?.evidence));
 
-  apify.next.set("apify~instagram-search-scraper", [{ pollsUntilDone: 1, finalStatus: "SUCCEEDED", usage: 0.01, items: [{ username: "glow.salon.la" }, { username: "nails.by.kim" }] }]);
+  apify.next.set("apify~instagram-search-scraper", [{ pollsUntilDone: 1, finalStatus: "SUCCEEDED", usage: 0.01, items: [{ username: "glow.salon.la" }, { username: "nails.by.kim" }, { username: "brows.la" }] }]);
   apify.next.set("apify~instagram-profile-scraper", [{
     pollsUntilDone: 1,
     finalStatus: "SUCCEEDED",
@@ -436,14 +436,22 @@ await runInOrganization(orgA!.id, async () => {
     items: [
       { username: "glow.salon.la", fullName: "Glow Salon", biography: "Beauty salon in Los Angeles", businessEmail: "hi@glowsalon.example", businessCategoryName: "Beauty salon" },
       { username: "nails.by.kim", fullName: "Nails by Kim", biography: "Nail art" },
+      { username: "brows.la", fullName: "Brow Bar", biography: "Brow studio in Los Angeles · DM to book" },
     ],
   }]);
   const igSearch = await startSocialProspects("instagram", { what: "beauty salons", where: "Los Angeles", maxResults: 10, language: "en" }, context, {});
   const igSearchJob = await runToEnd(igSearch.jobId);
   const searchRun = [...apify.runs.values()].find((entry) => entry.actorId === "apify~instagram-search-scraper");
   const igSearchResult = (igSearchJob.result ?? {}) as Record<string, unknown>;
-  check("Instagram account search asks for accounts matching the kind of business and place, then reads their profiles", searchRun?.input.search === "beauty salons Los Angeles" && searchRun?.input.searchType === "user" && igSearchJob.status === "succeeded" && igSearchResult.found === 2 && igSearchResult.eligible === 1, `${JSON.stringify(searchRun?.input)} ${JSON.stringify(igSearchResult)}`);
+  check("Instagram account search asks for accounts matching the kind of business and place, then reads their profiles", searchRun?.input.search === "beauty salons Los Angeles" && searchRun?.input.searchType === "user" && igSearchJob.status === "succeeded" && igSearchResult.found === 3 && igSearchResult.eligible === 2, `${JSON.stringify(searchRun?.input)} ${JSON.stringify(igSearchResult)}`);
   const igSearchMembers = await memberInsightsOf(igSearch.audienceId);
+  const brows = igSearchMembers.find((member) => JSON.stringify(member.evidence).includes("instagram.com/brows.la"));
+  const browsPerson = brows?.personId ? (await db.select().from(people).where(eq(people.id, brows.personId)))[0] : null;
+  check("an Instagram-only account whose profile names the place is a qualified lead: saved with its Instagram username and no email or phone (decision 16)",
+    Boolean(brows?.personId) && !brows?.reason && !browsPerson?.email && !browsPerson?.phone && (browsPerson?.raw as { instagram?: { username?: string } } | null)?.instagram?.username === "brows.la",
+    JSON.stringify({ reason: brows?.reason ?? null, email: browsPerson?.email ?? null, raw: browsPerson?.raw ?? null }));
+  const nails = igSearchMembers.find((member) => JSON.stringify(member.evidence).includes("instagram.com/nails.by.kim"));
+  check("…while the one that does not name Los Angeles is kept for research", !nails?.personId && /location is not verified/.test(nails?.reason ?? ""), nails?.reason ?? "missing");
   check("…an account found by search is a potential match from Instagram's account search", igSearchMembers.some((member) => /Instagram's account search/.test(member.matchReason ?? "")), igSearchMembers.map((member) => member.matchReason).join(" | "));
 
   // ---------------------------------------------------------- every run slot busy: wait, never hand off

@@ -10,11 +10,13 @@ export type WorkState =
   | "executing"
   | "waiting_slot"
   | "waiting_quota"
+  | "outside_hours"
   | "scheduled"
   | "retrying"
   | "needs_approval"
   | "paused"
   | "completed"
+  | "partial"
   | "not_searched"
   | "failed"
   | "cancelled"
@@ -25,11 +27,13 @@ export const WORK_STATE_LABELS: Record<WorkState, string> = {
   executing: "Working",
   waiting_slot: "Waiting for a run slot",
   waiting_quota: "Waiting for a provider limit",
+  outside_hours: "Outside sending hours",
   scheduled: "Scheduled",
   retrying: "Retrying",
   needs_approval: "Needs your Start",
   paused: "Paused",
   completed: "Done",
+  partial: "Partly done",
   not_searched: "Not searched",
   failed: "Failed",
   cancelled: "Cancelled",
@@ -37,7 +41,7 @@ export const WORK_STATE_LABELS: Record<WorkState, string> = {
 };
 
 /** States that may still change by themselves; a finished item will not. */
-export const OPEN_STATES: ReadonlySet<WorkState> = new Set(["queued", "executing", "waiting_slot", "waiting_quota", "scheduled", "retrying", "needs_approval", "paused", "stale"]);
+export const OPEN_STATES: ReadonlySet<WorkState> = new Set(["queued", "executing", "waiting_slot", "waiting_quota", "outside_hours", "scheduled", "retrying", "needs_approval", "paused", "stale"]);
 
 const STALE_MS = 3 * 60_000;
 
@@ -56,7 +60,8 @@ export function jobState(job: JobFacts, now: Date): { state: WorkState; reason: 
   const reason = typeof waiting?.reason === "string" ? waiting.reason : null;
   switch (job.status) {
     case "succeeded":
-      return job.result?.notSearched === true || job.result?.handedToJobId ? { state: "not_searched", reason: typeof job.result?.note === "string" ? job.result.note : null } : { state: "completed", reason: null };
+      if (job.result?.notSearched === true || job.result?.handedToJobId) return { state: "not_searched", reason: typeof job.result?.note === "string" ? job.result.note : null };
+      return partialSearch(job) ?? { state: "completed", reason: null };
     case "failed":
       return { state: "failed", reason: null };
     case "cancelled":
@@ -73,6 +78,19 @@ export function jobState(job: JobFacts, now: Date): { state: WorkState; reason: 
       return { state: "queued", reason: null };
     }
   }
+}
+
+/**
+ * A finished search that did not cover all it set out to: an Apify run cut
+ * short by its spending cap or time limit, or some of a web search's
+ * queries failing. What it found is kept either way.
+ */
+function partialSearch(job: JobFacts): { state: WorkState; reason: string } | null {
+  if (job.progress?.partial === true || job.result?.partial === true) return { state: "partial", reason: "the provider's run was cut short (its spending cap or time limit); what it found is kept" };
+  const searches = Array.isArray(job.result?.searches) ? (job.result.searches as { error?: unknown }[]) : [];
+  const failed = searches.filter((search) => typeof search?.error === "string" && search.error);
+  if (!failed.length) return null;
+  return { state: "partial", reason: `${failed.length} of ${searches.length} searches failed (${String(failed[0]!.error).slice(0, 160)}); what the others found is kept` };
 }
 
 /**
@@ -104,6 +122,48 @@ export function runState(status: string): WorkState {
     case "failed": return "failed";
     default: return "queued";
   }
+}
+
+type Sender = { gates: readonly string[]; nextAt: string | null };
+
+const HOURS_GATE = /^outside .*hours/i;
+
+function earliest(senders: readonly Sender[]): string | null {
+  const times = senders.flatMap((sender) => (sender.nextAt ? [sender.nextAt] : [])).sort((a, b) => Date.parse(a) - Date.parse(b));
+  return times[0] ?? null;
+}
+
+/**
+ * A plan's state with what its senders say (the plan card's Sending status,
+ * diagnoseDelivery): running with a channel that failed to launch is
+ * partial; running with every sender outside its hours (and held by nothing
+ * without a known end) waits for them; held by anything else, it is working
+ * and names the holds. `senders` null: not
+ * looked at, the run's status alone.
+ */
+export function planState(input: { status: string; error: string | null; senders: readonly Sender[] | null }, now: Date): { state: WorkState; reason: string | null; open: boolean } {
+  void now;
+  const open = ["proposed", "starting", "running", "paused"].includes(input.status);
+  const state = runState(input.status);
+  if (input.status !== "running") return { state, reason: input.status === "starting" || input.status === "proposed" ? null : input.error, open };
+  if (input.error) return { state: "partial", reason: `running on its other channels; ${input.error}`, open };
+  const senders = input.senders ?? [];
+  if (!senders.length || senders.some((sender) => !sender.gates.length)) return { state, reason: "sending within each channel's hours and daily limits; sent messages show in Replies and Overview", open };
+  const next = earliest(senders);
+  const when = next ? `; the next send is allowed at ${next}` : "";
+  // Only hours (and holds that end at a known time): a sender also held without an end, such as a disconnection, is not merely waiting for its hours.
+  if (senders.every((sender) => sender.nextAt && sender.gates.some((gate) => HOURS_GATE.test(gate)))) return { state: "outside_hours", reason: `every sender is outside its sending hours${when}`, open };
+  return { state, reason: `no sender can send right now: ${[...new Set(senders.flatMap((sender) => sender.gates))].join("; ")}${when}`, open };
+}
+
+/**
+ * A plan's people, those contacted (a message at least accepted for
+ * sending; an uncertain or failed send is not one) and those who replied,
+ * from each lead's progress as the plan card shows it.
+ */
+export function planCounts(leads: readonly { progress: { tone: string } }[]): { leads: number; contacted: number; replied: number } {
+  const replied = leads.filter((lead) => lead.progress.tone === "replied" || lead.progress.tone === "good").length;
+  return { leads: leads.length, contacted: replied + leads.filter((lead) => lead.progress.tone === "sent").length, replied };
 }
 
 export type ReplyState = "answered" | "needs_you" | "action_required" | "processing" | "waiting";

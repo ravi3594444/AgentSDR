@@ -111,7 +111,20 @@ const seeded = await runInOrganization(a.org.id, async () => {
   const failedStart = await run("Could not start", { status: "failed", error: "whatsapp: No connected WhatsApp number" });
   await db.update(assistantThreads).set({ autonomous: true, autonomousBy: a.owner.id, autonomousAt: now }).where(eq(assistantThreads.id, thread.id));
   await db.insert(outreachRunLeads).values(leads.map((lead) => ({ organizationId: a.org.id, runId: started.id, personId: lead.id, channel: "whatsapp" as const })));
-  return { account: account!, mailbox: mailbox!, instagram: instagram!, leads, campaign, thread, started, sibling, unmarked, automatic, proposed, emailPlan, failedStart };
+  // A LinkedIn plan: one account with its own hours (Mon–Fri 09:00–18:00 in New York) that has used its 5 invitations today.
+  const linkedin = await import("@/lib/linkedin/schema");
+  const [liAccount] = await db.insert(linkedin.linkedInAccounts).values({ organizationId: a.org.id, linkedinId: `delivery-li-${stamp}`, username: `delivery-li-${stamp}`, name: "Ravi", status: "CONNECTED", dailyInviteLimit: 5, workTimezone: "America/New_York", workStartTime: "09:00", workEndTime: "18:00", workDays: "1,2,3,4,5", updatedAt: new Date() }).returning();
+  const [liCampaign] = await db.insert(linkedin.campaigns).values({ organizationId: a.org.id, name: "Delivery check LinkedIn", type: "REGULAR", status: "ACTIVE", updatedAt: new Date() }).returning();
+  await db.insert(linkedin.campaignAccounts).values({ campaignId: liCampaign!.id, linkedinAccountId: liAccount!.id });
+  const sentToday = new Date(now);
+  sentToday.setHours(0, 5, 0, 0);
+  const liPeople = await db.insert(people).values(Array.from({ length: 8 }, (_, index) => ({ organizationId: a.org.id, fullName: `LinkedIn lead ${index}`, linkedinUrl: `https://www.linkedin.com/in/delivery-${stamp}-${index}`, source: "delivery-check" }))).returning({ id: people.id });
+  await db.insert(linkedin.leads).values(liPeople.map((person, index) => ({
+    organizationId: a.org.id, personId: person.id, linkedinUrl: `https://www.linkedin.com/in/delivery-${stamp}-${index}`, campaignId: liCampaign!.id, updatedAt: new Date(),
+    ...(index < 5 ? { linkedinAccountId: liAccount!.id, status: "REQUEST_SENT" as const, requestSentAt: sentToday } : { status: "PENDING" as const }),
+  })));
+  const liPlan = await run("LinkedIn plan", { channels: ["linkedin"], campaigns: { linkedin: liCampaign!.id } });
+  return { account: account!, mailbox: mailbox!, instagram: instagram!, leads, campaign, thread, started, sibling, unmarked, automatic, proposed, emailPlan, failedStart, liPlan, liAccount: liAccount! };
 });
 
 await runInOrganization(a.org.id, async () => {
@@ -130,6 +143,11 @@ await runInOrganization(a.org.id, async () => {
   const emailSenders = emailPlan.senders;
   check("an email plan lists the mailboxes, not the Instagram accounts", emailSenders.some((entry) => entry.channel === "email" && entry.account === seeded.mailbox.emailAddress) && emailSenders.every((entry) => entry.channel === "email"), emailSenders.map((entry) => `${entry.channel} ${entry.account}`).join("; "));
   check("…and so do its diagnosis data and summary", emailPlan.email.some((m) => m.mailbox === seeded.mailbox.emailAddress) && emailPlan.instagram.length === 0 && JSON.stringify(names(emailPlan.summary)) === JSON.stringify({ mailbox: true, instagram: false, noMailbox: false }), emailPlan.summary);
+  const liDiagnosis = await diagnoseDelivery(seeded.liPlan.id);
+  const liSender = liDiagnosis.senders.find((entry) => entry.channel === "linkedin");
+  check("a LinkedIn plan lists its LinkedIn account in its own working hours' time zone, nothing marked uncovered", liDiagnosis.senders.length === 1 && liSender?.account === `@${seeded.liAccount.username}` && liSender.timezone === "America/New_York" && liDiagnosis.notCovered.length === 0, JSON.stringify(liDiagnosis.senders));
+  check("…with its daily invitation limit as a gate, the next allowed time, and its 3 waiting invitations", Boolean(liSender?.gates.includes("5 of 5 invitations sent today")) && Boolean(liSender?.nextAt) && new Date(liSender!.nextAt!) > now && liSender?.queued === 3 && /Follow-up/.test(liSender?.note ?? ""), JSON.stringify(liSender));
+  check("…and diagnose_delivery tells the model the same", liDiagnosis.summary.includes(`LinkedIn @${seeded.liAccount.username}: 3 invitations waiting`) && liDiagnosis.summary.includes("America/New_York"), liDiagnosis.summary);
   const organizationWide = await diagnoseDelivery();
   const everySender = organizationWide.senders;
   check("the organization's own snapshot still lists every mailbox and Instagram account", everySender.some((entry) => entry.channel === "email" && entry.account === seeded.mailbox.emailAddress) && everySender.some((entry) => entry.channel === "instagram" && entry.account === `@${seeded.instagram.username}`), everySender.map((entry) => `${entry.channel} ${entry.account}`).join("; "));

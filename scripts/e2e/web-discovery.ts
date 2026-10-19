@@ -287,7 +287,8 @@ const { setDiscoveryPageOptions } = await import("@/lib/discovery/discovery.serv
 const { setTavilyApiBase } = await import("@/services/tavily");
 const { saveTavilySettings, tavilySettingsView, TavilySettingsError } = await import("@/lib/tavily/tavily.server");
 const { webSearchAvailability } = await import("@/lib/discovery/webSearch.server");
-const { setWebDiscoveryMailCheck, startWebDiscovery, normalizeWebCriteria, WebDiscoveryUnavailableError, INSTAGRAM_ONLY_REASON, INSTAGRAM_PROFILE_ONLY_REASON, MAX_OPEN_WEB_DISCOVERIES, MAX_WEB_DISCOVERIES_PER_DAY } = await import("@/lib/discovery/webDiscovery.server");
+const { setWebDiscoveryMailCheck, startWebDiscovery, normalizeWebCriteria, WebDiscoveryUnavailableError, INSTAGRAM_PROFILE_ONLY_REASON, MAX_OPEN_WEB_DISCOVERIES, MAX_WEB_DISCOVERIES_PER_DAY } = await import("@/lib/discovery/webDiscovery.server");
+const { instagramCommenterHold } = await import("@/lib/discovery/instagramEligibility");
 
 setDiscoveryPageOptions({ allowPrivate: true });
 setTavilyApiBase(TAVILY);
@@ -545,13 +546,13 @@ try {
   const glowEmail = glow?.evidence.find((item) => item.kind === "email");
   check("a domain that passed only by its address record: “can receive mail”, never “MX”", glowEmail?.source === "the business's website · domain can receive mail; mailbox not verified", glowEmail?.source ?? "");
   const quiet = named("Quiet Studio");
-  check("an Instagram profile with no website or contact is excluded as Instagram-only", quiet?.status === "excluded" && quiet.reason === INSTAGRAM_PROFILE_ONLY_REASON && quiet.evidence.some((item) => item.kind === "instagram"), quiet?.reason ?? "missing");
+  check("an Instagram-only profile that does not name Pune is kept for research, never called uncontactable (decision 16: a verified one would be a lead)", quiet?.status === "excluded" && /location is not verified/.test(quiet.reason ?? "") && /kept for research/.test(quiet.reason ?? "") && quiet.reason !== INSTAGRAM_PROFILE_ONLY_REASON && quiet.evidence.some((item) => item.kind === "instagram"), quiet?.reason ?? "missing");
 
   const commenters = members.filter((member) => member.sourceUrl === POST_URL);
   const priya = commenters.find((member) => member.name === "Priya K");
   const others = commenters.filter((member) => member.name !== "Priya K");
   check("each commenter is a candidate (the post author's own reply is not)", commenters.length === 4 && !commenters.some((member) => member.name === "Glow Dental"), commenters.map((member) => member.name).join(", "));
-  check("every Instagram-only commenter is excluded with the reason and Instagram evidence", commenters.every((member) => member.status === "excluded" && member.personId === null && member.reason === INSTAGRAM_ONLY_REASON && member.evidence.some((item) => item.kind === "instagram" && item.sourceUrl === POST_URL)), commenters.map((member) => member.reason).join(" | "));
+  check("every Instagram-only commenter is kept for research (its profile and place unchecked) with the reason and Instagram evidence", commenters.every((member) => member.status === "excluded" && member.personId === null && member.reason === instagramCommenterHold(POST_URL) && member.evidence.some((item) => item.kind === "instagram" && item.sourceUrl === POST_URL)), commenters.map((member) => member.reason).join(" | "));
   check("the explicit ask is a need, quoted, with the post and the comment's date", priya?.signals.length === 2 && priya.signals.every((signal) => signal.kind === "need" && signal.sourceUrl === POST_URL && signal.source === "Instagram comment") && priya.signals[0]!.text === "need a dentist near Baner, any recommendation?" && priya.signals[0]!.at === "2026-10-14T10:00:00.000Z", JSON.stringify(priya?.signals));
   check("emoji, “nice post” and “follow back” are engagement, never a need", others.length === 3 && others.every((member) => member.signals.length === 1 && member.signals[0]!.kind === "engagement"), others.map((member) => `${member.name}: ${member.signals.map((signal) => `${signal.kind} “${signal.text}”`).join()}`).join("; "));
   check("the owner's own Instagram accounts are not commenters to find", !members.some((member) => /Owner Clinic/.test(member.name) || [OWNER_IG, OWNER_IG_OLD].includes(member.facts.instagramUsername ?? "")));

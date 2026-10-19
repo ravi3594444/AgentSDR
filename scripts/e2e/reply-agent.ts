@@ -73,6 +73,7 @@ const { loadPersonFacts } = await import("@/lib/assistant/audiences.server");
 const { contactChannels } = await import("@/lib/assistant/audiences");
 const { findWrongRoutes, wrongRouteSendRefusal } = await import("@/lib/crm/wrongRoutes");
 const { candidateRoutes, wrongRouteAckLabel } = await import("@/lib/crm/wrongNumber");
+const { RetryCrmJobLaterError, STALE_LOCK_MS } = await import("@/lib/crm/worker");
 const { getCrmRecordWorkspace, listCrmActions } = await import("@/lib/crm/queries");
 const { applyHumanClassification, moveRecordStage } = await import("@/lib/crm/operations");
 const { discardDraft } = await import("@/lib/crm/drafts");
@@ -612,6 +613,11 @@ await runInOrganization(org!.id, async () => {
   const lidPhoneRoutes = (await routesOfPerson(29)).map((item) => item.route);
   check("a privacy-id chat records the number that wrote (its chat's number), not the Person's corrected phone", lidPhoneRoutes.length === 1 && lidPhoneRoutes[0] === phoneOf(29).replace(/\D/g, ""), lidPhoneRoutes.join(","));
   check("…so the corrected number stays open", !(await wrongRouteSendRefusal(db, { channel: "whatsapp", routes: [correctedPhone.replace(/\D/g, "")] })));
+  const lidApology = (await awaitingDrafts(29))[0];
+  const beforeApproval = sentTo(29);
+  if (lidApology) await sendDraft({ draftId: lidApology.id, revision: lidApology.revision, idempotencyKey: `lid-approve-${stamp}`, requestId: crypto.randomUUID(), actorRef: null }, { send: waSend });
+  const lidApologyRoute = (await routesOfPerson(29))[0];
+  check("…and its apology, approved by a person, is recognised as the apology on that number: sent once, recorded as sent", Boolean(lidApology) && sentTo(29) === beforeApproval + 1 && lidApologyRoute?.ackStatus === "sent", `${lidApology ? "drafted" : "no draft"}; ${sentTo(29) - beforeApproval} sent; route ${lidApologyRoute?.ackStatus}`);
   // W[30]: a lead who wrote first through a privacy id, no number known anywhere.
   await db.update(people).set({ phone: null }).where(eq(people.id, W[30]!));
   const bareLid = `${String(stamp).slice(-6)}300000000@lid`;
@@ -620,6 +626,15 @@ await runInOrganization(org!.id, async () => {
   const lidOnlyRoutes = (await routesOfPerson(30)).map((item) => item.route);
   check("a privacy-id chat with no known number records the id itself, so it is not left open", lidOnlyRoutes.length === 1 && lidOnlyRoutes[0] === bareLid, lidOnlyRoutes.join(",") || "nothing recorded");
   check("…and a send to that chat is refused", Boolean(await wrongRouteSendRefusal(db, { channel: "whatsapp", routes: candidateRoutes("whatsapp", { providerContactId: bareLid }) })));
+  // The chat's number becomes known later (a send merged into it carries the number over): the id recorded earlier is still the route.
+  const laterNumber = `+9196${String(stamp).slice(-6)}30`;
+  await db.update(whatsappChats).set({ phone: laterNumber }).where(and(eq(whatsappChats.accountId, waAccountRow!.id), eq(whatsappChats.unipileChatId, `wa-chat-30-${stamp}`)));
+  const lidAgain = await waInbound(30, "Wrong number", undefined, phoneOf(30), bareLid);
+  const [lidChat] = await db.select({ id: whatsappChats.id }).from(whatsappChats).where(and(eq(whatsappChats.accountId, waAccountRow!.id), eq(whatsappChats.unipileChatId, `wa-chat-30-${stamp}`)));
+  await db.insert(whatsappMessages).values({ chatId: lidChat!.id, unipileMessageId: `wa-pm-lid-30b-${stamp}`, direction: "inbound", origin: "lead", body: "Wrong number", sentAt: new Date(), crmConversationMessageId: lidAgain.message.id });
+  await waClassify(lidAgain.message.id, { complete: standInClassifier });
+  const lidRoutesLater = (await routesOfPerson(30)).map((item) => item.route);
+  check("a privacy id recorded before the chat's number was known is still found once it is: no second route, no second apology", lidRoutesLater.length === 1 && lidRoutesLater[0] === bareLid && (await awaitingDrafts(30)).length <= 1, `${lidRoutesLater.join(",")}; ${(await awaitingDrafts(30)).length} awaiting`);
 
   // ------------------------------------------------------------ opt-out wording the classifier's own rule misses
   waBefore = waSends.length;
@@ -776,6 +791,9 @@ await runInOrganization(org!.id, async () => {
   await db.update(crm.crmWrongRoutes).set({ ackStatus: "sending", ackUpdatedAt: new Date() }).where(eq(crm.crmWrongRoutes.id, liveSendingRoute!.routeId!));
   const liveSendingResult = await requeued(liveSendingJob);
   check("a job requeued while the first worker is still sending leaves that send alone (not marked uncertain)", liveSendingResult !== "done" && (await routeOf(37))?.ackStatus === "sending" && sentTo(37) === 0, `${liveSendingResult}; ${(await routeOf(37))?.ackStatus}`);
+  const liveError = await handleClassificationJob(liveSendingJob, { replyAgent: waDeps, complete: standInClassifier }).then(() => null, (error: unknown) => error);
+  const claimedAt = (await routeOf(37))?.ackUpdatedAt?.getTime() ?? 0;
+  check("…and the job is put back for when that claim goes stale, never failed for good", liveError instanceof RetryCrmJobLaterError && Math.abs(liveError.retryAt.getTime() - (claimedAt + STALE_LOCK_MS)) < 1_000, liveError instanceof Error ? `${liveError.name}: ${liveError.message}` : String(liveError));
   const liveReserved = await waInbound(38, "Wrong number");
   const liveReservedJob = await classifiedThenCrashed(38, liveReserved.message.id);
   const liveReservedRoute = await closeWrongNumber({ messageId: liveReserved.message.id, source: "classifier", acknowledgement: null, optOut: false, sendAllowed: false }, { send: waSend });

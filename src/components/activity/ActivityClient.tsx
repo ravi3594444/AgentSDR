@@ -33,11 +33,13 @@ const WORK_TONE: Record<WorkState, "neutral" | "success" | "info" | "danger" | "
   executing: "info",
   waiting_slot: "warning",
   waiting_quota: "warning",
+  outside_hours: "neutral",
   scheduled: "neutral",
   retrying: "warning",
   needs_approval: "info",
   paused: "neutral",
   completed: "success",
+  partial: "warning",
   not_searched: "warning",
   failed: "danger",
   cancelled: "neutral",
@@ -225,7 +227,12 @@ function WorkSection({ title, items, empty, busyId, onCancel, onRun }: {
 }
 
 function WorkRow({ item, busy, onCancel, onRun }: { item: WorkItem; busy: boolean; onCancel: (item: WorkItem) => void; onRun: (item: WorkItem, action: "pause" | "resume" | "stop") => void }) {
-  const counts = [item.found !== null ? `${item.found} found` : null, item.eligible !== null ? `${item.eligible} new` : null].filter(Boolean).join(" · ");
+  const counts = [
+    item.found !== null ? `${item.found} found` : null,
+    item.eligible !== null ? `${item.eligible} new` : null,
+    item.counts ? `${item.counts.leads} ${item.counts.leads === 1 ? "lead" : "leads"} · ${item.counts.contacted} contacted · ${item.counts.replied} replied` : null,
+  ].filter(Boolean).join(" · ");
+  const running = item.runStatus === "running";
   const small = "h-8 px-2.5";
   return (
     <li className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-start sm:justify-between">
@@ -248,9 +255,9 @@ function WorkRow({ item, busy, onCancel, onRun }: { item: WorkItem; busy: boolea
       </div>
       <div className="flex shrink-0 flex-wrap gap-2">
         {item.canCancel && <button type="button" disabled={busy} className={cn(secondaryButtonClass, small)} onClick={() => onCancel(item)}>Cancel</button>}
-        {item.runId && item.state === "executing" && <button type="button" disabled={busy} className={cn(secondaryButtonClass, small)} onClick={() => onRun(item, "pause")}>Pause</button>}
-        {item.runId && item.state === "paused" && <button type="button" disabled={busy} className={cn(secondaryButtonClass, small)} onClick={() => onRun(item, "resume")}>Resume</button>}
-        {item.runId && (item.state === "executing" || item.state === "paused") && <button type="button" disabled={busy} className={cn(secondaryButtonClass, small)} onClick={() => onRun(item, "stop")}>Stop</button>}
+        {item.runId && running && <button type="button" disabled={busy} className={cn(secondaryButtonClass, small)} onClick={() => onRun(item, "pause")}>Pause</button>}
+        {item.runId && item.runStatus === "paused" && <button type="button" disabled={busy} className={cn(secondaryButtonClass, small)} onClick={() => onRun(item, "resume")}>Resume</button>}
+        {item.runId && (running || item.runStatus === "paused" || item.runStatus === "starting") && <button type="button" disabled={busy} className={cn(secondaryButtonClass, small)} onClick={() => onRun(item, "stop")}>Stop</button>}
         {item.runId && item.state === "needs_approval" && item.threadId && <Link href={chatHref(item.threadId)} className={cn(secondaryButtonClass, small)}>Review in chat</Link>}
       </div>
     </li>
