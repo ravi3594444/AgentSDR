@@ -493,6 +493,23 @@ describe("groundingCorpus: what the owner wrote and what sources returned", () =
     }
   });
 
+  test("a guessed phone written with separators in the address's path is taken out of the page that echoes it", () => {
+    const corpus = groundingCorpus([owner(listedOn), pageRead("https://knowndir.example/phone/98220-11111", { title: "Lookup", text: "No results for 98220-11111." })]);
+    expect(actionsProblem([addPhoneGuess], input(corpus))).toContain("not in what the owner wrote");
+  });
+
+  test("what an earlier source gave is not a guess: searching a directory for a domain a search returned keeps the page's contacts", () => {
+    const corpus = groundingCorpus([
+      owner(ask),
+      searched("Acme Dental Pune", [{ url: "https://www.acmedental.in/", title: "Acme Dental, Pune", snippet: "Dental clinic in Pune" }]),
+      pageRead("https://knowndir.example/search?q=acmedental.in", { title: "Acme Dental", text: "Acme Dental, Pune — info@acmedental.in — +91 98220 11111" }),
+    ]);
+    expect(actionsProblem([addGuess], input(corpus))).toBeNull();
+    // A domain only the model wrote is still taken out.
+    const guessed = groundingCorpus([owner(ask), pageRead("https://knowndir.example/search?q=acmedental.in", { title: "Search", text: "No results for acmedental.in" })]);
+    expect(actionsProblem([readGuess], input(guessed))).toContain("only links the owner gave");
+  });
+
   test("a query naming the page's own site, or plain words, takes nothing from what the page returned", () => {
     const corpus = groundingCorpus([owner(ask), pageRead("https://knowndir.example/search?site=knowndir.example&q=acme+dental", {
       title: "knowndir.example: Acme Dental",

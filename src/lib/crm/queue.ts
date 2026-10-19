@@ -255,6 +255,9 @@ export async function failCrmJob(
     .update(crmJobs)
     .set(willRetry ? {
       status: "queued",
+      // Waiting for another worker's claim (retryAt) is not a failed attempt: the claim's attempt is given back,
+      // so a job put back on its last attempt can still be claimed.
+      ...(options.retryAt ? { attempts: Math.max(0, job.attempts - 1) } : {}),
       lockedAt: null,
       lockedBy: null,
       runAfter: runAfter!,

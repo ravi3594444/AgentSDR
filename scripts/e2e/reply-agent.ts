@@ -74,6 +74,7 @@ const { contactChannels } = await import("@/lib/assistant/audiences");
 const { findWrongRoutes, wrongRouteSendRefusal } = await import("@/lib/crm/wrongRoutes");
 const { candidateRoutes, wrongRouteAckLabel } = await import("@/lib/crm/wrongNumber");
 const { RetryCrmJobLaterError, STALE_LOCK_MS } = await import("@/lib/crm/worker");
+const { failCrmJob } = await import("@/lib/crm/queue");
 const { getCrmRecordWorkspace, listCrmActions } = await import("@/lib/crm/queries");
 const { applyHumanClassification, moveRecordStage } = await import("@/lib/crm/operations");
 const { discardDraft } = await import("@/lib/crm/drafts");
@@ -794,6 +795,18 @@ await runInOrganization(org!.id, async () => {
   const liveError = await handleClassificationJob(liveSendingJob, { replyAgent: waDeps, complete: standInClassifier }).then(() => null, (error: unknown) => error);
   const claimedAt = (await routeOf(37))?.ackUpdatedAt?.getTime() ?? 0;
   check("…and the job is put back for when that claim goes stale, never failed for good", liveError instanceof RetryCrmJobLaterError && Math.abs(liveError.retryAt.getTime() - (claimedAt + STALE_LOCK_MS)) < 1_000, liveError instanceof Error ? `${liveError.name}: ${liveError.message}` : String(liveError));
+  const deferredRecord = await recordOf(37);
+  const failedClassifications = await db.select({ id: crm.crmClassifications.id }).from(crm.crmClassifications)
+    .where(and(eq(crm.crmClassifications.messageId, liveSending.message.id), eq(crm.crmClassifications.status, "failed")));
+  check("…and being put back is not a failed classification: the record is not set to error", deferredRecord?.workflowState !== "error" && failedClassifications.length === 0,
+    JSON.stringify({ workflowState: deferredRecord?.workflowState, failed: failedClassifications.length }));
+  // Put back on its last attempt, it is still claimable: waiting for another worker's claim does not use up an attempt.
+  const [lastAttempt] = await db.update(crm.crmJobs).set({ status: "running", attempts: 3, maxAttempts: 3, lockedBy: "worker-check", lockedAt: new Date(), startedAt: new Date(), completedAt: null, failedAt: null })
+    .where(eq(crm.crmJobs.id, liveSendingJob.id)).returning();
+  await failCrmJob(lastAttempt!, "deferred", { retryAt: new Date(Date.now() + 60_000) });
+  const [deferred] = await db.select().from(crm.crmJobs).where(eq(crm.crmJobs.id, lastAttempt!.id));
+  check("…and a job put back on its last attempt can still be claimed", deferred?.status === "queued" && deferred.attempts < deferred.maxAttempts,
+    JSON.stringify({ status: deferred?.status, attempts: deferred?.attempts, max: deferred?.maxAttempts }));
   const liveReserved = await waInbound(38, "Wrong number");
   const liveReservedJob = await classifiedThenCrashed(38, liveReserved.message.id);
   const liveReservedRoute = await closeWrongNumber({ messageId: liveReserved.message.id, source: "classifier", acknowledgement: null, optOut: false, sendAllowed: false }, { send: waSend });

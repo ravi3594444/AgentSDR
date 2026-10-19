@@ -451,11 +451,19 @@ const CONTACT_LIKE = /[^\s@/?#&=]+@[^\s@/?#&=]+|\+?\d[\d\s().-]{5,}\d|(?:[a-z0-9
  * to what grounding reads: email addresses, host names and phone-like
  * digit runs. The pages' own hosts are not among them.
  */
-function modelWrittenTokens(pages: readonly URL[]): string[] {
+function modelWrittenTokens(pages: readonly URL[], known: string): string[] {
   const own = new Set(pages.map((page) => page.hostname.toLowerCase().replace(/^www\./, "")));
+  // What an earlier source already gave is not a guess, whoever wrote it into the address since.
+  const knownText = known.toLowerCase();
+  const knownNumbers = [...known.matchAll(/\+?\d[\d\s().-]{5,}\d/g)].map((match) => match[0].replace(/\D/g, ""));
+  const given = (token: string) => {
+    const digits = /^\d+$/.test(token) ? token : null;
+    return digits ? knownNumbers.some((number) => number.endsWith(digits) || digits.endsWith(number)) : knownText.includes(token.toLowerCase());
+  };
   const tokens = new Set<string>();
   for (const page of pages) {
-    const values = [...page.searchParams.values(), decoded(page.hash.slice(1)), ...page.pathname.split("/").map(decoded).filter((segment) => /@|\d{7,}/.test(segment))];
+    // A path segment carries an address, or a number however it is written ("98220-11111").
+    const values = [...page.searchParams.values(), decoded(page.hash.slice(1)), ...page.pathname.split("/").map(decoded).filter((segment) => segment.includes("@") || segment.replace(/\D/g, "").length >= 7)];
     for (const value of values) {
       for (const match of value.matchAll(CONTACT_LIKE)) {
         const token = match[0].trim();
@@ -470,7 +478,7 @@ function modelWrittenTokens(pages: readonly URL[]): string[] {
       }
     }
   }
-  return [...tokens].sort((a, b) => b.length - a.length);
+  return [...tokens].filter((token) => !given(token)).sort((a, b) => b.length - a.length);
 }
 
 /**
@@ -485,7 +493,7 @@ function modelWrittenTokens(pages: readonly URL[]): string[] {
  * one it was redirected to, grounds none of that either: every address,
  * host or number the model put in either address is taken out of the page.
  */
-function pageSourceText(text: string, pageUrls: readonly unknown[]): string {
+function pageSourceText(text: string, pageUrls: readonly unknown[], known: string): string {
   const pages = pageUrls.flatMap((value) => {
     const page = typeof value === "string" ? parsedLink(value) : null;
     return page ? [page] : [];
@@ -505,7 +513,7 @@ function pageSourceText(text: string, pageUrls: readonly unknown[]): string {
       return match;
     });
   }
-  for (const token of modelWrittenTokens(pages)) out = out.replace(new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), " ");
+  for (const token of modelWrittenTokens(pages, known)) out = out.replace(new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), " ");
   return out;
 }
 
@@ -518,26 +526,35 @@ function pageSourceText(text: string, pageUrls: readonly unknown[]): string {
  * counts for the page, not for the query string the model opened it with.
  */
 export function groundingCorpus(messages: readonly (Pick<TranscriptMessage, "role" | "tool" | "status" | "content" | "toolResult"> & { toolInput?: Record<string, unknown> | null })[], documentsText = ""): string {
+  // In order: what a page may not ground is only what no earlier source (or saved document) gave.
+  let known = documentsText;
   return messages
     .filter((message) => message.role === "user" || (message.role === "tool" && (message.tool === "read_document" || message.tool === "import_contacts" || (isSourceTool(message.tool) && message.status === "ok"))))
     .map((message) => {
-      if (message.tool === "web_search") {
-        const results = (message.toolResult?.data as { results?: unknown } | undefined)?.results;
-        return (Array.isArray(results) ? results : [])
-          .map((hit) => (hit && typeof hit === "object" ? hit as Record<string, unknown> : {}))
-          .map((hit) => [hit.title, hit.url, hit.snippet].filter((part) => typeof part === "string").join(" — "))
-          .join("\n");
-      }
-      const summary = typeof message.toolResult?.summary === "string" ? message.toolResult.summary : "";
-      const text = `${message.content} ${summary}`;
-      if (message.tool === "read_webpage" || message.tool?.startsWith("browser_")) {
-        // The address the page was read at: its data, or where the summary names it ("Read <url>", "Page: <url>").
-        const named = message.tool === "read_webpage" ? /^Read (\S+)/.exec(summary || message.content) : /^Page: (\S+)/m.exec(summary || message.content);
-        return pageSourceText(text, [message.toolInput?.url, (message.toolResult?.data as { url?: unknown } | undefined)?.url, named?.[1]]);
-      }
-      return text;
+      const part = sourceText(message, known);
+      known += `\n${part}`;
+      return part;
     })
     .join("\n") + `\n${documentsText}`;
+}
+
+/** One source's text for the corpus: a search's results, a page with what the model wrote into its address taken out, or the message itself. */
+function sourceText(message: Pick<TranscriptMessage, "tool" | "content" | "toolResult"> & { toolInput?: Record<string, unknown> | null }, known: string): string {
+  if (message.tool === "web_search") {
+    const results = (message.toolResult?.data as { results?: unknown } | undefined)?.results;
+    return (Array.isArray(results) ? results : [])
+      .map((hit) => (hit && typeof hit === "object" ? hit as Record<string, unknown> : {}))
+      .map((hit) => [hit.title, hit.url, hit.snippet].filter((part) => typeof part === "string").join(" — "))
+      .join("\n");
+  }
+  const summary = typeof message.toolResult?.summary === "string" ? message.toolResult.summary : "";
+  const text = `${message.content} ${summary}`;
+  if (message.tool === "read_webpage" || message.tool?.startsWith("browser_")) {
+    // The address the page was read at: its data, or where the summary names it ("Read <url>", "Page: <url>").
+    const named = message.tool === "read_webpage" ? /^Read (\S+)/.exec(summary || message.content) : /^Page: (\S+)/m.exec(summary || message.content);
+    return pageSourceText(text, [message.toolInput?.url, (message.toolResult?.data as { url?: unknown } | undefined)?.url, named?.[1]], known);
+  }
+  return text;
 }
 
 const HOST_IN_TEXT = /(?:^|[^a-z0-9.-])((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9])(?![a-z0-9-])/g;

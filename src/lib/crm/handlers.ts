@@ -549,7 +549,8 @@ export async function handleClassificationJob(
       }, { send: sending.send });
     }
   } catch (error) {
-    if (!(error instanceof PermanentCrmJobError)) await recordClassificationFailure(job.entityId, error);
+    // Put back to wait for another worker's claim is not a failed classification: the record stays as it is.
+    if (!(error instanceof PermanentCrmJobError) && !(error instanceof RetryCrmJobLaterError)) await recordClassificationFailure(job.entityId, error);
     throw error;
   }
 }
