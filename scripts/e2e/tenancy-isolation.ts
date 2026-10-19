@@ -372,7 +372,7 @@ async function main() {
     reads++;
     const leaked = leaksIn(res.text, markers, target.url);
     if (leaked.length) findings.push({ kind: "READ LEAK", where: `GET ${target.url} → ${res.status}`, detail: leaked.slice(0, 3).join(", ") });
-    else if (r.dynamic && target.id && res.status >= 200 && res.status < 300) findings.push({ kind: "READ 2xx", where: `GET ${target.url}`, detail: `B got ${res.status} for A's ${target.table} — check it returns nothing of A` });
+    else if (r.dynamic && target.id && res.status >= 200 && res.status < 300) findings.push({ kind: "READ 2xx", where: `GET ${target.url}`, detail: `B got ${res.status} for A's ${target.table} — check it returns nothing of A: ${res.text.replace(/\s+/g, " ").slice(0, 120)}` });
     if (res.status >= 500) findings.push({ kind: "ERROR", where: `GET ${target.url}`, detail: `${res.status} ${res.text.slice(0, 160)}` });
   }
 
@@ -387,7 +387,7 @@ async function main() {
       const after = await rowSnapshot(target.table, target.id);
       writes++;
       if (before !== after) findings.push({ kind: "WRITE LEAK", where: `${method} ${target.url} → ${res.status}`, detail: `A's ${target.table} row changed` });
-      else if (res.status >= 200 && res.status < 300) findings.push({ kind: "WRITE 2xx", where: `${method} ${target.url}`, detail: `B got ${res.status} on A's ${target.table} (row unchanged) — check` });
+      else if (res.status >= 200 && res.status < 300) findings.push({ kind: "WRITE 2xx", where: `${method} ${target.url}`, detail: `B got ${res.status} on A's ${target.table} (row unchanged) — check: ${res.text.replace(/\s+/g, " ").slice(0, 120)}` });
       const leaked = leaksIn(res.text, markers, target.url);
       if (leaked.length) findings.push({ kind: "WRITE RESPONSE LEAK", where: `${method} ${target.url}`, detail: leaked.slice(0, 3).join(", ") });
     }
