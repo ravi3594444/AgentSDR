@@ -26,6 +26,7 @@ import {
   getWhatsappAccountRow,
   type WhatsappAccountRow,
 } from "./accounts";
+import { mergedChatPatch } from "./chatMerge";
 import { recordWhatsappOutboundInCrm } from "./crmBridge";
 import { WhatsappApiError, WhatsappSendRefusedError } from "./errors";
 import { isWhatsappRecipientRefusal, WHATSAPP_RECIPIENT_REFUSAL } from "./refusal";
@@ -295,11 +296,15 @@ async function settleNewChat(
   if (!other) throw new Error(`WhatsApp chat ${placeholder.id} disappeared while sending`);
   // The webhook stored the chat first: move the send into it.
   await db.update(whatsappMessages).set({ chatId: other.id }).where(and(messageInOrg(), eq(whatsappMessages.id, message.id)));
-  if (!other.personId && placeholder.personId) {
-    await db.update(whatsappChats).set({ personId: placeholder.personId, updatedAt: new Date() }).where(and(chatInOrg(), eq(whatsappChats.id, other.id)));
+  // It keeps the person and the number the send opened the chat with: a privacy-id echo carries no number.
+  const patch = mergedChatPatch(other, placeholder);
+  let kept = other;
+  if (Object.keys(patch).length) {
+    const [updated] = await db.update(whatsappChats).set({ ...patch, updatedAt: new Date() }).where(and(chatInOrg(), eq(whatsappChats.id, other.id))).returning();
+    if (updated) kept = updated;
   }
   await db.delete(whatsappChats).where(and(chatInOrg(), eq(whatsappChats.id, placeholder.id)));
-  return other;
+  return kept;
 }
 
 async function settleMessageId(message: WhatsappMessageRow, unipileMessageId: string): Promise<WhatsappMessageRow> {

@@ -242,14 +242,15 @@ export async function completeCrmJob(job: CrmJob): Promise<void> {
 export async function failCrmJob(
   job: CrmJob,
   error: string,
-  options: { permanent?: boolean; now?: Date } = {},
+  options: { permanent?: boolean; now?: Date; retryAt?: Date } = {},
 ): Promise<{ willRetry: boolean; runAfter: Date | null }> {
   const cleanError = error.trim() || "Unknown CRM job failure";
   const now = options.now ?? new Date();
-  const willRetry = shouldRetryCrmJob(job, options.permanent);
-  const runAfter = willRetry
+  // A job that could not run yet (retryAt) is requeued for then, whatever its attempts.
+  const willRetry = options.retryAt ? true : shouldRetryCrmJob(job, options.permanent);
+  const runAfter = options.retryAt ?? (willRetry
     ? new Date(now.getTime() + crmJobRetryDelayMs(job.attempts))
-    : null;
+    : null);
   const updated = await db
     .update(crmJobs)
     .set(willRetry ? {

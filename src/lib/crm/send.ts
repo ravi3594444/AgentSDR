@@ -53,7 +53,7 @@ import {
 } from "./schema";
 import { assertCurrentCrmContext } from "./stateMachine";
 import { acknowledgementProblems, candidateRoutes } from "./wrongNumber";
-import { claimRouteForSendInTransaction, setAsideAcknowledgementsInTransaction, settleAcknowledgementInTransaction, wrongRouteSendRefusal } from "./wrongRoutes";
+import { claimRouteForSendInTransaction, conversationRoutes, setAsideAcknowledgementsInTransaction, settleAcknowledgementInTransaction, wrongRouteSendRefusal } from "./wrongRoutes";
 import { adoptCurrentSequenceStepInTransaction, interruptActiveSequenceRunInTransaction } from "./sequences";
 
 export type NormalizedCrmSendResult = {
@@ -393,12 +393,8 @@ async function prepareSend(tx: CrmTransaction, input: {
     draftId: draft.id,
     channel: draft.channel,
     personId: record.personId,
-    routes: candidateRoutes(draft.channel, {
-      providerContactId: conversation.providerContactId,
-      email: person.email,
-      phone: person.phone,
-      linkedinUrl: person.linkedinUrl,
-    }),
+    // The conversation's own chat number too: the route a wrong number is recorded by, even after the Person's phone was corrected.
+    routes: await conversationRoutes(tx, conversation, person),
   });
   if (draft.sequenceStepRunId) {
     const [stepScope] = await tx.select({ stepRun: crmSequenceStepRuns, run: crmSequenceRuns })

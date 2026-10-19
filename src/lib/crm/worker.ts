@@ -39,6 +39,18 @@ export class PermanentCrmJobError extends Error {
   }
 }
 
+/**
+ * The job cannot run yet and must not be failed: it is requeued for
+ * `retryAt` without counting against its attempts (for example, a claim
+ * another worker may still hold until its lock window ends).
+ */
+export class RetryCrmJobLaterError extends Error {
+  constructor(message: string, readonly retryAt: Date) {
+    super(message);
+    this.name = "RetryCrmJobLaterError";
+  }
+}
+
 type WorkerState = {
   owner: symbol;
   timer: ReturnType<typeof setInterval>;
@@ -108,6 +120,7 @@ async function runJob(job: CrmJob): Promise<void> {
     const message = error instanceof Error ? error.message : String(error);
     const { willRetry } = await failCrmJob(job, message, {
       permanent: error instanceof PermanentCrmJobError,
+      retryAt: error instanceof RetryCrmJobLaterError ? error.retryAt : undefined,
     });
     if (!willRetry) {
       console.warn(`[crm/worker] ${job.kind} job ${job.id} failed: ${message}`);

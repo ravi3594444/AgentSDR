@@ -36,7 +36,7 @@ import {
   type CrmCategoryKey,
 } from "./schema";
 import { startSequenceRunInTransaction } from "./sequences";
-import { PermanentCrmJobError, registerCrmJobHandlers, STALE_LOCK_MS } from "./worker";
+import { PermanentCrmJobError, registerCrmJobHandlers, RetryCrmJobLaterError, STALE_LOCK_MS } from "./worker";
 import { detectsOptOutWording, detectsWrongNumber } from "./wrongNumber";
 import { wrongRouteForConversation } from "./wrongRoutes";
 import { inOrg } from "@/lib/tenancy/scope";
@@ -307,12 +307,12 @@ async function unfinishedWrongNumber(
   messageId: string,
   expectedContextVersion: number,
   context: ClassificationContext,
-): Promise<{ source: "reply_agent" | "classifier"; optOut: boolean } | "in_flight" | null> {
+): Promise<{ source: "reply_agent" | "classifier"; optOut: boolean } | { inFlightUntil: Date } | null> {
   const [route] = await db.select({ ackStatus: crmWrongRoutes.ackStatus, ackUpdatedAt: crmWrongRoutes.ackUpdatedAt, source: crmWrongRoutes.source }).from(crmWrongRoutes)
     .where(and(inOrg(crmWrongRoutes), eq(crmWrongRoutes.messageId, messageId))).limit(1);
   if (route) {
     if (route.ackStatus !== "reserved" && route.ackStatus !== "sending") return null;
-    if (route.ackUpdatedAt && route.ackUpdatedAt.getTime() > Date.now() - STALE_LOCK_MS) return "in_flight";
+    if (route.ackUpdatedAt && route.ackUpdatedAt.getTime() > Date.now() - STALE_LOCK_MS) return { inFlightUntil: new Date(route.ackUpdatedAt.getTime() + STALE_LOCK_MS) };
     return { source: route.source === "reply_agent" ? "reply_agent" : "classifier", optOut: false };
   }
   if (context.routeWrong) return null;
@@ -389,7 +389,8 @@ export async function handleClassificationJob(
       // handling it left (closeWrongNumber picks up where it stopped, never
       // sends twice), else it is stale.
       const unfinished = await unfinishedWrongNumber(job.entityId, expected, context);
-      if (unfinished === "in_flight") throw new PermanentCrmJobError("Classification job context is stale; its wrong-number apology is left to the worker that claimed it");
+      // Possibly still another worker's send: look again once its claim is past the lock window, never fail it for good.
+      if (unfinished && "inFlightUntil" in unfinished) throw new RetryCrmJobLaterError("Classification job context is stale; its wrong-number apology is left to the worker that claimed it until its claim is stale", unfinished.inFlightUntil);
       if (!unfinished) throw new PermanentCrmJobError("Classification job context is stale");
       await closeWrongNumber({ messageId: job.entityId, source: unfinished.source, acknowledgement: null, optOut: unfinished.optOut, sendAllowed: sending.sendAllowed }, { send: sending.send });
       return;
