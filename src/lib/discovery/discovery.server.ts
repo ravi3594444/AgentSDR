@@ -23,6 +23,7 @@ import { searchTiles } from "./geocode";
 import { cleanBusinessName, mapsSearchPhrase, parseMapsCsvDetailed, rankEmails, type MapsPlace } from "./mapsResults";
 import { createMapsJob, downloadMapsResults, getMapsJobStatus, mapsScraperUrl, MapsScraperError } from "./mapsScraper.server";
 import { collectWebsiteContacts, type PageFetchOptions } from "./websiteContacts.server";
+import { instagramResearchHold } from "./instagramEligibility";
 
 /**
  * Lead discovery from public business listings: a Google Maps search on the
@@ -87,6 +88,8 @@ type InstagramOrigin = {
   hashtag: string | null;
   /** The post or profile names the requested place; otherwise its location is unknown. */
   placeNamed: boolean;
+  /** The account's own profile was read (its identity); absent on searches saved before this was recorded, which read it. */
+  profileRead?: boolean;
   biography: string | null;
   /** Contacts the profile itself publishes. */
   profileEmail: string | null;
@@ -699,6 +702,7 @@ function instagramPlaces(job: AssistantJob, posts: InstagramPost[], profiles: Ma
         postedAt: post.timestamp,
         hashtag: post.hashtag,
         placeNamed,
+        profileRead: Boolean(profile),
         biography: profile?.biography ?? null,
         profileEmail: profile?.email ?? null,
         profilePhone: profile?.phone ?? null,
@@ -911,6 +915,14 @@ async function savePlace(place: EnrichedPlace, payload: DiscoveryPayload): Promi
   if (place.closed) {
     const reason = place.origin ? `found on Instagram (@${place.origin.username}), ${place.closed}: nothing it publishes can be read` : `listed on Google Maps as ${place.closed.toLowerCase()}`;
     return { member: { personId: null, name: place.displayName, reason, ...base }, outcome: "excluded", email: false };
+  }
+
+  // An Instagram account is a lead only when its profile was read and, for a search in a place,
+  // it names that place; otherwise it is kept for research. Having no email or phone does not
+  // exclude it: a DM through the connected Instagram account is its route once a plan is approved.
+  if (place.origin) {
+    const hold = instagramResearchHold({ profileRead: place.origin.profileRead !== false, placeNamed: place.origin.placeNamed, where: payload.criteria.where });
+    if (hold) return { member: { personId: null, name: place.displayName, reason: hold, ...base }, outcome: "excluded", email: false };
   }
 
   let email: string | null = null;
