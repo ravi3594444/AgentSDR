@@ -1,17 +1,39 @@
 import "server-only";
 
-import { and, desc, eq, gte, inArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, exists, gt, gte, inArray, lt, ne, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { inOrg } from "@/lib/tenancy/scope";
 import { coverageLine, namedPlatforms, requestCoverage, type PlatformCoverage, type WebToolUse } from "./coverage";
 import { assistantJobs, assistantMessages } from "./schema";
 
+/** Whether a search job serves the owner message in `assistant_messages.id` (the outer row). */
+const servedByAJob = () => exists(db.select({ one: sql`1` }).from(assistantJobs).where(and(
+  inOrg(assistantJobs),
+  or(
+    sql`${assistantJobs.payload}->>'requestMessageId' = ${assistantMessages.id}::text`,
+    sql`${assistantJobs.payload}->'contactAfter'->>'requestId' = ${assistantMessages.id}::text`,
+  ),
+)));
+
 /**
  * The web searches and page reads that succeeded in the request's chat from
- * the request on. They start no job, so without them a request naming the
- * web would read "not started" however much the assistant searched it.
+ * the request until the owner's next request (an owner message a search was
+ * started for); a follow-up such as "yes" in between is not one, so what
+ * runs after it still counts. They start no job, so without them a request
+ * naming the web would read "not started" however much the assistant
+ * searched it.
  */
-async function webToolUse(request: { threadId: string; createdAt: Date }): Promise<WebToolUse> {
+async function webToolUse(request: { id: string; threadId: string; createdAt: Date }): Promise<WebToolUse> {
+  const [nextRequest] = await db.select({ createdAt: assistantMessages.createdAt }).from(assistantMessages)
+    .where(and(
+      inOrg(assistantMessages),
+      eq(assistantMessages.threadId, request.threadId),
+      eq(assistantMessages.role, "user"),
+      ne(assistantMessages.id, request.id),
+      gt(assistantMessages.createdAt, request.createdAt),
+      servedByAJob(),
+    ))
+    .orderBy(asc(assistantMessages.createdAt)).limit(1);
   const rows = await db.select({ tool: assistantMessages.tool, n: sql<number>`count(*)::int` }).from(assistantMessages)
     .where(and(
       inOrg(assistantMessages),
@@ -20,6 +42,7 @@ async function webToolUse(request: { threadId: string; createdAt: Date }): Promi
       eq(assistantMessages.status, "ok"),
       inArray(assistantMessages.tool, ["web_search", "read_webpage"]),
       gte(assistantMessages.createdAt, request.createdAt),
+      nextRequest ? lt(assistantMessages.createdAt, nextRequest.createdAt) : undefined,
     ))
     .groupBy(assistantMessages.tool);
   const count = (tool: string) => Number(rows.find((row) => row.tool === tool)?.n ?? 0);
@@ -34,7 +57,7 @@ async function webToolUse(request: { threadId: string; createdAt: Date }): Promi
  * itself when the request names the web.
  */
 export async function requestCoverageFor(requestMessageId: string): Promise<PlatformCoverage[]> {
-  const [message] = await db.select({ content: assistantMessages.content, threadId: assistantMessages.threadId, createdAt: assistantMessages.createdAt }).from(assistantMessages)
+  const [message] = await db.select({ id: assistantMessages.id, content: assistantMessages.content, threadId: assistantMessages.threadId, createdAt: assistantMessages.createdAt }).from(assistantMessages)
     .where(and(inOrg(assistantMessages), eq(assistantMessages.id, requestMessageId))).limit(1);
   if (!message) return [];
   const named = namedPlatforms(message.content);

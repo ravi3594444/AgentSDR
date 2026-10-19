@@ -144,7 +144,12 @@ type DiscoveryPayload = {
   requestMessageId?: string | null;
   /** When it began waiting for a free Apify run slot (it gives up after MAX_SLOT_WAIT_MS). */
   waitingSince?: string | null;
-  /** Apify already took over from a missing or failed scraper once for this search. */
+  /**
+   * This Maps search has already run on Apify: it started there (asked for,
+   * or as the approved fallback), or Apify took over from a missing or failed
+   * scraper once. Either way it never falls back to Apify again, so Apify's
+   * Actor is run and paid for at most once per search.
+   */
   apifyFallbackTried?: boolean;
 };
 

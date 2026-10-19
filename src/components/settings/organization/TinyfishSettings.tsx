@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import * as Button from "@/components/alignui/button";
 import { Frame, FrameFooter, FrameHeader, FramePanel } from "@/components/analytics/kit/Frame";
 import { Callout } from "@/components/settings/SettingsKit";
-import { TINYFISH_FREE_LIMITS, TINYFISH_LIMITS, type TinyfishSettingsView } from "@/lib/tinyfish/catalog";
+import { browserMinutesHint, TINYFISH_FREE_LIMITS, TINYFISH_LIMITS, type TinyfishSettingsView } from "@/lib/tinyfish/catalog";
 
 /**
  * Settings → Organization → TinyFish: the key (write-only), whether web
@@ -73,7 +73,8 @@ export function TinyfishSettings() {
 
   if (!settings) return error ? <Callout tone="error">{error}</Callout> : null;
   const field = "h-9 w-full rounded-lg border border-stroke-soft-200 bg-bg-white-0 px-3 text-paragraph-sm text-text-strong-950 disabled:opacity-60";
-  const browserCost = (Number(minutes) || 0) * TINYFISH_LIMITS.browserUsdPerMinute;
+  // The server's rule as typed: 1-9 minutes could never open a 10-minute session, so no spend is shown for them.
+  const minutesHint = browserMinutesHint(minutes);
   const waiting = settings.waitingUntil ? new Date(settings.waitingUntil) : null;
 
   return (
@@ -102,8 +103,8 @@ export function TinyfishSettings() {
         <label className="flex flex-col gap-1 text-label-xs text-text-strong-950 sm:max-w-xs">
           Browser minutes a day (0 = off)
           <input className={field} type="number" min={TINYFISH_LIMITS.browserMinutesPerDay.min} max={TINYFISH_LIMITS.browserMinutesPerDay.max} step="1" value={minutes} disabled={!canManage || busy} onChange={(event) => setMinutes(event.target.value)} />
-          <span className="text-paragraph-xs font-normal text-text-sub-600">
-            {Number(minutes) > 0 ? `Up to about $${browserCost.toFixed(2)} a day at TinyFish's $${TINYFISH_LIMITS.browserUsdPerMinute}/minute; one browser at a time.` : "The assistant cannot open a browser."}
+          <span className={`text-paragraph-xs font-normal ${minutesHint.problem ? "text-error-base" : "text-text-sub-600"}`}>
+            {minutesHint.text}
           </span>
         </label>
         {error && <Callout tone="error">{error}</Callout>}

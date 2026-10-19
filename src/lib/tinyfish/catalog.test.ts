@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { fetchFailureText, keyHint, keyProblem, tinyfishFetchResult, tinyfishSearchHits, webUrl } from "./catalog";
+import { browserMinutesHint, browserMinutesProblem, fetchFailureText, keyHint, keyProblem, tinyfishFetchResult, tinyfishSearchHits, webUrl } from "./catalog";
 
 // The live answer of 18 October 2026, trimmed (scratchpad record of the
 // verification call): results carry position, site_name, title, snippet, url.
@@ -65,6 +65,22 @@ describe("keys and URLs", () => {
     expect(keyProblem("short")).not.toBeNull();
     expect(keyProblem("sk-tinyfish-has a space-in-it")).not.toBeNull();
     expect(keyProblem("sk-tinyfish-abcdefghijklmnop")).toBeNull();
+  });
+
+  test("browser minutes are 0 (off) or at least one 10-minute session, whole, up to 240", () => {
+    expect(browserMinutesProblem(0)).toBeNull();
+    expect(browserMinutesProblem(10)).toBeNull();
+    expect(browserMinutesProblem(240)).toBeNull();
+    for (const tooFew of [1, 5, 9]) expect(browserMinutesProblem(tooFew)).toBe("Browser minutes a day must be 0 (off) or at least 10, one session's length");
+    for (const bad of [-1, 241, 12.5, Number.NaN]) expect(browserMinutesProblem(bad)).toBe("Browser minutes a day must be a whole number from 0 to 240");
+  });
+
+  test("the settings card shows the rule, not a spend, while 1-9 minutes are typed", () => {
+    for (const typed of ["1", "5", "9"]) expect(browserMinutesHint(typed)).toEqual({ problem: true, text: "Browser minutes a day must be 0 (off) or at least 10, one session's length." });
+    expect(browserMinutesHint("2.5").problem).toBe(true);
+    expect(browserMinutesHint("0")).toEqual({ problem: false, text: "The assistant cannot open a browser." });
+    expect(browserMinutesHint("")).toEqual({ problem: false, text: "The assistant cannot open a browser." });
+    expect(browserMinutesHint("10")).toEqual({ problem: false, text: "Up to about $0.02 a day at TinyFish's $0.002/minute; one browser at a time." });
   });
 
   test("webUrl accepts http(s) only", () => {

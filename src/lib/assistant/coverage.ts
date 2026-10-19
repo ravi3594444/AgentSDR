@@ -23,9 +23,11 @@ const NAMED: [Platform, RegExp][] = [
   ["instagram", /\b(?:instagram|insta|ig)\b/i],
   ["facebook", /\b(?:facebook|fb)\b/i],
   // "LinkedIn", "linked in", and "linked" alone as a short form; not the verb ("the sites linked in their bio", "linked to their site").
-  ["linkedin", /\b(?:linked-?in\b|linked\s+in\b(?!\s+(?:their|the|his|her|its|my|our|your|a|an|each|every|this|that|these|those|bio|bios|profile|profiles)\b)|linked\b(?!\s*(?:in|to|from|on|with|by|at|through|via|into|up)\b))/i],
-  // A business's own website ("with their websites") is something to find for it, not a place to search; Google alone ("google reviews") is not a web search.
-  ["web", /\b(?:(?<!\b(?:their|its|his|her|our|your|my|with|own)\s+)websites?|web\s*search|directories|directory|google\s+search(?:es)?|search(?:ing)?\s+(?:on\s+)?google)\b/i],
+  // Where a platform goes ("on linked in", "via linked in") it is LinkedIn whatever follows ("on linked in the Pune area").
+  ["linkedin", /\b(?:linked-?in\b|(?<=\b(?:on|via|through|from|in)\s+)linked\s+in\b|linked\s+in\b(?!\s+(?:their|the|his|her|its|my|our|your|a|an|each|every|this|that|these|those|bio|bios|profile|profiles)\b)|linked\b(?!\s*(?:in|to|from|on|with|by|at|through|via|into|up)\b))/i],
+  // A business's own website ("with their websites") is something to find for it, not a place to search; Google alone ("google reviews",
+  // "work at Google") is not a web search, but Google where a platform goes ("on google", "via google") is, unless it is Google Maps.
+  ["web", /\b(?:(?<!\b(?:their|its|his|her|our|your|my|with|own)\s+)websites?|web\s*search|directories|directory|google\s+search(?:es)?|search(?:ing)?\s+(?:on\s+)?google|(?<=\b(?:on|via)\s+)google\b(?!\s*(?:maps?|reviews?)\b))\b/i],
 ];
 
 /** The platforms the owner's words name, in a fixed order; none for a request that leaves the choice to the assistant. */

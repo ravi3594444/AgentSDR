@@ -24,6 +24,17 @@ describe("platforms an owner names", () => {
     expect(namedPlatforms("find agencies on Linked-In")).toEqual(["linkedin"]);
     expect(namedPlatforms("find real estate agencies in Pune on Google Maps and in online directories")).toEqual(["google_maps", "web"]);
   });
+
+  test("'linked in' where a platform goes is LinkedIn, whatever follows; 'on google' is the web", () => {
+    expect(namedPlatforms("find CTOs on linked in the Pune area")).toEqual(["linkedin"]);
+    expect(namedPlatforms("find CTOs via linked in their network")).toEqual(["linkedin"]);
+    expect(namedPlatforms("find agencies on google and instagram")).toEqual(["instagram", "web"]);
+    expect(namedPlatforms("look for dentists via Google")).toEqual(["web"]);
+    expect(namedPlatforms("find agencies with a google search")).toEqual(["web"]);
+    // Google Maps is not the web, and Google the company is neither.
+    expect(namedPlatforms("find leads on Google Maps and Instagram")).toEqual(["google_maps", "instagram"]);
+    expect(namedPlatforms("find engineers who work at Google on LinkedIn")).toEqual(["linkedin"]);
+  });
 });
 
 describe("which platform a search job covers", () => {

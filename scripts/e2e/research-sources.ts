@@ -243,6 +243,8 @@ await runInOrganization(b.org.id, async () => {
     const directReddit = await runTool("read_webpage", { url: "https://example.com/go/thread" }, { threadId: thread.id, userId: b.owner.id, ownerText: "x" });
     const directWalled = await runTool("read_webpage", { url: "https://example.com/go/profile" }, { threadId: thread.id, userId: b.owner.id, ownerText: "x" });
     const followed = calls.slice(before).some((call) => call.host === "example.com");
+    const contacted = calls.slice(before).filter((call) => call.host === "www.reddit.com" || call.host === "www.linkedin.com").map((call) => call.host);
+    check("the direct reader stops at a redirect to Reddit or a login wall: neither host is asked for anything", followed && contacted.length === 0, contacted.join(", "));
     check("a link read directly that redirects to Reddit is refused, its page unused", followed && !directReddit.ok && /www\.reddit\.com/.test(directReddit.summary) && /that approval is not recorded/.test(directReddit.summary) && !/Thread text|ops@acme-agency/.test(directReddit.summary), directReddit.summary.slice(0, 200));
     check("a link read directly that redirects to a login wall is refused, its page unused", !directWalled.ok && /www\.linkedin\.com needs a login|leads to www\.linkedin\.com/.test(directWalled.summary) && !/Thread text|ops@acme-agency/.test(directWalled.summary), directWalled.summary.slice(0, 200));
   } finally {

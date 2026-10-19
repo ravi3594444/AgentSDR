@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import http from "node:http";
 import type { LookupFunction } from "node:net";
 import { deflateRawSync, gzipSync } from "node:zlib";
-import { fetchPublicPage, proxiedByEnvironment, publicOnlyLookup, requestWithLookup, type Resolver } from "./websiteContacts.server";
+import { fetchPublicPage, PageRedirectRefusedError, proxiedByEnvironment, publicOnlyLookup, requestWithLookup, type Resolver } from "./websiteContacts.server";
 
 /** A local server standing in for a website: it records every request it gets. */
 const hits: { host: string | undefined; path: string | undefined }[] = [];
@@ -108,6 +108,29 @@ describe("fetchPublicPage", () => {
       delete process.env.HTTP_PROXY;
       globalThis.fetch = realFetch;
     }
+  });
+
+  test("a redirect to Reddit or a login-walled site is refused before that host is asked for anything", async () => {
+    const asked: string[] = [];
+    const moves: Record<string, string> = {
+      "https://short.example/thread": "https://www.reddit.com/r/smallbusiness/comments/abc/",
+      "https://short.example/link": "https://redd.it/abc123",
+      "https://short.example/profile": "https://www.linkedin.com/in/someone",
+      "https://short.example/insta": "https://instagram.com./someone",
+    };
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const url = String(input);
+      asked.push(url);
+      return moves[url]
+        ? new Response(null, { status: 301, headers: { location: moves[url]! } })
+        : new Response("<p>Thread text. Mail ops@acme-agency.example</p>", { status: 200, headers: { "content-type": "text/html" } });
+    }) as typeof fetch;
+    for (const [from, to] of Object.entries(moves)) {
+      const refused = await fetchPublicPage(from, { fetchImpl, allowPrivate: true }).then(() => null, (error: unknown) => error);
+      expect(refused).toBeInstanceOf(PageRedirectRefusedError);
+      expect((refused as PageRedirectRefusedError).destination.toString()).toBe(new URL(to).toString());
+    }
+    expect(asked).toEqual(Object.keys(moves));
   });
 
   test("an address written as the host is refused before any connection", async () => {

@@ -84,17 +84,24 @@ async function claim(): Promise<AssistantJob | null> {
  * A step's progress over the job's. A wait (`waiting`) reported earlier is
  * dropped unless this step reports it again, as every waiting step does:
  * otherwise a search that has started still reads as waiting for a slot.
+ * An earlier step's error (`lastError`) is dropped once a step completes
+ * without one, so the job no longer reads as retrying; a failed step keeps it.
  */
-export function mergeJobProgress(prior: Record<string, unknown>, next: Record<string, unknown> | undefined): Record<string, unknown> {
-  if (!next) return prior;
-  const kept = { ...prior };
+export function mergeJobProgress(prior: Record<string, unknown>, next: Record<string, unknown> | undefined, options: { stepFailed?: boolean } = {}): Record<string, unknown> {
+  let base = prior;
+  if (!options.stepFailed && "lastError" in prior) {
+    base = { ...prior };
+    delete base.lastError;
+  }
+  if (!next) return base;
+  const kept = { ...base };
   delete kept.waiting;
   return { ...kept, ...next };
 }
 
-async function release(job: AssistantJob, outcome: StepOutcome): Promise<AssistantJob | null> {
+async function release(job: AssistantJob, outcome: StepOutcome, stepFailed = false): Promise<AssistantJob | null> {
   const base = { lockedBy: null, heartbeatAt: null, attempts: 0 };
-  const progress = mergeJobProgress(job.progress, outcome.progress);
+  const progress = mergeJobProgress(job.progress, outcome.progress, { stepFailed });
   const owned = and(eq(assistantJobs.id, job.id), eq(assistantJobs.lockedBy, workerId));
   if (outcome.next === "wait") {
     await db.update(assistantJobs).set({
@@ -226,11 +233,13 @@ export async function runOneAssistantStep(): Promise<boolean> {
       .where(and(eq(assistantJobs.id, job.id), eq(assistantJobs.lockedBy, workerId)));
   };
   let outcome: StepOutcome;
+  let stepFailed = false;
   try {
     outcome = handler
       ? await runInOrganization(job.organizationId, () => handler(job, heartbeat))
       : { next: "failed", error: `No handler for ${job.kind} jobs in this server` };
   } catch (error) {
+    stepFailed = true;
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[assistant/worker] ${job.kind} ${job.id} stage ${job.stage} failed:`, error);
     // An unexpected error retries the same stage with backoff, a few times.
@@ -244,7 +253,7 @@ export async function runOneAssistantStep(): Promise<boolean> {
       return true;
     }
   }
-  const finished = await release(job, outcome);
+  const finished = await release(job, outcome, stepFailed);
   if (finished && onFinished) {
     await runInOrganization(finished.organizationId, () => onFinished!(finished)).catch((error) => {
       console.error(`[assistant/worker] could not report ${finished.kind} ${finished.id}:`, error);

@@ -239,6 +239,29 @@ await runInOrganization(a.org.id, async () => {
   check("a search that waited for a slot and then started is no longer shown as waiting", started?.stage === "apify" && !("waiting" in (started?.progress ?? {})) && item?.state === "queued" && item.reason === null, `${item?.state}: ${JSON.stringify(started?.progress)}`);
 });
 
+// A step that failed is retried and says so; once a later step completes without an error, the error is gone.
+const [flaky] = await db.insert(assistantJobs).values({
+  organizationId: a.org.id, kind: "web_discovery", stage: "searching", threadId: seeded.today.id, status: "queued", runAfter: new Date("1998-01-01T00:00:00Z"),
+  progress: { stage: "searching", searches: 2, searchesDone: 0 },
+}).returning();
+let flakyCalls = 0;
+registerAssistantJobHandler("web_discovery", async (job) => {
+  if (job.id !== flaky!.id) return { next: "wait", delayMs: 60_000 };
+  flakyCalls += 1;
+  if (flakyCalls === 1) throw new Error("socket hang up");
+  // A poll that reports no progress of its own.
+  return { next: "wait", delayMs: 60_000 };
+});
+await runOneAssistantStep();
+const [failedStep] = await db.select().from(assistantJobs).where(eq(assistantJobs.id, flaky!.id));
+const retrying = await runInOrganization(a.org.id, async () => (await listWork()).find((entry) => entry.id === flaky!.id));
+check("a step that failed is retried, its error shown", failedStep?.progress.lastError === "socket hang up" && retrying?.state === "retrying" && retrying.reason === "socket hang up", `${retrying?.state}: ${JSON.stringify(failedStep?.progress)}`);
+await db.update(assistantJobs).set({ runAfter: new Date("1998-01-01T00:00:00Z") }).where(eq(assistantJobs.id, flaky!.id));
+await runOneAssistantStep();
+const [recovered] = await db.select().from(assistantJobs).where(eq(assistantJobs.id, flaky!.id));
+const afterRecovery = await runInOrganization(a.org.id, async () => (await listWork()).find((entry) => entry.id === flaky!.id));
+check("once a later step completes without an error, the earlier error is dropped", flakyCalls === 2 && !("lastError" in (recovered?.progress ?? {})) && recovered?.progress.searches === 2 && afterRecovery?.state !== "retrying" && afterRecovery?.reason === null, `${afterRecovery?.state}: ${JSON.stringify(recovered?.progress)}`);
+
 // Starting outreach is not a search: Activity offers no Cancel for it; the plan's own Pause and Stop control it.
 await runInOrganization(a.org.id, async () => {
   const [starting] = await db.insert(assistantJobs).values({
