@@ -61,14 +61,16 @@ export function onAssistantJobFinished(listener: (job: AssistantJob) => Promise<
 
 const workerId = `assistant-${process.pid}-${randomUUID().slice(0, 8)}`;
 
-async function claim(): Promise<AssistantJob | null> {
+/** Claims the next due job (or, given an id, that job when it is due). */
+async function claim(jobId?: string): Promise<AssistantJob | null> {
   const staleBefore = new Date(Date.now() - STALE_MS);
+  const only = jobId ? sql`id = ${jobId}::uuid and ` : sql``;
   const rows = await db.execute<{ id: string }>(sql`
     update assistant_jobs set status = 'running', locked_by = ${workerId}, heartbeat_at = now(), attempts = attempts + 1
     where id = (
       select id from assistant_jobs
-      where (status = 'queued' and run_after <= now())
-         or (status = 'running' and heartbeat_at < ${staleBefore.toISOString()}::timestamptz)
+      where ${only}((status = 'queued' and run_after <= now())
+         or (status = 'running' and heartbeat_at < ${staleBefore.toISOString()}::timestamptz))
       order by run_after asc
       for update skip locked
       limit 1
@@ -227,9 +229,13 @@ export async function reconcileAssistantJobReports(graceMs = REPORT_GRACE_MS, no
 
 let lastReconcile = 0;
 
-/** Claims and runs one step of one due job; false when nothing was due. */
-export async function runOneAssistantStep(): Promise<boolean> {
-  const job = await claim();
+/**
+ * Claims and runs one step of one due job; false when nothing was due.
+ * `jobId` limits it to that job (scripts drive one job without taking
+ * another organization's).
+ */
+export async function runOneAssistantStep(options: { jobId?: string } = {}): Promise<boolean> {
+  const job = await claim(options.jobId);
   if (!job) return false;
   const handler = handlers.get(job.kind);
   const heartbeat = async () => {

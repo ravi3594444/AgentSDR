@@ -13,6 +13,7 @@ import { people } from "@/lib/leads/schema";
 import { upsertInstagramProspect } from "@/lib/instagram/prospects.server";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { apifyReadiness, pollTrackedRun, startTrackedRun } from "@/lib/apify/apify.server";
+import { objectiveSpendGuard } from "@/lib/assistant/objective.server";
 import { APIFY_ACTORS, APIFY_LIMITS, type ApifyActorKey } from "@/lib/apify/catalog";
 import { hashtagsFor, mentionsPlace, placesFromFacebookItems, placesFromLinkedinCompanyItems, placesFromMapsItems, postsFromHashtagItems, profilesFromItems, usernamesFromSearchItems, type InstagramPost } from "@/lib/apify/mapping";
 import { needSignal } from "./webDiscovery";
@@ -423,9 +424,16 @@ function payloadOf(job: AssistantJob): DiscoveryPayload {
   return job.payload as unknown as DiscoveryPayload;
 }
 
+/** The owner's request a search serves: the outreach request of a "find and contact" search, else its own request id. */
+function requestOf(payload: DiscoveryPayload): string | null {
+  return payload.contactAfter?.requestId ?? payload.requestMessageId ?? null;
+}
+
 async function stageQueued(job: AssistantJob): Promise<StepOutcome> {
   const payload = payloadOf(job);
-  const requestId = payload.contactAfter?.requestId ?? null;
+  const requestId = requestOf(payload);
+  // Paid runs also pass the request's own spend cap (objective.server.ts), under Apify's start lock.
+  const spendGuard = await objectiveSpendGuard(requestId);
   if (payload.target === "facebook" || payload.target === "linkedin") {
     const platform = SOCIAL[payload.target];
     const started = await startTrackedRun({
@@ -436,6 +444,7 @@ async function stageQueued(job: AssistantJob): Promise<StepOutcome> {
       wantedItems: payload.criteria.maxResults,
       jobId: job.id,
       requestId,
+      spendGuard,
     });
     if (started.started) return apifyStage(started.row.id, platform.actor, payload.providerNotes ?? []);
     if (started.slotsFull) return waitForSlot(job, sourceLabel(payload.target, "apify"), started.reason);
@@ -448,9 +457,12 @@ async function stageQueued(job: AssistantJob): Promise<StepOutcome> {
       wantedItems: payload.criteria.maxResults,
       jobId: job.id,
       requestId,
+      spendGuard,
     });
     if (started.started) return apifyStage(started.row.id, "instagram_search", payload.providerNotes ?? []);
     if (started.slotsFull) return waitForSlot(job, sourceLabel("instagram", "apify"), started.reason);
+    // The request's spend cap refused it: no other search takes it in its place.
+    if (started.budget) return doneWithNothing(job, [...(payload.providerNotes ?? []), `Instagram was not searched: ${started.reason}.`], true);
     return handOffToWebsite(job, [...(payload.providerNotes ?? []), `Instagram was not searched: ${apifyFallbackNote(started) ?? started.reason}`]);
   }
   if (payload.target === "instagram") {
@@ -460,9 +472,11 @@ async function stageQueued(job: AssistantJob): Promise<StepOutcome> {
       wantedItems: payload.criteria.maxResults * 2,
       jobId: job.id,
       requestId,
+      spendGuard,
     });
     if (started.started) return apifyStage(started.row.id, "instagram_hashtags", payload.providerNotes ?? []);
     if (started.slotsFull) return waitForSlot(job, sourceLabel("instagram", "apify"), started.reason);
+    if (started.budget) return doneWithNothing(job, [...(payload.providerNotes ?? []), `Instagram was not searched: ${started.reason}.`], true);
     // Allowance gone between the tool call and now: website search takes the request, if it can.
     return handOffToWebsite(job, [...(payload.providerNotes ?? []), `Instagram was not searched: ${apifyFallbackNote(started) ?? started.reason}`]);
   }
@@ -478,12 +492,15 @@ async function stageQueued(job: AssistantJob): Promise<StepOutcome> {
       wantedItems: payload.criteria.maxResults,
       jobId: job.id,
       requestId,
+      spendGuard,
     });
     if (started.started) return apifyStage(started.row.id, "google_maps", payload.providerNotes ?? []);
     if (started.slotsFull) return waitForSlot(job, sourceLabel("maps", "apify"), started.reason);
     const note = apifyFallbackNote(started) ?? `Apify was not used: ${started.reason}.`;
     // Never back to Apify from here: the built-in scraper, else website search.
     if (discoveryAvailability().available) return startScraper(job, [...(payload.providerNotes ?? []), note]);
+    // The request's spend cap refused it: the free scraper is the only other way, and it is not set up.
+    if (started.budget) return doneWithNothing(job, [...(payload.providerNotes ?? []), `Google Maps was not searched: ${started.reason}.`], true);
     return handOffToWebsite(job, [...(payload.providerNotes ?? []), note]);
   }
   return startScraperOrFallback(job, payload.providerNotes ?? []);
@@ -631,7 +648,8 @@ async function stageApify(job: AssistantJob): Promise<StepOutcome> {
       input: (maxItems) => ({ usernames: usernames.slice(0, maxItems) }),
       wantedItems: usernames.length,
       jobId: job.id,
-      requestId: payload.contactAfter?.requestId ?? null,
+      requestId: requestOf(payload),
+      spendGuard: await objectiveSpendGuard(requestOf(payload)),
     });
     if (profiles.started) return apifyStage(profiles.row.id, "instagram_profiles", notes, { instagram: { hashtags: [], posts, search: true } });
     return instagramPlaces(job, posts, new Map(), [...notes, `Profiles were not read (${profiles.reason}), so only the usernames are known.`]);
@@ -648,7 +666,8 @@ async function stageApify(job: AssistantJob): Promise<StepOutcome> {
       input: (maxItems) => ({ usernames: usernames.slice(0, maxItems) }),
       wantedItems: usernames.length,
       jobId: job.id,
-      requestId: payload.contactAfter?.requestId ?? null,
+      requestId: requestOf(payload),
+      spendGuard: await objectiveSpendGuard(requestOf(payload)),
     });
     if (profiles.started) return apifyStage(profiles.row.id, "instagram_profiles", notes, { instagram: { hashtags: payload.instagram?.hashtags ?? [], posts } });
     return instagramPlaces(job, posts, new Map(), [...notes, `Profiles were not read (${profiles.reason}), so only what the posts show is known.`]);

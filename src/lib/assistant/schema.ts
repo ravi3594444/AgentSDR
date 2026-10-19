@@ -1,7 +1,8 @@
-import { boolean, check, index, integer, jsonb, numeric, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { boolean, check, doublePrecision, index, integer, jsonb, numeric, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { organizations } from "@/lib/auth/schema";
 import { companies, people } from "@/lib/leads/schema";
+import type { Continuation, ObjectiveStatus, StopReason } from "./objective";
 import type { RequestApproval } from "./requestApproval";
 
 /**
@@ -216,7 +217,8 @@ export const leadAudienceMemberInsights = pgTable(
   },
 );
 
-export type AssistantJobKind = "discovery" | "outreach_start" | "linkedin_search" | "web_discovery" | "apify_instagram";
+/** "objective": the driver of one owner request (objective.server.ts), which continues it while its searches fall short of the target. */
+export type AssistantJobKind = "discovery" | "outreach_start" | "linkedin_search" | "web_discovery" | "apify_instagram" | "objective";
 export type AssistantJobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 
 /**
@@ -263,8 +265,62 @@ export const assistantJobs = pgTable(
     index("assistant_jobs_organization_idx").on(t.organizationId, t.createdAt),
     index("assistant_jobs_claim_idx").on(t.status, t.runAfter),
     index("assistant_jobs_unreported_idx").on(t.finishedAt).where(sql`${t.reportKey} IS NOT NULL AND ${t.reportedAt} IS NULL`),
-    check("assistant_jobs_kind_chk", sql`${t.kind} IN ('discovery', 'outreach_start', 'linkedin_search', 'web_discovery', 'apify_instagram')`),
+    check("assistant_jobs_kind_chk", sql`${t.kind} IN ('discovery', 'outreach_start', 'linkedin_search', 'web_discovery', 'apify_instagram', 'objective')`),
     check("assistant_jobs_status_chk", sql`${t.status} IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')`),
+  ],
+);
+
+/** What the driver keeps between steps (objective.server.ts): the latest continuation turn and how many in a row found nothing new. */
+export type ObjectiveProgress = {
+  continuation?: Continuation | null;
+  dry?: number;
+  /** Why it waits now, for the chat and Activity. */
+  waiting?: string | null;
+};
+
+/**
+ * One owner request pursued to an end (objective.ts, CONTEXT.md): its lead
+ * target, time limit and spend cap (named in the request or the "general"
+ * Sending rules' defaults), its status, the exact reason it stopped, and its
+ * one final report, keyed by `report_key` (written with the stop) and posted
+ * with `reported_at` in the same transaction as the chat event. Its searches
+ * are assistant_jobs carrying the request's id (payload.requestMessageId);
+ * the "objective" job drives it. Created by scripts/add-objectives.ts.
+ */
+export const assistantObjectives = pgTable(
+  "assistant_objectives",
+  {
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    id: uuid("id").primaryKey().defaultRandom(),
+    threadId: uuid("thread_id").notNull().references(() => assistantThreads.id, { onDelete: "cascade" }),
+    /** The owner's message that asked (the request id the searches and plans carry). */
+    requestMessageId: uuid("request_message_id").notNull().references(() => assistantMessages.id, { onDelete: "cascade" }),
+    leadTarget: integer("lead_target").notNull(),
+    timeLimitMinutes: integer("time_limit_minutes").notNull(),
+    deadlineAt: timestamp("deadline_at", { withTimezone: true }).notNull(),
+    spendCapUsd: doublePrecision("spend_cap_usd").notNull(),
+    /** Which controls the owner named (the rest are the organization's defaults). */
+    controls: jsonb("controls").$type<{ named?: { target: boolean; time: boolean; spend: boolean } }>().notNull().default({}),
+    status: text("status").notNull().default("active").$type<ObjectiveStatus>(),
+    stopReason: text("stop_reason").$type<StopReason>(),
+    /** The exact reason, as the report says it (which limit, who cancelled, what failed). */
+    stopDetail: text("stop_detail"),
+    stoppedAt: timestamp("stopped_at", { withTimezone: true }),
+    /** When the driver next acts (a wait for a slot, a quota, a running search or the next continuation). */
+    nextEligibleAt: timestamp("next_eligible_at", { withTimezone: true }),
+    progress: jsonb("progress").$type<ObjectiveProgress>().notNull().default({}),
+    reportKey: text("report_key"),
+    reportedAt: timestamp("reported_at", { withTimezone: true }),
+    createdBy: uuid("created_by"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("assistant_objectives_org_request_uq").on(t.organizationId, t.requestMessageId),
+    index("assistant_objectives_thread_idx").on(t.threadId, t.createdAt),
+    check("assistant_objectives_status_chk", sql`${t.status} IN ('active', 'paused', 'stopped')`),
+    check("assistant_objectives_stop_reason_chk", sql`${t.stopReason} IS NULL OR ${t.stopReason} IN ('target_reached', 'sources_exhausted', 'budget_spent', 'time_limit', 'cancelled', 'failed')`),
+    check("assistant_objectives_limits_chk", sql`${t.leadTarget} >= 1 AND ${t.timeLimitMinutes} >= 1 AND ${t.spendCapUsd} >= 0`),
   ],
 );
 

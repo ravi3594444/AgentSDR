@@ -109,7 +109,7 @@ test("WhatsApp's contract constants (shown by the recorder and the website, kept
 
 describe("organization day (general.timeZone, general.dayStartsAt)", () => {
   test("defaults to UTC midnight", () => {
-    expect(defaultValues("general")).toEqual({ timeZone: "UTC", dayStartsAt: "00:00", defaultPhoneCountry: "", autonomousRunsPerDay: 10, autonomousLeadsPerDay: 300, autonomousSearchesPerDay: 20 });
+    expect(defaultValues("general")).toEqual({ timeZone: "UTC", dayStartsAt: "00:00", defaultPhoneCountry: "", autonomousRunsPerDay: 10, autonomousLeadsPerDay: 300, autonomousSearchesPerDay: 20, objectiveLeadTarget: 25, objectiveHours: 4, objectiveSpendUsd: 5 });
   });
 
   test("validates the zone and the time", () => {
@@ -132,5 +132,14 @@ describe("Autonomous mode caps (general)", () => {
     expect(validateValues("general", { autonomousRunsPerDay: 500 }).ok).toBe(false);
     expect(validateValues("general", { autonomousLeadsPerDay: 5 }).ok).toBe(false);
     expect(validateValues("general", { autonomousSearchesPerDay: 30 })).toEqual({ ok: true, values: { autonomousSearchesPerDay: 30 } });
+  });
+});
+
+describe("a request's research defaults (general)", () => {
+  test("a lead target, a time limit and a spend cap, each bounded; 0 spend keeps requests on free sources", () => {
+    expect(validateValues("general", { objectiveLeadTarget: 0 }).ok).toBe(false);
+    expect(validateValues("general", { objectiveHours: 100 }).ok).toBe(false);
+    expect(validateValues("general", { objectiveSpendUsd: 2.5 }).ok).toBe(false);
+    expect(validateValues("general", { objectiveLeadTarget: 50, objectiveHours: 2, objectiveSpendUsd: 0 })).toEqual({ ok: true, values: { objectiveLeadTarget: 50, objectiveHours: 2, objectiveSpendUsd: 0 } });
   });
 });

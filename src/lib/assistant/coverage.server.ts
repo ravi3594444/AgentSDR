@@ -23,7 +23,7 @@ const servedByAJob = () => exists(db.select({ one: sql`1` }).from(assistantJobs)
  * naming the web would read "not started" however much the assistant
  * searched it.
  */
-async function webToolUse(request: { id: string; threadId: string; createdAt: Date }): Promise<WebToolUse> {
+export async function webToolUse(request: { id: string; threadId: string; createdAt: Date }): Promise<WebToolUse> {
   const [nextRequest] = await db.select({ createdAt: assistantMessages.createdAt }).from(assistantMessages)
     .where(and(
       inOrg(assistantMessages),

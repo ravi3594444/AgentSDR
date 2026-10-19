@@ -9,11 +9,13 @@ import { continueAfterEvent, runToolInThread } from "./agent.server";
 import { coverageLineForJob } from "./coverage.server";
 import { autoStartPlan, threadAutonomy } from "./autonomy.server";
 import { runLinkedinSearchStep } from "./linkedinSearch.server";
+import { failObjective, nudgeObjective, objectiveForJob, objectiveHold, postObjectiveReport } from "./objective.server";
+import { runObjectiveStep } from "./objectiveDriver.server";
 import { runOutreachStartStep } from "./outreach.server";
 import { applyRequestApproval } from "./requestApproval.server";
 import { assistantJobs } from "./schema";
 import { addMessage, claimThread, releaseThread, touchThread } from "./threads.server";
-import { claimJobReport, followUpDue, onAssistantJobFinished, registerAssistantJobHandler, type AssistantJob } from "./worker";
+import { claimJobReport, followUpDue, onAssistantJobFinished, registerAssistantJobHandler, type AssistantJob, type StepHandler } from "./worker";
 
 /**
  * Wires the assistant's background jobs to the worker, and reports each
@@ -26,6 +28,13 @@ import { claimJobReport, followUpDue, onAssistantJobFinished, registerAssistantJ
  * lost is posted by the worker's reconciliation, with what follows it, and
  * so is the plan a "find and contact" search promised when a restart came
  * after its report (owed from the report's commit, see followUpDue).
+ *
+ * A search of a request pursued as an objective (objective.server.ts) wakes
+ * that objective's driver when it finishes, and leaves continuing the
+ * request to it: the driver resumes the turn once the request's searches are
+ * done and its target is not met, and posts the request's one final report.
+ * A search of a paused request waits before it starts; one of a stopped
+ * request ends as not searched.
  */
 
 /** A finished website and directory search, from its result. */
@@ -91,15 +100,21 @@ function outreachMessage(job: AssistantJob): string {
 
 let registered = false;
 
+/** A search's steps, held before its first stage while its request is paused (or ended when it stopped). */
+function held(handler: StepHandler): StepHandler {
+  return async (job, heartbeat) => (await objectiveHold(job)) ?? handler(job, heartbeat);
+}
+
 export function registerAssistantJobs(): void {
   if (registered) return;
   registered = true;
-  registerAssistantJobHandler("discovery", runDiscoveryStep);
+  registerAssistantJobHandler("discovery", held(runDiscoveryStep));
   registerAssistantJobHandler("outreach_start", runOutreachStartStep);
-  registerAssistantJobHandler("linkedin_search", runLinkedinSearchStep);
-  registerAssistantJobHandler("web_discovery", runWebDiscoveryStep);
+  registerAssistantJobHandler("linkedin_search", held(runLinkedinSearchStep));
+  registerAssistantJobHandler("web_discovery", held(runWebDiscoveryStep));
   // Instagram prospects through Apify run on the discovery job's stages (discovery.server.ts).
-  registerAssistantJobHandler("apify_instagram", runDiscoveryStep);
+  registerAssistantJobHandler("apify_instagram", held(runDiscoveryStep));
+  registerAssistantJobHandler("objective", runObjectiveStep);
   onAssistantJobFinished(reportFinishedJob);
 }
 
@@ -140,6 +155,16 @@ async function finishFollowUp(job: AssistantJob): Promise<void> {
  * once.
  */
 export async function reportFinishedJob(job: AssistantJob): Promise<void> {
+  if (job.kind === "objective") {
+    // The driver's outcome is the objective's report, posted under the objective's own key; its job owes nothing more.
+    await claimJobReport(job, async () => undefined);
+    const objectiveId = typeof job.payload.objectiveId === "string" ? job.payload.objectiveId : null;
+    if (objectiveId) {
+      if (job.status === "failed") await failObjective(objectiveId, job.error ?? "unknown error");
+      else await postObjectiveReport(objectiveId);
+    }
+    return;
+  }
   if (!job.threadId) {
     await claimJobReport(job, async () => undefined);
     return;
@@ -151,28 +176,35 @@ export async function reportFinishedJob(job: AssistantJob): Promise<void> {
   // not left to the model's judgement. It still waits for the owner's Start.
   const contactAfter = found ? (job.payload as { contactAfter?: ContactAfter | null }).contactAfter ?? null : null;
   const coverage = search ? await coverageLineForJob(job).catch(() => null) : null;
+  // The request this search serves, when it is pursued as an objective: its driver continues it, not this report.
+  const objective = search ? await objectiveForJob(job).catch(() => null) : null;
   const content = `${search ? discoveryMessage(job) : outreachMessage(job)}${coverage ? ` ${coverage}` : ""}`;
   const posted = await claimJobReport(job, async (tx) => {
     await addMessage({ threadId, role: "event", content, toolResult: { reportKey: job.reportKey } }, tx);
     if (contactAfter) await tx.update(assistantJobs).set({ progress: followUpPatch("owed") }).where(and(inOrg(assistantJobs), eq(assistantJobs.id, job.id)));
   });
+  if (objective) await nudgeObjective(objective.id).catch((error) => console.error("[assistant] waking a request's objective failed:", error));
+  const driven = Boolean(objective);
   if (!posted) {
     // Reported already (a duplicate callback, or the reconciliation): what follows it runs only while it
     // is still owed and nobody is working on it (followUpSearch takes it), so at most once.
-    if (contactAfter) void followUpSearch(job, threadId, contactAfter);
+    if (contactAfter) void followUpSearch(job, threadId, contactAfter, driven);
     return;
   }
   if (search && !found) {
-    // Autonomous mode: a search that failed or found nobody still wakes the assistant, to try elsewhere.
-    if ((await threadAutonomy(job.threadId)).on) void continueAfterEvent(job.threadId);
+    // Autonomous mode: a search that failed or found nobody still wakes the assistant, to try elsewhere
+    // (an objective's driver does that for its own request, once its searches are done).
+    if (!driven && (await threadAutonomy(job.threadId)).on) void continueAfterEvent(job.threadId);
     return;
   }
   if (!search || job.status !== "succeeded" || !job.audienceId) return;
+  if (driven && !contactAfter) return;
   // Not awaited: writing the plan takes model calls, and the worker moves on.
-  void followUpSearch(job, job.threadId, contactAfter);
+  void followUpSearch(job, job.threadId, contactAfter, driven);
 }
 
-async function followUpSearch(job: AssistantJob, threadId: string, contactAfter: ContactAfter | null): Promise<void> {
+/** `driven`: the search serves an objective, whose driver continues the request afterwards (not this follow-up). */
+async function followUpSearch(job: AssistantJob, threadId: string, contactAfter: ContactAfter | null, driven = false): Promise<void> {
   try {
     // The promised plan is taken under a lease: made once, and a restart part-way leaves it to the reconciliation.
     if (contactAfter && !(await takeFollowUp(job))) return;
@@ -242,6 +274,8 @@ async function followUpSearch(job: AssistantJob, threadId: string, contactAfter:
       // Autonomous mode keeps working toward the owner's goal (the next search, a report); otherwise the plan waits.
       if (prepared.ok && !autonomous) return;
     }
+    // The objective's driver continues its request once the plan is made (it waits for owed plans).
+    if (driven) return;
     // Otherwise (or when the plan could not be made) the assistant picks up where the owner left it.
     await continueAfterEvent(threadId);
   } catch (error) {

@@ -11,7 +11,7 @@ import { requestCoverageFor } from "./coverage.server";
 import { searchAreaProblem } from "@/lib/discovery/geocode";
 import { extractContacts, publicLinks, visibleText } from "@/lib/discovery/contacts";
 import { assertPublicPageUrl, fetchPublicPage, LOGIN_WALLED_HOST, PageRedirectRefusedError } from "@/lib/discovery/websiteContacts.server";
-import { normalizeWebCriteria, startWebDiscovery, WebDiscoveryUnavailableError } from "@/lib/discovery/webDiscovery.server";
+import { normalizeWebCriteria, startWebDiscovery, WebDiscoveryLimitError, WebDiscoveryUnavailableError } from "@/lib/discovery/webDiscovery.server";
 import { generalWebSearch, webSearchAvailability, webSearchAvailabilityFrom, webSearchProviderName, WebSearchUnavailableError } from "@/lib/discovery/webSearch.server";
 import { fetchFailureText } from "@/lib/tinyfish/catalog";
 import { fetchWithTinyfish, tinyfishConnection, TinyfishWaitError } from "@/lib/tinyfish/tinyfish.server";
@@ -52,6 +52,7 @@ import { audienceProspects } from "./qualification.server";
 import { diagnoseDelivery } from "./deliveryDiagnostics.server";
 import { parseInstagramContacts } from "./instagramContacts";
 import { createInstagramContactsAudience } from "./instagramContacts.server";
+import { controlsSentence, ensureObjective, objectiveForRequest, objectiveLine, objectiveSpendGuard, objectiveStartProblem, setObjectiveState, threadObjectives } from "./objective.server";
 
 /**
  * What the assistant can do, and nothing else. Each tool is a call into an
@@ -86,6 +87,30 @@ export type ToolContext = {
 /** The request a search serves: the outreach request when there is one (its plans share it), else the owner's latest message. */
 function searchRequestId(context: ToolContext): string | null {
   return context.outreachRequestId ?? context.requestMessageId ?? null;
+}
+
+/**
+ * The request a search serves, pursued as an objective (objective.server.ts):
+ * created with its first search (its controls from the owner's words, else
+ * the defaults), and refusing new searches once it is paused, stopped or at
+ * a limit. `line` tells the model the controls, once, with the first search.
+ */
+async function searchObjective(context: ToolContext): Promise<{ problem: string | null; line: string | null }> {
+  const requestId = searchRequestId(context);
+  const ensured = await ensureObjective({ requestMessageId: requestId, threadId: context.threadId, userId: context.userId });
+  if (!ensured) return { problem: null, line: null };
+  const problem = await objectiveStartProblem(requestId);
+  return { problem, line: ensured.created ? controlsSentence(ensured.objective) : null };
+}
+
+/** A search refused by its request's objective, as a result the model reads (not the model's mistake). */
+function objectiveRefusal(problem: string): ToolResult {
+  return { ok: false, summary: `Not started: ${problem}.` };
+}
+
+/** A result's summary with the request's controls appended, the first time. */
+function withControls(result: ToolResult, line: string | null): ToolResult {
+  return line ? { ...result, summary: `${result.summary} ${line}` } : result;
 }
 
 /**
@@ -406,15 +431,17 @@ export const TOOLS: Record<string, Tool> = {
       if (area) return { ok: false, summary: area.problem };
       if (args.provider !== undefined && args.provider !== null && args.provider !== "apify") throw new ToolArgumentError("provider may only be 'apify' (when the owner asked for Apify); leave it out otherwise");
       const contactAfter = request ? { channels: channels(args) ?? null, ownerRequest: request, requestId: context.outreachRequestId ?? undefined } : null;
+      const objective = await searchObjective(context);
+      if (objective.problem) return objectiveRefusal(objective.problem);
       try {
         const started = await startDiscovery(criteria, context, { contactAfter, provider: args.provider === "apify" ? "apify" : null, requestMessageId: searchRequestId(context) });
         const source = started.provider === "website" ? "business websites and directories (no Google Maps search is available)" : sourceLabel("maps", started.provider);
-        return {
+        return withControls({
           ok: true,
           summary: `${started.waiting ? "Queued" : "Search started"} for “${started.phrase}” on ${source} (up to ${criteria.maxResults} businesses); job ${started.jobId}, audience ${started.audienceId}. It runs in the background; results are announced in the chat when done.${contactAfter ? " The outreach plan will be prepared automatically when it finishes." : ""}${started.note ? ` ${started.note}` : ""}`,
           display: `${started.waiting ? "Queued" : "Searching"} ${source} for “${started.phrase}”`,
           data: { jobId: started.jobId, audienceId: started.audienceId, phrase: started.phrase, criteria, provider: started.provider, source, waiting: Boolean(started.waiting), note: started.note },
-        };
+        }, objective.line);
       } catch (error) {
         if (error instanceof DiscoveryUnavailableError) return { ok: false, summary: error.message };
         throw error;
@@ -439,6 +466,8 @@ export const TOOLS: Record<string, Tool> = {
       const maxResults = Number.isFinite(requested) ? Math.min(100, Math.max(5, Math.round(requested))) : 30;
       const request = args.contactAfter === true ? requireOutreachRequest(context) : null;
       const contactAfter = request ? { channels: channels(args) ?? ["instagram", "email", "whatsapp"], ownerRequest: request, requestId: context.outreachRequestId ?? undefined } : null;
+      const objective = await searchObjective(context);
+      if (objective.problem) return objectiveRefusal(objective.problem);
       try {
         const started = await startInstagramProspects({ what: what.slice(0, 200), where: where.slice(0, 200), hashtags, maxResults, language: profile.language ?? "en" }, context, { contactAfter, requestMessageId: searchRequestId(context) });
         const via = started.provider !== "apify"
@@ -446,11 +475,11 @@ export const TOOLS: Record<string, Tool> = {
           : started.waiting
             ? `Instagram search for ${started.phrase} through Apify is queued: it waits for a free Apify run slot and starts by itself`
             : `Instagram search started for ${started.phrase} through Apify`;
-        return {
+        return withControls({
           ok: true,
           summary: `${via}; job ${started.jobId}, audience ${started.audienceId}. Results are announced in the chat when done.${contactAfter ? " The outreach plan will be prepared automatically for those who can be contacted." : ""} ${started.note ?? ""}`.trim(),
           data: { jobId: started.jobId, audienceId: started.audienceId, phrase: started.phrase, provider: started.provider, note: started.note },
-        };
+        }, objective.line);
       } catch (error) {
         if (error instanceof DiscoveryUnavailableError) return { ok: false, summary: error.message };
         throw error;
@@ -476,14 +505,16 @@ export const TOOLS: Record<string, Tool> = {
       const maxResults = Number.isFinite(requested) ? Math.min(100, Math.max(5, Math.round(requested))) : 30;
       const request = args.contactAfter === true ? requireOutreachRequest(context) : null;
       const contactAfter = request ? { channels: channels(args) ?? (platform === "instagram" ? ["instagram", "email", "whatsapp"] : null), ownerRequest: request, requestId: context.outreachRequestId ?? undefined } : null;
+      const objective = await searchObjective(context);
+      if (objective.problem) return objectiveRefusal(objective.problem);
       try {
         const started = await startSocialProspects(platform, { what: what.slice(0, 200), where: where.slice(0, 200), maxResults, language: profile.language ?? "en" }, context, { contactAfter, requestMessageId: searchRequestId(context) });
         const name = platform === "facebook" ? "Facebook" : platform === "linkedin" ? "LinkedIn" : "Instagram";
-        return {
+        return withControls({
           ok: true,
           summary: `${name} search ${started.waiting ? "queued (it waits for a free Apify run slot and starts by itself)" : "started"} for “${what}” in ${where} through Apify (up to ${maxResults}); job ${started.jobId}, audience ${started.audienceId}. Results are announced in the chat when done.${contactAfter ? " The outreach plan will be prepared automatically for those who can be contacted." : ""} ${started.note ?? ""}`.trim(),
           data: { jobId: started.jobId, audienceId: started.audienceId, phrase: started.phrase, provider: started.provider, note: started.note },
-        };
+        }, objective.line);
       } catch (error) {
         if (error instanceof DiscoveryUnavailableError) return { ok: false, summary: error.message };
         throw error;
@@ -512,17 +543,21 @@ export const TOOLS: Record<string, Tool> = {
       if (args.contactAfter !== undefined && typeof args.contactAfter !== "boolean") throw new ToolArgumentError("contactAfter must be true or false");
       const request = args.contactAfter === true ? requireOutreachRequest(context) : null;
       const contactAfter = request ? { channels: channels(args) ?? null, ownerRequest: request, requestId: context.outreachRequestId ?? undefined } : null;
+      const objective = await searchObjective(context);
+      if (objective.problem) return objectiveRefusal(objective.problem);
       try {
         const started = await startWebDiscovery(criteria, context, { contactAfter, requestMessageId: searchRequestId(context) });
         const instagram = started.instagram.usable ? " Public Instagram profiles and posts it returns are read too." : ` Instagram pages are skipped (${started.instagram.reason}).`;
         const provider = webSearchProviderName(started.provider);
-        return {
+        return withControls({
           ok: true,
           summary: `Web search started for “${started.phrase}” with ${provider} (${started.model}): ${started.queries.length} searches, up to ${criteria.maxResults} business websites; job ${started.jobId}, audience ${started.audienceId}.${instagram} Results are announced in the chat when done.${contactAfter ? " The outreach plan will be prepared automatically when it finishes." : ""}`,
           display: `Searching the web for “${started.phrase}” (${provider}, ${started.queries.length} searches, up to ${criteria.maxResults} websites).${instagram}`,
           data: { jobId: started.jobId, audienceId: started.audienceId, phrase: started.phrase, queries: started.queries, provider: started.provider, model: started.model, instagram: started.instagram, criteria },
-        };
+        }, objective.line);
       } catch (error) {
+        // Its open searches are a wait, not a limit: a request pursued on its own tries again when one finishes.
+        if (error instanceof WebDiscoveryLimitError && error.slotsFull) return { ok: false, summary: error.message, data: { waiting: true } };
         if (error instanceof WebDiscoveryUnavailableError) return { ok: false, summary: error.message };
         throw error;
       }
@@ -568,7 +603,8 @@ export const TOOLS: Record<string, Tool> = {
       const body = (args.body ?? null) as Record<string, unknown> | null;
       if (body && JSON.stringify(body).length > 4_000) throw new ToolArgumentError("body is too large (4,000 characters at most)");
       try {
-        const outcome = await callTregEndpoint({ endpointId: args.endpointId, query, body, threadId: context.threadId });
+        const requestId = searchRequestId(context);
+        const outcome = await callTregEndpoint({ endpointId: args.endpointId, query, body, threadId: context.threadId, requestId, spendGuard: await objectiveSpendGuard(requestId) });
         const id = outcome.endpoint?.id ?? String(args.endpointId ?? "");
         if (!outcome.ok) {
           return { ok: false, summary: `Treg ${id} not used: ${outcome.reason}.${outcome.costUsd ? ` Counted: $${outcome.costUsd}.` : ""}`, display: `Not used: ${outcome.reason}` };
@@ -628,7 +664,8 @@ export const TOOLS: Record<string, Tool> = {
       const audienceId = await createAudience({
         name,
         source: "list",
-        criteria: { source: "chat", imported: { created: result.created, updated: result.updated, failed: result.failed.length, skippedNoIdentity: result.skippedNoIdentity } },
+        // The request it serves: contacts found while pursuing it count toward its lead target.
+        criteria: { source: "chat", requestId: searchRequestId(context), imported: { created: result.created, updated: result.updated, failed: result.failed.length, skippedNoIdentity: result.skippedNoIdentity } },
         threadId: context.threadId,
         userId: context.userId,
       });
@@ -728,7 +765,7 @@ export const TOOLS: Record<string, Tool> = {
       const page = args.page === undefined ? 0 : Number(args.page);
       if (!Number.isInteger(page) || page < 0 || page > 3) throw new ToolArgumentError("page must be a whole number from 0 to 3");
       try {
-        const { provider, hits } = await generalWebSearch({ query, country: country?.toUpperCase() ?? null, page, purpose: text(args, "purpose") }, { threadId: context.threadId });
+        const { provider, hits } = await generalWebSearch({ query, country: country?.toUpperCase() ?? null, page, purpose: text(args, "purpose") }, { threadId: context.threadId, requestId: searchRequestId(context) });
         const name = webSearchProviderName(provider);
         const lines = hits.map((hit, index) => `${index + 1}. ${hit.title ?? "(no title)"} — ${hit.url}${hit.snippet ? ` — ${hit.snippet}` : ""}${hit.date ? ` (${hit.date})` : ""}`);
         return {
@@ -740,7 +777,7 @@ export const TOOLS: Record<string, Tool> = {
           data: { query, page, provider, results: hits },
         };
       } catch (error) {
-        if (error instanceof TinyfishWaitError) return { ok: false, summary: `Web search is waiting: ${error.message}. Use another source meanwhile, or tell the owner when it resumes.` };
+        if (error instanceof TinyfishWaitError) return { ok: false, summary: `Web search is waiting: ${error.message}. Use another source meanwhile, or tell the owner when it resumes.`, data: { waiting: true, until: error.until.toISOString() } };
         if (error instanceof WebSearchUnavailableError) return { ok: false, summary: `Web search is not available: ${error.message}.` };
         throw error;
       }
@@ -833,7 +870,8 @@ export const TOOLS: Record<string, Tool> = {
       const blocked = await browserNavigationProblem(url.toString());
       if (blocked) return { ok: false, summary: `Not opened: ${blocked}.` };
       try {
-        const opened = await openBrowser(url.toString(), context.threadId, browserNavigationProblem);
+        const requestId = searchRequestId(context);
+        const opened = await openBrowser(url.toString(), context.threadId, browserNavigationProblem, { requestId, spendGuard: await objectiveSpendGuard(requestId) });
         const allowance = opened.allowance;
         return browserResult(opened.reused ? "Opened in the chat's browser" : "Opened a browser", opened.snapshot, opened.problem, opened.reused ? "" : ` (paid by the minute; ${allowance.usedToday} of today's ${allowance.minutesPerDay} browser minutes reserved or used)`);
       } catch (error) {
@@ -898,15 +936,18 @@ export const TOOLS: Record<string, Tool> = {
       }
       const availability = await linkedinSearchAvailability();
       if (!availability.available) return { ok: false, summary: `LinkedIn search is not available: ${availability.reason}` };
+      const objective = await searchObjective(context);
+      if (objective.problem) return objectiveRefusal(objective.problem);
       const started = await startLinkedinSearch({ keywords, maxResults }, context, {
         contactAfter: args.contactAfter === true ? { channels: ["linkedin"], ownerRequest: requireOutreachRequest(context), requestId: context.outreachRequestId ?? undefined } : null,
+        requestMessageId: searchRequestId(context),
       });
-      return {
+      return withControls({
         ok: true,
         summary: `LinkedIn search started for “${keywords}” (up to ${maxResults} people); job ${started.jobId}, audience ${started.audienceId}. Results are announced in the chat when done.`,
         display: `LinkedIn search started for “${keywords}” (up to ${maxResults} people).`,
         data: { jobId: started.jobId, audienceId: started.audienceId, keywords },
-      };
+      }, objective.line);
     },
   },
 
@@ -914,7 +955,8 @@ export const TOOLS: Record<string, Tool> = {
     description: "The progress or result of a lead search (Google Maps, Instagram, Facebook, LinkedIn or web), and for a request that named several platforms, each platform's state (searched, searching, waiting, not searched, not started) with its reason.",
     arguments: "jobId (optional; the latest search when left out)",
     run: async (args, context) => {
-      const coverage = await requestCoverageLine(context);
+      const [platforms, objective] = await Promise.all([requestCoverageLine(context), objectiveLine(searchRequestId(context))]);
+      const coverage = [platforms, objective].filter(Boolean).join(" ") || null;
       const jobId = uuid(args, "jobId", false);
       const [job] = await db.select().from(assistantJobs)
         .where(and(inOrg(assistantJobs), inArray(assistantJobs.kind, ["discovery", "linkedin_search", "web_discovery", "apify_instagram"]), ...(jobId ? [eq(assistantJobs.id, jobId)] : [])))
@@ -946,6 +988,31 @@ export const TOOLS: Record<string, Tool> = {
         summary: `Search ${job.id}: ${job.status} (${job.stage}). Progress ${JSON.stringify(job.progress)}.${job.error ? ` Error: ${job.error}` : ""}${job.result ? ` Result: ${JSON.stringify(job.result)}` : ""}${coverage ? ` ${coverage}` : ""}`,
         display: `${display}${coverage ? `\n${coverage}` : ""}`,
         data: { jobId: job.id, status: job.status, stage: job.stage, progress: job.progress, result: job.result, error: job.error, audienceId: job.audienceId },
+      };
+    },
+  },
+
+  control_research: {
+    description: "Pause, resume or cancel the background research of the owner's request (its searches and the work that continues it toward its lead target, time limit and spend cap), only when the owner asks. Pausing or cancelling starts nothing new; searches already running finish, and every lead already saved is kept. Cancelling ends it with its final report. It does not touch outreach plans (pause_outreach and stop_outreach do).",
+    arguments: "action (pause | resume | cancel); requestId (optional: the request's message id; the latest research in this chat when left out)",
+    run: async (args, context) => {
+      const action = args.action;
+      if (action !== "pause" && action !== "resume" && action !== "cancel") throw new ToolArgumentError("action must be pause, resume or cancel");
+      const requestId = uuid(args, "requestId", false);
+      const objective = requestId
+        ? await objectiveForRequest(requestId)
+        : (await threadObjectives(context.threadId, 5)).find((row) => (action === "resume" ? row.status === "paused" : row.status !== "stopped")) ?? null;
+      if (!objective || objective.threadId !== context.threadId) return { ok: false, summary: action === "resume" ? "No paused research in this chat." : "No research is running in this chat." };
+      const { changed, objective: after } = await setObjectiveState(objective.id, action, { name: null });
+      const state = after?.status ?? objective.status;
+      return {
+        ok: changed,
+        summary: changed
+          ? action === "cancel"
+            ? "Research cancelled: nothing new starts, searches already running finish, every lead found is kept, and its final report follows."
+            : action === "pause" ? "Research paused: nothing new starts until it is resumed; searches already running finish and their leads are kept. Its time limit keeps counting." : "Research resumed."
+          : `Nothing changed: the research is ${state}.`,
+        data: { objectiveId: objective.id, status: state },
       };
     },
   },

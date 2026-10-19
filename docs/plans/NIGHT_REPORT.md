@@ -187,8 +187,9 @@ run them all before the new image takes traffic.
 4. `add-wrong-number.ts`: `crm_wrong_routes` and the "Wrong Number" subcategory. Classification and every send path now query it.
 5. `add-activity.ts`: `activity_seen`
 6. `add-assistant-job-reports.ts`: `assistant_jobs.report_key`, `reported_at`. The worker writes these columns.
+7. `add-objectives.ts`: `assistant_objectives`, the `objective` job kind, `treg_calls.request_id`. Search tools create objectives and Treg calls write the column.
 
-The image now ships all six (`Dockerfile`, `.dockerignore`).
+The image now ships all seven (`Dockerfile`, `.dockerignore`).
 
 ## Your morning list
 

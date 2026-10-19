@@ -62,6 +62,14 @@ word means here and, where it matters, what it does not mean.
 - **Report key**: the idempotency key of an objective's or job's terminal
   report. It ensures one report per outcome, even after duplicate callbacks
   or a restart.
+- **Continuation**: the objective's driver resuming the request's chat turn
+  without an owner message, once its searches have ended short of the
+  target, with a note of what each source yielded. The model chooses the
+  next source or query; a continuation that starts nothing means the
+  sources are exhausted.
+- **Stop reason**: why an objective ended, the first of: target reached,
+  sources exhausted, spend cap used, time limit, cancelled, or failed. It is
+  stored with the objective and said in its final report.
 
 ## Outreach
 

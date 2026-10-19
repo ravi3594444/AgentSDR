@@ -7,6 +7,7 @@ import { AIML_PROVIDER_KEY, AIML_PROVIDER_NAME } from "@/lib/ai/aimlapi-types";
 import { db } from "@/lib/db";
 import { addAudienceMembers, createAudience, type NewMember } from "@/lib/assistant/audiences.server";
 import { getBusinessProfile } from "@/lib/assistant/profile.server";
+import { objectiveStartProblem } from "@/lib/assistant/objective.server";
 import { assistantJobs, leadAudienceMembers, type AudienceChannel, type ContactEvidence, type LeadSignal } from "@/lib/assistant/schema";
 import type { AssistantJob, StepOutcome } from "@/lib/assistant/worker";
 import { findOrCreateContactPerson } from "@/lib/calls/campaigns";
@@ -193,11 +194,17 @@ export class WebDiscoveryUnavailableError extends Error {
   }
 }
 
-/** The organization's website searches are at a limit: the message says which and when to ask again. */
+/**
+ * The organization's website searches are at a limit: the message says which
+ * and when to ask again. `slotsFull`: only its open searches are in the way,
+ * a wait rather than a limit (an objective tries again when one finishes).
+ */
 export class WebDiscoveryLimitError extends WebDiscoveryUnavailableError {
-  constructor(message: string) {
+  readonly slotsFull: boolean;
+  constructor(message: string, options: { slotsFull?: boolean } = {}) {
     super(message);
     this.name = "WebDiscoveryLimitError";
+    this.slotsFull = options.slotsFull ?? false;
   }
 }
 
@@ -282,6 +289,9 @@ export async function startWebDiscovery(
   if (!(await featureEnabled("web_discovery"))) throw new WebDiscoveryUnavailableError(new FeatureDisabledError("web_discovery").message);
   const availability = await webSearchAvailability();
   if (!availability.available) throw new WebDiscoveryUnavailableError(availability.reason ?? "No web search is set up.");
+  // A request paused, stopped or at its limit starts no new search, including one another search hands over.
+  const closed = await objectiveStartProblem(options.requestMessageId ?? options.contactAfter?.requestId ?? null);
+  if (closed) throw new WebDiscoveryUnavailableError(`Not started: ${closed}.`);
   const readiness = await instagramReadiness();
   const instagram = { usable: readiness.usable, reason: readiness.reason };
   const queries = buildSearchQueries({ customers: criteria.customers, offer: criteria.offer, where: criteria.where, language: criteria.language, instagram: instagram.usable });
@@ -298,7 +308,7 @@ export async function startWebDiscovery(
     const open = Number(counts?.open ?? 0);
     const recent = Number(counts?.recent ?? 0);
     if (open >= MAX_OPEN_WEB_DISCOVERIES) {
-      throw new WebDiscoveryLimitError(`${open} website search${open === 1 ? " is" : "es are"} already running for this organization (at most ${MAX_OPEN_WEB_DISCOVERIES} at a time). Ask again when one has finished; lead_search_status shows their progress.`);
+      throw new WebDiscoveryLimitError(`${open} website search${open === 1 ? " is" : "es are"} already running for this organization (at most ${MAX_OPEN_WEB_DISCOVERIES} at a time). Ask again when one has finished; lead_search_status shows their progress.`, { slotsFull: true });
     }
     if (availability.provider === "tavily") {
       // Tavily: the owner's own daily cap of searches (Settings → Organization → Tavily) replaces the fixed one.

@@ -17,6 +17,7 @@ import {
 import { APIFY_ACTORS, APIFY_LIMITS, isApifyActorKey, type ApifyActorKey, type ApifySettingsView } from "./catalog";
 import { apifyAllowance, looksExhausted, runOutcome } from "./mapping";
 import { apifyRuns, apifySettings, type ApifyRunRow } from "./schema";
+import type { SpendGuard } from "@/lib/assistant/objective.server";
 
 /**
  * The organization's Apify connection and its runs. Every run is recorded
@@ -156,7 +157,8 @@ async function savedToken(): Promise<string | null> {
   return row?.encryptedToken ? decryptIntegrationCredential(row.encryptedToken) : null;
 }
 
-export type StartedRun = { started: true; row: ApifyRunRow } | { started: false; exhausted: boolean; slotsFull?: boolean; reason: string };
+/** `budget`: the request's own spend cap refused it (objective.server.ts), so no other paid provider should take it either. */
+export type StartedRun = { started: true; row: ApifyRunRow } | { started: false; exhausted: boolean; slotsFull?: boolean; budget?: boolean; reason: string };
 
 /**
  * Runs nothing polls any more hold a run slot and their reserved cap until
@@ -199,11 +201,23 @@ export async function startTrackedRun(input: {
   jobId: string | null;
   /** The owner's request the job serves (kept on the run). */
   requestId: string | null;
+  /**
+   * The request's own spend cap (objective.server.ts), checked under the
+   * same lock as the organization's budget: it may refuse the run, hold it
+   * while the request's other paid work settles, or lower the run's cap to
+   * what the request has left.
+   */
+  spendGuard?: SpendGuard;
 }): Promise<StartedRun> {
   // A retried step finds the run its first attempt started rather than paying for a second.
   if (input.jobId) {
     const open = await openRunForJob(input.jobId, input.actor);
     if (open?.status === "running") return { started: true, row: open };
+    // Reserved, then the answer was lost (the process stopped while starting it): Apify may have started it.
+    // It is never started a second time; its reserved cap stays counted until it is swept as spent.
+    if (open?.status === "starting") {
+      return { started: false, exhausted: false, reason: "an earlier attempt to start this Apify run lost its answer, so it may have run; it is not started again, and its reserved cap stays counted" };
+    }
   }
   // The account's allowance is read first (a network call, outside any transaction)…
   const readiness = await apifyReadiness(input.actor, input.wantedItems);
@@ -221,6 +235,11 @@ export async function startTrackedRun(input: {
       account: readiness.account,
     });
     if (!allowance.ok) return { usable: false as const, exhausted: allowance.exhausted, slotsFull: allowance.slotsFull, reason: allowance.reason };
+    // The request's cap, read again with every open reservation, after the organization's lock.
+    const room = input.spendGuard ? await input.spendGuard(tx, 0.01) : null;
+    if (room && !room.ok) return { usable: false as const, exhausted: false, slotsFull: room.wait, budget: !room.wait, reason: room.reason };
+    const maxChargeUsd = room ? Math.floor(Math.min(allowance.maxChargeUsd, room.maxUsd) * 100) / 100 : allowance.maxChargeUsd;
+    if (maxChargeUsd <= 0) return { usable: false as const, exhausted: false, slotsFull: false, budget: true, reason: "this request's spend cap leaves less than a cent for an Apify run" };
     const [row] = await tx.insert(apifyRuns).values({
       organizationId: currentOrganizationId(),
       jobId: input.jobId,
@@ -228,12 +247,12 @@ export async function startTrackedRun(input: {
       actorKey: input.actor,
       actorId: APIFY_ACTORS[input.actor].actorId,
       status: "starting",
-      maxChargeUsd: allowance.maxChargeUsd,
+      maxChargeUsd,
       maxItems: readiness.maxItems,
     }).returning();
     return { usable: true as const, row: row!, token: readiness.token };
   });
-  if (!reserved.usable) return { started: false, exhausted: reserved.exhausted, slotsFull: reserved.slotsFull, reason: reserved.reason };
+  if (!reserved.usable) return { started: false, exhausted: reserved.exhausted, slotsFull: reserved.slotsFull, budget: "budget" in reserved ? reserved.budget : undefined, reason: reserved.reason };
   const { row, token } = reserved;
   try {
     const run = await startApifyRun(token, row.actorId, input.input(row.maxItems), {

@@ -388,6 +388,31 @@ reviewer model pass in `writer.server.ts`. A pitch problem retries a
 bounded number of times and then keeps the best version: it must never
 stop a plan.
 
+## Objectives: one request pursued to an end
+
+A request whose turn starts a lead search becomes an objective
+(`src/lib/assistant/objective*.ts`, table `assistant_objectives`, unique per
+organization and request message): a lead target, a time limit and a spend
+cap, from the owner's words or the "general" Sending rules
+`objectiveLeadTarget` / `objectiveHours` / `objectiveSpendUsd`. Its searches
+stay ordinary jobs carrying the request's id; an `objective` job (the
+driver, `objectiveDriver.server.ts`) waits while they run and, when they end
+short of the target with time and budget left, resumes the request's turn
+with a note (found vs target, spend and time left, each source's yield) so
+the model picks the next source. It stops at the first of target reached,
+sources exhausted, spend cap used, time limit, the owner's cancel
+(`control_research`, `POST /api/assistant/objectives/[id]`) or a recorded
+failure, stores the exact reason, and posts one report keyed by its report
+key. Activity reads it through `objectiveView(requestMessageId)`.
+
+- A new search tool calls `searchObjective(context)` before it starts
+  anything, and its job carries `requestMessageId`.
+- Paid work passes the request's `SpendGuard`
+  (`objectiveSpendGuard(requestId)`) inside its own reservation
+  transaction, after its provider lock: Apify's `startTrackedRun`, Treg's
+  `callTregEndpoint`, `reserveQuota`'s `guard`. Its spend is read from the
+  ledgers by the request's jobs and id, never kept as a second counter.
+
 ## WhatsApp messaging (Unipile)
 
 Reps link their WhatsApp number in the Unipile dashboard; AgentSDR reads it
