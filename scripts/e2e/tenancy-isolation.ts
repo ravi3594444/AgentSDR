@@ -148,8 +148,43 @@ async function foreignKeyColumn(child: string, parent: string): Promise<string |
  */
 function leaksIn(body: string, markers: Set<string>, requestedUrl = ""): string[] {
   const found: string[] = [];
-  for (const marker of markers) if (body.includes(marker) && !requestedUrl.includes(marker)) found.push(marker);
+  for (const marker of markers) if (contains(body, marker) && !requestedUrl.includes(marker)) found.push(marker);
   return found;
+}
+
+const BARE_DOMAIN = /^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/i;
+
+/**
+ * Whether `body` holds `marker`. A company domain counts as that host only
+ * (bare, after "@" or "/", or with "www."), not as the tail of another host:
+ * an .xlsx carries "schemas.microsoft.com" in its XML namespaces whatever
+ * organization asks, and that is not A's microsoft.com.
+ */
+function contains(body: string, marker: string): boolean {
+  if (!BARE_DOMAIN.test(marker)) return body.includes(marker);
+  const text = body.toLowerCase();
+  const domain = marker.toLowerCase();
+  for (let at = text.indexOf(domain); at >= 0; at = text.indexOf(domain, at + 1)) {
+    const after = text.slice(at + domain.length, at + domain.length + 2);
+    if (/^[a-z0-9-]/.test(after) || /^\.[a-z0-9]/.test(after)) continue; // a longer host: acme.com.au, acme.community
+    if (at > 0 && /[a-z0-9-]/.test(text[at - 1]!)) continue; // a longer label: notacme.com
+    const host = /([a-z0-9-]+\.)*$/.exec(text.slice(Math.max(0, at - 253), at))?.[0] ?? "";
+    if (host === "" || host === "www.") return true;
+  }
+  return false;
+}
+
+// The detector itself, checked before it is trusted.
+for (const [body, marker, expected] of [
+  ['xmlns="http://schemas.microsoft.com/office/spreadsheetml/2009"', "microsoft.com", false],
+  ['{"domain":"microsoft.com"}', "microsoft.com", true],
+  ['<a href="https://www.microsoft.com/about">', "microsoft.com", true],
+  ["write to info@microsoft.com today", "microsoft.com", true],
+  ["acme.com.au and acme.community", "acme.com", false],
+  ["see notacme.com", "acme.com", false],
+  ['{"email":"priya@acme.com"}', "priya@acme.com", true],
+] as const) {
+  if (contains(body, marker) !== expected) throw new Error(`leak detector self-check failed: ${JSON.stringify({ body, marker, expected })}`);
 }
 
 // --------------------------------------------------------------- routes
