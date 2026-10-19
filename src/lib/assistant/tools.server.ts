@@ -1318,6 +1318,23 @@ export async function runTool(name: string, args: Record<string, unknown>, conte
   const tool = TOOLS[name];
   if (!tool) return { ok: false, summary: `There is no tool called ${name}.` };
   try {
+    // A lead request may be researched with individual web tools instead of a
+    // discovery tool. Establish its durable request objective before those
+    // tools run, while keeping ordinary page-reading questions lightweight.
+    // Search tools continue to use searchObjective() for the same request;
+    // ensureObjective is idempotent, so this cannot create per-call objectives.
+    const individualResearchTools = new Set([
+      "web_search", "read_webpage", "browser_open", "browser_read",
+      "browser_click", "browser_fill", "browser_scroll", "treg_search", "treg_call",
+    ]);
+    const leadFindingRequest = /\\b(?:find|source|research|identify|discover|build|get me|give me)\\b.{0,100}\\b(?:leads?|prospects?|customers?|businesses|companies|buyers|contacts?)\\b|\\b(?:leads?|prospects?)\\b.{0,100}\\b(?:find|source|research|identify|discover)\\b/i.test(context.ownerText);
+    if (individualResearchTools.has(name) && leadFindingRequest) {
+      await ensureObjective({
+        requestMessageId: searchRequestId(context),
+        threadId: context.threadId,
+        userId: context.userId,
+      });
+    }
     return await tool.run(args, context);
   } catch (error) {
     if (error instanceof ToolArgumentError) return { ok: false, refused: true, summary: `Not run: ${error.message.replace(/\.$/, "")}.` };
