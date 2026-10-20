@@ -4,6 +4,7 @@ import { organizations } from "@/lib/auth/schema";
 import { companies, people } from "@/lib/leads/schema";
 import type { Continuation, ObjectiveStatus, StopReason } from "./objective";
 import type { RequestApproval } from "./requestApproval";
+import type { LeadApproach } from "./messages";
 
 /**
  * The owner's assistant (src/lib/assistant/): a chat that takes the owner's
@@ -210,14 +211,32 @@ export const leadAudienceMembers = pgTable(
     /** Facts the messages may use: category, city, rating, … */
     facts: jsonb("facts").$type<Record<string, string>>().notNull().default({}),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    /**
+     * The lead's verdict against the owner request its list serves
+     * (leadFit.ts): only a contactable "match" counts toward the request's
+     * target. Stored once, with the sorter's group and approach, so plans
+     * and retries reuse it; fit_claimed_at is the lease while it is judged.
+     */
+    fit: text("fit").$type<LeadFit>(),
+    fitReason: text("fit_reason"),
+    fitGroup: text("fit_group"),
+    fitApproach: text("fit_approach").$type<LeadApproach>(),
+    fitRequestId: uuid("fit_request_id"),
+    fitAt: timestamp("fit_at", { withTimezone: true }),
+    fitClaimedAt: timestamp("fit_claimed_at", { withTimezone: true }),
   },
   (t) => [
     index("lead_audience_members_organization_idx").on(t.organizationId),
     index("lead_audience_members_audience_idx").on(t.audienceId, t.status),
     uniqueIndex("lead_audience_members_person_uq").on(t.audienceId, t.personId).where(sql`${t.personId} IS NOT NULL`),
     check("lead_audience_members_status_chk", sql`${t.status} IN ('eligible', 'excluded')`),
+    check("lead_audience_members_fit_chk", sql`${t.fit} IS NULL OR ${t.fit} IN ('match', 'unconfirmed', 'no_match')`),
+    check("lead_audience_members_fit_approach_chk", sql`${t.fitApproach} IS NULL OR ${t.fitApproach} IN ('standard', 'personal', 'skip')`),
   ],
 );
+
+/** A lead's verdict against the request its list serves (leadFit.ts). */
+export type LeadFit = "match" | "unconfirmed" | "no_match";
 
 /**
  * Why a lead matched and what it actually said or did (qualification.ts),

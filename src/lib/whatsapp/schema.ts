@@ -52,6 +52,9 @@ export const whatsappAccounts = pgTable(
     isDefault: boolean("is_default").notNull().default(false),
     /** New chats a day for this number; null = the organization's rule (Settings → WhatsApp → Sending rules). */
     newChatsPerDay: integer("new_chats_per_day"),
+    /** Why the campaign sender last held this number back (a refusal, a gap or cap); cleared by the next accepted send. */
+    lastRefusal: text("last_refusal"),
+    lastRefusalAt: timestamp("last_refusal_at", { withTimezone: true }),
     lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

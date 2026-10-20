@@ -2604,6 +2604,15 @@ CREATE TABLE public.lead_audience_members (
     evidence jsonb DEFAULT '[]'::jsonb NOT NULL,
     facts jsonb DEFAULT '{}'::jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
+    fit text,
+    fit_reason text,
+    fit_group text,
+    fit_approach text,
+    fit_request_id uuid,
+    fit_at timestamp with time zone,
+    fit_claimed_at timestamp with time zone,
+    CONSTRAINT lead_audience_members_fit_approach_chk CHECK (((fit_approach IS NULL) OR (fit_approach = ANY (ARRAY['standard'::text, 'personal'::text, 'skip'::text])))),
+    CONSTRAINT lead_audience_members_fit_chk CHECK (((fit IS NULL) OR (fit = ANY (ARRAY['match'::text, 'unconfirmed'::text, 'no_match'::text])))),
     CONSTRAINT lead_audience_members_status_chk CHECK ((status = ANY (ARRAY['eligible'::text, 'excluded'::text])))
 );
 
@@ -3180,6 +3189,8 @@ CREATE TABLE public.whatsapp_accounts (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     organization_id uuid NOT NULL,
     new_chats_per_day integer,
+    last_refusal text,
+    last_refusal_at timestamp with time zone,
     CONSTRAINT whatsapp_accounts_status_chk CHECK ((status = ANY (ARRAY['connected'::text, 'disconnected'::text, 'credentials'::text, 'error'::text])))
 );
 

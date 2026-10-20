@@ -45,7 +45,7 @@
 #   HEALTH_TIMEOUT_S           how long the new app gets to answer 200 (180)
 #   WORKER_LOG_TIMEOUT_S       how long to wait for the worker's start line (60)
 #   MIGRATIONS                 scripts/<name>.ts to run, in order (this release's
-#                              seven; set it empty to run none)
+#                              eight; set it empty to run none)
 #   BACKUP_DIR                 dumps and saved edits (./deploy-backups, which
 #                              .dockerignore keeps out of the image build)
 #   EXTERNAL_DB_BACKUP_DONE=1  needed when the database is not the bundled `db`
@@ -56,7 +56,7 @@ set -euo pipefail
 
 readonly IMAGE=agentsdr:local
 readonly WORKER_READY='[assistant/worker] starting'
-readonly DEFAULT_MIGRATIONS="add-tinyfish add-research-sources add-browser-sessions add-wrong-number add-activity add-assistant-job-reports add-objectives"
+readonly DEFAULT_MIGRATIONS="add-tinyfish add-research-sources add-browser-sessions add-wrong-number add-activity add-assistant-job-reports add-objectives add-pilot-fixes"
 
 SCRIPT_PATH=$(realpath "${BASH_SOURCE[0]}")
 ORIGINAL_ARGS=("$@")
@@ -555,12 +555,13 @@ summary() {
 Check the running image:
   $COMPOSE_CMD ps
   docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \$($COMPOSE_CMD ps -q app)
-  $COMPOSE_CMD exec app ls scripts/add-objectives.ts
+  $COMPOSE_CMD exec app ls scripts/add-pilot-fixes.ts
   $COMPOSE_CMD logs --since 15m app | grep -F '$WORKER_READY'
 EOF
   if ((HAS_BUNDLED_DB)); then
     cat <<EOF
   $COMPOSE_CMD exec db psql -U agentsdr agentsdr -Atc "select to_regclass('tinyfish_settings'), to_regclass('research_settings'), to_regclass('browser_sessions'), to_regclass('crm_wrong_routes'), to_regclass('activity_seen'), to_regclass('assistant_objectives')"
+  $COMPOSE_CMD exec db psql -U agentsdr agentsdr -Atc "select count(*) from information_schema.columns where (table_name, column_name) in (('lead_audience_members','fit'), ('lead_audience_members','fit_claimed_at'), ('whatsapp_accounts','last_refusal'))"
 EOF
   fi
   if [[ -n $ROLLBACK_TAG ]]; then

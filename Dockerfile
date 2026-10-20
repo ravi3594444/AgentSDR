@@ -67,6 +67,7 @@ COPY --from=builder --chown=nextjs:nodejs /app/scripts/add-research-sources.ts .
 COPY --from=builder --chown=nextjs:nodejs /app/scripts/add-browser-sessions.ts ./scripts/add-browser-sessions.ts
 COPY --from=builder --chown=nextjs:nodejs /app/scripts/add-activity.ts ./scripts/add-activity.ts
 COPY --from=builder --chown=nextjs:nodejs /app/scripts/add-objectives.ts ./scripts/add-objectives.ts
+COPY --from=builder --chown=nextjs:nodejs /app/scripts/add-pilot-fixes.ts ./scripts/add-pilot-fixes.ts
 
 # Entrypoint: maps APP_URL, builds DATABASE_URL for the bundled database,
 # refuses placeholder secrets on a public address and creates the schema in an
