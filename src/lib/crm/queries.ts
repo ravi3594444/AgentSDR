@@ -359,6 +359,9 @@ export async function listCrmActions(input: CrmActionFilters = {}) {
           ? "Delivery reconciliation"
           : draft?.status === "awaiting_review"
             ? apologyDraftIds.has(draft.id) ? "Wrong number: apology review" : draftStep?.stepType === "follow_up" ? "Follow-up review" : "Reply review"
+            // They asked not to be contacted: nothing can be sent, and the record waits only for the owner to read the reply.
+            : row.record.workflowState === "action_required" && policyByPerson.get(row.record.personId)?.doNotContact
+              ? "Do Not Contact: read their reply"
             : row.record.nextActionAt && row.record.nextActionAt <= new Date()
               // Due from WhatsApp Calling (calls/crmFollowUp.ts) — a call-only
               // record, with no reply on it: the rep calls or messages them;

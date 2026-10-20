@@ -280,7 +280,7 @@ export default function CrmRecordClient({ recordId, variant = "page" }: { record
         <ClassificationSelect record={data} categories={categories} onAction={mutate} />
         {/* A 16rem basis: on a phone the line takes its own row instead of shrinking to a word per line. */}
         <p role="status" className="min-w-0 grow basis-64 text-paragraph-xs text-text-sub-600">
-          {data.dnc ? "Outreach stopped · Do Not Contact" : wrongRoute ? wrongRouteLine(wrongRoute) : hasDraft ? "A draft needs your attention" : summary.headline}
+          {data.dnc ? String(data.workflowState) === "action_required" && !hasDraft ? "They asked not to be contacted; nothing can be sent. Read their reply, then Mark reviewed." : "Outreach stopped · Do Not Contact" : wrongRoute ? wrongRouteLine(wrongRoute) : hasDraft ? "A draft needs your attention" : summary.headline}
           {/* What happens next, when it is not the draft above: an owner decision, a classification, an uncertain send. */}
           {!hasDraft && summary.nextAction.urgent === true && <span className="text-text-strong-950"> · Next: {String(summary.nextAction.label)}</span>}
           {(summary.replyMode || summary.account) && <span className="text-text-soft-400"> · {[summary.replyMode && `Reply mode: ${summary.replyMode}`, summary.account && `Sending from ${summary.account}`].filter(Boolean).join(" · ")}</span>}
@@ -418,6 +418,15 @@ function RecordHeader({ back, data, person, name, avatarUrl, currentStep, active
         {linkedin && <a href={linkedinHref} target="_blank" rel="noreferrer" title={`Open ${name} on LinkedIn`} className="inline-flex min-w-0 items-center gap-1.5 transition hover:text-text-strong-950"><RiLinkedinLine className="size-4 shrink-0 text-text-soft-400" aria-hidden="true" /><span className="truncate">{linkedinSlug}</span><RiArrowRightUpLine className="size-3.5 shrink-0 text-text-soft-400" aria-hidden="true" /></a>}
       </div>}
       actions={<>
+        {/* Someone on Do Not Contact replied: nothing can be sent, so once read the record leaves Action required (Do Not Contact stays). */}
+        {dnc && workflowState === "action_required" && <Button.Root
+          variant="primary"
+          mode="lighter"
+          size="xsmall"
+          title="You read their reply; nothing can be sent to them. The record leaves Action required, Do Not Contact stays, and a new reply from them brings it back."
+          onClick={() => void onAction(`/records/${id}/reviewed`, {}, "POST", "Marked reviewed — Do Not Contact stays")}
+          data-testid="mark-reviewed"
+        ><Button.Icon as={RiCheckLine} />Mark reviewed</Button.Root>}
         <CallButton personId={personId} crmRecordId={id} phone={phone} onCallStarted={onCallStarted} />
         {canSkip && <Button.Root
           variant="neutral"

@@ -6,7 +6,8 @@ import { completeStructured } from "@/lib/ai/server/structuredCompletion";
 import { members, users } from "@/lib/auth/schema";
 import { sendAuthEmail } from "@/lib/auth/email";
 import { BRAND } from "@/lib/brand";
-import { crmConversationMessages, crmConversations } from "@/lib/crm/schema";
+import { crmConversationMessages, crmConversations, crmRecords } from "@/lib/crm/schema";
+import { crmActionableSql } from "@/lib/crm/actionGroups.server";
 import { companies, people } from "@/lib/leads/schema";
 import { currentOrganizationId, inOrg, runInOrganization } from "@/lib/tenancy/scope";
 import { byUrgency, handoffLabel, REMINDER_AFTER_MS, REPORT_KINDS, takesAnAnswer, waitedFor } from "./handoff";
@@ -145,7 +146,7 @@ export type NeedsYouItem = {
 };
 
 /** What waits for the owner, most urgent first, after settling the ones a person already answered in the chat. */
-export async function listNeedsYou(limit = 100): Promise<{ items: NeedsYouItem[]; reviewWaiting: number }> {
+export async function listNeedsYou(limit = 100): Promise<{ items: NeedsYouItem[]; reviewWaiting: number; actionRequired: number }> {
   await settlePersonReplies();
   const rows = await db.select({
     decision: ownerDecisions,
@@ -204,7 +205,11 @@ export async function listNeedsYou(limit = 100): Promise<{ items: NeedsYouItem[]
       sql`${autopilotReplies.reason} like 'the run is in Review mode%'`,
       sql`exists (select 1 from crm_drafts x where x.id = ${autopilotReplies.draftId} and x.status = 'awaiting_review')`,
     ));
-  return { items, reviewWaiting: Number(review?.n ?? 0) };
+  // What else waits in the CRM's Action required (a Do Not Contact reply to read, an error, a due follow-up):
+  // "nobody is waiting" is said only when that is empty too.
+  const [actionable] = await db.select({ n: sql<number>`count(*)::int` }).from(crmRecords)
+    .where(and(inOrg(crmRecords), crmActionableSql({ id: crmRecords.id, workflowState: crmRecords.workflowState, nextActionAt: crmRecords.nextActionAt })));
+  return { items, reviewWaiting: Number(review?.n ?? 0), actionRequired: Number(actionable?.n ?? 0) };
 }
 
 /** How many leads wait for the owner (the menu's badge). */

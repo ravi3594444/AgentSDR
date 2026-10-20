@@ -16,7 +16,7 @@ import { cn } from "@/utils/cn";
  * the app or their phone), or marks it done.
  */
 
-export type NeedsYouPayload = { items: NeedsYouItem[]; reviewWaiting: number };
+export type NeedsYouPayload = { items: NeedsYouItem[]; reviewWaiting: number; actionRequired?: number };
 
 const POLL_MS = 10_000;
 
@@ -131,6 +131,7 @@ export default function NeedsYouList({ initial, compact = false }: { initial: Ne
 
   const items = payload?.items ?? [];
   const review = payload?.reviewWaiting ?? 0;
+  const actionRequired = payload?.actionRequired ?? 0;
   if (compact) {
     if (!items.length) return null;
     const ready = items.filter((item) => item.priority === 0).length;
@@ -151,7 +152,11 @@ export default function NeedsYouList({ initial, compact = false }: { initial: Ne
       <div className="flex flex-wrap items-baseline gap-2">
         <h2 id="needs-you-title" className="text-label-md text-text-strong-950">Needs you</h2>
         <span className="text-paragraph-xs text-text-sub-600">
-          {items.length ? `${items.length} ${items.length === 1 ? "lead is" : "leads are"} waiting for a person, most urgent first` : "Nobody is waiting for you."}
+          {items.length
+            ? `${items.length} ${items.length === 1 ? "lead is" : "leads are"} waiting for a person, most urgent first`
+            : actionRequired
+              ? `No replies or decisions wait for you here; ${actionRequired} ${actionRequired === 1 ? "record is" : "records are"} in Action required.`
+              : "Nobody is waiting for you."}
         </span>
       </div>
       {error && <p role="alert" className="mt-2 text-paragraph-xs text-error-base">{error}</p>}

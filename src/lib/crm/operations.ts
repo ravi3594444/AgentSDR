@@ -415,6 +415,34 @@ export async function closeCrmRecord(input: {
   });
 }
 
+/**
+ * The owner read the reply of someone who asked not to be contacted (pilot
+ * fix F12): the record leaves Action required for idle. Do Not Contact
+ * stays, and a new reply from them brings it back (workflowStateForInbound).
+ * Refused while anything on it still needs a decision (a draft, a proposed
+ * classification) or when the person is not on Do Not Contact.
+ */
+export async function markCrmRecordReviewed(input: { recordId: string; actorRef?: string | null }) {
+  return withCrmTransaction(async (tx) => {
+    const record = await lockCrmRecord(tx, input.recordId);
+    if (record.workflowState !== "action_required") throw new CrmConflictError("Only a record in Action required can be marked reviewed");
+    if (!(await isPersonDoNotContact(tx, record.personId))) throw new CrmConflictError("Mark reviewed is for someone who asked not to be contacted; answer or close this record instead");
+    const [draft] = await tx.select({ id: crmDrafts.id }).from(crmDrafts)
+      .where(and(eq(crmDrafts.crmRecordId, record.id), inArray(crmDrafts.status, ["awaiting_review", "delivery_uncertain"]))).limit(1);
+    if (draft) throw new CrmConflictError("A draft on this record still needs a decision");
+    const [proposed] = await tx.select({ id: crmClassifications.id }).from(crmClassifications)
+      .where(and(eq(crmClassifications.crmRecordId, record.id), eq(crmClassifications.status, "proposed"))).limit(1);
+    if (proposed) throw new CrmConflictError("The classification of this record still needs review");
+    return transitionWorkflowInTransaction(tx, {
+      recordId: record.id,
+      to: "idle",
+      actorType: "authenticated_operator",
+      actorRef: input.actorRef,
+      reason: "do_not_contact_reviewed",
+    });
+  });
+}
+
 export async function reopenCrmRecord(input: { recordId: string; actorRef?: string | null }) {
   return withCrmTransaction(async (tx) => {
     const record = await lockCrmRecord(tx, input.recordId);

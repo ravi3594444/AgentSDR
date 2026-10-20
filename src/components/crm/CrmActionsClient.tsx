@@ -688,6 +688,7 @@ function draftStateOf({ editable, draftFull, status, dnc, sendable, actionText, 
     case "Processing error": return { label: "Processing error", tone: "error", icon: RiErrorWarningFill, hint: "Open the record to retry" };
     case "Classification review": return { label: "Needs classification", tone: "warning", icon: RiPriceTag3Line, hint: "Confirm the classification first" };
     case "No sequence assigned": return { label: "No sequence", tone: "neutral", icon: RiLinkUnlink, hint: "Nothing runs for this classification" };
+    case "Do Not Contact: read their reply": return { label: "Do Not Contact", tone: "warning", icon: RiForbid2Line, hint: "They asked not to be contacted; nothing can be sent. Read their reply, then Mark reviewed" };
     case "Delivery reconciliation": return { label: "Confirm delivery", tone: "warning", icon: RiQuestionLine, hint: "Open the record to confirm the last send" };
     case "Reply review":
     case "Write a reply":
