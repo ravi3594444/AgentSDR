@@ -41,7 +41,9 @@
 # Measured on 19 October (ab84f96, Node 22, the Dockerfile's build step): with
 # a 4096 MB heap the build takes about 6.0 GB (its largest worker 5.9 GB);
 # with 3072 MB a webpack worker runs out of heap and the build fails.
-#   HEALTH_URL                 http://127.0.0.1:<PORT from .env, or 3000>/sign-in
+#   HEALTH_URL                 http://127.0.0.1:<PORT from .env, or 3000>/sign-in; a
+#                              PORT holding an address ("127.0.0.1:3000", the form
+#                              compose's ports accept) gives that host and port
 #   HEALTH_TIMEOUT_S           how long the new app gets to answer 200 (180)
 #   WORKER_LOG_TIMEOUT_S       how long to wait for the worker's start line (60)
 #   MIGRATIONS                 scripts/<name>.ts to run, in order (this release's
@@ -135,6 +137,24 @@ parse_args() {
   done
 }
 
+# The sign-in page's URL from a compose-style PORT: "3000", "127.0.0.1:3000",
+# "0.0.0.0:3000" or "[::1]:3000". A wildcard host is reached on loopback, and
+# an IPv6 host keeps (or gets) its brackets.
+health_url_for() {
+  local value=$1 host=127.0.0.1 port=$1
+  if [[ $value == *:* ]]; then
+    host=${value%:*}
+    port=${value##*:}
+    case $host in
+      "" | 0.0.0.0 | "[::]" | "::") host=127.0.0.1 ;;
+      \[*\]) ;;
+      *:*) host="[$host]" ;;
+    esac
+  fi
+  [[ $port =~ ^[0-9]+$ ]] || die "PORT '$value' does not end in a port number; set HEALTH_URL"
+  printf 'http://%s:%s/sign-in\n' "$host" "$port"
+}
+
 load_settings() {
   MIGRATIONS=${MIGRATIONS-$DEFAULT_MIGRATIONS}
   MIN_BUILD_MEM_MB=${MIN_BUILD_MEM_MB:-7168}
@@ -146,7 +166,7 @@ load_settings() {
   if [[ -z ${HEALTH_URL:-} ]]; then
     local port=${PORT:-}
     [[ -n $port ]] || port=$(dotenv_value PORT)
-    HEALTH_URL="http://127.0.0.1:${port:-3000}/sign-in"
+    HEALTH_URL=$(health_url_for "${port:-3000}") || exit 1
   fi
 
   local knob m

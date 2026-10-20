@@ -100,7 +100,7 @@ Set any of these in `docker-compose.yml` or in `.env` (a `.env` value wins). Eve
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | empty | Adds "Continue with Google" sign-in. See [Google sign-in](/integrations/google-sign-in). |
 | `DB_POOL_MAX` | `8` | Connections the app opens to PostgreSQL. |
 | `CRON_SECRET`, `OUTREACH_TICK_SECRET` | not in the file | Optional. Add them to the `environment` block only to call the [job endpoints](/self-hosting/production#scheduled-jobs) from outside. |
-| `PORT` | `3000` | The host port the app is published on. Read by Compose only. |
+| `PORT` | `3000` | The host port the app is published on, or an address and port (`127.0.0.1:3000` publishes it on loopback only). Read by Compose and by `docker/deploy.sh`, whose health check follows it. With an address here, set `APP_URL` yourself: its default (`http://localhost:${PORT}`) would not be a URL. |
 | `AGENTSDR_VERSION` | the release the file was written for | The image tag. The file names its own release rather than `latest`, so a server that pulled an older `latest` never runs it with a newer file. Read by Compose only. |
 
 Every other variable in the [configuration reference](/configuration) can be added to the `environment` block the same way. Run `docker compose up -d` again after any change to recreate the containers.

@@ -256,6 +256,26 @@ describe("docker/deploy.sh", () => {
     expect(readdirSync(join(run.repo, "deploy-backups")).filter((name) => name.endsWith(".dump"))).toEqual([]);
   });
 
+  test("the health check follows a PORT that holds a bind address, and an explicit HEALTH_URL wins", () => {
+    const cases: [string, Record<string, string>, RegExp][] = [
+      ["PORT=127.0.0.1:3000\n", {}, /^curl .*http:\/\/127\.0\.0\.1:3000\/sign-in$/],
+      ["PORT=0.0.0.0:3100\n", {}, /^curl .*http:\/\/127\.0\.0\.1:3100\/sign-in$/],
+      ["PORT=10.0.0.5:3200\n", {}, /^curl .*http:\/\/10\.0\.0\.5:3200\/sign-in$/],
+      ["PORT=[::1]:3300\n", {}, /^curl .*http:\/\/\[::1\]:3300\/sign-in$/],
+      ["PORT=3999\n", { PORT: "127.0.0.1:3400" }, /^curl .*http:\/\/127\.0\.0\.1:3400\/sign-in$/],
+      ["PORT=127.0.0.1:3000\n", { HEALTH_URL: "http://app.internal:8080/sign-in" }, /^curl .*http:\/\/app\.internal:8080\/sign-in$/],
+      ["", {}, /^curl .*http:\/\/127\.0\.0\.1:3000\/sign-in$/],
+    ];
+    for (const [dotenv, env, url] of cases) {
+      const run = deploy({ dotenv, env });
+      expect({ dotenv, env, status: run.status }).toEqual({ dotenv, env, status: 0 });
+      expect(callAt(run, url)).toBeGreaterThanOrEqual(0);
+    }
+    const bad = deploy({ dotenv: "PORT=127.0.0.1:http\n" });
+    expect(bad.status).not.toBe(0);
+    expect(bad.output).toMatch(/PORT '127\.0\.0\.1:http' does not end in a port number; set HEALTH_URL/);
+  });
+
   test("a failed build runs no migration, does not switch, and starts the scraper again", () => {
     const run = deploy({ env: { FAIL_ON: "build" } });
     expectNoSwitch(run);
