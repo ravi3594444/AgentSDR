@@ -4,7 +4,7 @@ import { inOrg, runInOrganization } from "@/lib/tenancy/scope";
 import { db } from "@/lib/db";
 import { campaignAccounts, campaigns as campaignsTable, leads, linkedInAccounts } from "@/lib/linkedin/schema";
 import { CampaignsClient, type CampaignRow } from "@/components/linkedin/CampaignsClient";
-import { statusCountsByCampaignIds } from "@/lib/linkedin/campaignLeadStats";
+import { invitedCountsByCampaignIds, statusCountsByCampaignIds } from "@/lib/linkedin/campaignLeadStats";
 
 export const metadata = { title: "Campaigns" };
 
@@ -84,7 +84,7 @@ export default async function CampaignsPage() {
       if (row.campaignId) leadCountByCampaign[row.campaignId] = row.leadCount;
     }
 
-    const statusByCampaign = await statusCountsByCampaignIds(campaignIds);
+    const [statusByCampaign, invitedByCampaign] = await Promise.all([statusCountsByCampaignIds(campaignIds), invitedCountsByCampaignIds(campaignIds)]);
 
     const rows: CampaignRow[] = campaigns.map((c) => ({
       id: c.id,
@@ -95,6 +95,7 @@ export default async function CampaignsPage() {
       accounts: accountsByCampaign[c.id] ?? [],
       totalLeads: leadCountByCampaign[c.id] ?? 0,
       statusCounts: statusByCampaign[c.id] ?? {},
+      invitedCount: invitedByCampaign[c.id] ?? 0,
       createdAt: c.createdAt.toISOString(),
     }));
 

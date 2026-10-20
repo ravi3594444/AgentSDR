@@ -130,7 +130,7 @@ export default function ResultsClient({ initial }: { initial: ResultsPayload }) 
           { label: "People contacted", value: o.peopleContacted, detail: "At least one accepted send" },
           { label: "Replies", value: o.repliesReceived, detail: `From ${o.peopleReplied} people` },
           { label: "Reply rate", value: percent(o.replyRate), detail: `${o.contactedWhoReplied} of ${o.peopleContacted} contacted replied` },
-          { label: "Interested", value: o.interested, detail: "An enquiry, not a sale" },
+          { label: "Classified interested", value: o.interested, detail: "Replies the AI marked Interested in this period" },
         ]} />
       </section>
       <div className="flex flex-wrap gap-x-6 gap-y-2 border-y border-stroke-soft-200 py-3 text-paragraph-xs text-text-sub-600">
@@ -143,7 +143,7 @@ export default function ResultsClient({ initial }: { initial: ResultsPayload }) 
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Section title="Interested people">
-          <p className="mb-3 text-paragraph-xs text-text-soft-400">Replies classified as Interested. Open Leads to read the full conversations.</p>
+          <p className="mb-3 text-paragraph-xs text-text-soft-400">Replies the AI classified as Interested in this period (applied or accepted). A record moved by hand is not counted here; Analytics&apos; Positive counts every move into Interested or Customer, and Pipeline shows who is Interested now. Open Leads to read the full conversations.</p>
           <List items={r.interestedPeople.map((p) => `${p.name}${p.what ? ` — ${p.what}` : ""} (${new Date(p.at).toLocaleString()})`)} empty="No interested replies in this period." />
           <Link href="/crm/pipeline" className="mt-4 inline-block text-label-xs text-text-strong-950 underline underline-offset-4">Open leads &amp; replies</Link>
         </Section>
@@ -193,7 +193,7 @@ export default function ResultsClient({ initial }: { initial: ResultsPayload }) 
         {r.runs.length ? (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[32rem] text-left text-paragraph-xs">
-              <thead><tr className="text-text-soft-400"><th className="py-1 pr-3 font-normal">Run</th><th className="pr-3 font-normal">Status</th><th className="pr-3 font-normal">Reply mode</th><th className="font-normal">Per channel (contacted / sent / replied / stopped)</th></tr></thead>
+              <thead><tr className="text-text-soft-400"><th className="py-1 pr-3 font-normal">Run</th><th className="pr-3 font-normal">Status</th><th className="pr-3 font-normal">Reply mode</th><th className="font-normal">Per channel (people contacted / messages sent / replied / stopped or failed now)</th></tr></thead>
               <tbody>
                 {r.runs.map((run) => (
                   <tr key={run.id} className="border-t border-stroke-soft-200 text-text-strong-950">

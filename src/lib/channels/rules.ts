@@ -251,9 +251,9 @@ export const CHANNEL_RULES = {
     {
       key: "newChatsPerDay",
       kind: "number",
-      label: "New chats per day, per number",
-      help: "Conversations one number may start in a rolling day. Replies to people who wrote first are not counted.",
-      unit: "chats / day",
+      label: "New chats per 24 hours, per number",
+      help: "Conversations one number may start in a rolling 24-hour window. Each chat counts for 24 hours from when it started and then ages out on its own; there is no reset at midnight. Every campaign on the number shares the count. Replies in chats already open, and to people who wrote first, are not limited by it.",
+      unit: "new chats / 24 hours",
       default: 25,
       min: 1,
       max: 200,

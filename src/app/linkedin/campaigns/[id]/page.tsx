@@ -6,7 +6,7 @@ import { db } from "@/lib/db";
 import { campaignAccounts, campaigns, leads, linkedInAccounts } from "@/lib/linkedin/schema";
 import { CampaignDetailClient } from "@/components/linkedin/CampaignDetailClient";
 import { listCampaignLeadsPage } from "@/lib/linkedin/campaignLeads";
-import { statusCountsForCampaign } from "@/lib/linkedin/campaignLeadStats";
+import { invitedCountsByCampaignIds, statusCountsForCampaign } from "@/lib/linkedin/campaignLeadStats";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +17,7 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
 
     // Prisma's nested `accounts` include and `_count: { select: { leads: true } }`
     // become side queries keyed off the campaign id.
-    const [campaignRows, campaignAccountRows, [{ totalLeads }], accounts, statusCounts, initialLeadsPage] =
+    const [campaignRows, campaignAccountRows, [{ totalLeads }], accounts, statusCounts, initialLeadsPage, invited] =
       await Promise.all([
         db
           .select({
@@ -59,6 +59,7 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
           .orderBy(asc(linkedInAccounts.username)),
         statusCountsForCampaign(id),
         listCampaignLeadsPage(id, 1),
+        invitedCountsByCampaignIds([id]),
       ]);
 
     const campaign = campaignRows[0];
@@ -82,6 +83,7 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
           accounts: campaignAccountRows,
           totalLeads,
           statusCounts,
+          invitedCount: invited[id] ?? 0,
         }}
         initialLeadsPage={initialLeadsPage}
         accounts={accounts}

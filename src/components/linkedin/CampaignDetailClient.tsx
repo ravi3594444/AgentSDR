@@ -47,6 +47,8 @@ type Campaign = {
   accounts: LinkedInAccount[];
   totalLeads: number;
   statusCounts: Record<string, number>;
+  /** Leads with a recorded invitation, kept when a stop cancels them. */
+  invitedCount?: number;
   createdAt: string;
 };
 
@@ -108,7 +110,7 @@ export function CampaignDetailClient({
       .catch(() => setChartData([]));
   }, [campaign.id]);
 
-  const funnel = useMemo(() => campaignFunnel(campaign.statusCounts, campaign.totalLeads), [campaign.statusCounts, campaign.totalLeads]);
+  const funnel = useMemo(() => campaignFunnel(campaign.statusCounts, campaign.totalLeads, { invited: campaign.invitedCount }), [campaign.statusCounts, campaign.totalLeads, campaign.invitedCount]);
   const senderOptions = campaign.accounts.length > 0 ? campaign.accounts : accounts;
   const status = CAMPAIGN_STATUS[campaign.status];
   const steps = sequenceStepsBuilt(campaign);

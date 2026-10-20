@@ -13,14 +13,21 @@ export const computeNextAllowedRun = (from: Date = new Date(), gapMinutes?: [num
 export const isAccountRunnable = (nextAllowedRun: Date | null, at: Date = new Date()): boolean =>
   !nextAllowedRun || at >= nextAllowedRun;
 
-export const formatNextAllowedRun = (nextAllowedRun: Date | null): string => {
+/**
+ * When the rest between runs ends, to the second: a boundary such as
+ * 12:00:29.508 must not read as 12:00, which hides why the 12:00 check
+ * skipped the account. After it, the account is next run by the scheduled
+ * check (every 30 minutes), not at once. `timeZone` defaults to the viewer's.
+ */
+export const formatNextAllowedRun = (nextAllowedRun: Date | null, timeZone?: string, at: Date = new Date()): string => {
   if (!nextAllowedRun) return "Ready now";
-  const at = new Date();
   if (at >= nextAllowedRun) return "Ready now";
   return nextAllowedRun.toLocaleString(undefined, {
     month: "short",
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
+    second: "2-digit",
+    ...(timeZone ? { timeZone } : {}),
   });
 };

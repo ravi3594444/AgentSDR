@@ -7,7 +7,9 @@ import type * as Badge from "@/components/alignui/badge";
  * A lead's status is where it is now, not a history, so the cumulative
  * stages are sums of every status at or past them:
  * - accepted: connected, messaged, any follow-up, completed or replied
- * - invited: accepted plus those still waiting on the invitation
+ * - invited: from the invitation's own record when the API sends it
+ *   (`invited`: leads with a requestSentAt, kept when a stop cancels them),
+ *   else accepted plus those still waiting on the invitation
  *
  * Reply rate is replied / accepted — the same definition as the LinkedIn
  * view on Analytics — because a lead can only reply once connected.
@@ -25,13 +27,15 @@ export type CampaignFunnel = {
   accepted: number;
   acceptanceRate: number | null;
   replyRate: number | null;
-  /** 0–1 share of leads that have left the queue; null with no leads. */
+  /** 0–1 share of leads invited; null with no leads. */
   progress: number | null;
+  /** Every lead invited and none failed or waiting. */
+  complete: boolean;
 };
 
 const n = (s: Record<string, number>, key: string) => s[key] ?? 0;
 
-export function campaignFunnel(s: Record<string, number>, totalLeads?: number): CampaignFunnel {
+export function campaignFunnel(s: Record<string, number>, totalLeads?: number, evidence?: { invited?: number | null }): CampaignFunnel {
   const queued = n(s, "PENDING");
   const awaiting = n(s, "REQUEST_SENT");
   const inSequence =
@@ -41,7 +45,7 @@ export function campaignFunnel(s: Record<string, number>, totalLeads?: number): 
   const failed = n(s, "FAILED");
   const cancelled = n(s, "CANCELLED");
   const accepted = inSequence + completed + replied;
-  const invited = awaiting + accepted;
+  const invited = Math.max(evidence?.invited ?? 0, awaiting + accepted);
   const total = totalLeads ?? Object.values(s).reduce((sum, v) => sum + v, 0);
   return {
     total,
@@ -56,8 +60,19 @@ export function campaignFunnel(s: Record<string, number>, totalLeads?: number): 
     accepted,
     acceptanceRate: invited > 0 ? accepted / invited : null,
     replyRate: accepted > 0 ? replied / accepted : null,
-    progress: total > 0 ? Math.min((total - queued) / total, 1) : null,
+    progress: total > 0 ? Math.min(invited / total, 1) : null,
+    complete: total > 0 && queued === 0 && failed === 0 && invited >= total,
   };
+}
+
+/** The line under a campaign's lead count: who still waits for an invitation, else what became of everyone. */
+export function leadsProgressText(f: CampaignFunnel): string | undefined {
+  if (f.total === 0) return undefined;
+  const failed = f.failed > 0 ? `${f.failed.toLocaleString("en-US")} failed` : null;
+  if (f.queued > 0) return [`${f.queued.toLocaleString("en-US")} not invited yet`, failed].filter(Boolean).join("; ");
+  if (f.complete) return "Everyone has been invited";
+  const parts = [failed, `${f.invited.toLocaleString("en-US")} invited`, f.cancelled > 0 ? `${f.cancelled.toLocaleString("en-US")} cancelled` : null].filter(Boolean);
+  return `No leads waiting for an invitation; ${parts.join(", ")}`;
 }
 
 type BadgeColor = React.ComponentProps<typeof Badge.Root>["color"];

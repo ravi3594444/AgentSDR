@@ -213,10 +213,10 @@ export function WhatsappAccountsClient({ rules }: { rules: WhatsappNumberRules }
               />
               <KpiCell
                 icon={RiChat1Line}
-                label="New chats a day"
+                label="New chats per 24 hours"
                 value={String((accounts ?? []).filter(healthy).reduce((sum, a) => sum + newChatsOf(a), 0))}
                 context={`${rules.newChatsPerDay} per number · ${rules.secondsBetweenSends} s between sends`}
-                hint="Each connected number starts at most this many new chats a day, and messages from one number are spaced apart. Change it in WhatsApp → Sending rules, or per number."
+                hint="Each connected number starts at most this many new chats in any rolling 24 hours (no reset at midnight), shared by every campaign on it, and messages from one number are spaced apart. Replies in open chats are not limited. Change it in WhatsApp → Sending rules, or per number."
               />
             </KpiStrip>
 
@@ -238,7 +238,7 @@ export function WhatsappAccountsClient({ rules }: { rules: WhatsappNumberRules }
                     <Table.Row>
                       <Table.Head scope="col" className="px-4">Number</Table.Head>
                       <Table.Head scope="col" className="w-64 px-4">Status</Table.Head>
-                      <Table.Head scope="col" className="w-36 px-4">New chats a day</Table.Head>
+                      <Table.Head scope="col" className="w-36 px-4">New chats / 24 h</Table.Head>
                       <Table.Head scope="col" className="w-36 px-4">Last synced</Table.Head>
                       <Table.Head scope="col" className="w-16 px-4"><span className="sr-only">Actions</span></Table.Head>
                     </Table.Row>
@@ -313,7 +313,7 @@ export function WhatsappAccountsClient({ rules }: { rules: WhatsappNumberRules }
                                   </Dropdown.Item>
                                   <Dropdown.Item onSelect={() => setLimitAccount(account)}>
                                     <Dropdown.ItemIcon as={RiDashboard3Line} />
-                                    New chats a day
+                                    New chats per 24 hours
                                   </Dropdown.Item>
                                 </Dropdown.Content>
                               </Dropdown.Root>
@@ -332,7 +332,7 @@ export function WhatsappAccountsClient({ rules }: { rules: WhatsappNumberRules }
       {limitAccount && (
         <AccountLimitDialog
           key={limitAccount.id}
-          title="New chats a day"
+          title="New chats per 24 hours"
           accountLabel={limitAccount.name || limitAccount.phone || "this number"}
           rule={numberRule("whatsapp", "newChatsPerDay")}
           organizationValue={rules.newChatsPerDay}

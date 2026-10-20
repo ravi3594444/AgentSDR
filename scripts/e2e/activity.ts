@@ -7,8 +7,12 @@
  * step returns, and a plan's start job cannot be cancelled from Activity;
  * Needs you is the CRM's Needs you; a reply is new by when it was recorded,
  * the list and the badge agree, and seen moves only forward and only up to
- * what the unfiltered list showed; a second organization sees, counts and
- * cancels nothing.
+ * what the unfiltered list showed; a WhatsApp plan whose only recipient
+ * WhatsApp rejected is Failed with that reason and 0 contacted, never
+ * "sending"; a plan stopped after its first accepted send keeps that
+ * contact in Activity, its run report and its campaign's counts, LinkedIn
+ * invitations likewise; a second organization sees, counts and cancels
+ * nothing. The WhatsApp sends go to a stand-in, never to Unipile.
  *
  *   bun run --conditions=react-server scripts/e2e/activity.ts
  *
@@ -39,7 +43,15 @@ const { repliesSeenUntil } = await import("@/lib/activity/status");
 const linkedin = await import("@/lib/linkedin/schema");
 const { gridProviders, gridProviderCredentials } = await import("@/lib/grid/schema");
 const { encryptIntegrationCredentials } = await import("@/lib/integrations/credentials");
-const { stopRun } = await import("@/lib/assistant/outreach.server");
+const { reportRun, stopRun } = await import("@/lib/assistant/outreach.server");
+const { whatsappAccounts } = await import("@/lib/whatsapp/schema");
+const { addPeopleToWhatsappCampaign, createWhatsappCampaign, getWhatsappCampaignDetail, updateWhatsappCampaign } = await import("@/lib/whatsapp/campaigns/campaigns.server");
+const { runWhatsappCampaignTick } = await import("@/lib/whatsapp/campaigns/engine");
+const { WhatsappSendRefusedError } = await import("@/lib/whatsapp/errors");
+const { WHATSAPP_RECIPIENT_REFUSAL } = await import("@/lib/whatsapp/refusal");
+const whatsappMetrics = await import("@/components/whatsapp/campaigns/metrics");
+const linkedinMetrics = await import("@/components/linkedin/campaigns/metrics");
+const { invitedCountsByCampaignIds, statusCountsForCampaign } = await import("@/lib/linkedin/campaignLeadStats");
 type OutreachPlan = import("@/lib/assistant/schema").OutreachPlan;
 
 const stamp = Date.now();
@@ -252,8 +264,97 @@ await runInOrganization(a.org.id, async () => {
   const stopped = (await listWork()).find((item) => item.id === hoursCase.hoursRun.id);
   check("a stopped plan keeps its counts: 2 contacted, 1 replied", stopped?.counts?.contacted === 2 && stopped.counts.replied === 1 && stopped.runStatus === "stopped", JSON.stringify(stopped?.counts));
 });
+await runInOrganization(a.org.id, async () => {
+  // LinkedIn after the stop: the cancelled invitation was still sent, so the run report and the campaign's Invited keep it.
+  // A stored plan lists its assignments; this seeded one had none.
+  await db.update(outreachRuns).set({ plan: { assignments: [] } as unknown as OutreachPlan }).where(eq(outreachRuns.id, hoursCase.hoursRun.id));
+  const report = await reportRun(hoursCase.hoursRun.id);
+  const liCampaignId = hoursCase.hoursRun.campaigns.linkedin!;
+  const invited = (await invitedCountsByCampaignIds([liCampaignId]))[liCampaignId] ?? 0;
+  const funnel = linkedinMetrics.campaignFunnel(await statusCountsForCampaign(liCampaignId), 5, { invited });
+  check("after Stop, LinkedIn's run report and campaign keep the 2 invitations sent; current work shows as cancelled",
+    report?.channels[0]?.contacted === 2 && invited === 2 && funnel.invited === 2 && funnel.cancelled === 3 && report.channels[0].stopped === 4,
+    `report ${JSON.stringify(report?.channels[0])}; invited ${invited}; funnel ${funnel.invited}/${funnel.cancelled}`);
+});
+
+// WhatsApp, through the real campaign sender with a stand-in for Unipile.
+const whatsappCase = await runInOrganization(a.org.id, async () => {
+  const [account] = await db.insert(whatsappAccounts).values({ organizationId: a.org.id, unipileAccountId: `activity-wa-${stamp}`, name: "Activity number", phone: "+14155550100", status: "connected", connectedAt: at(-3 * day) }).returning();
+  const step = (body: string, delayHours: number) => ({ id: crypto.randomUUID(), body, delayHours });
+  const plan = async (name: string, phones: string[]) => {
+    const leadPeople = await db.insert(people).values(phones.map((phone, index) => ({ organizationId: a.org.id, source: "list", fullName: `${name} lead ${index}`, phone }))).returning();
+    const campaign = await createWhatsappCampaign({ name, accountIds: [account!.id], steps: [step("Hi {{firstName}}", 0), step("Following up", 48)] });
+    await addPeopleToWhatsappCampaign(campaign.id, leadPeople.map((person) => person.id));
+    const [run] = await db.insert(outreachRuns).values({
+      organizationId: a.org.id, threadId: seeded.today.id, audienceId: seeded.run.audienceId, name, status: "running", channels: ["whatsapp"], campaigns: { whatsapp: campaign.id },
+      plan: { assignments: [] } as unknown as OutreachPlan, autopilot: false, createdBy: a.owner.id,
+    }).returning();
+    await db.insert(outreachRunLeads).values(leadPeople.map((person) => ({ organizationId: a.org.id, runId: run!.id, personId: person.id, channel: "whatsapp" as const })));
+    return { campaign, run: run!, people: leadPeople };
+  };
+  const tail = String(stamp % 10_000).padStart(4, "0");
+  return { account: account!, rejected: await plan("Cleaning agencies, WhatsApp", [`+1415556${tail}`]), stopped: await plan("Beauty salons, WhatsApp", [`+1415557${tail}`, `+1415558${tail}`]) };
+});
+
+type TickSend = NonNullable<NonNullable<Parameters<typeof runWhatsappCampaignTick>[0]>["send"]>;
+let rejectedAttempts = 0;
+const rejecting = (async () => {
+  rejectedAttempts++;
+  throw new WhatsappSendRefusedError(WHATSAPP_RECIPIENT_REFUSAL, 400, null, "recipient_unreachable");
+}) as unknown as TickSend;
+let accepted = 0;
+const accepting = (async () => {
+  accepted++;
+  return { message: { id: null }, chat: {} };
+}) as unknown as TickSend;
+
+// The tick is platform-wide and opens each organization's scope itself, so it runs outside A's.
+const inA = <T,>(fn: () => Promise<T>) => runInOrganization(a.org.id, fn);
+await inA(() => updateWhatsappCampaign(whatsappCase.rejected.campaign.id, { status: "active" }));
+await runWhatsappCampaignTick({ send: rejecting });
+await runWhatsappCampaignTick({ send: rejecting });
+check("WhatsApp rejected the only recipient once, and it is not tried again", rejectedAttempts === 1, `${rejectedAttempts} attempts`);
+await inA(async () => {
+  const item = (await listWork()).find((entry) => entry.id === whatsappCase.rejected.run.id);
+  check("Activity: that plan is Failed with the recorded reason and 0 contacted, not Working or sending",
+    item?.state === "failed" && item.stateLabel === "Failed" && item.reason === "1 failed (WhatsApp rejected this recipient), 0 contacted; nothing left to send" && !item.open && item.runStatus === "running",
+    `${item?.stateLabel}: ${item?.reason}`);
+  check("…with 1 lead, 0 contacted, 1 failed", JSON.stringify(item?.counts) === JSON.stringify({ leads: 1, contacted: 0, replied: 0, failed: 1 }), JSON.stringify(item?.counts));
+  const report = await reportRun(whatsappCase.rejected.run.id);
+  const { stats } = await getWhatsappCampaignDetail(whatsappCase.rejected.campaign.id);
+  const funnel = whatsappMetrics.campaignFunnel(stats);
+  check("its run report and campaign say 0 contacted, 0 sent, 1 failed, and never \"Everyone has been messaged\"",
+    report?.channels[0]?.contacted === 0 && report.channels[0].messagesSent === 0 && report.channels[0].failed === 1 && whatsappMetrics.leadsProgressText(funnel) === "No leads waiting for a first message; 1 failed, 0 contacted" && !funnel.complete,
+    `${JSON.stringify(report?.channels[0])}; ${whatsappMetrics.leadsProgressText(funnel)}`);
+  await updateWhatsappCampaign(whatsappCase.rejected.campaign.id, { status: "paused" });
+  await updateWhatsappCampaign(whatsappCase.stopped.campaign.id, { status: "active" });
+});
+
+await runWhatsappCampaignTick({ send: accepting });
+check("the stand-in accepted one first message (one per number per tick)", accepted === 1, `${accepted} sends`);
+await inA(async () => {
+  const before = (await listWork()).find((entry) => entry.id === whatsappCase.stopped.run.id);
+  check("while its other lead waits for a first message, the plan is still working", before?.state === "executing" && before.open && before.counts?.contacted === 1, `${before?.stateLabel}: ${before?.reason}`);
+  await stopRun(whatsappCase.stopped.run.id);
+  const after = (await listWork()).find((entry) => entry.id === whatsappCase.stopped.run.id);
+  check("after Stop, Activity keeps the 1 contacted", after?.runStatus === "stopped" && after.counts?.contacted === 1 && after.counts.leads === 2, JSON.stringify(after?.counts));
+  const stoppedReport = await reportRun(whatsappCase.stopped.run.id);
+  check("…and so does the run report (Overview): 1 contacted, 1 message sent, both leads stopped now",
+    stoppedReport?.channels[0]?.contacted === 1 && stoppedReport.channels[0].messagesSent === 1 && stoppedReport.channels[0].stopped === 2, JSON.stringify(stoppedReport?.channels[0]));
+  const { stats: stoppedStats } = await getWhatsappCampaignDetail(whatsappCase.stopped.campaign.id);
+  const stoppedFunnel = whatsappMetrics.campaignFunnel(stoppedStats);
+  check("…and the campaign: 1 messaged, 1 message sent, 2 stopped",
+    stoppedFunnel.messaged === 1 && stoppedFunnel.messagesSent === 1 && stoppedFunnel.stopped === 2 && whatsappMetrics.leadsProgressText(stoppedFunnel) === "No leads waiting for a first message; 1 contacted, 2 stopped",
+    `${JSON.stringify(stoppedStats)}; ${whatsappMetrics.leadsProgressText(stoppedFunnel)}`);
+});
+await runWhatsappCampaignTick({ send: accepting });
+check("nothing is sent after the stop", accepted === 1, `${accepted} sends`);
+
 const otherWork = await runInOrganization(b.org.id, () => listWork());
 check("another organization's Activity lists none of it", !otherWork.some((item) => [hoursCase.hoursRun.id, hoursCase.partRun.id, hoursCase.cutShort.id, seeded.run.id].includes(item.id)));
+check("…nor the WhatsApp plans, and their run reports are not readable there",
+  !otherWork.some((item) => [whatsappCase.rejected.run.id, whatsappCase.stopped.run.id].includes(item.id))
+    && (await runInOrganization(b.org.id, () => reportRun(whatsappCase.stopped.run.id))) === null);
 
 // A cancel while the step is under way: the step's outcome is discarded.
 let release!: () => void;

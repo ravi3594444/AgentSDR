@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { canCancelJob, jobState, OPEN_STATES, planCounts, planState, REPLY_STATE_LABELS, repliesSeenUntil, replyState, runState, WORK_STATE_LABELS, type JobFacts } from "./status";
+import { canCancelJob, failedSummary, jobState, OPEN_STATES, planCounts, planOutcome, planState, REPLY_STATE_LABELS, repliesSeenUntil, replyState, runState, WORK_STATE_LABELS, type JobFacts, type PlanLead } from "./status";
 import type { SenderStatus } from "@/lib/assistant/runEvidence";
 
 const now = new Date("2026-10-18T12:00:00Z");
@@ -118,7 +118,7 @@ describe("partial work and sending hours are told apart from done and working", 
     expect(OPEN_STATES.has("partial")).toBe(false);
   });
 
-  const sender = (gates: string[], nextAt: string | null = null): SenderStatus => ({ channel: "whatsapp", account: "+91 98220 11111", timezone: "Asia/Kolkata", gates, nextAt, queued: 3, note: null });
+  const sender = (gates: string[], nextAt: string | null = null, queued = 3): SenderStatus => ({ channel: "whatsapp", account: "+91 98220 11111", timezone: "Asia/Kolkata", gates, nextAt, queued, note: null, limits: null, details: [] });
 
   test("a running plan whose every sender is outside its hours says so, with the earliest next send", () => {
     const linkedinAccount: SenderStatus = { ...sender(["Outside working hours (Mon–Fri 09:00–18:00 America/New_York)"], "2026-10-18T13:00:00.000Z"), channel: "linkedin", account: "Ravi" };
@@ -129,13 +129,14 @@ describe("partial work and sending hours are told apart from done and working", 
 
   test("outside its hours and also held by something with no known end (a disconnection) names every hold, not only the hours", () => {
     const held = planState({ status: "running", error: null, senders: [sender(["Unipile is disconnected", "Outside working hours (Mon–Fri 09:00–18:00 UTC)"], null)] });
-    expect(held).toEqual({ state: "executing", reason: "no sender can send right now: Unipile is disconnected; Outside working hours (Mon–Fri 09:00–18:00 UTC)", open: true, nextAt: null });
+    expect(held).toEqual({ state: "waiting_send", reason: "no sender can send right now: Unipile is disconnected; Outside working hours (Mon–Fri 09:00–18:00 UTC)", open: true, nextAt: null });
   });
 
-  test("one sender inside its hours keeps the plan working; every sender held by something else names the holds", () => {
+  test("one sender inside its hours keeps the plan working; every sender held by something else is waiting to send, not working, and names the holds", () => {
     expect(planState({ status: "running", error: null, senders: [sender(["Outside campaign sending hours (Asia/Kolkata)"]), sender([])] }).state).toBe("executing");
     const held = planState({ status: "running", error: null, senders: [sender(["Daily limit of 25 new chats used"], "2026-10-19T03:30:00.000Z")] });
-    expect(held).toEqual({ state: "executing", reason: "no sender can send right now: Daily limit of 25 new chats used", open: true, nextAt: "2026-10-19T03:30:00.000Z" });
+    expect(held).toEqual({ state: "waiting_send", reason: "no sender can send right now: Daily limit of 25 new chats used", open: true, nextAt: "2026-10-19T03:30:00.000Z" });
+    expect(WORK_STATE_LABELS.waiting_send).toBe("Waiting to send");
   });
 
   test("a running plan with a channel that failed to launch is partial and still open; without senders it is working", () => {
@@ -147,8 +148,75 @@ describe("partial work and sending hours are told apart from done and working", 
 
   test("a plan's counts: contacted means accepted for sending at least, never an uncertain or failed send; replied is a recorded reply", () => {
     const tones = ["waiting", "sent", "sent", "replied", "good", "failed", "stopped"] as const;
-    expect(planCounts(tones.map((tone) => ({ progress: { tone, text: "" } })))).toEqual({ leads: 7, contacted: 4, replied: 2 });
-    expect(planCounts([])).toEqual({ leads: 0, contacted: 0, replied: 0 });
+    expect(planCounts(tones.map((tone) => ({ progress: { tone, text: "" } })))).toEqual({ leads: 7, contacted: 4, replied: 2, failed: 1 });
+    expect(planCounts([])).toEqual({ leads: 0, contacted: 0, replied: 0, failed: 0 });
+  });
+});
+
+describe("a running plan with nothing left to send says how it ended, never that it is sending", () => {
+  const REFUSAL = "Could not send: WhatsApp rejected this recipient. Check the number and whether the profile is restricted; WhatsApp registration was not confirmed.";
+  const lead = (tone: PlanLead["progress"]["tone"], open: boolean, contacted = tone === "sent" || tone === "replied" || tone === "good", text = ""): PlanLead => ({ progress: { tone, text }, reach: { contacted, replied: tone === "replied" || tone === "good" }, open });
+  const waiting = () => lead("waiting", true);
+  const failed = () => lead("failed", false, false, REFUSAL);
+  const sentFollowUpDue = () => lead("sent", true);
+  const sentDone = () => lead("sent", false);
+  const sender = (queued: number, gates: string[] = []): SenderStatus => ({ channel: "whatsapp", account: "+1 415 555 0000", timezone: null, gates, nextAt: null, queued, note: null, limits: null, details: [] });
+  const running = (leads: PlanLead[], senders: SenderStatus[] | null = [sender(0)]) => planState({ status: "running", error: null, senders, leads });
+
+  test("all queued: still working, nothing claimed about an outcome", () => {
+    const state = running([waiting(), waiting()], [sender(2)]);
+    expect(state.state).toBe("executing");
+    expect(state.open).toBe(true);
+    expect(state.reason).toContain("sending within each channel's hours");
+  });
+
+  test("its only lead rejected by WhatsApp: failed, with the recorded reason and 0 contacted; nothing left to send", () => {
+    const state = running([failed()]);
+    expect(state).toEqual({ state: "failed", reason: "1 failed (WhatsApp rejected this recipient), 0 contacted; nothing left to send", open: false, nextAt: null });
+    expect(planCounts([failed()])).toEqual({ leads: 1, contacted: 0, replied: 0, failed: 1 });
+  });
+
+  test("6 sent with follow-ups pending and 6 failed: still working, and the failures are named", () => {
+    const leads = [...Array.from({ length: 6 }, sentFollowUpDue), ...Array.from({ length: 6 }, failed)];
+    const state = running(leads, [sender(6)]);
+    expect(state.state).toBe("executing");
+    expect(state.open).toBe(true);
+    expect(state.reason).toBe("sending within each channel's hours and daily limits; sent messages show in Replies and Overview; 6 failed (WhatsApp rejected this recipient) so far");
+    expect(planCounts(leads)).toEqual({ leads: 12, contacted: 6, replied: 0, failed: 6 });
+  });
+
+  test("6 sent and 6 failed with nothing left: partly done, both counted", () => {
+    const state = running([...Array.from({ length: 6 }, sentDone), ...Array.from({ length: 6 }, failed)]);
+    expect(state).toEqual({ state: "partial", reason: "6 contacted, 6 failed (WhatsApp rejected this recipient); nothing left to send", open: false, nextAt: null });
+  });
+
+  test("all sent and no follow-ups left: done; with follow-ups pending: working", () => {
+    expect(running([sentDone(), lead("replied", false)])).toEqual({ state: "completed", reason: "all 2 contacted; nothing left to send", open: false, nextAt: null });
+    expect(running([sentFollowUpDue(), sentDone()], [sender(1)]).state).toBe("executing");
+  });
+
+  test("nothing remaining for anyone, but a sender still has leads waiting (added to its campaign): not finished", () => {
+    expect(running([sentDone()], [sender(3)]).state).toBe("executing");
+  });
+
+  test("leads stopped before any message and a launch error are named; a lead with no engine row yet keeps it open", () => {
+    const stopped = lead("stopped", false, false);
+    expect(running([sentDone(), stopped]).reason).toBe("1 contacted, 1 stopped before a message; nothing left to send");
+    expect(planState({ status: "running", error: "email: no mailbox is connected", senders: null, leads: [sentDone()] })).toEqual({ state: "partial", reason: "all 1 contacted; nothing left to send; email: no mailbox is connected", open: false, nextAt: null });
+    expect(planOutcome([sentDone(), { progress: { tone: "waiting", text: "Not started yet" } }])).toBeNull();
+    expect(planOutcome([])).toBeNull();
+  });
+
+  test("the failure reason is the recorded one, shortened; several reasons are counted", () => {
+    expect(failedSummary([failed(), lead("failed", false, false, "Delivery uncertain; no automatic resend. Check the chat in WhatsApp Messages"), lead("failed", false, false, "Could not send")]))
+      .toBe("3 failed (WhatsApp rejected this recipient; 2 other reasons)");
+    expect(failedSummary([lead("failed", false, false, "Could not send")])).toBe("1 failed (no reason recorded)");
+    expect(failedSummary([sentDone()])).toBeNull();
+  });
+
+  test("a paused or stopped plan keeps its own status; viewing it decides nothing new", () => {
+    expect(planState({ status: "paused", error: null, senders: null, leads: [failed()] }).state).toBe("paused");
+    expect(planState({ status: "stopped", error: null, senders: null, leads: [failed()] }).state).toBe("completed");
   });
 });
 

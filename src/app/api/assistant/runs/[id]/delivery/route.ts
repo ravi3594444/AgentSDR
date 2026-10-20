@@ -14,7 +14,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     if (!/^[0-9a-f-]{36}$/i.test(id)) return Response.json({ error: "That outreach plan does not exist." }, { status: 404 });
     try {
       const diagnostics = await diagnoseDelivery(id);
-      return Response.json({ at: diagnostics.at, senders: diagnostics.senders, notCovered: diagnostics.notCovered }, { headers: { "Cache-Control": "no-store" } });
+      return Response.json({ at: diagnostics.at, displayTimeZone: diagnostics.displayTimeZone, senders: diagnostics.senders, notCovered: diagnostics.notCovered }, { headers: { "Cache-Control": "no-store" } });
     } catch (error) {
       if (error instanceof Error && error.message === "No such outreach run") return Response.json({ error: "That outreach plan does not exist." }, { status: 404 });
       throw error;

@@ -35,7 +35,7 @@ import type { ListWhatsappCampaignsResponse, WhatsappCampaignSummary } from "@/l
 import { cn } from "@/utils/cn";
 import { apiJson, errorText } from "./api";
 import { EditWhatsappCampaignModal } from "./EditWhatsappCampaignModal";
-import { CAMPAIGN_STATUS, campaignFunnel } from "./metrics";
+import { CAMPAIGN_STATUS, campaignFunnel, leadsProgressText } from "./metrics";
 
 const WHATSAPP = CHANNEL_META.whatsapp.color;
 
@@ -255,7 +255,7 @@ export function WhatsappCampaignsClient() {
                   <Table.Head scope="col" className="w-40 px-4">Numbers</Table.Head>
                   <Table.Head scope="col" className="w-20 px-4 text-right">Leads</Table.Head>
                   <Table.Head scope="col" className="w-24 whitespace-nowrap px-4 text-right" title="Leads not yet sent their first message">Not messaged</Table.Head>
-                  <Table.Head scope="col" className="w-24 px-4 text-right" title="Leads who received a message">Messaged</Table.Head>
+                  <Table.Head scope="col" className="w-24 px-4 text-right" title="Leads sent at least one message, or who replied; kept after a stop">Messaged</Table.Head>
                   <Table.Head scope="col" className="w-48 px-4" title="Leads who replied, and replied ÷ messaged">Replied</Table.Head>
                   <Table.Head scope="col" className="w-14 px-4"><span className="sr-only">Actions</span></Table.Head>
                 </Table.Row>
@@ -276,8 +276,8 @@ export function WhatsappCampaignsClient() {
                     >
                       <Table.Cell className="h-16 px-4">
                         <div className="flex min-w-0 items-center gap-3">
-                          <div className="shrink-0" title={f.progress === null ? "No leads" : f.queued === 0 ? "Every lead has been messaged" : `${Math.round(f.progress * 100)}% of leads messaged`}>
-                            <CampaignProgressRing progress={f.progress} complete={f.total > 0 && f.queued === 0} />
+                          <div className="shrink-0" title={f.progress === null ? "No leads" : `${Math.round(f.progress * 100)}% of leads messaged. ${leadsProgressText(f) ?? ""}`.trim()}>
+                            <CampaignProgressRing progress={f.progress} complete={f.complete} />
                           </div>
                           <div className="min-w-0">
                             <div className="flex min-w-0 items-center gap-2">

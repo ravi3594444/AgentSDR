@@ -6,6 +6,7 @@ import { RiChat3Line, RiInboxLine, RiPulseLine, RiRefreshLine } from "@remixicon
 import type { ReplyItem, WorkItem } from "@/lib/activity/activity.server";
 import { repliesSeenUntil, type ReplyState, type WorkState } from "@/lib/activity/status";
 import { CONVERSATION_CHANNEL_META } from "@/components/analytics/theme";
+import { displayTime } from "@/lib/assistant/displayTime";
 import { announceRecordChanged } from "@/components/crm/recordEvents";
 import { Badge, ErrorState, LoadingRows, secondaryButtonClass } from "@/components/crm/CrmLayout";
 import { timeAgo } from "@/components/crm/crm-utils";
@@ -34,6 +35,7 @@ const WORK_TONE: Record<WorkState, "neutral" | "success" | "info" | "danger" | "
   waiting_slot: "warning",
   waiting_quota: "warning",
   outside_hours: "neutral",
+  waiting_send: "warning",
   scheduled: "neutral",
   retrying: "warning",
   needs_approval: "info",
@@ -68,6 +70,8 @@ export function ActivityClient({ initialView }: { initialView: View }) {
   const [view, setView] = useState<View>(initialView);
   const [channel, setChannel] = useState<Channel>("all");
   const [work, setWork] = useState<WorkItem[] | null>(null);
+  // The organization's time zone, which plan reasons write their times in; the next-send time is shown in it too.
+  const [timeZone, setTimeZone] = useState<string | null>(null);
   const [replies, setReplies] = useState<ReplyItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -77,8 +81,9 @@ export function ActivityClient({ initialView }: { initialView: View }) {
   const loading = useRef(false);
 
   const loadWork = useCallback(async () => {
-    const body = await readJson<{ work: WorkItem[] }>(await fetch("/api/activity?view=work", { cache: "no-store" }));
+    const body = await readJson<{ work: WorkItem[]; timeZone?: string }>(await fetch("/api/activity?view=work", { cache: "no-store" }));
     setWork(body.work);
+    setTimeZone(body.timeZone ?? null);
   }, []);
 
   const loadReplies = useCallback(async () => {
@@ -172,8 +177,8 @@ export function ActivityClient({ initialView }: { initialView: View }) {
           <EmptyState icon={RiPulseLine} title="No background work this week" description="Searches and outreach plans the assistant starts, from any chat, show here while they run and for a week after." />
         ) : (
           <div className="space-y-6">
-            <WorkSection title="In progress" items={openWork} empty="Nothing is running or waiting." busyId={busyId} onCancel={cancelJob} onRun={runAction} />
-            <WorkSection title="Finished in the last 7 days" items={finishedWork} empty="Nothing has finished this week." busyId={busyId} onCancel={cancelJob} onRun={runAction} />
+            <WorkSection title="In progress" items={openWork} empty="Nothing is running or waiting." busyId={busyId} timeZone={timeZone} onCancel={cancelJob} onRun={runAction} />
+            <WorkSection title="Finished in the last 7 days" items={finishedWork} empty="Nothing has finished this week." busyId={busyId} timeZone={timeZone} onCancel={cancelJob} onRun={runAction} />
           </div>
         )
       )}
@@ -206,11 +211,12 @@ export function ActivityClient({ initialView }: { initialView: View }) {
   );
 }
 
-function WorkSection({ title, items, empty, busyId, onCancel, onRun }: {
+function WorkSection({ title, items, empty, busyId, timeZone, onCancel, onRun }: {
   title: string;
   items: WorkItem[];
   empty: string;
   busyId: string | null;
+  timeZone: string | null;
   onCancel: (item: WorkItem) => void;
   onRun: (item: WorkItem, action: "pause" | "resume" | "stop") => void;
 }) {
@@ -219,19 +225,22 @@ function WorkSection({ title, items, empty, busyId, onCancel, onRun }: {
       <h2 className="mb-2 text-label-sm text-text-sub-600">{title}</h2>
       {items.length === 0 ? <p className="text-paragraph-sm text-text-soft-400">{empty}</p> : (
         <ul className="divide-y divide-stroke-soft-200 overflow-hidden rounded-xl bg-bg-white-0 ring-1 ring-inset ring-stroke-soft-200">
-          {items.map((item) => <WorkRow key={`${item.type}:${item.id}`} item={item} busy={busyId === item.id} onCancel={onCancel} onRun={onRun} />)}
+          {items.map((item) => <WorkRow key={`${item.type}:${item.id}`} item={item} busy={busyId === item.id} timeZone={timeZone} onCancel={onCancel} onRun={onRun} />)}
         </ul>
       )}
     </section>
   );
 }
 
-function WorkRow({ item, busy, onCancel, onRun }: { item: WorkItem; busy: boolean; onCancel: (item: WorkItem) => void; onRun: (item: WorkItem, action: "pause" | "resume" | "stop") => void }) {
+function WorkRow({ item, busy, timeZone, onCancel, onRun }: { item: WorkItem; busy: boolean; timeZone: string | null; onCancel: (item: WorkItem) => void; onRun: (item: WorkItem, action: "pause" | "resume" | "stop") => void }) {
   const counts = [
     item.found !== null ? `${item.found} found` : null,
     item.eligible !== null ? `${item.eligible} new` : null,
-    item.counts ? `${item.counts.leads} ${item.counts.leads === 1 ? "lead" : "leads"} · ${item.counts.contacted} contacted · ${item.counts.replied} replied` : null,
+    item.counts ? `${item.counts.leads} ${item.counts.leads === 1 ? "lead" : "leads"} · ${item.counts.contacted} contacted · ${item.counts.replied} replied${item.counts.failed ? ` · ${item.counts.failed} failed` : ""}` : null,
   ].filter(Boolean).join(" · ");
+  const nextAt = item.nextAt
+    ? timeZone ? displayTime(new Date(item.nextAt), new Date(), timeZone) : new Date(item.nextAt).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+    : null;
   const running = item.runStatus === "running";
   const small = "h-8 px-2.5";
   return (
@@ -241,7 +250,7 @@ function WorkRow({ item, busy, onCancel, onRun }: { item: WorkItem; busy: boolea
           <p className="min-w-0 break-words text-label-sm text-text-strong-950">{item.title}</p>
           <Badge tone={WORK_TONE[item.state]}>{item.stateLabel}</Badge>
         </div>
-        {item.reason && <p className="text-paragraph-sm text-text-sub-600">{item.reason}{item.nextAt && <>; the next send is allowed <time dateTime={item.nextAt}>{new Date(item.nextAt).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</time></>}</p>}
+        {item.reason && <p className="text-paragraph-sm text-text-sub-600">{item.reason}{item.nextAt && <>; the next send is allowed <time dateTime={item.nextAt}>{nextAt}</time></>}</p>}
         <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-paragraph-xs text-text-soft-400">
           {item.source && <span>{item.source}</span>}
           {counts && <span>{counts}</span>}

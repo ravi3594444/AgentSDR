@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { listReplies, listWork } from "@/lib/activity/activity.server";
 import { assistantRoute } from "@/lib/assistant/http.server";
+import { organizationTimeZone } from "@/lib/reporting/metrics.server";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +17,8 @@ export async function GET(request: NextRequest) {
       const channel = params.get("channel");
       return Response.json(await listReplies({ userId: ctx.userId, channel: channel && CHANNELS.has(channel) ? channel : null }), { headers: { "Cache-Control": "no-store" } });
     }
-    return Response.json({ work: await listWork() }, { headers: { "Cache-Control": "no-store" } });
+    // Plan reasons write their times in the organization's time zone; the page shows the next send in it too.
+    const [work, timeZone] = await Promise.all([listWork(), organizationTimeZone()]);
+    return Response.json({ work, timeZone }, { headers: { "Cache-Control": "no-store" } });
   });
 }

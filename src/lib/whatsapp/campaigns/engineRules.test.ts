@@ -3,6 +3,7 @@ import { WhatsappApiError, WhatsappSendRefusedError, type WhatsappSendRefusalRea
 import { PlatformNotConnectedError } from "@/lib/platform/credentials";
 import {
   classifySendError,
+  heldBackReason,
   planAfterSend,
   planTransientRetry,
   sequenceExhausted,
@@ -99,5 +100,30 @@ describe("withinCampaignSendingHours", () => {
     expect(withinCampaignSendingHours(hours, new Date("2026-01-05T10:00:00Z"))).toBe(true); // Monday
     expect(withinCampaignSendingHours(hours, new Date("2026-01-05T18:00:00Z"))).toBe(false);
     expect(withinCampaignSendingHours(hours, new Date("2026-01-04T10:00:00Z"))).toBe(false); // Sunday
+  });
+});
+
+describe("heldBackReason: why the number was held back, kept on it for the Sending status", () => {
+  const reasonFor = (error: unknown) => heldBackReason(error, classifySendError(error));
+  test("waits on the number name their cause in fixed words", () => {
+    expect(reasonFor(refused("rate_limited", 429))).toBe("WhatsApp refused: rate limited (try again later)");
+    expect(reasonFor(refused("new_chat_limit"))).toBe("new chats for 24 hours used");
+    expect(reasonFor(refused("warm_up"))).toBe("warm-up: no new chats yet");
+    expect(reasonFor(refused("not_connected"))).toBe("disconnected");
+    expect(reasonFor(refused("unauthorized"))).toBe("Unipile refused this account (not authorized)");
+    expect(reasonFor(refused("send_gap", 429))).toBe("waiting the gap between two sends from this number");
+    expect(reasonFor(refused(null, 409))).toContain("without a clear reason");
+    expect(reasonFor(new PlatformNotConnectedError("unipile"))).toBe("Unipile is disconnected");
+  });
+  test("never the provider's text: a message carrying a phone number or a body is not copied", () => {
+    const error = new WhatsappSendRefusedError("WhatsApp is rate-limiting this number: +14155550000 said 'Hi Ada'. Try again later.", 429, 60, "rate_limited");
+    expect(reasonFor(error)).not.toContain("1415");
+    expect(reasonFor(error)).not.toContain("Ada");
+  });
+  test("a refusal about one lead, or a transient failure, is not a hold on the number", () => {
+    expect(reasonFor(refused("do_not_contact"))).toBeNull();
+    expect(reasonFor(refused("recipient_unreachable", 400))).toBeNull();
+    expect(reasonFor(new WhatsappApiError(502, "down"))).toBeNull();
+    expect(reasonFor(new Error("ECONNRESET"))).toBeNull();
   });
 });

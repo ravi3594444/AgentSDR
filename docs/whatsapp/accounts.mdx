@@ -66,7 +66,7 @@ Every WhatsApp send passes through the same checks: replies from the Messages pa
 | Guard | Default | What happens |
 | --- | --- | --- |
 | Warm-up after linking | 24 hours | A new number answers existing chats right away but starts no new chats until the warm-up ends. A number AgentSDR has never seen connected cannot start new chats at all. Sync, then try again. |
-| New chats per day | 25 per number | Once a number has started this many new chats in a rolling 24 hours, further new chats are refused. Existing chats can still be answered. |
+| New chats per 24 hours | 25 per number | Once a number has started this many new chats in a rolling 24 hours, further new chats are refused. Existing chats can still be answered. |
 | Gap between sends | 10 seconds | A second message from the same number sooner than this is refused with a wait time. |
 | Do Not Contact | Always on | A message to a lead marked Do Not Contact is refused. |
 
@@ -79,7 +79,7 @@ Other refusals you may see: the number is not connected, the message is empty, o
 The numbers above are your organization's **Sending rules** for WhatsApp, on **Settings → WhatsApp → Sending rules**:
 
 - **Warm-up after linking a number**: 0 to 336 hours. AgentSDR warns below 24.
-- **New chats per day, per number**: 1 to 200. It warns above 25.
+- **New chats per 24 hours, per number**: 1 to 200. It warns above 25.
 - **Seconds between messages, per number**: 3 to 600. It warns below 10.
 - **Sending hours for campaigns**: any time unless you set hours. These apply to campaigns only, not to messages you send yourself.
 

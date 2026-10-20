@@ -3,9 +3,10 @@ import "server-only";
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentOrganizationId } from "@/lib/tenancy/scope";
-import { leadProgress, leadReach, type LeadProgress, type LeadProgressInput } from "./runLeads";
+import { leadOpen, leadProgress, leadReach, type LeadProgress, type LeadProgressInput } from "./runLeads";
 
-export type RunLead = { personId: string; who: string; channel: string; progress: LeadProgress; reach: { contacted: boolean; replied: boolean } };
+/** `open`: its channel engine may still send it something (runLeads.ts leadOpen). */
+export type RunLead = { personId: string; who: string; channel: string; progress: LeadProgress; reach: { contacted: boolean; replied: boolean }; open: boolean };
 
 type Row = LeadProgressInput & { runId: string; personId: string; who: string | null };
 
@@ -17,7 +18,7 @@ export async function runLeads(runIds: readonly string[], perRun = 200): Promise
     select l.run_id::text as "runId", l.person_id::text as "personId", l.channel, l.status as "runStatus",
       coalesce(p.full_name, p.phone, p.email, p.raw->'instagram'->>'username') as "who",
       e.sequence_status as "emailStatus",
-      w.status as "whatsappStatus", w.last_sent_at::text as "whatsappSentAt", left(w.last_error, 120) as "whatsappError",
+      w.status as "whatsappStatus", w.last_sent_at::text as "whatsappSentAt", left(w.last_error, 200) as "whatsappError",
       wm.delivered_at::text as "whatsappDeliveredAt", wm.read_at::text as "whatsappReadAt",
       li.status::text as "linkedinStatus", li."requestSentAt"::text as "linkedinRequestSentAt",
       case when ig.status='sent' and exists (
@@ -50,7 +51,7 @@ export async function runLeads(runIds: readonly string[], perRun = 200): Promise
   const order = { good: 0, replied: 1, failed: 2, sent: 3, waiting: 4, stopped: 5 } as const;
   const out: Record<string, RunLead[]> = {};
   for (const row of Array.from(rows) as unknown as Row[]) {
-    (out[row.runId] ??= []).push({ personId: row.personId, who: row.who ?? "A lead", channel: row.channel, progress: leadProgress(row), reach: leadReach(row) });
+    (out[row.runId] ??= []).push({ personId: row.personId, who: row.who ?? "A lead", channel: row.channel, progress: leadProgress(row), reach: leadReach(row), open: leadOpen(row) });
   }
   for (const list of Object.values(out)) {
     list.sort((a, b) => order[a.progress.tone] - order[b.progress.tone] || a.who.localeCompare(b.who));
