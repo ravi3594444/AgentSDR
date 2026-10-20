@@ -9,7 +9,7 @@ import { inOrg } from "@/lib/tenancy/scope";
 import type { FeatureState } from "@/lib/features/catalog";
 import { TREG_LIMITS } from "@/lib/treg/catalog";
 import { featureState } from "@/lib/features/flags.server";
-import { actionsProblem, agentReplySchema, groundingCorpus, searchRequestFor, inquiryRepliesRequested, isSmallTalk, MAX_ACTIONS_PER_STEP, MAX_STEPS, DIRECT_CONTACT_TOOLS, nextAgentBatch, parseAgentReply, pendingOutreachRequestIndex, sameMessage, standingOutreachRequestIndex, transcriptText, unbackedClaim, type AgentReply } from "./agent";
+import { actionsProblem, agentReplySchema, groundingCorpus, searchArgsKey, searchRequestFor, inquiryRepliesRequested, isSmallTalk, MAX_ACTIONS_PER_STEP, MAX_STEPS, DIRECT_CONTACT_TOOLS, nextAgentBatch, parseAgentReply, pendingOutreachRequestIndex, sameMessage, standingOutreachRequestIndex, transcriptText, unbackedClaim, type AgentReply } from "./agent";
 import { AUTONOMOUS_MAX_STEPS, autonomousRules, SEARCH_TOOLS, searchCapProblem, type AutonomyCaps } from "./autonomy";
 import { autonomousSearchesToday, autonomyCaps, autoStartPlan, threadAutonomy } from "./autonomy.server";
 import { listAudiences } from "./audiences.server";
@@ -116,9 +116,36 @@ async function ownerDocumentsText(maxChars = 60_000): Promise<string> {
 }
 
 /** Runs one tool and records it in the thread: a "running" card first, then its result. */
+/**
+ * The search this request already started with the same arguments, when a
+ * tool call repeats it (a Retry after a failed answer, or a model that asks
+ * twice): its earlier result, unless that search failed or was cancelled.
+ * The transcript alone did not stop a repeat across turns (pilot fix F08).
+ */
+async function repeatedSearch(context: ToolContext, tool: string, args: Record<string, unknown>): Promise<ToolResult | null> {
+  const requestId = searchRequestId(context);
+  if (!SEARCH_TOOLS.has(tool) || !requestId || !context.threadId) return null;
+  const key = searchArgsKey(tool, args);
+  const earlier = await db.select({ toolInput: assistantMessages.toolInput, toolResult: assistantMessages.toolResult }).from(assistantMessages).where(and(
+    inOrg(assistantMessages),
+    eq(assistantMessages.threadId, context.threadId),
+    eq(assistantMessages.role, "tool"),
+    eq(assistantMessages.tool, tool),
+    eq(assistantMessages.status, "ok"),
+  )).orderBy(desc(assistantMessages.createdAt)).limit(20);
+  const same = earlier.find((row) => (row.toolResult as { requestId?: unknown } | null)?.requestId === requestId && searchArgsKey(tool, (row.toolInput ?? {}) as Record<string, unknown>) === key);
+  const data = (same?.toolResult as { data?: Record<string, unknown> } | null)?.data;
+  const jobId = typeof data?.jobId === "string" ? data.jobId : null;
+  if (!same || !jobId) return null;
+  const [job] = await db.select({ status: assistantJobs.status }).from(assistantJobs).where(and(inOrg(assistantJobs), eq(assistantJobs.id, jobId))).limit(1);
+  if (!job || job.status === "failed" || job.status === "cancelled") return null;
+  const state = job.status === "succeeded" ? "it has finished and its results were announced" : "it is still running; its results are announced when done";
+  return { ok: true, summary: `Already searched for this request with the same words: job ${jobId}, audience ${String(data?.audienceId ?? "")} (${state}). It was not started again.`, display: "This search was already started for this request; it was not started again.", data };
+}
+
 export async function runToolInThread(context: ToolContext, tool: string, args: Record<string, unknown>): Promise<ToolResult> {
   const row = await addMessage({ threadId: context.threadId, role: "tool", tool, toolInput: args, status: "running", content: "" });
-  const result = await runTool(tool, args, context);
+  const result = (await repeatedSearch(context, tool, args)) ?? await runTool(tool, args, context);
   // The request the tool served, so what the assistant did for a request is counted by its id (coverage.server.ts webToolUse).
   const requestId = searchRequestId(context);
   await updateMessage(row.id, {

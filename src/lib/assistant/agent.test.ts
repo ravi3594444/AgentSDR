@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { actionsProblem, agentReplySchema, cleanSuggestions, searchRequestFor, displayThreadTitle, groundingCorpus, isSmallTalk, MAX_ACTIONS_PER_REPLY, MAX_ACTIONS_PER_STEP, nextAgentBatch, outreachIntent, outreachRequested, outreachRequestProblem, parseAgentReply, pendingOutreachRequest, sameMessage, standingOutreachRequestIndex, outreachRevoked, threadTitleFrom, transcriptText, unbackedClaim, ungroundedContacts, urlGiven, type AgentReply, type TranscriptMessage } from "./agent";
+import { actionsProblem, agentReplySchema, cleanSuggestions, searchArgsKey, searchRequestFor, displayThreadTitle, groundingCorpus, isSmallTalk, MAX_ACTIONS_PER_REPLY, MAX_ACTIONS_PER_STEP, nextAgentBatch, outreachIntent, outreachRequested, outreachRequestProblem, parseAgentReply, pendingOutreachRequest, sameMessage, standingOutreachRequestIndex, outreachRevoked, threadTitleFrom, transcriptText, unbackedClaim, ungroundedContacts, urlGiven, type AgentReply, type TranscriptMessage } from "./agent";
 
 const TOOLS = ["find_leads", "save_business_info", "prepare_outreach"];
 
@@ -576,5 +576,20 @@ describe("searchRequestFor: which owner request a search serves", () => {
     expect(searchRequestFor({ ...base, continuationRequestId: "m0" })).toBe("m0");
     expect(searchRequestFor({ ...base, outreachRequestId: null })).toBe("m2");
     expect(searchRequestFor({ ...base, outreachRequestId: null, latestOwnerId: null })).toBeNull();
+  });
+});
+
+describe("the same search, asked again (pilot F08)", () => {
+  test("arguments that differ only in case, spacing, order or empty values are one search", () => {
+    expect(searchArgsKey("find_leads", { what: "Real estate  agencies", where: "Pune", maxResults: 50 }))
+      .toBe(searchArgsKey("find_leads", { maxResults: 50, where: " pune ", what: "real estate agencies", language: "" }));
+  });
+
+  test("other words, another place, another tool or another limit are another search", () => {
+    const base = searchArgsKey("find_leads", { what: "real estate agencies", where: "Pune" });
+    expect(searchArgsKey("find_leads", { what: "real estate agents", where: "Pune" })).not.toBe(base);
+    expect(searchArgsKey("find_leads", { what: "real estate agencies", where: "Mumbai" })).not.toBe(base);
+    expect(searchArgsKey("find_customers_on_web", { what: "real estate agencies", where: "Pune" })).not.toBe(base);
+    expect(searchArgsKey("find_leads", { what: "real estate agencies", where: "Pune", maxResults: 100 })).not.toBe(base);
   });
 });

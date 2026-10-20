@@ -9,7 +9,10 @@
  * - when every attempt fails, the chat gets a plain summary (no schema
  *   wording or raw model output) with a Retry flag, and nothing runs;
  * - Retry (a turn with no new message) answers the same request, and the
- *   Retry offer is not repeated.
+ *   Retry offer is not repeated;
+ * - a turn that started a search and then got no usable answer (pilot F08):
+ *   the summary does not say nothing was started, and a Retry whose model
+ *   repeats the same search starts no second one.
  *
  *   bun run --conditions=react-server scripts/e2e/assistant-recovery.ts
  *
@@ -25,6 +28,9 @@ if (!/@(localhost|127\.0\.0\.1)[:/]/.test(process.env.DATABASE_URL ?? "")) {
 }
 
 const root = join(import.meta.dir, "..", "..");
+// A search can be started (its job is recorded); nothing runs it here, so the scraper is never called.
+process.env.GMAPS_SCRAPER_URL = "http://scraper.recovery-check.test";
+process.env.GEOCODER_URL = "off";
 type Input = { userPrompt: string; accept: (text: string) => void; onRetry?: (info: { attempt: number; maxAttempts: number; reason: string }) => Promise<void> | void };
 let script: (input: Input) => Promise<string> = async () => {
   throw new Error("unexpected model call");
@@ -44,6 +50,8 @@ const { organizations, users, members } = await import("@/lib/auth/schema");
 const { runInOrganization } = await import("@/lib/tenancy/scope");
 const { runAgentTurn } = await import("@/lib/assistant/agent.server");
 const { createThread, listMessages } = await import("@/lib/assistant/threads.server");
+const { assistantJobs } = await import("@/lib/assistant/schema");
+const { and, eq } = await import("drizzle-orm");
 
 let failures = 0;
 function check(label: string, ok: boolean, detail = "") {
@@ -97,6 +105,35 @@ await runInOrganization(org!.id, async () => {
   const retried = visible(await listMessages(thread.id));
   check("Retry asks the model about the same request, with no new message from the owner", prompts.length === before + 1 && prompts.at(-1)!.includes(request) && retried.filter((row) => row.role === "user").length === 1);
   check("…and its answer follows the failure summary", retried.at(-1)?.role === "assistant" && /Searching Pune/.test(retried.at(-1)!.content));
+
+  // ---------------------------------------------------------- F08: a search started, then no usable answer; Retry repeats it
+  const started = await createThread(owner!.id);
+  const search = { tool: "find_leads", arguments: JSON.stringify({ what: "real estate agencies", where: "Pune" }) };
+  const searchesOf = () => db.select({ id: assistantJobs.id }).from(assistantJobs).where(and(eq(assistantJobs.threadId, started.id), eq(assistantJobs.kind, "discovery")));
+  let call = 0;
+  script = async (input) => {
+    call += 1;
+    if (call === 1) return JSON.stringify({ message: "", actions: [search], suggestions: [] });
+    await input.onRetry?.({ attempt: 2, maxAttempts: 3, reason: "actions must be an array" });
+    throw new Error("assistant_reply failed after 3 attempts: actions must be an array");
+  };
+  await runAgentTurn({ threadId: started.id, userId: owner!.id, text: "find real estate agencies in Pune" });
+  const afterFailure = visible(await listMessages(started.id));
+  const failureSummary = afterFailure.filter((row) => row.role === "event").at(-1);
+  check("F08: the search the turn started is kept when the model's next answer fails", (await searchesOf()).length === 1 && afterFailure.some((row) => row.role === "tool" && row.tool === "find_leads" && row.status === "ok"),
+    afterFailure.map((row) => `${row.role}:${row.tool ?? ""}:${row.status ?? ""}`).join(", "));
+  check("F08: …and the failure summary does not say nothing was started", Boolean(failureSummary) && !/Nothing was started/.test(failureSummary!.content), failureSummary?.content ?? "(none)");
+  call = 0;
+  script = async () => {
+    call += 1;
+    return call === 1 ? JSON.stringify({ message: "", actions: [search], suggestions: [] }) : reply("The search for real estate agencies in Pune is running.");
+  };
+  await runAgentTurn({ threadId: started.id, userId: owner!.id, text: null });
+  const afterRetry = visible(await listMessages(started.id));
+  const repeated = afterRetry.filter((row) => row.role === "tool" && row.tool === "find_leads").at(-1);
+  check("F08: Retry whose model repeats the same search starts no second one", (await searchesOf()).length === 1, `${(await searchesOf()).length} searches; last tool line: ${repeated?.content ?? ""}`);
+  check("F08: …and the turn ends with the model's answer", afterRetry.at(-1)?.role === "assistant" && /is running/.test(afterRetry.at(-1)!.content), afterRetry.at(-1)?.content ?? "");
+  await db.update(assistantJobs).set({ status: "cancelled" }).where(eq(assistantJobs.threadId, started.id));
 });
 
 console.log(failures ? `\n${failures} check(s) failed` : "\nAll recovery checks passed");

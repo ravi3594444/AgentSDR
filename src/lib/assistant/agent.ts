@@ -638,3 +638,20 @@ export function sameMessage(a: string, b: string): boolean {
   const shared = [...left].filter((word) => right.has(word)).length;
   return shared / Math.max(left.size, right.size) >= 0.8;
 }
+
+/**
+ * A search tool's arguments as one comparable key (pilot fix F08): keys in
+ * order, text trimmed and lower-cased, empty values left out, so a Retry
+ * whose model repeats the same search is recognised as the same search.
+ */
+export function searchArgsKey(tool: string, args: Record<string, unknown>): string {
+  const normal = (value: unknown): unknown => {
+    if (typeof value === "string") return value.trim().replace(/\s+/g, " ").toLowerCase();
+    if (Array.isArray(value)) return value.map(normal);
+    if (value && typeof value === "object") {
+      return Object.fromEntries(Object.entries(value as Record<string, unknown>).filter(([, item]) => item !== undefined && item !== null && item !== "").sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, normal(item)]));
+    }
+    return value;
+  };
+  return `${tool}:${JSON.stringify(normal(args))}`;
+}
