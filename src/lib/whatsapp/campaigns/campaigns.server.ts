@@ -97,7 +97,7 @@ async function loadCampaignRow(campaignId: string): Promise<CampaignRow> {
 // --- summaries ---------------------------------------------------------------------------
 
 function emptyStats(): WhatsappCampaignStats {
-  return { queued: 0, in_sequence: 0, completed: 0, replied: 0, stopped: 0, failed: 0, total: 0, messagesSent: 0 };
+  return { queued: 0, in_sequence: 0, completed: 0, replied: 0, stopped: 0, failed: 0, total: 0, contacted: 0, messagesSent: 0 };
 }
 
 async function loadStats(campaignIds: string[]): Promise<Map<string, WhatsappCampaignStats>> {
@@ -105,7 +105,13 @@ async function loadStats(campaignIds: string[]): Promise<Map<string, WhatsappCam
   if (!campaignIds.length) return stats;
   const [byStatus, sent] = await Promise.all([
     db
-      .select({ campaignId: whatsappCampaignLeads.campaignId, status: whatsappCampaignLeads.status, n: count() })
+      .select({
+        campaignId: whatsappCampaignLeads.campaignId,
+        status: whatsappCampaignLeads.status,
+        n: count(),
+        // Sent a message at least once: kept when the lead is stopped, fails later or the campaign is paused.
+        contacted: sql<number>`count(*) filter (where ${whatsappCampaignLeads.lastSentAt} is not null or ${whatsappCampaignLeads.status} = 'replied')::int`,
+      })
       .from(whatsappCampaignLeads)
       .where(and(campaignLeadInOrg(), inArray(whatsappCampaignLeads.campaignId, campaignIds)))
       .groupBy(whatsappCampaignLeads.campaignId, whatsappCampaignLeads.status),
@@ -121,6 +127,7 @@ async function loadStats(campaignIds: string[]): Promise<Map<string, WhatsappCam
     if (!entry || !(WHATSAPP_CAMPAIGN_LEAD_STATUSES as readonly string[]).includes(row.status)) continue;
     entry[row.status] = row.n;
     entry.total += row.n;
+    entry.contacted += Number(row.contacted);
   }
   for (const row of sent) {
     const entry = stats.get(row.campaignId);

@@ -35,7 +35,8 @@ import { takesAnAnswer } from "@/lib/assistant/handoff";
 import type { OwnerDecisionKind } from "@/lib/assistant/schema";
 import type { RunAuthorization, SenderStatus } from "@/lib/assistant/runEvidence";
 import { AUTOPILOT_LIMITS } from "@/lib/crm/autopilot";
-import { planCounts } from "@/lib/activity/status";
+import { planCounts, planOutcome } from "@/lib/activity/status";
+import { displayTime } from "@/lib/assistant/displayTime";
 import * as Button from "@/components/alignui/button";
 import NeedsYouList from "@/components/assistant/NeedsYouList";
 import { useChatScroll } from "./useChatScroll";
@@ -84,7 +85,7 @@ type Job = {
 
 type RunReply = { id: string; conversationId: string; who: string; channel: string; receivedAt: string; preview: string; state: { tone: "done" | "waiting" | "you" | "failed"; text: string; at?: string; release?: boolean } };
 
-type RunLead = { personId: string; who: string; channel: string; progress: { tone: "waiting" | "sent" | "replied" | "good" | "stopped" | "failed"; text: string }; /** Contacted and replied, kept after a stop (runLeads.ts leadReach). */ reach?: { contacted: boolean; replied: boolean } };
+type RunLead = { personId: string; who: string; channel: string; progress: { tone: "waiting" | "sent" | "replied" | "good" | "stopped" | "failed"; text: string }; /** Contacted and replied, kept after a stop (runLeads.ts leadReach). */ reach?: { contacted: boolean; replied: boolean }; /** Its channel engine may still send it something (runLeads.ts leadOpen). */ open?: boolean };
 
 type Run = { id: string; status: string; autopilot: boolean; error: string | null; campaigns: Record<string, string>; replies?: RunReply[]; leads?: RunLead[]; /** Other plans of the same request, and its searches still running. */ requestPeers?: number; /** The plan as stored now (people left out at a start are gone from it). */ plan?: ProposalData["plan"]; /** Who authorized it to send, and how (runEvidence.ts). */ authorization?: RunAuthorization };
 
@@ -556,8 +557,9 @@ function ProposalCard({ message, run, canManageAutopilot, lastReplyMode, onChang
       <p className="mt-2 text-paragraph-xs text-text-sub-600">
         Daily limits: {[
           plan.limits.emailPerMailboxPerDay ? `${plan.limits.emailPerMailboxPerDay} emails per mailbox` : null,
-          plan.limits.whatsappNewChatsPerDay ? `${plan.limits.whatsappNewChatsPerDay} new WhatsApp chats per number` : null,
+          plan.limits.whatsappNewChatsPerDay ? `${plan.limits.whatsappNewChatsPerDay} new WhatsApp chats per number in 24 hours, shared with its other campaigns` : null,
           plan.limits.instagramNewChatsPerDay ? `${plan.limits.instagramNewChatsPerDay} initial Instagram DMs per account in 24 hours` : null,
+          perChannel.linkedin ? "each LinkedIn account's own invitation limit and working hours (Sending status shows them)" : null,
         ].filter(Boolean).join(", ") || "the connected channels' limits"}. Sending rules, sending hours and Do Not Contact apply. Sending uses your own accounts.
         {perChannel.instagram ? " Instagram sends one initial DM; replies follow the reply mode you choose." : ""}
       </p>
@@ -645,7 +647,7 @@ function ProposalCard({ message, run, canManageAutopilot, lastReplyMode, onChang
       )}
       {(status === "running" || status === "paused" || status === "starting") && <SendingStatus runId={data.runId} />}
       {run?.replies && run.replies.length > 0 && <RepliesList replies={run.replies} onChanged={onChanged} />}
-      {run?.leads && run.leads.length > 0 && <LeadsList leads={run.leads} />}
+      {run?.leads && run.leads.length > 0 && <LeadsList leads={run.leads} running={status === "running"} />}
       {run?.error && <p className="mt-2 text-paragraph-xs text-error-base">{run.error}</p>}
       {error && <p role="alert" className="mt-2 text-paragraph-xs text-error-base">{error}</p>}
     </div>
@@ -673,7 +675,7 @@ function AuthorizationLine({ authorization, autopilot, status }: { authorization
  * No recorded gate does not prove a worker is running.
  */
 function SendingStatus({ runId }: { runId: string }) {
-  const [state, setState] = useState<{ at: string; senders: SenderStatus[]; notCovered: string[] } | null>(null);
+  const [state, setState] = useState<{ at: string; displayTimeZone?: string; senders: SenderStatus[]; notCovered: string[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const load = async () => {
@@ -700,16 +702,18 @@ function SendingStatus({ runId }: { runId: string }) {
               <li key={`${sender.channel}-${sender.account}`} className="rounded-md bg-bg-weak-50 px-2.5 py-1.5">
                 <p className="text-text-strong-950">{CHANNEL_LABEL[sender.channel] ?? sender.channel} · {sender.account}{sender.queued !== null && <span className="text-text-soft-400"> · {sender.queued} waiting</span>}</p>
                 <p className="text-text-sub-600">
-                  {sender.gates.length ? sender.gates.join("; ") : "No recorded gate is holding it"}.
-                  {sender.nextAt && <> Next send allowed {dateTime(sender.nextAt)}.</>}
+                  {sender.gates.length ? sender.gates.join("; ") : sender.queued === 0 ? "No leads waiting" : "No recorded gate is holding it"}.
+                  {sender.nextAt && <> Next send allowed {state.displayTimeZone ? displayTime(new Date(sender.nextAt), new Date(state.at), state.displayTimeZone) : dateTime(sender.nextAt)}.</>}
                   {" "}{sender.timezone ? `Sending hours in ${sender.timezone}.` : "No sending hours set: any time."}
                   {sender.note && <> {sender.note}</>}
                 </p>
+                {sender.limits && <p className="text-text-sub-600">{sender.limits}</p>}
+                {sender.details?.map((line) => <p key={line} className="text-text-sub-600">{line}</p>)}
               </li>
             ))}
           </ul>
           {state.notCovered.length > 0 && <p className="text-text-soft-400">Not covered here: {state.notCovered.map((channel) => CHANNEL_LABEL[channel] ?? channel).join(", ")}.</p>}
-          <p className="text-text-soft-400">Checked {timeOf(state.at)} from the recorded settings and queues. It does not prove the sender is running; a send is confirmed only when the provider accepts it.
+          <p className="text-text-soft-400">Checked {timeOf(state.at)} from the recorded settings and queues.{state.displayTimeZone && <> Times are in {state.displayTimeZone}, the organization&apos;s time zone; sending hours use each sender&apos;s own zone, and where leads are does not change either.</>} It does not prove the sender is running; a send is confirmed only when the provider accepts it. Next times are estimates; every gate is checked again at send time.
             {" "}<button type="button" className="underline underline-offset-2" onClick={() => void load()}>Check again</button></p>
         </div>
       )}
@@ -837,16 +841,22 @@ function SortingSummary({ plan }: { plan: ProposalData["plan"] }) {
   );
 }
 
+/** The card's lead list is cut at this many (runLeads.server.ts); a cut list cannot say that nothing is left to send. */
+const CARD_LEADS = 200;
+
 /** Every lead of a started run and where it stands: waiting, sent, replied (and how), stopped or failed. */
-function LeadsList({ leads }: { leads: RunLead[] }) {
+function LeadsList({ leads, running }: { leads: RunLead[]; running: boolean }) {
   // The same counts as Activity (planCounts): a stopped lead that was messaged was still contacted.
-  const { contacted, replied } = planCounts(leads);
+  const { contacted, replied, failed } = planCounts(leads);
   const interested = leads.filter((lead) => lead.progress.tone === "good").length;
+  // Running with nothing left to send to anyone: say how it ended rather than implying it is still sending.
+  const outcome = running && leads.length < CARD_LEADS ? planOutcome(leads) : null;
   const tone = { good: "text-success-base", replied: "text-text-strong-950", sent: "text-text-sub-600", waiting: "text-text-soft-400", stopped: "text-text-soft-400", failed: "text-error-base" } as const;
   return (
     <details className="mt-3 border-t border-stroke-soft-200 pt-3 text-paragraph-xs">
       <summary className="cursor-pointer text-label-xs text-text-strong-950">
-        Leads · {leads.length} · {contacted} contacted · {replied} replied · {interested} interested
+        Leads · {leads.length} · {contacted} contacted · {replied} replied · {interested} interested{failed > 0 && <span className="text-error-base"> · {failed} failed</span>}
+        {outcome && <span className={cn("block font-normal", outcome.state === "failed" ? "text-error-base" : "text-text-sub-600")}>{outcome.state === "completed" ? "Done" : outcome.state === "failed" ? "Failed" : "Partly done"}: {outcome.reason}. Replies are still handled.</span>}
       </summary>
       <ul className="mt-1.5 max-h-72 space-y-1 overflow-y-auto">
         {leads.map((lead) => (

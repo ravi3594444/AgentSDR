@@ -19,7 +19,7 @@ import { FunnelChart } from "@/components/analytics/kit/FunnelChart";
 import { KpiCell, KpiStrip } from "@/components/analytics/kit/KpiStrip";
 import { CHANNEL_META, formatCompact, formatPercent, HUE, MUTED, STATUS } from "@/components/analytics/theme";
 import type { WhatsappCampaignDetail } from "@/lib/whatsapp/campaigns/contract";
-import type { CampaignFunnel } from "./metrics";
+import { leadsProgressText, type CampaignFunnel } from "./metrics";
 
 /**
  * A message campaign's Overview: headline numbers, the leads -> messaged ->
@@ -54,8 +54,8 @@ export function WhatsappCampaignOverview({ funnel: f, campaign }: { funnel: Camp
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-12 lg:gap-5">
       <KpiStrip className="lg:col-span-12" columns={5}>
-        <KpiCell icon={RiTeamLine} label="Leads" value={formatCompact(f.total)} context={f.queued > 0 ? `${formatCompact(f.queued)} not messaged yet` : f.total > 0 ? "Everyone has been messaged" : undefined} />
-        <KpiCell icon={RiSendPlaneLine} label="Messaged" value={formatCompact(f.messaged)} context={pct(f.messaged, f.total) ? `${pct(f.messaged, f.total)} of leads` : undefined} hint="Leads who received at least one message and are still in sequence, finished or replied." />
+        <KpiCell icon={RiTeamLine} label="Leads" value={formatCompact(f.total)} context={leadsProgressText(f)} />
+        <KpiCell icon={RiSendPlaneLine} label="Messaged" value={formatCompact(f.messaged)} context={pct(f.messaged, f.total) ? `${pct(f.messaged, f.total)} of leads` : undefined} hint="Leads sent at least one message (accepted by WhatsApp), or who replied. A lead stopped or failed later still counts; one that failed before its first message does not." />
         <KpiCell icon={RiChat1Line} label="Replied" value={formatCompact(f.replied)} context={f.replyRate !== null ? `${formatPercent(f.replyRate)} of messaged` : undefined} hint="Leads who replied on any channel. A reply stops the sequence." />
         <KpiCell icon={RiMailSendLine} label="Messages sent" value={formatCompact(f.messagesSent)} context={`${campaign.stepCount} ${campaign.stepCount === 1 ? "message" : "messages"} in the sequence`} hint="Every message delivered to WhatsApp, first messages and follow-ups." />
         <KpiCell icon={RiErrorWarningLine} label="Failed" value={formatCompact(f.failed)} context={f.stopped > 0 ? `${formatCompact(f.stopped)} stopped` : f.failed > 0 ? "WhatsApp refused the number or message" : "None"} hint="Leads WhatsApp could not deliver to. The Leads tab shows the reason for each." />

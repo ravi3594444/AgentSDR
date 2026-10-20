@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { leadProgress, leadReach, type LeadProgressInput } from "./runLeads";
+import { leadOpen, leadProgress, leadReach, type LeadProgressInput } from "./runLeads";
 
 const base: LeadProgressInput = { channel: "whatsapp", runStatus: "active", emailStatus: null, whatsappStatus: null, whatsappSentAt: null, whatsappError: null, linkedinStatus: null, category: null, subcategory: null };
 
@@ -63,5 +63,27 @@ describe("leadReach: whether a lead was contacted and replied, whatever its stat
     expect(leadReach(lead({ runStatus: "opted_out", whatsappStatus: "stopped", whatsappSentAt: "2026-10-18T10:00:00Z" }))).toEqual({ contacted: true, replied: true });
     expect(leadReach(lead({ channel: "email", emailStatus: "reply_received", category: "interested" }))).toEqual({ contacted: true, replied: true });
     expect(leadReach(lead({ channel: "instagram", instagramStatus: "replied" }))).toEqual({ contacted: true, replied: true });
+  });
+});
+
+describe("leadOpen: whether the channel engine may still send the lead something", () => {
+  test("waiting for a first message or a follow-up, or an invitation awaiting acceptance, is open", () => {
+    expect(leadOpen({ ...base, whatsappStatus: "queued" })).toBe(true);
+    expect(leadOpen({ ...base, whatsappStatus: "in_sequence", whatsappSentAt: "2026-10-19T10:00:00Z" })).toBe(true);
+    expect(leadOpen({ ...base, channel: "email", emailStatus: "initial_sent" })).toBe(true);
+    expect(leadOpen({ ...base, channel: "linkedin", linkedinStatus: "REQUEST_SENT" })).toBe(true);
+    expect(leadOpen({ ...base, channel: "instagram", instagramStatus: "queued" })).toBe(true);
+  });
+
+  test("failed, stopped, finished, replied or opted out is closed", () => {
+    for (const status of ["failed", "stopped", "completed", "replied"]) expect(leadOpen({ ...base, whatsappStatus: status })).toBe(false);
+    for (const status of ["sequence_completed", "bounced", "suppressed", "reply_received"]) expect(leadOpen({ ...base, channel: "email", emailStatus: status })).toBe(false);
+    for (const status of ["FAILED", "CANCELLED", "COMPLETED", "REPLIED", "FOLLOW_UP_3_SENT"]) expect(leadOpen({ ...base, channel: "linkedin", linkedinStatus: status })).toBe(false);
+    expect(leadOpen({ ...base, whatsappStatus: "queued", runStatus: "opted_out" })).toBe(false);
+  });
+
+  test("no engine row yet is open: a plan is never taken as finished without a record saying so", () => {
+    expect(leadOpen(base)).toBe(true);
+    expect(leadOpen({ ...base, channel: "instagram" })).toBe(true);
   });
 });

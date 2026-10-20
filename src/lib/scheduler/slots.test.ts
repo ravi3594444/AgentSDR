@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { internalSchedulerEnabled } from "./config";
 import { PLATFORM_JOBS, platformJob } from "./schedules";
-import { dailyAt, everyMinutes, latestDailySlot, latestDueSlot, wallTimeToInstant } from "./slots";
+import { dailyAt, everyMinutes, latestDailySlot, latestDueSlot, nextSlotAt, wallTimeToInstant } from "./slots";
 
 const at = (iso: string) => new Date(iso);
 const slot = (schedule: Parameters<typeof latestDueSlot>[0], now: string) => latestDueSlot(schedule, at(now)).toISOString();
@@ -32,6 +32,28 @@ describe("every N minutes", () => {
     expect(() => everyMinutes(0)).toThrow();
     expect(() => everyMinutes(90)).toThrow();
     expect(everyMinutes(120)).toEqual({ kind: "interval", minutes: 120 });
+  });
+});
+
+describe("the next slot at or after a time", () => {
+  const next = (schedule: Parameters<typeof nextSlotAt>[0], when: string) => nextSlotAt(schedule, at(when)).toISOString();
+
+  test("every 30 minutes: the :00 or :30 at or after it", () => {
+    const every30 = everyMinutes(30);
+    expect(next(every30, "2026-10-19T12:00:00.000Z")).toBe("2026-10-19T12:00:00.000Z");
+    // The pilot: a cooldown ending 29.508 seconds after the 12:00 check is next looked at 12:30.
+    expect(next(every30, "2026-10-19T12:00:29.508Z")).toBe("2026-10-19T12:30:00.000Z");
+    expect(next(every30, "2026-10-19T23:45:00.000Z")).toBe("2026-10-20T00:00:00.000Z");
+  });
+
+  test("daily: today's time when it is still ahead, else tomorrow's, across a DST change", () => {
+    const kolkata = dailyAt("05:30", "Asia/Kolkata");
+    expect(next(kolkata, "2026-10-19T00:00:00.000Z")).toBe("2026-10-19T00:00:00.000Z");
+    expect(next(kolkata, "2026-10-19T00:00:00.001Z")).toBe("2026-10-20T00:00:00.000Z");
+    const newYork = dailyAt("00:00", "America/New_York");
+    // Fall back on 1 November: the day after a 25-hour day starts at 05:00 UTC.
+    expect(next(newYork, "2026-11-01T06:00:00.000Z")).toBe("2026-11-02T05:00:00.000Z");
+    expect(next(newYork, "2026-10-31T05:00:00.000Z")).toBe("2026-11-01T04:00:00.000Z");
   });
 });
 

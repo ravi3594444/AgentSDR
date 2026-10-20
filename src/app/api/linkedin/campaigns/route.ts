@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withLinkedinOrg } from "@/lib/linkedin/organizations.server";
-import { and, count, desc, eq, inArray } from "drizzle-orm";
+import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   campaignAccounts,
@@ -59,7 +59,13 @@ export async function GET(req: Request) {
     // one grouped count gives both the per-status tally and the total.
     const statusRows = campaignIds.length
       ? await db
-          .select({ campaignId: leads.campaignId, status: leads.status, count: count() })
+          .select({
+            campaignId: leads.campaignId,
+            status: leads.status,
+            count: count(),
+            // Invited: the invitation's own record, kept when a stop cancels the lead.
+            invited: sql<number>`count(*) filter (where ${leads.requestSentAt} is not null)::int`,
+          })
           .from(leads)
           .where(and(inOrg(leads), inArray(leads.campaignId, campaignIds)))
           .groupBy(leads.campaignId, leads.status)
@@ -67,8 +73,10 @@ export async function GET(req: Request) {
 
     const statusCountsByCampaign = new Map<string, Record<string, number>>();
     const totalLeadsByCampaign = new Map<string, number>();
+    const invitedByCampaign = new Map<string, number>();
     for (const row of statusRows) {
       if (!row.campaignId) continue;
+      invitedByCampaign.set(row.campaignId, (invitedByCampaign.get(row.campaignId) ?? 0) + Number(row.invited));
       const counts = statusCountsByCampaign.get(row.campaignId) ?? {};
       counts[row.status] = (counts[row.status] ?? 0) + row.count;
       statusCountsByCampaign.set(row.campaignId, counts);
@@ -84,6 +92,7 @@ export async function GET(req: Request) {
       accounts: accountsByCampaign.get(c.id) ?? [],
       totalLeads: totalLeadsByCampaign.get(c.id) ?? 0,
       statusCounts: statusCountsByCampaign.get(c.id) ?? {},
+      invitedCount: invitedByCampaign.get(c.id) ?? 0,
       createdAt: c.createdAt.toISOString(),
       updatedAt: c.updatedAt.toISOString(),
     }));

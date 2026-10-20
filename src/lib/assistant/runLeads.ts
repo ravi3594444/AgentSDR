@@ -47,6 +47,29 @@ export function leadReach(input: LeadProgressInput): { contacted: boolean; repli
   return { contacted, replied };
 }
 
+const EMAIL_OPEN = new Set(["pending", "initial_sent", "in_follow_up"]);
+const WHATSAPP_OPEN = new Set(["queued", "in_sequence"]);
+const LINKEDIN_OPEN = new Set(["PENDING", "REQUEST_SENT", "CONNECTED", "ACCEPT_MESSAGE_SENT", "FOLLOW_UP_1_SENT", "FOLLOW_UP_2_SENT"]);
+const INSTAGRAM_OPEN = new Set(["queued", "resolving", "sending"]);
+
+/**
+ * Whether the lead's channel engine may still send it something: a first
+ * message, a follow-up, or the messages after an invitation is accepted.
+ * A lead with no engine row yet (a plan still launching, an inquiry run's
+ * member) is open: it is never taken as finished without a record saying so.
+ */
+export function leadOpen(input: LeadProgressInput): boolean {
+  if (input.runStatus === "opted_out") return false;
+  const open = (status: string | null | undefined, statuses: ReadonlySet<string>) => status == null || statuses.has(status);
+  switch (input.channel) {
+    case "email": return open(input.emailStatus, EMAIL_OPEN);
+    case "whatsapp": return open(input.whatsappStatus, WHATSAPP_OPEN);
+    case "linkedin": return open(input.linkedinStatus, LINKEDIN_OPEN);
+    case "instagram": return open(input.instagramStatus, INSTAGRAM_OPEN);
+    default: return true;
+  }
+}
+
 const CATEGORY: Record<string, string> = { interested: "Interested", not_interested: "Not interested", customer: "Customer", other: "Other" };
 
 function replied(input: LeadProgressInput): LeadProgress {

@@ -4,8 +4,9 @@
  * place of Gmail and Unipile. It checks what the unit tests cannot: the
  * daily allowance, the throttle, pause and resume, the per-step send claim,
  * a reply stopping the remaining follow-ups (through the real CRM ingestion),
- * a reply landing while a step is being sent, and the server-side launch
- * rules reading real rows.
+ * a reply landing while a step is being sent, the server-side launch
+ * rules reading real rows, and a refusal on a WhatsApp number kept as its
+ * held-back reason (no lead failed, nothing resent) until an accepted send.
  *
  *   bun run --conditions=react-server scripts/e2e/campaign-engines.ts
  *
@@ -41,6 +42,7 @@ const { encryptIntegrationCredentials } = await import("@/lib/integrations/crede
 const { whatsappAccounts, whatsappCampaignLeads, whatsappCampaignSends } = await import("@/lib/whatsapp/schema");
 const { addPeopleToWhatsappCampaign, createWhatsappCampaign, updateWhatsappCampaign } = await import("@/lib/whatsapp/campaigns/campaigns.server");
 const { runWhatsappCampaignTick } = await import("@/lib/whatsapp/campaigns/engine");
+const { WhatsappSendRefusedError } = await import("@/lib/whatsapp/errors");
 const { runInOrganization, currentOrganizationId } = await import("@/lib/tenancy/scope");
 
 let failures = 0;
@@ -259,8 +261,23 @@ await runInOrganization(org!.id, async () => {
     }) as unknown as Parameters<typeof runWhatsappCampaignTick>[0] extends { send?: infer S } ? S : never;
     const waTick = () => runWhatsappCampaignTick({ send: waSend });
 
+    // WhatsApp rate-limits the number: a wait on the number, not a failure of the lead.
+    const refusing = (async () => {
+      throw new WhatsappSendRefusedError("WhatsApp is rate-limiting this number: +14155550000 is busy. Try again later.", 429, 60, "rate_limited");
+    }) as unknown as typeof waSend;
+    // (The tick's own totals cover every organization; this one's leads and claims are what count here.)
+    const held = await runWhatsappCampaignTick({ send: refusing });
+    const [heldAccount] = await db.select().from(whatsappAccounts).where(eq(whatsappAccounts.id, account!.id));
+    const heldLeads = await db.select().from(whatsappCampaignLeads).where(eq(whatsappCampaignLeads.campaignId, waCampaign.id));
+    const heldClaims = await db.select().from(whatsappCampaignSends).where(inArray(whatsappCampaignSends.leadId, heldLeads.map((lead) => lead.id)));
+    check("a rate-limit refusal is kept on the number as a short reason, without the provider's text or a phone number",
+      heldAccount?.lastRefusal === "WhatsApp refused: rate limited (try again later)" && Boolean(heldAccount.lastRefusalAt) && !/1415/.test(heldAccount.lastRefusal ?? ""), `${heldAccount?.lastRefusal} at ${heldAccount?.lastRefusalAt?.toISOString()}`);
+    check("…and the wait fails no lead and leaves no claim behind to resend", heldLeads.every((lead) => lead.status === "queued" && !lead.lastError) && heldClaims.length === 0 && waSent.length === 0, `${JSON.stringify(held)}; ${heldLeads.map((lead) => lead.status).join(",")}; ${heldClaims.length} claims`);
+
     const w1 = await waTick();
     check("a WhatsApp tick sends one first message per number", w1.sent === 1 && waSent.length === 1, JSON.stringify(w1));
+    const [clearedAccount] = await db.select().from(whatsappAccounts).where(eq(whatsappAccounts.id, account!.id));
+    check("the next accepted send clears the held-back reason", clearedAccount?.lastRefusal === null && clearedAccount.lastRefusalAt === null, `${clearedAccount?.lastRefusal}`);
     // So the CRM records the step as a campaign message, not as the owner's answer (crmBridge.ts).
     check("a WhatsApp step is sent with the CRM origin \"campaign\"", waOrigins.length === 1 && waOrigins[0] === "campaign", JSON.stringify(waOrigins));
 

@@ -4,7 +4,13 @@
  * - who authorized each plan (Start, a request approval, Autonomous mode,
  *   or not started at all);
  * - each WhatsApp number's configured time zone, the gate holding it and the
- *   earliest time it may send (outside hours, the rolling new-chat limit);
+ *   earliest time it may send (outside hours, the rolling new-chat limit
+ *   counted across every campaign on the number), its used / limit /
+ *   available line and why the campaign sender last held it back;
+ * - each LinkedIn account's rest between runs to the second, the next
+ *   scheduled check, its invitation limit and hours, and when the
+ *   invitation-limit flag is cleared, in the organization's time zone;
+ * - reading any of it writes nothing;
  * - each lead's delivery evidence (accepted, then delivered as WhatsApp
  *   reported, then a read receipt), never "seen";
  * - an uncertain send shown as such, never resent;
@@ -46,6 +52,7 @@ const { createAudience } = await import("@/lib/assistant/audiences.server");
 const { diagnoseDelivery } = await import("@/lib/assistant/deliveryDiagnostics.server");
 const { runLeads } = await import("@/lib/assistant/runLeads.server");
 const { assistantState } = await import("@/lib/assistant/http.server");
+const linkedinSchema = await import("@/lib/linkedin/schema");
 type OutreachPlan = import("@/lib/assistant/schema").OutreachPlan;
 type OrgContext = import("@/lib/auth/context").OrgContext;
 
@@ -80,6 +87,8 @@ const seeded = await runInOrganization(a.org.id, async () => {
   const [provider] = await db.insert(gridProviders).values({ organizationId: a.org.id, key: "platform-unipile", name: "Unipile (delivery check)" }).returning();
   await db.insert(gridProviderCredentials).values({ providerId: provider!.id, encryptedPayload: encryptIntegrationCredentials({ apiKey: "delivery-check", dsn: "https://unipile.invalid" }) });
   await saveChannelRules("whatsapp", { sendingHours: hours }, a.owner.id);
+  // The organization's own time zone and new day: the panel writes its times in it.
+  await saveChannelRules("general", { timeZone: "Asia/Kolkata", dayStartsAt: "05:30" }, a.owner.id);
   const [account] = await db.insert(whatsappAccounts).values({ organizationId: a.org.id, unipileAccountId: `delivery-check-${stamp}`, name: "Sales number", phone: "+919800000099", status: "connected", connectedAt: new Date(now.getTime() - 3 * 86_400_000) }).returning();
   // A mailbox and an Instagram account the WhatsApp plans do not send from.
   const [mailbox] = await db.insert(mailboxes).values({ organizationId: a.org.id, emailAddress: `sales-${stamp}@delivery-check.test`, status: "connected" }).returning();
@@ -112,7 +121,7 @@ const seeded = await runInOrganization(a.org.id, async () => {
   await db.update(assistantThreads).set({ autonomous: true, autonomousBy: a.owner.id, autonomousAt: now }).where(eq(assistantThreads.id, thread.id));
   await db.insert(outreachRunLeads).values(leads.map((lead) => ({ organizationId: a.org.id, runId: started.id, personId: lead.id, channel: "whatsapp" as const })));
   // A LinkedIn plan: one account with its own hours (Mon–Fri 09:00–18:00 in New York) that has used its 5 invitations today.
-  const linkedin = await import("@/lib/linkedin/schema");
+  const linkedin = linkedinSchema;
   const [liAccount] = await db.insert(linkedin.linkedInAccounts).values({ organizationId: a.org.id, linkedinId: `delivery-li-${stamp}`, username: `delivery-li-${stamp}`, name: "Ravi", status: "CONNECTED", dailyInviteLimit: 5, workTimezone: "America/New_York", workStartTime: "09:00", workEndTime: "18:00", workDays: "1,2,3,4,5", updatedAt: new Date() }).returning();
   const [liCampaign] = await db.insert(linkedin.campaigns).values({ organizationId: a.org.id, name: "Delivery check LinkedIn", type: "REGULAR", status: "ACTIVE", updatedAt: new Date() }).returning();
   await db.insert(linkedin.campaignAccounts).values({ campaignId: liCampaign!.id, linkedinAccountId: liAccount!.id });
@@ -202,6 +211,43 @@ await runInOrganization(a.org.id, async () => {
   check("Autonomous mode is named as the authorization", auth(seeded.automatic.id)?.kind === "autonomous", auth(seeded.automatic.id)?.text);
   check("a waiting plan in an Autonomous chat is not described as started", auth(seeded.proposed.id)?.kind === "none" && /did not start this one/.test(auth(seeded.proposed.id)?.text ?? ""), auth(seeded.proposed.id)?.text);
   check("a plan whose launch failed is not described as started", auth(seeded.failedStart.id)?.kind === "none" && auth(seeded.failedStart.id)?.text === "It did not start; nothing was sent.", auth(seeded.failedStart.id)?.text);
+
+  // Another campaign on the same number starts a chat: the rolling count is the number's, not the campaign's.
+  const otherPeople = await db.insert(people).values({ organizationId: a.org.id, phone: `+9197${String(stamp % 100_000_000).padStart(8, "0")}`, fullName: "Other campaign lead", source: "delivery-check" }).returning();
+  const otherCampaign = await createWhatsappCampaign({ name: "Delivery check, another campaign", accountIds: [seeded.account.id], steps: [{ id: randomUUID(), body: "Hello", delayHours: 0 }] });
+  await addPeopleToWhatsappCampaign(otherCampaign.id, [otherPeople[0]!.id]);
+  const [otherChat] = await db.insert(whatsappChats).values({ accountId: seeded.account.id, unipileChatId: `chat-${stamp}-other-campaign`, phone: otherPeople[0]!.phone!, personId: otherPeople[0]!.id }).returning();
+  await db.insert(whatsappMessages).values({ chatId: otherChat!.id, unipileMessageId: `msg-${stamp}-other-campaign`, direction: "outbound", origin: "agentsdr", body: "Hello", sentAt: new Date() });
+  await db.update(whatsappAccounts).set({ newChatsPerDay: 4, lastRefusal: "WhatsApp refused: rate limited (try again later)", lastRefusalAt: new Date(now.getTime() - 120_000) }).where(eq(whatsappAccounts.id, seeded.account.id));
+  const leadsBefore = JSON.stringify(await db.select().from(whatsappCampaignLeads).where(eq(whatsappCampaignLeads.campaignId, seeded.campaign.id)));
+  const sendsBefore = (await db.select().from(whatsappCampaignSends)).length;
+  const [accountBefore] = await db.select().from(whatsappAccounts).where(eq(whatsappAccounts.id, seeded.account.id));
+  const shared = await diagnoseDelivery(seeded.started.id);
+  const full = shared.senders.find((entry) => entry.channel === "whatsapp");
+  check("4 of 4 counts the other campaign's chat on the same number", full?.gates.join() === "4 of 4 new chats used in the last 24 hours", full?.gates.join("; "));
+  check("…with used, limit, available and the leads waiting for a first message, and that every campaign on the number shares it",
+    Boolean(full?.limits?.startsWith("New chats per 24 hours, per number: 4 of 4 used, 0 available; 0 leads wait for a first message.")) && /Every campaign on this number shares the count/.test(full?.limits ?? "") && /no reset at midnight/.test(full?.limits ?? ""), full?.limits ?? "");
+  check("…when the next new chat is possible, in the organization's time zone", shared.displayTimeZone === "Asia/Kolkata" && Boolean(full?.details.some((line) => /^Next new chat possible from .*\(Asia\/Kolkata\), when the oldest counted chat is 24 hours old\.$/.test(line))), JSON.stringify(full?.details));
+  check("…and why the sender last held it back, with when, without a phone number", Boolean(full?.details.some((line) => /^Last held back at \d\d:\d\d:\d\d \(Asia\/Kolkata\): WhatsApp refused: rate limited \(try again later\)\.$/.test(line))) && !/\+91/.test(full?.details.join(" ") ?? ""), JSON.stringify(full?.details));
+  check("…and diagnose_delivery tells the model the same", shared.summary.includes("4 of 4 used, 0 available") && shared.summary.includes("Last held back at") && shared.summary.includes("Times above are in Asia/Kolkata"), shared.summary);
+
+  // LinkedIn: a rest between runs ending at an odd second, then LinkedIn's invitation-limit flag.
+  const restEnds = new Date(now.getTime() + 10 * 60_000 + 29_508);
+  await db.update(linkedinSchema.linkedInAccounts).set({ nextAllowedRun: restEnds, limitReached: true }).where(eq(linkedinSchema.linkedInAccounts.id, seeded.liAccount.id));
+  const resting = (await diagnoseDelivery(seeded.liPlan.id)).senders.find((entry) => entry.channel === "linkedin");
+  const restClock = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).format(restEnds);
+  const checkAt = new Date(Math.ceil(restEnds.getTime() / 1_800_000) * 1_800_000);
+  const checkClock = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(checkAt);
+  check("the rest between LinkedIn runs is a gate with its end to the second, in the organization's zone", Boolean(resting?.gates.some((gate) => gate.startsWith(`Between LinkedIn runs until `) && gate.includes(`${restClock} (Asia/Kolkata)`))), JSON.stringify(resting?.gates));
+  check("…the next scheduled check is a separate line, the first :00 or :30 after the rest", Boolean(resting?.details.some((line) => line.startsWith("Next scheduled check ") && line.includes(`${checkClock} (Asia/Kolkata)`) && line.includes("every 30 minutes"))), JSON.stringify(resting?.details));
+  check("…LinkedIn's invitation-limit flag says it is cleared at the organization's daily reset, with when", Boolean(resting?.gates.some((gate) => /^LinkedIn reported this account's invitation limit; the flag is cleared at the organization's daily reset, .*05:30 \(Asia\/Kolkata\)$/.test(gate))), JSON.stringify(resting?.gates));
+  check("…and its own invitation limit and working hours are shown", resting?.limits === "Invitations: 5 of 5 sent today, 0 left. Working hours: Mon, Tue, Wed, Thu, Fri 09:00–18:00 (America/New_York).", resting?.limits ?? "");
+  check("…the next send, when known, is on a scheduled check", resting?.nextAt === null || new Date(resting!.nextAt!).getTime() % 1_800_000 === 0, `${resting?.nextAt}`);
+
+  // Reading the status changed nothing: no lead, claim or account was written.
+  const [accountAfter] = await db.select().from(whatsappAccounts).where(eq(whatsappAccounts.id, seeded.account.id));
+  const leadsAfter = JSON.stringify(await db.select().from(whatsappCampaignLeads).where(eq(whatsappCampaignLeads.campaignId, seeded.campaign.id)));
+  check("reading the sending status writes nothing", leadsBefore === leadsAfter && (await db.select().from(whatsappCampaignSends)).length === sendsBefore && JSON.stringify(accountBefore) === JSON.stringify(accountAfter));
 });
 
 await runInOrganization(b.org.id, async () => {

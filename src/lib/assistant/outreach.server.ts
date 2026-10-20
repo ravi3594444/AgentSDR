@@ -1017,8 +1017,13 @@ export type RunReport = {
   status: string;
   autopilot: boolean;
   leads: number;
-  /** messagesSent is null where the engine keeps no per-message count (LinkedIn). */
-  channels: { channel: AudienceChannel; campaignId: string; contacted: number; messagesSent: number | null; replied: number; finished: number; stopped: number }[];
+  /**
+   * contacted is people reached at least once, from send evidence a stop
+   * keeps (WhatsApp last_sent_at, LinkedIn requestSentAt); messagesSent is
+   * messages, null where the engine keeps no per-message count (LinkedIn);
+   * stopped is leads stopped or failed now, failed those failed now.
+   */
+  channels: { channel: AudienceChannel; campaignId: string; contacted: number; messagesSent: number | null; replied: number; finished: number; stopped: number; failed: number }[];
   error: string | null;
 };
 
@@ -1035,10 +1040,11 @@ export async function reportRun(runId: string): Promise<RunReport | null> {
         .innerJoin(outreachLeads, eq(outreachLeads.id, outreachEmails.leadId))
         .where(and(eq(outreachLeads.campaignId, campaignId), eq(outreachEmails.status, "sent")));
       const by = (names: string[]) => statuses.filter((row) => names.includes(row.status)).reduce((sum, row) => sum + Number(row.n), 0);
-      channels.push({ channel, campaignId, contacted: by(["initial_sent", "in_follow_up", "reply_received", "sequence_completed"]), messagesSent: Number(sent?.n ?? 0), replied: by(["reply_received"]), finished: by(["sequence_completed"]), stopped: by(["bounced", "suppressed", "unsubscribed"]) });
+      channels.push({ channel, campaignId, contacted: by(["initial_sent", "in_follow_up", "reply_received", "sequence_completed"]), messagesSent: Number(sent?.n ?? 0), replied: by(["reply_received"]), finished: by(["sequence_completed"]), stopped: by(["bounced", "suppressed", "unsubscribed"]), failed: by(["bounced"]) });
     } else if (channel === "whatsapp") {
       const { stats } = await getWhatsappCampaignDetail(campaignId);
-      channels.push({ channel, campaignId, contacted: stats.in_sequence + stats.replied + stats.completed, messagesSent: stats.messagesSent, replied: stats.replied, finished: stats.completed, stopped: stats.failed + stats.stopped });
+      // Contacted from each lead's last send, which a stop keeps; its current status would drop to stopped.
+      channels.push({ channel, campaignId, contacted: stats.contacted, messagesSent: stats.messagesSent, replied: stats.replied, finished: stats.completed, stopped: stats.failed + stats.stopped, failed: stats.failed });
     } else if (channel === "instagram") {
       const statuses = await db.select({ status: instagramOutreachQueue.status, n: count() }).from(instagramOutreachQueue)
         .where(and(inOrg(instagramOutreachQueue), eq(instagramOutreachQueue.runId, run.id))).groupBy(instagramOutreachQueue.status);
@@ -1047,13 +1053,19 @@ export async function reportRun(runId: string): Promise<RunReport | null> {
         join instagram_chats c on c.person_id=q.person_id and c.account_id=q.account_id
         join instagram_messages m on m.chat_id=c.id and m.direction='inbound' and m.sent_at>=q.created_at
         where q.organization_id=${currentOrganizationId()} and q.run_id=${run.id}`);
-      channels.push({ channel, campaignId, contacted: by(["sent"]), messagesSent: by(["sent"]), replied: Number(replies[0]?.n ?? 0), finished: by(["sent"]), stopped: by(["failed", "uncertain", "cancelled"]) });
+      channels.push({ channel, campaignId, contacted: by(["sent"]), messagesSent: by(["sent"]), replied: Number(replies[0]?.n ?? 0), finished: by(["sent"]), stopped: by(["failed", "uncertain", "cancelled"]), failed: by(["failed", "uncertain"]) });
     } else {
-      const statuses = await db.select({ status: linkedinLeads.status, n: count() }).from(linkedinLeads)
+      const reached = ["REQUEST_SENT", "CONNECTED", "ACCEPT_MESSAGE_SENT", "FOLLOW_UP_1_SENT", "FOLLOW_UP_2_SENT", "FOLLOW_UP_3_SENT", "REPLIED", "COMPLETED"];
+      // Reached: an invitation time (kept when a stop cancels the lead) or a status past the invitation.
+      const statuses = await db.select({
+        status: linkedinLeads.status,
+        n: count(),
+        reached: sql<number>`count(*) filter (where ${linkedinLeads.requestSentAt} is not null or ${linkedinLeads.status}::text in (${sql.join(reached.map((status) => sql`${status}`), sql`, `)}))::int`,
+      }).from(linkedinLeads)
         .where(and(inOrg(linkedinLeads), eq(linkedinLeads.campaignId, campaignId))).groupBy(linkedinLeads.status);
       const by = (names: string[]) => statuses.filter((row) => names.includes(row.status)).reduce((sum, row) => sum + Number(row.n), 0);
-      const reached = ["REQUEST_SENT", "CONNECTED", "ACCEPT_MESSAGE_SENT", "FOLLOW_UP_1_SENT", "FOLLOW_UP_2_SENT", "FOLLOW_UP_3_SENT", "REPLIED", "COMPLETED"];
-      channels.push({ channel, campaignId, contacted: by(reached), messagesSent: null, replied: by(["REPLIED"]), finished: by(["COMPLETED"]), stopped: by(["FAILED", "CANCELLED"]) });
+      const contacted = statuses.reduce((sum, row) => sum + Number(row.reached), 0);
+      channels.push({ channel, campaignId, contacted, messagesSent: null, replied: by(["REPLIED"]), finished: by(["COMPLETED"]), stopped: by(["FAILED", "CANCELLED"]), failed: by(["FAILED"]) });
     }
   }
   const leads = run.plan.kind === "inquiries" ? await inquiryRunMembers(run.id) : run.plan.assignments.length;

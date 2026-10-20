@@ -44,6 +44,22 @@ export function latestDueSlot(schedule: Schedule, now: Date): Date {
   return latestDailySlot(schedule.timeZone, schedule.at, now);
 }
 
+/**
+ * The first slot of `schedule` at or after `at`: when a job that is due
+ * then is next looked at. An interval's slots sit on the UTC clock (every
+ * 30 minutes: :00 and :30); a daily slot is the next new-day time in its
+ * zone, DST-safe because consecutive days are 23 to 25 hours apart.
+ */
+export function nextSlotAt(schedule: Schedule, at: Date): Date {
+  if (schedule.kind === "interval") {
+    const step = schedule.minutes * MINUTE_MS;
+    return new Date(Math.ceil(at.getTime() / step) * step);
+  }
+  const latest = latestDailySlot(schedule.timeZone, schedule.at, at);
+  if (latest.getTime() === at.getTime()) return latest;
+  return latestDailySlot(schedule.timeZone, schedule.at, new Date(latest.getTime() + 25 * 60 * MINUTE_MS));
+}
+
 /** "HH:MM", 24-hour. */
 export function parseClockTime(value: string): { hour: number; minute: number } | null {
   const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(value);

@@ -11,7 +11,7 @@ import "server-only";
  * left in `sending` means delivery is uncertain and the lead is failed for a
  * person to check, never retried.
  */
-import { and, asc, desc, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { channelRules } from "@/lib/channels/rules.server";
 import { companies, people } from "@/lib/leads/schema";
@@ -23,6 +23,7 @@ import { WHATSAPP_CAMPAIGN_OPEN_LEAD_STATUSES } from "./contract";
 import {
   classifySendError,
   emptyMessageError,
+  heldBackReason,
   IN_FLIGHT_CLAIM_MS,
   planAfterSend,
   planTransientRetry,
@@ -203,6 +204,29 @@ async function failClaim(claimId: string, error: string): Promise<void> {
   await db.update(whatsappCampaignSends).set({ status: "failed", error }).where(eq(whatsappCampaignSends.id, claimId));
 }
 
+/**
+ * Keeps why the number was held back (a short reason, never a message or a
+ * phone number) for the plan's Sending status. A failure to record it never
+ * changes what the sender does.
+ */
+async function recordHeldBack(accountId: string, reason: string): Promise<void> {
+  try {
+    await db.update(whatsappAccounts).set({ lastRefusal: reason, lastRefusalAt: new Date() }).where(and(inOrg(whatsappAccounts), eq(whatsappAccounts.id, accountId)));
+  } catch (error) {
+    console.warn(`[whatsapp/campaigns] could not record why number ${accountId} was held back:`, error);
+  }
+}
+
+/** An accepted send: the number is no longer held back. Writes only when a reason is stored. */
+async function clearHeldBack(accountId: string): Promise<void> {
+  try {
+    await db.update(whatsappAccounts).set({ lastRefusal: null, lastRefusalAt: null })
+      .where(and(inOrg(whatsappAccounts), eq(whatsappAccounts.id, accountId), isNotNull(whatsappAccounts.lastRefusalAt)));
+  } catch (error) {
+    console.warn(`[whatsapp/campaigns] could not clear the held-back reason of number ${accountId}:`, error);
+  }
+}
+
 async function processLead(
   picked: LeadRow & { steps: Steps },
   account: typeof whatsappAccounts.$inferSelect,
@@ -329,6 +353,7 @@ async function processLead(
         status: plan.status,
         nextSendAt: plan.nextSendAt,
       }, now);
+      await clearHeldBack(account.id);
       result.sent += 1;
       return "continue";
     }
@@ -367,7 +392,7 @@ async function processLead(
     // Recorded on the CRM as a campaign step, not as the owner's own answer.
     response = await send({ personId: picked.personId, accountId: account.id, text, crmOrigin: "campaign" });
   } catch (error) {
-    return handleSendFailure(error, picked, claimId, now, result);
+    return handleSendFailure(error, picked, account.id, claimId, now, result);
   }
   // Recording runs outside the try: once Unipile accepted the message, a
   // failed write here must not be read as a failed send (that deleted the
@@ -388,6 +413,7 @@ async function processLead(
     status: plan.status,
     nextSendAt: plan.nextSendAt,
   }, now);
+  await clearHeldBack(account.id);
   result.sent += 1;
   return "sent";
 }
@@ -395,12 +421,16 @@ async function processLead(
 async function handleSendFailure(
   error: unknown,
   lead: LeadRow,
+  accountId: string,
   claimId: string,
   now: Date,
   result: WhatsappCampaignTickResult,
 ): Promise<StepOutcome> {
   const action: SendFailureAction = classifySendError(error);
   const message = error instanceof Error ? error.message : String(error);
+  // A hold on the number (not on this lead): its reason is kept, the claim released, the lead untouched.
+  const heldBack = heldBackReason(error, action);
+  if (heldBack) await recordHeldBack(accountId, heldBack);
   switch (action.kind) {
     case "stop_account":
       await deleteClaim(claimId);

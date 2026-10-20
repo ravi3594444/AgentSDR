@@ -21,7 +21,7 @@ import { SeriesStats } from "@/components/analytics/kit/SeriesStats";
 import { seriesTotal, TimeSeriesChart, TimeSeriesTable, type SeriesKeys } from "@/components/analytics/kit/TimeSeriesChart";
 import { Skeleton } from "@/components/page/Skeletons";
 import { CHANNEL_META, formatCompact, formatPercent, MUTED, STATUS } from "@/components/analytics/theme";
-import type { CampaignFunnel } from "./metrics";
+import { leadsProgressText, type CampaignFunnel } from "./metrics";
 
 /**
  * A LinkedIn campaign's Overview: headline numbers, the invited → accepted →
@@ -104,8 +104,8 @@ export function CampaignOverview({
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-12 lg:gap-5">
       <KpiStrip className="lg:col-span-12" columns={5}>
-        <KpiCell icon={RiTeamLine} label="Leads" value={formatCompact(f.total)} context={f.queued > 0 ? `${formatCompact(f.queued)} not invited yet` : "Everyone has been invited"} />
-        <KpiCell icon={RiSendPlaneLine} label="Invited" value={formatCompact(f.invited)} context={pct(f.invited, f.total) ? `${pct(f.invited, f.total)} of leads` : undefined} hint="Leads sent a connection request, whatever happened next." />
+        <KpiCell icon={RiTeamLine} label="Leads" value={formatCompact(f.total)} context={leadsProgressText(f)} />
+        <KpiCell icon={RiSendPlaneLine} label="Invited" value={formatCompact(f.invited)} context={pct(f.invited, f.total) ? `${pct(f.invited, f.total)} of leads` : undefined} hint="Leads sent a connection request, whatever happened next, including those cancelled by a stop afterwards." />
         <KpiCell icon={RiCheckDoubleLine} label="Accepted" value={formatCompact(f.accepted)} context={f.acceptanceRate !== null ? `${formatPercent(f.acceptanceRate)} acceptance rate` : undefined} hint="Leads who accepted the connection request. Acceptance rate is accepted ÷ invited." />
         <KpiCell icon={RiChat1Line} label="Replied" value={formatCompact(f.replied)} context={f.replyRate !== null ? `${formatPercent(f.replyRate)} of accepted` : undefined} hint="Leads who replied. Reply rate is replied ÷ accepted, as on Analytics." />
         <KpiCell icon={RiErrorWarningLine} label="Failed" value={formatCompact(f.failed)} context={f.cancelled > 0 ? `${formatCompact(f.cancelled)} cancelled` : f.failed > 0 ? "Invitations that could not be sent" : "None"} hint="Leads whose invitation could not be sent after every retry." />

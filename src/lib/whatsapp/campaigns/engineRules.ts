@@ -86,6 +86,32 @@ export function classifySendError(error: unknown): SendFailureAction {
   return { kind: "retry_later" };
 }
 
+/**
+ * Why the number was held back, in a few words, for the number's
+ * last_refusal (shown on the plan's Sending status), or null when the
+ * refusal was about one lead (Do Not Contact, a recipient refusal) or a
+ * transient failure the lead itself records. Fixed wording only: never the
+ * provider's message, a message body or a phone number.
+ */
+export function heldBackReason(error: unknown, action: SendFailureAction): string | null {
+  if (action.kind === "stop_organization") return "Unipile is disconnected";
+  if (!(error instanceof WhatsappSendRefusedError)) return null;
+  switch (action.kind) {
+    case "stop_account":
+      if (error.reason === "send_gap") return "waiting the gap between two sends from this number";
+      if (error.reason === "rate_limited") return "WhatsApp refused: rate limited (try again later)";
+      return "WhatsApp refused without a clear reason; it waits and tries again on a later pass";
+    case "block_first_messages":
+      return error.reason === "warm_up" ? "warm-up: no new chats yet" : "new chats for 24 hours used";
+    case "skip_account":
+      if (error.reason === "unauthorized") return "Unipile refused this account (not authorized)";
+      if (error.reason === "no_number") return "no WhatsApp number is linked";
+      return "disconnected";
+    default:
+      return null;
+  }
+}
+
 export type RetryPlan =
   | { status: "failed"; attempts: number }
   | { status: "retry"; attempts: number; nextSendAt: Date };

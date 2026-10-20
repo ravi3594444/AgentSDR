@@ -30,7 +30,7 @@ import { CHANNEL_META, formatCompact, formatPercent } from "@/components/analyti
 import { useDialogs } from "@/components/DialogProvider";
 import { LinkedInAccountAvatars } from "@/components/linkedin/LinkedInAccountTag";
 import { EditCampaignModal } from "@/components/linkedin/campaigns/EditCampaignModal";
-import { CAMPAIGN_STATUS, campaignFunnel } from "@/components/linkedin/campaigns/metrics";
+import { CAMPAIGN_STATUS, campaignFunnel, leadsProgressText } from "@/components/linkedin/campaigns/metrics";
 import CampaignProgressRing from "@/components/outreach/CampaignProgressRing";
 import { EmptyState } from "@/components/page/EmptyState";
 import { PageHeader } from "@/components/page/PageHeader";
@@ -47,6 +47,8 @@ export type CampaignRow = {
   accounts: LinkedInAccount[];
   totalLeads: number;
   statusCounts: Record<string, number>;
+  /** Leads with a recorded invitation, kept when a stop cancels them. */
+  invitedCount?: number;
   createdAt: string;
 };
 
@@ -130,7 +132,7 @@ export function CampaignsClient({
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<Filter>("ALL");
 
-  const rows = useMemo(() => campaigns.map((c) => ({ ...c, funnel: campaignFunnel(c.statusCounts, c.totalLeads) })), [campaigns]);
+  const rows = useMemo(() => campaigns.map((c) => ({ ...c, funnel: campaignFunnel(c.statusCounts, c.totalLeads, { invited: c.invitedCount }) })), [campaigns]);
 
   const counts = useMemo(
     () => ({
@@ -331,8 +333,8 @@ export function CampaignsClient({
                     >
                       <Table.Cell className="h-16 px-4">
                         <div className="flex min-w-0 items-center gap-3">
-                          <div className="shrink-0" title={f.progress === null ? "No leads" : f.queued === 0 ? "Every lead has been invited" : `${Math.round(f.progress * 100)}% of leads invited`}>
-                            <CampaignProgressRing progress={f.progress} complete={f.total > 0 && f.queued === 0} />
+                          <div className="shrink-0" title={f.progress === null ? "No leads" : `${Math.round(f.progress * 100)}% of leads invited. ${leadsProgressText(f) ?? ""}`.trim()}>
+                            <CampaignProgressRing progress={f.progress} complete={f.complete} />
                           </div>
                           <div className="min-w-0">
                             <div className="flex min-w-0 items-center gap-2">

@@ -48,7 +48,7 @@ const HINTS = {
   contacted: METRICS.peopleContacted.definition,
   replies: METRICS.replies.definition,
   replyRate: METRICS.replyRate.definition,
-  positive: "Distinct CRM records moved into Interested or Customer in this period.",
+  positive: "Distinct CRM records moved into Interested or Customer at any point in this period, by the AI or by a person, even if they were moved again later. Pipeline's Interested filter shows who is Interested now; Overview's Interested counts replies the AI classified Interested.",
   meetings: "Distinct CRM records moved into a meeting or demo subcategory in this period. No-shows are not counted.",
   customers: "Distinct CRM records moved into Customer in this period.",
   response: "Median time from a lead's message to your next reply in that conversation.",
@@ -68,7 +68,7 @@ export function OverviewView({ data, loading, onSelectView }: ViewProps<"overvie
         <KpiCell icon={RiUserFollowLine} label="Contacted" value={formatCompact(kpis.contacted.value)} metric={kpis.contacted} hint={HINTS.contacted} context={`${formatCompact(kpis.sent.value)} sent, accepted by the provider`} />
         <KpiCell icon={RiReplyLine} label="Replies" value={formatCompact(crm.kpis.replies.value)} metric={crm.kpis.replies} hint={HINTS.replies} context={`from ${formatCompact(kpis.replied.value)} ${kpis.replied.value === 1 ? "person" : "people"}`} spark={replySpark} />
         <KpiCell icon={RiPercentLine} label="Reply rate" value={formatPercent(kpis.replyRate.value)} metric={kpis.replyRate} hint={HINTS.replyRate} context={`${formatCompact(kpis.contactedWhoReplied.value)} of ${formatCompact(kpis.contacted.value)} contacted replied`} />
-        <KpiCell icon={RiThumbUpLine} label="Positive" value={formatCompact(kpis.positive.value)} metric={kpis.positive} hint={HINTS.positive} context={kpis.replied.value > 0 ? `${formatPercent(kpis.positive.value / kpis.replied.value)} of people who replied` : vsPrevious(kpis.positive)} />
+        <KpiCell icon={RiThumbUpLine} label="Positive in period" value={formatCompact(kpis.positive.value)} metric={kpis.positive} hint={HINTS.positive} context={kpis.replied.value > 0 ? `${formatPercent(kpis.positive.value / kpis.replied.value)} of people who replied` : vsPrevious(kpis.positive)} />
         <KpiCell icon={RiCalendarEventLine} label="Meetings" value={formatCompact(kpis.meetings.value)} metric={kpis.meetings} hint={HINTS.meetings} context={vsPrevious(kpis.meetings)} />
         <KpiCell icon={RiTrophyLine} label="Customers" value={formatCompact(kpis.customers.value)} metric={kpis.customers} hint={HINTS.customers} context={vsPrevious(kpis.customers)} />
         <KpiCell icon={RiTimerLine} label="Median first response" value={formatMinutes(response.value)} metric={response} upIsGood={false} hint={HINTS.response} context={response.previous === null ? undefined : `vs ${formatMinutes(response.previous)} previous period`} />

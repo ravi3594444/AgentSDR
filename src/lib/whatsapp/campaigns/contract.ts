@@ -60,8 +60,15 @@ export type WhatsappCampaignSender = {
 };
 
 /** Lead counts by status, plus messages actually delivered to WhatsApp. */
+/**
+ * A campaign's leads by where they are now, plus two counts from durable
+ * evidence that a stop, a pause or a later failure does not erase:
+ * `contacted`, leads sent at least one message (last_sent_at) or that
+ * replied, and `messagesSent`, the messages themselves (several per lead).
+ */
 export type WhatsappCampaignStats = Record<WhatsappCampaignLeadStatus, number> & {
   total: number;
+  contacted: number;
   messagesSent: number;
 };
 

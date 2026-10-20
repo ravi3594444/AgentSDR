@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { mailboxHoursFromWeekly } from "@/lib/outreach/workingHours";
 import { coveringApproval, emailSenderStatus, linkedinSenderStatus, runAuthorization, whatsappSenderStatus, type RunAuthorizationInput } from "./runEvidence";
+import { displayTime } from "./displayTime";
+import { formatNextAllowedRun } from "@/lib/linkedin/nextAllowedRun";
 
 const base: RunAuthorizationInput = { status: "running", approvedAt: new Date("2026-10-18T10:00:00Z"), approverName: "Ravi", autonomous: false, ownApproval: null, coveringApproval: null, threadAutonomous: false };
 
@@ -72,6 +74,37 @@ describe("sender status", () => {
     expect(whatsappSenderStatus({ ...whatsapp, now, connectedAt: null }).nextAt).toBeNull();
   });
 
+  test("at 30 of 30, counting the chats every campaign on the number started: used, limit, available and when capacity frees, in the display zone", () => {
+    const now = new Date("2026-10-19T06:00:00Z");
+    // 30 chats this number started in the last 24 hours, from two campaigns and manual sends alike: the query counts them all.
+    const status = whatsappSenderStatus({ ...whatsapp, sendingHours: null, now, guardrails: { ...guardrails, newChatsPerDay: 30 }, newChatTimes: newChats(30, "2026-10-18T07:00:00Z", 10), queued: 9, firstMessagesQueued: 4, displayTimeZone: "Asia/Kolkata" });
+    expect(status.gates).toEqual(["30 of 30 new chats used in the last 24 hours"]);
+    expect(status.limits).toBe("New chats per 24 hours, per number: 30 of 30 used, 0 available; 4 leads wait for a first message. Every campaign on this number shares the count. Each chat counts for 24 hours from when it started (no reset at midnight); replies in chats already open are not limited by it.");
+    expect(status.nextAt).toBe("2026-10-19T07:00:00.000Z");
+    expect(status.details).toEqual(["Next new chat possible from 12:30 (Asia/Kolkata), when the oldest counted chat is 24 hours old."]);
+    expect(status.queued).toBe(9);
+    // Under the limit it still shows the count, with nothing holding it.
+    const room = whatsappSenderStatus({ ...whatsapp, sendingHours: null, now, newChatTimes: newChats(12, "2026-10-18T07:00:00Z"), firstMessagesQueued: 1 });
+    expect(room.gates).toEqual([]);
+    expect(room.limits).toContain("12 of 25 used, 13 available; 1 lead waits for a first message");
+  });
+
+  test("a limit lowered to 20 under 30 used: capacity frees when the 11th oldest chat is 24 hours old", () => {
+    const now = new Date("2026-10-19T06:00:00Z");
+    const times = newChats(30, "2026-10-18T07:00:00Z", 10);
+    const status = whatsappSenderStatus({ ...whatsapp, sendingHours: null, now, guardrails: { ...guardrails, newChatsPerDay: 20 }, newChatTimes: times, displayTimeZone: "UTC" });
+    expect(status.nextAt).toBe(new Date(times[10]!.getTime() + 86_400_000).toISOString());
+    expect(status.nextAt).toBe("2026-10-19T08:40:00.000Z");
+    expect(status.details).toEqual(["Next new chat possible from 08:40 (UTC), when the 11 oldest counted chats are 24 hours old."]);
+  });
+
+  test("why the campaign sender last held the number back, with when, until its next accepted send clears it", () => {
+    const now = new Date("2026-10-19T06:00:00Z");
+    const status = whatsappSenderStatus({ ...whatsapp, sendingHours: null, now, lastRefusal: { reason: "WhatsApp refused: rate limited (try again later)", at: new Date("2026-10-19T05:58:07.900Z") }, displayTimeZone: "Asia/Kolkata" });
+    expect(status.details).toEqual(["Last held back at 11:28:07 (Asia/Kolkata): WhatsApp refused: rate limited (try again later)."]);
+    expect(whatsappSenderStatus({ ...whatsapp, sendingHours: null, now, lastRefusal: null }).details).toEqual([]);
+  });
+
   test("over a lowered new-chat limit, it waits until enough chats leave the 24 hours, not just the oldest", () => {
     // 25 new chats, one every 30 minutes from 15:00, then the limit is lowered to 10: send.ts refuses until 16 have aged out.
     const now = new Date("2026-10-18T14:00:00Z");
@@ -133,18 +166,84 @@ describe("LinkedIn sender status", () => {
     expect(status.note).toContain("Follow-up");
   });
 
-  test("the gap between runs is a time, not a gate; a disconnected account promises no time", () => {
-    const gap = linkedinSenderStatus({ ...base, nextAllowedRun: new Date("2026-10-19T06:20:00Z"), now: new Date("2026-10-19T06:00:00Z") });
-    expect(gap.gates).toEqual([]);
-    expect(gap.nextAt).toBe("2026-10-19T06:20:00.000Z");
+  test("the gap between runs is a gate with its end to the second; the next send waits for the scheduled check after it; a disconnected account promises no time", () => {
+    const gap = linkedinSenderStatus({ ...base, nextAllowedRun: new Date("2026-10-19T06:20:00Z"), checkEveryMinutes: 30, displayTimeZone: "Asia/Kolkata", now: new Date("2026-10-19T06:00:00Z") });
+    expect(gap.gates).toEqual(["Between LinkedIn runs until 11:50:00 (Asia/Kolkata)"]);
+    expect(gap.nextAt).toBe("2026-10-19T06:30:00.000Z");
+    // Not scheduled: the rest's end is the time.
+    expect(linkedinSenderStatus({ ...base, nextAllowedRun: new Date("2026-10-19T06:20:00Z"), now: new Date("2026-10-19T06:00:00Z") }).nextAt).toBe("2026-10-19T06:20:00.000Z");
     const down = linkedinSenderStatus({ ...base, status: "CREDENTIALS", now: new Date("2026-10-19T06:00:00Z") });
     expect(down.gates).toEqual(["The account is credentials"]);
     expect(down.nextAt).toBeNull();
     expect(linkedinSenderStatus({ ...base, limitReached: true, now: new Date("2026-10-19T06:00:00Z") }).nextAt).toBeNull();
   });
 
+  describe("the pilot's boundary: a check at 12:00:00 UTC, the rest ending at 12:00:29.508 UTC", () => {
+    const cooldown = new Date("2026-10-19T12:00:29.508Z");
+    const anyTime = { workTimezone: null, workStartTime: null, workEndTime: null, workDays: null };
+    const pilot = { ...base, hours: anyTime, nextAllowedRun: cooldown, checkEveryMinutes: 30 };
+
+    test("before it ends, in India: the end to the second and the next check as a separate time", () => {
+      const status = linkedinSenderStatus({ ...pilot, displayTimeZone: "Asia/Kolkata", now: new Date("2026-10-19T11:50:00Z") });
+      expect(status.gates).toEqual(["Between LinkedIn runs until 17:30:29 (Asia/Kolkata)"]);
+      expect(status.details).toEqual(["Next scheduled check 18:00 (Asia/Kolkata) (checks run every 30 minutes)."]);
+      expect(status.nextAt).toBe("2026-10-19T12:30:00.000Z");
+    });
+
+    test("in New York: the same instants, in that zone", () => {
+      const status = linkedinSenderStatus({ ...pilot, displayTimeZone: "America/New_York", now: new Date("2026-10-19T11:50:00Z") });
+      expect(status.gates).toEqual(["Between LinkedIn runs until 08:00:29 (America/New_York)"]);
+      expect(status.details).toEqual(["Next scheduled check 08:30 (America/New_York) (checks run every 30 minutes)."]);
+    });
+
+    test("after it ended but before the next check: waiting for that check, not an active rest and not working", () => {
+      const status = linkedinSenderStatus({ ...pilot, displayTimeZone: "Asia/Kolkata", now: new Date("2026-10-19T12:05:00Z") });
+      expect(status.gates).toEqual(["Waiting for the next scheduled check at 18:00 (Asia/Kolkata)"]);
+      expect(status.nextAt).toBe("2026-10-19T12:30:00.000Z");
+    });
+
+    test("once a check has passed since it ended, nothing recorded holds it", () => {
+      const status = linkedinSenderStatus({ ...pilot, displayTimeZone: "Asia/Kolkata", now: new Date("2026-10-19T12:31:00Z") });
+      expect(status.gates).toEqual([]);
+      expect(status.details).toEqual(["Next scheduled check 18:30 (Asia/Kolkata) (checks run every 30 minutes)."]);
+    });
+
+    test("the accounts page shows the rest's end to the second", () => {
+      expect(formatNextAllowedRun(cooldown, "Asia/Kolkata", new Date("2026-10-19T11:50:00Z"))).toContain("5:30:29");
+      expect(formatNextAllowedRun(cooldown, "UTC", new Date("2026-10-19T12:01:00Z"))).toBe("Ready now");
+    });
+  });
+
+  test("LinkedIn's invitation-limit flag says it is cleared at the organization's daily reset, and when", () => {
+    const now = new Date("2026-10-19T06:00:00Z");
+    const reset = new Date("2026-10-19T18:30:00Z"); // midnight in India
+    const status = linkedinSenderStatus({ ...base, limitReached: true, limitResetsAt: reset, checkEveryMinutes: 30, displayTimeZone: "Asia/Kolkata", now });
+    expect(status.gates).toEqual(["LinkedIn reported this account's invitation limit; the flag is cleared at the organization's daily reset, Tue 20 Oct 00:00 (Asia/Kolkata)"]);
+    // After the reset, the account's next working hours (Tuesday 09:00 in India), on a scheduled check.
+    expect(status.nextAt).toBe("2026-10-20T03:30:00.000Z");
+    expect(linkedinSenderStatus({ ...base, limitReached: true, now }).gates[0]).toBe("LinkedIn reported this account's invitation limit; the flag is cleared at the organization's daily reset");
+  });
+
+  test("a LinkedIn plan shows the account's own invitation limit and working hours", () => {
+    const status = linkedinSenderStatus({ ...base, invitationsToday: 3, now: new Date("2026-10-19T06:00:00Z") });
+    expect(status.limits).toBe("Invitations: 3 of 20 sent today, 17 left. Working hours: Mon, Tue, Wed, Thu, Fri 09:00–18:00 (Asia/Kolkata).");
+  });
+
   test("no working hours anywhere: any time, no time zone invented", () => {
     const status = linkedinSenderStatus({ ...base, hours: { workTimezone: null, workStartTime: null, workEndTime: null, workDays: null }, now: new Date("2026-10-19T01:00:00Z") });
     expect(status).toMatchObject({ timezone: null, gates: [], nextAt: null });
+  });
+});
+
+describe("display times", () => {
+  const now = new Date("2026-10-19T11:50:00Z");
+  test("the clock time in the display zone, seconds when asked, cut not rounded, and the zone named", () => {
+    expect(displayTime(new Date("2026-10-19T12:00:29.508Z"), now, "Asia/Kolkata", { seconds: true })).toBe("17:30:29 (Asia/Kolkata)");
+    expect(displayTime(new Date("2026-10-19T12:30:00Z"), now, "Asia/Kolkata")).toBe("18:00 (Asia/Kolkata)");
+    expect(displayTime(new Date("2026-10-19T12:00:29.508Z"), now, "America/New_York", { seconds: true })).toBe("08:00:29 (America/New_York)");
+  });
+  test("another local day carries its date; an unknown zone falls back to UTC", () => {
+    expect(displayTime(new Date("2026-10-19T19:00:00Z"), now, "Asia/Kolkata")).toBe("Tue 20 Oct 00:30 (Asia/Kolkata)");
+    expect(displayTime(new Date("2026-10-19T12:30:00Z"), now, "Mars/Olympus")).toBe("12:30 (UTC)");
   });
 });

@@ -84,12 +84,12 @@ Overrides exist for three limits, listed in the tables below. Where a table says
 |---|---|---|---|---|
 | Sending hours for campaigns | Any time | n/a | n/a | n/a |
 | Warm-up after linking a number | 24 hours | 0 | 336 | Warns below 24 hours |
-| New chats per day, per number | 25 | 1 | 200 | Warns above 25 |
+| New chats per 24 hours, per number | 25 | 1 | 200 | Warns above 25 |
 | Seconds between messages, per number | 10 | 3 | 600 | Warns below 10 seconds |
 
 - **Sending hours** apply to campaign messages only. Messages you send yourself are not affected.
 - **Warm-up.** A newly linked number replies to existing chats right away but starts no new chats for this long. New numbers that message strangers on day one are banned far more often.
-- **New chats per day** counts conversations a number starts in a rolling day. Replies to people who wrote first are not counted. WhatsApp bans numbers that start many chats with people who do not have them saved.
+- **New chats per 24 hours** counts conversations a number starts in a rolling 24-hour window. Each chat counts for 24 hours from when it started, then ages out on its own; there is no reset at midnight. Every campaign on the number shares the count. Replies in chats already open, and to people who wrote first, are not limited by it. WhatsApp bans numbers that start many chats with people who do not have them saved.
 - **Seconds between messages** is the shortest gap between two messages from one number.
 - **Override:** each number can set its own **New chats a day** on **WhatsApp**, **Numbers**.
 

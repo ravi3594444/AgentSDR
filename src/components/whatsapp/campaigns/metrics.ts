@@ -23,11 +23,12 @@ export const LEAD_STATUS: Record<WhatsappCampaignLeadStatus, { label: string; co
 };
 
 /**
- * What a campaign's lead-status counts add up to. A lead's status is where
- * it is now, so "messaged" is every lead past the queue that received a
- * message: in sequence, completed or replied. Stopped and failed leads may
- * or may not have been messaged first, so they are not counted as messaged.
- * Reply rate is replied / messaged.
+ * What a campaign's lead counts add up to. A lead's status is where it is
+ * now; "messaged" is from the send evidence instead (a lead sent at least
+ * one message, or that replied), so a lead stopped or failed after its
+ * first message still counts and one that failed before it does not.
+ * Reply rate is replied / messaged. Progress is the share messaged, so
+ * failed recipients never read as progress.
  */
 export type CampaignFunnel = {
   total: number;
@@ -40,12 +41,15 @@ export type CampaignFunnel = {
   messaged: number;
   messagesSent: number;
   replyRate: number | null;
-  /** 0-1 share of leads that have left the queue; null with no leads. */
+  /** 0-1 share of leads messaged; null with no leads. */
   progress: number | null;
+  /** Every lead messaged and none failed or waiting: only then is the campaign's first round done. */
+  complete: boolean;
 };
 
 export function campaignFunnel(s: WhatsappCampaignStats): CampaignFunnel {
-  const messaged = s.in_sequence + s.completed + s.replied;
+  // Older payloads without the evidence count fall back to the statuses that imply a message.
+  const messaged = typeof s.contacted === "number" ? s.contacted : s.in_sequence + s.completed + s.replied;
   return {
     total: s.total,
     queued: s.queued,
@@ -57,8 +61,23 @@ export function campaignFunnel(s: WhatsappCampaignStats): CampaignFunnel {
     messaged,
     messagesSent: s.messagesSent,
     replyRate: messaged > 0 ? s.replied / messaged : null,
-    progress: s.total > 0 ? Math.min((s.total - s.queued) / s.total, 1) : null,
+    progress: s.total > 0 ? Math.min(messaged / s.total, 1) : null,
+    complete: s.total > 0 && s.queued === 0 && s.failed === 0 && messaged >= s.total,
   };
+}
+
+/**
+ * The line under a campaign's lead count, from the counts only: who still
+ * waits for a first message, else what became of everyone. "Everyone has
+ * been messaged" only when nobody failed or was left out.
+ */
+export function leadsProgressText(f: CampaignFunnel): string | undefined {
+  if (f.total === 0) return undefined;
+  const failed = f.failed > 0 ? `${f.failed.toLocaleString("en-US")} failed` : null;
+  if (f.queued > 0) return [`${f.queued.toLocaleString("en-US")} not messaged yet`, failed].filter(Boolean).join("; ");
+  if (f.complete) return "Everyone has been messaged";
+  const parts = [failed, `${f.messaged.toLocaleString("en-US")} contacted`, f.stopped > 0 ? `${f.stopped.toLocaleString("en-US")} stopped` : null].filter(Boolean);
+  return `No leads waiting for a first message; ${parts.join(", ")}`;
 }
 
 /** Why a campaign cannot launch yet, or null. Mirrors the API's own checks. */

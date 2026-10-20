@@ -12,6 +12,8 @@ import type { WorkingHours } from "@/lib/outreach/schema";
 import { isWindowOpenFrom, isWithinWorkingHours, mailboxHoursFromWeekly, nextWindowStart } from "@/lib/outreach/workingHours";
 import { formatWorkingHoursSummary, hasWorkingHoursConfigured, isWithinWorkingHours as isWithinLinkedinHours, parseHHmmToMinutes, parseWorkDays, type WorkingHoursFields } from "@/lib/linkedin/workingHours";
 import { NEW_CHAT_WINDOW_MS, secondsUntilNextSend, warmUpEndsAt, type WhatsappGuardrails } from "@/lib/whatsapp/guardrails";
+import { everyMinutes, latestDueSlot, nextSlotAt } from "@/lib/scheduler/slots";
+import { displayTime } from "./displayTime";
 
 export type RunAuthorization = {
   kind: "none" | "start" | "request" | "autonomous";
@@ -92,6 +94,10 @@ export type SenderStatus = {
   nextAt: string | null;
   queued: number | null;
   note: string | null;
+  /** The sender's limit and how much of it is used, in plain words; null when not worked out for this channel. */
+  limits: string | null;
+  /** Further facts, one sentence each: the next scheduled check, when capacity frees up, the last time it was held back and why. */
+  details: string[];
 };
 
 function latest(dates: (Date | null)[]): Date | null {
@@ -133,6 +139,8 @@ export function emailSenderStatus(input: {
     nextAt: next?.toISOString() ?? null,
     queued: input.queued,
     note: null,
+    limits: null,
+    details: [],
   };
 }
 
@@ -146,12 +154,21 @@ export function whatsappSenderStatus(input: {
   guardrails: WhatsappGuardrails;
   connectedAt: Date | null;
   lastSentAt: Date | null;
-  /** When each chat this number started in the last 24 hours was created, oldest first. */
+  /** When each chat this number started in the last 24 hours was created, oldest first, from every campaign and manual send. */
   newChatTimes: Date[];
+  /** Leads waiting for their next message (a first message or a follow-up). */
   queued: number;
+  /** Of those, the leads still waiting for a first message: the ones a new chat is needed for. */
+  firstMessagesQueued?: number;
+  /** Why the campaign sender last held this number back (whatsapp_accounts.last_refusal), cleared by its next accepted send. */
+  lastRefusal?: { reason: string; at: Date } | null;
+  /** The zone times are written in (the organization's). */
+  displayTimeZone?: string;
   now: Date;
 }): SenderStatus {
   const { guardrails, now } = input;
+  const zone = input.displayTimeZone ?? "UTC";
+  const details: string[] = [];
   const gates: string[] = [];
   let open = false;
   const times: (Date | null)[] = [];
@@ -171,15 +188,22 @@ export function whatsappSenderStatus(input: {
     times.push(warmUp);
   }
   const newChats = input.newChatTimes.length;
-  if (newChats >= guardrails.newChatsPerDay) {
+  const full = newChats >= guardrails.newChatsPerDay;
+  if (full) {
     gates.push(`${newChats} of ${guardrails.newChatsPerDay} new chats used in the last 24 hours`);
     // send.ts allows a new chat once the count is under the limit: after this many have left the window.
     const freedBy = input.newChatTimes[newChats - guardrails.newChatsPerDay];
-    times.push(freedBy ? new Date(freedBy.getTime() + NEW_CHAT_WINDOW_MS) : null);
+    const frees = freedBy ? new Date(freedBy.getTime() + NEW_CHAT_WINDOW_MS) : null;
+    times.push(frees);
+    const leaving = newChats - guardrails.newChatsPerDay + 1;
+    if (frees) details.push(`Next new chat possible from ${displayTime(frees, now, zone)}, when ${leaving === 1 ? "the oldest counted chat is" : `the ${leaving} oldest counted chats are`} 24 hours old.`);
   }
   const wait = secondsUntilNextSend(input.lastSentAt, now, guardrails.minSecondsBetweenSends);
   if (wait > 0) times.push(new Date(now.getTime() + wait * 1000));
   const next = open || times.some((time) => time === null) ? null : latest(times);
+  if (input.lastRefusal) details.push(`Last held back at ${displayTime(input.lastRefusal.at, now, zone, { seconds: true })}: ${input.lastRefusal.reason}.`);
+  const available = Math.max(0, guardrails.newChatsPerDay - newChats);
+  const firsts = input.firstMessagesQueued;
   return {
     channel: "whatsapp",
     account: input.account,
@@ -187,7 +211,10 @@ export function whatsappSenderStatus(input: {
     gates,
     nextAt: next?.toISOString() ?? null,
     queued: input.queued,
-    note: newChats >= guardrails.newChatsPerDay || warmUp ? "Follow-ups in chats already open are not held by the new-chat limits." : null,
+    note: full || warmUp ? "Follow-ups in chats already open are not held by the new-chat limits." : null,
+    limits: `New chats per 24 hours, per number: ${newChats} of ${guardrails.newChatsPerDay} used, ${available} available${firsts === undefined ? "" : `; ${firsts} ${firsts === 1 ? "lead waits" : "leads wait"} for a first message`}. `
+      + "Every campaign on this number shares the count. Each chat counts for 24 hours from when it started (no reset at midnight); replies in chats already open are not limited by it.",
+    details,
   };
 }
 
@@ -222,28 +249,62 @@ export function linkedinSenderStatus(input: {
   /** The start of the next day the engine counts invitations by. */
   nextDayStart: Date;
   queued: number;
+  /** How often the LinkedIn engine's scheduled run looks at accounts (linkedin-run-outreach, every 30 minutes on the UTC clock); null when it is not scheduled. */
+  checkEveryMinutes?: number | null;
+  /** The organization's next daily reset (its daily rollover), which clears LinkedIn's invitation-limit flag. */
+  limitResetsAt?: Date | null;
+  /** The zone times are written in (the organization's). */
+  displayTimeZone?: string;
   now: Date;
 }): SenderStatus {
   const { now } = input;
+  const zone = input.displayTimeZone ?? "UTC";
   const gates: string[] = [];
+  const details: string[] = [];
   let open = false;
   const times: (Date | null)[] = [];
+  const schedule = input.checkEveryMinutes ? everyMinutes(input.checkEveryMinutes) : null;
   if (!input.unipileConnected) { gates.push("Unipile is disconnected"); open = true; }
   if (input.status !== "CONNECTED") { gates.push(`The account is ${input.status.toLowerCase().replace(/_/g, " ")}`); open = true; }
-  if (input.limitReached) { gates.push("LinkedIn reported this account's invitation limit"); open = true; }
+  if (input.limitReached) {
+    // Cleared by the organization's daily rollover (resetDailyLimits), whatever LinkedIn says then.
+    if (input.limitResetsAt) {
+      gates.push(`LinkedIn reported this account's invitation limit; the flag is cleared at the organization's daily reset, ${displayTime(input.limitResetsAt, now, zone)}`);
+      // The first time after the reset its working hours allow.
+      const reset = input.limitResetsAt;
+      times.push(hasWorkingHoursConfigured(input.hours) && !isWithinLinkedinHours(input.hours, reset) ? linkedinNextWindow(input.hours, reset) : reset);
+    } else {
+      gates.push("LinkedIn reported this account's invitation limit; the flag is cleared at the organization's daily reset");
+      open = true;
+    }
+  }
   if (input.paused) { gates.push("LinkedIn outbound is paused by the server's migration controls"); open = true; }
   const configured = hasWorkingHoursConfigured(input.hours);
   if (configured && !isWithinLinkedinHours(input.hours, now)) {
     gates.push(`Outside working hours (${formatWorkingHoursSummary(input.hours)})`);
     times.push(linkedinNextWindow(input.hours, now));
   }
-  if (input.nextAllowedRun && input.nextAllowedRun > now) times.push(input.nextAllowedRun);
+  // The rest between runs (runOutreach sets it after each run): the account is only looked at again by a scheduled check after it.
+  const cooldownEnds = input.nextAllowedRun;
+  if (cooldownEnds && cooldownEnds > now) {
+    gates.push(`Between LinkedIn runs until ${displayTime(cooldownEnds, now, zone, { seconds: true })}`);
+    times.push(cooldownEnds);
+  } else if (cooldownEnds && schedule && cooldownEnds > latestDueSlot(schedule, now)) {
+    // The rest ended after the last check: nothing runs for it before the next one.
+    const check = nextSlotAt(schedule, now);
+    gates.push(`Waiting for the next scheduled check at ${displayTime(check, now, zone)}`);
+    times.push(check);
+  }
   if (input.invitationsToday >= input.invitationsPerDay) {
     gates.push(`${input.invitationsToday} of ${input.invitationsPerDay} invitations sent today`);
     const tomorrow = input.nextDayStart;
     times.push(configured && !isWithinLinkedinHours(input.hours, tomorrow) ? linkedinNextWindow(input.hours, tomorrow) : tomorrow);
   }
-  const next = open || times.some((time) => time === null) ? null : latest(times);
+  const allowed = open || times.some((time) => time === null) ? null : latest(times);
+  // The engine sends only when a scheduled check finds the account free: the first check at or after every gate's end.
+  const next = allowed && schedule ? nextSlotAt(schedule, allowed) : allowed;
+  if (schedule) details.push(`Next scheduled check ${displayTime(nextSlotAt(schedule, cooldownEnds && cooldownEnds > now ? cooldownEnds : now), now, zone)} (checks run every ${input.checkEveryMinutes} minutes).`);
+  const left = Math.max(0, input.invitationsPerDay - input.invitationsToday);
   return {
     channel: "linkedin",
     account: input.account,
@@ -252,5 +313,7 @@ export function linkedinSenderStatus(input: {
     nextAt: next?.toISOString() ?? null,
     queued: input.queued,
     note: input.invitationsToday >= input.invitationsPerDay ? "Follow-up messages to accepted invitations are not held by the invitation limit." : null,
+    limits: `Invitations: ${input.invitationsToday} of ${input.invitationsPerDay} sent today, ${left} left. Working hours: ${configured ? formatWorkingHoursSummary(input.hours) : "any time (none set)"}.`,
+    details,
   };
 }

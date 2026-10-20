@@ -44,8 +44,8 @@ export type WorkItem = {
   runStatus: string | null;
   /** Plans: the earliest time a held sender may send again, shown in the viewer's time. */
   nextAt: string | null;
-  /** Plans: their people, those contacted (accepted for sending at least) and those who replied. */
-  counts: { leads: number; contacted: number; replied: number } | null;
+  /** Plans: their people, those contacted (accepted for sending at least), those who replied and those whose send failed. */
+  counts: { leads: number; contacted: number; replied: number; failed: number } | null;
   canCancel: boolean;
 };
 
@@ -124,7 +124,8 @@ export async function listWork(now = new Date()): Promise<WorkItem[]> {
     return [run.id, snapshot?.senders ?? null] as const;
   })));
   for (const { run, threadTitle } of runs) {
-    const { state, reason, open, nextAt } = planState({ status: run.status, error: run.error, senders: senders.get(run.id) ?? null });
+    // Its leads say whether anything is left to send; reading them changes nothing.
+    const { state, reason, open, nextAt } = planState({ status: run.status, error: run.error, senders: senders.get(run.id) ?? null, leads: started.includes(run.id) ? leads[run.id] ?? null : null });
     items.push({
       id: run.id,
       type: "plan",

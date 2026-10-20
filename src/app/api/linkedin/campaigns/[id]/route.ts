@@ -125,6 +125,8 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     for (const lead of campaignLeads) {
       statusCounts[lead.status] = (statusCounts[lead.status] ?? 0) + 1;
     }
+    // Invited: the invitation's own record, kept when a stop cancels the lead.
+    const invitedCount = campaignLeads.filter((lead) => lead.requestSentAt).length;
 
     return NextResponse.json({
       ok: true,
@@ -142,6 +144,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
         accounts,
         totalLeads: campaignLeads.length,
         statusCounts,
+        invitedCount,
         createdAt: campaign.createdAt.toISOString(),
         updatedAt: campaign.updatedAt.toISOString(),
       },

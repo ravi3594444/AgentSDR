@@ -18,13 +18,21 @@ import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { NEW_CHAT_WINDOW_MS, whatsappGuardrails } from "@/lib/whatsapp/guardrails";
 import { campaignAccounts, leads as linkedinLeads, linkedInAccounts } from "@/lib/linkedin/schema";
 import { withOrganizationHours } from "@/lib/linkedin/workingHours";
+import { organizationTimeZone } from "@/lib/reporting/metrics.server";
+import { platformJob } from "@/lib/scheduler/schedules";
+import { dailyAt, nextSlotAt } from "@/lib/scheduler/slots";
 import { emailSenderStatus, linkedinSenderStatus, whatsappSenderStatus, type SenderStatus } from "./runEvidence";
 import { outreachRuns } from "./schema";
 
-/** Read-only snapshot. It reports stored gates, not a claim that a worker or provider is healthy. */
+/**
+ * Read-only snapshot. It reports stored gates, not a claim that a worker or
+ * provider is healthy. Times in gates and details are written in the
+ * organization's time zone (`displayTimeZone`), which the panel names.
+ */
 export async function diagnoseDelivery(runId?: string) {
   const org = currentOrganizationId();
   const now = new Date();
+  const displayTimeZone = await organizationTimeZone();
   const [run] = runId
     ? await db
         .select()
@@ -143,8 +151,8 @@ export async function diagnoseDelivery(runId?: string) {
       and (${runId ?? null}::uuid is null or run_id=${runId ?? null}::uuid) and updated_at>now()-interval '7 days' group by status,error order by n desc limit 5`),
     );
   }
-  const whatsapp = await whatsappSenders(run?.campaigns.whatsapp ?? null, Boolean(run), now);
-  const linkedin = await linkedinSenders(run?.campaigns.linkedin ?? null, Boolean(run), now);
+  const whatsapp = await whatsappSenders(run?.campaigns.whatsapp ?? null, Boolean(run), now, displayTimeZone);
+  const linkedin = await linkedinSenders(run?.campaigns.linkedin ?? null, Boolean(run), now, displayTimeZone);
   const instagramRules = instagram.length ? await channelRules("instagram") : null;
   const senders: SenderStatus[] = [
     ...email.map((m) => emailSenderStatus({ mailbox: m.mailbox, workingHours: m.workingHours, nextEmailTime: m.nextSendAt ? new Date(m.nextSendAt) : null, gates: m.gates, queued: m.activeQueue, now })),
@@ -157,7 +165,7 @@ export async function diagnoseDelivery(runId?: string) {
       const timed = a.gates.every((gate) => gate.startsWith("Outside sending hours") || gate.startsWith("Next send allowed at "));
       const opens = hours && a.gates.some((gate) => gate.startsWith("Outside sending hours")) ? nextWindowStart(hours, now) : null;
       const next = [opens, nextSend ? new Date(nextSend) : null].filter((date): date is Date => Boolean(date)).sort((x, y) => y.getTime() - x.getTime())[0] ?? null;
-      return { channel: "instagram", account: a.account, timezone: hours?.timezone ?? null, gates: a.gates, nextAt: a.gates.length && timed ? next?.toISOString() ?? null : null, queued: a.queued, note: null };
+      return { channel: "instagram", account: a.account, timezone: hours?.timezone ?? null, gates: a.gates, nextAt: a.gates.length && timed ? next?.toISOString() ?? null : null, queued: a.queued, note: null, limits: null, details: [] };
     }),
   ];
   const lines = [
@@ -180,17 +188,20 @@ export async function diagnoseDelivery(runId?: string) {
     ...instagramErrors.map((e) => `${e.n} Instagram ${e.status}: ${e.reason}`),
     ...whatsapp.map(
       (w) =>
-        `WhatsApp ${w.account}: ${w.queued} awaiting their next message. ${w.gates.join("; ") || "No recorded number gate is blocking sends"}${w.nextAt ? `; next send allowed at ${w.nextAt}` : ""}.${w.timezone ? ` Sending hours are in ${w.timezone}.` : " No campaign sending hours are set (any time)."}`,
+        `WhatsApp ${w.account}: ${w.queued} awaiting their next message. ${w.gates.join("; ") || "No recorded number gate is blocking sends"}${w.nextAt ? `; next send allowed at ${w.nextAt}` : ""}.${w.timezone ? ` Sending hours are in ${w.timezone}.` : " No campaign sending hours are set (any time)."}${[w.limits, ...w.details].filter(Boolean).map((line) => ` ${line}`).join("")}`,
     ),
     ...linkedin.map(
       (l) =>
-        `LinkedIn ${l.account}: ${l.queued} invitations waiting. ${l.gates.join("; ") || "No recorded account gate is blocking sends"}${l.nextAt ? `; next send allowed at ${l.nextAt}` : ""}.${l.timezone ? ` Working hours are in ${l.timezone}.` : " No working hours are set (any time)."}`,
+        `LinkedIn ${l.account}: ${l.queued} invitations waiting. ${l.gates.join("; ") || "No recorded account gate is blocking sends"}${l.nextAt ? `; next send allowed at ${l.nextAt}` : ""}.${l.timezone ? ` Working hours are in ${l.timezone}.` : " No working hours are set (any time)."}${[l.limits, ...l.details].filter(Boolean).map((line) => ` ${line}`).join("")}`,
     ),
+    `Times above are in ${displayTimeZone}, the organization's time zone, unless written as ISO times.`,
     "This snapshot does not measure worker liveness or confirm future delivery. Lead cities do not determine a sender's sending timezone.",
   ];
   if (!email.length && sendsOn("email")) lines.splice(1, 0, "No email mailbox is configured.");
   return {
     at: now.toISOString(),
+    /** The zone the gates' and details' times are written in, for the panel to show its own times in too. */
+    displayTimeZone,
     runStatus: run?.status ?? null,
     email,
     emailCampaigns: Array.from(emailCampaigns),
@@ -210,19 +221,22 @@ export async function diagnoseDelivery(runId?: string) {
  * The WhatsApp numbers a run's campaign sends from (or every number of the
  * organization), with the gates send.ts applies under its lock, read the same way.
  */
-async function whatsappSenders(campaignId: string | null, forRun: boolean, now: Date): Promise<SenderStatus[]> {
+async function whatsappSenders(campaignId: string | null, forRun: boolean, now: Date, displayTimeZone: string): Promise<SenderStatus[]> {
   if (forRun && !campaignId) return [];
   const org = currentOrganizationId();
   const accounts = await db.execute<{
     id: string; name: string | null; phone: string | null; status: string; connected_at: string | null; new_chats_per_day: number | null;
-    last_sent: string | null; new_chat_times: string[]; queued: number;
-  }>(sql`select a.id, a.name, a.phone, a.status, a.connected_at::text, a.new_chats_per_day,
+    last_sent: string | null; new_chat_times: string[]; queued: number; first_queued: number; last_refusal: string | null; last_refusal_at: string | null;
+  }>(sql`select a.id, a.name, a.phone, a.status, a.connected_at::text, a.new_chats_per_day, a.last_refusal, a.last_refusal_at::text,
       (select max(m.sent_at)::text from whatsapp_messages m join whatsapp_chats c on c.id = m.chat_id where c.account_id = a.id and m.origin = 'agentsdr') as last_sent,
       (select coalesce(array_agg(c.created_at::text order by c.created_at), '{}'::text[]) from whatsapp_chats c where c.account_id = a.id and c.created_at >= ${new Date(now.getTime() - NEW_CHAT_WINDOW_MS).toISOString()}::timestamptz
         and (select m.origin from whatsapp_messages m where m.chat_id = c.id order by m.sent_at asc limit 1) = 'agentsdr') as new_chat_times,
       (select count(*)::int from whatsapp_campaign_leads l join whatsapp_campaigns wc on wc.id = l.campaign_id
         where wc.organization_id = ${org} and l.status in ('queued', 'in_sequence') and (l.account_id = a.id or l.account_id is null)
-          and (${campaignId}::uuid is null or l.campaign_id = ${campaignId}::uuid)) as queued
+          and (${campaignId}::uuid is null or l.campaign_id = ${campaignId}::uuid)) as queued,
+      (select count(*)::int from whatsapp_campaign_leads l join whatsapp_campaigns wc on wc.id = l.campaign_id
+        where wc.organization_id = ${org} and l.status in ('queued', 'in_sequence') and l.current_step = 0 and (l.account_id = a.id or l.account_id is null)
+          and (${campaignId}::uuid is null or l.campaign_id = ${campaignId}::uuid)) as first_queued
     from whatsapp_accounts a
     where a.organization_id = ${org}
       and (${campaignId}::uuid is null or a.id in (select ca.account_id from whatsapp_campaign_accounts ca where ca.campaign_id = ${campaignId}::uuid))
@@ -241,6 +255,9 @@ async function whatsappSenders(campaignId: string | null, forRun: boolean, now: 
     lastSentAt: a.last_sent ? new Date(a.last_sent) : null,
     newChatTimes: a.new_chat_times.map((time) => new Date(time)),
     queued: Number(a.queued),
+    firstMessagesQueued: Number(a.first_queued),
+    lastRefusal: a.last_refusal && a.last_refusal_at ? { reason: a.last_refusal, at: new Date(a.last_refusal_at) } : null,
+    displayTimeZone,
     now,
   }));
 }
@@ -251,7 +268,7 @@ async function whatsappSenders(campaignId: string | null, forRun: boolean, now: 
  * working hours (the account's own, else the organization's), the gap
  * between runs, the daily invitation limit, the account's state.
  */
-async function linkedinSenders(campaignId: string | null, forRun: boolean, now: Date): Promise<SenderStatus[]> {
+async function linkedinSenders(campaignId: string | null, forRun: boolean, now: Date, displayTimeZone: string): Promise<SenderStatus[]> {
   if (forRun && !campaignId) return [];
   const accounts = campaignId
     ? await db.select({ account: linkedInAccounts }).from(campaignAccounts)
@@ -260,7 +277,11 @@ async function linkedinSenders(campaignId: string | null, forRun: boolean, now: 
       .then((rows) => rows.map((row) => row.account))
     : await db.select().from(linkedInAccounts).where(inOrg(linkedInAccounts));
   if (!accounts.length) return [];
-  const [rules, unipile] = await Promise.all([channelRules("linkedin"), isPlatformConnected("unipile")]);
+  const [rules, unipile, general] = await Promise.all([channelRules("linkedin"), isPlatformConnected("unipile"), channelRules("general").catch(() => null)]);
+  // The LinkedIn engine's scheduled run, and the organization's daily rollover that clears the invitation-limit flag.
+  const outreachJob = platformJob("linkedin-run-outreach");
+  const checkEveryMinutes = outreachJob.enabled && outreachJob.schedule.kind === "interval" ? outreachJob.schedule.minutes : null;
+  const limitResetsAt = general ? nextDailyReset(general.timeZone, general.dayStartsAt, now) : null;
   // The engine counts a day's invitations from the server's own midnight (sendInvitations).
   const todayStart = new Date(now);
   todayStart.setHours(0, 0, 0, 0);
@@ -287,7 +308,20 @@ async function linkedinSenders(campaignId: string | null, forRun: boolean, now: 
       invitationsPerDay: account.dailyInviteLimit ?? (account.isPremium ? rules.invitesPerDayPremium : rules.invitesPerDayFree),
       nextDayStart,
       queued: Number(waiting?.n ?? 0),
+      checkEveryMinutes,
+      limitResetsAt,
+      displayTimeZone,
       now,
     });
   }));
+}
+
+/** The organization's next new-day time (its daily rollover), after now; null when its settings cannot be read. */
+function nextDailyReset(timeZone: unknown, dayStartsAt: unknown, now: Date): Date | null {
+  if (typeof timeZone !== "string" || typeof dayStartsAt !== "string") return null;
+  try {
+    return nextSlotAt(dailyAt(dayStartsAt, timeZone), new Date(now.getTime() + 1));
+  } catch {
+    return null;
+  }
 }
