@@ -45,6 +45,7 @@ scripts
 !scripts/add-browser-sessions.ts
 !scripts/add-activity.ts
 !scripts/add-objectives.ts
+!scripts/add-pilot-fixes.ts
 
 README.md
 
