@@ -297,14 +297,16 @@ const whatsappCase = await runInOrganization(a.org.id, async () => {
 });
 
 type TickSend = NonNullable<NonNullable<Parameters<typeof runWhatsappCampaignTick>[0]>["send"]>;
+// The tick sends for every organization's active campaigns (other suites on this database leave some): only this check's number is counted.
+const ours = (request: { accountId?: string | null }) => request.accountId === whatsappCase.account.id;
 let rejectedAttempts = 0;
-const rejecting = (async () => {
-  rejectedAttempts++;
+const rejecting = (async (request: { accountId?: string | null }) => {
+  if (ours(request)) rejectedAttempts++;
   throw new WhatsappSendRefusedError(WHATSAPP_RECIPIENT_REFUSAL, 400, null, "recipient_unreachable");
 }) as unknown as TickSend;
 let accepted = 0;
-const accepting = (async () => {
-  accepted++;
+const accepting = (async (request: { accountId?: string | null }) => {
+  if (ours(request)) accepted++;
   return { message: { id: null }, chat: {} };
 }) as unknown as TickSend;
 
