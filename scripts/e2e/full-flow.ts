@@ -71,8 +71,8 @@ function writerAnswer(input: Input): string {
   switch (input.schemaName) {
     case "lead_sorting":
       return JSON.stringify({ leads: leadsAsked(input.userPrompt).map(({ index, facts }) => (facts.hiring
-        ? { index, group: "Clinics hiring front desk staff", approach: "standard", reason: "May fit: its website lists a front desk opening for appointment reminders." }
-        : { index, group: "Dental clinics", approach: "standard", reason: "A dental clinic in Pune, as the owner asked." })) });
+        ? { index, group: "Clinics hiring front desk staff", approach: "standard", reason: "May fit: its website lists a front desk opening for appointment reminders.", requestFit: "fits", noWebsiteRequired: false }
+        : { index, group: "Dental clinics", approach: "standard", reason: "A dental clinic in Pune, as the owner asked.", requestFit: "fits", noWebsiteRequired: false })) });
     case "outreach_sequences": {
       // The per-lead line's merge field is named per plan; the prompt lists it.
       const key = `${input.systemPrompt ?? ""}\n${input.userPrompt}`.match(/\{\{(p_[0-9a-f]+)\}\}/)?.[1];
@@ -323,7 +323,7 @@ await runInOrganization(a.org.id, async () => {
   const report = (await events(thread.id)).filter((row) => (row.toolResult as { objectiveId?: string; reportKey?: string } | null)?.objectiveId === objective!.id && (row.toolResult as { reportKey?: string }).reportKey);
   check("target reached: the request stops with that reason", stopped?.status === "stopped" && stopped.stopReason === "target_reached" && done.status === "succeeded", `${stopped?.status} ${stopped?.stopReason} ${done.status}`);
   check("one final report: what was searched by source, leads and routes, spend and the stop reason",
-    report.length === 1 && /^Research finished: 12 qualified leads found, the target was 10/.test(report[0]!.content) && /Google Maps through the built-in scraper: 2 searches, 12 found/.test(report[0]!.content) && /Recorded spend: \$0\.00/.test(report[0]!.content),
+    report.length === 1 && /^Research finished: the target of 10 was reached/.test(report[0]!.content) && /Google Maps through the built-in scraper: 2 searches, 12 found/.test(report[0]!.content) && /Recorded spend: \$0\.00/.test(report[0]!.content),
     report.map((row) => row.content).join(" | ").slice(0, 600));
 
   // ---------------------------------------------------------- 5. Start, and the approval for the rest of the request

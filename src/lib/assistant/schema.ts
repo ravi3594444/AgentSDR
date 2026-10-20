@@ -318,6 +318,11 @@ export type ObjectiveProgress = {
   waiting?: string | null;
   /** When the owner last paused it (ISO): a continuation turn that ran across a pause is not judged on what it started. */
   pausedAt?: string | null;
+  /** The driver's failed attempts at judging the leads left unjudged, and the last error (qualify.server.ts). */
+  qualifyFailures?: number;
+  qualifyError?: string | null;
+  /** The counts when it stopped, so the report can explain leads that searches still running added after. */
+  atStop?: { qualified: number; found: number; contactable: number } | null;
 };
 
 /**

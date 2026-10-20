@@ -38,6 +38,8 @@ import { inquiryRepliesRequested, outreachRequested, outreachRequestProblem } fr
 import { answerDecision, DecisionError, listOpenDecisions } from "./decisions.server";
 import { channelAvailability, listRuns, OutreachError, prepareOutreach, reportRun, setRunPaused, setRunReplyMode, stopRun } from "./outreach.server";
 import { channelList, channelPolicy, planChannelsLine } from "./channelPolicy";
+import { typedByOwner } from "./leadFit";
+import { markGivenByOwner } from "./qualify.server";
 import { mergeProfile, PROFILE_LABELS, profileChanges } from "./profile";
 import { businessContext } from "./businessContext";
 import { businessSources } from "./businessContext.server";
@@ -325,6 +327,16 @@ async function browserHold(context: ToolContext): Promise<ToolResult | null> {
   if (!reason) return null;
   const minutes = await closeBrowser(context.threadId);
   return { ok: false, summary: `Not run: ${reason}.${minutes === null ? "" : " The chat's browser was closed."}` };
+}
+
+/**
+ * The web tools serve the same request as the searches: while its research
+ * is paused, or once it stopped or its time passed, they do not run either,
+ * with the same reason, so the two paths never disagree about the request.
+ */
+async function webToolHold(context: ToolContext): Promise<ToolResult | null> {
+  const reason = await requestHoldReason(searchRequestId(context));
+  return reason ? { ok: false, summary: `Not run: ${reason}.` } : null;
 }
 
 async function runBrowserStep(context: ToolContext, verb: string, action: BrowserAction): Promise<ToolResult> {
@@ -698,6 +710,9 @@ export const TOOLS: Record<string, Tool> = {
         userId: context.userId,
       });
       await addAudienceMembers(audienceId, result.personIds.map((personId) => ({ personId, source: "list" })));
+      // The ones the owner typed themselves count as a match; those found on a page are judged against the request.
+      const typed = rows.flatMap((row) => (result.rowPersonIds[row.rowNumber] && typedByOwner(row, context.ownerText ?? "") ? [result.rowPersonIds[row.rowNumber]!] : []));
+      await markGivenByOwner(audienceId, typed, searchRequestId(context));
       // Read back what was stored (phones normalized with their country code) so the owner can check it.
       const stored = await db.select({ name: people.fullName, phone: people.phone, email: people.email, linkedinUrl: people.linkedinUrl })
         .from(people).where(and(inOrg(people), inArray(people.id, result.personIds)));
@@ -792,6 +807,8 @@ export const TOOLS: Record<string, Tool> = {
       if (country && !/^[A-Za-z]{2}$/.test(country)) throw new ToolArgumentError("country must be a 2-letter code such as IN or US");
       const page = args.page === undefined ? 0 : Number(args.page);
       if (!Number.isInteger(page) || page < 0 || page > 3) throw new ToolArgumentError("page must be a whole number from 0 to 3");
+      const held = await webToolHold(context);
+      if (held) return held;
       try {
         const requestId = searchRequestId(context);
         // A free-only request ($0 cap) searches only with TinyFish's free searches, never Tavily's paid credits.
@@ -820,6 +837,8 @@ export const TOOLS: Record<string, Tool> = {
     arguments: "url",
     run: async (args, context) => {
       const raw = text(args, "url", true)!.trim();
+      const held = await webToolHold(context);
+      if (held) return held;
       let url: URL;
       try {
         url = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
@@ -959,8 +978,8 @@ export const TOOLS: Record<string, Tool> = {
   },
 
   find_linkedin_leads: {
-    description: "Search LinkedIn for people by keywords (a job title, profession or industry, plus a place), with the organization's connected LinkedIn account through Unipile and its daily search allowance. Runs in the background; the profiles found can be contacted on LinkedIn only (LinkedIn gives no email or phone). Use for people (owners, managers, professionals); use find_leads for businesses with a public Maps listing.",
-    arguments: "keywords (e.g. 'clinic owner Pune'), maxResults (5-200, default 50), contactAfter (true only when the owner asked to contact them)",
+    description: "Search LinkedIn for people by keywords (a job title, profession or industry, plus a place), with the organization's connected LinkedIn account through Unipile and its daily search allowance. Runs in the background; the profiles found can be contacted on LinkedIn only (LinkedIn gives no email or phone). Use for people (owners, managers, professionals); use find_leads for businesses with a public Maps listing. LinkedIn matches the words anywhere on a profile, so a broad query ('founder') returns unrelated people: put the owner's kind of business and their place into the keywords ('real estate agency founder Austin'), and expect only those whose headline and place show the fit to count toward the request.",
+    arguments: "keywords (the role, the kind of business and the place, e.g. 'dental clinic owner Pune'), maxResults (5-200, default 50), contactAfter (true only when the owner asked to contact them)",
     run: async (args, context) => {
       const keywords = text(args, "keywords", true)!.trim().slice(0, 200);
       const requested = Number(args.maxResults ?? 50);

@@ -3,6 +3,7 @@ import {
   AI_SEARCH_ESTIMATE_USD,
   continuationNote,
   limitReached,
+  MAX_QUALIFY_ATTEMPTS,
   nextDriverStep,
   objectiveReportKey,
   objectiveReportText,
@@ -202,10 +203,30 @@ describe("the driver: wait, continue or stop", () => {
     refusals: [],
     dry: 0,
     pausedAt: null,
+    pendingMembers: 0,
+    qualifyFailures: 0,
     ...over,
   });
   const turn = (over: Partial<Continuation> = {}): Continuation => ({
     n: 1, attempt: 1, startedAt: minutes(-5).toISOString(), endedAt: minutes(-1).toISOString(), end: "done", leadsAtStart: 10, judged: null, waitUntil: null, ...over,
+  });
+
+  test("leads not yet judged against the request are judged before the count decides anything", () => {
+    expect(nextDriverStep(facts({ pendingMembers: 30 }))).toEqual({ kind: "qualify" });
+    // A finished turn that only added a list is judged first, not taken as a source exhausted.
+    expect(nextDriverStep(facts({ pendingMembers: 4, continuation: turn() }))).toEqual({ kind: "qualify" });
+    // Searches still running judge their own leads.
+    expect(nextDriverStep(facts({ pendingMembers: 30, openChildren: 1 })).kind).toBe("wait");
+    // After the attempts are used, those leads stay uncounted and the request goes on.
+    expect(nextDriverStep(facts({ pendingMembers: 30, qualifyFailures: MAX_QUALIFY_ATTEMPTS })).kind).toBe("continue");
+    // A target already met stops first; a paused request waits.
+    expect(nextDriverStep(facts({ pendingMembers: 30, leads: 25 })).kind).toBe("stop");
+    expect(nextDriverStep(facts({ pendingMembers: 30, status: "paused" })).kind).toBe("wait");
+  });
+
+  test("50 contactable profiles of which 3 match do not complete a target of 25", () => {
+    expect(limitReached({ now: NOW, deadline: minutes(120), leadTarget: 25, leads: 3, spendCapUsd: 5, spentUsd: 0 })).toBeNull();
+    expect(nextDriverStep(facts({ leads: 3, continuation: turn({ leadsAtStart: 3 }), newSearches: 1 }))).toEqual({ kind: "judge", judged: "productive", waitUntil: null });
   });
 
   test("a turn the owner paused part way through is not a source exhausted: after the resume the request continues, and the paused turn is not counted as dry", () => {
@@ -286,8 +307,8 @@ describe("the driver: wait, continue or stop", () => {
 
 describe("wording", () => {
   const sources = [
-    { label: "Google Maps through the built-in scraper", searches: 2, found: 31, eligible: 12, notSearched: 0, failed: 0, open: 0, notes: [] },
-    { label: "Instagram through Apify", searches: 1, found: 0, eligible: 0, notSearched: 1, failed: 0, open: 0, notes: ["no Apify run slot came free within 6 hours"] },
+    { label: "Google Maps through the built-in scraper", searches: 2, found: 31, eligible: 12, judged: 0, matched: 0, notSearched: 0, failed: 0, open: 0, notes: [] },
+    { label: "Instagram through Apify", searches: 1, found: 0, eligible: 0, judged: 0, matched: 0, notSearched: 1, failed: 0, open: 0, notes: ["no Apify run slot came free within 6 hours"] },
   ];
   const spend = spendFromLedgers([{ ledger: "apify", status: "succeeded", usageUsd: 0.42, maxChargeUsd: 2 }]);
 
@@ -316,7 +337,7 @@ describe("wording", () => {
       stillRunning: 1,
     });
     expect(text).toMatch(/^Research stopped: the 4 h time limit passed/);
-    expect(text).toMatch(/12 qualified leads of the 25 wanted; 13 still to find/);
+    expect(text).toMatch(/12 qualified leads \(contactable and matching your request\) of the 25 wanted; 13 still to find/);
     expect(text).toMatch(/9 by email, 5 by WhatsApp or phone, 1 on Instagram/);
     expect(text).toMatch(/Recorded spend: \$0\.42 of the \$5\.00 cap \(Apify \$0\.42\)/);
     expect(text).toMatch(/1 search still running when it stopped/);
@@ -325,8 +346,8 @@ describe("wording", () => {
 
   test("a reached target says so, and nothing is left to find", () => {
     const text = objectiveReportText({ request: "x", reason: "target_reached", detail: "", leads: 26, leadTarget: 25, routes: { email: 26, whatsapp: 0, linkedin: 0, instagram: 0 }, spend: spendFromLedgers([]), spendCapUsd: 5, sources, web: null, stillRunning: 0 });
-    expect(text).toMatch(/^Research finished: the target was reached/);
-    expect(text).toMatch(/26 qualified leads of the 25 wanted\./);
+    expect(text).toMatch(/^Research finished: the target of 25 was reached/);
+    expect(text).toMatch(/26 qualified leads \(contactable and matching your request\) of the 25 wanted\./);
     expect(text).toMatch(/Recorded spend: \$0\.00/);
   });
 
@@ -340,6 +361,23 @@ describe("wording", () => {
     const note = continuationNote({ request: "x", n: 1, leads: 0, leadTarget: 25, spend: spendFromLedgers([{ ledger: "treg", status: "succeeded", costUsd: 0.02, ceilingUsd: 0.5 }]), spendCapUsd: 0, msLeft: 60_000, sources, web: null });
     expect(note).toMatch(/Spent \$0\.02 \(free sources only/);
     expect(note).not.toMatch(/Spent nothing/);
+  });
+
+  test("the report keeps found, contactable and matching apart, and explains leads added after the stop", () => {
+    const funnel = { found: 74, contactable: 70, qualified: 26, notMatching: 40, unconfirmed: 4, pending: 0, pendingMembers: 0, noMatchReasons: [{ reason: "A software founder, not in real estate.", count: 30 }, { reason: "Outside the United States.", count: 10 }] };
+    const text = objectiveReportText({ request: "x", reason: "target_reached", detail: "26 qualified leads found, the target was 25", leads: 26, leadTarget: 25, routes: { email: 4, whatsapp: 2, linkedin: 22, instagram: 0 }, spend: spendFromLedgers([]), spendCapUsd: 5, sources, web: null, stillRunning: 0, funnel, atStop: { qualified: 25 } });
+    expect(text).toMatch(/26 qualified leads \(contactable and matching your request\) of the 25 wanted\. It stopped at 25; searches already running then added 1\./);
+    expect(text).toMatch(/Their contact routes \(one person can have several\): 4 by email, 2 by WhatsApp or phone, 22 on LinkedIn/);
+    expect(text).toMatch(/Found 74 \(70 contactable\): 26 match your request, 40 do not \(30: A software founder, not in real estate; 10: Outside the United States\), 4 unconfirmed/);
+    // One total: the stop-time figure is explained, never printed as a second "qualified" count.
+    expect(text.match(/qualified lead/g)?.length).toBe(1);
+  });
+
+  test("a source line says how many of its contactable leads match", () => {
+    const note = continuationNote({ request: "x", n: 1, leads: 3, leadTarget: 25, spend: spendFromLedgers([]), spendCapUsd: 5, msLeft: 60_000, web: null,
+      sources: [{ label: "LinkedIn people search through Unipile", searches: 1, found: 50, eligible: 50, judged: 50, matched: 3, notSearched: 0, failed: 0, open: 0, notes: [] }] });
+    expect(note).toMatch(/LinkedIn people search through Unipile: 1 search, 50 found, 50 can be contacted, 3 of them match your request/);
+    expect(note).toMatch(/3 of 25 qualified leads so far \(contactable and matching the request\)/);
   });
 
   test("Activity's request spend line", () => {

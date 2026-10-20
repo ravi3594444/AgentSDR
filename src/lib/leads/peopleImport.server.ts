@@ -54,6 +54,8 @@ export type PeopleImportResult = {
   skippedNoIdentity: number;
   /** Everyone the import created or updated, in file order. */
   personIds: string[];
+  /** The person each imported row became, by its row number. */
+  rowPersonIds: Record<number, string>;
 };
 
 /**
@@ -66,12 +68,14 @@ export async function importPeopleRows(rows: ImportRow[]): Promise<PeopleImportR
   const plan = planPeopleImport(rows, await organizationPhoneCountry());
   const failed = [...plan.failed];
   const personIds: string[] = [];
+  const rowPersonIds: Record<number, string> = {};
   let created = 0;
   let updated = 0;
   for (const row of plan.identified) {
     try {
       const result = await upsertManualPerson(row, row.customFields);
       personIds.push(result.personId);
+      rowPersonIds[row.rowNumber] = result.personId;
       if (result.created) created += 1;
       else updated += 1;
     } catch (error) {
@@ -82,6 +86,7 @@ export async function importPeopleRows(rows: ImportRow[]): Promise<PeopleImportR
     try {
       const result = await importPhoneOnlyPerson(row, phone);
       personIds.push(result.personId);
+      rowPersonIds[row.rowNumber] = result.personId;
       if (result.created) created += 1;
       else updated += 1;
     } catch (error) {
@@ -98,5 +103,6 @@ export async function importPeopleRows(rows: ImportRow[]): Promise<PeopleImportR
     warnings: plan.warnings,
     skippedNoIdentity: plan.skippedNoIdentity,
     personIds: [...new Set(personIds)],
+    rowPersonIds,
   };
 }

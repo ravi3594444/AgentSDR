@@ -51,6 +51,7 @@ import { collectWebsiteContacts, fetchPublicPage } from "./websiteContacts.serve
 import { offerFocus, recipientFields, websiteNotes, type OfferFocus, type WebsiteProfile } from "./websiteProfile";
 import { instagramCommenterHold, instagramResearchHold } from "./instagramEligibility";
 import { mentionsPlace } from "@/lib/apify/mapping";
+import { websiteStatusFact } from "@/lib/assistant/leadFit";
 
 /**
  * Lead discovery from a description of the owner's customers, through a
@@ -620,7 +621,13 @@ async function readSite(candidate: Candidate, context: ReadContext): Promise<Rea
   // after any redirect), or the Instagram profile.
   const directoryPage = candidate.origin.finalUrl ?? candidate.origin.url;
   const sourceUrl = candidate.via === "website_of" ? candidate.instagram?.url ?? candidate.origin.url : candidate.via === "linked_from" ? directoryPage : candidate.origin.url;
-  const facts: Record<string, string> = { businessName: name, website, foundVia: "web search", searchQuery: candidate.origin.query };
+  const facts: Record<string, string> = {
+    businessName: name,
+    website,
+    websiteStatus: result.error ? websiteStatusFact({ state: "listed_unchecked", url: website, why: result.error }) : websiteStatusFact({ state: "read", url: website }),
+    foundVia: "web search",
+    searchQuery: candidate.origin.query,
+  };
   if (candidate.via === "linked_from") {
     facts.directoryPage = directoryPage;
     if (directoryPage !== candidate.origin.url) facts.searchResult = candidate.origin.url;

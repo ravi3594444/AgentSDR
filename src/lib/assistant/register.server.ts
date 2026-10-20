@@ -9,14 +9,17 @@ import { continueAfterEvent, runToolInThread } from "./agent.server";
 import { coverageLineForJob } from "./coverage.server";
 import { autoStartPlan, threadAutonomy } from "./autonomy.server";
 import { runLinkedinSearchStep } from "./linkedinSearch.server";
-import { failObjective, jobRequestId, nudgeObjective, objectiveForJob, objectiveHold, postObjectiveReport } from "./objective.server";
+import { failObjective, jobRequestId, nudgeObjective, objectiveForJob, objectiveHold, objectiveRequest, postObjectiveReport } from "./objective.server";
+import { assessMembers, audienceFunnel, unjudgedMembers } from "./qualify.server";
+import { funnelLine, type LeadFunnel } from "./leadFit";
+import { savedErrorText } from "@/lib/grid/sanitize";
 import { runObjectiveStep } from "./objectiveDriver.server";
 import { runOutreachStartStep } from "./outreach.server";
 import { applyRequestApproval } from "./requestApproval.server";
 import { assistantJobs, type OutreachPlan } from "./schema";
 import { planChannelsLine } from "./channelPolicy";
 import { addMessage, claimThread, releaseThread, touchThread } from "./threads.server";
-import { claimJobReport, followUpDue, onAssistantJobFinished, registerAssistantJobHandler, type AssistantJob, type StepHandler } from "./worker";
+import { claimJobReport, followUpDue, onAssistantJobFinished, registerAssistantJobHandler, type AssistantJob, type StepHandler, type StepOutcome } from "./worker";
 
 /**
  * Wires the assistant's background jobs to the worker, and reports each
@@ -66,6 +69,13 @@ function instagramProspectMessage(job: AssistantJob): string {
   return `The Instagram prospect search for ${String(result.phrase ?? "")} (through Apify) finished: ${found} accounts found — potential matches, not interested customers. ${count("eligible")} have a contact route for an approved plan (${count("withEmail")} by email, ${count("withPhoneOnly")} by phone only, ${count("withInstagram")} with Instagram profiles); ${count("excluded")} were left out with the reason recorded${count("duplicates") ? `; ${count("duplicates")} duplicates skipped` : ""}.${providerNote}`;
 }
 
+/** How a search's contactable leads were judged against the request (only matches count toward it), when they were. */
+function fitText(job: AssistantJob): string {
+  const result = (job.result ?? {}) as { fit?: LeadFunnel; fitNote?: unknown };
+  const note = typeof result.fitNote === "string" ? ` ${result.fitNote}` : "";
+  return result.fit && result.fit.contactable ? ` Judged against your request: ${funnelLine(result.fit)}.${note}` : note;
+}
+
 function discoveryMessage(job: AssistantJob): string {
   if (job.kind === "web_discovery") return webDiscoveryMessage(job);
   if (job.kind === "apify_instagram") return instagramProspectMessage(job);
@@ -110,15 +120,64 @@ function held(handler: StepHandler): StepHandler {
   return async (job, heartbeat) => (await objectiveHold(job)) ?? handler(job, heartbeat);
 }
 
+const QUALIFYING = "qualifying";
+/** Judging attempts a search makes before it finishes with its leads not judged (the driver tries them again). */
+const MAX_QUALIFY_FAILURES = 2;
+const QUALIFY_RETRY_MS = 30_000;
+const QUALIFY_CLAIMED_MS = 15_000;
+
+/**
+ * A search serving an objective ends by judging its leads against the
+ * owner's request (qualify.server.ts), so the request counts only those
+ * that match; its result waits in the payload meanwhile. Judging never fails
+ * a search: a pause waits, a stop or a model that keeps failing finishes it
+ * with the leads not judged (the driver judges them later). A search with no
+ * objective is unchanged.
+ */
+function judged(handler: StepHandler): StepHandler {
+  return async (job, heartbeat) => {
+    if (job.stage === QUALIFYING) return runQualifyingStage(job, heartbeat);
+    const outcome = await handler(job, heartbeat);
+    if (outcome.next !== "done" || !job.audienceId || outcome.result.notSearched || !Number(outcome.result.eligible ?? 0)) return outcome;
+    if (!(await objectiveForJob(job))) return outcome;
+    return { next: "stage", stage: QUALIFYING, progress: { ...(outcome.progress ?? {}), stage: QUALIFYING }, payload: { searchResult: outcome.result } };
+  };
+}
+
+async function runQualifyingStage(job: AssistantJob, heartbeat: () => Promise<void>): Promise<StepOutcome> {
+  const payload = job.payload as { searchResult?: Record<string, unknown>; qualifyFailures?: number };
+  const audienceIds = job.audienceId ? [job.audienceId] : [];
+  const finish = async (note: string | null): Promise<StepOutcome> => ({
+    next: "done",
+    progress: { stage: "done" },
+    result: { ...(payload.searchResult ?? {}), fit: await audienceFunnel(audienceIds), ...(note ? { fitNote: note } : {}) },
+  });
+  const objective = await objectiveForJob(job);
+  if (!objective) return finish(null);
+  if (objective.status === "paused") return { next: "wait", delayMs: 60_000, progress: { stage: QUALIFYING, waiting: { kind: "paused", reason: "the owner paused this request's research; its leads are judged when resumed" } } };
+  if (objective.status === "stopped") return finish("Its leads were not judged against your request: the research stopped first.");
+  try {
+    const before = await unjudgedMembers(audienceIds);
+    const { judged: count, remaining } = await assessMembers({ audienceIds, request: await objectiveRequest(objective), requestId: objective.requestMessageId, heartbeat });
+    if (remaining > 0) return { next: "wait", delayMs: count ? 1_000 : QUALIFY_CLAIMED_MS, progress: { stage: QUALIFYING, judged: before - remaining, toJudge: before } };
+    return finish(null);
+  } catch (error) {
+    const failures = (payload.qualifyFailures ?? 0) + 1;
+    console.error(`[assistant] judging the leads of search ${job.id} failed (${failures}):`, error);
+    if (failures >= MAX_QUALIFY_FAILURES) return finish(`Its leads were not judged against your request yet: ${savedErrorText(error, 200)}`);
+    return { next: "wait", delayMs: QUALIFY_RETRY_MS, payload: { qualifyFailures: failures }, progress: { stage: QUALIFYING } };
+  }
+}
+
 export function registerAssistantJobs(): void {
   if (registered) return;
   registered = true;
-  registerAssistantJobHandler("discovery", held(runDiscoveryStep));
+  registerAssistantJobHandler("discovery", held(judged(runDiscoveryStep)));
   registerAssistantJobHandler("outreach_start", runOutreachStartStep);
-  registerAssistantJobHandler("linkedin_search", held(runLinkedinSearchStep));
-  registerAssistantJobHandler("web_discovery", held(runWebDiscoveryStep));
+  registerAssistantJobHandler("linkedin_search", held(judged(runLinkedinSearchStep)));
+  registerAssistantJobHandler("web_discovery", held(judged(runWebDiscoveryStep)));
   // Instagram prospects through Apify run on the discovery job's stages (discovery.server.ts).
-  registerAssistantJobHandler("apify_instagram", held(runDiscoveryStep));
+  registerAssistantJobHandler("apify_instagram", held(judged(runDiscoveryStep)));
   registerAssistantJobHandler("objective", runObjectiveStep);
   onAssistantJobFinished(reportFinishedJob);
 }
@@ -183,7 +242,7 @@ export async function reportFinishedJob(job: AssistantJob): Promise<void> {
   const coverage = search ? await coverageLineForJob(job).catch(() => null) : null;
   // The request this search serves, when it is pursued as an objective: its driver continues it, not this report.
   const objective = search ? await objectiveForJob(job).catch(() => null) : null;
-  const content = `${search ? discoveryMessage(job) : outreachMessage(job)}${coverage ? ` ${coverage}` : ""}`;
+  const content = `${search ? `${discoveryMessage(job)}${fitText(job)}` : outreachMessage(job)}${coverage ? ` ${coverage}` : ""}`;
   const posted = await claimJobReport(job, async (tx) => {
     await addMessage({ threadId, role: "event", content, toolResult: { reportKey: job.reportKey } }, tx);
     if (contactAfter) await tx.update(assistantJobs).set({ progress: followUpPatch("owed") }).where(and(inOrg(assistantJobs), eq(assistantJobs.id, job.id)));

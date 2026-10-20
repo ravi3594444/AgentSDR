@@ -46,7 +46,7 @@ function channelsAsked(prompt: string): string[] {
 function writerAnswer(input: Input): string {
   switch (input.schemaName) {
     case "lead_sorting":
-      return JSON.stringify({ leads: leadsAsked(input.userPrompt).map((index) => ({ index, group: "Property firms", approach: "standard", reason: "A property business, as the owner asked." })) });
+      return JSON.stringify({ leads: leadsAsked(input.userPrompt).map((index) => ({ index, group: "Property firms", approach: "standard", reason: "A property business, as the owner asked.", requestFit: "fits", noWebsiteRequired: false })) });
     case "outreach_sequences":
       return JSON.stringify({ channels: channelsAsked(input.userPrompt).map((channel) => ({
         channel,

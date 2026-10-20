@@ -11,6 +11,8 @@ import { getObjective, nudgeObjective, objectiveFacts, postObjectiveReport, read
 import { assistantMessages, assistantObjectives, type ObjectiveProgress } from "./schema";
 import { addMessage, claimThread, releaseThread, threadBusy } from "./threads.server";
 import type { AssistantJob, StepOutcome } from "./worker";
+import { assessMembers } from "./qualify.server";
+import { savedErrorText } from "@/lib/grid/sanitize";
 
 /**
  * The driver of one objective: an "objective" job the worker steps like any
@@ -33,6 +35,7 @@ import type { AssistantJob, StepOutcome } from "./worker";
  */
 
 const CHAT_BUSY_RETRY_MS = 20_000;
+const QUALIFY_RETRY_MS = 60_000;
 const TURN_POLL_MS = 15_000;
 const SETTLE_POLL_MS = 30_000;
 
@@ -40,6 +43,9 @@ function progressOf(facts: ObjectiveFacts, waiting: string | null): Record<strin
   return {
     stage: "watching",
     leads: facts.leads,
+    found: facts.funnel.found,
+    contactable: facts.funnel.contactable,
+    toJudge: facts.funnel.pending,
     leadTarget: facts.objective.leadTarget,
     spentUsd: facts.spend.totalUsd,
     spendCapUsd: facts.objective.spendCapUsd,
@@ -80,7 +86,27 @@ async function driverFacts(objective: Objective, facts: ObjectiveFacts): Promise
     refusals: tried.filter((row) => !waiting(row) && row.toolResult?.hidden !== true).map((row) => row.content),
     dry: progress.dry ?? 0,
     pausedAt: progress.pausedAt ?? null,
+    pendingMembers: facts.funnel.pendingMembers,
+    qualifyFailures: progress.qualifyFailures ?? 0,
   };
+}
+
+const JUDGING = "judging the leads found against the request";
+
+/** Judges leads left unjudged (qualify.server.ts); a failure is counted, and after MAX_QUALIFY_ATTEMPTS they stay uncounted. */
+async function qualifyLeft(objective: Objective, facts: ObjectiveFacts): Promise<StepOutcome> {
+  try {
+    const { judged } = await assessMembers({ audienceIds: facts.audienceIds, request: facts.request, requestId: objective.requestMessageId, maxBatches: 4 });
+    // Nothing judged: the rest are claimed by a search judging them now.
+    const delay = judged ? 1_000 : TURN_POLL_MS;
+    await saveObjectiveProgress(objective.id, { waiting: JUDGING }, new Date(Date.now() + delay));
+    return { next: "wait", delayMs: delay, progress: progressOf(facts, JUDGING) };
+  } catch (error) {
+    const failures = ((objective.progress as ObjectiveProgress).qualifyFailures ?? 0) + 1;
+    console.error(`[assistant/objective] judging the leads of ${objective.id} failed (${failures}):`, error);
+    await saveObjectiveProgress(objective.id, { qualifyFailures: failures, qualifyError: savedErrorText(error, 200), waiting: JUDGING }, new Date(Date.now() + QUALIFY_RETRY_MS));
+    return { next: "wait", delayMs: QUALIFY_RETRY_MS, progress: progressOf(facts, JUDGING) };
+  }
 }
 
 /** Records the verdict on the latest continuation (merged into it, so the turn's own end is kept). */
@@ -151,6 +177,7 @@ async function continueRequest(objective: Objective, facts: ObjectiveFacts, step
           msLeft: objective.deadlineAt.getTime() - Date.now(),
           sources: facts.sources,
           web: facts.web,
+          funnel: facts.funnel,
         }),
         toolResult: { objectiveNote: noteKey, objectiveId: objective.id },
       });
@@ -203,6 +230,8 @@ export async function runObjectiveStep(job: AssistantJob): Promise<StepOutcome> 
     const step = nextDriverStep(await driverFacts(objective, facts));
     if (step.kind === "judge") {
       await judge(objective, step);
+    } else if (step.kind === "qualify") {
+      return qualifyLeft(objective, facts);
     } else if (step.kind === "stop") {
       await stopObjective(objective, step.reason, step.detail);
     } else if (step.kind === "wait") {

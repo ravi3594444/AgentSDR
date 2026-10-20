@@ -1,5 +1,6 @@
 import { numberRule } from "@/lib/channels/rules";
 import { TINYFISH_LIMITS } from "@/lib/tinyfish/catalog";
+import type { LeadFunnel } from "./leadFit";
 
 /**
  * An objective (CONTEXT.md): one owner request pursued to an end. It owns a
@@ -338,15 +339,22 @@ export type DriverFacts = LimitFacts & {
   dry: number;
   /** When the owner last paused the request (ISO), or null. */
   pausedAt: string | null;
+  /** Contactable leads of the request still without a verdict on the request (qualify.server.ts). */
+  pendingMembers: number;
+  /** The driver's failed attempts at judging them. */
+  qualifyFailures: number;
 };
 
 export type DriverStep =
   | { kind: "stop"; reason: StopReason; detail: string }
   | { kind: "wait"; delayMs: number; reason: string }
   | { kind: "judge"; judged: "productive" | "waiting"; waitUntil: Date | null }
+  | { kind: "qualify" }
   | { kind: "continue"; n: number; attempt: number; dry: number };
 
 export const MAX_CONTINUATION_ATTEMPTS = 3;
+/** The driver's attempts at judging leads left unjudged; after these they stay uncounted, and the report says so. */
+export const MAX_QUALIFY_ATTEMPTS = 3;
 export const MAX_DRY_CONTINUATIONS = 2;
 const WATCH_MS = 60_000;
 const TURN_POLL_MS = 15_000;
@@ -367,6 +375,9 @@ export function nextDriverStep(facts: DriverFacts): DriverStep {
   const untilDeadline = Math.max(1_000, facts.deadline.getTime() - facts.now.getTime() + 1_000);
   const wait = (delayMs: number, reason: string): DriverStep => ({ kind: "wait", delayMs: Math.min(delayMs, untilDeadline), reason });
   if (facts.status === "paused") return wait(PAUSED_POLL_MS, "paused by the owner");
+  // Leads found but not yet judged against the request (a list added by hand, an earlier failure): judged before
+  // anything is decided on the count. Searches still running judge their own.
+  if (facts.openChildren === 0 && facts.pendingMembers > 0 && facts.qualifyFailures < MAX_QUALIFY_ATTEMPTS) return { kind: "qualify" };
 
   const turn = facts.continuation;
   if (turn && !turn.judged) {
@@ -412,6 +423,9 @@ export type SourceYield = {
   searches: number;
   found: number;
   eligible: number;
+  /** Of the contactable leads judged against the request, how many match (leadFit.ts); 0 judged when none were. */
+  judged: number;
+  matched: number;
   notSearched: number;
   failed: number;
   open: number;
@@ -439,7 +453,7 @@ export function sourceLine(source: SourceYield): string {
   const parts: string[] = [];
   const ran = source.searches - source.notSearched - source.failed - source.open;
   const why = source.notes[0] ? ` (${reasonText(source.notes[0])})` : "";
-  if (ran > 0) parts.push(`${plural(ran, "search", "searches")}, ${source.found} found, ${source.eligible} can be contacted`);
+  if (ran > 0) parts.push(`${plural(ran, "search", "searches")}, ${source.found} found, ${source.eligible} can be contacted${source.judged ? `, ${source.matched} of them match your request` : ""}`);
   if (source.open) parts.push(`${source.open} still running`);
   if (source.notSearched) parts.push(`${source.notSearched} not searched${why}`);
   if (source.failed) parts.push(`${source.failed} failed${source.notSearched ? "" : why}`);
@@ -494,14 +508,27 @@ export function continuationNote(input: {
   msLeft: number;
   sources: readonly SourceYield[];
   web: WebUse | null;
+  funnel?: LeadFunnel;
 }): string {
   const request = input.request.replace(/\s+/g, " ").trim().slice(0, 200);
   return [
-    `Continuing your request “${request}” on its own (step ${input.n}): ${input.leads} of ${input.leadTarget} qualified leads so far, ${Math.max(0, input.leadTarget - input.leads)} to go.`,
+    `Continuing your request “${request}” on its own (step ${input.n}): ${input.leads} of ${input.leadTarget} qualified leads so far (contactable and matching the request), ${Math.max(0, input.leadTarget - input.leads)} to go.`,
+    input.funnel && input.funnel.found ? `${funnelText(input.funnel)}.` : null,
     `Spent ${input.spendCapUsd > 0 ? `${usd(input.spend.totalUsd)} of ${usd(input.spendCapUsd)} on paid sources` : `${input.spend.totalUsd > 0 ? usd(input.spend.totalUsd) : "nothing"} (free sources only: no Apify, Treg, browser, Tavily or AI web research)`}${input.spend.tavilyCredits ? ` and ${plural(input.spend.tavilyCredits, "Tavily credit")}` : ""}; ${formatDuration(input.msLeft)} left.`,
     `Searched so far — ${sourcesText(input.sources, input.web)}.`,
-    "Next: another source or a different query, chosen by these yields; a search that already ran is not repeated, and when nothing else fits the request the research stops here.",
-  ].join(" ");
+    "Next: another source or a different query, chosen by these yields and by why leads did not match (a place or kind of business to name in the query); a search that already ran is not repeated, and when nothing else fits the request the research stops here.",
+  ].filter(Boolean).join(" ");
+}
+
+/** "Found 50 (50 contactable): 3 match your request, 40 do not (…), 7 unconfirmed" — every step kept apart. */
+function funnelText(funnel: LeadFunnel): string {
+  const parts = [
+    `${funnel.qualified} match your request`,
+    funnel.notMatching ? `${funnel.notMatching} do not${funnel.noMatchReasons.length ? ` (${funnel.noMatchReasons.slice(0, 2).map((item) => `${item.count}: ${reasonText(item.reason, 90)}`).join("; ")})` : ""}` : null,
+    funnel.unconfirmed ? `${funnel.unconfirmed} unconfirmed (a requirement could not be checked)` : null,
+    funnel.pending ? `${funnel.pending} not judged against it yet` : null,
+  ].filter(Boolean);
+  return `Found ${funnel.found} (${funnel.contactable} contactable): ${parts.join(", ")}`;
 }
 
 export const STOP_WORDS: Record<StopReason, string> = {
@@ -528,9 +555,14 @@ export function objectiveReportText(input: {
   web: WebUse | null;
   /** Searches still running when it stopped: their leads are saved as they finish. */
   stillRunning: number;
+  /** The request's leads at each step (found, contactable, matching, …), by distinct person. */
+  funnel?: LeadFunnel;
+  /** The counts when it stopped: more found by searches already running then are explained, not printed as a second total. */
+  atStop?: { qualified: number } | null;
 }): string {
   const head = input.reason === "target_reached" ? "Research finished" : "Research stopped";
-  const why = input.detail ? input.detail : STOP_WORDS[input.reason];
+  // A reached target is said without the count it was recorded with: the line below gives the one total.
+  const why = input.reason === "target_reached" ? `the target of ${input.leadTarget} was reached` : input.detail ? input.detail : STOP_WORDS[input.reason];
   const remaining = Math.max(0, input.leadTarget - input.leads);
   const routes = [
     input.routes.email ? `${input.routes.email} by email` : null,
@@ -539,9 +571,15 @@ export function objectiveReportText(input: {
     input.routes.instagram ? `${input.routes.instagram} on Instagram` : null,
   ].filter(Boolean);
   const request = input.request.replace(/\s+/g, " ").trim().slice(0, 200);
+  const late = input.atStop && input.atStop.qualified !== input.leads
+    ? input.leads > input.atStop.qualified
+      ? ` It stopped at ${input.atStop.qualified}; searches already running then added ${input.leads - input.atStop.qualified}.`
+      : ` It stopped at ${input.atStop.qualified}; judging the last leads brought it to ${input.leads}.`
+    : "";
   return [
     `${head}: ${why} (request “${request}”).`,
-    `${plural(input.leads, "qualified lead")} of the ${input.leadTarget} wanted${remaining ? `; ${remaining} still to find` : ""}.${routes.length ? ` Contact routes: ${routes.join(", ")}.` : ""}`,
+    `${plural(input.leads, "qualified lead")} (contactable and matching your request) of the ${input.leadTarget} wanted${remaining ? `; ${remaining} still to find` : ""}.${late}${routes.length ? ` Their contact routes (one person can have several): ${routes.join(", ")}.` : ""}`,
+    input.funnel && input.funnel.found ? `${funnelText(input.funnel)}.` : null,
     `Searched — ${sourcesText(input.sources, input.web)}.`,
     `Recorded spend: ${spendText(input.spend, input.spendCapUsd)}. The AI model's own use for chat and writing is not in this figure; your AI provider bills it.`,
     input.stillRunning ? `${plural(input.stillRunning, "search", "searches")} still running when it stopped; ${input.stillRunning === 1 ? "its" : "their"} leads are saved as ${input.stillRunning === 1 ? "it finishes" : "they finish"}.` : null,

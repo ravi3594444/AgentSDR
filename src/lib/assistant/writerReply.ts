@@ -1,5 +1,6 @@
 import type { AudienceChannel } from "./schema";
 import type { LeadApproach } from "./messages";
+import type { RequestFit } from "./leadFit";
 
 type Shape = {
   type: string;
@@ -15,7 +16,7 @@ type WriterReplies = {
   outreach_sequences: { channels: { channel: AudienceChannel; messages: { subject: string; body: string; waitDays: number }[] }[] };
   first_message_review: { messages: { channel: AudienceChannel; wouldReply: number; reasons: string[] }[] };
   opening_lines: { lines: { index: number; line: string }[] };
-  lead_sorting: { leads: { index: number; group: string; approach: LeadApproach; reason: string }[] };
+  lead_sorting: { leads: { index: number; group: string; approach: LeadApproach; reason: string; requestFit: RequestFit; noWebsiteRequired: boolean }[] };
   personal_messages: { messages: { index: number; subject: string; body: string }[] };
 };
 
@@ -178,12 +179,14 @@ const SORT_SCHEMA = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["index", "group", "approach", "reason"],
+        required: ["index", "group", "approach", "reason", "requestFit", "noWebsiteRequired"],
         properties: {
           index: { type: "integer" },
           group: { type: "string", description: "2 to 4 words naming the kind of lead, the same words for leads of the same kind." },
           approach: { type: "string", enum: ["standard", "personal", "skip"] },
           reason: { type: "string", description: "One short sentence for the owner, from the lead's facts only." },
+          requestFit: { type: "string", enum: ["fits", "unconfirmed", "does_not_fit"], description: "Whether the facts match what the owner asked for." },
+          noWebsiteRequired: { type: "boolean", description: "True only when the owner's request asks for leads like this one to have no website." },
         },
       },
     },

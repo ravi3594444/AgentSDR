@@ -33,9 +33,11 @@ import {
   type StopReason,
   type WebUse,
 } from "./objective";
-import { assistantJobs, assistantMessages, assistantObjectives, leadAudienceMembers, leadAudiences, type ObjectiveProgress } from "./schema";
+import { assistantJobs, assistantMessages, assistantObjectives, leadAudiences, type ObjectiveProgress } from "./schema";
 import { addMessage } from "./threads.server";
 import type { AssistantJob, StepOutcome } from "./worker";
+import { audienceFunnel } from "./qualify.server";
+import type { LeadFunnel } from "./leadFit";
 
 /**
  * Objectives, server side (rules in objective.ts): one row per owner request
@@ -226,36 +228,20 @@ export async function objectiveChildren(objective: Pick<Objective, "requestMessa
 const isOpen = (job: Pick<ObjectiveChild, "status">) => job.status === "queued" || job.status === "running";
 
 /**
- * Qualified leads: distinct people with a contact route (eligible members)
- * across the request's lead lists — its searches' and the lists the
- * assistant made for it (criteria.requestId). Each person counts once,
- * however many sources found them.
+ * Qualified leads: distinct people with a contact route whom the judging
+ * found to match the owner's request (qualify.server.ts), across the
+ * request's lead lists — its searches' and the lists the assistant made for
+ * it (criteria.requestId). Each person counts once, however many sources
+ * found them; a contact route alone is not a match. The funnel keeps the
+ * other steps apart (found, contactable, not matching, unconfirmed, not yet
+ * judged), and the routes are the qualified people's.
  */
-export async function objectiveLeads(objective: Pick<Objective, "requestMessageId">, children: readonly ObjectiveChild[]): Promise<{ leads: number; routes: ContactRoutes; audienceIds: string[] }> {
+export async function objectiveLeads(objective: Pick<Objective, "requestMessageId">, children: readonly ObjectiveChild[]): Promise<{ leads: number; routes: ContactRoutes; audienceIds: string[]; funnel: LeadFunnel }> {
   const listed = await db.select({ id: leadAudiences.id }).from(leadAudiences)
     .where(and(inOrg(leadAudiences), sql`${leadAudiences.criteria} ->> 'requestId' = ${objective.requestMessageId}`));
   const audienceIds = [...new Set([...children.flatMap((job) => (job.audienceId ? [job.audienceId] : [])), ...listed.map((row) => row.id)])];
-  const none = { email: 0, whatsapp: 0, linkedin: 0, instagram: 0 };
-  if (!audienceIds.length) return { leads: 0, routes: none, audienceIds };
-  const person = leadAudienceMembers.personId;
-  const channel = (name: string) => sql<number>`count(distinct ${person}) filter (where ${name} = any(${leadAudienceMembers.channels}))::int`;
-  const [row] = await db.select({
-    leads: sql<number>`count(distinct ${person})::int`,
-    email: channel("email"),
-    whatsapp: channel("whatsapp"),
-    linkedin: channel("linkedin"),
-    instagram: channel("instagram"),
-  }).from(leadAudienceMembers).where(and(
-    inOrg(leadAudienceMembers),
-    inArray(leadAudienceMembers.audienceId, audienceIds),
-    eq(leadAudienceMembers.status, "eligible"),
-    isNotNull(person),
-  ));
-  return {
-    leads: Number(row?.leads ?? 0),
-    routes: { email: Number(row?.email ?? 0), whatsapp: Number(row?.whatsapp ?? 0), linkedin: Number(row?.linkedin ?? 0), instagram: Number(row?.instagram ?? 0) },
-    audienceIds,
-  };
+  const { routes, ...funnel } = await audienceFunnel(audienceIds);
+  return { leads: funnel.qualified, routes, audienceIds, funnel };
 }
 
 /**
@@ -404,10 +390,10 @@ export function objectiveSources(children: readonly ObjectiveChild[]): SourceYie
   const bySource = new Map<string, SourceYield>();
   for (const job of children) {
     const label = childLabel(job);
-    const source = bySource.get(label) ?? { label, searches: 0, found: 0, eligible: 0, notSearched: 0, failed: 0, open: 0, notes: [] };
+    const source = bySource.get(label) ?? { label, searches: 0, found: 0, eligible: 0, judged: 0, matched: 0, notSearched: 0, failed: 0, open: 0, notes: [] };
     bySource.set(label, source);
     source.searches += 1;
-    const result = (job.result ?? {}) as { found?: unknown; eligible?: unknown; notSearched?: unknown; handedToJobId?: unknown; note?: unknown };
+    const result = (job.result ?? {}) as { found?: unknown; eligible?: unknown; notSearched?: unknown; handedToJobId?: unknown; note?: unknown; fit?: { contactable?: unknown; qualified?: unknown; pending?: unknown } };
     const note = (text: unknown) => {
       if (typeof text === "string" && text.trim() && source.notes.length < 3) source.notes.push(text.trim());
     };
@@ -421,6 +407,11 @@ export function objectiveSources(children: readonly ObjectiveChild[]): SourceYie
     } else {
       source.found += Number(result.found ?? 0);
       source.eligible += Number(result.eligible ?? 0);
+      // As judged when the search ended (a lead judged later, by the driver, counts in the request's totals).
+      if (result.fit) {
+        source.judged += Math.max(0, Number(result.fit.contactable ?? 0) - Number(result.fit.pending ?? 0));
+        source.matched += Number(result.fit.qualified ?? 0);
+      }
     }
   }
   return [...bySource.values()];
@@ -435,6 +426,7 @@ export type ObjectiveFacts = {
   leads: number;
   routes: ContactRoutes;
   audienceIds: string[];
+  funnel: LeadFunnel;
   spend: SpendBreakdown;
   sources: SourceYield[];
   web: WebUse | null;
@@ -444,7 +436,7 @@ export type ObjectiveFacts = {
 
 export async function objectiveFacts(objective: Objective): Promise<ObjectiveFacts> {
   const children = await objectiveChildren(objective);
-  const [{ leads, routes, audienceIds }, spend, [message]] = await Promise.all([
+  const [{ leads, routes, audienceIds, funnel }, spend, [message]] = await Promise.all([
     objectiveLeads(objective, children),
     objectiveSpend(objective, db, children),
     db.select({ id: assistantMessages.id, threadId: assistantMessages.threadId, createdAt: assistantMessages.createdAt, content: assistantMessages.content })
@@ -458,6 +450,7 @@ export async function objectiveFacts(objective: Objective): Promise<ObjectiveFac
     leads,
     routes,
     audienceIds,
+    funnel,
     spend,
     sources: objectiveSources(children),
     web,
@@ -589,6 +582,9 @@ async function cancelUnstarted(objective: Pick<Objective, "requestMessageId">, n
  * Null when it was already stopped.
  */
 export async function stopObjective(objective: Pick<Objective, "id" | "requestMessageId">, reason: StopReason, detail: string): Promise<Objective | null> {
+  // The counts as they stand now, kept so the report can explain what searches still running add after.
+  const { funnel } = await objectiveLeads(objective, await objectiveChildren(objective));
+  const atStop = { qualified: funnel.qualified, found: funnel.found, contactable: funnel.contactable };
   const [stopped] = await db.update(assistantObjectives).set({
     status: "stopped",
     stopReason: reason,
@@ -597,7 +593,7 @@ export async function stopObjective(objective: Pick<Objective, "id" | "requestMe
     reportKey: objectiveReportKey(objective.id, reason),
     reportedAt: null,
     nextEligibleAt: null,
-    progress: sql`${assistantObjectives.progress} || jsonb_build_object('waiting', null)`,
+    progress: sql`${assistantObjectives.progress} || jsonb_build_object('waiting', null, 'atStop', ${JSON.stringify(atStop)}::jsonb)`,
     updatedAt: new Date(),
   }).where(and(inOrg(assistantObjectives), eq(assistantObjectives.id, objective.id), ne(assistantObjectives.status, "stopped"))).returning();
   if (stopped) await cancelUnstarted(stopped, `Not searched: the request's research stopped (${detail}) before this search started.`);
@@ -673,6 +669,13 @@ async function requestText(objective: Pick<Objective, "requestMessageId">): Prom
   return (message?.content ?? "").replace(/\s+/g, " ").trim().slice(0, 160);
 }
 
+/** The owner's words that asked for the request, whole (what its leads are judged against). */
+export async function objectiveRequest(objective: Pick<Objective, "requestMessageId">): Promise<string> {
+  const [message] = await db.select({ content: assistantMessages.content }).from(assistantMessages)
+    .where(and(inOrg(assistantMessages), eq(assistantMessages.id, objective.requestMessageId))).limit(1);
+  return message?.content ?? "";
+}
+
 /** Whether the stopped objective may report now: its running searches have finished, or it has waited long enough for them. */
 export function readyToReport(objective: Pick<Objective, "stoppedAt">, openChildren: number, now = new Date()): boolean {
   return openChildren === 0 || !objective.stoppedAt || now.getTime() - objective.stoppedAt.getTime() >= SETTLE_MS;
@@ -701,6 +704,8 @@ export async function postObjectiveReport(objectiveId: string): Promise<boolean>
     sources: facts.sources,
     web: facts.web,
     stillRunning: facts.openChildren,
+    funnel: facts.funnel,
+    atStop: (objective.progress as ObjectiveProgress).atStop ?? null,
   });
   return db.transaction(async (tx) => {
     const claimed = await tx.update(assistantObjectives).set({ reportedAt: new Date(), updatedAt: new Date() })

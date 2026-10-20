@@ -328,6 +328,10 @@ export async function eligibleAudienceMembers(audienceId: string) {
     channels: leadAudienceMembers.channels,
     facts: leadAudienceMembers.facts,
     sourceUrl: leadAudienceMembers.sourceUrl,
+    fit: leadAudienceMembers.fit,
+    fitReason: leadAudienceMembers.fitReason,
+    fitGroup: leadAudienceMembers.fitGroup,
+    fitApproach: leadAudienceMembers.fitApproach,
   }).from(leadAudienceMembers)
     .where(and(inOrg(leadAudienceMembers), eq(leadAudienceMembers.audienceId, audienceId), eq(leadAudienceMembers.status, "eligible")))
     .orderBy(asc(leadAudienceMembers.createdAt));

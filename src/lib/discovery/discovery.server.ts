@@ -27,6 +27,7 @@ import { collectWebsiteContacts, type PageFetchOptions } from "./websiteContacts
 import { offerFocus, recipientFields, websiteNotes, type OfferFocus, type WebsiteProfile } from "./websiteProfile";
 import { getBusinessProfile } from "@/lib/assistant/profile.server";
 import { instagramResearchHold } from "./instagramEligibility";
+import { websiteStatusFact } from "@/lib/assistant/leadFit";
 
 /**
  * Lead discovery from public business listings: a Google Maps search on the
@@ -946,9 +947,18 @@ function factsOf(place: EnrichedPlace): Record<string, string> {
   if (place.city) facts.city = place.city;
   if (place.address) facts.address = place.address;
   if (place.website) facts.website = place.website;
+  facts.websiteStatus = placeWebsiteStatus(place);
   if (place.rating !== null) facts.rating = String(place.rating);
   if (place.reviewCount !== null) facts.reviewCount = String(place.reviewCount);
   return facts;
+}
+
+/** What is known of a place's website: none on its listing, listed but not read (and why), or read (leadFit.ts). */
+function placeWebsiteStatus(place: EnrichedPlace): string {
+  const where = place.origin ? "Instagram profile" : place.listing ? SOCIAL[place.listing].listingLabel : "Google Maps listing";
+  if (!place.website) return websiteStatusFact({ state: "none_listed", where });
+  if (place.websiteProfile && !place.websiteError) return websiteStatusFact({ state: "read", url: place.website });
+  return websiteStatusFact({ state: "listed_unchecked", url: place.website, why: place.websiteError ?? "not read" });
 }
 
 /** The contact details of a place with where each came from, best first. */

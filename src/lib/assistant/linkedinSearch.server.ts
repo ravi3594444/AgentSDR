@@ -12,6 +12,7 @@ import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { addAudienceMembers, createAudience } from "./audiences.server";
 import { assistantJobs, type AudienceChannel } from "./schema";
 import type { AssistantJob, StepOutcome } from "./worker";
+import { linkedinProfileFacts } from "./leadFit";
 
 /**
  * Lead search on LinkedIn through the existing Unipile search (SearchBatch
@@ -120,8 +121,14 @@ export async function runLinkedinSearchStep(job: AssistantJob): Promise<StepOutc
       ? [{ rowNumber: index + 2, linkedinUrl: lead.profileUrl, fullName: lead.name, title: lead.headline, companyName: lead.companyName, customFields: { ...(lead.location ? { location: lead.location } : {}), discoveredVia: "LinkedIn search" } }]
       : []);
     const imported = await importPeopleRows(rows);
+    // What the search showed of each profile (headline, place, company) and the words searched: what the lead is judged on.
+    const factsOf = new Map<string, Record<string, string>>();
+    leads.forEach((lead, index) => {
+      const personId = imported.rowPersonIds[index + 2];
+      if (personId && !factsOf.has(personId)) factsOf.set(personId, linkedinProfileFacts(lead, payload.keywords));
+    });
     const added = job.audienceId && imported.personIds.length
-      ? await addAudienceMembers(job.audienceId, imported.personIds.map((personId) => ({ personId, source: "linkedin_search" })))
+      ? await addAudienceMembers(job.audienceId, imported.personIds.map((personId) => ({ personId, source: "linkedin_search", facts: factsOf.get(personId) ?? {} })))
       : { eligible: 0, excluded: 0, added: 0 };
     return {
       next: "done",

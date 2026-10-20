@@ -5,7 +5,7 @@ import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { channelRules } from "@/lib/channels/rules.server";
 import { addPeopleToEmailCampaign, addPeopleToLinkedinCampaign } from "@/lib/leads/campaignAssignments";
-import { companies, people } from "@/lib/leads/schema";
+import { people } from "@/lib/leads/schema";
 import { personVariables } from "@/lib/leads/variables";
 import { campaignAccounts, campaigns as linkedinCampaigns, leads as linkedinLeads, linkedInAccounts } from "@/lib/linkedin/schema";
 import { normalizeLinkedinSequence, linkedinSequenceError } from "@/lib/linkedin/campaignSequence";
@@ -28,6 +28,7 @@ import { eligibleAudienceMembers, memberInsights, summarizeAudience } from "./au
 import { orderedFindings } from "./qualification";
 import { countReasons } from "./audiences";
 import { CHANNEL_NAMES, channelPolicy, unreachableReason } from "./channelPolicy";
+import { judgeLeads, leadFacts, loadPeople, storeVerdicts, type PersonRow } from "./qualify.server";
 import { availableTokens, leadTextKey, MAX_PERSONAL, perLeadSteps, personalizationKey, settleGroups, templateTokens, type LeadApproach } from "./messages";
 import { displayBusinessName, pitchProblems } from "./pitch";
 import { getBusinessProfile } from "./profile.server";
@@ -46,7 +47,7 @@ import {
   type PlannedStep,
 } from "./schema";
 import type { AssistantJob, StepOutcome } from "./worker";
-import { businessContext, sortLeads, writePersonalLines, writePersonalMessages, writeSequences, type WriterCost } from "./writer.server";
+import { businessContext, writePersonalLines, writePersonalMessages, writeSequences, type WriterCost } from "./writer.server";
 
 /**
  * Outreach runs: what the owner approves once and the assistant then runs.
@@ -60,8 +61,7 @@ import { businessContext, sortLeads, writePersonalLines, writePersonalMessages, 
 
 const DEFAULT_MAX_LEADS = 100;
 const HARD_MAX_LEADS = 1_000;
-/** Leads sorted per model call, and first messages written per call. */
-const SORT_BATCH = 25;
+/** First messages written per model call (leads are sorted in batches of JUDGE_BATCH, qualify.server.ts). */
 const PERSONAL_BATCH = 5;
 
 export class OutreachError extends Error {
@@ -119,15 +119,6 @@ export async function channelAvailability(): Promise<Record<AudienceChannel, Cha
   };
 }
 
-type PersonRow = { person: typeof people.$inferSelect; company: typeof companies.$inferSelect | null };
-
-async function loadPeople(personIds: string[]): Promise<Map<string, PersonRow>> {
-  if (!personIds.length) return new Map();
-  const rows = await db.select({ person: people, company: companies }).from(people)
-    .leftJoin(companies, and(eq(companies.id, people.companyId), inOrg(companies)))
-    .where(and(inOrg(people), inArray(people.id, personIds)));
-  return new Map(rows.map((row) => [row.person.id, row]));
-}
 
 function leadVariables(row: PersonRow, key: string, line: string): Record<string, string> {
   const variables = personVariables(row.person, row.company);
@@ -140,23 +131,6 @@ function leadVariables(row: PersonRow, key: string, line: string): Record<string
   return variables;
 }
 
-/** What the sorting and writing models may know of a lead: its public facts, title, company and short own fields. */
-function leadFacts(memberFacts: Record<string, string>, row: PersonRow | undefined): Record<string, string> {
-  const out: Record<string, string> = { ...memberFacts };
-  if (!row) return out;
-  if (row.person.fullName && !out.name) out.name = row.person.fullName;
-  if (row.person.title) out.title ??= row.person.title;
-  if (row.company?.name) out.company ??= row.company.name;
-  if (out.company) out.company = displayBusinessName(out.company);
-  if (row.company?.domain) out.website ??= row.company.domain;
-  for (const [field, value] of Object.entries((row.person.raw ?? {}) as Record<string, unknown>)) {
-    if (Object.keys(out).length >= 14) break;
-    if (typeof value !== "string" || !value.trim() || value.length > 200) continue;
-    if (/^p_[0-9a-f]{8}/.test(field) || ["addedVia", "discoveredVia"].includes(field)) continue;
-    out[field] ??= value;
-  }
-  return out;
-}
 
 /** The lead's first message as it will read after their opening line: what the line must not repeat. */
 function firstMessageAfterLine(step: PlannedStep | undefined, row: PersonRow | undefined, key: string): string {
@@ -265,22 +239,28 @@ export async function prepareOutreach(input: PrepareInput): Promise<Proposal> {
     return person?.fullName ?? business ?? memberByPerson.get(personId)?.name ?? "Lead";
   };
 
-  // 1. Sort the leads: what kind each is, and whether it gets its group's
-  // message, one written for it alone, or nothing (with the reason).
+  // 1. Sort the leads: what kind each is, whether it is what the owner asked for, and whether it gets its
+  // group's message, one written for it alone, or nothing (with the reason). A lead a search already judged
+  // against this request keeps that verdict (qualify.server.ts); the rest are judged now, and stored the same way.
   const facts = assignments.map((assignment) => leadFacts(memberByPerson.get(assignment.personId)?.facts ?? {}, leadRows.get(assignment.personId)));
-  const sortable = input.sortLeads !== false && facts.some((item) => Object.keys(item).some((name) => name !== "name"));
-  const sorting = new Map<number, { group: string; approach: LeadApproach; reason: string }>();
-  if (sortable) {
-    const known: string[] = [];
-    for (let start = 0; start < assignments.length; start += SORT_BATCH) {
-      const batch = facts.slice(start, start + SORT_BATCH).map((item, offset) => ({ index: start + offset, facts: item }));
-      for (const [index, value] of await sortLeads({ context, leads: batch, knownGroups: known, cost })) {
-        sorting.set(index, value);
-        if (!known.some((label) => label.toLowerCase() === value.group.toLowerCase())) known.push(value.group);
-      }
-    }
-  }
   const fallbackGroup = typeof audience.criteria.what === "string" && audience.criteria.what.trim() ? audience.criteria.what.trim().replace(/^./, (c) => c.toUpperCase()) : "Your leads";
+  const sorting = new Map<number, { group: string; approach: LeadApproach; reason: string }>();
+  const unjudged: number[] = [];
+  if (input.sortLeads !== false) {
+    assignments.forEach((assignment, index) => {
+      const member = memberByPerson.get(assignment.personId);
+      if (member?.fit && member.fitApproach) sorting.set(index, { group: member.fitGroup || fallbackGroup, approach: member.fitApproach, reason: member.fitReason ?? "" });
+      else unjudged.push(index);
+    });
+  }
+  if (unjudged.some((index) => Object.keys(facts[index]!).some((name) => name !== "name"))) {
+    const verdicts = await judgeLeads({ facts: unjudged.map((index) => facts[index]!), request: input.ownerRequest ?? null, context, cost, knownGroups: [...new Set([...sorting.values()].map((value) => value.group))] });
+    unjudged.forEach((index, at) => sorting.set(index, { group: verdicts[at]!.group, approach: verdicts[at]!.approach, reason: verdicts[at]!.reason }));
+    await storeVerdicts(unjudged.flatMap((index, at) => {
+      const memberId = memberByPerson.get(assignments[index]!.personId)?.id;
+      return memberId ? [{ memberId, verdict: verdicts[at]! }] : [];
+    }), input.requestId ?? null);
+  }
   const skipped: NonNullable<OutreachPlan["skipped"]> = [];
   const kept: { assignment: OutreachPlan["assignments"][number]; facts: Record<string, string>; group: string; approach: "standard" | "personal"; reason: string }[] = [];
   assignments.forEach((assignment, index) => {

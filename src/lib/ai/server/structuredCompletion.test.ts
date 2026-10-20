@@ -287,7 +287,7 @@ describe("assistant completion recovery", () => {
 });
 
 describe("outreach response recovery through the provider transport", () => {
-  const sorted = { leads: [{ index: 25, group: "Real estate agencies", approach: "standard", reason: "The business publishes a Chicago office." }] };
+  const sorted = { leads: [{ index: 25, group: "Real estate agencies", approach: "standard", reason: "The business publishes a Chicago office.", requestFit: "fits", noWebsiteRequired: false }] };
 
   for (const mode of ["tool_call", "json_schema"] as const) {
     test(`${mode}: repairs the missing-leads response from the planning failure`, async () => {

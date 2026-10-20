@@ -388,8 +388,11 @@ function DiscoveryCard({ message, job }: { message: Message; job: Job | undefine
     reading: `Reading the pages the search found for published contact details (${progress.read ?? progress.pagesRead ?? 0} of ${progress.toRead ?? progress.candidates ?? "?"})…`,
     enriching: `Reading business websites for contact details (${progress.websitesChecked ?? 0} of ${progress.websitesToCheck ?? "?"})…`,
     saving: `Checking and saving contacts (${progress.saved ?? 0} of ${progress.found ?? "?"})…`,
+    qualifying: waiting ? `Waiting: ${waiting.reason ?? "paused"}.` : `Judging the leads found against your request (${progress.judged ?? 0} of ${progress.toJudge ?? "?"})…`,
   };
   const result = job.result as Record<string, number | string | null> | null;
+  // How its contactable leads were judged against the request (only matches count toward it), when they were.
+  const fit = (job.result as { fit?: { contactable: number; qualified: number; notMatching: number; unconfirmed: number; pending: number } } | null)?.fit ?? null;
   return (
     <Card title={`${linkedin ? "LinkedIn search" : web ? "Web search" : instagram ? "Instagram prospects" : viaApify ? "Lead search (Apify)" : "Lead search"}: ${data?.phrase ?? data?.keywords ?? (data as { customers?: string } | undefined)?.customers ?? ""}`} status={job.status}>
       {job.status === "queued" || job.status === "running" ? (
@@ -400,10 +403,12 @@ function DiscoveryCard({ message, job }: { message: Message; job: Job | undefine
         <p>
           {result.found ?? 0} {linkedin ? "profiles" : instagram ? "Instagram accounts" : "businesses"} found{source && !instagram && !linkedin ? ` on ${source}` : ""}{instagram ? " (potential matches, not interest)" : ""} · <span className="text-label-sm text-text-strong-950">{result.eligible ?? 0} contactable</span>{linkedin ? " on LinkedIn" : ` (${result.withEmail ?? 0} by email, ${result.withPhoneOnly ?? 0} by phone only, ${result.withInstagram ?? 0} with Instagram profiles)`}
           {instagram && Number(result.instagramOnly ?? 0) > 0 && ` · ${result.instagramOnly} found on Instagram only — approved DM plan and connected sender required`}
+          {fit && fit.contactable > 0 && <> · <span className="text-label-sm text-text-strong-950">{fit.qualified} match your request</span>{fit.notMatching ? `, ${fit.notMatching} do not` : ""}{fit.unconfirmed ? `, ${fit.unconfirmed} unconfirmed` : ""}{fit.pending ? `, ${fit.pending} not judged yet` : ""}</>}
           {Number(result.excluded ?? 0) > 0 && ` · ${result.excluded} left out with reasons`}
           {Number(result.duplicates ?? 0) > 0 && ` · ${result.duplicates} duplicates skipped`}
           {Number(result.alreadyKnown ?? 0) > 0 && ` · ${result.alreadyKnown} already in your leads (not duplicated)`}
           {result.note ? <span className="mt-1 block">{String(result.note)}</span> : null}
+          {result.fitNote ? <span className="mt-1 block text-text-sub-600">{String(result.fitNote)}</span> : null}
           {result.providerNote ? <span className="mt-1 block text-text-sub-600">{String(result.providerNote)}</span> : null}
         </p>
       ) : (

@@ -52,8 +52,22 @@ type Input = { userPrompt: string; schemaName?: string; accept: (text: string) =
 type Script = (input: Input) => string | Promise<string>;
 let replies: Script[] = [];
 const prompts: string[] = [];
+/** The lead sorter's verdict on one lead's facts (leadFit.ts): every lead fits unless a check says otherwise. */
+type Verdict = { requestFit: "fits" | "unconfirmed" | "does_not_fit"; reason: string; noWebsite?: boolean };
+let judge: (facts: Record<string, string>) => Verdict = () => ({ requestFit: "fits", reason: "What the owner asked for." });
+const judgedLeads: Record<string, string>[] = [];
 mock.module(join(root, "src/lib/ai/server/structuredCompletion.ts"), () => ({
   completeStructured: async (input: Input) => {
+    if (input.schemaName === "lead_sorting") {
+      const leads = [...input.userPrompt.matchAll(/^(\d+)(?: \([^)]*\))?: (\{.*\})$/gm)].map((match) => ({ index: Number(match[1]), facts: JSON.parse(match[2]!) as Record<string, string> }));
+      judgedLeads.push(...leads.map((lead) => lead.facts));
+      const text = JSON.stringify({ leads: leads.map(({ index, facts }) => {
+        const verdict = judge(facts);
+        return { index, group: "Leads", approach: verdict.requestFit === "does_not_fit" ? "skip" : "standard", reason: verdict.reason, requestFit: verdict.requestFit, noWebsiteRequired: verdict.noWebsite === true };
+      }) });
+      input.accept(text);
+      return { text, model: "fixture", provider: "fixture", request: {}, response: {}, usage: {}, attempts: 1 };
+    }
     prompts.push(input.userPrompt);
     const next = replies.shift();
     if (!next) throw new Error(`unexpected model call: ${input.userPrompt.slice(-300)}`);
@@ -70,12 +84,12 @@ const turn = (message: string, actions: { tool: string; args: Record<string, unk
 // ------------------------------------------------------------ the scraper and Apify, stood in
 const MAPS_HEADER = "input_id,link,title,category,address,website,phone,review_count,review_rating,place_id,cid,status,complete_address,emails";
 const csv = (values: (string | number)[]) => values.map((value) => `"${String(value).replace(/"/g, "\"\"")}"`).join(",");
-const scraper = { jobs: new Map<string, string>(), posts: [] as string[], perPhrase: 6 };
+const scraper = { jobs: new Map<string, string>(), posts: [] as string[], perPhrase: 6, website: null as ((index: number) => string) | null };
 const slug = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 function mapsCsv(phrase: string): string {
   const rows = Array.from({ length: scraper.perPhrase }, (_, index) => {
     const key = `${slug(phrase)}-${index + 1}`;
-    return csv(["1", `https://maps.google.com/?cid=${stamp}${index}${key.length}`, `${phrase} business ${index + 1}`, "Business", "Pune", "", "", 10, 4.5, `pl-${stamp}-${key}`, `${stamp}${index}`, "", JSON.stringify({ city: "Pune", country: "IN" }), `hello@${key}-${stamp}.test`]);
+    return csv(["1", `https://maps.google.com/?cid=${stamp}${index}${key.length}`, `${phrase} business ${index + 1}`, "Business", "Pune", scraper.website?.(index) ?? "", "", 10, 4.5, `pl-${stamp}-${key}`, `${stamp}${index}`, "", JSON.stringify({ city: "Pune", country: "IN" }), `hello@${key}-${stamp}.test`]);
   });
   return [MAPS_HEADER, ...rows].join("\n");
 }
@@ -150,6 +164,7 @@ const { runOneAssistantStep, reconcileAssistantJobReports } = await import("@/li
 const { registerAssistantJobs, reportFinishedJob } = await import("@/lib/assistant/register.server");
 const { runTool, TOOLS } = await import("@/lib/assistant/tools.server");
 const objectives = await import("@/lib/assistant/objective.server");
+const { assessMembers } = await import("@/lib/assistant/qualify.server");
 type AssistantJob = typeof schema.assistantJobs.$inferSelect;
 type Objective = typeof schema.assistantObjectives.$inferSelect;
 
@@ -283,8 +298,8 @@ await runInOrganization(a.org.id, async () => {
     const reports = await reportsOf(thread.id, objective.id);
     check("target reached: stopped with that reason, and the driver finished", stopped.status === "stopped" && stopped.stopReason === "target_reached" && done.status === "succeeded", `${stopped.status} ${stopped.stopReason} ${done.status}`);
     check("one final report: sources, leads and contact routes, spend, what is left, and the stop reason",
-      reports.length === 1 && /^Research finished: 12 qualified leads found, the target was 10/.test(reports[0]!.content) && /12 qualified leads of the 10 wanted\./.test(reports[0]!.content)
-        && /Contact routes: 12 by email/.test(reports[0]!.content) && /Google Maps through the built-in scraper: 2 searches, 12 found, 12 can be contacted/.test(reports[0]!.content) && /Recorded spend: \$0\.00 of the \$5\.00 cap/.test(reports[0]!.content),
+      reports.length === 1 && /^Research finished: the target of 10 was reached/.test(reports[0]!.content) && /12 qualified leads \(contactable and matching your request\) of the 10 wanted\./.test(reports[0]!.content)
+        && /Their contact routes \(one person can have several\): 12 by email/.test(reports[0]!.content) && /Google Maps through the built-in scraper: 2 searches, 12 found, 12 can be contacted/.test(reports[0]!.content) && /Recorded spend: \$0\.00 of the \$5\.00 cap/.test(reports[0]!.content),
       reports.map((row) => row.content).join(" | "));
     const links = ((reports[0]?.toolResult as { data?: { links?: { href: string }[] } } | null)?.data?.links ?? []).map((link) => link.href);
     check("…with links to the saved results", links.includes(`/assistant?thread=${thread.id}`) && links.includes("/leads"), links.join(" "));
@@ -326,7 +341,7 @@ await runInOrganization(a.org.id, async () => {
     check("settled with what Apify reported, then stopped: spend cap used", settled?.status === "succeeded" && settled.usageUsd === 1 && stopped.stopReason === "budget_spent", `${settled?.status} ${settled?.usageUsd} ${stopped.stopReason}`);
     const reports = await reportsOf(thread.id, objective.id);
     check("the report keeps the leads found and gives the spend and the exact reason",
-      reports.length === 1 && /^Research stopped: \$1\.00 of the \$1\.00 spend cap was used/.test(reports[0]!.content) && /3 qualified leads of the 25 wanted; 22 still to find/.test(reports[0]!.content) && /Recorded spend: \$1\.00 of the \$1\.00 cap \(Apify \$1\.00\)/.test(reports[0]!.content) && /Facebook through Apify: 1 search, 3 found, 3 can be contacted/.test(reports[0]!.content),
+      reports.length === 1 && /^Research stopped: \$1\.00 of the \$1\.00 spend cap was used/.test(reports[0]!.content) && /3 qualified leads \(contactable and matching your request\) of the 25 wanted; 22 still to find/.test(reports[0]!.content) && /Recorded spend: \$1\.00 of the \$1\.00 cap \(Apify \$1\.00\)/.test(reports[0]!.content) && /Facebook through Apify: 1 search, 3 found, 3 can be contacted/.test(reports[0]!.content),
       reports.map((row) => row.content).join(" | "));
     const members = await db.select().from(schema.leadAudienceMembers).where(and(eq(schema.leadAudienceMembers.audienceId, search!.audienceId!), eq(schema.leadAudienceMembers.status, "eligible")));
     check("the leads are kept", members.length === 3);
@@ -401,7 +416,7 @@ await runInOrganization(a.org.id, async () => {
     check("time limit: stopped with that reason", stopped.stopReason === "time_limit" && stopped.status === "stopped", String(stopped.stopReason));
     check("the search that had not begun is not started", notBegun.status === "cancelled" && (notBegun.result as { notSearched?: boolean } | null)?.notSearched === true && !scraper.posts.includes("bakeries in Pimpri"), notBegun.status);
     check("the report keeps the first search's leads and says what was not searched",
-      reports.length === 1 && /^Research stopped: the time limit passed/.test(reports[0]!.content) && /6 qualified leads of the 25 wanted/.test(reports[0]!.content) && /1 not searched/.test(reports[0]!.content),
+      reports.length === 1 && /^Research stopped: the time limit passed/.test(reports[0]!.content) && /6 qualified leads \(contactable and matching your request\) of the 25 wanted/.test(reports[0]!.content) && /1 not searched/.test(reports[0]!.content),
       reports.map((row) => row.content).join(" | "));
   }
 
@@ -424,6 +439,8 @@ await runInOrganization(a.org.id, async () => {
     check("…and the request waits instead of continuing", pausedStep.status === "queued" && (await objectiveOf(requestId)).status === "paused" && (await notesOf(thread.id, objective.id)).length === 1);
     const blocked = await runTool("find_leads", { what: "pilates studios", where: "Pune" }, context);
     check("…and starts no new search", !blocked.ok && /paused/.test(blocked.summary), blocked.summary);
+    const webPaused = await runTool("web_search", { query: "pilates studio Pune" }, context);
+    check("…nor a web search of its own: the same request, paused for both paths", !webPaused.ok && /^Not run: the owner paused this request's research/.test(webPaused.summary), webPaused.summary);
     const resumed = await runTool("control_research", { action: "resume" }, context);
     check("resume: active again", resumed.ok && (await objectiveOf(requestId)).status === "active");
     await runTool("control_research", { action: "pause" }, context);
@@ -433,7 +450,7 @@ await runInOrganization(a.org.id, async () => {
     await step(driver.id);
     const reports = await reportsOf(thread.id, objective.id);
     check("the report keeps the leads already saved and says it was cancelled",
-      reports.length === 1 && /^Research stopped: cancelled by the owner/.test(reports[0]!.content) && /6 qualified leads of the 25 wanted/.test(reports[0]!.content), reports.map((row) => row.content).join(" | "));
+      reports.length === 1 && /^Research stopped: cancelled by the owner/.test(reports[0]!.content) && /6 qualified leads \(contactable and matching your request\) of the 25 wanted/.test(reports[0]!.content), reports.map((row) => row.content).join(" | "));
     const again = await runTool("control_research", { action: "resume" }, context);
     check("a cancelled request cannot be resumed", !again.ok, again.summary);
   }
@@ -598,7 +615,7 @@ await runInOrganization(a.org.id, async () => {
     await reportFinishedJob(await jobRow(driver.id));
     const reports = await reportsOf(thread.id, objective.id);
     check("one report, however often a restart, the reconciliation or a duplicate callback asks", reports.length === 1 && (await jobRow(driver.id)).status === "succeeded", String(reports.length));
-    check("…and it covers both searches and the leads they found", /12 qualified leads of the 25 wanted; 13 still to find/.test(reports[0]?.content ?? ""), reports[0]?.content ?? "");
+    check("…and it covers both searches and the leads they found", /12 qualified leads \(contactable and matching your request\) of the 25 wanted; 13 still to find/.test(reports[0]?.content ?? ""), reports[0]?.content ?? "");
   }
 
   // ---------------------------------------------------------- 6a. a turn a finished job started serves that job's request
@@ -618,6 +635,54 @@ await runInOrganization(a.org.id, async () => {
     const objective = await objectives.objectiveForRequest(requestId);
     await objectives.setObjectiveState(objective!.id, "cancel", { name: null });
     await db.update(schema.assistantJobs).set({ status: "cancelled" }).where(and(eq(schema.assistantJobs.organizationId, a.org.id), eq(schema.assistantJobs.threadId, thread.id), inArray(schema.assistantJobs.status, ["queued", "running"])));
+  }
+
+  // ---------------------------------------------------------- 6b. only leads that match the request count (pilot F02)
+  {
+    const thread = await createThread(a.owner.id);
+    scraper.perPhrase = 10;
+    scraper.website = (index) => (index === 1 ? `https://agency-two-${stamp}.test/` : "");
+    judge = (facts) => /business [123]\b/.test(facts.businessName ?? "")
+      ? { requestFit: "fits", reason: "A real estate agency in Pune.", noWebsite: true }
+      : { requestFit: "does_not_fit", reason: "Not a real estate agency." };
+    const before = judgedLeads.length;
+    const ask25 = "find 25 real estate agencies in Pune without a website";
+    const requestId = await ask(thread.id, ask25, turn("", [{ tool: "find_leads", args: { what: "real estate agencies", where: "Pune" } }]));
+    const objective = await objectiveOf(requestId);
+    await finishSearches(requestId);
+    const [search] = await children(requestId);
+    const fit = (search!.result as { fit?: { contactable: number; qualified: number; notMatching: number; unconfirmed: number; pending: number } } | null)?.fit;
+    check("the search ends by judging its contactable leads against the request: 10 contactable, 2 match, 7 do not, 1 unconfirmed",
+      search!.status === "succeeded" && fit?.contactable === 10 && fit.qualified === 2 && fit.notMatching === 7 && fit.unconfirmed === 1 && fit.pending === 0, JSON.stringify({ status: search!.status, stage: search!.stage, fit }));
+    const seen = judgedLeads.slice(before);
+    const named = (n: number) => seen.find((facts) => new RegExp(`business ${n}\\b`).test(facts.businessName ?? ""));
+    check("…judged on what is known of each website: none listed on Maps, or listed but not checked (never proof of none)",
+      seen.length === 10 && /^none listed on its Google Maps listing/.test(named(1)?.websiteStatus ?? "") && /^listed \(https:\/\/agency-two-\d+\.test\/\) but could not be checked/.test(named(2)?.websiteStatus ?? ""),
+      JSON.stringify([named(1)?.websiteStatus, named(2)?.websiteStatus, seen.length]));
+    const searchReport = (await events(thread.id)).find((row) => /Judged against your request/.test(row.content));
+    check("…and its report says how many match, and why the rest do not",
+      /Judged against your request: 2 of 10 contactable match your request \(7 do not \(Not a real estate agency\), 1 unconfirmed\)/.test(searchReport?.content ?? ""), searchReport?.content ?? "(none)");
+    const facts = await objectives.objectiveFacts(objective);
+    check("10 contactable leads of which 2 match are 2 qualified toward the target of 25, not 10",
+      facts.leads === 2 && facts.funnel.contactable === 10 && facts.funnel.notMatching === 7 && facts.funnel.unconfirmed === 1 && (await objectives.objectiveStartProblem(requestId)) === null, JSON.stringify(facts.funnel));
+    const again = await assessMembers({ audienceIds: facts.audienceIds, request: ask25, requestId, maxBatches: 2 });
+    check("judging again judges nobody twice, and the count stays", again.judged === 0 && again.remaining === 0 && judgedLeads.length === before + 10 && (await objectives.objectiveFacts(objective)).leads === 2);
+    await objectives.setObjectiveState(objective.id, "cancel", { name: null });
+    const context = { threadId: thread.id, userId: a.owner.id, ownerText: ask25, requestMessageId: requestId };
+    const web = await runTool("web_search", { query: "real estate agency Pune" }, context);
+    const page = await runTool("read_webpage", { url: `https://agency-two-${stamp}.test/` }, context);
+    check("a stopped request: web_search and read_webpage refuse with the same reason, as the searches do",
+      !web.ok && !page.ok && /^Not run: this request's research has stopped/.test(web.summary) && web.summary === page.summary, `${web.summary} | ${page.summary}`);
+    await step((await driverOf(objective.id)).id);
+    const reports = await reportsOf(thread.id, objective.id);
+    check("the final report keeps found, contactable and matching apart, with the reasons",
+      reports.length === 1 && /2 qualified leads \(contactable and matching your request\) of the 25 wanted; 23 still to find/.test(reports[0]!.content)
+        && /Found 10 \(10 contactable\): 2 match your request, 7 do not \(7: Not a real estate agency\), 1 unconfirmed/.test(reports[0]!.content)
+        && /10 can be contacted, 2 of them match your request/.test(reports[0]!.content),
+      reports.map((row) => row.content).join(" | "));
+    scraper.perPhrase = 6;
+    scraper.website = null;
+    judge = () => ({ requestFit: "fits", reason: "What the owner asked for." });
   }
 
   // ---------------------------------------------------------- nothing left open

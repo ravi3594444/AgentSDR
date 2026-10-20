@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { parseWriterReply, writerReplyInstructions, WRITER_REPLY_SCHEMAS } from "./writerReply";
 
 const replies = {
-  lead_sorting: { leads: [{ index: 25, group: "Real estate agencies", approach: "standard" as const, reason: "Offers real estate services in Chicago." }] },
+  lead_sorting: { leads: [{ index: 25, group: "Real estate agencies", approach: "standard" as const, reason: "Offers real estate services in Chicago.", requestFit: "fits" as const, noWebsiteRequired: false }] },
   outreach_sequences: { channels: [{ channel: "email" as const, messages: [{ subject: "A question", body: "Do you handle inquiries manually?", waitDays: 0 }] }] },
   opening_lines: { lines: [{ index: 25, line: "I saw your Chicago office listed." }] },
   personal_messages: { messages: [{ index: 25, subject: "A question", body: "Do you handle inquiries manually?" }] },
@@ -58,6 +58,8 @@ describe("outreach response shapes", () => {
       ["group", null, "group must be a string"],
       ["reason", 7, "reason must be a string"],
       ["approach", "send_now", "approach must be one of"],
+      ["requestFit", "maybe", "requestFit must be one of"],
+      ["noWebsiteRequired", "yes", "noWebsiteRequired must be a boolean"],
     ] as const) {
       expect(() => parseWriterReply(JSON.stringify({ leads: [{ ...replies.lead_sorting.leads[0], [field]: value }] }), "lead_sorting"))
         .toThrow(`lead_sorting.leads[0].${reason}`);
