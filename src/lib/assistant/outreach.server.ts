@@ -29,7 +29,7 @@ import { orderedFindings } from "./qualification";
 import { countReasons } from "./audiences";
 import { CHANNEL_NAMES, channelPolicy, unreachableReason } from "./channelPolicy";
 import { judgeLeads, leadFacts, loadPeople, storeVerdicts, type PersonRow } from "./qualify.server";
-import { availableTokens, leadTextKey, MAX_PERSONAL, perLeadSteps, personalizationKey, settleGroups, templateTokens, type LeadApproach } from "./messages";
+import { availableTokens, groundSequences, leadTextKey, MAX_PERSONAL, perLeadSteps, personalizationKey, sequenceClaimProblem, settleGroups, templateTokens, type LeadApproach } from "./messages";
 import { displayBusinessName, pitchProblems } from "./pitch";
 import { getBusinessProfile } from "./profile.server";
 import { effectiveBusinessProfile } from "./businessContext.server";
@@ -166,7 +166,7 @@ export type PrepareInput = {
 };
 
 /** An earlier run's messages for the channels wanted, with its per-lead merge key swapped for the new run's. */
-function reuseSequences(source: Partial<Record<AudienceChannel, PlannedStep[]>>, baseKey: string, key: string, channels: AudienceChannel[], tokens: readonly string[]): Partial<Record<AudienceChannel, PlannedStep[]>> {
+function reuseSequences(source: Partial<Record<AudienceChannel, PlannedStep[]>>, baseKey: string, key: string, channels: AudienceChannel[], tokens: readonly string[], knowledge: string): Partial<Record<AudienceChannel, PlannedStep[]>> {
   const out: Partial<Record<AudienceChannel, PlannedStep[]>> = {};
   const token = new RegExp(`\\{\\{\\s*${baseKey}\\s*\\}\\}`, "g");
   const allowed = new Set([...tokens, baseKey].map((name) => name.toLowerCase()));
@@ -176,6 +176,8 @@ function reuseSequences(source: Partial<Record<AudienceChannel, PlannedStep[]>>,
     if (steps?.some((step) => templateTokens(`${step.subject ?? ""} ${step.body}`).some((name) => !allowed.has(name.toLowerCase())))) continue;
     // Messages that would be skipped by busy readers (pitch.ts) are written afresh rather than reused.
     if (steps?.some((step, index) => pitchProblems(channel, step.body, { first: index === 0 }).length)) continue;
+    // So are messages with a claim the owner's information does not (or no longer) back.
+    if (steps?.some((step) => sequenceClaimProblem(`${step.subject ?? ""}\n${step.body}`, knowledge))) continue;
     if (steps?.length) out[channel] = steps.map((step) => ({ ...step, subject: step.subject?.replace(token, `{{${key}}}`) ?? null, body: step.body.replace(token, `{{${key}}}`) }));
   }
   return out;
@@ -280,6 +282,7 @@ export async function prepareOutreach(input: PrepareInput): Promise<Proposal> {
 
   // 2. Messages per kind of lead, using only merge fields all its leads have.
   const groups: PlanGroup[] = [];
+  const droppedSteps: NonNullable<OutreachPlan["droppedSteps"]> = [];
   const leadPlans: NonNullable<OutreachPlan["leadPlans"]> = {};
   for (const [groupIndex, settled] of settleGroups(kept.map((lead) => lead.group)).entries()) {
     const id = `g${groupIndex + 1}`;
@@ -294,7 +297,7 @@ export async function prepareOutreach(input: PrepareInput): Promise<Proposal> {
         ? base.plan.groups.find((group) => group.label.toLowerCase() === settled.label.toLowerCase())?.sequences
         : base.plan.sequences
       : undefined;
-    const reused = base && baseSequences ? reuseSequences(baseSequences, base.plan.personalizationKey, key, groupChannels, tokens) : {};
+    const reused = base && baseSequences ? reuseSequences(baseSequences, base.plan.personalizationKey, key, groupChannels, tokens, context) : {};
     const toWrite = groupChannels.filter((channel) => !reused[channel]);
     const written = toWrite.length ? await writeSequences({
       profile,
@@ -307,7 +310,13 @@ export async function prepareOutreach(input: PrepareInput): Promise<Proposal> {
       tokens,
       cost,
     }) : {};
-    groups.push({ id, label: settled.label, count: groupLeads.length, sequences: { ...reused, ...written } });
+    // Every step checked for claims the information does not back: a follow-up is dropped, a first message stops the plan.
+    const grounded = groundSequences({ ...reused, ...written }, context);
+    if (grounded.blocked) {
+      throw new OutreachError(`The first ${CHANNEL_NAMES[grounded.blocked.channel]} message for “${settled.label}” still makes a claim your information does not back after rewriting (${grounded.blocked.problem}), so no plan was made. Save the case study or figure in your business information, or ask me to write it without.`);
+    }
+    droppedSteps.push(...grounded.dropped.map((item) => ({ group: settled.label, ...item })));
+    groups.push({ id, label: settled.label, count: groupLeads.length, sequences: grounded.sequences });
     for (const lead of groupLeads) leadPlans[lead.assignment.personId] = { groupId: id, approach: lead.approach, reason: lead.reason };
   }
 
@@ -406,6 +415,7 @@ export async function prepareOutreach(input: PrepareInput): Promise<Proposal> {
     },
     excluded: [...audience.excluded, ...countReasons(unassigned)].sort((a, b) => b.count - a.count),
     channelNote: policy.note,
+    droppedSteps,
     estimate: {
       aiCalls: personalizeCalls,
       aiCostUsd: perCall !== null ? Number((perCall * personalizeCalls + (cost.usd ?? 0)).toFixed(4)) : null,

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { availableTokens, ensureSignOff, leadClaimProblem, leadTextKey, MAX_GROUPS, perLeadSteps, personalMessageProblem, settleGroups, personalizationKey, personalLineProblem, sequenceProblem, templateProblem, templateTokens } from "./messages";
+import { availableTokens, ensureSignOff, groundSequences, leadClaimProblem, leadTextKey, MAX_GROUPS, perLeadSteps, personalMessageProblem, settleGroups, personalizationKey, personalLineProblem, sequenceClaimProblem, sequenceProblem, templateProblem, templateTokens } from "./messages";
 
 const TOKENS = ["firstName", "company", "city", "category", "p_1a2b3c4d"];
 
@@ -216,3 +216,55 @@ describe("claims about a lead: what the second review found", () => {
   });
 });
 
+
+describe("claims a sequence step makes about the sender's results (pilot F05)", () => {
+  const offer = "LeadDesk answers every buyer enquiry for property firms, day and night, and books viewings into the agent's calendar.";
+  const pilotOne = "We recently helped a similar agency cut lead response time by 80%.";
+  const pilotTwo = "We built a simple AI agent for one agency that cut response time to under a minute.";
+
+  test("the two pilot sentences are refused when the information does not hold them", () => {
+    expect(sequenceClaimProblem(pilotOne, offer)).toMatch(/client story/);
+    expect(sequenceClaimProblem(pilotTwo, offer)).toMatch(/client story/);
+    expect(sequenceClaimProblem("Teams answer leads 3x faster with it.", offer)).toMatch(/3x/);
+    expect(sequenceClaimProblem("It replies in under a minute, every time.", offer)).toMatch(/under a minute/);
+    expect(sequenceClaimProblem("Response rates go up 80%.", offer)).toMatch(/80%/);
+  });
+
+  test("a saved case study backs a story that retells it, figures included", () => {
+    const saved = `${offer}\nCase study: Sunrise Realty in Pune cut its lead response time by 80% in the first month.\nOur assistant answers new enquiries in under a minute.`;
+    expect(sequenceClaimProblem(pilotOne, saved)).toBeNull();
+    expect(sequenceClaimProblem("It replies in under a minute, every time.", saved)).toBeNull();
+    // The same story with a figure the case study does not give is still refused.
+    expect(sequenceClaimProblem("We recently helped a similar agency cut lead response time by 95%.", saved)).toMatch(/95%/);
+  });
+
+  test("a figure is backed only as that figure, not by any 80 in the information", () => {
+    expect(sequenceClaimProblem("Response rates go up 80%.", "Plans start at 80 USD a month.")).toMatch(/80%/);
+  });
+
+  test("plain offer wording, merge fields and a time for a call are not claims", () => {
+    expect(sequenceClaimProblem("Hi {{company}} team, {{p_1a2b3c4d}} we help property firms answer every enquiry within the hour. Would a 15 minute call this week be useful?", offer)).toBeNull();
+    expect(sequenceClaimProblem("Just checking whether faster replies would help your team this month.", offer)).toBeNull();
+  });
+
+  test("a template says nothing about its recipients that no lead's facts back", () => {
+    expect(sequenceClaimProblem("Saw that you don't have online booking on your website.", offer)).toMatch(/lack/);
+  });
+});
+
+describe("a plan's sequences after the writer is done", () => {
+  const knowledge = "LeadDesk answers every buyer enquiry for property firms.";
+  const step = (body: string, waitDays: number, subject: string | null = null) => ({ subject, body, waitDays });
+
+  test("a follow-up that keeps an unbacked claim is dropped, and its wait moves to the next step", () => {
+    const result = groundSequences({ whatsapp: [step("Hello, we answer every buyer enquiry for you.", 0), step("We recently helped a similar agency cut response time by 80%.", 3), step("Is this worth a short call?", 4)] }, knowledge);
+    expect(result.blocked).toBeNull();
+    expect(result.dropped).toEqual([{ channel: "whatsapp", step: 2, problem: expect.stringMatching(/client story/) }]);
+    expect(result.sequences.whatsapp!.map((item) => [item.body, item.waitDays])).toEqual([["Hello, we answer every buyer enquiry for you.", 0], ["Is this worth a short call?", 7]]);
+  });
+
+  test("a first message that keeps one stops the plan", () => {
+    const result = groundSequences({ email: [step("We built a simple AI agent for one agency that cut response time to under a minute.", 0, "Faster replies")] }, knowledge);
+    expect(result.blocked).toEqual({ channel: "email", problem: expect.stringMatching(/client story/) });
+  });
+});

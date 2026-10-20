@@ -420,6 +420,8 @@ export type OutreachPlan = {
   excluded: { reason: string; count: number }[];
   /** Why channels a lead has are not used, in the owner's terms ("you asked for WhatsApp"); null or absent when the owner named none (channelPolicy.ts). */
   channelNote?: string | null;
+  /** Follow-up steps left out because they kept a claim the owner's information does not back (messages.ts groundSequences). */
+  droppedSteps?: { group: string; channel: AudienceChannel; step: number; problem: string }[];
   /**
    * aiCalls: personalization calls the start makes; aiCostUsd: the writing
    * already spent plus those calls; perCallUsd: one such call's cost, kept so

@@ -5,7 +5,7 @@ import { completeStructured } from "@/lib/ai/server/structuredCompletion";
 import { retrieveKnowledge } from "@/lib/crm/knowledge";
 import { recordUsage } from "./usage.server";
 import { parseWriterReply, writerReplyInstructions, WRITER_REPLY_SCHEMAS } from "./writerReply";
-import { CHANNEL_RULES, ensureSignOff, leadClaimProblem, personalLineProblem, personalMessageProblem, sequenceProblem, type LeadApproach } from "./messages";
+import { CHANNEL_RULES, ensureSignOff, leadClaimProblem, personalLineProblem, personalMessageProblem, sequenceClaimProblem, sequenceProblem, type LeadApproach } from "./messages";
 import { lineClash, PERSONAL_LINE_LIMITS, pitchProblems } from "./pitch";
 import { profileKnowledgeText } from "./profile";
 import type { AudienceChannel, BusinessProfile, PlannedStep } from "./schema";
@@ -116,6 +116,7 @@ export async function writeSequences(input: {
       const body = parseWriterReply(text, "outreach_sequences");
       const out: Partial<Record<AudienceChannel, PlannedStep[]>> = {};
       const pitch: string[] = [];
+      const claims: string[] = [];
       for (const channel of input.channels) {
         const entry = body.channels.find((item) => item.channel === channel);
         if (!entry) throw new Error(`Write the ${channel} messages too.`);
@@ -130,11 +131,17 @@ export async function writeSequences(input: {
         if (problem) throw new Error(problem);
         // Checked on what the writer wrote, before the sign-off the code adds (a role and business name are not a list).
         pitch.push(...steps.flatMap((step, index) => pitchProblems(channel, step.body, { first: index === 0 }).map((found) => `${channel} message ${index + 1}: ${found}`)));
+        // A client story, figure or speed the information does not hold, in any step (pilot F05): sent back to be rewritten.
+        claims.push(...signedSteps.flatMap((step, index) => {
+          const problem = sequenceClaimProblem(`${step.subject ?? ""}\n${step.body}`, input.context);
+          return problem ? [`${channel} message ${index + 1}: ${problem}`] : [];
+        }));
         out[channel] = signedSteps;
       }
-      if (pitch.length && answers <= PITCH_RETRIES) {
+      // After the retries the last version is kept; prepareOutreach then drops a follow-up or stops the plan (groundSequences).
+      if ((pitch.length || claims.length) && answers <= PITCH_RETRIES) {
         fallback = out;
-        throw new Error(pitch.join("; "));
+        throw new Error([...claims, ...pitch].join("; "));
       }
       parsed = out;
     },

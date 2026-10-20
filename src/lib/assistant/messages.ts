@@ -181,6 +181,112 @@ export function leadClaimProblem(text: string, facts: Readonly<Record<string, st
   return null;
 }
 
+/**
+ * Claims about the sender's results that a message may make only when the
+ * owner's information holds them (pilot fix F05): a client story or case
+ * study ("we recently helped a similar agency…", "we built an agent for one
+ * agency…", "our clients cut…"), a percentage, a multiplier ("3x") or a
+ * speed ("under a minute", "within 5 minutes"). A saved case study backs a
+ * story that shares its words, and each figure must be in the information as
+ * that figure.
+ */
+const CLIENT_STORY = [
+  /\b(?:we|i)(?:['’]ve| have)?\s+(?:recently\s+|just\s+|already\s+|once\s+)?(?:helped|worked with|partnered with|supported)\s+(?:a|an|one|another|several|many|other|similar|dozens|hundreds|over|more than|\d+)\b/i,
+  /\b(?:we|i)(?:['’]ve| have)?\s+(?:recently\s+|just\s+|already\s+|once\s+)?(?:built|set up|created|launched|automated|did|ran|designed)\b[^.!?\n]{0,60}?\bfor\s+(?:a|an|one|another|several|many|other|similar|\d+)\s+(?:similar\s+|local\s+|other\s+)?(?:client|customer|agency|agencies|clinic|clinics|company|companies|business|businesses|firm|firms|brokerage|brokerages|team|teams|realtor|realtors|brand|brands|store|stores)\b/i,
+  /\b(?:our|my)\s+(?:clients?|customers?|users?)\s+(?:have\s+|has\s+)?(?:saw|see|seen|got|get|cut|increased|doubled|tripled|reduced|grew|achieved|reported|saved|closed|went)\b/i,
+  /\b(?:a|one)\s+(?:client|customer)\s+of\s+(?:ours|mine)\b/i,
+  /\bcase\s+stud(?:y|ies)\b/i,
+];
+const PERCENT_CLAIM = /\b(\d+(?:\.\d+)?)\s?(?:%|percent\b)/gi;
+const MULTIPLIER_CLAIM = /\b(\d+(?:\.\d+)?)\s?(?:x|×)(?=[\s.,!?)]|$)|\b(\d+(?:\.\d+)?)\s+times\s+(?:more|faster|higher|better|as)\b/gi;
+const SPEED_CLAIM = /\b(?:in\s+under|in\s+less\s+than|under|less\s+than|within|in\s+just|in\s+only|in\s+about)\s+(a|an|one|\d+(?:\.\d+)?)\s*-?\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)\b/gi;
+const STORY_STOPWORDS = new Set(["that", "this", "with", "from", "your", "their", "they", "them", "have", "will", "would", "could", "about", "into", "just", "like", "more", "than", "what", "when", "which", "were", "been", "also", "only", "very", "help", "helped", "recently", "similar", "agency", "client", "clients", "business", "company"]);
+
+function sentences(text: string): string[] {
+  return text.split(/(?<=[.!?])\s+|\n+/).map((part) => part.trim()).filter(Boolean);
+}
+
+function storyWords(text: string): Set<string> {
+  return new Set(text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((word) => word.length >= 4 && !STORY_STOPWORDS.has(word)));
+}
+
+/** A speed as a comparable phrase: "under a minute" → "1 minute". */
+function speedKey(amount: string, unit: string): string {
+  const n = /^(?:a|an|one)$/i.test(amount) ? "1" : amount;
+  const u = unit.toLowerCase().replace(/^secs?$/, "second").replace(/^mins?$/, "minute").replace(/^hrs?$/, "hour").replace(/s$/, "");
+  return `${n} ${u}`;
+}
+
+function knownSpeeds(knowledge: string): Set<string> {
+  const out = new Set<string>();
+  for (const match of knowledge.matchAll(/\b(a|an|one|\d+(?:\.\d+)?)\s*-?\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)\b/gi)) out.add(speedKey(match[1]!, match[2]!));
+  return out;
+}
+
+export function sequenceClaimProblem(text: string, knowledge: string): string | null {
+  const plain = text.replace(/\{\{[^}]*\}\}/g, " ");
+  const known = knowledge.toLowerCase();
+  const story = sentences(plain).find((sentence) => CLIENT_STORY.some((pattern) => pattern.test(sentence)));
+  if (story) {
+    // Backed by a saved story it retells: a client-result sentence in the information sharing at least two of its words.
+    const words = storyWords(story);
+    const saved = sentences(knowledge).filter((sentence) => CLIENT_STORY.some((pattern) => pattern.test(sentence)) || /\b(?:result|results|case study|client|customer)\b/i.test(sentence));
+    if (!saved.some((sentence) => [...storyWords(sentence)].filter((word) => words.has(word)).length >= 2)) {
+      return `it tells a client story (“${story.slice(0, 120)}”) that your information does not contain; describe the offer instead, or save the case study first`;
+    }
+  }
+  for (const match of plain.matchAll(PERCENT_CLAIM)) {
+    if (!new RegExp(`\\b${match[1]!.replace(".", "\\.")}\\s?(?:%|percent\\b)`, "i").test(known)) return `it claims ${match[0].trim()}, a figure your information does not give`;
+  }
+  for (const match of plain.matchAll(MULTIPLIER_CLAIM)) {
+    const n = (match[1] ?? match[2])!.replace(".", "\\.");
+    if (!new RegExp(`\\b${n}\\s?(?:x|×|times)\\b`, "i").test(known)) return `it claims “${match[0].trim()}”, which your information does not give`;
+  }
+  const speeds = knownSpeeds(knowledge);
+  for (const match of plain.matchAll(SPEED_CLAIM)) {
+    if (!speeds.has(speedKey(match[1]!, match[2]!))) return `it promises “${match[0].trim()}”, a speed your information does not give`;
+  }
+  // A price or link the information does not hold, and anything said about the recipients (hiring, what they lack):
+  // a template goes to every lead of its group, so no one lead's facts back it.
+  return leadClaimProblem(plain, {}, knowledge);
+}
+
+/**
+ * Checks every step of a plan's sequences (sequenceClaimProblem) once the
+ * writer is done with them: a follow-up that still makes an unbacked claim
+ * is dropped (its wait moves to the next step, so the timing holds), and a
+ * first message that does stops the plan (`blocked`). The preview and the
+ * launch use what this returns.
+ */
+export function groundSequences(sequences: Partial<Record<AudienceChannel, PlannedStep[]>>, knowledge: string): {
+  sequences: Partial<Record<AudienceChannel, PlannedStep[]>>;
+  dropped: { channel: AudienceChannel; step: number; problem: string }[];
+  blocked: { channel: AudienceChannel; problem: string } | null;
+} {
+  const out: Partial<Record<AudienceChannel, PlannedStep[]>> = {};
+  const dropped: { channel: AudienceChannel; step: number; problem: string }[] = [];
+  let blocked: { channel: AudienceChannel; problem: string } | null = null;
+  for (const [channel, steps] of Object.entries(sequences) as [AudienceChannel, PlannedStep[]][]) {
+    const kept: PlannedStep[] = [];
+    let carriedWait = 0;
+    steps.forEach((step, index) => {
+      const problem = sequenceClaimProblem(`${step.subject ?? ""}\n${step.body}`, knowledge);
+      if (problem && index === 0) {
+        blocked ??= { channel, problem };
+        kept.push(step);
+      } else if (problem) {
+        dropped.push({ channel, step: index + 1, problem });
+        carriedWait += step.waitDays;
+      } else {
+        kept.push(index > 0 && carriedWait ? { ...step, waitDays: Math.min(30, step.waitDays + carriedWait) } : step);
+        if (index > 0) carriedWait = 0;
+      }
+    });
+    out[channel] = kept;
+  }
+  return { sequences: out, dropped, blocked };
+}
+
 /** A short, safe merge key for a run's per-lead line: "p_1a2b3c4d". */
 export function personalizationKey(runId: string): string {
   return `p_${runId.replace(/-/g, "").slice(0, 8)}`;

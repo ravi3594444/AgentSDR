@@ -441,6 +441,7 @@ type ProposalData = {
     limits: { maxLeads: number; emailPerMailboxPerDay: number | null; whatsappNewChatsPerDay: number | null; instagramNewChatsPerDay?: number | null };
     excluded: { reason: string; count: number }[];
     channelNote?: string | null;
+    droppedSteps?: { group: string; channel: string; step: number; problem: string }[];
     estimate: { aiCalls: number; aiCostUsd: number | null; days: number | null };
     autopilot: boolean;
     ownerRequest?: string | null;
@@ -568,6 +569,11 @@ function ProposalCard({ message, run, canManageAutopilot, lastReplyMode, onChang
       </p>
       {plan.excluded.length > 0 && (
         <p className="mt-1 text-paragraph-xs text-text-sub-600">Left out: {plan.excluded.slice(0, 3).map((e) => `${e.count} × ${e.reason}`).join("; ")}.</p>
+      )}
+      {plan.droppedSteps && plan.droppedSteps.length > 0 && (
+        <p className="mt-1 text-paragraph-xs text-text-sub-600" data-testid="plan-dropped-steps">
+          Not in the sequence, because it kept a claim your information does not back: {plan.droppedSteps.map((item) => `${CHANNEL_LABEL[item.channel] ?? item.channel} message ${item.step} for “${item.group}” (${item.problem})`).join("; ")}.
+        </p>
       )}
       {plan.groups && plan.groups.length > 0 && <SortingSummary plan={plan} />}
       <div className="mt-3 space-y-2">
