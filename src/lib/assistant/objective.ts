@@ -485,7 +485,7 @@ function spendText(spend: SpendBreakdown, capUsd: number): string {
  * sources counted in dollars, Tavily shown in credits, and the AI model's
  * own use, which is not counted.
  */
-export const SPEND_CAP_COVERS = "It counts Apify runs, Treg calls, browser minutes and AI web research (held at an estimate until the provider reports its cost); Tavily searches are shown in credits and limited by your daily Tavily cap; the AI model's own use for chat and writing is not counted (your AI provider bills it).";
+export const SPEND_CAP_COVERS = "It counts Apify runs, Treg calls, browser minutes and AI web research (held at an estimate until the provider reports its cost); Tavily searches are shown in credits and limited by your daily Tavily cap; the AI model's own use for chat, judging the leads found against your request, and writing is not counted (your AI provider bills it).";
 
 /** A request's spend for Activity and the chat: "$1.20 of $5.00 spent", or free sources only. */
 export function requestSpendLine(spentUsd: number, capUsd: number): string {
@@ -581,7 +581,7 @@ export function objectiveReportText(input: {
     `${plural(input.leads, "qualified lead")} (contactable and matching your request) of the ${input.leadTarget} wanted${remaining ? `; ${remaining} still to find` : ""}.${late}${routes.length ? ` Their contact routes (one person can have several): ${routes.join(", ")}.` : ""}`,
     input.funnel && input.funnel.found ? `${funnelText(input.funnel)}.` : null,
     `Searched — ${sourcesText(input.sources, input.web)}.`,
-    `Recorded spend: ${spendText(input.spend, input.spendCapUsd)}. The AI model's own use for chat and writing is not in this figure; your AI provider bills it.`,
+    `Recorded spend: ${spendText(input.spend, input.spendCapUsd)}. The AI model's own use for chat, judging leads and writing is not in this figure; your AI provider bills it.`,
     input.stillRunning ? `${plural(input.stillRunning, "search", "searches")} still running when it stopped; ${input.stillRunning === 1 ? "its" : "their"} leads are saved as ${input.stillRunning === 1 ? "it finishes" : "they finish"}.` : null,
     "Every lead found is kept: the lead lists are in this chat, and the people in Leads.",
   ].filter(Boolean).join(" ");

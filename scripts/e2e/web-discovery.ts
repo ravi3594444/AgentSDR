@@ -854,12 +854,14 @@ try {
     g.cappedRequest = capped.id;
   });
   // AI web research is held at its estimate ($0.05) before each search: the second no longer fits a $0.06 cap.
+  // Judging the leads found against the request is the model's own use, outside the cap (SPEND_CAP_COVERS): not counted here.
+  const researchCalls = (from: number) => aiCalls.slice(from).filter((call) => !JSON.stringify(call.body).includes("lead_sorting")).length;
   const aiBeforeG = aiCalls.length;
   const runG = await runJob(g.capped);
   const resultG = (runG.job.result ?? {}) as { note?: string | null; searches?: unknown[] };
   check("G: AI web research stops at the request's spend cap mid-search: the next search is not made, and the job goes on with what it found",
-    runG.job.status === "succeeded" && aiCalls.length - aiBeforeG === 1 && (resultG.searches ?? []).length === 1 && /The other 1 search was not made: this request's spend cap of \$0\.06 leaves \$0\.047, less than the \$0\.05 this needs\./.test(resultG.note ?? ""),
-    JSON.stringify({ status: runG.job.status, calls: aiCalls.length - aiBeforeG, note: resultG.note, error: runG.job.error }));
+    runG.job.status === "succeeded" && researchCalls(aiBeforeG) === 1 && (resultG.searches ?? []).length === 1 && /The other 1 search was not made: this request's spend cap of \$0\.06 leaves \$0\.047, less than the \$0\.05 this needs\./.test(resultG.note ?? ""),
+    JSON.stringify({ status: runG.job.status, calls: researchCalls(aiBeforeG), note: resultG.note, error: runG.job.error }));
   await runInOrganization(orgG!.id, async () => {
     const view = await objectiveView(g.cappedRequest);
     check("G: …the request's recorded spend is what the search reported, within its cap", view?.spentUsd === 0.013 && view.spendCapUsd === 0.06, JSON.stringify({ spent: view?.spentUsd, cap: view?.spendCapUsd }));

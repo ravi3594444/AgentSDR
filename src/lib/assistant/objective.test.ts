@@ -355,7 +355,7 @@ describe("wording", () => {
     const tavily = spendFromLedgers([{ ledger: "tavily_job", credits: 4 }, { ledger: "ai_search", costUsd: 0.05, state: "uncertain" }]);
     const text = objectiveReportText({ request: "x", reason: "sources_exhausted", detail: "", leads: 3, leadTarget: 25, routes: { email: 3, whatsapp: 0, linkedin: 0, instagram: 0 }, spend: tavily, spendCapUsd: 5, sources, web: null, stillRunning: 0 });
     expect(text).toMatch(/\$0\.05 of the \$5\.00 cap \(AI web research \$0\.05, \$0\.05 counted at an estimate because the provider did not report the cost\); 4 Tavily credits, limited by your daily Tavily cap/);
-    expect(text).toMatch(/AI model's own use for chat and writing is not in this figure/);
+    expect(text).toMatch(/AI model's own use for chat, judging leads and writing is not in this figure/);
     const freeOnly = objectiveReportText({ request: "x", reason: "sources_exhausted", detail: "", leads: 0, leadTarget: 25, routes: { email: 0, whatsapp: 0, linkedin: 0, instagram: 0 }, spend: spendFromLedgers([]), spendCapUsd: 0, sources, web: null, stillRunning: 0 });
     expect(freeOnly).toMatch(/Recorded spend: nothing \(free sources only\)/);
     const note = continuationNote({ request: "x", n: 1, leads: 0, leadTarget: 25, spend: spendFromLedgers([{ ledger: "treg", status: "succeeded", costUsd: 0.02, ceilingUsd: 0.5 }]), spendCapUsd: 0, msLeft: 60_000, sources, web: null });
