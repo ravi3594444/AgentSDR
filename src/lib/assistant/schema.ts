@@ -413,6 +413,8 @@ export type OutreachPlan = {
   limits: { maxLeads: number; emailPerMailboxPerDay: number | null; whatsappNewChatsPerDay: number | null; instagramNewChatsPerDay?: number | null };
   /** Leads left out and why, counted by reason. */
   excluded: { reason: string; count: number }[];
+  /** Why channels a lead has are not used, in the owner's terms ("you asked for WhatsApp"); null or absent when the owner named none (channelPolicy.ts). */
+  channelNote?: string | null;
   /**
    * aiCalls: personalization calls the start makes; aiCostUsd: the writing
    * already spent plus those calls; perCallUsd: one such call's cost, kept so

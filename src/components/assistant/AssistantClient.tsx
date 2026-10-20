@@ -434,6 +434,7 @@ type ProposalData = {
     skipped?: { personId: string; name: string; reason: string }[];
     limits: { maxLeads: number; emailPerMailboxPerDay: number | null; whatsappNewChatsPerDay: number | null; instagramNewChatsPerDay?: number | null };
     excluded: { reason: string; count: number }[];
+    channelNote?: string | null;
     estimate: { aiCalls: number; aiCostUsd: number | null; days: number | null };
     autopilot: boolean;
     ownerRequest?: string | null;
@@ -554,6 +555,9 @@ function ProposalCard({ message, run, canManageAutopilot, lastReplyMode, onChang
           plan.limits.instagramNewChatsPerDay ? `${plan.limits.instagramNewChatsPerDay} initial Instagram DMs per account in 24 hours` : null,
         ].filter(Boolean).join(", ") || "the connected channels' limits"}. Sending rules, sending hours and Do Not Contact apply. Sending uses your own accounts.
         {perChannel.instagram ? " Instagram sends one initial DM; replies follow the reply mode you choose." : ""}
+      </p>
+      <p className="mt-1 text-paragraph-xs text-text-sub-600" data-testid="plan-channel-scope">
+        {plan.channelNote ? `Only the channels you named: ${plan.channelNote}.` : "Each lead gets its best ready channel."}
       </p>
       {plan.excluded.length > 0 && (
         <p className="mt-1 text-paragraph-xs text-text-sub-600">Left out: {plan.excluded.slice(0, 3).map((e) => `${e.count} × ${e.reason}`).join("; ")}.</p>

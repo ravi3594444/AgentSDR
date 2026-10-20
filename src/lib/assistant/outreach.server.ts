@@ -27,6 +27,7 @@ import { requeueRunAutopilot } from "./autopilotRun.server";
 import { eligibleAudienceMembers, memberInsights, summarizeAudience } from "./audiences.server";
 import { orderedFindings } from "./qualification";
 import { countReasons } from "./audiences";
+import { CHANNEL_NAMES, channelPolicy, unreachableReason } from "./channelPolicy";
 import { availableTokens, leadTextKey, MAX_PERSONAL, perLeadSteps, personalizationKey, settleGroups, templateTokens, type LeadApproach } from "./messages";
 import { displayBusinessName, pitchProblems } from "./pitch";
 import { getBusinessProfile } from "./profile.server";
@@ -62,7 +63,6 @@ const HARD_MAX_LEADS = 1_000;
 /** Leads sorted per model call, and first messages written per call. */
 const SORT_BATCH = 25;
 const PERSONAL_BATCH = 5;
-const CHANNEL_ORDER: AudienceChannel[] = ["email", "whatsapp", "linkedin", "instagram"];
 
 export class OutreachError extends Error {
   constructor(message: string) {
@@ -227,11 +227,11 @@ export async function prepareOutreach(input: PrepareInput): Promise<Proposal> {
   const base = input.basedOnRunId ? await getRun(input.basedOnRunId) : null;
   if (input.basedOnRunId && !base) throw new OutreachError("That earlier run does not exist.");
   const availability = await channelAvailability();
-  const wanted = (input.channels?.length ? input.channels : base ? base.channels : profile.preferredChannels?.length ? profile.preferredChannels : CHANNEL_ORDER)
-    .filter((channel, index, all) => CHANNEL_ORDER.includes(channel) && all.indexOf(channel) === index);
-  const usable = wanted.filter((channel) => availability[channel].available);
+  // The owner's words restrict the channels; the model's list, an earlier run and the saved preference only order them.
+  const policy = channelPolicy({ requested: input.channels ?? [], ownerText: input.ownerRequest ?? "", preferred: profile.preferredChannels ?? [], base: base?.channels ?? [] });
+  const usable = policy.order.filter((channel) => availability[channel].available);
   if (!usable.length) {
-    throw new OutreachError(`None of the chosen channels can send yet: ${wanted.map((channel) => `${channel} — ${availability[channel].reason}`).join("; ")}.`);
+    throw new OutreachError(`None of the ${policy.restricted ? "channels you asked for" : "channels"} can send yet: ${policy.order.map((channel) => `${CHANNEL_NAMES[channel]} — ${availability[channel].reason}`).join("; ")}.`);
   }
 
   const maxLeads = Math.min(HARD_MAX_LEADS, Math.max(1, Math.round(input.maxLeads ?? Math.min(DEFAULT_MAX_LEADS, audience.eligible))));
@@ -242,12 +242,14 @@ export async function prepareOutreach(input: PrepareInput): Promise<Proposal> {
     if (!member.personId) continue;
     const channel = usable.find((candidate) => member.channels.includes(candidate));
     if (!channel) {
-      unassigned.push(`reachable only by ${member.channels.join(" or ")}, which ${member.channels.length > 1 ? "are" : "is"} not used in this run`);
+      unassigned.push(unreachableReason(member.channels, policy, availability));
       continue;
     }
     if (assignments.length < maxLeads) assignments.push({ personId: member.personId, channel });
   }
-  if (!assignments.length) throw new OutreachError(`No lead in this audience can be reached on ${usable.join(" or ")}.`);
+  if (!assignments.length) {
+    throw new OutreachError(`No lead in this audience can be reached on ${usable.map((channel) => CHANNEL_NAMES[channel]).join(" or ")}: ${countReasons(unassigned).slice(0, 3).map((item) => `${item.count} ${item.reason}`).join("; ")}.`);
+  }
 
   const runId = randomUUID();
   const key = personalizationKey(runId);
@@ -422,7 +424,8 @@ export async function prepareOutreach(input: PrepareInput): Promise<Proposal> {
       whatsappNewChatsPerDay: availability.whatsapp.available ? availability.whatsapp.perSenderPerDay : null,
       instagramNewChatsPerDay: channels.includes("instagram") && availability.instagram.available ? availability.instagram.perSenderPerDay : null,
     },
-    excluded: [...audience.excluded, ...countReasons(unassigned)],
+    excluded: [...audience.excluded, ...countReasons(unassigned)].sort((a, b) => b.count - a.count),
+    channelNote: policy.note,
     estimate: {
       aiCalls: personalizeCalls,
       aiCostUsd: perCall !== null ? Number((perCall * personalizeCalls + (cost.usd ?? 0)).toFixed(4)) : null,

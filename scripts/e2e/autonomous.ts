@@ -385,7 +385,7 @@ await runInOrganization(org2!.id, async () => {
   check("restart: the launch reuses the campaign it had created and recorded, never a second one, and enrolls nobody twice",
     campaignId === halfLaunched!.id && namesake.length === 1 && new Set(campaignLeads.map((lead) => lead.personId)).size === campaignLeads.length,
     JSON.stringify({ campaignId, halfLaunched: halfLaunched!.id, campaigns: namesake.length }));
-  const launchReports = (await events()).filter((event) => /Outreach started\. linkedin: started with 43 leads/.test(event.content));
+  const launchReports = (await events()).filter((event) => /Outreach started: campaigns activated\. linkedin: started with 43 leads/.test(event.content));
   check("restart: the launch is reported once, under its report key", launchReports.length === 1 && relaunched?.reportKey === `assistant_job:${launchJob!.id}:succeeded` && relaunched?.reportedAt instanceof Date && (launchReports[0]!.toolResult as { reportKey?: string } | null)?.reportKey === relaunched?.reportKey, `${launchReports.length}`);
 
   // ------------------------------------------------------------ Stop pressed while the plan is launching

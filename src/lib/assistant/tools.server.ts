@@ -37,6 +37,7 @@ import { addAudienceMembers, createAudience, listAudiences, summarizeAudience } 
 import { inquiryRepliesRequested, outreachRequested, outreachRequestProblem } from "./agent";
 import { answerDecision, DecisionError, listOpenDecisions } from "./decisions.server";
 import { channelAvailability, listRuns, OutreachError, prepareOutreach, reportRun, setRunPaused, setRunReplyMode, stopRun } from "./outreach.server";
+import { channelList, channelPolicy, planChannelsLine } from "./channelPolicy";
 import { mergeProfile, PROFILE_LABELS, profileChanges } from "./profile";
 import { businessContext } from "./businessContext";
 import { businessSources } from "./businessContext.server";
@@ -197,6 +198,12 @@ function uuid(args: Record<string, unknown>, key: string, required = true): stri
   const value = text(args, key, required);
   if (value !== undefined && !/^[0-9a-f-]{36}$/i.test(value)) throw new ToolArgumentError(`${key} must be an id from an earlier result`);
   return value;
+}
+
+/** Which channels the plan a search prepares will use, from the policy that plan applies (channelPolicy.ts). */
+function followUpChannels(contactAfter: { channels: AudienceChannel[] | null; ownerRequest: string }): string {
+  const policy = channelPolicy({ requested: contactAfter.channels ?? [], ownerText: contactAfter.ownerRequest });
+  return policy.restricted ? `only on ${channelList(policy.order)}, because ${policy.note}` : "with each lead on its best ready channel";
 }
 
 function channels(args: Record<string, unknown>): AudienceChannel[] | undefined {
@@ -439,7 +446,7 @@ export const TOOLS: Record<string, Tool> = {
 
   find_leads: {
     description: "Search public Google Maps business listings for leads matching the owner's target customers, then read each business's own website for published contact details. Takes a few minutes and runs in the background; the chat shows its progress and announces the result. It runs on the built-in Google Maps scraper (no cost per search). Apify's Google Maps Actor (paid from the owner's Apify account) is used only when the owner asks for Apify (provider 'apify'), or as the fallback the organization approved when the built-in scraper is not set up or fails; with neither, website search takes it when that is on. The result names the source and provider, and the reason. Google Maps is one source however many cities or providers search it. Only businesses with a public listing are found.",
-    arguments: "what (kind of business, e.g. 'dental clinics'), where (city/region/country), maxResults (5-200, default 50), language (two letters, optional), provider (optional: 'apify' only when the owner asked for Apify), contactAfter (true only when the owner asked to contact, email or message the leads found: the outreach plan is then prepared automatically when the search finishes), channels (optional, with contactAfter: array of email|whatsapp|linkedin|instagram)",
+    arguments: "what (kind of business, e.g. 'dental clinics'), where (city/region/country), maxResults (5-200, default 50), language (two letters, optional), provider (optional: 'apify' only when the owner asked for Apify), contactAfter (true only when the owner asked to contact, email or message the leads found: the outreach plan is then prepared automatically when the search finishes), channels (optional, with contactAfter: array of email|whatsapp|linkedin|instagram, only when the owner's own words named how to contact them; otherwise leave it out and each lead gets its best ready route)",
     run: async (args, context) => {
       const profile = await getBusinessProfile();
       const criteria = normalizeCriteria(args, profile.language ?? "en");
@@ -458,7 +465,7 @@ export const TOOLS: Record<string, Tool> = {
         const source = started.provider === "website" ? "business websites and directories (no Google Maps search is available)" : sourceLabel("maps", started.provider);
         return withControls({
           ok: true,
-          summary: `${started.waiting ? "Queued" : "Search started"} for “${started.phrase}” on ${source} (up to ${criteria.maxResults} businesses); job ${started.jobId}, audience ${started.audienceId}. It runs in the background; results are announced in the chat when done.${contactAfter ? " The outreach plan will be prepared automatically when it finishes." : ""}${started.note ? ` ${started.note}` : ""}`,
+          summary: `${started.waiting ? "Queued" : "Search started"} for “${started.phrase}” on ${source} (up to ${criteria.maxResults} businesses); job ${started.jobId}, audience ${started.audienceId}. It runs in the background; results are announced in the chat when done.${contactAfter ? ` The outreach plan will be prepared automatically when it finishes, ${followUpChannels(contactAfter)}.` : ""}${started.note ? ` ${started.note}` : ""}`,
           display: `${started.waiting ? "Queued" : "Searching"} ${source} for “${started.phrase}”`,
           data: { jobId: started.jobId, audienceId: started.audienceId, phrase: started.phrase, criteria, provider: started.provider, source, waiting: Boolean(started.waiting), note: started.note },
         }, objective.line);
@@ -472,7 +479,7 @@ export const TOOLS: Record<string, Tool> = {
   find_instagram_prospects: {
     available: (features) => features.apify_discovery,
     description: "Find Instagram accounts that post about the owner's kind of customers in a place, through Apify (the organization's approved Instagram Actors, within its budget; paid from the owner's Apify account): public posts under hashtags made from the customer type and place (plus any the owner names), then the accounts' public profiles and the websites they list, for emails and phones they publish. Instagram profiles can receive one initial DM through a connected Unipile Instagram account after the outreach plan is approved, within Instagram sending rules; recipient restrictions may still prevent delivery. Published emails and phones remain alternative channels. Hashtags do not filter by place: accounts whose post or profile does not name the place are marked location unknown. Without Apify available, website search takes the request when it is on (same request), else it says nothing was searched. Runs in the background and announces the result.",
-    arguments: "what (kind of customer or business, e.g. 'home bakers'), where (city/area), hashtags (optional array of hashtags the owner named), maxResults (5-100 accounts, default 30), contactAfter (true only when the owner asked to contact the people found: the plan uses Instagram when connected, or the requested supported contact channels), channels (optional, with contactAfter: array of instagram|email|whatsapp|linkedin)",
+    arguments: "what (kind of customer or business, e.g. 'home bakers'), where (city/area), hashtags (optional array of hashtags the owner named), maxResults (5-100 accounts, default 30), contactAfter (true only when the owner asked to contact the people found: the plan uses Instagram when connected, or the requested supported contact channels), channels (optional, with contactAfter: array of instagram|email|whatsapp|linkedin, only when the owner's own words named how to contact them; otherwise leave it out and each lead gets its best ready route)",
     run: async (args, context) => {
       if (!(await featureEnabled("apify_discovery"))) return { ok: false, summary: new FeatureDisabledError("apify_discovery").message };
       const profile = await getBusinessProfile();
@@ -497,7 +504,7 @@ export const TOOLS: Record<string, Tool> = {
             : `Instagram search started for ${started.phrase} through Apify`;
         return withControls({
           ok: true,
-          summary: `${via}; job ${started.jobId}, audience ${started.audienceId}. Results are announced in the chat when done.${contactAfter ? " The outreach plan will be prepared automatically for those who can be contacted." : ""} ${started.note ?? ""}`.trim(),
+          summary: `${via}; job ${started.jobId}, audience ${started.audienceId}. Results are announced in the chat when done.${contactAfter ? ` The outreach plan will be prepared automatically for those who can be contacted, ${followUpChannels(contactAfter)}.` : ""} ${started.note ?? ""}`.trim(),
           data: { jobId: started.jobId, audienceId: started.audienceId, phrase: started.phrase, provider: started.provider, note: started.note },
         }, objective.line);
       } catch (error) {
@@ -510,7 +517,7 @@ export const TOOLS: Record<string, Tool> = {
   find_social_leads: {
     available: (features) => features.apify_discovery,
     description: "Find businesses on a social platform by keyword and place, through Apify (the organization's approved Actors, within its budget; paid from the owner's Apify account): platform 'facebook' — Facebook business pages with the phone, email, website and address each publishes; 'linkedin' — LinkedIn companies (no emails on LinkedIn: contacts come from reading each company's own website; the Actor reads LinkedIn without logging in, which LinkedIn's terms do not allow, so the owner approves it knowingly); 'instagram' — Instagram accounts from Instagram's own account search, then their public profiles. Each lead's website is read for the contacts it publishes. Finding a page or account is NOT a way to contact it: Facebook pages need a published email or phone. Instagram profiles can receive one initial DM through a connected Unipile Instagram account after plan approval, subject to sending rules and recipient restrictions. When the platform's Actor is not approved or the budget is used, it says so and nothing is searched. Runs in the background and announces the result.",
-    arguments: "platform (facebook|linkedin|instagram), what (kind of business, e.g. 'real estate agencies'), where (city/area), maxResults (5-100, default 30), contactAfter (true only when the owner asked to contact the people found), channels (optional, with contactAfter: array of email|whatsapp|linkedin|instagram)",
+    arguments: "platform (facebook|linkedin|instagram), what (kind of business, e.g. 'real estate agencies'), where (city/area), maxResults (5-100, default 30), contactAfter (true only when the owner asked to contact the people found), channels (optional, with contactAfter: array of email|whatsapp|linkedin|instagram, only when the owner's own words named how to contact them; otherwise leave it out and each lead gets its best ready route)",
     run: async (args, context) => {
       if (!(await featureEnabled("apify_discovery"))) return { ok: false, summary: new FeatureDisabledError("apify_discovery").message };
       const platform = args.platform;
@@ -532,7 +539,7 @@ export const TOOLS: Record<string, Tool> = {
         const name = platform === "facebook" ? "Facebook" : platform === "linkedin" ? "LinkedIn" : "Instagram";
         return withControls({
           ok: true,
-          summary: `${name} search ${started.waiting ? "queued (it waits for a free Apify run slot and starts by itself)" : "started"} for “${what}” in ${where} through Apify (up to ${maxResults}); job ${started.jobId}, audience ${started.audienceId}. Results are announced in the chat when done.${contactAfter ? " The outreach plan will be prepared automatically for those who can be contacted." : ""} ${started.note ?? ""}`.trim(),
+          summary: `${name} search ${started.waiting ? "queued (it waits for a free Apify run slot and starts by itself)" : "started"} for “${what}” in ${where} through Apify (up to ${maxResults}); job ${started.jobId}, audience ${started.audienceId}. Results are announced in the chat when done.${contactAfter ? ` The outreach plan will be prepared automatically for those who can be contacted, ${followUpChannels(contactAfter)}.` : ""} ${started.note ?? ""}`.trim(),
           data: { jobId: started.jobId, audienceId: started.audienceId, phrase: started.phrase, provider: started.provider, note: started.note },
         }, objective.line);
       } catch (error) {
@@ -545,7 +552,7 @@ export const TOOLS: Record<string, Tool> = {
   find_customers_on_web: {
     available: (features) => features.web_discovery,
     description: "Find customers matching the owner's description of them with a real web search provider (TinyFish when connected, free within its daily allowance; else Tavily when the organization saved a Tavily key; else its OpenRouter connection with its web plugin, or AI/ML API's web research model; never a model answering from memory): only the pages the provider returned are used. It reads the businesses' own websites and the local directories or lists the search returned (and the business websites those directories link to) for the emails and phones they publish, and keeps each contact with the page it came from; it never guesses an email, phone, person or page, and people already in the leads are reused, not duplicated. Public Instagram profiles and posts the search returns are read (a profile's website, a post's comments) only when Instagram is connected (the Instagram feature on and an account linked); otherwise they are skipped. Instagram-only profiles can receive an initial DM after plan approval when an Instagram sender is connected. Up to 3 searches (free on TinyFish, paid on the others); runs in the background, waits when TinyFish's free allowance asks it to, and announces the result in the chat. Needs the Website and directory search feature.",
-    arguments: "customers (who the customers are, from the owner's words or the business profile), where (city/area/region), maxResults (5-40 business websites to read, default 20), contactAfter (true only when the owner asked to contact, email or message the leads found: the outreach plan is then prepared automatically when the search finishes), channels (optional, with contactAfter: array of email|whatsapp|linkedin|instagram)",
+    arguments: "customers (who the customers are, from the owner's words or the business profile), where (city/area/region), maxResults (5-40 business websites to read, default 20), contactAfter (true only when the owner asked to contact, email or message the leads found: the outreach plan is then prepared automatically when the search finishes), channels (optional, with contactAfter: array of email|whatsapp|linkedin|instagram, only when the owner's own words named how to contact them; otherwise leave it out and each lead gets its best ready route)",
     run: async (args, context) => {
       if (!(await featureEnabled("web_discovery"))) return { ok: false, summary: new FeatureDisabledError("web_discovery").message };
       const availability = await webSearchAvailability();
@@ -571,7 +578,7 @@ export const TOOLS: Record<string, Tool> = {
         const provider = webSearchProviderName(started.provider);
         return withControls({
           ok: true,
-          summary: `Web search started for “${started.phrase}” with ${provider} (${started.model}): ${started.queries.length} searches, up to ${criteria.maxResults} business websites; job ${started.jobId}, audience ${started.audienceId}.${instagram} Results are announced in the chat when done.${contactAfter ? " The outreach plan will be prepared automatically when it finishes." : ""}`,
+          summary: `Web search started for “${started.phrase}” with ${provider} (${started.model}): ${started.queries.length} searches, up to ${criteria.maxResults} business websites; job ${started.jobId}, audience ${started.audienceId}.${instagram} Results are announced in the chat when done.${contactAfter ? ` The outreach plan will be prepared automatically when it finishes, ${followUpChannels(contactAfter)}.` : ""}`,
           display: `Searching the web for “${started.phrase}” (${provider}, ${started.queries.length} searches, up to ${criteria.maxResults} websites).${instagram}`,
           data: { jobId: started.jobId, audienceId: started.audienceId, phrase: started.phrase, queries: started.queries, provider: started.provider, model: started.model, instagram: started.instagram, criteria },
         }, objective.line);
@@ -668,7 +675,7 @@ export const TOOLS: Record<string, Tool> = {
 
   add_contacts: {
     description: "Add people the owner gave in the chat (phone numbers, emails or LinkedIn profile links, with a name or company when given) as a new lead list, so outreach can be prepared for them (contactAfter true when the owner asked for it: the plan follows automatically). Only contacts the owner wrote, that are on a page read with read_webpage, or that a successful treg_call returned. A phone number without + and a country code is refused unless the organization has a Default phone country: ask the owner which country, never guess it.",
-    arguments: "contacts (array of objects with name, phone, email, linkedinUrl, company; each needs a phone, email or linkedinUrl; up to 50), listName (optional), contactAfter (true when the owner asked to contact, message or pitch these people: the outreach plan is then prepared right after), channels (optional, with contactAfter: array of email|whatsapp|linkedin|instagram)",
+    arguments: "contacts (array of objects with name, phone, email, linkedinUrl, company; each needs a phone, email or linkedinUrl; up to 50), listName (optional), contactAfter (true when the owner asked to contact, message or pitch these people: the outreach plan is then prepared right after), channels (optional, with contactAfter: array of email|whatsapp|linkedin|instagram, only when the owner's own words named how to contact them; otherwise leave it out and each lead gets its best ready route)",
     run: async (args, context) => {
       if (!Array.isArray(args.contacts) || !args.contacts.length) throw new ToolArgumentError("contacts must be a non-empty array");
       if (args.contacts.length > MAX_CHAT_CONTACTS) throw new ToolArgumentError(`at most ${MAX_CHAT_CONTACTS} contacts at once; for more, attach a CSV or Excel list`);
@@ -971,7 +978,7 @@ export const TOOLS: Record<string, Tool> = {
       });
       return withControls({
         ok: true,
-        summary: `LinkedIn search started for “${keywords}” (up to ${maxResults} people); job ${started.jobId}, audience ${started.audienceId}. Results are announced in the chat when done.`,
+        summary: `LinkedIn search started for “${keywords}” (up to ${maxResults} people); job ${started.jobId}, audience ${started.audienceId}. Results are announced in the chat when done.${args.contactAfter === true ? " The outreach plan will be prepared automatically when it finishes, on LinkedIn: the only route these profiles have." : ""}`,
         display: `LinkedIn search started for “${keywords}” (up to ${maxResults} people).`,
         data: { jobId: started.jobId, audienceId: started.audienceId, keywords },
       }, objective.line);
@@ -1080,7 +1087,7 @@ export const TOOLS: Record<string, Tool> = {
 
   prepare_outreach: {
     description: "Write the outreach for a lead list and plan the run. It first sorts the leads by itself: what kind of lead each is (each kind gets its own messages), which leads deserve a first message written for them alone, and which clearly do not fit the owner's offer (left out with the reason). Then it plans which channel each lead gets, the messages (with real samples), daily limits, how long it takes and the AI cost. Creates nothing and sends nothing; the owner reviews the plan, chooses Automatic or Review replies and presses Start. Only when the owner asked for outreach (or said yes to your offer of it). To contact more people with an earlier run's messages, pass basedOnRunId (a new plan the owner approves again).",
-    arguments: "audienceId; channels (optional array of email|whatsapp|linkedin|instagram in order of preference); maxLeads (optional, default up to 100); autopilot (optional true/false: propose Automatic replies); instructions (optional text, e.g. tone or angle for this run); basedOnRunId (optional: reuse that run's messages); includeSkipped (optional true: also contact the leads the sorting leaves out, when the owner asks)",
+    arguments: "audienceId; channels (optional array of email|whatsapp|linkedin|instagram, only when the owner's own words named how to contact them; otherwise leave it out and each lead gets its best ready route: a list the owner did not ask for only changes the order); maxLeads (optional, default up to 100); autopilot (optional true/false: propose Automatic replies); instructions (optional text, e.g. tone or angle for this run); basedOnRunId (optional: reuse that run's messages); includeSkipped (optional true: also contact the leads the sorting leaves out, when the owner asks)",
     run: async (args, context) => {
       const request = context.authorizedBy === "search" ? context.ownerText : requireOutreachRequest(context);
       if (args.includeSkipped !== undefined && typeof args.includeSkipped !== "boolean") throw new ToolArgumentError("includeSkipped must be true or false");
@@ -1103,14 +1110,13 @@ export const TOOLS: Record<string, Tool> = {
           threadId: context.threadId,
           userId: context.userId,
         });
-        const perChannel = proposal.plan.assignments.reduce<Record<string, number>>((acc, a) => ({ ...acc, [a.channel]: (acc[a.channel] ?? 0) + 1 }), {});
         const plan = proposal.plan;
         const sorted = plan.groups?.length
           ? ` Sorted into ${plan.groups.map((group) => `“${group.label}” (${group.count})`).join(", ")}; ${plan.personal?.length ?? 0} written to individually; ${plan.skipped?.length ?? 0} left out${plan.skipped?.length ? ` (${[...new Set(plan.skipped.map((item) => item.reason))].slice(0, 3).join("; ")})` : ""}.`
           : "";
         return {
           ok: true,
-          summary: `Plan ${proposal.runId} ready for “${proposal.name}”: ${plan.assignments.length} leads (${Object.entries(perChannel).map(([c, n]) => `${c} ${n}`).join(", ")}), about ${plan.estimate.days ?? "?"} days, AI cost about ${plan.estimate.aiCostUsd === null ? "unknown" : `$${plan.estimate.aiCostUsd}`}.${sorted}${context.autonomous ? " Autonomous mode: it starts on its own right after this unless a daily cap stops it; the next event line says which." : " It is shown to the owner with sample messages and a Start button; nothing is sent until they press Start."}`,
+          summary: `Plan ${proposal.runId} ready for “${proposal.name}”: ${planChannelsLine(plan)}, about ${plan.estimate.days ?? "?"} days, AI cost about ${plan.estimate.aiCostUsd === null ? "unknown" : `$${plan.estimate.aiCostUsd}`}.${sorted}${context.autonomous ? " Autonomous mode: it starts on its own right after this unless a daily cap stops it; the next event line says which." : " It is shown to the owner with sample messages and a Start button; nothing is sent until they press Start."}`,
           data: proposal as unknown as Record<string, unknown>,
         };
       } catch (error) {

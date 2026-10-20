@@ -13,7 +13,8 @@ import { failObjective, jobRequestId, nudgeObjective, objectiveForJob, objective
 import { runObjectiveStep } from "./objectiveDriver.server";
 import { runOutreachStartStep } from "./outreach.server";
 import { applyRequestApproval } from "./requestApproval.server";
-import { assistantJobs } from "./schema";
+import { assistantJobs, type OutreachPlan } from "./schema";
+import { planChannelsLine } from "./channelPolicy";
 import { addMessage, claimThread, releaseThread, touchThread } from "./threads.server";
 import { claimJobReport, followUpDue, onAssistantJobFinished, registerAssistantJobHandler, type AssistantJob, type StepHandler } from "./worker";
 
@@ -98,7 +99,8 @@ function outreachMessage(job: AssistantJob): string {
       : `${launch.channel}: started with ${launch.added} leads${launch.skipped ? ` (${launch.skipped} skipped)` : ""}`)
     // A launch whose own summary was lost (see runOutreachStartStep): what the run recorded, without per-channel counts.
     : [`started on ${(result.started ?? []).join(", ") || "no channel"} (the lead counts are on the plan)`, ...(result.problems ? [`not started — ${result.problems}`] : [])];
-  return `Outreach started. ${lines.join("; ")}.${result.autopilot ? " Ordinary replies will be answered automatically; anything unusual waits for you in Action required." : " Replies wait for you in Action required."} Messages go out within each channel's sending hours and daily limits.`;
+  // Started means the campaigns are active, not that anything was sent: each sender still waits for its hours, limits and gaps.
+  return `Outreach started: campaigns activated. ${lines.join("; ")}.${result.autopilot ? " Ordinary replies will be answered automatically; anything unusual waits for you in Action required." : " Replies wait for you in Action required."} Nothing is sent until each channel's sender is allowed to send (its sending hours, daily limits and gaps); sends appear on the plan card as they are recorded.`;
 }
 
 let registered = false;
@@ -245,6 +247,9 @@ async function followUpSearch(job: AssistantJob, threadId: string, contactAfter:
           await finish();
           if (prepared.ok) {
             const runId = typeof prepared.data?.runId === "string" ? prepared.data.runId : null;
+            // Its channels and counts as the plan has them, so the chat never names a channel the plan does not use.
+            const plan = (prepared.data as { plan?: OutreachPlan } | undefined)?.plan;
+            const planned = plan?.assignments ? `: ${planChannelsLine(plan)}` : "";
             // Autonomous mode: every start goes through the capped path (autoStartPlan posts why one waits).
             const tried = autonomous && runId ? await autoStartPlan(threadId, runId) : null;
             // Switched off at the last moment: treated as without Autonomous mode.
@@ -260,8 +265,8 @@ async function followUpSearch(job: AssistantJob, threadId: string, contactAfter:
                 threadId,
                 role: "event",
                 content: approval.reason
-                  ? `The outreach plan for these leads is ready below. It was not started with the rest of your request because ${approval.reason}: check it and press Start. Nothing is sent before that.`
-                  : "The outreach plan for these leads is ready below. Check the audience, the sample messages and the limits, then press Start. Nothing is sent before that.",
+                  ? `The outreach plan for these leads is ready below${planned}. It was not started with the rest of your request because ${approval.reason}: check it and press Start. Nothing is sent before that.`
+                  : `The outreach plan for these leads is ready below${planned}. Check the audience, the sample messages and the limits, then press Start. Nothing is sent before that.`,
               });
             }
           }
