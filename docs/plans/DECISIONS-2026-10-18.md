@@ -125,3 +125,17 @@ stays eligible).
 | 80 | `docker/deploy.sh` stops before switching images on any failed backup, build or migration; after the switch it checks `/sign-in`, the running image's revision label and the worker's start line, and puts the previous image back on any failure. The migrations stay: they are additive and the previous image runs on them | A failed migration used to switch images anyway (the old loop's `break` left it exiting 0) | Leave the switch and rollback to the operator |
 | 81 | The deploy builds with a 4096 MB heap per Node process (`NEXT_BUILD_HEAP_MB`, the Dockerfile's), requires MemAvailable + SwapFree ≥ 7 GB with the Maps scraper still running, and stops the scraper during the build | Measured on `ab84f96`: the build takes about 6.0 GB with a 4096 MB heap, and with 3072 MB a webpack worker runs out of heap. The VM has 8 GB and has run out of memory during a build before, so in practice it needs the 4 GB swap file the script describes | Build on another machine and push the image |
 
+
+## Pilot fixes (20 October, `docs/plans/PILOT_FIXES_2026-10-19.md`)
+
+The owner chose 82, 83, 84 and 86; the others follow from the fix doc.
+
+| # | Default | Why | Alternative |
+| --- | --- | --- | --- |
+| 82 | A plan uses only the channels the owner's own words name ("message them on WhatsApp", "email only", "don't email them"). A list the model passes, an earlier run's channels and saved preferred channels only set the order | The pilot's general request became WhatsApp-only because the model passed `["whatsapp"]`, and email-only leads were dropped | Treat any passed list as exclusive |
+| 83 | Leads are judged against the owner's request when a search serving it ends. The existing sorter does it, 25 per call. Verdicts are stored, and only matching contactable people count toward the target. Judging is the model's own use, outside the spend cap, and every cap wording says so | 50 contactable LinkedIn profiles, 3 of them fitting, "completed" a target of 25 | Judge only at plan time |
+| 84 | A follow-up step that still makes an unbacked claim after the writer's retries is dropped (its wait moves to the next step); a first message that does stops the plan | A sequence must never send a client story or figure the owner's information does not hold | Block the whole plan for any step |
+| 85 | For a request without websites: a website found and read is no match; one listed but not checked, a domain on record or nothing known is unconfirmed; "none listed on Maps" counts, with that uncertainty in its reason. It applies only where the sorter says the request asks it of that lead | An empty Maps field and a failed fetch are not proof of no website, and a request can list several kinds of lead | Treat a missing website field as proof |
+| 86 | A Do Not Contact record waits in Action required until the owner presses Mark reviewed, which moves it to idle and keeps Do Not Contact; a new reply brings it back | The reply that asked to stop deserves a read, and nothing else can be done with it | Clear it automatically when Do Not Contact is set |
+| 87 | A search tool called again for the same request with the same arguments returns the earlier search unless that one failed or was cancelled | A Retry after a failed answer started the same (possibly paid) search twice | Rely on the transcript |
+| 88 | Contacts the owner typed into the chat count as a match for the request; contacts the assistant found on a page are judged | The owner chose them | Judge every contact |

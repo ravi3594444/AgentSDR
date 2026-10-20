@@ -506,3 +506,34 @@ Retain F01–F09 and their acceptance criteria. Add F10 and F11 to the existing 
 
 The implementing session should report addressed IDs, root causes, regressions and exact commit. Mark this audit as recorded, not implemented. Recheck the named existing plans after the owner's normal deployment; test any new outbound path only against fake providers or a specifically approved test recipient.
 
+
+## 8. Implementation status, 20 October
+
+On branch `claude/dreamy-fermi-h5woha`, on top of the pilot build `1ba023f`.
+Pushed, **not deployed**. Every check below ran with fake providers on a
+local database: no live send, paid run or provider call was made, and no
+older proposal was started. "Implemented" means the code changed and an
+automated check covers the acceptance criterion. Each fix still needs its
+live check on the VM.
+
+| ID | Status | Commit | Root cause | Behaviour now |
+| --- | --- | --- | --- | --- |
+| F01 | Implemented | `33f6b40` | Any channel list the model passed, an earlier run's channels and saved `preferredChannels` were each treated as the only channels | Channels are restricted only when the owner's own words name them (`channelPolicy.ts`); otherwise those lists only set the order and each lead gets its best ready route. Left-out leads say why (the owner's choice, or a sender that cannot send yet). The plan card, summary and follow-up event state the plan's actual channels and counts. "Outreach started" now says campaigns were activated and nothing is sent until each sender may send |
+| F02 | Implemented | `d9585bc`, `f0a2177` | A request counted every lead with a contact route; the fit check ran only at plan time, against the offer and not the request | The sorter judges each contactable lead against the request (`requestFit`), at the end of every search that serves the request. Verdicts are stored per lead-list member, first one wins, claimed under a lease. Only distinct matching people count toward the target, so 50 profiles with 3 matches leave 22 still to find. The report keeps found, contactable, match, no match (with reasons), unconfirmed and not judged apart. Judging is model use, outside the spend cap, and the cap wording says so |
+| F03 | Implemented | `d9585bc` | `web_search` and `read_webpage` never checked the request's state | Both refuse while the request is paused, stopped or past its time, with the same reason the searches give. A new owner message is still a new request |
+| F04 | Implemented (report, narration); F11 covers counts | `d9585bc`, `33f6b40` | The report printed the stop-time count next to a later recount; plan narration was model-written | One total, with leads added after the stop explained ("It stopped at 25; searches already running then added 1"). Search reports say how many match. Plan and start narration are written from the plan's state |
+| F05 | Implemented | `7359c21` | Group templates, follow-ups and reused sequences were checked only for structure and pitch. Nothing caught client stories or speeds, and a percentage passed if the same number appeared anywhere in the information | Every step is checked (`sequenceClaimProblem`): client stories must retell a saved one; percentages, multipliers and speeds must appear as that figure. The writer gets the claim back to rewrite. After the retries, a follow-up that still fails is dropped with the reason, and a first message that still fails stops the plan. The preview and the launched campaign use the same steps |
+| F06 | Implemented | `8797bdb` (S4) | The WhatsApp limit showed only when reached and was labelled "per day". The LinkedIn rest between runs had no gate. Nothing computed the next scheduled check. Number-level refusals lost their reason | Rule label: "New chats per 24 hours, per number" (rolling window). Status shows used / limit / available and the next free slot; the LinkedIn rest is a gate shown to the second, with the next :00/:30 check as its own line; refusals are kept as a short fixed reason (`last_refusal`) |
+| F07 | Implemented (facts, wording) | `d9585bc` | LinkedIn leads carried no facts. Maps never recorded a missing website, and a domain alone read as a website | Facts: `websiteStatus` is one of none listed / listed but not checked / found and read / domain on record, not checked. LinkedIn profiles carry headline, place, company and the words searched. The LinkedIn tool asks for the kind of business and the place in its keywords. **Not done:** structured LinkedIn filters (geography and industry IDs) beyond keywords |
+| F08 | Defect reproduced and fixed | `5313630` | Recovery itself worked, but a Retry whose model repeated the same search started a second search job; only the transcript guarded it across turns | A search tool called again for the same request with the same arguments returns the earlier search unless that search failed or was cancelled. The failure summary already listed what was done |
+| F09 | Implemented | `6cf8d31` | `deploy.sh` built `http://127.0.0.1:${PORT}/sign-in`, doubling the host for `PORT=127.0.0.1:3000` | The host and port are read from `PORT`: a wildcard host is reached on loopback, IPv6 keeps its brackets, and an explicit `HEALTH_URL` wins. The docs note that `APP_URL` must be set when `PORT` holds an address |
+| F10 | Implemented | `8797bdb` (S4) | The helper said "Everyone has been messaged" whenever nothing was queued, and plans never left Working | Helper text comes from the counts ("No leads waiting for a first message; 6 failed, 6 contacted"). A running plan with no work left shows Done, Partly done or Failed with the first reason |
+| F11 | Implemented | `8797bdb` (S4) | Contacted counts read current statuses, which Stop changes | WhatsApp contacted counts come from `last_sent_at`; LinkedIn invited comes from `requestSentAt`. Both survive Stop. Positive (Analytics) and Interested (Overview) turned out to be different definitions, so they are relabelled, not renumbered |
+| F12 | Implemented | `51999df` | Do Not Contact moves every record to Action required, and nothing ever cleared it | The queue says "Do Not Contact: read their reply". **Mark reviewed** moves the record to idle with a CRM event. Do Not Contact stays, drafting stays blocked, and a new reply brings the record back. Needs you now counts records waiting in Action required instead of saying "Nobody is waiting" |
+
+**Not done or not verified:**
+- "Immediate reply" on answered rows (section 7) was not investigated.
+- Removing a lead from a WhatsApp campaign still hard-deletes its send rows, so counts drop on removal; fixing that needs a soft-removal design.
+- `last_refusal` is cleared only by an accepted campaign send.
+- The provider's real reset times, delivery, and whether the worker and scheduler run on the VM were not measured.
+- The judged counts for leads saved before this deploy come from the driver's leftover-judging step and the next plan, not retroactively for finished requests.

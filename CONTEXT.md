@@ -35,9 +35,23 @@ word means here and, where it matters, what it does not mean.
   counts as a need. What the pages read did not show is "not found on the
   pages read", never "does not exist". A person a website names is not the
   owner of a general address (info@, contact@) found beside them.
-- **Qualified lead**: a person or company whose fit and contact route are
-  backed by evidence, deduplicated against People and outreach history. Each
-  person counts once, however many sources found them.
+- **Qualified lead**: a person or company that is contactable (a route) and
+  that the judging found to match the owner's request (`fit = match`,
+  `leadFit.ts`), deduplicated against People and outreach history. Each
+  person counts once, however many sources found them. A contact route
+  alone is not a match, and keyword hits are hints, not proof.
+- **Lead funnel**: a request's leads by distinct person: found, contactable,
+  then of the contactable: match, no match (with the reason), unconfirmed (a
+  requirement could not be checked, such as "no website") and not judged
+  yet.
+- **Website status**: what is known of a lead's website: none listed (on its
+  Maps listing or profile; not proof it has none), listed but not checked,
+  found and read, or a company domain on record, not checked.
+- **Channel policy**: the channels a plan may use. Only the owner's own words
+  restrict them; anything else only orders them, and each lead gets its
+  first ready route (`channelPolicy.ts`).
+- **Mark reviewed**: what the owner does with a Do Not Contact record once
+  they have read the reply. It moves to idle, and Do Not Contact stays.
 
 ## Limits and money
 

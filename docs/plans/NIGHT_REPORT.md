@@ -711,3 +711,84 @@ Deployment and live acceptance are **pending** until you run them.
 - On a desktop record page both "Leads & replies" and "Pipeline" are
   highlighted in the sidebar (both point at `/crm/pipeline`); this predates
   the branch.
+
+## Pilot fixes F01–F12, 20 October
+
+The owner's fix doc (`docs/plans/PILOT_FIXES_2026-10-19.md`), on top of the
+pilot build `1ba023f`. Section 8 of that doc has the per-ID root cause and
+behaviour. Pushed to `claude/dreamy-fermi-h5woha`, **not deployed**. No live
+send, paid run or provider call was made, and no older proposal was started.
+
+| Commit | IDs |
+| --- | --- |
+| `408cd68` | The fix doc and the `add-pilot-fixes` migration (lead fit on lead-list members, last refusal on WhatsApp numbers) |
+| `33f6b40` | F01 channel policy, plan narration (F04) |
+| `d9585bc`, `f0a2177` | F02 judged against the request, F03 web tools follow the request, F04 report, F07 facts |
+| `8797bdb` (merged in `ea1eabd`) | F06 sender waits, F10 failed recipients, F11 counts after Stop |
+| `7359c21` | F05 claims in every step |
+| `6cf8d31` | F09 deploy health URL |
+| `51999df` | F12 Mark reviewed |
+| `5313630` | F08 Retry starts no second search |
+| `c60af72` | e2e: the activity check counts only its own WhatsApp number |
+
+### Checks
+
+- `npx tsc --noEmit`: clean. eslint: clean on all 98 changed files.
+- Unit tests: 1862 pass, 0 fail.
+- `docker/deploy.test.ts`: 23 pass; shellcheck clean.
+- `check-organization-scope --contract`: passes. No new table.
+- Upgrade path: the pilot base schema, then all eight migrations, twice. The result equals a fresh install, and `db:check` passes on both.
+- All 22 offline e2e suites pass on a fresh database. New ones:
+  - `channel-policy` (13): mixed email, WhatsApp and LinkedIn leads; a named-WhatsApp request; no mailbox; Do Not Contact; one email accepted by the fake sender after Start.
+  - `sequence-claims` (8): a claim retried then dropped; fixed when told; a first message blocked; a saved case study backs the story.
+  - `dnc-review` (11).
+- Extended suites:
+  - `objective`: 10 contactable leads with 2 matching count as 2; the no-website outcomes stay apart; judging twice judges nobody; web tools refuse on a stopped request.
+  - `assistant-recovery`: F08.
+  - `activity`, `delivery-evidence` and `campaign-engines`: F10/F11 through the real campaign sender (S4).
+- Production build, as the Dockerfile builds it: `next build --webpack` under Node 22 with a 4096 MB heap, at `5313630`.
+  - It built in 352 s. Peak memory was 5.6 GB across the build's processes, and 6.3 GB for the whole machine.
+  - Served by `bun server.js` with every sender paused: `/sign-in` answered 200 and the worker logged its start line.
+  - Tenancy isolation: no failures. Smoke: every main page answers 200.
+- Pilot screens on that build, signed in as the demo owner, desktop and phone (`pilot-shots.ts`): all 9 checks pass, with no horizontal overflow and no page errors.
+  - WhatsApp campaign helper: "No leads waiting for a first message; 1 failed, 1 contacted" (F10).
+  - Activity: "Partly done: 1 contacted, 1 failed (WhatsApp rejected this recipient); nothing left to send" (F10/F11).
+  - The Do Not Contact record's explanation and Mark reviewed button, the Action required label, and Mark reviewed through the production route (F12).
+
+### Not verified, or left as is
+
+- Nothing ran against a live provider. Still unverified:
+  - real sends and their delivery;
+  - Unipile's and LinkedIn's actual reset times;
+  - the sorter's verdicts on real leads with a real model (only a scripted model judged them here);
+  - the running image on the VM.
+- "Immediate reply" on answered rows was not investigated.
+- WhatsApp campaign lead removal still hard-deletes its send rows.
+- Structured LinkedIn geography and industry filters were not added; the keywords carry the kind of business and the place.
+- A plan with nothing left to send keeps its Pause and Stop buttons; the run itself stays running, as before.
+- Leads saved before this deploy are judged when their request's driver next steps, or when a plan is prepared for them. A request that already finished is not recounted.
+
+### On the VM
+
+Deploy as in "Your morning list" above: the same commands, then
+`docker/deploy.sh`. Its migration list now runs eight, the last being
+`add-pilot-fixes`. Then check:
+
+```sh
+C="docker compose -f docker-compose.yml -f docker-compose.build.yml -f docker-compose.discovery.yml"
+$C exec db psql -U agentsdr agentsdr -Atc "select count(*) from information_schema.columns where (table_name, column_name) in (('lead_audience_members','fit'), ('lead_audience_members','fit_claimed_at'), ('whatsapp_accounts','last_refusal'))"   # 3
+```
+
+Recheck the named plans without sending anything new:
+
+1. The Chicago WhatsApp campaign's helper should read "No leads waiting for a first message; 6 failed, 6 contacted", not "Everyone has been messaged". Its Activity plan should be Partly done, not Working.
+2. After Stop, the LinkedIn and WhatsApp campaign lists keep the contacted and invited counts the plan had.
+3. The wrong-number Do Not Contact record should show "Read their reply, then Mark reviewed". Mark reviewed moves it out of Action required, and Do Not Contact stays.
+4. Sending status:
+   - WhatsApp shows used / limit / available and when the next new chat is possible;
+   - LinkedIn shows the rest between runs to the second, and the next :00/:30 check.
+5. In a new chat, a general request ("find real estate agencies in Chicago and contact them"):
+   - the plan card says each lead gets its best ready channel, and email-only leads are planned on email;
+   - search reports say "N of M contactable match your request";
+   - only matches count toward the target.
+6. Ask for a plan whose follow-up would need a case study you have not saved. The plan card names any step left out, and no client story or figure appears in the samples.

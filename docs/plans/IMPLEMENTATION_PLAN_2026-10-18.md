@@ -874,3 +874,13 @@ history in CRM, and reviews at `/crm/actions`.
 - Owner-provided Autonomous-mode transcript: `Pasted text(8).txt`, 18 October 2026; reviewed alongside `src/lib/assistant/autonomy.ts`, `autonomy.server.ts` and `src/lib/discovery/discovery.server.ts`.
 - Owner's VM build, read-only diagnostic output and successful account-verification/reply test in this conversation, 18 October 2026.
 
+
+## Pilot fixes F01–F12 (20 October)
+
+Planned and recorded in `docs/plans/PILOT_FIXES_2026-10-19.md`; the
+per-ID status table is its section 8. Every ID is implemented and checked
+with fake providers on a local database. F08 was a verification task, and it
+reproduced a real defect (a Retry repeating a search), now fixed. Nothing
+is deployed and nothing was tested live. Still open: "Immediate reply" on
+answered rows, soft removal of WhatsApp campaign leads, and structured
+LinkedIn filters beyond keywords.
