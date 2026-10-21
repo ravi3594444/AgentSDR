@@ -15,11 +15,31 @@ Settings → Advanced → Appearance offers four optional illustrated background
 | Deep space | Indigo nebulae, stars and a crescent planet | Dark navy surfaces |
 | Moonlit ocean | Silver moonlight across midnight waves | Dark blue surfaces |
 
-Light (plain white), Pure black and System remain available. Native radio buttons allow keyboard selection; the choice takes effect immediately and is remembered on this browser. Other devices keep their own appearance. The sidebar's light/dark toggle remains available.
+Light (plain white), Pure black and System remain available. Native radio buttons allow keyboard selection; the choice takes effect immediately and is remembered on this browser. Other devices keep their own appearance. The sidebar's button flips Light and Pure black; with an illustrated background selected it opens Settings → Appearance instead of replacing the picture, and its tooltip says which.
 
-The pictures fill the signed-in workspace canvas, including behind the assistant. Messages, tables and cards keep solid surfaces. The artwork is decorative and does not intercept clicks. Public landing and sign-in pages do not acquire a scenery background.
+The pictures fill the signed-in workspace canvas, including behind the assistant. Messages, tables and cards keep solid surfaces. The email, LinkedIn, WhatsApp, calls, Instagram and tables sections and the Leads list keep a mostly opaque (88%) surface, so the picture shows faintly behind dense lists. The artwork is decorative and does not intercept clicks. Public landing and sign-in pages do not acquire a scenery background.
 
-Common body text and labels increase from 14 to 15 px; small text increases from 12 to 13 px, with matching line heights. The smallest label token increases from 11 to 12 px. These shared tokens apply across themes; headings and explicit pixel-sized text are not scaled.
+The theme colours are set on `<html>`, so menus, popovers, dialogs and the phone navigation drawer (rendered outside the app shell) match the workspace. The dark themes' rules outrank the device dark-mode block, so a device in dark mode keeps their colours. Tints and text colours were chosen against each artwork's own pixels, where text sits (the header band and the chat column):
+
+| Theme | Tint | Secondary / hint text under 4.5:1 |
+| --- | ---: | --- |
+| Golden clouds | 55% ivory | none (worst 5.7:1 and 4.9:1) |
+| Dark forest | 62% | 0.1% / 0.4% of header pixels |
+| Deep space | 62% | 0.1% / 0.2% |
+| Moonlit ocean | 62% | 0.0% / 0.2% |
+
+Before, Golden clouds put about two thirds of the header area under 4.5:1 for secondary text, and the dark themes up to 12% for hints.
+
+**Bigger text everywhere** (the owner found it too small). The shared scale moves up two pixels where most text lives, with matching line heights; headings are unchanged:
+
+| Size | Before | Now |
+| --- | ---: | ---: |
+| Small text (`paragraph-xs`, `label-xs`, Tailwind `text-xs`) | 12 px | 14 px |
+| Body text (`paragraph-sm`, `label-sm`, Tailwind `text-sm`) | 14 px | 16 px |
+| Medium text (`paragraph-md`, `label-md`, Tailwind `text-base`) | 16 px | 17 px |
+| Smallest labels (`label-2xs`) | 11 px | 12 px |
+
+The 310 fixed-pixel text classes of 8–14 px (in 48 files) and the landing page's 8–14 px text take the same step; the chart axes and the enrichment grid follow. Small boxes that held text were resized where the bigger text would not fit (the Inbox filter counter, the 20 px avatar, the Notes and Tasks avatar).
 
 ## Assets and loading
 
