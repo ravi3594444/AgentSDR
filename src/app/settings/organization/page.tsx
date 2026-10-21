@@ -1,40 +1,13 @@
-import { ChannelRulesForm } from "@/components/settings/ChannelRulesForm";
-import { ApifySettings } from "@/components/settings/organization/ApifySettings";
-import { OrgFeatures } from "@/components/settings/organization/OrgFeatures";
-import { OrgGeneral } from "@/components/settings/organization/OrgGeneral";
-import { ResearchSourcesSettings } from "@/components/settings/organization/ResearchSourcesSettings";
-import { TavilySettings } from "@/components/settings/organization/TavilySettings";
-import { TinyfishSettings } from "@/components/settings/organization/TinyfishSettings";
-import { TregSettings } from "@/components/settings/organization/TregSettings";
-import { SettingsPage } from "@/components/settings/SettingsPage";
-import { can, requirePageOrgContext } from "@/lib/auth/context";
-import { channelRulesForSettings } from "@/lib/channels/rules.server";
-import { runInOrganization } from "@/lib/tenancy/scope";
+import { redirect } from "next/navigation";
+import { SETTINGS_HOME } from "@/components/settings/settingsNav";
+import { withQuery } from "@/lib/nav/legacyRoutes";
 
-export const metadata = { title: "Organization" };
 export const dynamic = "force-dynamic";
 
-export default async function Page() {
-  const ctx = await requirePageOrgContext();
-  const { values } = await runInOrganization(ctx.organizationId, () => channelRulesForSettings("general"));
-  return (
-    <SettingsPage title="Organization" description="Your organization's name, URL and your role in it." width="narrow">
-      <div className="flex flex-col gap-8">
-        <OrgGeneral />
-        <section className="flex flex-col gap-3" aria-labelledby="org-defaults">
-          <div>
-            <h3 id="org-defaults" className="text-label-md text-text-strong-950">Defaults</h3>
-            <p className="mt-1 text-paragraph-sm text-text-sub-600">Used across every channel.</p>
-          </div>
-          <ChannelRulesForm channel="general" initialValues={values} canEdit={can(ctx, { integrations: ["manage"] })} />
-        </section>
-        <TinyfishSettings />
-        <ResearchSourcesSettings />
-        <OrgFeatures />
-        <TavilySettings />
-        <ApifySettings />
-        <TregSettings />
-      </div>
-    </SettingsPage>
-  );
+// The old General page was split up: name, URL and the business profile are on
+// Your business (here), the day and Autonomous caps on Sending defaults, research
+// defaults, TinyFish and sources on Lead research, and optional features and
+// providers on Providers & features. Old links keep their query.
+export default async function OldOrganizationSettingsPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
+  redirect(withQuery(SETTINGS_HOME, await searchParams));
 }

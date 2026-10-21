@@ -1,8 +1,6 @@
 import {
   RiBookOpenLine,
-  RiBuilding2Line,
   RiCpuLine,
-  RiEqualizerLine,
   RiGroupLine,
   RiInstagramLine,
   RiTeamLine,
@@ -12,8 +10,12 @@ import {
   RiPlugLine,
   RiPaletteLine,
   RiPriceTag3Line,
+  RiPuzzleLine,
   RiQuestionAnswerLine,
   RiQuillPenLine,
+  RiSearchEyeLine,
+  RiStore2Line,
+  RiTimeLine,
   RiWhatsappLine,
   type RemixiconComponentType,
 } from "@remixicon/react";
@@ -45,23 +47,29 @@ export function visibleSettingsNav(features: FeatureState | null): typeof SETTIN
 }
 
 /**
- * Every settings screen in the app. Each is its own route under /settings;
- * the pages they replaced redirect here (next.config.ts).
+ * Every settings screen in the app, in five groups: what the assistant knows
+ * about the business and who works in it; the accounts and services it is
+ * connected to; how fast and when it sends; how far one request researches
+ * and spends; and the optional extras. Each screen is its own route under
+ * /settings and is listed once; the pages they replaced redirect here
+ * (next.config.ts, and /settings/organization → /settings/business).
  */
 export const SETTINGS_NAV: { label: string; items: SettingsNavItem[] }[] = [
   {
-    label: "Organization",
+    label: "Your business",
     items: [
-      { href: "/settings/organization", label: "General", icon: RiBuilding2Line },
+      { href: "/settings/business", label: "Business profile", icon: RiStore2Line },
       { href: "/settings/members", label: "Members", icon: RiGroupLine },
       { href: "/settings/teams", label: "Teams", icon: RiTeamLine },
+      { href: "/settings/instructions", label: "Instructions", icon: RiQuillPenLine },
+      { href: "/settings/knowledge", label: "Knowledge", icon: RiBookOpenLine },
     ],
   },
-  // Each channel is one row here; its pages — the connected accounts, the
-  // integration it runs on, its sending rules (src/lib/channels/rules.ts) —
-  // are tabs across the top of the section (SettingsShell).
+  // A channel's accounts and the integration it runs on are tabs across the
+  // top of its section (SettingsShell); its sending rules are a row under
+  // "Sending & automation".
   {
-    label: "Channels",
+    label: "Connected accounts",
     items: [
       {
         href: "/settings/email-accounts",
@@ -70,7 +78,6 @@ export const SETTINGS_NAV: { label: string; items: SettingsNavItem[] }[] = [
         tabs: [
           { href: "/settings/email-accounts", label: "Mailboxes", icon: RiMailLine },
           { href: "/settings/email-connection", label: "Connection", icon: RiPlugLine },
-          { href: "/settings/email-rules", label: "Sending rules", icon: RiEqualizerLine },
         ],
       },
       {
@@ -80,7 +87,6 @@ export const SETTINGS_NAV: { label: string; items: SettingsNavItem[] }[] = [
         tabs: [
           { href: "/settings/linkedin-accounts", label: "Accounts", icon: RiLinkedinBoxLine },
           { href: "/settings/linkedin-connection", label: "Connection", icon: RiPlugLine },
-          { href: "/settings/linkedin-rules", label: "Sending rules", icon: RiEqualizerLine },
         ],
       },
       {
@@ -90,41 +96,41 @@ export const SETTINGS_NAV: { label: string; items: SettingsNavItem[] }[] = [
         tabs: [
           { href: "/settings/whatsapp-accounts", label: "Numbers", icon: RiWhatsappLine },
           { href: "/settings/whatsapp-connection", label: "Integrations", icon: RiPlugLine },
-          { href: "/settings/whatsapp-rules", label: "Sending rules", icon: RiEqualizerLine },
         ],
       },
-      {
-        // Only for organizations that turned Instagram messages on.
-        href: "/settings/instagram-accounts",
-        label: "Instagram",
-        icon: RiInstagramLine,
-        feature: "instagram",
-        tabs: [{ href: "/settings/instagram-accounts", label: "Accounts", icon: RiInstagramLine }, { href: "/settings/instagram-rules", label: "Sending rules", icon: RiEqualizerLine }],
-      },
-    ],
-  },
-  {
-    label: "AI",
-    items: [
-      { href: "/settings/instructions", label: "Instructions", icon: RiQuillPenLine },
-      { href: "/settings/knowledge", label: "Knowledge", icon: RiBookOpenLine },
+      // Only for organizations that turned Instagram messages on.
+      { href: "/settings/instagram-accounts", label: "Instagram", icon: RiInstagramLine, feature: "instagram" },
       { href: "/settings/ai", label: "AI provider", icon: RiCpuLine },
     ],
   },
+  // The Sending rules registry (src/lib/channels/rules.ts): a page per
+  // channel, and the "general" rules split between Sending defaults and
+  // Lead research (GENERAL_RULE_PAGES).
   {
-    label: "CRM & leads",
+    label: "Sending & automation",
     items: [
-      { href: "/settings/lead-categories", label: "Lead categories", icon: RiPriceTag3Line },
-      { href: "/settings/columns", label: "Lead columns", icon: RiLayoutColumnLine },
-      { href: "/settings/inquiries", label: "Inquiries", icon: RiQuestionAnswerLine, feature: "inquiry_intake" },
+      { href: "/settings/sending", label: "Sending defaults", icon: RiTimeLine },
+      { href: "/settings/email-rules", label: "Email sending rules", icon: RiMailLine },
+      { href: "/settings/linkedin-rules", label: "LinkedIn sending rules", icon: RiLinkedinBoxLine },
+      { href: "/settings/whatsapp-rules", label: "WhatsApp sending rules", icon: RiWhatsappLine },
+      { href: "/settings/instagram-rules", label: "Instagram sending rules", icon: RiInstagramLine, feature: "instagram" },
     ],
   },
   {
-    label: "Preferences",
-    items: [{ href: "/settings/appearance", label: "Appearance", icon: RiPaletteLine }],
+    label: "Research & budget",
+    items: [{ href: "/settings/research", label: "Lead research", icon: RiSearchEyeLine }],
+  },
+  {
+    label: "Advanced",
+    items: [
+      { href: "/settings/advanced", label: "Providers & features", icon: RiPuzzleLine },
+      { href: "/settings/lead-categories", label: "Lead categories", icon: RiPriceTag3Line },
+      { href: "/settings/columns", label: "Lead columns", icon: RiLayoutColumnLine },
+      { href: "/settings/inquiries", label: "Inquiries", icon: RiQuestionAnswerLine, feature: "inquiry_intake" },
+      { href: "/settings/appearance", label: "Appearance", icon: RiPaletteLine },
+    ],
   },
 ];
 
-/** Where "Settings" opens. */
+/** Where "Settings" opens: Your business → Business profile. */
 export const SETTINGS_HOME = SETTINGS_NAV[0].items[0].href;
-

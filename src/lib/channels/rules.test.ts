@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { CHANNEL_RULES, CHANNELS, defaultValues, pickInRange, resolveValues, ruleError, ruleWarning, rulesOf, validateValues } from "./rules";
+import { CHANNEL_RULES, CHANNELS, defaultValues, GENERAL_RULE_PAGES, mergeStoredRules, pickInRange, resolveValues, ruleError, ruleSubmission, rulesSubset, ruleWarning, rulesOf, validateValues } from "./rules";
 
 describe("registry", () => {
   test("every default is valid and inside its own bounds", () => {
@@ -141,5 +141,31 @@ describe("a request's research defaults (general)", () => {
     expect(validateValues("general", { objectiveHours: 100 }).ok).toBe(false);
     expect(validateValues("general", { objectiveSpendUsd: 2.5 }).ok).toBe(false);
     expect(validateValues("general", { objectiveLeadTarget: 50, objectiveHours: 2, objectiveSpendUsd: 0 })).toEqual({ ok: true, values: { objectiveLeadTarget: 50, objectiveHours: 2, objectiveSpendUsd: 0 } });
+  });
+});
+
+describe("the general rules split across two settings pages", () => {
+  test("every general rule is on exactly one page, in registry order", () => {
+    const shown: string[] = [...GENERAL_RULE_PAGES.sending, ...GENERAL_RULE_PAGES.research];
+    expect([...shown].sort()).toEqual(rulesOf("general").map((rule) => rule.key).sort());
+    expect(new Set(shown).size).toBe(shown.length);
+    expect(rulesSubset("general", GENERAL_RULE_PAGES.research).map((rule) => rule.key)).toEqual(["objectiveLeadTarget", "objectiveHours", "objectiveSpendUsd"]);
+    expect(rulesSubset("email")).toBe(rulesOf("email"));
+    expect(() => rulesSubset("general", ["dailySendLimit"])).toThrow("No general rule dailySendLimit");
+  });
+
+  test("a page sends only the rules it shows", () => {
+    const all = { ...defaultValues("general"), objectiveLeadTarget: 80, timeZone: "Asia/Kolkata" };
+    expect(ruleSubmission(rulesSubset("general", GENERAL_RULE_PAGES.sending), all)).toEqual({
+      timeZone: "Asia/Kolkata", dayStartsAt: "00:00", defaultPhoneCountry: "", autonomousRunsPerDay: 10, autonomousLeadsPerDay: 300, autonomousSearchesPerDay: 20,
+    });
+  });
+
+  test("saving one page's rules keeps what the other page stored", () => {
+    const stored = { objectiveLeadTarget: 80, timeZone: "Asia/Kolkata" };
+    // Sending defaults saved with the time zone back at its default: dropped from the row; the research target untouched.
+    expect(mergeStoredRules("general", stored, { timeZone: "UTC", autonomousRunsPerDay: 12 })).toEqual({ objectiveLeadTarget: 80, autonomousRunsPerDay: 12 });
+    expect(mergeStoredRules("general", stored, { objectiveHours: 6 })).toEqual({ ...stored, objectiveHours: 6 });
+    expect(mergeStoredRules("general", stored, {})).toEqual(stored);
   });
 });

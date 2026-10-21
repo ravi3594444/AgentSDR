@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { contactChannels, countReasons } from "./audiences";
-import { mergeProfile, missingForDiscovery, missingForOutreach, profileKnowledgeText } from "./profile";
+import { mergeProfile, missingForDiscovery, missingForOutreach, PROFILE_FIELD_MAX, profileKnowledgeText, profilePatchProblems } from "./profile";
 
 describe("mergeProfile", () => {
   test("replaces, clears and keeps fields; target customers stay free text", () => {
@@ -16,6 +16,30 @@ describe("mergeProfile", () => {
     const { profile, problems } = mergeProfile({}, { favouriteColour: "blue", language: "English", preferredChannels: ["fax"], offer: 5 });
     expect(profile).toEqual({});
     expect(problems).toHaveLength(4);
+  });
+});
+
+describe("profilePatchProblems (Settings → Your business)", () => {
+  test("accepts profile fields as text, an empty string to clear, a language code and known channels", () => {
+    expect(profilePatchProblems({ businessName: "Bright Path", offer: "", language: "EN", preferredChannels: ["email", "instagram"] })).toEqual([]);
+    expect(mergeProfile({ offer: "Old" }, { businessName: "Bright Path", offer: "" }).profile).toEqual({ businessName: "Bright Path" });
+  });
+
+  test("names each problem in plain words and saves nothing it would change", () => {
+    expect(profilePatchProblems({ favouriteColour: "blue", offer: 5, language: "English", preferredChannels: ["fax"] })).toEqual([
+      "favouriteColour is not part of the business profile",
+      "Offer must be text",
+      "Language must be a two-letter code such as en",
+      "Preferred channels must be a list of email, whatsapp, linkedin, instagram",
+    ]);
+    expect(profilePatchProblems({ notes: "x".repeat(PROFILE_FIELD_MAX + 1) })).toEqual(["Notes is too long: keep it under 4,000 characters"]);
+    expect(profilePatchProblems({ notes: "x".repeat(PROFILE_FIELD_MAX) })).toEqual([]);
+  });
+
+  test("refuses a body that is not an object of fields, or is empty", () => {
+    expect(profilePatchProblems(null)).toHaveLength(1);
+    expect(profilePatchProblems(["offer"])).toHaveLength(1);
+    expect(profilePatchProblems({})).toEqual(["Nothing to save"]);
   });
 });
 
