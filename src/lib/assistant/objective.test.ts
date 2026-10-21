@@ -256,19 +256,25 @@ describe("the driver: wait, continue or stop", () => {
     expect(nextDriverStep(facts({ deadline: minutes(-1) }))).toMatchObject({ kind: "stop", reason: "time_limit" });
   });
 
-  test("research agent v2: the target wakes the assistant once (to plan and finish), then the request stops; spend and time still stop at once", () => {
-    const v2 = { wakeAtTarget: true, leadTarget: 5, leads: 5 };
-    expect(nextDriverStep(facts(v2))).toEqual({ kind: "continue", n: 1, attempt: 1, dry: 0 });
+  test("research agent v2: a limit wakes the assistant once (to plan from what matched and finish), then the request stops", () => {
+    const v2 = { wakeAtLimit: true, leadTarget: 5, leads: 5 };
+    expect(nextDriverStep(facts(v2))).toEqual({ kind: "continue", n: 1, attempt: 1, dry: 0, final: "target_reached" });
     expect(nextDriverStep(facts({ ...v2, threadBusy: true })).kind).toBe("wait");
-    // That turn running, then ended: it stops at the target.
-    expect(nextDriverStep(facts({ ...v2, threadBusy: true, continuation: turn({ leadsAtStart: 5, endedAt: null, end: null }) })).kind).toBe("wait");
-    expect(nextDriverStep(facts({ ...v2, continuation: turn({ leadsAtStart: 5 }) }))).toMatchObject({ kind: "stop", reason: "target_reached" });
-    // An earlier turn below the target does not count as that turn.
-    expect(nextDriverStep(facts({ ...v2, continuation: turn({ n: 2, leadsAtStart: 3 }) }))).toEqual({ kind: "continue", n: 3, attempt: 1, dry: 0 });
+    // That turn running, then ended: it stops at the limit.
+    expect(nextDriverStep(facts({ ...v2, threadBusy: true, continuation: turn({ final: "target_reached", endedAt: null, end: null }) }))).toMatchObject({ kind: "wait", delayMs: 15_000 });
+    expect(nextDriverStep(facts({ ...v2, continuation: turn({ final: "target_reached" }) }))).toMatchObject({ kind: "stop", reason: "target_reached" });
+    // An earlier turn that did not start at a limit does not count as that turn.
+    expect(nextDriverStep(facts({ ...v2, continuation: turn({ n: 2, leadsAtStart: 3 }) }))).toEqual({ kind: "continue", n: 3, attempt: 1, dry: 0, final: "target_reached" });
     // Interrupted: taken again, a bounded number of times.
-    expect(nextDriverStep(facts({ ...v2, continuation: turn({ leadsAtStart: 5, endedAt: null, end: null }) }))).toEqual({ kind: "continue", n: 1, attempt: 2, dry: 0 });
-    expect(nextDriverStep(facts({ ...v2, continuation: turn({ leadsAtStart: 5, endedAt: null, end: null, attempt: MAX_CONTINUATION_ATTEMPTS }) }))).toMatchObject({ kind: "stop", reason: "target_reached" });
-    expect(nextDriverStep(facts({ ...v2, spentUsd: 5, leads: 2 }))).toMatchObject({ kind: "stop", reason: "budget_spent" });
+    expect(nextDriverStep(facts({ ...v2, continuation: turn({ final: "target_reached", endedAt: null, end: null }) }))).toEqual({ kind: "continue", n: 1, attempt: 2, dry: 0, final: "target_reached" });
+    expect(nextDriverStep(facts({ ...v2, continuation: turn({ final: "target_reached", endedAt: null, end: null, attempt: MAX_CONTINUATION_ATTEMPTS }) }))).toMatchObject({ kind: "stop", reason: "target_reached" });
+    // The spend cap and the time limit wake it the same way: six of ten matched still get their plan.
+    const short = { wakeAtLimit: true, leadTarget: 10, leads: 6 };
+    expect(nextDriverStep(facts({ ...short, spentUsd: 5 }))).toEqual({ kind: "continue", n: 1, attempt: 1, dry: 0, final: "budget_spent" });
+    expect(nextDriverStep(facts({ ...short, deadline: minutes(-1), continuation: turn({ n: 3, leadsAtStart: 6 }) }))).toEqual({ kind: "continue", n: 4, attempt: 1, dry: 0, final: "time_limit" });
+    expect(nextDriverStep(facts({ ...short, deadline: minutes(-1), continuation: turn({ n: 4, final: "time_limit" }) }))).toMatchObject({ kind: "stop", reason: "time_limit" });
+    // Without v2 every limit stops at once.
+    expect(nextDriverStep(facts({ leadTarget: 10, leads: 6, spentUsd: 5 }))).toMatchObject({ kind: "stop", reason: "budget_spent" });
   });
 
   test("research agent v2: a question to the owner waits for the answer instead of ending the request", () => {
@@ -401,6 +407,14 @@ describe("wording", () => {
       sources: [{ label: "LinkedIn people search through Unipile", searches: 1, found: 50, eligible: 50, judged: 50, matched: 3, notSearched: 0, failed: 0, open: 0, notes: [] }] });
     expect(note).toMatch(/LinkedIn people search through Unipile: 1 search, 50 found, 50 can be contacted, 3 of them match your request/);
     expect(note).toMatch(/3 of 25 qualified leads so far \(contactable and matching the request\)/);
+  });
+
+  test("research agent v2: the note names the limit that ends the request and asks for the plan from what matched", () => {
+    const base = { request: "x", n: 4, leads: 6, leadTarget: 10, spend: spendFromLedgers([]), spendCapUsd: 5, msLeft: 0, sources: [], web: null, v2: true };
+    expect(continuationNote({ ...base, final: "time_limit" })).toMatch(/reached its time limit with 6 of 10 matching leads \(step 4\)\. No more searches start for it\. Next: review them, prepare outreach from the leads that match if the brief says contact, then finish_request\./);
+    expect(continuationNote({ ...base, final: "budget_spent" })).toMatch(/reached its spend cap with 6 of 10/);
+    expect(continuationNote({ ...base, leads: 10, final: "target_reached" })).toMatch(/has its 10 matching leads/);
+    expect(continuationNote(base)).toMatch(/have finished for now/);
   });
 
   test("Activity's request spend line", () => {

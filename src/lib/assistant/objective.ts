@@ -311,7 +311,10 @@ export function formatDuration(ms: number): string {
 }
 
 /** The first limit the request has reached, in order: its target, its spend cap (settled spend), its time. */
-export function limitReached(facts: LimitFacts): { reason: StopReason; detail: string } | null {
+/** The stop reasons a limit gives (limitReached). */
+export type LimitReason = Extract<StopReason, "target_reached" | "budget_spent" | "time_limit">;
+
+export function limitReached(facts: LimitFacts): { reason: LimitReason; detail: string } | null {
   if (facts.leads >= facts.leadTarget) return { reason: "target_reached", detail: `${facts.leads} qualified leads found, the target was ${facts.leadTarget}` };
   if (facts.spendCapUsd > 0 && facts.spentUsd >= facts.spendCapUsd - EPSILON) return { reason: "budget_spent", detail: `${usd(facts.spentUsd)} of the ${usd(facts.spendCapUsd)} spend cap was used` };
   if (facts.now.getTime() >= facts.deadline.getTime()) return { reason: "time_limit", detail: "the time limit passed" };
@@ -332,6 +335,8 @@ export type Continuation = {
   /** Judged once its turn ended: it started work (productive), or met only a full slot or quota wait (waiting). */
   judged: "productive" | "waiting" | null;
   waitUntil?: string | null;
+  /** Research agent v2: the limit this turn was started at, to plan from what matched and finish. */
+  final?: LimitReason;
 };
 
 export type DriverFacts = LimitFacts & {
@@ -357,8 +362,8 @@ export type DriverFacts = LimitFacts & {
   pendingMembers: number;
   /** The driver's failed attempts at judging them. */
   qualifyFailures: number;
-  /** Research agent v2: reaching the target wakes the assistant once (to prepare the plan and finish) before the request stops. */
-  wakeAtTarget?: boolean;
+  /** Research agent v2: reaching a limit (the target, the spend cap, the time limit) wakes the assistant once, to prepare the plan from what matched and finish, before the request stops. */
+  wakeAtLimit?: boolean;
   /** Research agent v2: the chat's last word is the assistant's question to the owner; the request waits for the answer. */
   waitingForOwner?: boolean;
 };
@@ -368,7 +373,7 @@ export type DriverStep =
   | { kind: "wait"; delayMs: number; reason: string }
   | { kind: "judge"; judged: "productive" | "waiting"; waitUntil: Date | null }
   | { kind: "qualify" }
-  | { kind: "continue"; n: number; attempt: number; dry: number };
+  | { kind: "continue"; n: number; attempt: number; dry: number; final?: LimitReason };
 
 export const MAX_CONTINUATION_ATTEMPTS = 3;
 /** The driver's attempts at judging leads left unjudged; after these they stay uncounted, and the report says so. */
@@ -391,13 +396,15 @@ export function nextDriverStep(facts: DriverFacts): DriverStep {
   const limit = limitReached(facts);
   const untilDeadline = Math.max(1_000, facts.deadline.getTime() - facts.now.getTime() + 1_000);
   const wait = (delayMs: number, reason: string): DriverStep => ({ kind: "wait", delayMs: Math.min(delayMs, untilDeadline), reason });
-  if (limit && limit.reason === "target_reached" && facts.wakeAtTarget) {
-    // v2: one turn that starts at the target (it prepares the plan and finishes); once it has ended, the request stops there.
+  if (limit && facts.wakeAtLimit) {
+    // v2: one turn that starts at the limit (it prepares the plan from what matched and finishes); once it has
+    // ended, the request stops there. Not clamped to the deadline: at the time limit that would poll every second.
     const turn = facts.continuation;
-    if (!turn || turn.leadsAtStart < facts.leadTarget) return facts.threadBusy ? wait(TURN_POLL_MS, "the chat is busy") : { kind: "continue", n: (turn?.n ?? 0) + 1, attempt: 1, dry: facts.dry };
+    const final = limit.reason as LimitReason;
+    if (!turn?.final) return facts.threadBusy ? { kind: "wait", delayMs: TURN_POLL_MS, reason: "the chat is busy" } : { kind: "continue", n: (turn?.n ?? 0) + 1, attempt: 1, dry: facts.dry, final };
     if (turn.endedAt || turn.attempt >= MAX_CONTINUATION_ATTEMPTS) return { kind: "stop", ...limit };
-    if (facts.threadBusy) return wait(TURN_POLL_MS, "the assistant is preparing what follows the target");
-    return { kind: "continue", n: turn.n, attempt: turn.attempt + 1, dry: facts.dry };
+    if (facts.threadBusy) return { kind: "wait", delayMs: TURN_POLL_MS, reason: "the assistant is preparing what follows the limit" };
+    return { kind: "continue", n: turn.n, attempt: turn.attempt + 1, dry: facts.dry, final: turn.final };
   }
   if (limit) return { kind: "stop", ...limit };
   if (facts.status === "paused") return wait(PAUSED_POLL_MS, "paused by the owner");
@@ -540,8 +547,12 @@ export function continuationNote(input: {
   funnel?: LeadFunnel;
   /** Research agent v2: the model holds the brief and the counts; the note only wakes it, without pressing for more searches. */
   v2?: boolean;
+  /** v2: the limit this turn starts at; it is the request's last turn. */
+  final?: LimitReason;
 }): string {
   if (input.v2) {
+    if (input.final === "target_reached") return `Your request has its ${input.leadTarget} matching leads (step ${input.n}); the counts are in PROGRESS. Next: review them, prepare outreach if the brief says contact, then finish_request. No more searches start for it.`;
+    if (input.final) return `Your request reached its ${input.final === "budget_spent" ? "spend cap" : "time limit"} with ${input.leads} of ${input.leadTarget} matching leads (step ${input.n}). No more searches start for it. Next: review them, prepare outreach from the leads that match if the brief says contact, then finish_request.`;
     return input.leads >= input.leadTarget
       ? `Your request has its ${input.leadTarget} matching leads (step ${input.n}); the counts are in PROGRESS. Next: review them, prepare outreach if the brief says contact, then finish_request. No more searches start for it.`
       : `The searches for your request have finished for now (step ${input.n}); the counts are in PROGRESS. Next: review the leads, correct verdicts the evidence contradicts, prepare outreach when the brief says contact and enough leads match, search another source if the brief still needs leads, or finish_request when its done condition is met.`;

@@ -95,7 +95,7 @@ async function driverFacts(objective: Objective, facts: ObjectiveFacts): Promise
     pausedAt: progress.pausedAt ?? null,
     pendingMembers: facts.funnel.pendingMembers,
     qualifyFailures: progress.qualifyFailures ?? 0,
-    wakeAtTarget: v2,
+    wakeAtLimit: v2,
     waitingForOwner: lastWord?.role === "assistant" && lastWord.content.trim().endsWith("?"),
   };
 }
@@ -188,6 +188,7 @@ async function continueRequest(objective: Objective, facts: ObjectiveFacts, step
           web: facts.web,
           funnel: facts.funnel,
           v2: Boolean(objective.controls.brief),
+          ...(step.final ? { final: step.final } : {}),
         }),
         toolResult: {
           objectiveNote: noteKey,
@@ -206,6 +207,7 @@ async function continueRequest(objective: Objective, facts: ObjectiveFacts, step
       leadsAtStart: retry?.leadsAtStart ?? facts.leads,
       judged: null,
       waitUntil: null,
+      ...(step.final ? { final: step.final } : {}),
     };
     await saveObjectiveProgress(objective.id, { continuation, dry: step.dry, waiting: "the assistant is choosing the next source" }, new Date(Date.now() + TURN_POLL_MS));
   } catch (error) {

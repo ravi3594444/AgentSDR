@@ -77,7 +77,7 @@ const calls = {
   unipile: [] as string[],
   linkedin: [] as string[],
   pages: [] as string[],
-  aiml: [] as { path: string; status: number; ms: number }[],
+  aiml: [] as { path: string; status: number; ms: number; answer?: string }[],
   blocked: [] as string[],
 };
 const model = { bySchema: {} as Record<string, number>, real: 0, stubbed: 0, scripted: 0, capHit: false, inputTokens: 0, outputTokens: 0 };
@@ -213,7 +213,15 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     }
     const started = Date.now();
     const response = await realFetch(input, init);
-    calls.aiml.push({ path: url.pathname, status: response.status, ms: Date.now() - started });
+    // What a completion carried, so an empty answer can be told from a refusal.
+    const answer = url.pathname.endsWith("/chat/completions") && response.ok
+      ? await response.clone().json().then((body: { choices?: { finish_reason?: string; message?: { content?: string | null; tool_calls?: { function?: { name?: string; arguments?: string } }[] } }[] }) => {
+        const choice = body.choices?.[0];
+        const called = (choice?.message?.tool_calls ?? []).map((call) => `${call.function?.name}(${(call.function?.arguments ?? "").slice(0, 160)})`).join(" ");
+        return `finish=${choice?.finish_reason ?? "none"} content=${(choice?.message?.content ?? "").length} calls=${called || "none"}`;
+      }).catch(() => "unreadable")
+      : undefined;
+    calls.aiml.push({ path: url.pathname, status: response.status, ms: Date.now() - started, ...(answer ? { answer } : {}) });
     return response;
   }
   if (url.origin === SCRAPER) {
@@ -517,6 +525,13 @@ try {
         const dryStop = cont ? facts.leads === cont.leadsAtStart && (progress.dry ?? 0) + 1 >= MAX_DRY_CONTINUATIONS : false;
         if (model.capHit || (facts.openChildren === 0 && facts.followUpsPending === 0 && !busy && facts.leads < objective.leadTarget && !dryStop)) {
           harnessCap = model.capHit ? `model budget of ${MODEL_CAP} calls` : `continuation cap of ${CONT_CAP}`;
+          if (AGENT === "v2" && !model.capHit) {
+            // v2 meets a real limit the way the product does: its time runs out, and the driver gives the
+            // assistant one last turn to plan from what matched and finish.
+            mark(`harness ends the request's time (${harnessCap})`);
+            await db.update(schema.assistantObjectives).set({ deadlineAt: new Date(Date.now() - 1_000) }).where(eq(schema.assistantObjectives.id, objective.id));
+            continue;
+          }
           mark(`harness cancels the research (${harnessCap})`);
           await objectives.setObjectiveState(objective.id, "cancel", { name: `audit harness (${harnessCap})` });
           continue;
