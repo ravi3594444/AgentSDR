@@ -1001,7 +1001,7 @@ CREATE TABLE public.assistant_jobs (
     finished_at timestamp with time zone,
     report_key text,
     reported_at timestamp with time zone,
-    CONSTRAINT assistant_jobs_kind_chk CHECK ((kind = ANY (ARRAY['discovery'::text, 'outreach_start'::text, 'linkedin_search'::text, 'web_discovery'::text, 'apify_instagram'::text, 'objective'::text]))),
+    CONSTRAINT assistant_jobs_kind_chk CHECK ((kind = ANY (ARRAY['discovery'::text, 'outreach_start'::text, 'linkedin_search'::text, 'web_discovery'::text, 'apify_instagram'::text, 'objective'::text, 'social_research'::text]))),
     CONSTRAINT assistant_jobs_status_chk CHECK ((status = ANY (ARRAY['queued'::text, 'running'::text, 'succeeded'::text, 'failed'::text, 'cancelled'::text])))
 );
 
@@ -1132,6 +1132,23 @@ CREATE TABLE public.autopilot_takeovers (
     reason text NOT NULL,
     created_by uuid,
     created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+--
+-- Name: brightdata_settings; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.brightdata_settings (
+    organization_id uuid NOT NULL,
+    encrypted_key text,
+    key_hint text,
+    monthly_credits integer DEFAULT 1000 NOT NULL,
+    max_records_per_search integer DEFAULT 60 NOT NULL,
+    serp_zone text,
+    reddit_enabled boolean DEFAULT false NOT NULL,
+    updated_by uuid,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT brightdata_settings_limits_chk CHECK ((((monthly_credits >= 0) AND (monthly_credits <= 100000)) AND ((max_records_per_search >= 5) AND (max_records_per_search <= 300))))
 );
 
 --
@@ -2677,7 +2694,7 @@ CREATE TABLE public.organization_features (
     enabled boolean DEFAULT false NOT NULL,
     updated_by uuid,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT organization_features_key_chk CHECK ((key = ANY (ARRAY['instagram'::text, 'web_discovery'::text, 'inquiry_intake'::text, 'apify_discovery'::text, 'treg'::text])))
+    CONSTRAINT organization_features_key_chk CHECK ((key = ANY (ARRAY['instagram'::text, 'web_discovery'::text, 'inquiry_intake'::text, 'apify_discovery'::text, 'treg'::text, 'brightdata'::text])))
 );
 
 --
@@ -3484,6 +3501,13 @@ ALTER TABLE ONLY public.autopilot_replies
 
 ALTER TABLE ONLY public.autopilot_takeovers
     ADD CONSTRAINT autopilot_takeovers_pkey PRIMARY KEY (id);
+
+--
+-- Name: brightdata_settings brightdata_settings_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.brightdata_settings
+    ADD CONSTRAINT brightdata_settings_pkey PRIMARY KEY (organization_id);
 
 --
 -- Name: browser_sessions browser_sessions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
@@ -5714,6 +5738,12 @@ CREATE INDEX people_organization_idx ON public.people USING btree (organization_
 CREATE INDEX people_phone_lookup_idx ON public.people USING btree (phone) WHERE (phone IS NOT NULL);
 
 --
+-- Name: provider_usage_job_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX provider_usage_job_idx ON public.provider_usage USING btree (job_id) WHERE (job_id IS NOT NULL);
+
+--
 -- Name: provider_usage_org_product_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -6236,6 +6266,13 @@ ALTER TABLE ONLY public.autopilot_replies
 
 ALTER TABLE ONLY public.autopilot_takeovers
     ADD CONSTRAINT autopilot_takeovers_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
+
+--
+-- Name: brightdata_settings brightdata_settings_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.brightdata_settings
+    ADD CONSTRAINT brightdata_settings_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
 
 --
 -- Name: browser_sessions browser_sessions_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -

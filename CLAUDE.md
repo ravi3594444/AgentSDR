@@ -413,6 +413,33 @@ key. Activity reads it through `objectiveView(requestMessageId)`.
   `callTregEndpoint`, `reserveQuota`'s `guard`. Its spend is read from the
   ledgers by the request's jobs and id, never kept as a second counter.
 
+## Bright Data social research
+
+Bright Data is the research provider behind `research_social_sources`
+(`src/lib/brightdata/`, the job in `src/lib/discovery/socialResearch.server.ts`),
+behind the `brightdata` feature and a per-organization key saved on the
+Providers & features page (`brightdata_settings`, encrypted like every
+integration). Only Reddit is searched natively (posts by keyword and
+subreddit, with comments, behind the owner's own `reddit_enabled` switch);
+X, Instagram and Facebook posts, profiles and pages come from a web search
+(TinyFish, Tavily, the AI provider) or the owner's SERP zone, then are read
+through Bright Data. A dataset listed in `catalog.ts` is not "operational":
+the settings card shows per dataset only what this organization's own
+collections returned.
+
+Every collection is a `provider_usage` row (provider `brightdata`, product
+`records` or `serp`), reserved at its most credits under the organization's
+lock and the request's spend guard before Bright Data is called, settled
+from the records it reported (failed inputs are billed too). A lost trigger
+answer stays `uncertain` and is never sent again; a retried step polls its
+own collection; the same inputs settled within 7 days are downloaded again
+for free. Bright Data's API does not report the balance, so the monthly
+limit is AgentSDR's own count and every figure says "estimated". A 429 is
+never retried quickly (25 of them blacklist the IP). Nothing tops up or
+changes a plan. Findings keep their link, quote, author and read time;
+someone is contactable only through what their own profile, page or
+website publishes — AgentSDR never messages anyone on Reddit, X or Facebook.
+
 ## WhatsApp messaging (Unipile)
 
 Reps link their WhatsApp number in the Unipile dashboard; AgentSDR reads it

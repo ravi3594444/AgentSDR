@@ -46,6 +46,11 @@ if (!/@(localhost|127\.0\.0\.1)[:/]/.test(process.env.DATABASE_URL ?? "")) {
 
 const stamp = Date.now();
 const SCRAPER = "http://scraper.full-flow-check.test";
+const BRIGHTDATA = "https://brightdata.full-flow-check.test";
+const BRIGHTDATA_KEY = `bd-full-flow-${stamp}`;
+const REDDIT_POSTER = `clinic_owner_${stamp}`;
+const REDDIT_VENDOR = `vendor_${stamp}`;
+const REDDIT_POST = `https://www.reddit.com/r/Dentists/comments/ff${stamp.toString(36)}/missed_calls/`;
 process.env.GMAPS_SCRAPER_URL = SCRAPER;
 process.env.GEOCODER_URL = "off";
 process.env.DISCOVERY_DNS_CHECK = "off";
@@ -132,6 +137,35 @@ const SITE_PAGES: Record<string, string> = {
   [`${SMILE_SITE}careers`]: `<h1>Careers</h1><p>We're hiring</p><ul><li>Front Desk Coordinator – appointment reminders and recalls</li></ul>`,
 };
 const pageReads: string[] = [];
+
+// ------------------------------------------------------------ Bright Data, stood in: Reddit posts by keyword, then a poster's profile
+const brightdata = { triggers: [] as { dataset: string; discoverBy: string | null; input: Record<string, unknown>[]; auth: string | null }[] };
+function brightdataAnswer(method: string, url: URL, init?: RequestInit): Response {
+  const auth = new Headers(init?.headers).get("authorization");
+  if (auth !== `Bearer ${BRIGHTDATA_KEY}`) return new Response("Unauthorized", { status: 401 });
+  if (method === "GET" && url.pathname === "/datasets/v3/scrapers") return json(200, [{ id: "gd_lvz8ah06191smkebj4", domain: "reddit.com" }]);
+  if (method === "POST" && url.pathname === "/datasets/v3/trigger") {
+    const body = JSON.parse(String(init?.body ?? "{}")) as { input: Record<string, unknown>[] };
+    brightdata.triggers.push({ dataset: url.searchParams.get("dataset_id") ?? "", discoverBy: url.searchParams.get("discover_by"), input: body.input, auth });
+    return json(200, { snapshot_id: `sd_ff_${brightdata.triggers.length}_${stamp}` });
+  }
+  const snapshot = url.pathname.match(/^\/datasets\/v3\/(progress|snapshot)\/sd_ff_(\d+)_/);
+  if (snapshot) {
+    const trigger = brightdata.triggers[Number(snapshot[2]) - 1]!;
+    const now = new Date().toISOString();
+    const records = trigger.dataset === "gd_lvz8ah06191smkebj4"
+      ? [
+          { post_id: "t3_ff1", url: REDDIT_POST, user_posted: REDDIT_POSTER, title: "Our front desk misses calls all day", description: "We are a dental clinic in Pune and lose bookings every week. Looking for a service that answers missed calls.", num_comments: 1, date_posted: "2026-10-12T10:30:02.133Z", community_name: "Dentists", comments: [{ comment: "We sell exactly that, DM me", url: `${REDDIT_POST}comment/c1/`, user_commenting: REDDIT_VENDOR, date_of_comment: "2026-10-13T13:19:55.908Z", replies: [] }], timestamp: now, input: { url: REDDIT_POST }, discovery_input: { keyword: String(trigger.input[0]?.keyword ?? ""), date: "Past year" } },
+        ]
+      : trigger.input.map((input) => ({ url: String(input.url), name: REDDIT_POSTER, social_links: [{ url: PUNE_SMILES_SITE }], description: "Owner, Pune Smiles dental clinic", timestamp: now, input }));
+    if (snapshot[1] === "progress") return json(200, { status: "ready", snapshot_id: `sd_ff_${snapshot[2]}_${stamp}`, dataset_id: trigger.dataset, records: records.length, errors: 0 });
+    return json(200, records);
+  }
+  return json(405, { error: `not in the stand-in: ${method} ${url.pathname}` });
+}
+const PUNE_SMILES_SITE = `https://pune-smiles-${stamp}.test/`;
+SITE_PAGES[PUNE_SMILES_SITE] = `<html><head><title>Pune Smiles Dental</title></head><body><h1>Pune Smiles</h1><a href="tel:+912025531234">+91 20 2553 1234</a></body></html>`;
+
 const realFetch = globalThis.fetch;
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
@@ -151,6 +185,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (match![2]) return new Response(mapsCsv(phrase), { status: 200, headers: { "content-type": "text/csv" } });
     return json(200, { ID: match![1], Status: "ok" });
   }
+  if (url.origin === BRIGHTDATA) return brightdataAnswer(method, url, init);
   if (url.hostname.endsWith(".test") || url.hostname.endsWith(".invalid")) return new Response("not found", { status: 404 });
   return realFetch(input, init);
 }) as typeof fetch;
@@ -166,6 +201,10 @@ const { encryptIntegrationCredentials } = await import("@/lib/integrations/crede
 const { whatsappAccounts, whatsappCampaignLeads, whatsappCampaigns, whatsappCampaignSends, whatsappMessages } = await import("@/lib/whatsapp/schema");
 const { createWhatsappCampaign } = await import("@/lib/whatsapp/campaigns/campaigns.server");
 const { setDiscoveryPageOptions } = await import("@/lib/discovery/discovery.server");
+const { setBrightdataApiBase } = await import("@/services/brightdata");
+const { saveBrightdataSettings } = await import("@/lib/brightdata/brightdata.server");
+const { setFeature } = await import("@/lib/features/flags.server");
+const { providerUsage } = await import("@/lib/quota/schema");
 const { runAgentTurn } = await import("@/lib/assistant/agent.server");
 const { createThread, listMessages } = await import("@/lib/assistant/threads.server");
 const { runOneAssistantStep, reconcileAssistantJobReports } = await import("@/lib/assistant/worker");
@@ -177,6 +216,7 @@ const objectives = await import("@/lib/assistant/objective.server");
 const { listWork } = await import("@/lib/activity/activity.server");
 type AssistantJob = typeof schema.assistantJobs.$inferSelect;
 
+setBrightdataApiBase(BRIGHTDATA);
 setDiscoveryPageOptions({
   allowPrivate: true,
   fetchImpl: (async (input: RequestInfo | URL) => {
@@ -216,7 +256,7 @@ async function step(jobId: string): Promise<AssistantJob> {
 }
 async function searches(requestId: string): Promise<AssistantJob[]> {
   return db.select().from(schema.assistantJobs).where(and(
-    inArray(schema.assistantJobs.kind, ["discovery", "web_discovery", "linkedin_search", "apify_instagram"]),
+    inArray(schema.assistantJobs.kind, ["discovery", "web_discovery", "linkedin_search", "apify_instagram", "social_research"]),
     sql`${schema.assistantJobs.payload} ->> 'requestMessageId' = ${requestId}`,
   )).orderBy(schema.assistantJobs.createdAt);
 }
@@ -266,6 +306,8 @@ await runInOrganization(a.org.id, async () => {
   await db.insert(gridProviderCredentials).values({ providerId: provider!.id, encryptedPayload: encryptIntegrationCredentials({ apiKey: "full-flow-check", dsn: "https://unipile.invalid" }) });
   const [account] = await db.insert(whatsappAccounts).values({ organizationId: a.org.id, unipileAccountId: `full-flow-${stamp}`, name: "Clinic sales", phone: "+919800000077", status: "connected", connectedAt: new Date(Date.now() - 5 * 86_400_000) }).returning();
   await updateBusinessProfile({ businessName: "ChairFill", offer: "WhatsApp appointment reminders that fill empty chair hours for dental clinics", senderName: "Ravi" }, a.owner.id);
+  await setFeature("brightdata", true, a.owner.id);
+  await saveBrightdataSettings({ key: BRIGHTDATA_KEY, redditEnabled: true }, a.owner.id);
   // A contact the owner already has, named and titled their own way: the clinic's founder, by the address the clinic's website gives her.
   const [kavya] = await db.insert(people).values({ organizationId: a.org.id, email: `kavya@smile-${stamp}.test`, fullName: "Kavya Joshi-Rao", firstName: "Kavya", lastName: "Joshi-Rao", title: "Clinic Director", source: "manual" }).returning();
 
@@ -398,6 +440,39 @@ await runInOrganization(a.org.id, async () => {
     JSON.stringify({ request: requestItem && { state: requestItem.state, reason: requestItem.reason }, plans: planItems.map((item) => ({ state: item.state, counts: item.counts })) }));
   check("the chat model was asked twice per turn and the writer wrote each plan", modelCalls.filter((name) => name === "assistant_reply").length === 4 && modelCalls.filter((name) => name === "outreach_sequences").length >= 2,
     modelCalls.join(","));
+
+  // ---------------------------------------------------------- 8. a second request: Reddit research through Bright Data, qualified, planned and reported
+  replies = turn("Researching Reddit for clinics complaining about missed calls; I will write a WhatsApp plan for anyone whose own profile or website gives a number.", [{ tool: "research_social_sources", args: { platforms: ["reddit"], customers: "dental clinics", need: "missed calls at the front desk", where: "Pune", contactAfter: true, channels: ["whatsapp"] } }]);
+  await runAgentTurn({ threadId: thread.id, userId: a.owner.id, text: "Find 1 dental clinic on Reddit complaining about missed calls and message them on WhatsApp" });
+  const requestId2 = [...(await listMessages(thread.id, 500))].reverse().find((row) => row.role === "user")!.id;
+  const objective2 = await objectives.objectiveForRequest(requestId2);
+  const [social] = await searches(requestId2);
+  check("the second prompt starts a Reddit research job through Bright Data for a request with a target of 1", Boolean(objective2) && objective2!.leadTarget === 1 && social?.kind === "social_research", JSON.stringify({ target: objective2?.leadTarget, kind: social?.kind }));
+  await finishSearches(requestId2);
+  const socialDone = await jobRow(social!.id);
+  const socialResult = (socialDone.result ?? {}) as { found?: number; eligible?: number; excluded?: number; discussions?: number; creditsUsed?: number; fit?: { qualified?: number } };
+  check("Bright Data discovered the post by keyword and read the poster's profile, with the key as a Bearer header; the vendor's was not read",
+    brightdata.triggers.length === 2 && brightdata.triggers[0]!.discoverBy === "keyword" && brightdata.triggers[1]!.input[0]!.url === `https://www.reddit.com/user/${REDDIT_POSTER}/` && brightdata.triggers.every((trigger) => trigger.auth === `Bearer ${BRIGHTDATA_KEY}`),
+    JSON.stringify(brightdata.triggers.map((trigger) => [trigger.discoverBy, trigger.input])));
+  check("the research found the poster (a lead by the phone her website publishes) and the vendor (research only), and judged the poster against the request",
+    socialDone.status === "succeeded" && socialResult.found === 2 && socialResult.discussions === 2 && socialResult.eligible === 1 && socialResult.excluded === 1 && socialResult.fit?.qualified === 1 && socialResult.creditsUsed === 2,
+    JSON.stringify({ status: socialDone.status, error: socialDone.error, ...socialResult }));
+  const [posterMember] = await db.select().from(schema.leadAudienceMembers).where(and(eq(schema.leadAudienceMembers.audienceId, socialDone.audienceId!), eq(schema.leadAudienceMembers.status, "eligible")));
+  check("the lead keeps its evidence: the post, her words, the profile that led to the website, and the phone with its page",
+    posterMember?.fit === "match" && posterMember.sourceUrl === `https://www.reddit.com/user/${REDDIT_POSTER}/` && posterMember.facts.discussion === REDDIT_POST && /Looking for a service/.test(posterMember.facts.quote ?? "") && posterMember.evidence.some((item) => item.kind === "phone" && item.value === "+912025531234" && item.sourceUrl === PUNE_SMILES_SITE) && posterMember.channels.includes("whatsapp"),
+    JSON.stringify({ fit: posterMember?.fit, source: posterMember?.sourceUrl, facts: posterMember?.facts, evidence: posterMember?.evidence, channels: posterMember?.channels }));
+  const runsAfter = await plans(thread.id);
+  const plan3 = runsAfter.find((run) => run.plan.requestId === requestId2);
+  check("a WhatsApp plan was written for that one lead and waits for Start", runsAfter.length === 3 && plan3?.status === "proposed" && plan3.channels.join() === "whatsapp" && plan3.plan.assignments.length === 1, JSON.stringify(runsAfter.map((run) => ({ status: run.status, channels: run.channels, leads: run.plan.assignments.length }))));
+  const [driver2] = await db.select().from(schema.assistantJobs).where(and(eq(schema.assistantJobs.kind, "objective"), sql`${schema.assistantJobs.payload} ->> 'objectiveId' = ${objective2!.id}`));
+  await step(driver2!.id);
+  const stopped2 = await objectives.objectiveForRequest(requestId2);
+  const report2 = (await events(thread.id)).filter((row) => (row.toolResult as { objectiveId?: string; reportKey?: string } | null)?.objectiveId === objective2!.id && (row.toolResult as { reportKey?: string }).reportKey);
+  check("target reached: one final report names Reddit through Bright Data, its yield and the credits as an estimate",
+    stopped2?.status === "stopped" && stopped2.stopReason === "target_reached" && report2.length === 1 && /Reddit through Bright Data: 1 search, 2 found/.test(report2[0]!.content) && /2 credits, estimated from delivered records/.test(report2[0]!.content),
+    `${stopped2?.status} ${stopped2?.stopReason} ${report2.map((row) => row.content).join(" | ").slice(0, 700)}`);
+  const usage = await db.select({ status: providerUsage.status, used: providerUsage.usedUnits }).from(providerUsage).where(and(eq(providerUsage.organizationId, a.org.id), eq(providerUsage.provider, "brightdata")));
+  check("the request's Bright Data use is on the ledger, settled from what was delivered", usage.length === 2 && usage.every((row) => row.status === "settled") && usage.reduce((sum, row) => sum + (row.used ?? 0), 0) === 2, JSON.stringify(usage));
 
   shared = { threadId: thread.id, requestId, objectiveId: objective!.id, runIds: runs.map((run) => run.id) };
 });

@@ -80,6 +80,8 @@ const MAX_FINDINGS_KEPT = 300;
 const MAX_FAILURES_KEPT = 30;
 const FINDING_TEXT_CHARS = 1_200;
 const POLL_DELAY_MS = 20_000;
+/** Collections one job keeps open before it polls them: the organization's cap (BRIGHTDATA_LIMITS.openCollections) is never filled by one job's starts alone. */
+const JOB_OPEN_COLLECTIONS = 2;
 const MAX_EMAILS_PER_LEAD = 5;
 
 export type SocialResearchCriteria = {
@@ -453,6 +455,8 @@ async function startPlannedCollection(job: AssistantJob, payload: Payload, task:
   const started = await startCollection({ spec: task.spec, jobId: job.id, requestId: jobRequestId(job), threadId: job.threadId, spendGuard: await objectiveSpendGuard(jobRequestId(job)) });
   if (!started.started) {
     if (started.wait) {
+      // Open collections in the way (this job's, or another's): poll this job's own first, else wait.
+      if (/collections are still open/.test(started.reason) && (payload.collections ?? []).some((item) => item.state === "open")) return pollFirst(payload);
       return { next: "wait", delayMs: 60_000, progress: progressOf(payload, "searching", { waiting: { kind: started.budget === undefined && /rate limit/.test(started.reason) ? "quota" : "paused", provider: "brightdata", reason: `${task.label} waits: ${started.reason}` } }) };
     }
     state.state = task.hop ? state.state : "failed";
@@ -468,6 +472,16 @@ async function startPlannedCollection(job: AssistantJob, payload: Payload, task:
   if (started.reused) note(state, `${task.label}: the same collection ran within the last ${BRIGHTDATA_LIMITS.reuseDays} days; its records were read again at no cost`);
   state.state = "collecting";
   return null;
+}
+
+/** Leaves the plan where it is and polls the job's open collections; the collecting stage comes back to the plan when they are done. */
+function pollFirst(payload: Payload): StepOutcome {
+  return {
+    next: "stage",
+    stage: "collecting",
+    payload: { sources: payload.sources, plan: payload.plan, searchIndex: payload.searchIndex ?? 0, collections: payload.collections ?? [], reservedRecords: payload.reservedRecords ?? 0, findings: payload.findings ?? [], failures: payload.failures ?? [], urls: payload.urls ?? {} },
+    progress: progressOf(payload, "collecting", { collecting: (payload.collections ?? []).filter((item) => item.state === "open").length }),
+  };
 }
 
 async function stageSearching(job: AssistantJob, heartbeat: () => Promise<void>): Promise<StepOutcome> {
@@ -492,6 +506,8 @@ async function stageSearching(job: AssistantJob, heartbeat: () => Promise<void>)
     const outcome = await startPlannedCollection(job, payload, task);
     if (outcome) return outcome;
     await savePayload(job, { sources: payload.sources, collections: payload.collections ?? [], reservedRecords: payload.reservedRecords ?? 0, searchIndex: index + 1 });
+    // A few open at a time: they are polled before more are started, so one job never fills the organization's cap.
+    if ((payload.collections ?? []).filter((item) => item.state === "open").length >= JOB_OPEN_COLLECTIONS) return pollFirst({ ...payload, searchIndex: index + 1 });
     return finish();
   }
   const state = source(payload, task.platform);
@@ -631,7 +647,10 @@ async function stageCollecting(job: AssistantJob, heartbeat: () => Promise<void>
   if (collections.some((item) => item.state === "open")) {
     return { next: "stage", stage: "collecting", payload: { collections, findings, failures, sources: payload.sources }, progress: progressOf(payload, "collecting", { collecting: collections.filter((item) => item.state === "open").length }) };
   }
-  for (const state of payload.sources) if (state.state === "collecting") state.state = "searched";
+  // The plan has more to start (it was left to poll first): back to it.
+  if ((payload.searchIndex ?? 0) < payload.plan.length) {
+    return { next: "stage", stage: "searching", payload: { collections, findings, failures, sources: payload.sources }, progress: progressOf(payload, "searching", { searches: payload.plan.length, searchesDone: payload.searchIndex ?? 0 }) };
+  }
   if (!payload.hopsDone) {
     const hops = profileHops(payload);
     if (hops.length) {
@@ -643,6 +662,7 @@ async function stageCollecting(job: AssistantJob, heartbeat: () => Promise<void>
       };
     }
   }
+  for (const state of payload.sources) if (state.state === "collecting") state.state = "searched";
   return { next: "stage", stage: "reading", payload: { collections, findings, failures, sources: payload.sources, hopsDone: true, readIndex: 0, websites: [] }, progress: progressOf(payload, "reading", { read: 0 }) };
 }
 
@@ -877,12 +897,17 @@ function noContactReason(lead: Lead, rejected: number): string {
 
 type SaveOutcome = { member: NewMember | null; outcome: "eligible" | "excluded" | "duplicate" | "own"; known: boolean; email: boolean; phone: boolean; instagram: boolean };
 
-async function saveLead(lead: Lead, payload: Payload, context: { job: AssistantJob; index: number; owner: OwnerIdentity }): Promise<SaveOutcome> {
+async function saveLead(lead: Lead, payload: Payload, context: { job: AssistantJob; index: number; owner: OwnerIdentity; country: string | undefined }): Promise<SaveOutcome> {
   const { owner } = context;
   const none: SaveOutcome = { member: null, outcome: "own", known: false, email: false, phone: false, instagram: false };
   if (ownsDomain(owner, websiteDomain(lead.website)) || (lead.platform === "instagram" && lead.username && owner.instagram.has(lead.username.toLowerCase()))) return none;
   const { emails, rejected } = await usableEmails(lead, owner);
-  const phones = lead.phones.filter((phone) => !owner.phones.has(phone.value));
+  // A phone a profile or page publishes is checked to E.164 like every other (the website's were, when read).
+  const phones: FoundContactValue[] = [];
+  for (const phone of lead.phones) {
+    const checked = checkPhone(phone.value, context.country);
+    if (checked.ok && !owner.phones.has(checked.e164) && !phones.some((item) => item.value === checked.e164)) phones.push({ ...phone, value: checked.e164 });
+  }
   const igUsername = lead.platform === "instagram" ? instagramUsername(lead.username) : null;
   const id = stableMemberId(context.job.id, lead.platform === "reddit" ? context.index : context.index);
   const base = { id, source: SOCIAL_RESEARCH_SOURCE, sourceUrl: lead.sourceUrl, evidence: evidenceOf(lead, emails, phones, igUsername), facts: lead.facts, matchReason: lead.matchReason, signals: lead.signals };
@@ -957,9 +982,10 @@ async function stageSaving(job: AssistantJob, heartbeat: () => Promise<void>): P
   const tally = { ...emptyTally(), ...payload.tally };
   const profile = await getBusinessProfile();
   const owner = await ownerIdentity({ ownWebsite: profile.website ?? null });
+  const country = await organizationPhoneCountry();
   const members: NewMember[] = [];
   for (const [offset, lead] of leads.slice(start, start + SAVE_BATCH).entries()) {
-    const saved = await saveLead(lead, payload, { job, index: start + offset, owner });
+    const saved = await saveLead(lead, payload, { job, index: start + offset, owner, country });
     if (saved.outcome === "duplicate") tally.duplicates += 1;
     if (saved.outcome === "own") tally.ownBusiness += 1;
     if (saved.member) members.push(saved.member);

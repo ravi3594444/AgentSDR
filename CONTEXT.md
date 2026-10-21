@@ -14,9 +14,24 @@ word means here and, where it matters, what it does not mean.
 - **Source**: where leads come from, such as Google Maps, Instagram,
   LinkedIn, the open web, a directory, Hacker News or Stack Exchange.
 - **Provider**: who fetches from a source, such as the built-in Maps scraper
-  (the gosom sidecar), Apify, TinyFish, Tavily or Unipile. Labels always name
-  both, for example "Google Maps through the built-in scraper" or "Instagram
-  through Apify". Two providers for one source still count as one source.
+  (the gosom sidecar), Apify, TinyFish, Tavily, Bright Data or Unipile.
+  Labels always name both, for example "Google Maps through the built-in
+  scraper", "Instagram through Apify" or "Reddit through Bright Data". Two
+  providers for one source still count as one source.
+- **Social research**: one `social_research` job through Bright Data
+  (`socialResearch.server.ts`): Reddit posts with their comments found by
+  keyword and in named subreddits (only when the owner turned Reddit
+  research on), and X, Instagram and Facebook posts, profiles and pages a
+  web search (or the owner's SERP zone) returns, then the authors' profiles
+  and the websites they list. It answers "what are people saying", not
+  "who runs a business here" (that is a lead search).
+- **Finding**: one thing read from a social platform: a post, a comment, a
+  profile or a page, kept with its link, the words quoted, who wrote them
+  and when Bright Data read it. A finding is research evidence. Its author
+  is a lead only when their own profile or page, or the website it lists,
+  publishes an email or a phone, or (Instagram) a username for a DM; every
+  other author stays in the list as excluded, with the reason. AgentSDR
+  never messages anyone on Reddit, X or Facebook.
 - **Platform coverage**: the state of each platform the owner named:
   searched, queued, partial, blocked or unavailable, with the actual reason.
   A website's Instagram link is contact enrichment, not an Instagram search.
@@ -72,6 +87,12 @@ word means here and, where it matters, what it does not mean.
   advisory lock before the provider call, then settled with the actual
   usage. A lost response keeps the reserved amount and is never blindly
   retried.
+
+- **Credit (Bright Data)**: what Bright Data bills per record delivered, a
+  failed input included. AgentSDR counts credits itself from delivered
+  records against the owner's monthly limit, reserved at a collection's
+  most before it starts; the count is "estimated" because the API does not
+  report the account's balance. It never tops up or upgrades the account.
 
 ## Background work
 
