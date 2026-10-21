@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   aiReadiness,
   buildReadiness,
@@ -294,6 +296,17 @@ describe("Gmail watch and incoming replies", () => {
     expect(repliesReadiness(fresh()).details[0]).toContain("land in the Inbox");
     expect(replySyncReadiness(facts, channels).next).toContain("appears in the Inbox");
     expect(repliesReadiness(fresh()).links).toEqual([{ href: "/inbox", label: "Inbox" }]);
+  });
+
+  // Review of pilot L05: the Getting started page's own AI header, and the
+  // AI/ML API settings, still promised that every draft waits for review.
+  test("the Getting started page and the AI/ML API settings never promise review of every reply", () => {
+    const read = (...parts: string[]) => readFileSync(join(import.meta.dir, "..", "..", ...parts), "utf8");
+    const page = read("app", "getting-started", "page.tsx");
+    for (const source of [page, read("components", "ai", "AimlSettingsClient.tsx")]) {
+      expect(source).not.toMatch(/for your review|always wait|without your approval|Action required/);
+    }
+    expect(page).toContain("replies follow each plan's Review or Automatic mode");
   });
 
   test("a connected channel is proven only by a reply that actually arrived", () => {

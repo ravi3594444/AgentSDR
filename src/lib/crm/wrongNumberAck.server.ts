@@ -270,7 +270,7 @@ function summarize(channel: WrongRouteChannel, row: Pick<CrmWrongRoute, "ackStat
   const reason = row.ackReason ? ` (${row.ackReason})` : "";
   switch (row.ackStatus) {
     case "sent": return `${head}; one apology sent`;
-    case "drafted": return `${head}; the apology waits for you in Action required${reason}`;
+    case "drafted": return `${head}; the apology waits for you in the Inbox (Needs you)${reason}`;
     case "reserved":
     case "sending": return `${head}; the apology is being sent`;
     case "failed": return `${head}; the apology could not be sent and is not retried${reason}`;

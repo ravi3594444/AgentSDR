@@ -14,7 +14,9 @@
  * scope (results(all_time), reportRun, the campaign's own leads) and still
  * do after Stop; that the next step follows the plan's state — its sender,
  * then a pause, then an open decision (the Inbox first); that the chat lists
- * its request; and that a second organization gets nothing for any key.
+ * its request; that with every child finished the request reads researching
+ * while its objective runs and, paused, says to resume it (never Done); and
+ * that a second organization gets nothing for any key.
  * Nothing is sent and no provider is called.
  *
  *   bun run --conditions=react-server scripts/e2e/request-workspace.ts
@@ -198,6 +200,22 @@ await runInOrganization(a!.id, async () => {
   check("…and the Requests list shows it open and researching, with no row for the driver",
     rowBetween?.open === true && rowBetween.stateLabel.startsWith("Researching") && rowBetween.searches === 1 && !listedBetween.requests.some((row) => row.key === `job:${seeded.driver.id}`),
     JSON.stringify({ open: rowBetween?.open, stateLabel: rowBetween?.stateLabel, searches: rowBetween?.searches, keys: listedBetween.requests.map((row) => row.key) }));
+  // Review of L03: paused with every child finished and nothing waiting in the Inbox, it reads paused everywhere and its next step is to resume it, never Done.
+  await db.update(ownerDecisions).set({ status: "resolved" }).where(eq(ownerDecisions.runId, seeded.plan.id));
+  await setObjectiveState(seeded.objective.id, "pause", { name: null });
+  const pausedResearch = await requestSummary(requestKey);
+  check("paused research: open, \"Research paused\", and the next step is to resume it in the chat, not Done",
+    pausedResearch?.open === true && pausedResearch.stateLabel === "Research paused" && pausedResearch.nextAction.kind === "paused" && /resume/i.test(pausedResearch.nextAction.label) && pausedResearch.nextAction.href === `/assistant?thread=${seeded.thread.id}`,
+    JSON.stringify({ open: pausedResearch?.open, stateLabel: pausedResearch?.stateLabel, next: pausedResearch?.nextAction }));
+  check("…and it shows no reason it waited for before the pause", pausedResearch?.blocker === null && pausedResearch.objective?.waiting === null, JSON.stringify({ blocker: pausedResearch?.blocker, waiting: pausedResearch?.objective?.waiting }));
+  const pausedRow = (await listRequests()).requests.find((row) => row.key === requestKey);
+  check("…and the Requests list and the chat agree: open, Research paused",
+    pausedRow?.open === true && pausedRow.stateLabel === "Research paused" && (await threadRequests(seeded.thread.id))[0]?.open === true,
+    JSON.stringify({ open: pausedRow?.open, stateLabel: pausedRow?.stateLabel }));
+  await setObjectiveState(seeded.objective.id, "resume", { name: null });
+  const resumedResearch = await requestSummary(requestKey);
+  check("resumed: researching again", resumedResearch?.open === true && resumedResearch.stateLabel.startsWith("Researching") && resumedResearch.nextAction.kind === "research",
+    JSON.stringify({ stateLabel: resumedResearch?.stateLabel, next: resumedResearch?.nextAction.kind }));
   await setObjectiveState(seeded.objective.id, "cancel", { name: null });
   const stoppedRequest = await requestSummary(requestKey);
   const stoppedRow = (await listRequests()).requests.find((row) => row.key === requestKey);
@@ -214,6 +232,8 @@ await runInOrganization(b!.id, async () => {
   check("…lists none of its work", !listed.requests.some((row) => [requestKey, runKey].includes(row.key)) && !listed.manualCampaigns.some((row) => row.key === campaignKey));
   check("…and nothing for its chat", (await threadRequests(seeded.thread.id)).length === 0);
 });
+// No worker runs here, and Stop woke the driver: it is finished by hand, as it would end, so no other suite's worker claims it.
+await db.update(assistantJobs).set({ status: "succeeded", stage: "done", finishedAt: new Date() }).where(eq(assistantJobs.id, seeded.driver.id));
 const [runAfter] = await db.select().from(outreachRuns).where(eq(outreachRuns.id, seeded.plan.id));
 check("reading changed nothing the checks did not do themselves", runAfter?.status === "stopped");
 

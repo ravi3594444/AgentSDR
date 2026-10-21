@@ -6,6 +6,7 @@ import { RiCheckLine, RiExternalLinkLine, RiFireLine, RiTimeLine, RiUserVoiceLin
 
 import * as Badge from "@/components/alignui/badge";
 import * as Button from "@/components/alignui/button";
+import { formatChatDateTime } from "@/lib/assistant/chatTime";
 import type { NeedsYouItem } from "@/lib/assistant/handoff.server";
 import { cn } from "@/utils/cn";
 
@@ -16,7 +17,8 @@ import { cn } from "@/utils/cn";
  * the app or their phone), or marks it done.
  */
 
-export type NeedsYouPayload = { items: NeedsYouItem[]; reviewWaiting: number; actionRequired?: number };
+/** `timeZone` is the organization's, which the cards write their times in (chatTime.ts). */
+export type NeedsYouPayload = { items: NeedsYouItem[]; reviewWaiting: number; actionRequired?: number; timeZone?: string };
 
 const POLL_MS = 10_000;
 
@@ -26,7 +28,7 @@ function tone(priority: number): "red" | "orange" | "gray" {
   return priority === 0 ? "red" : priority <= 3 ? "orange" : "gray";
 }
 
-function Item({ item, onChanged }: { item: NeedsYouItem; onChanged: () => void }) {
+function Item({ item, timeZone, onChanged }: { item: NeedsYouItem; timeZone: string; onChanged: () => void }) {
   const [answer, setAnswer] = useState("");
   const [answering, setAnswering] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -62,7 +64,7 @@ function Item({ item, onChanged }: { item: NeedsYouItem; onChanged: () => void }
           {item.leadName}
           {item.company && <span className="text-text-sub-600"> · {item.company}</span>}
         </p>
-        <span className="inline-flex items-center gap-1 text-paragraph-xs text-text-soft-400" title={new Date(item.createdAt).toLocaleString()}>
+        <span className="inline-flex items-center gap-1 text-paragraph-xs text-text-soft-400" title={formatChatDateTime(item.createdAt, timeZone)}>
           <RiTimeLine className="size-3.5" aria-hidden /> waiting {item.waited}
         </span>
       </div>
@@ -146,6 +148,7 @@ export default function NeedsYouList({ initial, compact = false, inbox = false, 
 
   const items = (payload?.items ?? []).filter((item) => !channel || item.channel === channel);
   const changed = () => { void load(); onChanged?.(); };
+  const timeZone = payload?.timeZone ?? "UTC";
   useEffect(() => { onCount?.(items.length); }, [onCount, items.length]);
   const review = payload?.reviewWaiting ?? 0;
   const actionRequired = payload?.actionRequired ?? 0;
@@ -173,7 +176,7 @@ export default function NeedsYouList({ initial, compact = false, inbox = false, 
           {items.length > 0 && <span className="text-paragraph-xs text-text-sub-600">{items.length} {items.length === 1 ? "lead is" : "leads are"} waiting for your answer, most urgent first</span>}
         </div>
         {error && <p role="alert" className="mt-2 text-paragraph-xs text-error-base">{error}</p>}
-        {items.length > 0 && <ul className="mt-3 space-y-2">{items.map((item) => <Item key={item.id} item={item} onChanged={changed} />)}</ul>}
+        {items.length > 0 && <ul className="mt-3 space-y-2">{items.map((item) => <Item key={item.id} item={item} timeZone={timeZone} onChanged={changed} />)}</ul>}
       </section>
     );
   }
@@ -190,7 +193,7 @@ export default function NeedsYouList({ initial, compact = false, inbox = false, 
         </span>
       </div>
       {error && <p role="alert" className="mt-2 text-paragraph-xs text-error-base">{error}</p>}
-      {items.length > 0 && <ul className="mt-3 space-y-2">{items.map((item) => <Item key={item.id} item={item} onChanged={changed} />)}</ul>}
+      {items.length > 0 && <ul className="mt-3 space-y-2">{items.map((item) => <Item key={item.id} item={item} timeZone={timeZone} onChanged={changed} />)}</ul>}
       {review > 0 && (
         <p className="mt-3 text-paragraph-xs text-text-sub-600">
           {review} {review === 1 ? "reply waits" : "replies wait"} for your review (Review mode) in{" "}

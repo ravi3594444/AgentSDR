@@ -116,8 +116,9 @@ function groupState(items: readonly WorkItem[], objective: RequestStateFacts["ob
  * The organization's requests, open first then newest: the last 30 days and
  * anything still open, optionally on one channel or in one state. Campaigns
  * made by hand that no run owns are listed apart, so older work stays findable.
+ * `timeZone` is the organization's, which the page writes its times in.
  */
-export async function listRequests(input: { channel?: string | null; state?: "open" | "done" | null; days?: number; now?: Date } = {}): Promise<{ requests: RequestRow[]; manualCampaigns: RequestRow[] }> {
+export async function listRequests(input: { channel?: string | null; state?: "open" | "done" | null; days?: number; now?: Date } = {}): Promise<{ requests: RequestRow[]; manualCampaigns: RequestRow[]; timeZone: string }> {
   const now = input.now ?? new Date();
   const days = input.days ?? LIST_DAYS;
   const listed = (await listWork(now, { days })).filter(isOwnWork);
@@ -184,8 +185,8 @@ export async function listRequests(input: { channel?: string | null; state?: "op
   const keep = (row: RequestRow) => (!input.channel || row.channels.includes(input.channel))
     && (!input.state || (input.state === "open" ? row.open : !row.open));
   const order = (a: RequestRow, b: RequestRow) => Number(b.open) - Number(a.open) || b.startedAt.localeCompare(a.startedAt);
-  const manualCampaigns = (await listManualCampaigns(now, days)).filter(keep).sort(order);
-  return { requests: requests.filter(keep).sort(order), manualCampaigns };
+  const [manual, timeZone] = await Promise.all([listManualCampaigns(now, days), organizationTimeZone()]);
+  return { requests: requests.filter(keep).sort(order), manualCampaigns: manual.filter(keep).sort(order), timeZone };
 }
 
 /** Email, WhatsApp and LinkedIn campaigns no outreach run owns: active or paused, or touched in the window. */
@@ -347,16 +348,22 @@ export async function requestSummary(keyText: string, now = new Date()): Promise
     ?? (lastPlan && !lastPlan.open ? lastPlan.reason ?? lastPlan.stateLabel : null)
     ?? (campaign && !["active", "paused"].includes(campaign.status) ? `Campaign ${campaign.status}` : null)
     ?? (searches.length && !searches.some((item) => item.open) ? searches[0]!.reason ?? searches[0]!.stateLabel : null);
+  // Its own work and its objective decide its state; a campaign key reads its campaign's.
+  const state = requestState({ items: children, objective: objective ? { status: objective.status, waiting: objective.waiting } : null });
+  const campaignOpen = Boolean(campaign && ["active", "paused"].includes(campaign.status));
   const nextAction = nextActionFor({
     waitingInInbox: Number(attention?.n ?? 0) + waiting.needsYou,
     awaitingStart: plans.filter((plan) => plan.runStatus === "proposed").map((plan) => ({ name: plan.title.replace(/^Outreach plan: /, ""), threadId: plan.threadId })),
     senderProblem,
     waitingUntil,
     paused: paused ? { name: paused.title.replace(/^Outreach plan: /, "") } : null,
+    // Paused research is open while nothing else of it is, so its next step is to resume it, never "Done".
+    researchPaused: objective?.status === "paused" ? { threadId: objective.threadId } : null,
     researching,
-    open: children.some((item) => item.open) || Boolean(campaign && ["active", "paused"].includes(campaign.status)),
+    open: state.open || campaignOpen,
     outcome,
   });
+  // The objective's waiting reason is read only while it runs (objective.server.ts viewOf): a paused one is held by the pause.
   const blocker = objective?.waiting
     ?? openPlans.find((plan) => ["waiting_send", "outside_hours", "partial", "failed"].includes(plan.state))?.reason
     ?? searches.find((item) => item.state === "failed")?.reason
@@ -371,9 +378,6 @@ export async function requestSummary(keyText: string, now = new Date()): Promise
       }
     }
   }
-  // Its own work and its objective decide its state; a campaign key reads its campaign's.
-  const state = requestState({ items: children, objective: objective ? { status: objective.status, waiting: objective.waiting } : null });
-  const campaignOpen = Boolean(campaign && ["active", "paused"].includes(campaign.status));
   return {
     key: formatRequestKey(key),
     kind: key.kind,

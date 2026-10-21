@@ -35,3 +35,23 @@ describe("the chat formats nothing in the browser's or the server's own zone", (
     expect(source).toContain("formatChatTime(");
   });
 });
+
+// Review of pilot L04: Reports, Requests, the request panel and the Inbox's
+// Needs you cards wrote their times (tooltips too) in the viewer's or the
+// server's own zone, while every other time beside them is the
+// organization's. A date's toLocale*() with no time zone is the tell.
+describe("the other outreach pages write owner-visible times in the organization's zone too", () => {
+  const files = [
+    ["components", "assistant", "ResultsClient.tsx"],
+    ["components", "assistant", "RequestsClient.tsx"],
+    ["components", "assistant", "NeedsYouList.tsx"],
+    ["components", "assistant", "RequestSummaryView.tsx"],
+    ["components", "activity", "WorkRow.tsx"],
+  ];
+
+  test.each(files.map((parts) => [parts.join("/"), parts] as const))("%s formats no date in the browser's or the server's own zone", (_path, parts) => {
+    const source = readFileSync(join(import.meta.dir, "..", "..", ...parts), "utf8");
+    expect(source).not.toMatch(/new Date\([^)]*\)\.toLocale\w*String\(/);
+    expect(source).not.toMatch(/\.toLocale(?:Date|Time)String\(/);
+  });
+});

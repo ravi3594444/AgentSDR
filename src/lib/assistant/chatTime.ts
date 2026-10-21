@@ -1,12 +1,14 @@
 import { zoneOrUtc } from "./displayTime";
 
 /**
- * Times in the chat (AssistantClient.tsx), in one explicit time zone: the
- * organization's (reporting/metrics.server.ts organizationTimeZone, the
- * same policy Reports and the request panel use), never the process's or
- * the browser's. The server and the browser then render the same text, so
- * a reload never changes a message's time (pilot finding L04). Stored
- * instants stay UTC. Pure and client-safe: Intl only.
+ * Times in the chat (AssistantClient.tsx) and the outreach pages beside it
+ * (Reports, Requests, the request panel, the Inbox's Needs you cards, their
+ * tooltips too), in one explicit time zone: the organization's
+ * (reporting/metrics.server.ts organizationTimeZone, the same policy
+ * Reports use), never the process's or the browser's. The server and the
+ * browser then render the same text, so a reload never changes a message's
+ * time (pilot finding L04). Stored instants stay UTC. Pure and client-safe:
+ * Intl only.
  */
 
 const LOCALE = "en-US";

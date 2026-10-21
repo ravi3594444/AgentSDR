@@ -520,7 +520,7 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
     });
     if (!sendNow) {
       if (await setAsideIfAnswered(scope, draft.id)) return answeredMeanwhile();
-      const reason = membership.automatic ? "the assistant only sends from a production server" : "the run is in Review mode: the reply waits for you in Action required";
+      const reason = membership.automatic ? "the assistant only sends from a production server" : "the run is in Review mode: the reply waits for you in the Inbox (Needs you)";
       const decisionId = note ? await tellOwner({ scope, facts, leadName, ...ownerNoteToDecision(note.kind), note: note.note, draftId: draft.id, told: false, brief }) : null;
       return finish(runRowId, scope, startedAt, { ...base, status: "drafted", reason, reply, draftId: draft.id, decisionId });
     }

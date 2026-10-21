@@ -24,7 +24,7 @@ describe("replyState", () => {
       .toBe("Answered automatically in 12 s; you were told in Needs you");
     expect(replyState({ ...base, agentStatus: "running" }, true, now)).toMatchObject({ tone: "waiting" });
     expect(replyState({ ...base, agentStatus: "no_reply", agentReason: "they only said thanks" }, true, now)).toEqual({ tone: "done", text: "No answer needed: they only said thanks" });
-    expect(replyState({ ...base, agentStatus: "drafted", agentReason: "the run is in Review mode: the reply waits for you in Action required" }, false, now).text).toContain("Review mode");
+    expect(replyState({ ...base, agentStatus: "drafted", agentReason: "the run is in Review mode: the reply waits for you in the Inbox (Needs you)" }, false, now).text).toContain("Review mode");
     expect(replyState({ ...base, agentStatus: "drafted", draftStatus: "sent" }, false, now)).toMatchObject({ tone: "done", text: "Answered" });
     expect(replyState({ ...base, agentStatus: "told_owner", agentReason: "asks about a refund" }, true, now)).toMatchObject({ tone: "you" });
     expect(replyState({ ...base, agentStatus: "stopped", agentReason: "a newer message arrived; that one is answered instead" }, true, now)).toMatchObject({ tone: "done" });
@@ -35,11 +35,32 @@ describe("replyState", () => {
     const wrong = { ...base, agentAction: "wrong_number" };
     expect(replyState({ ...wrong, agentStatus: "replied", agentReason: "Wrong number: outreach to this number stopped; one apology sent" }, true, now))
       .toEqual({ tone: "done", text: "Wrong number — outreach stopped; apology sent" });
-    expect(replyState({ ...wrong, agentStatus: "drafted" }, false, now)).toEqual({ tone: "you", text: "Wrong number — outreach stopped; the apology waits for you in Action required" });
+    expect(replyState({ ...wrong, agentStatus: "drafted" }, false, now)).toEqual({ tone: "you", text: "Wrong number — outreach stopped; the apology waits for you in the Inbox (Needs you)" });
     expect(replyState({ ...wrong, agentStatus: "drafted", draftStatus: "sent" }, false, now).text).toBe("Wrong number — outreach stopped; apology sent");
     expect(replyState({ ...wrong, agentStatus: "stopped", agentReason: "Wrong number: outreach to this number stopped; no apology (they asked not to be contacted)" }, true, now))
       .toEqual({ tone: "done", text: "Wrong number — outreach stopped; no apology (they asked not to be contacted)" });
     expect(replyState({ ...wrong, agentStatus: "stopped", agentReason: "Wrong number: outreach to this number stopped; whether the apology arrived is uncertain, so it is not resent" }, true, now).tone).toBe("you");
     expect(replyState({ ...wrong, agentStatus: "stopped", agentReason: "Wrong number: outreach to this number stopped; the apology could not be sent and is not retried (refused)" }, true, now).tone).toBe("failed");
+  });
+});
+
+// Review of pilot L05: the chat's reply lines sent people to "Action
+// required"; what waits for a person is in the Inbox, under Needs you.
+describe("where a reply that waits for a person is", () => {
+  test("every line names the Inbox (Needs you), never Action required", () => {
+    const records: [ReplyRecord, boolean][] = [
+      [{ ...base, draftStatus: "awaiting_review" }, false],
+      [{ ...base, draftStatus: "awaiting_review" }, true],
+      [{ ...base, draftStatus: "failed" }, true],
+      [{ ...base, receivedAt: "2026-10-15T09:00:00Z" }, true],
+      [{ ...base, agentStatus: "drafted", agentReason: "the run is in Review mode: the reply waits for you in the Inbox (Needs you)" }, false],
+      [{ ...base, agentAction: "wrong_number", agentStatus: "drafted" }, false],
+    ];
+    for (const [record, automatic] of records) {
+      const { text } = replyState(record, automatic, now);
+      expect(text).not.toContain("Action required");
+      expect(text).toContain("the Inbox (Needs you)");
+    }
+    expect(replyState({ ...base, draftStatus: "awaiting_review" }, false, now).text).toBe("Review mode: the answer waits for you in the Inbox (Needs you)");
   });
 });

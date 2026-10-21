@@ -19,7 +19,7 @@ describe("request keys", () => {
   });
 });
 
-const quiet: NextStepFacts = { waitingInInbox: 0, awaitingStart: [], senderProblem: null, waitingUntil: null, paused: null, researching: false, open: false, outcome: null };
+const quiet: NextStepFacts = { waitingInInbox: 0, awaitingStart: [], senderProblem: null, waitingUntil: null, paused: null, researchPaused: null, researching: false, open: false, outcome: null };
 
 describe("the next step: the first that applies", () => {
   test("what waits in the Inbox comes first", () => {
@@ -47,6 +47,18 @@ describe("the next step: the first that applies", () => {
     expect(nextActionFor({ ...quiet, paused: { name: "Chicago" }, researching: true }).kind).toBe("paused");
     expect(nextActionFor({ ...quiet, researching: true, open: true }).kind).toBe("research");
     expect(nextActionFor({ ...quiet, open: true }).label).toBe("Sending");
+  });
+
+  // Review of pilot L03: research the owner paused, with every search
+  // finished, read "Done" as its next step while the panel said paused.
+  test("research the owner paused: resume it in the chat, never Done", () => {
+    const step = nextActionFor({ ...quiet, researchPaused: { threadId: "t1" }, outcome: "Done" });
+    expect(step).toMatchObject({ kind: "paused", label: "Resume the research when ready", href: "/assistant?thread=t1" });
+    expect(step.detail).toContain("nothing new is searched until you resume it");
+    expect(nextActionFor({ ...quiet, researchPaused: { threadId: null } }).href).toBeNull();
+    // A paused plan is named first (its card resumes it); paused research comes before a search still finishing.
+    expect(nextActionFor({ ...quiet, paused: { name: "Chicago" }, researchPaused: { threadId: "t1" } }).label).toContain("Chicago");
+    expect(nextActionFor({ ...quiet, researchPaused: { threadId: "t1" }, researching: true, open: true }).kind).toBe("paused");
   });
 
   test("done says how it ended; nothing open and no outcome is nothing to do", () => {
