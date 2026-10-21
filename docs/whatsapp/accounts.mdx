@@ -74,19 +74,14 @@ A "new chat" means a number this account has never messaged. Chats the lead star
 
 Other refusals you may see: the number is not connected, the message is empty, or the message is longer than 4096 characters.
 
-### Change the defaults
+### Automatic pacing
 
-The numbers above are your organization's **Sending rules** for WhatsApp, on **Settings → WhatsApp → Sending rules**:
+The numbers above are applied automatically: 24 hours of warm-up, 25 new chats per number in any rolling 24 hours, and 10 seconds between messages from one number. There is no setting for them, and no sending hours: numbers send at any time of day. A number that already had its own **New chats a day** keeps it.
 
-- **Warm-up after linking a number**: 0 to 336 hours. AgentSDR warns below 24.
-- **New chats per 24 hours, per number**: 1 to 200. It warns above 25.
-- **Seconds between messages, per number**: 3 to 600. It warns below 10.
-- **Sending hours for campaigns**: any time unless you set hours. These apply to campaigns only, not to messages you send yourself.
-
-A number's own **New chats a day** overrides the organization rule. See [Sending rules](/workspace/sending-rules) for how rules and overrides combine.
+A first message to someone no channel has contacted before also takes one place under your workspace's [daily lead limit](/workspace/sending-rules). Once today's places are used, first messages to new people wait for the reset; follow-ups and replies go on.
 
 <Tip>
-Keep the defaults for the first weeks of a new number. WhatsApp bans numbers that start many chats with people who do not have them saved.
+WhatsApp bans numbers that start many chats with people who do not have them saved, which is why new numbers warm up and every number starts new chats slowly.
 </Tip>
 
 ## Messages and where they come from
@@ -109,7 +104,7 @@ A reply from a lead you already know by phone lands in the [CRM](/crm/overview) 
     Place and record WhatsApp calls.
   </Card>
   <Card title="Sending rules" icon="settings" href="/workspace/sending-rules">
-    Limits per channel and per account.
+    The daily lead limit and automatic pacing.
   </Card>
   <Card title="Integrations" icon="plug" href="/integrations">
     Connect Unipile and Cloudflare R2.

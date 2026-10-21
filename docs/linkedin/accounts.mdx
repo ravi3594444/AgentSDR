@@ -1,10 +1,10 @@
 ---
 title: "LinkedIn accounts"
-description: "Connect LinkedIn accounts through Unipile, see their status, and set each account's daily connection request limit and working hours."
+description: "Connect LinkedIn accounts through Unipile, see their status, their requests today and when each next works."
 icon: "linkedin"
 ---
 
-LinkedIn campaigns send connection requests and messages from LinkedIn accounts that you connect through Unipile. You connect Unipile once for your organization, then add each LinkedIn profile from **Settings → LinkedIn**. That section has three tabs: **Accounts**, **Connection** and **Sending rules**.
+LinkedIn campaigns send connection requests and messages from LinkedIn accounts that you connect through Unipile. You connect Unipile once for your organization, then add each LinkedIn profile from **Settings → LinkedIn**. That section has two tabs: **Accounts** and **Connection**.
 
 <Info>
 Automating LinkedIn is against LinkedIn's terms and can get an account restricted. Read [Responsible use](/responsible-use) first. The limits on this page exist to keep activity modest, but no tool can promise an account will never be limited.
@@ -55,9 +55,9 @@ The cards at the top show **Connected**, **Needs attention**, **Requests today**
 | --- | --- |
 | **Account** | Name and username, with a Premium badge for Premium or Sales Navigator accounts. |
 | **Status** | **Connected**, **Limit reached** or **Disconnected**. |
-| **Requests today** | Connection requests sent today against the account's daily limit. "Own limit" appears when you set a limit for this account. |
+| **Requests today** | Connection requests sent today against the account's daily limit. "Own limit" appears when the account has a limit of its own. |
 | **Pending** | Leads waiting for a connection request from this account. |
-| **Schedule** | The account's working hours (or "Any time"), and when it next runs. |
+| **Next run** | When the account next works, after its rest between runs. |
 
 What the statuses mean:
 
@@ -67,36 +67,22 @@ What the statuses mean:
 
 ## Daily connection request limit
 
-The default depends on the account type, and both defaults are set in [Sending rules](/workspace/sending-rules):
+Each account sends at most a set number of connection requests a day. The limit is automatic and depends on the account type:
 
-| Account | Default per day | Allowed |
-| --- | --- | --- |
-| Premium or Sales Navigator | 30 | 1 to 100 |
-| Free | 5 | 1 to 50 |
+| Account | Per day |
+| --- | --- |
+| Premium or Sales Navigator | 30 |
+| Free | 5 |
 
-To change one account, open its **...** menu and choose **Daily request limit**. Enter a number, or leave it empty to follow the organization's rule, which also means a later change to the rule reaches that account. The dialog warns before you go past the safe edge (above 30 for Premium, above 10 for free) but still lets you save.
+An account that was given its own limit before these became automatic keeps it; the table marks it "Own limit". New people an account invites also count toward your [daily lead limit](/workspace/sending-rules), shared by every channel.
 
 <Warning>
-LinkedIn restricts accounts that send much more than 30 invitations a day, and free accounts have a much smaller weekly allowance. Raising the limit past the warning raises the risk of restriction.
+LinkedIn restricts accounts that send much more than 30 invitations a day, and free accounts have a much smaller weekly allowance.
 </Warning>
 
-## Working hours
+## Any time of day
 
-By default an account works whenever its campaigns are due. To restrict it, choose **Set working hours** (or **Edit working hours**) in the row menu. The **Working hours** dialog has:
-
-- **Restrict outreach to working hours**: off means any time.
-- **Timezone**, **Start** and **End**.
-- **Working days**, where at least one day must be selected.
-
-Outside the window the account does nothing: it does not look up profiles, send invitations or send follow-ups. If you want the same hours for every account, set **Working hours for accounts without their own** in [Sending rules](/workspace/sending-rules). An account's own hours always win over that rule.
-
-<Note>
-The Schedule column shows "Any time" for an account without hours of its own, even when an organization-wide rule applies to it.
-</Note>
-
-## Pace between runs
-
-Beyond the daily limit, accounts send in short runs and then rest. Each run sends a few invitations with a gap between them, then the account waits before its next run. These numbers are organization-wide and are in [Sending rules](/workspace/sending-rules). The defaults and how the engine uses them are covered in [LinkedIn campaigns](/linkedin/campaigns).
+Accounts work at any time, every day: there are no working hours to set. Beyond the daily limit, accounts send in short runs and then rest. Each run sends a few invitations with a gap between them, then the account waits before its next run; **Next run** shows when. The defaults and how the engine uses them are covered in [LinkedIn campaigns](/linkedin/campaigns).
 
 ## Related
 
@@ -108,7 +94,7 @@ Beyond the daily limit, accounts send in short runs and then rest. Each run send
     Conversations and connections.
   </Card>
   <Card title="Sending rules" icon="settings" href="/workspace/sending-rules">
-    Limits, gaps and working hours.
+    The daily lead limit and automatic pacing.
   </Card>
   <Card title="Integrations" icon="plug" href="/integrations">
     Unipile credentials step by step.

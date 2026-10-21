@@ -67,7 +67,7 @@ The scheduled jobs run inside the app, so there is nothing to set up: no cron co
 | Job | When | What it does |
 |---|---|---|
 | Daily rollover | Once a day per organization, at the start of that organization's day | Builds the organization's email send queues, renews its Gmail push watches (only needed for [Gmail reply sync](/integrations/gmail-reply-sync)) and resets its LinkedIn accounts' daily limits. **Without it nothing is sent.** |
-| LinkedIn outreach | Every 30 minutes (:00 and :30, UTC) | Syncs accounts, resolves profiles, sends invitations and follow-ups. Each account's working hours and daily limits still apply. |
+| LinkedIn outreach | Every 30 minutes (:00 and :30, UTC) | Syncs accounts, resolves profiles, sends invitations and follow-ups, at any time of day. Each account's daily limits and the workspace's daily lead limit still apply. |
 | Webhook replay | Every 10 minutes | Re-processes failed or abandoned LinkedIn and Instagram webhook deliveries. |
 | History pruning | Daily at 00:00 UTC | Deletes LinkedIn job history older than 1 day and scheduler records older than 30 days. |
 

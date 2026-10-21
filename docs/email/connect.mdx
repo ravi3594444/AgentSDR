@@ -1,6 +1,6 @@
 ---
 title: "Connect email"
-description: "Connect Google Workspace, add the mailboxes campaigns send from, and set each mailbox's signature and sending hours."
+description: "Connect Google Workspace, add the mailboxes campaigns send from, and set each mailbox's signature."
 icon: "mail"
 ---
 
@@ -64,7 +64,7 @@ An address can belong to only one organization. If it is already connected elsew
 
 ## Read the Mailboxes table
 
-Each row shows a status, how many emails went out today against the mailbox's daily limit, and its sending hours.
+Each row shows a status and how many emails went out today against the mailbox's daily limit. Mailboxes send at any time of day, every day; there are no sending hours to set.
 
 | Status | Meaning |
 | --- | --- |
@@ -75,29 +75,21 @@ Each row shows a status, how many emails went out today against the mailbox's da
 
 Only **Connected** mailboxes send. The cards above the table summarise **Connected**, **Needs attention**, **Sent today** and **Left today** (daily limits of connected mailboxes minus what they sent). Failed mailboxes are sorted to the top.
 
-Use the **...** menu on a row for **Test connection**, **Send test email** (connected mailboxes only), **Sending hours**, **Signature** and **Remove mailbox**. Removing a mailbox stops it sending, and emails scheduled from it do not go out.
+Use the **...** menu on a row for **Test connection**, **Send test email** (connected mailboxes only), **Signature** and **Remove mailbox**. Removing a mailbox stops it sending, and emails scheduled from it do not go out.
 
 ## Daily limit
 
-A new mailbox starts with the organization's **Emails per day, per mailbox** rule, which defaults to 30 (allowed 1 to 200). The table shows each mailbox's sent-today count against its own limit, and the queue never schedules more than that limit in a day.
+A new mailbox starts with the organization's emails-per-mailbox pacing, 30 a day by default. The table shows each mailbox's sent-today count against its own limit, and the queue never schedules more than that limit in a day. This pacing is automatic: there is no setting for it. Above about 50 a day from one Google Workspace mailbox, deliverability usually drops and Google may throttle it.
 
-The page warns above about 50 a day from one Google Workspace mailbox, because deliverability usually drops and Google may throttle it. New mailboxes should start low. You change the default under [Sending rules](/workspace/sending-rules).
-
-<Note>
-The mailbox table does not currently have a control for editing one mailbox's limit. The limit is copied from the organization rule when the mailbox is added.
-</Note>
+New people a mailbox emails also count toward your [daily lead limit](/workspace/sending-rules), shared by every channel.
 
 ## Signature
 
 Choose **Signature** on a mailbox to edit it. It is plain text, such as a name and title. In a sequence, put `%signature%` where it should appear; if the email body has no placeholder, the signature is appended at the end. If the mailbox has no signature, the placeholder is removed rather than sent literally.
 
-## Sending hours
+## Pacing
 
-Choose **Sending hours** on a mailbox. Set a **Timezone**, then turn on the **Days** you want and a start and end time for each. The mailbox only sends inside this window, and emails due outside it wait for the next open slot. If every day is off, the mailbox will not send at all. A day whose end is before its start is treated as an overnight window.
-
-New mailboxes copy the organization's default: Monday to Friday, 09:00 to 18:00, in `Asia/Kolkata` unless you change it in [Sending rules](/workspace/sending-rules). Changing the default does not rewrite mailboxes that already exist.
-
-Between sends, each mailbox also waits a random gap, 18 to 24 minutes by default. Sending more often than every 10 minutes from one mailbox looks automated to spam filters.
+Mailboxes send at any time, every day. Between sends, each mailbox waits a random gap, 18 to 24 minutes by default, because sending more often than every 10 minutes from one mailbox looks automated to spam filters. See [Sending rules](/workspace/sending-rules).
 
 ## Related
 
@@ -109,7 +101,7 @@ Between sends, each mailbox also waits a random gap, 18 to 24 minutes by default
     Where replies arrive.
   </Card>
   <Card title="Sending rules" icon="settings" href="/workspace/sending-rules">
-    Default limits, gaps and hours.
+    The daily lead limit and automatic pacing.
   </Card>
   <Card title="Google Workspace setup" icon="plug" href="/integrations/google-workspace">
     Step by step: Cloud project, service account, domain-wide delegation, and reply sync.
