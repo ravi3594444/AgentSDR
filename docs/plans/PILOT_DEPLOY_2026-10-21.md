@@ -27,6 +27,7 @@ In the persistent terminal (`tmux new -A -s agentsdr-deploy`), run:
 (
 set -euo pipefail
 cd ~/leads-x
+git remote set-branches --add origin codex/pilot-deploy-20261021
 unset MIGRATIONS SKIP_GIT_UPDATE DEPLOY_REEXEC
 export COMPOSE_FILE=docker-compose.yml:docker-compose.build.yml:docker-compose.discovery.yml
 export NEXT_BUILD_HEAP_MB=4096
@@ -36,7 +37,7 @@ docker inspect agentsdr-app-1 --format 'Revision={{index .Config.Labels "org.ope
 )
 ```
 
-The script backs up the database, saves tracked VM edits as a patch, checks memory, pauses the Maps scraper during the build, runs migrations before switching, and checks the sign-in page, image revision and worker startup. Its checkout step refuses conflicting or unsaved tracked changes; inspect that error instead of discarding VM edits. Existing approved campaigns can resume when the app starts.
+The extra Git tracking entry lets a single-branch clone check out the new pilot branch. The script backs up the database, saves tracked VM edits as a patch, checks memory, pauses the Maps scraper during the build, runs migrations before switching, and checks the sign-in page, image revision and worker startup. Its checkout step refuses conflicting or unsaved tracked changes; inspect that error instead of discarding VM edits. Existing approved campaigns can resume when the app starts.
 
 Use the existing swap; these commands do not create or overwrite a swap file. Do not set `SKIP_GIT_UPDATE=1` for the initial invocation, since the checkout must first reach this pilot branch.
 
