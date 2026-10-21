@@ -276,3 +276,39 @@ Existing page `redirect()`s drop their query string: `/crm`, `/linkedin`, `/call
 - The Inbox reaches every action: approve, edit, send, manual reply, reply mode, Mark reviewed, answer decision (e2e + browser).
 - "Your business" and its Knowledge copy stay identical (e2e).
 - Older chats render unchanged (unit + browser).
+
+## Status (21 October)
+
+All four stages are built and committed on `claude/dreamy-fermi-h5woha`.
+
+| Stage | Commits | State |
+| --- | --- | --- |
+| N0 plan | `4ef89e2` | Done |
+| N1 navigation and Inbox | `4df0a8a` | Done |
+| N2 requests and Reports | `b9a4bd4` (server), `1f9a845` (pages) | Done |
+| N3 settings and Your business | `debe2aa`, `51ea04f`, `5b1ded5`, `10d2e01`, merged in `e13d500` | Done |
+| N4 compact reports, labels, onboarding | `a754f83`, `8947043` | Done; gates below |
+
+### Where the build differs from the plan
+
+- **Needs you rows and decisions are not double-counted.** The rows are
+  `crmAttentionSql` (the Action required queue plus any draft awaiting
+  review); open owner decisions are listed above them as cards. A record
+  whose only reason is a decision appears once, as its card. The badge is
+  rows plus decisions, and the Needs you tab shows the same number.
+- **Advanced is a folded section in the sidebar**, not a footer group: it
+  holds the channel groups, Sequences, data and developer pages, and opens
+  by itself when it holds the current page.
+- **The Leads board is board-only.** The pipeline's own list mode was the
+  same rows as the Inbox's All conversations, so it was dropped.
+- **Activity and Analytics pages are retired** behind redirects (their API
+  routes stay). Activity's row component moved to `WorkRow.tsx`.
+- **Manual replies** are written from the conversation (rows open it), not
+  inline in the Inbox list; approve, edit, send, reclassify, Mark reviewed and
+  reply mode are inline.
+- **Structured chat events** cover search finished, plan ready, outreach
+  started and research continuing. Autonomy and request-approval notices are
+  already one sentence and keep their text.
+- **Settings labels** (N3): Business profile, Sending defaults, Lead
+  research, Providers & features; channel rule rows read "Email sending
+  rules" and so on so labels stay unique in ⌘K.

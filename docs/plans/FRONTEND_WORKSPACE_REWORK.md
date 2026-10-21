@@ -1,5 +1,10 @@
 # Frontend workspace rework
 
+> Superseded in part by `NAVIGATION_REWORK_2026-10-20.md` (20 October):
+> Leads & replies, Action required, Activity, Overview and Analytics are
+> now Outreach (Chat, Requests, Reports), Inbox and Leads (List, Board).
+> The sections below describe the earlier state.
+
 18 October 2026. Based on `claude/new-session-g5hljn` at `640b2d6`.
 
 Frontend implementation: `5fb1a51`, ready for agent testing on

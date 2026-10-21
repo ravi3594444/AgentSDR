@@ -105,16 +105,29 @@ word means here and, where it matters, what it does not mean.
   running plan. Overlapping people stay in their existing campaign and are
   excluded from the new plan. They never block the rest of the plan.
 - **Reply mode**: per run. **Automatic** means the reply agent may send an
-  answer. **Review** means it leaves a draft in Action required.
+  answer. **Review** means it leaves a draft in the Inbox. Switched on the
+  plan card, or from an Inbox row (owner or admin for Automatic).
 - **Takeover**: the owner saying "I'll reply myself" for one conversation.
   The agent then stays silent there.
-- **Needs you**: open owner decisions such as missing information, a
-  complaint, a negotiation or a meeting, and drafts awaiting review.
-  Interested and opt-out reports are shown but do not count as Needs you. A
-  decision stays in Needs you after the assistant's answer or the owner's own
-  reply until the owner settles it.
-- **Action required**: CRM records waiting on a person, such as a draft
-  awaiting review or an unclassified reply.
+- **Needs you**: the Inbox's first view, and its badge. Open owner decisions
+  (missing information, a complaint, a negotiation, a meeting) shown first,
+  then every conversation waiting on a person (`crmAttentionSql`): the Action
+  required queue plus any draft awaiting review. Interested and opt-out
+  reports are shown but never count. A decision stays until the owner
+  settles it, even after the assistant's answer or the owner's own reply.
+- **Action required**: a CRM record's workflow state, and the queue of
+  records waiting on a person (an error, a classification to confirm, a
+  draft, a due follow-up). It is part of Needs you, no longer a page of its own.
+- **Inbox**: `/inbox`. Every channel's replies in one list: **Needs you** and
+  **All conversations** (every conversation a reply arrived on, answered or
+  not), with a channel filter. Each channel's own inbox stays under Advanced.
+- **Request**: one piece of outreach work, followed from start to finish
+  (`src/lib/assistant/requests.ts`). Usually an owner's message in a chat,
+  with the searches and plans that carry its id; an older plan or search
+  with no request id stands alone; a campaign made by hand is its own. Its
+  summary: matching, contacted, replied, interested and failed, what blocks
+  it, and the one next step. Shown beside the chat and on Outreach →
+  Requests.
 
 ## Delivery evidence, weakest to strongest
 
