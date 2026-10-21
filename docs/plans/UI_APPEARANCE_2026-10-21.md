@@ -76,6 +76,20 @@ All four are edge-to-edge landscape backgrounds. These briefs summarize the fina
 
 No production image build or browser UI verification has been run for these illustrated themes. The repository's UI workflow requests static checks and concise manual verification; no deployment or provider call was made for this change.
 
+## Checks after the bigger-text change (21 Oct)
+
+Code: this branch merged into `claude/pilot-fixes-l01-l05` (what would deploy together), built as the Dockerfile builder does (`next build --webpack` under Node, exit 0), served with `bun server.js`, and measured in Chromium against today's build side by side, signed in as the demo owner, at 1440×900 and 390×844.
+
+- **Text size**, average over the visible text of each page, plain Light: every one of the 18 pages, the landing page included, is about 2 px bigger at both widths. For example the chat 12.9 → 14.8 px, Inbox 13.4 → 15.4 px, Reports 12.2 → 14.2 px, the landing page 15.4 → 17.1 px.
+- **Layout**: no text clipped by a box, no horizontal page scroll and no page errors on any page, before or after. Text cut with "…" in narrow columns rises where expected (the phone Leads list 29 → 44 entries, all conversations in the Inbox 44 → 56).
+- **Themes**: 204 page views (six choices × 17 pages × two widths) with the device in light mode and 60 with it in dark mode: the right picture each time, only that picture's full-size file loaded, and the dark themes keep their own colours on a dark-mode device (surface `#0c1512`, `#0b0e1b`, `#0b141f`, not pure black). A popover in Dark forest has the same surface as the workspace. The sidebar button reads "Dark forest is on. Change the appearance" and opens Settings → Appearance.
+- `src/components/theme/themes.test.ts` (11 tests): the text scale, no text below 10 px, the stored-value fallbacks, the button label, the cascade against the device dark-mode block, 4.5:1 on every solid surface and over each artwork at its darkest or brightest 1%. Full suite on the combined tree: 2,008 pass, 0 fail; `tsc` clean.
+- Two independent reviews ran; every confirmed finding is fixed in these commits.
+
+**Merging next to `claude/pilot-fixes-l01-l05`**: whichever lands second meets one conflicting line in `AssistantClient.tsx`, the owner message's time. Keep the pilot fix's `formatChatTime(turn.owner.createdAt, timeZone)` (the L04 time-zone fix) with this branch's `text-[13px]`, and drop `toLocaleTimeString` and `suppressHydrationWarning`.
+
+Not checked here: the Docker image itself (no daemon in this environment), and pages outside the 18 above at the new size (campaign editors, record pages, the tables grid).
+
 ## Manual review before merging
 
 1. In a browser with no saved appearance choice, open the workspace: the canvas must be plain white. An existing saved Light, Pure black, System or Golden clouds choice must remain selected.
