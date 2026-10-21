@@ -9,7 +9,7 @@ import { GoogleButton, OrDivider } from "@/components/auth/GoogleButton";
 import { BRAND } from "@/lib/brand";
 
 export function SignUpForm({ googleEnabled, from, inviteOnly = false }: { googleEnabled: boolean; from: string | null; inviteOnly?: boolean }) {
-  const target = from || "/analytics";
+  const target = from || "/assistant";
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");

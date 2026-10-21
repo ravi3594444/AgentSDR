@@ -36,6 +36,7 @@ import {
   RiSendPlaneFill,
   RiSendPlaneLine,
   RiSparklingFill,
+  RiUserLine,
   RiTimeLine,
   RiTimerLine,
   RiWhatsappFill,
@@ -47,7 +48,9 @@ import * as Popover from "@/components/alignui/popover";
 import * as Select from "@/components/alignui/select";
 import * as Table from "@/components/alignui/table";
 import { Frame, FrameHeader, FramePanel } from "@/components/analytics/kit/Frame";
-import { WorkspaceNavigation, WorkspaceStats } from "@/components/page/WorkspaceNavigation";
+import { WorkspaceStats } from "@/components/page/WorkspaceNavigation";
+import { PageTabs } from "@/components/page/PageTabs";
+import NeedsYouList from "@/components/assistant/NeedsYouList";
 import { CONVERSATION_CHANNEL_META, HUE, MUTED_STRONG } from "@/components/analytics/theme";
 import { EmptyState } from "@/components/page/EmptyState";
 import { PageHeader } from "@/components/page/PageHeader";
@@ -64,6 +67,7 @@ import { createResponseGate } from "./responseGate";
 import { CRM_DUE_STATE_LABELS, type CrmDueState } from "@/lib/crm/stateMachine";
 import { CRM_ACTION_GROUP_LABELS, CRM_ACTION_GROUPS } from "@/lib/crm/actionGroups";
 import { CRM_CHANNELS } from "@/lib/crm/channels";
+import { AUTOPILOT_LIMITS } from "@/lib/crm/autopilot";
 
 export type Data = Record<string, unknown>;
 export type Action = Data;
@@ -91,16 +95,18 @@ const CATEGORY_KEYS = ["interested", "customer", "not_interested", "other"] as c
 const CHANNELS = CRM_CHANNELS;
 
 /**
- * The workspace's views, all on /crm/actions (`?view=` deep-links one). The
- * queue is the default; Needs you is the owner's open decisions and drafts;
- * All replies keeps every conversation a reply arrived on findable, answered
- * or not.
+ * The Inbox's two views (`?view=` deep-links one). Needs you is everything
+ * waiting on a person — the owner's decisions above, then every reply,
+ * draft, error and due follow-up (scope `attention`); All conversations keeps
+ * every conversation a reply arrived on findable, answered or not (scope
+ * `replies`). The old Action required views map onto them: `actions` and
+ * `needs_you` are Needs you, `replies` is All conversations.
  */
-const VIEWS = ["actions", "needs_you", "replies"] as const;
-type View = (typeof VIEWS)[number];
-type ScopeCounts = Record<View, number>;
-function isView(value: unknown): value is View {
-  return typeof value === "string" && (VIEWS as readonly string[]).includes(value);
+type View = "needs_you" | "all";
+const VIEW_SCOPE = { needs_you: "attention", all: "replies" } as const;
+type ScopeCounts = { attention: number; replies: number };
+export function inboxView(value: string | null): View {
+  return value === "all" || value === "replies" ? "all" : "needs_you";
 }
 
 export function CompactSelect({ label, value, onChange, placeholder, children, className }: { label: string; value: string; onChange: (value: string) => void; placeholder: string; children: React.ReactNode; className?: string }) {
@@ -134,6 +140,17 @@ export function channelItems() {
 
 type Filters = { category: string; subcategoryId: string; channel: string; actionGroup: string; classificationReview: string; sequenceId: string; error: string; due: string };
 const NO_FILTERS: Filters = { category: "", subcategoryId: "", channel: "", actionGroup: "", classificationReview: "", sequenceId: "", error: "", due: "" };
+/** The filters a link carries, under their URL names (`group` is the action type). */
+const FILTER_PARAMS: Record<keyof Filters, string> = { category: "category", subcategoryId: "subcategory", channel: "channel", actionGroup: "group", classificationReview: "review", sequenceId: "sequence", error: "error", due: "due" };
+function filtersFromUrl(params: URLSearchParams): Filters {
+  const filters = { ...NO_FILTERS };
+  for (const key of Object.keys(FILTER_PARAMS) as (keyof Filters)[]) filters[key] = params.get(FILTER_PARAMS[key]) ?? "";
+  // Older links named these by their API names.
+  filters.actionGroup ||= params.get("actionGroup") ?? "";
+  filters.subcategoryId ||= params.get("subcategoryId") ?? "";
+  filters.sequenceId ||= params.get("sequenceId") ?? "";
+  return filters;
+}
 
 type QueueSummary = { queue: number; needsDecision: number; followUpsDue: number; errors: number; drafts: number | null };
 
@@ -165,6 +182,14 @@ function useQueueSummary() {
   return [summary, load] as const;
 }
 
+/**
+ * The Inbox: one list across every channel. Needs you puts the owner's open
+ * decisions first, then every conversation waiting on a person; All
+ * conversations is every one a reply arrived on. Each row keeps its inline
+ * tools — approve, edit, send, reclassify, Mark reviewed, reply mode — and
+ * opens the full conversation for a manual reply. View and filters live in
+ * the URL, so a link or a redirected bookmark opens the same list.
+ */
 export function CrmActionsClient() {
   const [actions, setActions] = useState<Action[]>([]);
   const [categories, setCategories] = useState<Data[]>([]);
@@ -177,22 +202,30 @@ export function CrmActionsClient() {
   const [hasMore, setHasMore] = useState(false);
   const [total, setTotal] = useState<number | null>(null);
   const [summary, reloadSummary] = useQueueSummary();
-  const [view, setView] = useState<View>("actions");
-  // Nothing loads until the deep link is read, so ?view=needs_you sends no queue request first.
-  const [viewRead, setViewRead] = useState(false);
+  const [view, setView] = useState<View>("needs_you");
+  // Nothing loads until the deep link is read, so ?view=all sends no Needs you request first.
+  const [urlRead, setUrlRead] = useState(false);
   const [scopeCounts, setScopeCounts] = useState<ScopeCounts | null>(null);
+  const [decisionCount, setDecisionCount] = useState(0);
+  const [decisionsKey, setDecisionsKey] = useState(0);
   // Read once on mount rather than through useSearchParams, so the page stays statically rendered.
   useEffect(() => {
-    const requested = new URLSearchParams(window.location.search).get("view");
-    if (isView(requested)) setView(requested);
-    setViewRead(true);
+    const params = new URLSearchParams(window.location.search);
+    setView(inboxView(params.get("view")));
+    setFilters(filtersFromUrl(params));
+    setUrlRead(true);
   }, []);
-  const selectView = useCallback((next: View) => {
-    setView(next);
+  // The view and filters shown are the URL's, so the address can be shared or bookmarked.
+  useEffect(() => {
+    if (!urlRead) return;
     const url = new URL(window.location.href);
-    if (next === "actions") url.searchParams.delete("view"); else url.searchParams.set("view", next);
-    window.history.replaceState(window.history.state, "", url);
-  }, []);
+    url.searchParams.set("view", view);
+    for (const key of Object.keys(FILTER_PARAMS) as (keyof Filters)[]) {
+      if (filters[key]) url.searchParams.set(FILTER_PARAMS[key], filters[key]); else url.searchParams.delete(FILTER_PARAMS[key]);
+    }
+    for (const legacy of ["actionGroup", "subcategoryId", "sequenceId"]) url.searchParams.delete(legacy);
+    if (url.href !== window.location.href) window.history.replaceState(window.history.state, "", url);
+  }, [urlRead, view, filters]);
   useEffect(() => {
     void Promise.all([crmFetch("/categories"), crmFetch("/sequences?includeArchived=true")]).then(([categoryResult, sequenceResult]) => {
       setCategories(asList<Data>(asObject(categoryResult).categories));
@@ -213,12 +246,12 @@ export function CrmActionsClient() {
     if (filters.due === "overdue") params.set("overdue", "true");
     if (filters.due === "today") params.set("dueBefore", new Date(new Date().setHours(23, 59, 59, 999)).toISOString());
     if (filters.due === "upcoming") params.set("dueAfter", new Date().toISOString());
-    if (view !== "actions") params.set("scope", view);
+    params.set("scope", VIEW_SCOPE[view]);
     params.set("limit", String(PAGE_SIZE));
     return params.toString();
   }, [filters, view]);
   // Only the AI review post-filter makes the server total a count of this page
-  // rather than of the queue.
+  // rather than of the list.
   const postFiltered = Boolean(filters.classificationReview);
   // A view or filter picked while a list is loading must not be overwritten by
   // the earlier request's answer when that one returns last.
@@ -259,16 +292,17 @@ export function CrmActionsClient() {
     }
   }, [query, responses]);
   // A filter change resets to the first page; `load` changes with the query.
-  useEffect(() => { if (viewRead) void load(0); }, [load, viewRead]);
+  useEffect(() => { if (urlRead) void load(0); }, [load, urlRead]);
   const loadMore = useCallback(() => { void load(nextOffset); }, [load, nextOffset]);
   const subcategories = useMemo(() => categories.flatMap((category) => asList<Data>(category.subcategories))
     .filter((subcategory) => !filters.category || subcategory.categoryKey === filters.category), [categories, filters.category]);
   const setFilter = (key: keyof Filters, value: string) => setFilters((old) => ({ ...old, [key]: value, ...(key === "category" ? { subcategoryId: "" } : {}) }));
-  const activeFilterCount = Object.values(filters).filter(Boolean).length;
+  // The channel has its own chips, so it is not counted among the dropdown filters.
+  const activeFilterCount = Object.entries(filters).filter(([key, value]) => key !== "channel" && value).length;
   const secondaryFilterCount = [filters.subcategoryId, filters.classificationReview, filters.sequenceId, filters.error].filter(Boolean).length;
-  const clearFilters = () => setFilters(NO_FILTERS);
+  const clearFilters = () => setFilters((old) => ({ ...NO_FILTERS, channel: old.channel }));
 
-  // A row that leaves the queue changes the counts; one read of the summary a
+  // A row that leaves the list changes the counts; one read of the summary a
   // moment after a burst of edits keeps the strip honest without a read per click.
   const summaryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (summaryTimer.current) clearTimeout(summaryTimer.current); }, []);
@@ -280,7 +314,6 @@ export function CrmActionsClient() {
     if (ticket === null) return;
     try {
       const params = new URLSearchParams(queryRef.current);
-      params.delete("scope");
       params.set("limit", "1");
       const body = asObject(await crmFetch(`/actions?${params}`));
       if (responses.isCurrent(ticket) && body.scopeCounts) setScopeCounts(body.scopeCounts as ScopeCounts);
@@ -291,43 +324,56 @@ export function CrmActionsClient() {
     summaryTimer.current = setTimeout(() => { void reloadSummary(); void reloadCounts(); }, 1500);
   }, [reloadSummary, reloadCounts]);
 
-  const refresh = () => { void load(0); void reloadSummary(); };
+  const refresh = () => { void load(0); void reloadSummary(); setDecisionsKey((key) => key + 1); };
+  const selectView = (next: View) => setView(next);
   const shown = actions.length;
-  const order = view === "replies" ? "latest activity first" : "newest reply first";
+  const order = view === "all" ? "latest activity first" : "newest reply first";
   const detail = !loaded ? "Loading…"
-    : total !== null && !(postFiltered && hasMore) ? `${(postFiltered ? shown : total).toLocaleString()} ${(postFiltered ? shown : total) === 1 ? "item" : "items"}${activeFilterCount ? " match these filters" : ""} · ${order}`
-    : `${shown}+ items · ${order}`;
+    : total !== null && !(postFiltered && hasMore) ? `${(postFiltered ? shown : total).toLocaleString()} ${(postFiltered ? shown : total) === 1 ? "conversation" : "conversations"}${activeFilterCount ? " match these filters" : ""} · ${order}`
+    : `${shown}+ conversations · ${order}`;
+  const channelLabel = filters.channel ? CONVERSATION_CHANNEL_META[filters.channel as keyof typeof CONVERSATION_CHANNEL_META]?.label ?? filters.channel : "";
   const empty = activeFilterCount
-    ? { icon: RiFilterOffLine, title: "Nothing matches these filters", detail: "There are items, just none that fit every filter you picked.", action: <Button.Root variant="neutral" mode="stroke" size="small" onClick={clearFilters}>Clear filters</Button.Root> }
-    : view === "needs_you"
-    ? { icon: RiCheckDoubleLine, title: "Nothing needs you", detail: "Questions the assistant could not answer, handovers and drafts to review will show up here." }
-    : view === "replies"
-    ? { icon: RiCheckDoubleLine, title: "No replies yet", detail: "Every reply a lead sends shows up here, answered or not." }
-    : { icon: RiCheckDoubleLine, title: "You're all caught up", detail: "New replies, drafts to approve and due follow-ups will show up here." };
+    ? { icon: RiFilterOffLine, title: "Nothing matches these filters", detail: "There are conversations, just none that fit every filter you picked.", action: <Button.Root variant="neutral" mode="stroke" size="small" onClick={clearFilters}>Clear filters</Button.Root> }
+    : view === "all"
+    ? { icon: RiCheckDoubleLine, title: channelLabel ? `No ${channelLabel} replies yet` : "No replies yet", detail: "Every reply a lead sends shows up here, answered or not." }
+    : decisionCount
+    ? { icon: RiCheckDoubleLine, title: "No replies or drafts wait for you", detail: "Only the decisions above need you right now." }
+    : { icon: RiCheckDoubleLine, title: "You're all caught up", detail: "New replies, drafts to approve, decisions and due follow-ups will show up here." };
+  const needsYouCount = scopeCounts ? scopeCounts.attention + decisionCount : undefined;
 
   return <>
     <PageHeader
-      title="Action required"
-      description="Unresolved reviews, decisions and follow-ups. Needs you holds your open decisions and drafts; All replies keeps every reply findable."
+      title="Inbox"
+      description="Every reply across email, WhatsApp, LinkedIn and Instagram. Needs you holds what waits on a person; All conversations keeps every reply findable."
       actions={<Button.Root variant="neutral" mode="stroke" size="small" onClick={refresh} disabled={loading}>
         <Button.Icon as={RiRefreshLine} className={cn(loading && loaded && "animate-spin")} />Refresh
       </Button.Root>}
     />
 
-    <div className="mt-5"><WorkspaceNavigation area="leads" active="/crm/actions" /></div>
-    <WorkspaceStats items={[
-      { label: "Needs you", value: scopeCounts?.needs_you.toLocaleString() ?? "—", detail: "Open decisions and drafts", onSelect: () => selectView(view === "needs_you" ? "actions" : "needs_you"), selected: view === "needs_you" },
-      { label: "In the queue", value: summary?.queue.toLocaleString() ?? "—", detail: "Needs a human action", onSelect: () => { selectView("actions"); clearFilters(); }, selected: view === "actions" && activeFilterCount === 0 },
-      { label: "All replies", value: scopeCounts?.replies.toLocaleString() ?? "—", detail: "Answered ones included", onSelect: () => selectView(view === "replies" ? "actions" : "replies"), selected: view === "replies" },
-      { label: "Drafts to review", value: summary?.drafts?.toLocaleString() ?? "—", detail: "Waiting for approval" },
-      { label: "Follow-ups due", value: summary?.followUpsDue.toLocaleString() ?? "—", onSelect: () => setFilter("actionGroup", filters.actionGroup === "follow_up" ? "" : "follow_up"), selected: filters.actionGroup === "follow_up" },
-      { label: "Errors", value: summary?.errors.toLocaleString() ?? "—", onSelect: () => setFilter("error", filters.error ? "" : "true"), selected: Boolean(filters.error) },
-    ]} />
+    <PageTabs
+      className="mt-5"
+      label="Inbox view"
+      value={view}
+      onChange={selectView}
+      tabs={[
+        { value: "needs_you", label: "Needs you", count: needsYouCount },
+        { value: "all", label: "All conversations", count: scopeCounts?.replies },
+      ]}
+    />
+    <ChannelChips value={filters.channel} onChange={(value) => setFilter("channel", value)} className="mt-4" />
+
+    {view === "needs_you" && <>
+      <WorkspaceStats items={[
+        { label: "Drafts to review", value: summary?.drafts?.toLocaleString() ?? "—", detail: "Waiting for approval" },
+        { label: "Follow-ups due", value: summary?.followUpsDue.toLocaleString() ?? "—", onSelect: () => setFilter("actionGroup", filters.actionGroup === "follow_up" ? "" : "follow_up"), selected: filters.actionGroup === "follow_up" },
+        { label: "Errors", value: summary?.errors.toLocaleString() ?? "—", onSelect: () => setFilter("error", filters.error ? "" : "true"), selected: Boolean(filters.error) },
+      ]} />
+      <NeedsYouList key={decisionsKey} initial={null} inbox channel={filters.channel || undefined} onCount={setDecisionCount} onChanged={onMutated} />
+    </>}
 
     <Frame className="mt-5">
-      <FrameHeader title={view === "needs_you" ? "Needs you" : view === "replies" ? "All replies" : "Queue"} description={detail} actions={<>
+      <FrameHeader title={view === "all" ? "All conversations" : "Replies, drafts and follow-ups"} description={detail} actions={<>
           <CompactSelect label="Category" placeholder="All categories" value={filters.category} onChange={(value) => setFilter("category", value)}><Select.Item value="">All categories</Select.Item>{categoryItems()}</CompactSelect>
-          <CompactSelect label="Channel" placeholder="All channels" value={filters.channel} onChange={(value) => setFilter("channel", value)}><Select.Item value="">All channels</Select.Item>{channelItems()}</CompactSelect>
           <CompactSelect label="Action type" placeholder="All action types" value={filters.actionGroup} onChange={(value) => setFilter("actionGroup", value)}><Select.Item value="">All action types</Select.Item>{CRM_ACTION_GROUPS.map((group) => <Select.Item key={group} value={group}>{CRM_ACTION_GROUP_LABELS[group]}</Select.Item>)}</CompactSelect>
           <CompactSelect label="Due time" placeholder="Any due time" value={filters.due} onChange={(value) => setFilter("due", value)}><Select.Item value="">Any due time</Select.Item><Select.Item value="overdue">Overdue</Select.Item><Select.Item value="today">Due today</Select.Item><Select.Item value="upcoming">Upcoming</Select.Item></CompactSelect>
           <Popover.Root>
@@ -362,7 +408,7 @@ export function CrmActionsClient() {
               refreshing={loading}
               hasMore={hasMore && !loadingMore}
               onLoadMore={loadMore}
-              scope={view === "actions" ? undefined : view}
+              scope={VIEW_SCOPE[view]}
               empty={empty}
             />
             {/* Busy while a first page loads too: no next page follows until it lands, and the observer re-arms then. */}
@@ -371,6 +417,24 @@ export function CrmActionsClient() {
       </FramePanel>
     </Frame>
   </>;
+}
+
+/** All channels, or one: the Inbox's channel filter as one row of chips. */
+function ChannelChips({ value, onChange, className }: { value: string; onChange: (value: string) => void; className?: string }) {
+  const options = [{ key: "", label: "All channels" }, ...CHANNELS.map((key) => ({ key, label: CONVERSATION_CHANNEL_META[key].label }))];
+  return <div role="group" aria-label="Channel" className={cn("flex flex-wrap gap-2", className)}>
+    {options.map((option) => {
+      const active = value === option.key;
+      const meta = option.key ? CONVERSATION_CHANNEL_META[option.key as keyof typeof CONVERSATION_CHANNEL_META] : null;
+      const Icon = meta?.icon;
+      return <button key={option.key || "all"} type="button" aria-pressed={active} onClick={() => onChange(option.key)}
+        className={cn("inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-label-xs outline-none ring-1 ring-inset transition-colors focus-visible:ring-2 focus-visible:ring-primary-base",
+          active ? "bg-bg-strong-950 text-text-white-0 ring-bg-strong-950" : "bg-bg-white-0 text-text-sub-600 ring-stroke-soft-200 hover:text-text-strong-950")}>
+        {Icon && <span className="flex" style={{ color: active ? undefined : meta.color }}><Icon className="size-4" aria-hidden="true" /></span>}
+        {option.label}
+      </button>;
+    })}
+  </div>;
 }
 
 function FilterField({ label, children }: { label: string; children: React.ReactNode }) {
@@ -422,8 +486,8 @@ type Notice = { tone: "success" | "error"; text: string };
 export function useRowMutations({ onActionsChange, pipeline, scope, onMutated, onRowGone }: {
   onActionsChange: React.Dispatch<React.SetStateAction<Action[]>>;
   pipeline?: boolean;
-  /** The Needs you or All replies view: a row is re-read in that view, so an answered one stays. */
-  scope?: "needs_you" | "replies";
+  /** The Inbox's view (or the older Needs you): a row is re-read in that scope, so an answered one stays. */
+  scope?: "needs_you" | "replies" | "attention";
   onMutated?: () => void;
   onRowGone?: (id: string) => void;
 }) {
@@ -475,8 +539,33 @@ export function useRowMutations({ onActionsChange, pipeline, scope, onMutated, o
     if (ok) refreshLater(id);
   }, [mutateRow, refreshLater]);
 
-  return { busyIds, notice, setNotice, mutateRow, classify, refreshRow };
+  // A run's reply mode is the assistant's, not the CRM's: it posts to the run
+  // (owner/admin for Automatic, checked there) and re-reads this row.
+  const switchReplyMode = useCallback(async (id: string, run: ReplyRun, mode: "automatic" | "review") => {
+    setBusyIds((old) => new Set(old).add(id));
+    setNotice(null);
+    try {
+      const response = await fetch(`/api/assistant/runs/${encodeURIComponent(run.id)}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "mode", mode }) });
+      const body = asObject(await response.json().catch(() => ({})));
+      if (!response.ok) throw new Error(typeof body.error === "string" ? body.error : `HTTP ${response.status}`);
+      await refreshRow(id);
+      setNotice({ tone: "success", text: mode === "automatic" ? `Replies in “${run.name}” are now answered automatically` : `Replies in “${run.name}” now wait for your review` });
+      onMutated?.();
+      return true;
+    } catch (cause) {
+      setNotice({ tone: "error", text: errorMessage(cause) });
+      return false;
+    } finally {
+      setBusyIds((old) => { const next = new Set(old); next.delete(id); return next; });
+    }
+  }, [refreshRow, onMutated]);
+
+  return { busyIds, notice, setNotice, mutateRow, classify, refreshRow, switchReplyMode };
 }
+
+/** The outreach run answering a conversation, while its reply mode can still be switched. */
+export type ReplyRun = { id: string; name: string; status: string; automatic: boolean };
+type ReplyModeSwitch = (run: ReplyRun, mode: "automatic" | "review") => Promise<boolean>;
 
 /**
  * Keeps a list current while a record is changed in the pop-up over it: a
@@ -542,8 +631,8 @@ type RowsProps = {
   /** More pages exist; the record pop-up loads them when it steps near the end. */
   hasMore?: boolean;
   onLoadMore?: () => void;
-  /** Rows of the Needs you or All replies view. */
-  scope?: "needs_you" | "replies";
+  /** Rows of an Inbox view (or the older Needs you). */
+  scope?: "needs_you" | "replies" | "attention";
 };
 
 export function ActionRows({ actions, categories, onActionsChange, pipeline, refreshing, onMutated, empty, hasMore, onLoadMore, scope }: RowsProps) {
@@ -552,7 +641,7 @@ export function ActionRows({ actions, categories, onActionsChange, pipeline, ref
   // Read once per mount so the "follow-up overdue" arithmetic stays pure.
   const [now] = useState(() => Date.now());
   const onRowGone = useCallback((id: string) => setEditingId((current) => current === id ? "" : current), []);
-  const { busyIds, notice, setNotice, mutateRow, classify, refreshRow } = useRowMutations({ onActionsChange, pipeline, scope, onMutated, onRowGone });
+  const { busyIds, notice, setNotice, mutateRow, classify, refreshRow, switchReplyMode } = useRowMutations({ onActionsChange, pipeline, scope, onMutated, onRowGone });
   useSyncRecordChanges(actions, refreshRow, onMutated);
   usePublishRecordQueue(actions, hasMore, onLoadMore);
 
@@ -570,9 +659,10 @@ export function ActionRows({ actions, categories, onActionsChange, pipeline, ref
           now={now}
           busy={busyIds.has(id)}
           pipeline={pipeline}
-          onOpen={() => router.push(id ? `/crm/records/${id}` : "/crm/actions")}
+          onOpen={() => router.push(id ? `/crm/records/${id}` : "/inbox")}
           onMutate={(path, body, method, success) => mutateRow(id, path, body, method, success)}
           onClassify={(choice) => classify(action, choice)}
+          onReplyMode={(run, mode) => switchReplyMode(id, run, mode)}
         />;
       })}
     </div>
@@ -609,10 +699,11 @@ export function ActionRows({ actions, categories, onActionsChange, pipeline, ref
             editing={editing}
             pipeline={pipeline}
             now={now}
-            onOpen={() => router.push(id ? `/crm/records/${id}` : "/crm/actions")}
+            onOpen={() => router.push(id ? `/crm/records/${id}` : "/inbox")}
             onToggleEdit={() => setEditingId(editing ? "" : id)}
             onMutate={onMutate}
             onClassify={(choice) => classify(action, choice)}
+            onReplyMode={(run, mode) => switchReplyMode(id, run, mode)}
           />;
         })}</Table.Body>
       </Table.Root>
@@ -725,7 +816,7 @@ export function describeAction(action: Action, categories: Data[], pipeline: boo
   const keepCategoryKey = String(record.categoryKey ?? classification.category ?? "other");
   const keepSubcategoryId = record.subcategoryId ? String(record.subcategoryId) : null;
   const id = actionId(action);
-  const href = id ? `/crm/records/${id}` : "/crm/actions";
+  const href = id ? `/crm/records/${id}` : "/inbox";
   const category = actionCategory(action);
   const channel = actionChannel(action);
   const due = action.dueAt ?? action.nextActionAt;
@@ -801,8 +892,15 @@ export function describeAction(action: Action, categories: Data[], pipeline: boo
   const answerLabel = answered ? String(asObject(conversation.answer).label ?? "") : "";
   const headline = conversation.headline ? String(conversation.headline) : "";
   const openConversation = asObject(conversation.nextAction).kind === "open_conversation";
+  // The run answering this conversation, while it still sends: its reply mode can be switched from the row.
+  const run = asObject(conversation.run);
+  const replyRun: ReplyRun | null = run.id && (run.status === "running" || run.status === "paused")
+    ? { id: String(run.id), name: String(run.name ?? "this run"), status: String(run.status), automatic: Boolean(run.automatic) }
+    : null;
+  // They asked not to be contacted and the record waits only for the owner to read it (F12).
+  const dncReview = actionText === "Do Not Contact: read their reply";
   return {
-    answerLabel, headline, openConversation,
+    answerLabel, headline, openConversation, replyRun, dncReview,
     id, href, record, person, activeRun, inbound, subcategory, classification, category, channel, stage,
     proposedCategoryKey, proposedSubcategoryId, proposedLabel, keepCategoryKey, keepSubcategoryId,
     dueLabel, dueDetail, dueColor, dueIcon, actionText, name, companyDomain, companyLabel,
@@ -950,7 +1048,7 @@ function sendDraft(row: Row, onMutate: RowMutation) {
   void onMutate(`/drafts/${String(editable.id)}/send`, { revision: Number(editable.revision ?? 1) }, "POST", "Reply queued for sending");
 }
 
-function ActionRow({ action, categories, busy, editing, pipeline, now, onOpen, onToggleEdit, onMutate, onClassify }: {
+function ActionRow({ action, categories, busy, editing, pipeline, now, onOpen, onToggleEdit, onMutate, onClassify, onReplyMode }: {
   action: Action;
   categories: Data[];
   busy: boolean;
@@ -961,6 +1059,7 @@ function ActionRow({ action, categories, busy, editing, pipeline, now, onOpen, o
   onToggleEdit: () => void;
   onMutate: RowMutation;
   onClassify: (choice: { categoryKey: string; subcategoryId: string | null }) => Promise<void>;
+  onReplyMode?: ReplyModeSwitch;
 }) {
   const row = describeAction(action, categories, pipeline, now);
   const { id, href, record, editable } = row;
@@ -1031,6 +1130,7 @@ function ActionRow({ action, categories, busy, editing, pipeline, now, onOpen, o
       </Table.Cell>}
       <Table.Cell className="px-3 py-3 text-right">
         <DueChip row={row} />
+        {row.replyRun && <p className="mt-1 text-paragraph-xs text-text-soft-400" title={`Reply mode of “${row.replyRun.name}”`}>{row.replyRun.automatic ? "Automatic replies" : "Review mode"}</p>}
         {pipeline && row.answerLabel && row.dueLabel !== "—" && <p className="mt-1 text-paragraph-xs text-text-sub-600">{row.answerLabel}</p>}
         {(pipeline || row.openConversation) && <Link href={href} className="mt-2 inline-block text-paragraph-xs text-text-sub-600 underline-offset-4 hover:text-text-strong-950 hover:underline">Open conversation</Link>}
       </Table.Cell>
@@ -1046,6 +1146,9 @@ function ActionRow({ action, categories, busy, editing, pipeline, now, onOpen, o
           contextVersion={Number(record.contextVersion)}
           onMutate={onMutate}
           onMoveStage={(body) => onMutate(`/records/${id}/stage`, body, "POST", moveStageSuccessMessage(body))}
+          dncReview={row.dncReview}
+          replyRun={row.replyRun}
+          onReplyMode={onReplyMode}
           label={`More actions for ${row.name}`}
         />
       </Table.Cell>
@@ -1058,7 +1161,7 @@ function ActionRow({ action, categories, busy, editing, pipeline, now, onOpen, o
   </>;
 }
 
-export function RowMenu({ href, draft, hasRun, recordId, categories, categoryKey, subcategoryId, contextVersion, onMutate, onMoveStage, label, className }: {
+export function RowMenu({ href, draft, hasRun, recordId, categories, categoryKey, subcategoryId, contextVersion, onMutate, onMoveStage, dncReview, replyRun, onReplyMode, label, className }: {
   href: string;
   draft: Data | null;
   hasRun: boolean;
@@ -1069,9 +1172,22 @@ export function RowMenu({ href, draft, hasRun, recordId, categories, categoryKey
   contextVersion: number;
   onMutate: RowMutation;
   onMoveStage: (body: MoveStageBody) => Promise<boolean>;
+  /** A Do Not Contact reply waiting to be read: Mark reviewed takes it off the list. */
+  dncReview?: boolean;
+  replyRun?: ReplyRun | null;
+  onReplyMode?: ReplyModeSwitch;
   label: string;
   className?: string;
 }) {
+  const switchMode = (mode: "automatic" | "review") => {
+    if (!replyRun || !onReplyMode) return;
+    // Automatic widens what Start approved, so it is confirmed with its limits, as on the plan card.
+    if (mode === "automatic" && !window.confirm(
+      `Answer the replies of “${replyRun.name}” automatically? Replies backed by your saved information are checked and sent as soon as the draft is ready; `
+      + `at most ${AUTOPILOT_LIMITS.perConversation} per conversation and ${AUTOPILOT_LIMITS.perDay} in any 24 hours. Everything else still waits for you. Other runs are not affected.`,
+    )) return;
+    void onReplyMode(replyRun, mode);
+  };
   const tomorrow = () => new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
   const [regenerateOpen, setRegenerateOpen] = useState(false);
   const [moveStageOpen, setMoveStageOpen] = useState(false);
@@ -1086,6 +1202,13 @@ export function RowMenu({ href, draft, hasRun, recordId, categories, categoryKey
         <Dropdown.Item asChild><Link href={href}><Dropdown.ItemIcon as={RiExternalLinkLine} />Open record</Link></Dropdown.Item>
         <Dropdown.Item onSelect={() => setMoveStageOpen(true)}><Dropdown.ItemIcon as={RiArrowRightLine} />Move stage…</Dropdown.Item>
         {hasRun && <Dropdown.Item onSelect={() => void onMutate(`/records/${recordId}/snooze`, { until: tomorrow() }, "POST", "Snoozed for a day")}><Dropdown.ItemIcon as={RiTimerLine} />Snooze a day</Dropdown.Item>}
+        {dncReview && <Dropdown.Item onSelect={() => void onMutate(`/records/${recordId}/reviewed`, {}, "POST", "Marked reviewed — Do Not Contact stays")} data-testid="row-mark-reviewed"><Dropdown.ItemIcon as={RiCheckLine} />Mark reviewed</Dropdown.Item>}
+        {replyRun && onReplyMode && <>
+          <Dropdown.Separator />
+          <Dropdown.Item onSelect={() => switchMode(replyRun.automatic ? "review" : "automatic")} data-testid="row-reply-mode">
+            <Dropdown.ItemIcon as={replyRun.automatic ? RiUserLine : RiSparklingFill} />{replyRun.automatic ? "Switch run to Review" : "Switch run to Automatic replies"}
+          </Dropdown.Item>
+        </>}
         {draft && <>
           <Dropdown.Separator />
           <Dropdown.Item onSelect={() => setRegenerateOpen(true)}><Dropdown.ItemIcon as={RiRefreshLine} />Regenerate draft…</Dropdown.Item>
@@ -1110,7 +1233,7 @@ export function CompanyFavicon({ domain }: { domain: string }) {
  * Drafts are sent from the card or opened in the record pop-up; the inline
  * editor needs the table's width.
  */
-export function ActionCard({ action, categories, now, busy, onOpen, onMutate, onClassify, pipeline }: {
+export function ActionCard({ action, categories, now, busy, onOpen, onMutate, onClassify, onReplyMode, pipeline }: {
   pipeline?: boolean;
   action: Action;
   categories: Data[];
@@ -1119,6 +1242,7 @@ export function ActionCard({ action, categories, now, busy, onOpen, onMutate, on
   onOpen: () => void;
   onMutate: RowMutation;
   onClassify: (choice: { categoryKey: string; subcategoryId: string | null }) => Promise<void>;
+  onReplyMode?: ReplyModeSwitch;
 }) {
   const row = describeAction(action, categories, pipeline, now);
   const { id, href, record, editable } = row;
@@ -1166,6 +1290,9 @@ export function ActionCard({ action, categories, now, busy, onOpen, onMutate, on
           contextVersion={Number(record.contextVersion)}
           onMutate={onMutate}
           onMoveStage={(body) => onMutate(`/records/${id}/stage`, body, "POST", moveStageSuccessMessage(body))}
+          dncReview={row.dncReview}
+          replyRun={row.replyRun}
+          onReplyMode={onReplyMode}
           label={`More actions for ${row.name}`}
         />
       </div>

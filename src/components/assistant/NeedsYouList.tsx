@@ -104,7 +104,22 @@ function Item({ item, onChanged }: { item: NeedsYouItem; onChanged: () => void }
   );
 }
 
-export default function NeedsYouList({ initial, compact = false }: { initial: NeedsYouPayload | null; compact?: boolean }) {
+/**
+ * The leads waiting for a person. `compact` is the one-line banner above the
+ * chat; `inbox` is the cards at the top of the Inbox's Needs you, filtered to
+ * one channel when the Inbox is, and nothing at all when no decision waits
+ * (the rows below say the rest).
+ */
+export default function NeedsYouList({ initial, compact = false, inbox = false, channel, onChanged, onCount }: {
+  initial: NeedsYouPayload | null;
+  compact?: boolean;
+  inbox?: boolean;
+  channel?: string;
+  /** After a decision is answered or resolved, so the Inbox can refresh its counts. */
+  onChanged?: () => void;
+  /** How many decisions are shown, for the Inbox's Needs you count. */
+  onCount?: (count: number) => void;
+}) {
   const [payload, setPayload] = useState<NeedsYouPayload | null>(initial);
   const [error, setError] = useState<string | null>(null);
 
@@ -129,14 +144,16 @@ export default function NeedsYouList({ initial, compact = false }: { initial: Ne
     };
   }, [initial, load]);
 
-  const items = payload?.items ?? [];
+  const items = (payload?.items ?? []).filter((item) => !channel || item.channel === channel);
+  const changed = () => { void load(); onChanged?.(); };
+  useEffect(() => { onCount?.(items.length); }, [onCount, items.length]);
   const review = payload?.reviewWaiting ?? 0;
   const actionRequired = payload?.actionRequired ?? 0;
   if (compact) {
     if (!items.length) return null;
     const ready = items.filter((item) => item.priority === 0).length;
     return (
-      <Link href="/assistant/results#needs-you" data-testid="needs-you-banner"
+      <Link href="/inbox?view=needs_you" data-testid="needs-you-banner"
         className="mx-auto flex max-w-3xl items-center gap-3 rounded-xl border border-stroke-soft-200 bg-bg-weak-50/60 px-3.5 py-3 text-paragraph-sm text-text-strong-950 outline-none transition hover:bg-bg-weak-50 focus-visible:ring-2 focus-visible:ring-primary-base">
         <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-bg-white-0 ring-1 ring-inset ring-stroke-soft-200"><RiFireLine className={cn("size-4", ready ? "text-error-base" : "text-warning-base")} aria-hidden /></span>
         <span className="min-w-0 flex-1">
@@ -147,6 +164,19 @@ export default function NeedsYouList({ initial, compact = false }: { initial: Ne
       </Link>
     );
   }
+  if (inbox) {
+    if (!items.length && !error) return null;
+    return (
+      <section id="needs-you" className="scroll-mt-4 rounded-xl border border-stroke-soft-200 bg-bg-weak-50 p-3 sm:p-4" aria-labelledby="needs-you-title" data-testid="inbox-decisions">
+        <div className="flex flex-wrap items-baseline gap-2">
+          <h2 id="needs-you-title" className="text-label-md text-text-strong-950">Decisions only you can make</h2>
+          {items.length > 0 && <span className="text-paragraph-xs text-text-sub-600">{items.length} {items.length === 1 ? "lead is" : "leads are"} waiting for your answer, most urgent first</span>}
+        </div>
+        {error && <p role="alert" className="mt-2 text-paragraph-xs text-error-base">{error}</p>}
+        {items.length > 0 && <ul className="mt-3 space-y-2">{items.map((item) => <Item key={item.id} item={item} onChanged={changed} />)}</ul>}
+      </section>
+    );
+  }
   return (
     <section id="needs-you" className="scroll-mt-4 rounded-xl border border-stroke-soft-200 bg-bg-weak-50 p-3 sm:p-4" aria-labelledby="needs-you-title">
       <div className="flex flex-wrap items-baseline gap-2">
@@ -155,16 +185,16 @@ export default function NeedsYouList({ initial, compact = false }: { initial: Ne
           {items.length
             ? `${items.length} ${items.length === 1 ? "lead is" : "leads are"} waiting for a person, most urgent first`
             : actionRequired
-              ? `No replies or decisions wait for you here; ${actionRequired} ${actionRequired === 1 ? "record is" : "records are"} in Action required.`
+              ? `No decisions wait for you here; ${actionRequired} ${actionRequired === 1 ? "conversation waits" : "conversations wait"} in the Inbox.`
               : "Nobody is waiting for you."}
         </span>
       </div>
       {error && <p role="alert" className="mt-2 text-paragraph-xs text-error-base">{error}</p>}
-      {items.length > 0 && <ul className="mt-3 space-y-2">{items.map((item) => <Item key={item.id} item={item} onChanged={() => void load()} />)}</ul>}
+      {items.length > 0 && <ul className="mt-3 space-y-2">{items.map((item) => <Item key={item.id} item={item} onChanged={changed} />)}</ul>}
       {review > 0 && (
         <p className="mt-3 text-paragraph-xs text-text-sub-600">
           {review} {review === 1 ? "reply waits" : "replies wait"} for your review (Review mode) in{" "}
-          <Link href="/crm/actions" className="text-primary-base hover:underline">Action required</Link>.
+          <Link href="/inbox?view=needs_you" className="text-primary-base hover:underline">the Inbox</Link>.
         </p>
       )}
     </section>

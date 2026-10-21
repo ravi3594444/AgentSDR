@@ -108,6 +108,7 @@ export async function loadConversationSummaries(recordIds: readonly string[], no
     personIds.length
       ? db.select({
         personId: outreachRunLeads.personId, channel: outreachRunLeads.channel, leadStatus: outreachRunLeads.status,
+        runId: outreachRuns.id, runName: outreachRuns.name,
         runStatus: outreachRuns.status, automatic: outreachRuns.autopilot, plan: outreachRuns.plan,
       }).from(outreachRunLeads)
         .innerJoin(outreachRuns, and(eq(outreachRuns.id, outreachRunLeads.runId), inOrg(outreachRuns)))
@@ -173,13 +174,19 @@ export async function loadConversationSummaries(recordIds: readonly string[], no
         return ref;
     }
   };
+  // As runMembershipFor reads it: the person's newest run on this channel, when it covers the conversation.
+  const membershipOf = (record: (typeof records)[number]) => {
+    const conversation = conversationOf(record.id);
+    if (!conversation) return null;
+    const membership = memberships.find((row) => row.personId === record.personId && row.channel === conversation.channel);
+    return membership && runCoversConversation(membership.plan, conversation) ? membership : null;
+  };
   const replyModeOf = (record: (typeof records)[number]): ReplyMode => {
     const conversation = conversationOf(record.id);
     if (!conversation) return "review";
     if (takenOver.has(conversation.conversationId)) return "takeover";
-    // As runMembershipFor reads it: the person's newest run on this channel.
-    const membership = memberships.find((row) => row.personId === record.personId && row.channel === conversation.channel);
-    if (!membership || !runCoversConversation(membership.plan, conversation)) return "review";
+    const membership = membershipOf(record);
+    if (!membership) return "review";
     return membership.automatic && membership.runStatus === "running" && membership.leadStatus === "active" ? "automatic" : "review";
   };
 
@@ -211,6 +218,10 @@ export async function loadConversationSummaries(recordIds: readonly string[], no
       classificationStatus: classificationOf.get(record.id) ?? null,
       decisions: decisionsOf.get(record.id) ?? [],
       replyMode: replyModeOf(record),
+      run: (() => {
+        const membership = membershipOf(record);
+        return membership ? { id: membership.runId, name: membership.runName, status: membership.runStatus, automatic: membership.automatic } : null;
+      })(),
       account: conversation ? { channel: conversation.channel, ref: conversation.accountRef, label: accountLabel(conversation.channel, conversation.accountRef) } : null,
       doNotContact: record.doNotContact ?? false,
       wrongRoute: wrongRoute ? { channel: wrongRoute.channel, route: wrongRoute.route, ackStatus: wrongRoute.ackStatus } : null,

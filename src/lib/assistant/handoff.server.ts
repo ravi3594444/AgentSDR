@@ -242,7 +242,7 @@ export function handoffEmail(input: { to: string; leadName: string; label: strin
   const subject = input.reminder
     ? `Still waiting: ${input.leadName} (${input.label.toLowerCase()}, ${input.waited})`
     : `${input.label}: ${input.leadName}`;
-  const url = `${appUrl()}/assistant/results#needs-you`;
+  const url = `${appUrl()}/inbox?view=needs_you`;
   const about = input.brief || input.reason;
   const said = input.leadMessage?.trim() ? `They wrote: “${input.leadMessage.trim().slice(0, 400)}”` : "";
   const text = [

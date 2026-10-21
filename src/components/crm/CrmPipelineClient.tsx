@@ -6,14 +6,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   RiCheckDoubleLine,
   RiFilterOffLine,
-  RiKanbanView2,
-  RiListUnordered,
   RiRefreshLine,
 } from "@remixicon/react";
 import * as Button from "@/components/alignui/button";
 import * as SegmentedControl from "@/components/alignui/segmented-control";
 import * as Select from "@/components/alignui/select";
-import { Frame, FrameHeader, FramePanel } from "@/components/analytics/kit/Frame";
+import { Frame, FramePanel } from "@/components/analytics/kit/Frame";
 import { WorkspaceNavigation, WorkspaceStats } from "@/components/page/WorkspaceNavigation";
 import { EmptyState } from "@/components/page/EmptyState";
 import { PageHeader } from "@/components/page/PageHeader";
@@ -21,11 +19,8 @@ import { cn } from "@/utils/cn";
 import { HoverPreviewProvider } from "./ActionRowTools";
 import {
   ActionCard,
-  ActionRows,
   CompactSelect,
-  LoadMoreOnScroll,
   NoticeBar,
-  PAGE_SIZE,
   STAGE_META,
   StageIcon,
   actionId,
@@ -38,15 +33,13 @@ import {
   type PipelineStage,
 } from "./CrmActionsClient";
 import { ErrorState } from "./CrmLayout";
-import { RowsSkeleton } from "./CrmSkeletons";
 import { asList, asObject, crmFetch, errorMessage } from "./crm-utils";
 
 const STAGES = Object.keys(STAGE_META) as PipelineStage[];
 /** Cards per column per request; a board shows three columns at once. */
 const BOARD_PAGE = 20;
 
-const EMPTY_COPY: Record<PipelineStage | "all", { title: string; detail: string }> = {
-  all: { title: "No open leads", detail: "Anyone who replies will show up here until their record is closed." },
+const EMPTY_COPY: Record<PipelineStage, { title: string; detail: string }> = {
   needs_action: { title: "Nothing needs attention", detail: "New replies and due follow-ups land here." },
   waiting: { title: "No one is waiting", detail: "Leads you have replied to, or with a follow-up scheduled, land here." },
   exhausted: { title: "No exhausted sequences", detail: "Leads whose every follow-up went out without a reply land here." },
@@ -122,20 +115,24 @@ function usePipelinePage(query: string, pageSize: number, enabled: boolean) {
   return { actions, setActions, stageCounts, loaded, loading, loadingMore, error, hasMore, load, loadMore };
 }
 
-type View = "board" | "list";
-
 /**
  * Every open lead, not only the ones due now. Action required drops a record
  * the moment it is acted on; this keeps it, so someone replied to yesterday
  * with a follow-up due tomorrow — or whose follow-ups have all gone out — is
- * still somewhere to be found. The board shows the three stages side by side;
- * the list is the same data as a table, with the inline draft editor.
+ * still somewhere to be found. The board shows the three stages side by side,
+ * inside Leads (`/leads?view=board`); each conversation as a row is the
+ * Inbox's All conversations.
  */
 export function CrmPipelineClient() {
-  const [view, setView] = useState<View>("list");
   const [categories, setCategories] = useState<Data[]>([]);
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
-  const [listStage, setListStage] = useState<PipelineStage | "all">("all");
+  // A link from an older pipeline bookmark (/crm/pipeline?channel=…) keeps its filters.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const channel = params.get("channel") ?? "";
+    const category = params.get("category") ?? "";
+    if (channel || category) setFilters({ channel, category });
+  }, []);
   // Below lg the board shows one column at a time.
   const [mobileStage, setMobileStage] = useState<PipelineStage>("needs_action");
   const [categoryError, setCategoryError] = useState("");
@@ -149,10 +146,9 @@ export function CrmPipelineClient() {
     if (stage !== "all") params.set("stage", stage);
     return params.toString();
   };
-  const needs = usePipelinePage(stageQuery("needs_action"), BOARD_PAGE, view === "board");
-  const waiting = usePipelinePage(stageQuery("waiting"), BOARD_PAGE, view === "board");
-  const exhausted = usePipelinePage(stageQuery("exhausted"), BOARD_PAGE, view === "board");
-  const list = usePipelinePage(stageQuery(listStage), PAGE_SIZE, view === "list");
+  const needs = usePipelinePage(stageQuery("needs_action"), BOARD_PAGE, true);
+  const waiting = usePipelinePage(stageQuery("waiting"), BOARD_PAGE, true);
+  const exhausted = usePipelinePage(stageQuery("exhausted"), BOARD_PAGE, true);
   const columns = { needs_action: needs, waiting, exhausted } as const;
 
   // Counts come back with every first page; after an edit moves a lead, one
@@ -167,7 +163,7 @@ export function CrmPipelineClient() {
       void crmFetch(`/actions?${base}&limit=1`).then((result) => setFreshCounts(asObject(asObject(result).stageCounts) as Partial<Record<PipelineStage, number>>)).catch(() => undefined);
     }, 1200);
   }, [base]);
-  const counts = freshCounts ?? (view === "list" ? list.stageCounts : needs.stageCounts ?? waiting.stageCounts ?? exhausted.stageCounts);
+  const counts = freshCounts ?? needs.stageCounts ?? waiting.stageCounts ?? exhausted.stageCounts;
   const countFor = (stage: PipelineStage | "all") => counts
     ? stage === "all" ? STAGES.reduce((sum, key) => sum + Number(counts[key] ?? 0), 0) : Number(counts[stage] ?? 0)
     : null;
@@ -178,15 +174,14 @@ export function CrmPipelineClient() {
 
   return <>
     <PageHeader
-      title="Leads & replies"
-      description="Every open conversation stays here, including the ones you or the assistant have already answered."
+      title="Leads"
+      description="Every open lead by stage: waiting on you, waiting on them, or out of follow-ups. Answered ones stay here too."
       actions={<Button.Root variant="neutral" mode="stroke" size="small" onClick={() => {
         setFreshCounts(null);
-        if (view === "list") void list.load(0);
-        else for (const page of Object.values(columns)) void page.load(0);
+        for (const page of Object.values(columns)) void page.load(0);
       }}><Button.Icon as={RiRefreshLine} />Refresh</Button.Root>}
     />
-    <div className="mt-5"><WorkspaceNavigation area="leads" active="/crm/pipeline" /></div>
+    <div className="mt-5"><WorkspaceNavigation area="leads" active="/leads?view=board" /></div>
     <WorkspaceStats items={[
       { label: "Open leads", value: format(total), detail: "Under the current filters" },
       { label: "Needs action", value: format(countFor("needs_action")), detail: "Waiting for you" },
@@ -194,88 +189,42 @@ export function CrmPipelineClient() {
       { label: "Follow-ups exhausted", value: format(countFor("exhausted")) },
     ]} />
 
-    <div className="mt-5 flex flex-wrap items-center justify-between gap-2">
-      <SegmentedControl.Root value={view} onValueChange={(value) => setView(value as View)}>
-        <SegmentedControl.List className="w-auto" aria-label="View">
-          <SegmentedControl.Trigger value="board" className="gap-1.5 px-3"><RiKanbanView2 className="size-4" aria-hidden="true" />Board</SegmentedControl.Trigger>
-          <SegmentedControl.Trigger value="list" className="gap-1.5 px-3"><RiListUnordered className="size-4" aria-hidden="true" />List</SegmentedControl.Trigger>
-        </SegmentedControl.List>
-      </SegmentedControl.Root>
-      <div className="flex flex-wrap items-center gap-2">
-        <CompactSelect label="Category" placeholder="All categories" value={filters.category} onChange={(value) => setFilter("category", value)}>
-          <Select.Item value="potential">Potential (not “Not interested”)</Select.Item>
-          <Select.Item value="">All categories</Select.Item>
-          {categoryItems()}
-        </CompactSelect>
-        <CompactSelect label="Channel" placeholder="All channels" value={filters.channel} onChange={(value) => setFilter("channel", value)}><Select.Item value="">All channels</Select.Item>{channelItems()}</CompactSelect>
-        {filtered && <Button.Root variant="neutral" mode="ghost" size="xsmall" onClick={() => setFilters(DEFAULT_FILTERS)}>Reset</Button.Root>}
-      </div>
+    <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
+      <CompactSelect label="Category" placeholder="All categories" value={filters.category} onChange={(value) => setFilter("category", value)}>
+        <Select.Item value="potential">Potential (not “Not interested”)</Select.Item>
+        <Select.Item value="">All categories</Select.Item>
+        {categoryItems()}
+      </CompactSelect>
+      <CompactSelect label="Channel" placeholder="All channels" value={filters.channel} onChange={(value) => setFilter("channel", value)}><Select.Item value="">All channels</Select.Item>{channelItems()}</CompactSelect>
+      {filtered && <Button.Root variant="neutral" mode="ghost" size="xsmall" onClick={() => setFilters(DEFAULT_FILTERS)}>Reset</Button.Root>}
     </div>
     {categoryError && <div className="mt-3"><ErrorState message={categoryError} /></div>}
 
-    {view === "board" ? <>
-      <SegmentedControl.Root value={mobileStage} onValueChange={(value) => setMobileStage(value as PipelineStage)} className="mt-4 lg:hidden">
-        <SegmentedControl.List aria-label="Stage">
-          {STAGES.map((stage) => <SegmentedControl.Trigger key={stage} value={stage} className="gap-1 px-1.5 text-label-xs sm:gap-1.5 sm:px-2">
-            <StageGlyph stage={stage} />
-            {STAGE_META[stage].short}
-            <span className="tabular-nums text-text-soft-400">{format(countFor(stage))}</span>
-          </SegmentedControl.Trigger>)}
-        </SegmentedControl.List>
-      </SegmentedControl.Root>
-      <HoverPreviewProvider>
-        <div className="mt-4 grid grid-cols-1 items-start gap-4 lg:grid-cols-3 lg:gap-5">
-          {STAGES.map((stage) => <BoardColumn
-            key={stage}
-            stage={stage}
-            page={columns[stage]}
-            columns={columns}
-            count={countFor(stage)}
-            categories={categories}
-            filtered={filtered}
-            onReset={() => setFilters(DEFAULT_FILTERS)}
-            onMutated={onMutated}
-            className={stage === mobileStage ? undefined : "hidden lg:flex"}
-          />)}
-        </div>
-      </HoverPreviewProvider>
-    </> : <Frame className="mt-4">
-      <FrameHeader
-        title="Open leads"
-        description={list.loaded ? `${format(countFor(listStage))} leads · most recent activity first` : "Loading…"}
-        actions={
-          <SegmentedControl.Root value={listStage} onValueChange={(value) => setListStage(value as PipelineStage | "all")}>
-            <SegmentedControl.List className="w-full sm:inline-grid sm:w-auto" aria-label="Pipeline stage">
-              {(["all", ...STAGES] as const).map((stage) => <SegmentedControl.Trigger key={stage} value={stage} className="h-auto min-h-7 flex-col gap-0 whitespace-normal px-1 py-1 text-center leading-tight sm:h-7 sm:flex-row sm:gap-1.5 sm:whitespace-nowrap sm:px-3 sm:py-0">
-                {stage !== "all" && <StageGlyph stage={stage} className="hidden sm:flex" />}
-                {stage === "all" ? "All" : STAGE_META[stage].short}
-                <span className="tabular-nums text-text-soft-400">{format(countFor(stage))}</span>
-              </SegmentedControl.Trigger>)}
-            </SegmentedControl.List>
-          </SegmentedControl.Root>
-        }
-      />
-      <FramePanel className="overflow-hidden p-0 sm:p-0">
-        {!list.loaded && list.loading ? <RowsSkeleton rows={8} />
-          : list.error && !list.actions.length ? <div className="p-4"><ErrorState message={list.error} onRetry={() => void list.load(0)} /></div>
-          : <>
-            <ActionRows
-              actions={list.actions}
-              categories={categories}
-              onActionsChange={list.setActions}
-              onMutated={onMutated}
-              pipeline
-              refreshing={list.loading}
-              hasMore={list.hasMore && !list.loadingMore}
-              onLoadMore={list.loadMore}
-              empty={filtered
-                ? { icon: RiFilterOffLine, title: "No leads match these filters", detail: "Try another category or channel.", action: <Button.Root variant="neutral" mode="stroke" size="small" onClick={() => setFilters(DEFAULT_FILTERS)}>Reset filters</Button.Root> }
-                : { icon: RiCheckDoubleLine, ...EMPTY_COPY[listStage] }}
-            />
-            {list.hasMore && <LoadMoreOnScroll onLoadMore={list.loadMore} busy={list.loadingMore} />}
-          </>}
-      </FramePanel>
-    </Frame>}
+    <SegmentedControl.Root value={mobileStage} onValueChange={(value) => setMobileStage(value as PipelineStage)} className="mt-4 lg:hidden">
+      <SegmentedControl.List aria-label="Stage">
+        {STAGES.map((stage) => <SegmentedControl.Trigger key={stage} value={stage} className="gap-1 px-1.5 text-label-xs sm:gap-1.5 sm:px-2">
+          <StageGlyph stage={stage} />
+          {STAGE_META[stage].short}
+          <span className="tabular-nums text-text-soft-400">{format(countFor(stage))}</span>
+        </SegmentedControl.Trigger>)}
+      </SegmentedControl.List>
+    </SegmentedControl.Root>
+    <HoverPreviewProvider>
+      <div className="mt-4 grid grid-cols-1 items-start gap-4 lg:grid-cols-3 lg:gap-5">
+        {STAGES.map((stage) => <BoardColumn
+          key={stage}
+          stage={stage}
+          page={columns[stage]}
+          columns={columns}
+          count={countFor(stage)}
+          categories={categories}
+          filtered={filtered}
+          onReset={() => setFilters(DEFAULT_FILTERS)}
+          onMutated={onMutated}
+          className={stage === mobileStage ? undefined : "hidden lg:flex"}
+        />)}
+      </div>
+    </HoverPreviewProvider>
   </>;
 }
 
@@ -342,7 +291,7 @@ function BoardColumn({ stage, page, columns, count, categories, filtered, onRese
             categories={categories}
             now={now}
             busy={busyIds.has(id)}
-            onOpen={() => router.push(`/crm/records/${id}`)}
+            onOpen={() => router.push(`/crm/records/${id}?from=board`)}
             onMutate={(path, body, method, success) => mutateRow(id, path, body, method, success)}
             onClassify={(choice) => classify(action, choice)}
             pipeline

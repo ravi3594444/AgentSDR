@@ -145,7 +145,7 @@ export default function ResultsClient({ initial }: { initial: ResultsPayload }) 
         <Section title="Interested people">
           <p className="mb-3 text-paragraph-xs text-text-soft-400">Replies the AI classified as Interested in this period (applied or accepted). A record moved by hand is not counted here; Analytics&apos; Positive counts every move into Interested or Customer, and Pipeline shows who is Interested now. Open Leads to read the full conversations.</p>
           <List items={r.interestedPeople.map((p) => `${p.name}${p.what ? ` — ${p.what}` : ""} (${new Date(p.at).toLocaleString()})`)} empty="No interested replies in this period." />
-          <Link href="/crm/pipeline" className="mt-4 inline-block text-label-xs text-text-strong-950 underline underline-offset-4">Open leads &amp; replies</Link>
+          <Link href="/leads?view=board" className="mt-4 inline-block text-label-xs text-text-strong-950 underline underline-offset-4">Open the Leads board</Link>
         </Section>
         <Section title="Where leads came from">
           <LeadSourcesTable sources={r.leads.sources} empty="No leads were found or imported in this period." />

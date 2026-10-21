@@ -186,9 +186,9 @@ type AttentionItem = { key: AttentionKey; label: string; hint: string; href: str
 
 const ATTENTION: AttentionItem[] = [
   { key: "needsYou", label: METRICS.needsYouNow.label, hint: "Open decisions waiting for you", href: "/assistant/results", icon: RiFlagLine, tone: "serious" },
-  { key: "actionRequired", label: METRICS.actionRequiredNow.label, hint: "Conversations in the queue", href: "/crm/actions", icon: RiInboxLine, tone: "serious" },
-  { key: "overdue", label: METRICS.followUpsDueNow.label, hint: "Follow-ups drafted or past their time", href: "/crm/actions", icon: RiAlarmWarningLine, tone: "critical" },
-  { key: "draftsAwaitingReview", label: METRICS.draftsAwaitingReviewNow.label, hint: "AI replies waiting for approval", href: "/crm/actions", icon: RiDraftLine, tone: "warning" },
+  { key: "actionRequired", label: METRICS.actionRequiredNow.label, hint: "Conversations in the queue", href: "/inbox?view=needs_you", icon: RiInboxLine, tone: "serious" },
+  { key: "overdue", label: METRICS.followUpsDueNow.label, hint: "Follow-ups drafted or past their time", href: "/inbox?view=needs_you&group=follow_up", icon: RiAlarmWarningLine, tone: "critical" },
+  { key: "draftsAwaitingReview", label: METRICS.draftsAwaitingReviewNow.label, hint: "AI replies waiting for approval", href: "/inbox?view=needs_you", icon: RiDraftLine, tone: "warning" },
   { key: "plansAwaitingStart", label: METRICS.plansAwaitingStartNow.label, hint: "Nothing is sent until you start them", href: "/assistant", icon: RiSendPlaneLine, tone: "warning" },
   { key: "mailboxesFailing", label: "Failing mailboxes", hint: "Email accounts that can't send", href: "/settings/email-accounts", icon: RiMailForbidLine, tone: "critical" },
   { key: "linkedinDisconnected", label: "LinkedIn disconnected", hint: "Accounts that need reconnecting", href: "/settings/linkedin-accounts", icon: RiLinkedinBoxLine, tone: "critical" },

@@ -29,7 +29,7 @@ import * as Tooltip from "@/components/alignui/tooltip";
 import { SETTINGS_HOME } from "@/components/settings/settingsNav";
 import { CommandPalette } from "@/components/nav/CommandPalette";
 import { ThemeToggleButton } from "@/components/theme/ThemeSwitch";
-import { activeHref, NAV_FOOTER, visibleNavSections, type NavBadges, type NavData, type NavEntry, type NavGroup, type NavLink } from "@/components/nav/navConfig";
+import { activeHref, NAV_FOOTER, visibleNavSections, type NavBadges, type NavData, type NavEntry, type NavGroup, type NavLink, type NavSection } from "@/components/nav/navConfig";
 import type { FeatureState } from "@/lib/features/catalog";
 import { APP_VERSION, bugReportUrl, SUPPORT_LINKS } from "@/lib/support";
 import { useDemoMode } from "@/components/demo/DemoProvider";
@@ -39,9 +39,10 @@ import { useRecordChanged } from "@/components/crm/recordEvents";
 
 /**
  * The app sidebar, in the ReUI shape: brand + collapse at the top, a
- * "jump to" search (⌘K), labelled sections with one collapsible group per
- * outreach channel, developer links and Settings pinned to the bottom, and
- * the workspace card. Collapses to an icon rail; groups then open as a menu.
+ * "jump to" search (⌘K), the three destinations, a collapsed Advanced
+ * section with one group per channel's manual tools, Getting started and
+ * Settings pinned to the bottom, and the workspace card. Collapses to an
+ * icon rail; groups then open as a menu.
  *
  * Badges are live (GET /api/nav/badges): refreshed on navigation and every
  * minute while the tab is visible. The same answer says which optional
@@ -305,6 +306,17 @@ export default function Sidebar({ mobile = false, onClose }: { mobile?: boolean;
       return next;
     });
   };
+  // A collapsible section (Advanced) holding the current page is always open; otherwise the stored choice, closed by default.
+  const sectionLinks = (section: NavSection) => section.entries.flatMap((e) => (e.kind === "group" ? e.children : [e]));
+  const sectionKey = (section: NavSection) => `section:${section.id ?? section.label}`;
+  const isSectionOpen = (section: NavSection) => !section.collapsible || sectionLinks(section).some((l) => l.href === current) || Boolean(openGroups[sectionKey(section)]);
+  const toggleSection = (section: NavSection) => {
+    setOpenGroups((prev) => {
+      const next = { ...prev, [sectionKey(section)]: !isSectionOpen(section) };
+      writeStorage(OPEN_KEY, next);
+      return next;
+    });
+  };
 
   const { data: session, isPending: sessionPending } = useSession();
   const { data: activeOrg, isPending: orgPending } = useActiveOrganization();
@@ -321,7 +333,7 @@ export default function Sidebar({ mobile = false, onClose }: { mobile?: boolean;
     const { error } = await authClient.organization.setActive({ organizationId });
     if (error) return setSwitchError(error.message || "Could not switch organization.");
     // A full load, so nothing cached from the previous organization survives.
-    window.location.assign("/analytics");
+    window.location.assign("/assistant");
   }
 
   async function signOut() {
@@ -401,15 +413,30 @@ export default function Sidebar({ mobile = false, onClose }: { mobile?: boolean;
 
         {/* Sections */}
         <nav aria-label="Main" className={cn("flex-1 overflow-y-auto pb-3", collapsed ? "px-3" : "px-3")}>
-          {sections.map((section, i) => (
-            <div key={section.label ?? i} className={cn(i > 0 && "mt-4")}>
-              {section.label && (collapsed ? <div className="mx-2 mb-2 border-t border-stroke-soft-200" /> : <p className="mb-2 px-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-text-soft-400">{section.label}</p>)}
-              <div className="space-y-0.5">{section.entries.map((e) => renderEntry(e))}</div>
-            </div>
-          ))}
+          {sections.map((section, i) => {
+            // The icon rail always lists the entries; only the full sidebar folds a section away.
+            const open = collapsed || isSectionOpen(section);
+            const waiting = !open && sectionLinks(section).some((l) => Boolean(l.badge && badges?.[l.badge]));
+            return (
+              <div key={section.label ?? i} className={cn(i > 0 && "mt-4")}>
+                {section.label && (collapsed
+                  ? <div className="mx-2 mb-2 border-t border-stroke-soft-200" />
+                  : section.collapsible
+                  ? (
+                    <button type="button" onClick={() => toggleSection(section)} aria-expanded={open} className="mb-1 flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-text-soft-400 outline-none transition-colors hover:text-text-sub-600 focus-visible:ring-2 focus-visible:ring-primary-base">
+                      <span className="flex-1 text-left">{section.label}</span>
+                      {waiting && <span className="size-2 shrink-0 rounded-full bg-warning-base" aria-label="Needs attention" />}
+                      <RiArrowDownSLine className={cn("size-4 shrink-0 transition-transform duration-200", !open && "-rotate-90")} aria-hidden="true" />
+                    </button>
+                  )
+                  : <p className="mb-2 px-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-text-soft-400">{section.label}</p>)}
+                {open && <div className="space-y-0.5">{section.entries.map((e) => renderEntry(e))}</div>}
+              </div>
+            );
+          })}
         </nav>
 
-        {/* Pinned: developer links, settings, workspace */}
+        {/* Pinned: Getting started, settings, help, workspace */}
         <div className={cn("shrink-0 space-y-0.5 border-t border-stroke-soft-200 pt-2", collapsed ? "px-3" : "px-3")}>
           {NAV_FOOTER.map((e) => renderEntry(e, true))}
           <HelpRow collapsed={collapsed} compact />

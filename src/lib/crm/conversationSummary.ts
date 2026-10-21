@@ -115,11 +115,16 @@ export type ConversationFacts = {
   /** Open owner decisions, and recent reports (interested, opt-out). */
   decisions: readonly SummaryDecision[];
   replyMode: ReplyMode;
+  /** The outreach run that answers this conversation (the person's newest on its channel), if any. */
+  run?: SummaryRun | null;
   account: { channel: string; ref: string; label: string } | null;
   doNotContact: boolean;
   wrongRoute: { channel: string; route: string; ackStatus: string } | null;
   now?: Date;
 };
+
+/** The run behind a conversation, so a list can switch its reply mode in place. */
+export type SummaryRun = { id: string; name: string; status: string; automatic: boolean };
 
 export type NextActionKind =
   | "do_not_contact"
@@ -147,6 +152,7 @@ export type ConversationSummary = {
   account: { channel: string; ref: string; label: string } | null;
   replyMode: ReplyMode;
   replyModeLabel: string;
+  run: SummaryRun | null;
   pending: {
     draft: ConversationFacts["draft"];
     decisions: { id: string; kind: OwnerDecisionKind; label: string; action: string }[];
@@ -227,6 +233,7 @@ export function describeConversation(facts: ConversationFacts): ConversationSumm
     account: facts.account,
     replyMode: facts.replyMode,
     replyModeLabel: REPLY_MODE_LABELS[facts.replyMode],
+    run: facts.run ?? null,
     pending: {
       draft,
       decisions: open.map((decision) => ({ id: decision.id, kind: decision.kind, label: handoffLabel(decision.kind).label, action: handoffLabel(decision.kind).action })),

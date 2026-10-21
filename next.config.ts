@@ -1,5 +1,6 @@
 import type { NextConfig } from "next";
 import pkg from "./package.json";
+import { LEGACY_REDIRECTS } from "./src/lib/nav/legacyRoutes";
 
 const nextConfig: NextConfig = {
   output: "standalone",
@@ -66,6 +67,9 @@ const nextConfig: NextConfig = {
       // People and Companies are the two tabs of Leads.
       { source: "/people", destination: "/leads", permanent: false },
       { source: "/companies", destination: "/leads?tab=companies", permanent: false },
+
+      // Pages the navigation rework folded into Outreach, Inbox and Leads (src/lib/nav/legacyRoutes.ts).
+      ...LEGACY_REDIRECTS,
     ];
   },
 };

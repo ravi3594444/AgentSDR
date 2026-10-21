@@ -68,6 +68,19 @@ export function crmNeedsYouSql(r: CrmRecordScopeColumns): SQL<boolean> {
        where nd.crm_record_id = ${r.id} and nd.status = 'awaiting_review'))`;
 }
 
+/**
+ * The Inbox's Needs you rows: the Action required queue plus every draft
+ * awaiting review, whatever the record's state (a Review-mode reply can wait
+ * on a record the queue no longer holds). Owner decisions are listed beside
+ * these rows (listNeedsYou), not as rows, so one lead's question is not
+ * shown twice.
+ */
+export function crmAttentionSql(r: CrmRecordColumns): SQL<boolean> {
+  return sql<boolean>`(${crmActionableSql(r)} or exists (
+      select 1 from crm_drafts attention_draft
+       where attention_draft.crm_record_id = ${r.id} and attention_draft.status = 'awaiting_review'))`;
+}
+
 /** Raw-SQL record columns under the alias `r`, for statements written by hand (badges, Activity). */
 export const RAW_RECORD_COLUMNS = {
   id: sql.raw("r.id"),
@@ -83,4 +96,15 @@ export const RAW_RECORD_COLUMNS = {
  */
 export function crmActionQueueCountSql(organizationId: string): SQL<number> {
   return sql<number>`(SELECT count(*) FROM crm_records r WHERE r.organization_id = ${organizationId} AND ${crmActionableSql(RAW_RECORD_COLUMNS)})::int`;
+}
+
+/**
+ * The Inbox badge: every Needs you row (crmAttentionSql) plus every open
+ * owner decision, which the Inbox lists above the rows. Interested and
+ * opt-out reports are not decisions and never count.
+ */
+export function crmInboxCountSql(organizationId: string): SQL<number> {
+  const reports = sql.join(REPORT_KINDS.map((kind) => sql`${kind}`), sql`, `);
+  return sql<number>`((SELECT count(*) FROM crm_records r WHERE r.organization_id = ${organizationId} AND ${crmAttentionSql(RAW_RECORD_COLUMNS)})
+    + (SELECT count(*) FROM owner_decisions od WHERE od.organization_id = ${organizationId} AND od.status = 'open' AND od.kind NOT IN (${reports})))::int`;
 }

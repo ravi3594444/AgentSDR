@@ -1,7 +1,5 @@
 import {
   RiRobot2Line,
-  RiPulseLine,
-  RiBarChartBoxLine,
   RiBookOpenLine,
   RiBugLine,
   RiLightbulbLine,
@@ -25,10 +23,8 @@ import {
   RiInstagramFill,
   RiLinkedinBoxFill,
   RiMailFill,
-  RiRouteLine,
   RiSettings3Line,
   RiTimeLine,
-  RiTodoLine,
   RiUserSearchLine,
   RiWhatsappFill,
   type RemixiconComponentType,
@@ -42,10 +38,11 @@ import { isReleased } from "@/lib/release";
 /**
  * The app's navigation, shared by the sidebar and the ⌘K palette.
  *
- * Shape: a few labelled sections of links and collapsible groups (one group
- * per outreach channel), plus footer entries pinned to the bottom. A link's
- * `match` lists extra path prefixes that should light it up (a record page
- * belongs to Leads). An entry with a `feature` shows only while that
+ * Shape: three destinations — Outreach, Inbox, Leads — then a collapsed
+ * Advanced section holding the manual tools (one group per channel's
+ * campaigns and inbox, sequences, data, developer pages), plus Getting
+ * started and Settings pinned to the bottom. A link's `match` lists extra
+ * path prefixes that should light it up (a record page belongs to Leads). An entry with a `feature` shows only while that
  * optional feature is on for the organization (GET /api/nav/badges says
  * which are); without the answer it stays hidden.
  */
@@ -53,6 +50,8 @@ import { isReleased } from "@/lib/release";
 /** Live counts from GET /api/nav/badges. */
 export type NavBadges = {
   actionRequired: number;
+  /** The Inbox's Needs you: records waiting on a person plus open owner decisions (crmInboxCountSql). */
+  inbox: number;
   whatsappUnread: number;
   draftsAwaitingReview: number;
   /** Failing mailboxes + disconnected LinkedIn, WhatsApp and Instagram accounts. */
@@ -95,7 +94,14 @@ export type NavGroup = {
 };
 
 export type NavEntry = NavLink | NavGroup;
-export type NavSection = { label?: string; entries: NavEntry[] };
+export type NavSection = {
+  label?: string;
+  entries: NavEntry[];
+  /** Closed until opened (the label is the toggle), unless it holds the current page. */
+  collapsible?: boolean;
+  /** Key for the stored open/closed choice of a collapsible section. */
+  id?: string;
+};
 
 const link = (href: string, label: string, icon: RemixiconComponentType, extra: Partial<NavLink> = {}): NavLink => ({ kind: "link", href, label, icon, ...extra });
 
@@ -105,15 +111,17 @@ const when = <T,>(released: boolean, ...entries: T[]): T[] => (released ? entrie
 export const NAV_SECTIONS: NavSection[] = [
   {
     entries: [
-      link("/assistant", "Assistant", RiRobot2Line),
-      link("/activity", "Activity", RiPulseLine, { badge: "newReplies" }),
-      link("/assistant/results", "Overview", RiBarChartBoxLine, { badge: "needsYou", match: ["/analytics"] }),
-      link("/crm/actions", "Action required", RiTodoLine, { badge: "actionRequired" }),
-      link("/crm/pipeline", "Leads & replies", RiUserSearchLine, { match: ["/crm/records", "/leads"] }),
+      // The chat, its requests and the reports; Activity and Overview were its old names.
+      link("/assistant", "Outreach", RiRobot2Line, { match: ["/activity", "/analytics"] }),
+      link("/inbox", "Inbox", RiInboxLine, { badge: "inbox", match: ["/crm/actions"] }),
+      link("/leads", "Leads", RiUserSearchLine, { match: ["/crm/records", "/crm/pipeline"] }),
     ],
   },
   {
-    label: "Outreach",
+    // Manual tools: campaigns made by hand, each channel's own inbox, sequences, data, developer pages.
+    label: "Advanced",
+    id: "advanced",
+    collapsible: true,
     entries: [
       {
         kind: "group",
@@ -160,18 +168,7 @@ export const NAV_SECTIONS: NavSection[] = [
         feature: "instagram",
         children: [link("/instagram/messages", "Messages", RiChat3Line)],
       },
-    ],
-  },
-  {
-    label: "CRM",
-    entries: [
-      link("/crm/pipeline", "Pipeline", RiRouteLine),
       link("/crm/sequences", "Sequences", RiTimeLine),
-    ],
-  },
-  ...when<NavSection>(isReleased("tables") || isReleased("prospecting"), {
-    label: "Data",
-    entries: [
       ...when<NavEntry>(isReleased("tables"), link("/tables", "Tables", RiGridLine)),
       ...when<NavEntry>(isReleased("prospecting"), {
         kind: "group",
@@ -183,23 +180,23 @@ export const NAV_SECTIONS: NavSection[] = [
           link("/campaigns", "Qualification campaigns", RiFilter3Line),
         ],
       }),
+      {
+        kind: "group",
+        id: "developers",
+        label: "Developers",
+        icon: RiCodeSSlashLine,
+        children: [
+          link("/linkedin/connections", "Connections", RiLinkM),
+          link("/linkedin/jobs", "Job history", RiHistoryLine),
+          link("/linkedin/webhooks", "LinkedIn webhooks", RiWebhookLine),
+        ],
+      },
     ],
-  }),
+  },
 ];
 
 export const NAV_FOOTER: NavEntry[] = [
-  {
-    kind: "group",
-    id: "developers",
-    label: "Developers",
-    icon: RiCodeSSlashLine,
-    children: [
-      link("/linkedin/connections", "Connections", RiLinkM),
-      link("/linkedin/jobs", "Job history", RiHistoryLine),
-      link("/linkedin/webhooks", "LinkedIn webhooks", RiWebhookLine),
-    ],
-  },
-  // Pinned beside Settings rather than at the top, so finished setup never pushes campaign and inbox work down.
+  // Pinned beside Settings rather than at the top, so finished setup never pushes the day's work down.
   link("/getting-started", "Getting started", RiListCheck3),
   link(SETTINGS_HOME, "Settings", RiSettings3Line, { match: ["/settings"], badge: "accountsNeedingAttention", badgeStyle: "dot" }),
 ];
@@ -257,6 +254,12 @@ export function paletteItems(features: FeatureState | null = null): PaletteItem[
       else for (const t of s.tabs) items.push({ href: t.href, label: `${s.label} · ${t.label}`, group: "Settings", icon: t.icon, keywords: g.label });
     }
   }
+  // The views inside the three destinations, so "all conversations" or "board" finds them.
+  items.push(
+    { href: "/inbox?view=needs_you", label: "Inbox · Needs you", group: "Pages", icon: RiInboxLine, keywords: "action required approve drafts decisions" },
+    { href: "/inbox?view=all", label: "Inbox · All conversations", group: "Pages", icon: RiInboxLine, keywords: "replies messages" },
+    { href: "/leads?view=board", label: "Leads · Board", group: "Pages", icon: RiUserSearchLine, keywords: "pipeline" },
+  );
   items.push(
     { href: "/outreach/campaigns/new", label: "New email campaign", group: "Create", icon: RiMailFill },
     { href: "/linkedin/campaigns/new", label: "New LinkedIn campaign", group: "Create", icon: RiLinkedinBoxFill },

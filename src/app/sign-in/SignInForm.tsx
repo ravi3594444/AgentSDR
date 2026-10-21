@@ -36,7 +36,7 @@ export function SignInForm({
   /** False on an invite-only instance: accounts come from invitations, so "Create one" is not offered. */
   signupAvailable?: boolean;
 }) {
-  const target = from || "/analytics";
+  const target = from || "/assistant";
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");

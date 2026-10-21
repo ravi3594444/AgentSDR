@@ -201,9 +201,9 @@ export function InstagramMessagesClient({ initialChatId = null }: { initialChatI
           actions={
             <>
               <Button.Root variant="neutral" mode="stroke" size="small" asChild>
-                <Link href="/crm/actions">
+                <Link href="/inbox?view=needs_you&channel=instagram">
                   <Button.Icon as={RiTodoLine} />
-                  Action required
+                  Inbox
                 </Link>
               </Button.Root>
               <Button.Root variant="neutral" mode="stroke" size="small" asChild>
@@ -364,11 +364,11 @@ export function InstagramMessagesClient({ initialChatId = null }: { initialChatI
               <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-bg-weak-50 px-3.5 py-2.5 text-paragraph-xs text-text-sub-600 ring-1 ring-inset ring-stroke-soft-200">
                 <span className="min-w-0 flex-1">
                   {person
-                    ? "Replies to this chat are drafted for review in Action required and sent from there."
+                    ? "Replies to this chat are drafted for review in the Inbox and sent from there."
                     : `Replies are drafted once the sender is in your leads (or arrives as an inquiry). Until then this chat is read-only here.`}
                 </span>
                 <Button.Root variant="neutral" mode="stroke" size="xsmall" asChild>
-                  <Link href={recordId ? `/crm/records/${recordId}` : "/crm/actions"}>{recordId ? "Open record" : "Action required"}</Link>
+                  <Link href={recordId ? `/crm/records/${recordId}` : "/inbox?view=needs_you&channel=instagram"}>{recordId ? "Open record" : "Inbox"}</Link>
                 </Button.Root>
               </div>
             </ComposerDock>

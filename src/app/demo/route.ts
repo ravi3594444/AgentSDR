@@ -27,9 +27,9 @@ function publicOrigin(request: NextRequest): string {
 export async function GET(request: NextRequest) {
   if (!isDemoMode()) return new NextResponse("Not found", { status: 404 });
 
-  const target = new URL(safeFrom(request.nextUrl.searchParams.get("from")) ?? "/analytics", publicOrigin(request));
+  const target = new URL(safeFrom(request.nextUrl.searchParams.get("from")) ?? "/assistant", publicOrigin(request));
   // Never loop back into the door itself.
-  if (target.pathname === "/demo") target.href = new URL("/analytics", target).href;
+  if (target.pathname === "/demo") target.href = new URL("/assistant", target).href;
 
   try {
     const { headers } = await auth.api.signInEmail({

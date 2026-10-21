@@ -165,8 +165,8 @@ export default function LeadsClient({ initialTab, initialRows, initialTotal }: P
     <main className="h-full w-full overflow-y-auto bg-bg-white-0">
       <PageContainer>
         <PageHeader
-          title="Contacts"
-          description="Every person and company you can reach, with their outreach and CRM state."
+          title="Leads"
+          description="Every person and company you can reach, with their outreach and CRM state. Board shows the open ones by stage."
           actions={isPeople && <Button.Root variant="primary" mode="filled" size="small" onClick={() => setShowImport(true)}><Button.Icon as={RiUpload2Line} />Import people</Button.Root>}
         />
 

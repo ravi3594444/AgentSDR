@@ -616,7 +616,7 @@ function ProposalCard({ message, run, canManageAutopilot, lastReplyMode, onChang
           </label>
           <label className={cn("flex items-start gap-2 rounded-lg p-2 text-paragraph-xs ring-1 ring-inset", mode === "review" ? "ring-primary-base" : "ring-stroke-soft-200")}>
             <input type="radio" name={`mode-${data.runId}`} className="mt-0.5" checked={mode === "review"} disabled={busy} onChange={() => setMode("review")} />
-            <span><span className="text-label-xs text-text-strong-950">Review.</span> The AI drafts every reply; each waits for you in Action required.</span>
+            <span><span className="text-label-xs text-text-strong-950">Review.</span> The AI drafts every reply; each waits for you in the Inbox.</span>
           </label>
           <p className="text-paragraph-xs text-text-soft-400">Either way the first messages and follow-ups go out automatically to {plan.assignments.length === 1 ? "this one lead" : `these ${plan.assignments.length} leads`} only, within the limits above. Adding people, channels or higher limits needs a new plan you approve.</p>
           {requestHasMore && (
@@ -638,7 +638,7 @@ function ProposalCard({ message, run, canManageAutopilot, lastReplyMode, onChang
         <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-stroke-soft-200 pt-3 text-paragraph-xs text-text-sub-600">
           <span className="flex-1">
             <span className="text-label-xs text-text-strong-950">{run?.autopilot ? "Automatic replies" : "Review mode"}.</span>{" "}
-            {run?.autopilot ? `Ordinary replies are answered as soon as the answer is written and checked (at most ${AUTOPILOT_PER_CONVERSATION} per conversation, ${AUTOPILOT_PER_DAY} in 24 hours).` : "Replies wait for you in Action required."}{" "}
+            {run?.autopilot ? `Ordinary replies are answered as soon as the answer is written and checked (at most ${AUTOPILOT_PER_CONVERSATION} per conversation, ${AUTOPILOT_PER_DAY} in 24 hours).` : "Replies wait for you in the Inbox."}{" "}
             {Object.keys(run?.campaigns ?? {}).length ? `Campaigns: ${Object.keys(run!.campaigns).map((c) => CHANNEL_LABEL[c] ?? c).join(", ")}.` : ""}
           </span>
           <Button.Root variant="neutral" mode="stroke" size="xsmall" disabled={busy || (!run?.autopilot && !canManageAutopilot)} onClick={() => void act("mode", run?.autopilot ? "review" : "automatic")}>
@@ -743,7 +743,7 @@ function InquiryRunCard({ message, run, canManageAutopilot, onChanged }: { messa
   const accounts = (data.plan.inquiry?.accounts ?? []).map((account) => account.username ? `@${account.username}` : "an Instagram account").join(", ");
 
   async function act(action: "start" | "cancel" | "pause" | "resume" | "stop" | "mode", nextMode?: "automatic" | "review") {
-    if (action === "stop" && !window.confirm("Stop answering new inquiries for good? Replies already sent stay sent; new inquiries then wait for you in Action required.")) return;
+    if (action === "stop" && !window.confirm("Stop answering new inquiries for good? Replies already sent stay sent; new inquiries then wait for you in the Inbox.")) return;
     if (action === "mode" && nextMode === "automatic" && !window.confirm(
       `Answer new inquiries automatically? Answers backed by your saved information are checked and sent as soon as they are ready; at most ${AUTOPILOT_PER_CONVERSATION} per conversation and ${AUTOPILOT_PER_DAY} in any 24 hours. Everything else waits for you.`,
     )) return;
@@ -790,7 +790,7 @@ function InquiryRunCard({ message, run, canManageAutopilot, onChanged }: { messa
           </label>
           <label className={cn("flex items-start gap-2 rounded-lg p-2 text-paragraph-xs ring-1 ring-inset", mode === "review" ? "ring-primary-base" : "ring-stroke-soft-200")}>
             <input type="radio" name={`mode-${data.runId}`} className="mt-0.5" checked={mode === "review"} disabled={busy} onChange={() => setMode("review")} />
-            <span><span className="text-label-xs text-text-strong-950">Review.</span> Every answer is drafted and waits for you in Action required.</span>
+            <span><span className="text-label-xs text-text-strong-950">Review.</span> Every answer is drafted and waits for you in the Inbox.</span>
           </label>
           <div className="flex justify-end gap-2">
             <Button.Root variant="neutral" mode="stroke" size="small" disabled={busy} onClick={() => void act("cancel")}>Discard</Button.Root>
@@ -803,7 +803,7 @@ function InquiryRunCard({ message, run, canManageAutopilot, onChanged }: { messa
       )}
       {(status === "running" || status === "paused") && (
         <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-stroke-soft-200 pt-3 text-paragraph-xs text-text-sub-600">
-          <span className="flex-1"><span className="text-label-xs text-text-strong-950">{run?.autopilot ? "Automatic replies" : "Review mode"}.</span> {run?.autopilot ? "Ordinary questions are answered once checked." : "Answers wait for you in Action required."}</span>
+          <span className="flex-1"><span className="text-label-xs text-text-strong-950">{run?.autopilot ? "Automatic replies" : "Review mode"}.</span> {run?.autopilot ? "Ordinary questions are answered once checked." : "Answers wait for you in the Inbox."}</span>
           <Button.Root variant="neutral" mode="stroke" size="xsmall" disabled={busy || (!run?.autopilot && !canManageAutopilot)} onClick={() => void act("mode", run?.autopilot ? "review" : "automatic")}>
             {run?.autopilot ? "Switch to Review" : "Switch to Automatic"}
           </Button.Root>
@@ -1576,7 +1576,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
             {state.thread.autonomous
               ? `Autonomous: plans start on their own in Automatic mode, up to ${state.thread.autonomyCaps?.runsPerDay ?? "?"} plans and ${state.thread.autonomyCaps?.leadsPerDay ?? "?"} leads a day. Turn it off at the top to review each plan.`
               : "Nothing reaches your leads until you press Start on a plan."}
-            <span className="hidden sm:inline"> Replies waiting for you are in <Link href="/crm/actions" className="underline underline-offset-2 hover:text-text-sub-600">Action required</Link>.</span>
+            <span className="hidden sm:inline"> Replies waiting for you are in the <Link href="/inbox?view=needs_you" className="underline underline-offset-2 hover:text-text-sub-600">Inbox</Link>.</span>
           </p>
         </div>
       </div>

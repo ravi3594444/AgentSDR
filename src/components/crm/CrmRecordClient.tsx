@@ -144,7 +144,7 @@ function channelIcon(channel: unknown, className = "size-4") {
  * pop-up's own bar closes it — and the workspace is sized to the pop-up
  * rather than the window.
  */
-export default function CrmRecordClient({ recordId, variant = "page" }: { recordId: string; variant?: "page" | "modal" }) {
+export default function CrmRecordClient({ recordId, variant = "page", back = BACK }: { recordId: string; variant?: "page" | "modal"; /** Where the page's back link goes: the Inbox, or the Leads board it was opened from. */ back?: { href: string; label: string } }) {
   const [data, setData] = useState<Data>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -212,7 +212,7 @@ export default function CrmRecordClient({ recordId, variant = "page" }: { record
   // Only the first load blanks the page; a reload after an action keeps the
   // workspace on screen, dimmed, so the reader does not lose their place.
   if (loading && !data.id) return <RecordBody />;
-  if (error && !data.id) return <div className="space-y-6"><PageHeader back={variant === "page" ? BACK : undefined} title="Conversation" /><ErrorState message={error} onRetry={() => void load()} /></div>;
+  if (error && !data.id) return <div className="space-y-6"><PageHeader back={variant === "page" ? back : undefined} title="Conversation" /><ErrorState message={error} onRetry={() => void load()} /></div>;
 
   const person = asObject(data.person);
   const draft = asObject(data.draft);
@@ -255,7 +255,7 @@ export default function CrmRecordClient({ recordId, variant = "page" }: { record
   return (
     <div className={cn("space-y-5 transition-opacity", loading && "opacity-60")} aria-busy={loading || undefined}>
       <RecordHeader
-        back={variant === "page" ? BACK : undefined}
+        back={variant === "page" ? back : undefined}
         data={data}
         person={person}
         name={name}
@@ -314,7 +314,9 @@ export default function CrmRecordClient({ recordId, variant = "page" }: { record
   );
 }
 
-const BACK = { href: "/crm/pipeline", label: "Leads & replies" };
+const BACK = { href: "/inbox", label: "Inbox" };
+/** The back link for a record opened from the Leads board (`?from=board`). */
+export const BOARD_BACK = { href: "/leads?view=board", label: "Leads" };
 
 /**
  * Height of the workspace row, measured rather than assumed.

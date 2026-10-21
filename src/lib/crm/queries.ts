@@ -32,7 +32,7 @@ import { CrmNotFoundError } from "./repository";
 import { crmDueState } from "./stateMachine";
 import { wrongRoutesForRecord } from "./wrongRoutes";
 import type { CrmActionGroup } from "./actionGroups";
-import { crmActionableSql, crmActionGroupSql, crmNeedsYouSql } from "./actionGroups.server";
+import { crmActionableSql, crmActionGroupSql, crmAttentionSql, crmNeedsYouSql } from "./actionGroups.server";
 import { contactDisplayName } from "./contactName";
 import { loadConversationSummaries } from "./conversationSummary.server";
 import { inOrg } from "@/lib/tenancy/scope";
@@ -121,15 +121,16 @@ export type CrmPipelineStage = "needs_action" | "waiting" | "exhausted";
 
 export const CRM_PIPELINE_STAGES: readonly CrmPipelineStage[] = ["needs_action", "waiting", "exhausted"];
 
-export const CRM_ACTION_SCOPES = ["actions", "pipeline", "needs_you", "replies"] as const;
+export const CRM_ACTION_SCOPES = ["actions", "pipeline", "needs_you", "replies", "attention"] as const;
 export type CrmActionScope = (typeof CRM_ACTION_SCOPES)[number];
 
 /** The workspace views counted beside the list (the pipeline has its own stage counts). */
-export type CrmScopeCounts = { needs_you: number; actions: number; replies: number };
+export type CrmScopeCounts = { needs_you: number; actions: number; replies: number; attention: number };
 
 const actionableCondition = crmActionableSql(crmRecords);
 const actionGroup = crmActionGroupSql(crmRecords);
 const needsYouCondition = crmNeedsYouSql(crmRecords);
+const attentionCondition = crmAttentionSql(crmRecords);
 /** The Action required queue's condition as the list filters by it; the navigation badge counts the same (crmActionQueueCountSql). */
 export const crmActionQueueCondition = actionableCondition;
 // Every record a reply was ever recorded on, answered or not, open or closed.
@@ -154,7 +155,8 @@ export type CrmActionFilters = {
    * every record with an open owner decision or a draft awaiting review
    * (crmNeedsYouSql), whatever its workflow state. `replies` is every record
    * a reply was recorded on, so an answered or closed conversation stays
-   * findable.
+   * findable. `attention` is the Inbox's Needs you rows (crmAttentionSql):
+   * the queue plus every draft awaiting review.
    */
   scope?: CrmActionScope;
   /** Pipeline only: narrow to one stage. */
@@ -215,6 +217,8 @@ export async function listCrmActions(input: CrmActionFilters = {}) {
     ? narrowed(needsYouCondition)
     : view === "replies"
     ? narrowed(repliedCondition)
+    : view === "attention"
+    ? narrowed(attentionCondition)
     : stateFilter ?? actionableCondition;
   const scopeCondition = scope === "pipeline"
     ? stateFilter ?? sql`${crmRecords.workflowState} <> 'closed'`
@@ -295,13 +299,14 @@ export async function listCrmActions(input: CrmActionFilters = {}) {
         .where(inArray(crmSequenceRuns.crmRecordId, pageRecordIds))
         .orderBy(crmSequenceRuns.crmRecordId, desc(crmSequenceRuns.createdAt))
       : Promise.resolve([]),
-    // Needs you, Action required and All replies under the list's filters:
-    // one pass, the same three conditions the views list by.
+    // Needs you, Action required, All replies and the Inbox's attention list
+    // under the list's filters: one pass, the same conditions the views list by.
     !pipeline && !input.recordId
       ? db.select({
         needs_you: sql<number>`count(*) filter (where ${viewCondition("needs_you")})`.mapWith(Number),
         actions: sql<number>`count(*) filter (where ${viewCondition("actions")})`.mapWith(Number),
         replies: sql<number>`count(*) filter (where ${viewCondition("replies")})`.mapWith(Number),
+        attention: sql<number>`count(*) filter (where ${viewCondition("attention")})`.mapWith(Number),
       }).from(crmRecords).where(and(...filterConditions))
       : Promise.resolve([]),
   ]);
@@ -424,7 +429,7 @@ export async function listCrmActions(input: CrmActionFilters = {}) {
     nextOffset: offset + rows.length,
     hasMore: rows.length === limit,
     ...(pipeline && !input.recordId ? { stageCounts: Object.fromEntries(CRM_PIPELINE_STAGES.map((stage) => [stage, Number(stageCounts.find((row) => row.stage === stage)?.total ?? 0)])) } : {}),
-    ...(!pipeline && !input.recordId ? { scopeCounts: { needs_you: scopeCounts[0]?.needs_you ?? 0, actions: scopeCounts[0]?.actions ?? 0, replies: scopeCounts[0]?.replies ?? 0 } satisfies CrmScopeCounts } : {}),
+    ...(!pipeline && !input.recordId ? { scopeCounts: { needs_you: scopeCounts[0]?.needs_you ?? 0, actions: scopeCounts[0]?.actions ?? 0, replies: scopeCounts[0]?.replies ?? 0, attention: scopeCounts[0]?.attention ?? 0 } satisfies CrmScopeCounts } : {}),
   };
 }
 

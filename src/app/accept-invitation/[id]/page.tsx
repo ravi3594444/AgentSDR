@@ -67,7 +67,7 @@ export default function AcceptInvitationPage({ params }: { params: Promise<{ id:
         return setBusy(null);
       }
     }
-    window.location.href = "/analytics";
+    window.location.href = "/assistant";
   }
 
   async function decline() {

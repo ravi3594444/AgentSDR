@@ -82,7 +82,7 @@ describe("a fresh workspace", () => {
       "/outreach/campaigns",
       "/linkedin/campaigns",
       "/whatsapp/campaigns",
-      "/crm/actions",
+      "/inbox",
     ]));
   });
 

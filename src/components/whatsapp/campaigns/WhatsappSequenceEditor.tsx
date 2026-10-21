@@ -395,7 +395,7 @@ export function WhatsappSequenceEditor({
           </div>
         </FramePanel>
         <FrameFooter>
-          First messages count against each number&apos;s new-chats-per-day limit (Settings → WhatsApp → Sending rules). A reply on any channel stops the lead&apos;s sequence and lands in CRM → Action required.
+          First messages count against each number&apos;s new-chats-per-day limit (Settings → WhatsApp → Sending rules). A reply on any channel stops the lead&apos;s sequence and lands in the Inbox.
         </FrameFooter>
       </Frame>
     </div>

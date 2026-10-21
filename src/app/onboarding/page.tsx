@@ -46,7 +46,7 @@ export default function OnboardingPage() {
       setError(active.error.message || "Created, but could not switch into it. Reload and try again.");
       return setLoading(false);
     }
-    window.location.assign("/analytics");
+    window.location.assign("/assistant");
   }
 
   async function switchTo(id: string) {
@@ -57,7 +57,7 @@ export default function OnboardingPage() {
       setError(err.message || "Could not switch organization.");
       return setSwitching(null);
     }
-    window.location.assign("/analytics");
+    window.location.assign("/assistant");
   }
 
   const hasOrgs = !!orgs && orgs.length > 0;

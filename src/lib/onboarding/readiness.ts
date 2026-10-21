@@ -553,7 +553,7 @@ export function campaignsReadiness(facts: ReadinessFacts, channels: { email: Rea
 
 export function repliesReadiness(facts: ReadinessFacts): ReadinessItem {
   const { actionRequired, draftsAwaitingReview } = facts.replies;
-  const base = { key: "replies" as const, title: "Replies", links: [{ href: "/crm/actions", label: "Action required" }] };
+  const base = { key: "replies" as const, title: "Replies", links: [{ href: "/inbox", label: "Inbox" }] };
   if (actionRequired + draftsAwaitingReview > 0) {
     return {
       ...base,
@@ -581,7 +581,7 @@ const CHANNEL_LABEL: Record<ReplyChannel, string> = { email: "Email", linkedin: 
  * connected; to do until each has received at least one.
  */
 export function replySyncReadiness(facts: ReadinessFacts, channels: Record<ReplyChannel, ReadinessItem>): ReadinessItem {
-  const base = { key: "replySync" as const, title: "Incoming replies", links: [{ href: "/crm/actions", label: "Action required" }] };
+  const base = { key: "replySync" as const, title: "Incoming replies", links: [{ href: "/inbox", label: "Inbox" }] };
   const connected = (Object.keys(CHANNEL_LABEL) as ReplyChannel[]).filter((channel) => channels[channel].status === "connected");
   if (!connected.length) {
     return {

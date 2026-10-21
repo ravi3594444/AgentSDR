@@ -269,7 +269,7 @@ export function InstagramAccountsClient({ inquiryIntakeOn }: { inquiryIntakeOn: 
             <Callout tone="info" title="History is shown, never answered" className="mt-5">
               “Import history” brings an account&rsquo;s recent chats in so you can read them in Instagram → Messages. Imported
               messages, and any message sent before the account was linked, are marked History: they are never counted unread,
-              never reach Action required and never get a reply. Only new messages are drafted for.
+              never reach the Inbox and never get a reply. Only new messages are drafted for.
             </Callout>
 
             <p className="mt-3 text-paragraph-xs text-text-sub-600">

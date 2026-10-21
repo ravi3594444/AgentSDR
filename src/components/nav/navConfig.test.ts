@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { defaultFeatureState } from "@/lib/features/catalog";
 import { SETTINGS_NAV, visibleSettingsNav } from "@/components/settings/settingsNav";
-import { activeHref, NAV_SECTIONS, paletteItems, visibleNavSections } from "./navConfig";
+import { activeHref, NAV_FOOTER, NAV_SECTIONS, paletteItems, visibleNavSections } from "./navConfig";
 
 const instagramOn = { ...defaultFeatureState(), instagram: true };
 
@@ -42,20 +42,46 @@ describe("navigation tied to optional features", () => {
   });
 });
 
-test("reporting bookmarks share Overview, while lead records and contacts keep their workspace", () => {
-  expect(activeHref("/analytics")).toBe("/assistant/results");
-  expect(activeHref("/assistant/results")).toBe("/assistant/results");
-  expect(activeHref("/leads")).toBe("/crm/pipeline");
-  expect(activeHref("/crm/records/example")).toBe("/crm/pipeline");
-  expect(activeHref("/crm/actions")).toBe("/crm/actions");
+test("three destinations come first: Outreach, Inbox with the one Needs you badge, Leads", () => {
+  const [main, advanced] = NAV_SECTIONS;
+  expect(main?.label).toBeUndefined();
+  expect(main?.entries.map((entry) => (entry.kind === "link" ? [entry.href, entry.label, entry.badge ?? null] : entry.id))).toEqual([
+    ["/assistant", "Outreach", null],
+    ["/inbox", "Inbox", "inbox"],
+    ["/leads", "Leads", null],
+  ]);
+  expect(advanced?.label).toBe("Advanced");
+  expect(advanced?.collapsible).toBe(true);
+  expect(NAV_FOOTER.map((entry) => (entry.kind === "link" ? entry.label : entry.id))).toEqual(["Getting started", "Settings"]);
 });
 
-test("Activity is reachable from every page, with the new-replies badge, whatever features are on", () => {
-  for (const features of [null, instagramOn]) {
-    const entries = visibleNavSections(features).flatMap((section) => section.entries);
-    const activity = entries.flatMap((entry) => (entry.kind === "group" ? [] : [entry])).find((entry) => entry.href === "/activity");
-    expect(activity?.badge).toBe("newReplies");
+test("every manual tool stays reachable under Advanced, and no page is listed twice", () => {
+  const all = hrefs(visibleNavSections(instagramOn));
+  for (const href of ["/outreach/campaigns", "/outreach/inbox", "/linkedin/campaigns", "/linkedin/messages", "/whatsapp/campaigns", "/calling/messages", "/instagram/messages", "/crm/sequences", "/linkedin/connections", "/linkedin/jobs", "/linkedin/webhooks"]) {
+    expect(all).toContain(href);
   }
-  expect(activeHref("/activity")).toBe("/activity");
-  expect(paletteItems().map((item) => item.href)).toContain("/activity");
+  expect(new Set(all).size).toBe(all.length);
+  // The board lives inside Leads now; the old duplicate entries are gone.
+  expect(all).not.toContain("/crm/pipeline");
+  expect(all).not.toContain("/crm/actions");
+});
+
+test("old and new paths light up the destination they now belong to", () => {
+  expect(activeHref("/assistant")).toBe("/assistant");
+  expect(activeHref("/assistant/results")).toBe("/assistant");
+  expect(activeHref("/activity")).toBe("/assistant");
+  expect(activeHref("/analytics")).toBe("/assistant");
+  expect(activeHref("/inbox")).toBe("/inbox");
+  expect(activeHref("/crm/actions")).toBe("/inbox");
+  expect(activeHref("/leads")).toBe("/leads");
+  expect(activeHref("/leads/companies")).toBe("/leads");
+  expect(activeHref("/crm/pipeline")).toBe("/leads");
+  expect(activeHref("/crm/records/example")).toBe("/leads");
+  expect(activeHref("/outreach/inbox")).toBe("/outreach/inbox");
+  expect(activeHref("/whatsapp/campaigns/abc")).toBe("/whatsapp/campaigns");
+});
+
+test("the palette reaches the views inside the destinations", () => {
+  const items = paletteItems().map((item) => item.href);
+  expect(items).toEqual(expect.arrayContaining(["/inbox?view=needs_you", "/inbox?view=all", "/leads?view=board", "/assistant"]));
 });
