@@ -6,6 +6,7 @@ import {
   toolCallSystemPrompt,
   type OpenRouterModelSelection,
 } from "@/lib/ai/openrouter-types";
+import { AIML_PROVIDER_KEY } from "@/lib/ai/aimlapi-types";
 import { RUNTIME_PROVIDERS, type AiRuntimePlan } from "@/lib/ai/runtimePlan";
 import { getAiRuntime } from "./runtime";
 
@@ -22,6 +23,22 @@ import { getAiRuntime } from "./runtime";
  * openai/gpt-4o-mini, google/gemini-3.5-flash-lite and
  * anthropic/claude-haiku-latest: all accepted strict mode and answered on
  * schema.
+ *
+ * The tag does not promise json_schema itself: DeepSeek Chat is tagged
+ * `structured_output` and `tools`, yet its request schema allows only text
+ * and json_object, so its json_schema request is refused with HTTP 400
+ * before inference (21 Oct 2026). When a json_schema request gets any 400
+ * (AI/ML's body says only "Validation failed", so the cause is not read) and
+ * the model is also tagged `tools` (aimlFunctionCallFallback), the same
+ * attempt is sent once more as a forced function call (same model, prompts
+ * and schema) and the rest of the call stays a function call. That is the
+ * only switch: never back, never twice, and only for a 400 — 401, 403, 404,
+ * 422, 429, 5xx and timeouts behave as below. The refused request is not
+ * counted as an attempt (it produced no answer), so a call makes at most
+ * `maxAttempts` + 1 requests. Nothing is remembered between calls: every
+ * call asks for json_schema first, so a model that always refuses it costs
+ * one refused request per call, and one unrelated 400 never moves a model
+ * off json_schema for later calls.
  *
  * OpenRouter — a function call, never `response_format`. JSON mode is the
  * parameter the pinned providers
@@ -40,8 +57,9 @@ import { getAiRuntime } from "./runtime";
  * call's arguments can still miss the schema, each attempt is judged and
  * a bad one is retried: no tool call, arguments that are not a JSON object,
  * arguments the caller's `accept` rejects, or a transient transport error
- * (429, 5xx, timeout). Routing and configuration errors (400, 401, 403,
- * 404) are not retried — another attempt would fail the same way.
+ * (429, 5xx, timeout). Routing and configuration errors (400 apart from
+ * the one AI/ML json_schema fallback above, 401, 403, 404) are not retried —
+ * another attempt would fail the same way.
  *
  * Reasoning models spend `max_tokens` on thinking before the call:
  * minimax-m3 was measured using 799 of an 800-token budget on reasoning and
@@ -91,10 +109,32 @@ export type StructuredCompletionResult = {
     inputTokens?: number;
     outputTokens?: number;
   };
+  /** Attempts at an answer; a json_schema request refused before the function-call fallback is not one. */
   attempts: number;
 };
 
 class RejectedAttemptError extends Error {}
+
+function httpStatusOf(error: unknown): number | undefined {
+  const candidate = error as { status?: unknown; statusCode?: unknown } | null;
+  const status = Number(candidate?.status ?? candidate?.statusCode);
+  return Number.isFinite(status) && status > 0 ? status : undefined;
+}
+
+/**
+ * What callers read off a provider's error, for an error that wraps it: the
+ * HTTP status (the reply agent stops on a permanent 4xx) and the SDK's code,
+ * type, body and request id (the AI-column audit stops at the first error in
+ * the chain that carries a status).
+ */
+function providerErrorFields(error: unknown): Record<string, unknown> {
+  const status = httpStatusOf(error);
+  const source = error && typeof error === "object" ? error as Record<string, unknown> : {};
+  return Object.fromEntries([
+    ["status", status],
+    ...(["code", "type", "error", "requestID"] as const).map((key) => [key, source[key]] as const),
+  ].filter(([, value]) => value !== undefined && value !== null));
+}
 
 function describeResponseError(response: unknown): string | null {
   const error = (response as { error?: unknown } | null)?.error;
@@ -128,7 +168,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 export type StructuredCompletionRuntime = (
   requested: OpenRouterModelSelection | undefined,
   timeoutMs: number,
-) => Promise<Pick<AiRuntimePlan, "providerKey" | "selection" | "routing" | "structuredOutput" | "supportsPlugins"> & {
+) => Promise<Pick<AiRuntimePlan, "providerKey" | "selection" | "routing" | "structuredOutput" | "functionCallFallback" | "supportsPlugins"> & {
   client: { chat: { completions: { create: (request: never, options: { signal?: AbortSignal }) => Promise<StructuredChatResponse> } } };
 }>;
 
@@ -190,10 +230,14 @@ export async function completeStructured(
   input: StructuredCompletionInput,
   dependencies: { runtime?: StructuredCompletionRuntime; sleep?: typeof sleep } = {},
 ): Promise<StructuredCompletionResult> {
-  const { client, selection, routing, structuredOutput, supportsPlugins, providerKey } = await (dependencies.runtime ?? getAiRuntime)(
+  const { client, selection, routing, structuredOutput, functionCallFallback, supportsPlugins, providerKey } = await (dependencies.runtime ?? getAiRuntime)(
     input.requestedModel,
     input.timeoutMs,
   );
+  // Switches once, json_schema to tool_call, and only on AI/ML API (see the top of this file).
+  let mode = structuredOutput;
+  const mayFallBack = providerKey === AIML_PROVIDER_KEY && structuredOutput === "json_schema" && functionCallFallback === true;
+  let schemaRefusal: string | null = null;
   if (input.plugins?.length && !supportsPlugins) {
     // Answering a web-research question from the model's memory would look
     // like a researched answer; refuse instead.
@@ -219,7 +263,7 @@ export async function completeStructured(
       ...openRouterTokenLimit(selection.modelId, outputTokens),
       ...routing,
     };
-    if (structuredOutput === "json_schema") {
+    if (mode === "json_schema") {
       return {
         ...base,
         messages: [
@@ -262,7 +306,7 @@ export async function completeStructured(
   function answerText(response: StructuredChatResponse): string {
     const choice = response.choices?.[0];
     const message = choice?.message;
-    if (structuredOutput === "json_schema") {
+    if (mode === "json_schema") {
       const content = typeof message?.content === "string" ? message.content : "";
       if (!content.trim()) {
         const detail = describeResponseError(response);
@@ -350,21 +394,45 @@ export async function completeStructured(
     };
   }
 
+  /** One attempt; a json_schema request refused with HTTP 400 is sent once more as a function call. */
+  async function attemptOrFallBack(): Promise<Omit<StructuredCompletionResult, "attempts">> {
+    try {
+      return await attempt();
+    } catch (error) {
+      if (!mayFallBack || mode !== "json_schema" || httpStatusOf(error) !== 400 || input.signal?.aborted) throw error;
+      schemaRefusal = messageOf(error);
+      mode = "tool_call";
+      console.warn(`[ai/structured] ${input.schemaName}: ${selection.modelId} refused the json_schema request (${schemaRefusal}); asking once more as a function call`);
+      return await attempt();
+    }
+  }
+
+  /** After the switch, a failure also says why json_schema was dropped. */
+  const afterRefusal = (failure: string) => schemaRefusal
+    ? `${input.schemaName}: the json_schema request was rejected (${schemaRefusal}) and the function-call retry also failed: ${failure}`
+    : failure;
+
   let lastError: unknown;
   for (let index = 0; index < maxAttempts; index += 1) {
     if (index > 0) {
       // Lets the caller say it is retrying; a failure to say so never stops the retry.
-      await Promise.resolve(input.onRetry?.({ attempt: index + 1, maxAttempts, reason: lastError instanceof Error ? lastError.message : String(lastError) })).catch(() => undefined);
+      await Promise.resolve(input.onRetry?.({ attempt: index + 1, maxAttempts, reason: messageOf(lastError) })).catch(() => undefined);
       await (dependencies.sleep ?? sleep)(RETRY_BACKOFF_MS[Math.min(index - 1, RETRY_BACKOFF_MS.length - 1)], input.signal);
     }
     try {
-      return { ...(await attempt()), attempts: index + 1 };
+      return { ...(await attemptOrFallBack()), attempts: index + 1 };
     } catch (error) {
       lastError = error;
       const retryable = error instanceof RejectedAttemptError || isRetryableOpenRouterError(error);
-      if (!retryable || input.signal?.aborted) throw error;
+      if (!retryable || input.signal?.aborted) {
+        if (!schemaRefusal) throw error;
+        throw Object.assign(new Error(afterRefusal(messageOf(error)), { cause: error }), providerErrorFields(error));
+      }
     }
   }
-  const reason = lastError instanceof Error ? lastError.message : String(lastError);
-  throw new Error(`${input.schemaName} failed after ${maxAttempts} attempts: ${reason}`, { cause: lastError });
+  throw new Error(afterRefusal(`${input.schemaName} failed after ${maxAttempts} attempts: ${messageOf(lastError)}`), { cause: lastError });
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

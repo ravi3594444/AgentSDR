@@ -46,6 +46,20 @@ export function aimlStructuredMode(capabilities: readonly string[]): "json_schem
 }
 
 /**
+ * Whether a json_schema request the model refuses with HTTP 400 may be sent
+ * once more as a function call (structuredCompletion.ts): only for a model
+ * asked for json_schema that AI/ML also tags `tools`. `structured_output`
+ * does not promise json_schema itself: DeepSeek Chat carries the tag while
+ * its published request schema allows only text and json_object response
+ * formats (AI/ML docs-json, 21 Oct 2026), so every request 400ed. Every
+ * model that accepts json_schema keeps that format; nothing is switched up
+ * front.
+ */
+export function aimlFunctionCallFallback(capabilities: readonly string[]): boolean {
+  return aimlStructuredMode(capabilities) === "json_schema" && capabilities.includes("tools");
+}
+
+/**
  * The models every AI feature here can use: chat-completion models that
  * AI/ML marks `structured_output` or `tools`, because classification, drafts
  * and table columns all need an answer of an exact shape (aimlStructuredMode

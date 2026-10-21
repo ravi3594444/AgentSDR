@@ -47,7 +47,7 @@
 #   HEALTH_TIMEOUT_S           how long the new app gets to answer 200 (180)
 #   WORKER_LOG_TIMEOUT_S       how long to wait for the worker's start line (60)
 #   MIGRATIONS                 scripts/<name>.ts to run, in order (this release's
-#                              eight; set it empty to run none)
+#                              nine; set it empty to run none)
 #   BACKUP_DIR                 dumps and saved edits (./deploy-backups, which
 #                              .dockerignore keeps out of the image build)
 #   EXTERNAL_DB_BACKUP_DONE=1  needed when the database is not the bundled `db`

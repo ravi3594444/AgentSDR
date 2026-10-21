@@ -569,6 +569,26 @@ try {
     const foreverResult = (foreverRun.job.result ?? {}) as Record<string, unknown> & { sources?: { platform: string; state: string; reason: string | null }[] };
     check("B01 job: a provider that keeps asking to wait is given up after the time a collection may take, the source failed with the reason, the job finished", Boolean(foreverWaiting) && foreverRun.job.status === "succeeded" && foreverResult.sources?.[0]?.state === "failed" && /kept asking to wait/.test(foreverResult.sources[0].reason ?? "") && foreverResult.found === 0, JSON.stringify({ status: foreverRun.job.status, error: foreverRun.job.error, sources: foreverResult.sources }));
 
+    // A long Retry-After is a not-before time, not permission to retry after 15 minutes.
+    bd.mode = { status: 429, body: { error: "Too many requests" }, retryAfter: "1800" };
+    bd.once = true;
+    const longWaitJob = await runTool("research_social_sources", { ...ARGS, platforms: ["reddit"], need: "booking enquiries unanswered after closing" }, ctx(thread.id));
+    const longWaitData = longWaitJob.data as { jobId: string };
+    let longWaiting: AssistantJob | null = null;
+    for (let round = 0; round < 6 && !longWaiting; round += 1) {
+      const job = await step(longWaitData.jobId);
+      if ((job.progress as { waiting?: unknown }).waiting) longWaiting = job;
+    }
+    const longRow = (await ledger(longWaitData.jobId)).find((row) => row.detail?.retryable === true);
+    const retryAt = typeof longRow?.detail?.retryAt === "string" ? Date.parse(longRow.detail.retryAt) : 0;
+    check("a 30-minute Retry-After stays intact in the ledger; the job wakes at its 20-minute deadline to stop", Boolean(longWaiting) && retryAt - Date.now() > 29 * 60_000 && longWaiting!.runAfter.getTime() - Date.now() > 19 * 60_000, JSON.stringify({ retryAt: longRow?.detail?.retryAt, runAfter: longWaiting?.runAfter }));
+    await db.update(assistantJobs).set({ payload: sql`${assistantJobs.payload} || jsonb_build_object('waits', jsonb_build_object('0', ${new Date(Date.now() - 21 * 60_000).toISOString()}::text))` }).where(eq(assistantJobs.id, longWaitData.jobId));
+    bd.mode = "ok";
+    const callsBeforeDeadline = triggerCalls();
+    const longWaitRun = await runJob(longWaitData.jobId);
+    const longWaitResult = (longWaitRun.job.result ?? {}) as { found?: number; sources?: { state: string }[] };
+    check("an expired wait ends before a trigger even when the provider has recovered", longWaitRun.job.status === "succeeded" && triggerCalls() === callsBeforeDeadline && longWaitResult.found === 0 && longWaitResult.sources?.[0]?.state === "failed", JSON.stringify({ status: longWaitRun.job.status, calls: triggerCalls() - callsBeforeDeadline, result: longWaitResult }));
+
     bd.pollsUntilReady = 99;
     const stuckJob = await runTool("research_social_sources", { ...ARGS, platforms: ["reddit"], need: "voicemail that never gets returned" }, ctx(thread.id));
     const stuckData = stuckJob.data as { jobId: string };

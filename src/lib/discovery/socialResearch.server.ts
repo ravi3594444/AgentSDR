@@ -31,6 +31,7 @@ import {
 import { brightdataReadiness, pollCollection, serpSearchThroughBrightdata, startCollection, type CollectionSpec } from "@/lib/brightdata/brightdata.server";
 import { readRecords, type SocialFinding } from "@/lib/brightdata/mapping";
 import { datasetForUrl } from "@/lib/brightdata/urls";
+import { brightdataTaskWaitMs } from "@/lib/brightdata/waits";
 import { TinyfishWaitError } from "@/lib/tinyfish/tinyfish.server";
 import { cleanEmail, websiteDomain } from "./contacts";
 import { discoveryPageOptions } from "./discovery.server";
@@ -80,9 +81,8 @@ const MAX_FINDINGS_KEPT = 300;
 const MAX_FAILURES_KEPT = 30;
 const FINDING_TEXT_CHARS = 1_200;
 const POLL_DELAY_MS = 20_000;
-/** How long a step waits when Bright Data asks it to: at least a minute, at most this, whatever Retry-After says. */
+/** Minimum wait when the provider names none; the task deadline bounds longer waits. */
 const MIN_WAIT_MS = 60_000;
-const MAX_WAIT_MS = 15 * 60_000;
 /** Collections one job keeps open before it polls them: the organization's cap (BRIGHTDATA_LIMITS.openCollections) is never filled by one job's starts alone. */
 const JOB_OPEN_COLLECTIONS = 2;
 const MAX_EMAILS_PER_LEAD = 5;
@@ -465,8 +465,9 @@ function collectTasksFor(payload: Payload): SearchTask[] {
 function waitFor(payload: Payload, index: number, retryAfterMs: number | null): { next: "wait"; delayMs: number; payload: Partial<Payload> } | null {
   const waits = payload.waits ?? (payload.waits = {});
   const since = waits[String(index)] ?? (waits[String(index)] = new Date().toISOString());
-  if (Date.now() - Date.parse(since) > BRIGHTDATA_LIMITS.collectionTimeoutMinutes * 60_000) return null;
-  return { next: "wait", delayMs: Math.min(MAX_WAIT_MS, Math.max(MIN_WAIT_MS, retryAfterMs ?? MIN_WAIT_MS)), payload: { waits, sources: payload.sources } };
+  const delayMs = brightdataTaskWaitMs(since, Date.now(), retryAfterMs);
+  if (delayMs === null) return null;
+  return { next: "wait", delayMs, payload: { waits, sources: payload.sources } };
 }
 
 async function startPlannedCollection(job: AssistantJob, payload: Payload, task: Extract<SearchTask, { kind: "collect" }>, index: number): Promise<StepOutcome | null> {
@@ -529,6 +530,16 @@ async function stageSearching(job: AssistantJob, heartbeat: () => Promise<void>)
     return { next: "stage", stage: "collecting", payload: { ...common, urlsCollected: true, findings: payload.findings ?? [], failures: payload.failures ?? [] }, progress: progressOf(payload, "collecting") };
   };
   if (!task) return finish();
+  // End an overdue provider wait before any new trigger or SERP request,
+  // even when the provider would accept it now. Earlier results stay kept.
+  const waitingSince = payload.waits?.[String(index)];
+  if (waitingSince && brightdataTaskWaitMs(waitingSince, Date.now(), null) === null) {
+    const state = source(payload, task.platform);
+    const reason = `Bright Data kept asking to wait for ${BRIGHTDATA_LIMITS.collectionTimeoutMinutes} minutes`;
+    if (task.kind !== "collect" || !task.hop) { state.state = "failed"; state.reason = reason; }
+    note(state, `${task.kind === "collect" ? task.label : task.query}: not collected — ${reason}`);
+    return finish();
+  }
   if (task.kind === "collect") {
     const outcome = await startPlannedCollection(job, payload, task, index);
     if (outcome) return outcome;
@@ -546,7 +557,7 @@ async function stageSearching(job: AssistantJob, heartbeat: () => Promise<void>)
   } else if (payload.urlFinder === "brightdata_serp") {
     const result = await serpSearchThroughBrightdata(task.query, { jobId: job.id, requestId: jobRequestId(job), threadId: job.threadId, spendGuard: await objectiveSpendGuard(jobRequestId(job)) });
     if (!result.ok && result.wait) {
-      const hold = result.rateLimited ? waitFor(payload, index, null) : { next: "wait" as const, delayMs: MIN_WAIT_MS, payload: {} };
+      const hold = result.rateLimited ? waitFor(payload, index, result.retryAfterMs ?? null) : { next: "wait" as const, delayMs: MIN_WAIT_MS, payload: {} };
       if (hold) return { ...hold, progress: progressOf(payload, "searching", { waiting: { kind: result.rateLimited ? "quota" : "paused", provider: "brightdata", reason: `the next search waits: ${result.reason}` } }) };
       note(state, `the search “${task.query}” was not made: Bright Data kept asking to wait for ${BRIGHTDATA_LIMITS.collectionTimeoutMinutes} minutes (${result.reason})`);
     } else if (!result.ok) note(state, `the search “${task.query}” failed: ${result.reason}`);

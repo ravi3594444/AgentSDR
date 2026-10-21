@@ -10,12 +10,12 @@
  * What it proves: a greeting is answered (and is not "interested"), a
  * question answered from the business information, an invented price is
  * handed back to the agent and fixed in the next turn, a reply that stays
- * unbacked becomes an honest holding line and a card for the owner, a ready
+ * unbacked sends nothing and opens an error card for the owner, a ready
  * lead gets an answer and a Needs you card, a stop request sets Do Not
  * Contact and sends nothing, an acknowledgement needs no answer, Review
  * mode only drafts, a retried job never answers twice, a newer message wins,
  * a chat the owner took over and a lead outside a running run stay with the
- * classifier, a model outage still answers, and the Replies list shows the
+ * classifier, a model outage stays visible without a fabricated answer, and the Replies list shows the
  * outcome with its time.
  *
  * Wrong number (WhatsApp): in an Automatic run one brief apology goes out and
@@ -212,14 +212,14 @@ await runInOrganization(org!.id, async () => {
   check("an invented price is not sent; the agent is told what to fix", /PROBLEMS TO FIX/.test(feedbackPrompt) && /1,999/.test(feedbackPrompt), feedbackPrompt.split("PROBLEMS TO FIX:")[1]?.trim().split("\n")[0] ?? "");
   check("its second turn goes out, and the owner gets the question", sends.length === before + 1 && !/1,999/.test(sends.at(-1)?.body ?? "") && row?.turns.length === 2 && Boolean(await card(P[2]!, "missing_info")), `turns=${row?.turns.length}`);
 
-  // ------------------------------------------------------------ never backed: holding line + card
+  // ------------------------------------------------------------ never backed: no send + visible failure
   before = sends.length;
   const stubborn = await inbound(P[3]!, "Can you come Saturday at 5pm?");
   script.set("Subject: Re: Chair servicing\nCan you come Saturday at 5pm?", () => ({ action: "reply", reply: "Sure, Saturday at 5pm works, see you then!", category: "interested" }));
   await classify(stubborn.id);
   row = await agentRow(stubborn.id);
-  check("a reply still unbacked after three turns becomes an honest holding line", sends.length === before + 1 && /get back to you/.test(sends.at(-1)?.body ?? "") && row?.turns.length === 3, sends.at(-1)?.body ?? "");
-  check("…and the owner gets a card for it", Boolean(await card(P[3]!, "missing_info")));
+  check("a reply still unbacked after three turns is not sent or drafted", sends.length === before && row?.status === "failed" && row.turns.length === 3 && row.draftId === null, row?.reason ?? "");
+  check("…and the owner gets an error card for it", Boolean(await card(P[3]!, "uncertain")));
 
   // ------------------------------------------------------------ a ready lead
   before = sends.length;
@@ -313,7 +313,7 @@ await runInOrganization(org!.id, async () => {
   script.set("Subject: Re: Chair servicing\nWhat areas do you cover?", () => new Error("simulated model outage"));
   await classify(outage.id);
   row = await agentRow(outage.id);
-  check("when the model is down the lead still gets a holding line and the owner a card", sends.length === before + 1 && row?.status === "replied" && Boolean(await card(P[8]!, "uncertain")), row?.turns.map((turn) => turn.error).join(" | ") ?? "");
+  check("when the model stays down no canned reply is sent and the owner gets a card", sends.length === before && row?.status === "failed" && row.turns.length === 3 && row.draftId === null && Boolean(await card(P[8]!, "uncertain")), row?.turns.map((turn) => turn.error).join(" | ") ?? "");
 
   before = sends.length;
   const outageAgain = await inbound(P[8]!, "Hello? Anyone there?", "t-outage");
@@ -321,10 +321,25 @@ await runInOrganization(org!.id, async () => {
   const [outageConversation] = await db.select({ id: crm.crmConversationMessages.conversationId }).from(crm.crmConversationMessages).where(eq(crm.crmConversationMessages.id, outage.id));
   if (outageAgain.conversationId === outageConversation?.id) {
     await classify(outageAgain.id);
-    check("the holding line is not repeated in the same chat while the model stays down", sends.length === before && (await agentRow(outageAgain.id))?.status === "told_owner");
+    check("a second outage message also fails visibly without a canned reply", sends.length === before && (await agentRow(outageAgain.id))?.status === "failed");
   } else {
     check("the second outage message lands in the same chat", false, "different conversation");
   }
+
+  // ------------------------------------------------------------ provider rejects a greeting's request
+  before = sends.length;
+  let invalidCalls = 0;
+  const invalidGreeting = await inbound(P[9]!, "Hello", "t-invalid-request");
+  const invalidModel: AgentModel = async () => {
+    invalidCalls++;
+    throw Object.assign(new Error("400 Validation failed: response_format.type does not allow json_schema"), { status: 400 });
+  };
+  const invalidOutcome = await runReplyAgent(invalidGreeting.id, { ...deps, model: invalidModel });
+  row = await agentRow(invalidGreeting.id);
+  const [invalidRecord] = await db.select().from(crm.crmRecords).where(and(eq(crm.crmRecords.organizationId, orgId), eq(crm.crmRecords.personId, P[9]!)));
+  check("an HTTP 400 is recorded once, with its status and reason", invalidCalls === 1 && row?.turns.length === 1 && row.turns[0]?.httpStatus === 400 && /response_format/.test(row.reason ?? ""));
+  check("a rejected greeting never becomes a fake holding reply", sends.length === before && invalidOutcome?.status === "failed" && row?.draftId === null && row.reply === null);
+  check("the provider failure appears in the CRM and Needs you", invalidRecord?.workflowState === "error" && Boolean(await card(P[9]!, "uncertain")));
 
   // ------------------------------------------------------------ the Replies list
   const replies = (await runReplies([autoRun!.id], 20))[autoRun!.id] ?? [];

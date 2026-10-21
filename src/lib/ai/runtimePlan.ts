@@ -36,6 +36,13 @@ export type AiRuntimePlan = {
   routing: Record<string, unknown>;
   /** How a structured answer is requested. */
   structuredOutput: "tool_call" | "json_schema";
+  /**
+   * AI/ML API only: the model is asked for json_schema and its catalog tags
+   * list `tools`, so a json_schema request it refuses with HTTP 400 is sent
+   * once more as a function call (aimlFunctionCallFallback). Set by
+   * server/runtime.ts from the catalog; absent when the catalog was not read.
+   */
+  functionCallFallback?: boolean;
   /** OpenRouter's server-side plugins (web search) are available. */
   supportsPlugins: boolean;
 };

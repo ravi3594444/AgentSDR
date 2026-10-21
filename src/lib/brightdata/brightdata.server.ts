@@ -27,6 +27,7 @@ import {
 } from "./catalog";
 import { collectionKey, creditsUsed, errorKind, progressOutcome, reservedCredits } from "./mapping";
 import { brightdataSettings } from "./schema";
+import { brightdataRetryAfterMs } from "./waits";
 import type { SpendGuard } from "@/lib/assistant/objective.server";
 
 /**
@@ -54,10 +55,6 @@ export const BRIGHTDATA_PROVIDER = "brightdata";
 /** Ledger products: one credit per delivered record, one per SERP request. */
 export const RECORDS_PRODUCT = "records";
 export const SERP_PRODUCT = "serp";
-/** The wait after a rate limit that names none, and the most one is honoured for. */
-const DEFAULT_RETRY_MS = 60_000;
-const MAX_RETRY_MS = 15 * 60_000;
-
 export class BrightdataSettingsError extends Error {}
 
 type SettingsRow = typeof brightdataSettings.$inferSelect;
@@ -375,7 +372,7 @@ export async function startCollection(input: {
     }
     if (kind === "wait") {
       // Refused before anything was sent: nothing is billed, and it is sent again once the wait has passed (the row remembers when).
-      const retryAfterMs = Math.min(MAX_RETRY_MS, Math.max(0, (error instanceof BrightdataError ? error.retryAfterMs : null) ?? DEFAULT_RETRY_MS));
+      const retryAfterMs = brightdataRetryAfterMs(error instanceof BrightdataError ? error.retryAfterMs : null);
       await settleQuota(reservation.usageId, { status: "failed", usedUnits: 0, error: message, detail: { retryable: true, retryAt: new Date(Date.now() + retryAfterMs).toISOString() } });
       return { started: false, wait: true, exhausted: false, rateLimited: true, retryAfterMs, reason: `Bright Data asked to wait ${Math.ceil(retryAfterMs / 1_000)} s (rate limit)` };
     }
@@ -448,7 +445,7 @@ export async function pollCollection(usageId: string, options: { stopWaiting?: b
 // ── SERP ─────────────────────────────────────────────────────────────────────
 
 /** `rateLimited`: Bright Data refused the request outright (ask again after a while); `wait` without it: the request's spend guard holds it. */
-export type SerpOutcome = { ok: true; results: SerpResult[]; usageId: string } | { ok: false; wait: boolean; rateLimited?: boolean; reason: string };
+export type SerpOutcome = { ok: true; results: SerpResult[]; usageId: string } | { ok: false; wait: boolean; rateLimited?: boolean; retryAfterMs?: number; reason: string };
 
 /**
  * One Google search through the owner's SERP zone (one credit), for finding
@@ -486,6 +483,6 @@ export async function serpSearchThroughBrightdata(query: string, input: { jobId:
     const message = error instanceof Error ? error.message : String(error);
     const kind = error instanceof BrightdataError ? errorKind(error.status, message) : "lost";
     await settleQuota(reservation.usageId, { status: kind === "lost" ? "uncertain" : "failed", usedUnits: kind === "lost" ? 1 : 0, error: message });
-    return { ok: false, wait: kind === "wait", rateLimited: kind === "wait", reason: `Bright Data SERP failed: ${message}` };
+    return { ok: false, wait: kind === "wait", rateLimited: kind === "wait", ...(kind === "wait" ? { retryAfterMs: brightdataRetryAfterMs(error instanceof BrightdataError ? error.retryAfterMs : null) } : {}), reason: `Bright Data SERP failed: ${message}` };
   }
 }
