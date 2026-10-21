@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { RiChat3Line } from "@remixicon/react";
 import type { WorkItem } from "@/lib/activity/activity.server";
-import type { WorkState } from "@/lib/activity/status";
+import { nextAtPhrase, type WorkState } from "@/lib/activity/status";
 import { formatChatDateTime } from "@/lib/assistant/chatTime";
 import { displayTime } from "@/lib/assistant/displayTime";
 import { Badge, secondaryButtonClass } from "@/components/crm/CrmLayout";
@@ -26,8 +26,8 @@ export const WORK_TONE: Record<WorkState, "neutral" | "success" | "info" | "dang
   executing: "info",
   waiting_slot: "warning",
   waiting_quota: "warning",
-  outside_hours: "neutral",
   waiting_send: "warning",
+  daily_lead_limit: "neutral",
   scheduled: "neutral",
   retrying: "warning",
   needs_approval: "info",
@@ -62,7 +62,7 @@ export function WorkRow({ item, busy, timeZone, onCancel, onRun, compact = false
           <p className={cn("min-w-0 break-words text-label-sm text-text-strong-950", compact && "line-clamp-2")}>{item.title}</p>
           <Badge tone={WORK_TONE[item.state]}>{item.stateLabel}</Badge>
         </div>
-        {item.reason && <p className={cn("text-text-sub-600", compact ? "text-paragraph-xs" : "text-paragraph-sm")}>{item.reason}{item.nextAt && <>; the next send is allowed <time dateTime={item.nextAt}>{nextAt}</time></>}</p>}
+        {item.reason && <p className={cn("text-text-sub-600", compact ? "text-paragraph-xs" : "text-paragraph-sm")}>{item.reason}{item.nextAt && <>; {nextAtPhrase(item.state)} <time dateTime={item.nextAt}>{nextAt}</time></>}</p>}
         <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-paragraph-xs text-text-soft-400">
           {item.source && <span>{item.source}</span>}
           {counts && <span>{counts}</span>}

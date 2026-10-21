@@ -3,14 +3,13 @@
  * send and how, and for each sending account the gates recorded right now
  * and the earliest time it may send. A sender with no recorded gate is not
  * proof that a worker is running, and a time zone is always the one
- * configured for the sender, never inferred from where leads are. Pure;
- * deliveryDiagnostics.server.ts and http.server.ts read the rows.
+ * configured for the sender, never inferred from where leads are. Sending is
+ * always on: no sender has sending hours. Pure; deliveryDiagnostics.server.ts
+ * and http.server.ts read the rows.
  */
 import { addDays, set as setTime } from "date-fns";
 import { fromZonedTime, toZonedTime } from "date-fns-tz";
 import type { WorkingHours } from "@/lib/outreach/schema";
-import { isWindowOpenFrom, isWithinWorkingHours, mailboxHoursFromWeekly, nextWindowStart } from "@/lib/outreach/workingHours";
-import { formatWorkingHoursSummary, hasWorkingHoursConfigured, isWithinWorkingHours as isWithinLinkedinHours, parseHHmmToMinutes, parseWorkDays, type WorkingHoursFields } from "@/lib/linkedin/workingHours";
 import { NEW_CHAT_WINDOW_MS, secondsUntilNextSend, warmUpEndsAt, type WhatsappGuardrails } from "@/lib/whatsapp/guardrails";
 import { everyMinutes, latestDueSlot, nextSlotAt } from "@/lib/scheduler/slots";
 import { displayTime } from "./displayTime";
@@ -86,7 +85,7 @@ export function coveringApproval<T extends { approvedAt: string; expiresAt: stri
 export type SenderStatus = {
   channel: "email" | "whatsapp" | "instagram" | "linkedin";
   account: string;
-  /** The IANA time zone of the sender's configured sending hours; null when no hours are set (any time). */
+  /** The IANA time zone a mailbox's daily send count is kept in; null for senders without one. It never limits when a sender sends. */
   timezone: string | null;
   /** Gates recorded right now. None is not proof that a worker is running. */
   gates: string[];
@@ -104,43 +103,59 @@ function latest(dates: (Date | null)[]): Date | null {
   return dates.reduce<Date | null>((max, date) => (date && (!max || date > max) ? date : max), null);
 }
 
-/** The start of the next sending window on another local day: after a daily limit is used. */
-function nextDayWindow(hours: WorkingHours, now: Date): Date | null {
+/** The next local midnight in `timeZone`: when a mailbox's daily send count starts again. */
+function nextLocalMidnight(timeZone: string, now: Date): Date | null {
   try {
-    const midnight = fromZonedTime(setTime(addDays(toZonedTime(now, hours.timezone), 1), { hours: 0, minutes: 0, seconds: 0, milliseconds: 0 }), hours.timezone);
-    return isWindowOpenFrom(hours, midnight) ? midnight : nextWindowStart(hours, midnight);
+    return fromZonedTime(setTime(addDays(toZonedTime(now, timeZone), 1), { hours: 0, minutes: 0, seconds: 0, milliseconds: 0 }), timeZone);
   } catch {
     return null;
   }
 }
 
-/** One mailbox, from the email scheduler's own gates (emailDeliveryGates). */
+/** The daily lead limit while it is used: why first messages wait, and when it resets (dailyLeadLimit.ts). */
+export type DailyLeadLimitHold = { reason: string; resetsAt: Date };
+
+/**
+ * One mailbox, from the email scheduler's own gates (emailDeliveryGates).
+ * The queue is a technical detail, not a hold: an empty one is normal while
+ * every lead waits for a reply or a follow-up. The pause between sends holds
+ * only a queued email; with none waiting it is a detail too. `leadLimit`:
+ * the daily lead limit is used while first emails wait.
+ */
 export function emailSenderStatus(input: {
   mailbox: string;
-  workingHours: WorkingHours;
+  workingHours: Pick<WorkingHours, "timezone">;
   nextEmailTime: Date | null;
   gates: { code: string; reason: string }[];
   queued: number;
+  leadLimit?: DailyLeadLimitHold | null;
   now: Date;
 }): SenderStatus {
   const codes = new Set(input.gates.map((gate) => gate.code));
+  const pausing = codes.has("gap") && input.queued === 0;
+  const holds = input.gates.filter((gate) => gate.code !== "queue" && !(gate.code === "gap" && pausing)).map((gate) => gate.reason);
+  const details = [
+    ...input.gates.filter((gate) => gate.code === "gap" && pausing).map((gate) => `${gate.reason}; no queued email waits on it.`),
+    ...input.gates.filter((gate) => gate.code === "queue").map((gate) => `${gate.reason}.`),
+  ];
+  if (input.leadLimit) holds.push(input.leadLimit.reason);
   // Disconnected, paused or unlinked: no time can be promised.
   const open = ["paused", "mailbox", "provider", "account"].some((code) => codes.has(code));
-  const next = open ? null : latest([
-    codes.has("hours") ? nextWindowStart(input.workingHours, input.now) : null,
-    codes.has("gap") ? input.nextEmailTime : null,
-    codes.has("capacity") ? nextDayWindow(input.workingHours, input.now) : null,
+  const next = open || !holds.length ? null : latest([
+    codes.has("gap") && !pausing ? input.nextEmailTime : null,
+    codes.has("capacity") ? nextLocalMidnight(input.workingHours.timezone, input.now) : null,
+    input.leadLimit?.resetsAt ?? null,
   ]);
   return {
     channel: "email",
     account: input.mailbox,
     timezone: input.workingHours.timezone,
-    gates: input.gates.map((gate) => gate.reason),
+    gates: holds,
     nextAt: next?.toISOString() ?? null,
     queued: input.queued,
     note: null,
     limits: null,
-    details: [],
+    details,
   };
 }
 
@@ -150,7 +165,6 @@ export function whatsappSenderStatus(input: {
   status: string;
   unipileConnected: boolean;
   paused: boolean;
-  sendingHours: WorkingHours | null;
   guardrails: WhatsappGuardrails;
   connectedAt: Date | null;
   lastSentAt: Date | null;
@@ -162,6 +176,8 @@ export function whatsappSenderStatus(input: {
   firstMessagesQueued?: number;
   /** Why the campaign sender last held this number back (whatsapp_accounts.last_refusal), cleared by its next accepted send. */
   lastRefusal?: { reason: string; at: Date } | null;
+  /** The daily lead limit, while it is used: it holds this number's first messages. */
+  dailyLeadLimit?: DailyLeadLimitHold | null;
   /** The zone times are written in (the organization's). */
   displayTimeZone?: string;
   now: Date;
@@ -175,9 +191,9 @@ export function whatsappSenderStatus(input: {
   if (!input.unipileConnected) { gates.push("Unipile is disconnected"); open = true; }
   if (input.status !== "connected") { gates.push(`The number is ${input.status}`); open = true; }
   if (input.paused) { gates.push("WhatsApp outbound is paused by the server's migration controls"); open = true; }
-  if (input.sendingHours && !isWithinWorkingHours(input.sendingHours, now)) {
-    gates.push(`Outside campaign sending hours (${input.sendingHours.timezone})`);
-    times.push(nextWindowStart(input.sendingHours, now));
+  if (input.dailyLeadLimit && (input.firstMessagesQueued ?? 0) > 0) {
+    gates.push(input.dailyLeadLimit.reason);
+    times.push(input.dailyLeadLimit.resetsAt);
   }
   const warmUp = warmUpEndsAt(input.connectedAt, now, guardrails.warmUpHours);
   if (!input.connectedAt && guardrails.warmUpHours > 0) {
@@ -207,7 +223,7 @@ export function whatsappSenderStatus(input: {
   return {
     channel: "whatsapp",
     account: input.account,
-    timezone: input.sendingHours?.timezone ?? null,
+    timezone: null,
     gates,
     nextAt: next?.toISOString() ?? null,
     queued: input.queued,
@@ -219,30 +235,16 @@ export function whatsappSenderStatus(input: {
 }
 
 /**
- * When a LinkedIn account's working hours next open: the same window the
- * LinkedIn engine checks (runOutreach: the account's own hours, else the
- * organization's), as weekly hours. Null when it runs any time.
+ * One LinkedIn account of a plan, from the same checks the LinkedIn engine
+ * (runOutreach, sendInvitations) makes. It works at any time of day: an
+ * account's old working-hours fields are ignored, as the engine ignores them.
  */
-function linkedinNextWindow(hours: WorkingHoursFields, now: Date): Date | null {
-  if (!hasWorkingHoursConfigured(hours)) return null;
-  const start = hours.workStartTime ?? "09:00";
-  const end = hours.workEndTime ?? "18:00";
-  if (parseHHmmToMinutes(start) === parseHHmmToMinutes(end)) return null;
-  // Probe minute by minute from the next window start the shared helper gives,
-  // since its end is inclusive where the engine's is exclusive.
-  const weekly = mailboxHoursFromWeekly({ timezone: hours.workTimezone!, days: parseWorkDays(hours.workDays), start, end });
-  const next = nextWindowStart(weekly, now);
-  return next && isWithinLinkedinHours(hours, next) ? next : null;
-}
-
-/** One LinkedIn account of a plan, from the same checks the LinkedIn engine (runOutreach, sendInvitations) makes. */
 export function linkedinSenderStatus(input: {
   account: string;
   status: string;
   limitReached: boolean;
   unipileConnected: boolean;
   paused: boolean;
-  hours: WorkingHoursFields;
   nextAllowedRun: Date | null;
   invitationsToday: number;
   invitationsPerDay: number;
@@ -253,6 +255,8 @@ export function linkedinSenderStatus(input: {
   checkEveryMinutes?: number | null;
   /** The organization's next daily reset (its daily rollover), which clears LinkedIn's invitation-limit flag. */
   limitResetsAt?: Date | null;
+  /** The daily lead limit, while it is used: it holds this account's invitations (each a first message). */
+  dailyLeadLimit?: DailyLeadLimitHold | null;
   /** The zone times are written in (the organization's). */
   displayTimeZone?: string;
   now: Date;
@@ -270,19 +274,16 @@ export function linkedinSenderStatus(input: {
     // Cleared by the organization's daily rollover (resetDailyLimits), whatever LinkedIn says then.
     if (input.limitResetsAt) {
       gates.push(`LinkedIn reported this account's invitation limit; the flag is cleared at the organization's daily reset, ${displayTime(input.limitResetsAt, now, zone)}`);
-      // The first time after the reset its working hours allow.
-      const reset = input.limitResetsAt;
-      times.push(hasWorkingHoursConfigured(input.hours) && !isWithinLinkedinHours(input.hours, reset) ? linkedinNextWindow(input.hours, reset) : reset);
+      times.push(input.limitResetsAt);
     } else {
       gates.push("LinkedIn reported this account's invitation limit; the flag is cleared at the organization's daily reset");
       open = true;
     }
   }
   if (input.paused) { gates.push("LinkedIn outbound is paused by the server's migration controls"); open = true; }
-  const configured = hasWorkingHoursConfigured(input.hours);
-  if (configured && !isWithinLinkedinHours(input.hours, now)) {
-    gates.push(`Outside working hours (${formatWorkingHoursSummary(input.hours)})`);
-    times.push(linkedinNextWindow(input.hours, now));
+  if (input.dailyLeadLimit && input.queued > 0) {
+    gates.push(input.dailyLeadLimit.reason);
+    times.push(input.dailyLeadLimit.resetsAt);
   }
   // The rest between runs (runOutreach sets it after each run): the account is only looked at again by a scheduled check after it.
   const cooldownEnds = input.nextAllowedRun;
@@ -297,8 +298,7 @@ export function linkedinSenderStatus(input: {
   }
   if (input.invitationsToday >= input.invitationsPerDay) {
     gates.push(`${input.invitationsToday} of ${input.invitationsPerDay} invitations sent today`);
-    const tomorrow = input.nextDayStart;
-    times.push(configured && !isWithinLinkedinHours(input.hours, tomorrow) ? linkedinNextWindow(input.hours, tomorrow) : tomorrow);
+    times.push(input.nextDayStart);
   }
   const allowed = open || times.some((time) => time === null) ? null : latest(times);
   // The engine sends only when a scheduled check finds the account free: the first check at or after every gate's end.
@@ -308,12 +308,12 @@ export function linkedinSenderStatus(input: {
   return {
     channel: "linkedin",
     account: input.account,
-    timezone: configured ? input.hours.workTimezone : null,
+    timezone: null,
     gates,
     nextAt: next?.toISOString() ?? null,
     queued: input.queued,
     note: input.invitationsToday >= input.invitationsPerDay ? "Follow-up messages to accepted invitations are not held by the invitation limit." : null,
-    limits: `Invitations: ${input.invitationsToday} of ${input.invitationsPerDay} sent today, ${left} left. Working hours: ${configured ? formatWorkingHoursSummary(input.hours) : "any time (none set)"}.`,
+    limits: `Invitations: ${input.invitationsToday} of ${input.invitationsPerDay} sent today, ${left} left.`,
     details,
   };
 }

@@ -5,34 +5,40 @@ import { channelRules } from "@/lib/channels/rules.server";
 import { featureEnabled } from "@/lib/features/flags.server";
 import { instagramOutreachReady } from "@/lib/instagram/outreach.server";
 import { isMigrationControlPaused } from "@/lib/migration/controls";
+import { newLeadsToday } from "@/lib/channels/dailyLeadLimit.server";
+import { dailyLeadLimitReason, describeLeadDay } from "@/lib/channels/dailyLeadLimit";
 import { emailDeliveryGates } from "@/lib/outreach/deliveryDiagnostics";
 import { mailboxProviderConnected } from "@/lib/outreach/mailboxProviders";
 import { mailboxes } from "@/lib/outreach/schema";
-import {
-  isWithinWorkingHours,
-  mailboxHoursFromWeekly,
-  nextWindowStart,
-} from "@/lib/outreach/workingHours";
 import { isPlatformConnected } from "@/lib/platform/credentials";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { NEW_CHAT_WINDOW_MS, whatsappGuardrails } from "@/lib/whatsapp/guardrails";
 import { campaignAccounts, leads as linkedinLeads, linkedInAccounts } from "@/lib/linkedin/schema";
-import { withOrganizationHours } from "@/lib/linkedin/workingHours";
 import { organizationTimeZone } from "@/lib/reporting/metrics.server";
 import { platformJob } from "@/lib/scheduler/schedules";
 import { dailyAt, nextSlotAt } from "@/lib/scheduler/slots";
-import { emailSenderStatus, linkedinSenderStatus, whatsappSenderStatus, type SenderStatus } from "./runEvidence";
+import { displayTime } from "./displayTime";
+import { emailSenderStatus, linkedinSenderStatus, whatsappSenderStatus, type DailyLeadLimitHold, type SenderStatus } from "./runEvidence";
 import { outreachRuns } from "./schema";
+
+/** How an Instagram account's gap between DMs starts; its end follows in the organization's zone. */
+const INSTAGRAM_GAP = "Pausing between DMs until ";
 
 /**
  * Read-only snapshot. It reports stored gates, not a claim that a worker or
  * provider is healthy. Times in gates and details are written in the
  * organization's time zone (`displayTimeZone`), which the panel names.
+ * Sending is always on: no sender has sending hours. While the daily lead
+ * limit is used, it is a gate of every sender with first messages waiting.
  */
 export async function diagnoseDelivery(runId?: string) {
   const org = currentOrganizationId();
   const now = new Date();
   const displayTimeZone = await organizationTimeZone();
+  const leadDay = await newLeadsToday(now);
+  const leadLimit: DailyLeadLimitHold | null = leadDay.used >= leadDay.limit
+    ? { reason: dailyLeadLimitReason(leadDay.used, leadDay.limit, leadDay.resetsAt, leadDay.timeZone), resetsAt: leadDay.resetsAt }
+    : null;
   const [run] = runId
     ? await db
         .select()
@@ -66,8 +72,9 @@ export async function diagnoseDelivery(runId?: string) {
     return {
       mailbox: mailbox.emailAddress,
       activeQueue,
+      /** The zone its daily send count is kept in (never a sending window). */
       timezone: mailbox.workingHours.timezone,
-      workingHours: mailbox.workingHours,
+      connected: mailbox.status === "connected",
       nextSendAt: mailbox.nextEmailTime?.toISOString() ?? null,
       lastError: mailbox.lastError,
       gates: emailDeliveryGates(mailbox, {
@@ -75,6 +82,7 @@ export async function diagnoseDelivery(runId?: string) {
         paused: isMigrationControlPaused("emailOutbound"),
         activeQueue,
         now,
+        displayTimeZone,
       }),
     };
   });
@@ -103,6 +111,8 @@ export async function diagnoseDelivery(runId?: string) {
     attempted24h: number;
     limit: number;
     gates: string[];
+    /** The end of the account's gap between DMs, while one runs. */
+    nextSend: Date | null;
   }[] = [];
   let instagramErrors: { status: string; reason: string; n: number }[] = [];
   if (sendsOn("instagram") && (await featureEnabled("instagram")) && (await instagramOutreachReady())) {
@@ -129,17 +139,16 @@ export async function diagnoseDelivery(runId?: string) {
         isMigrationControlPaused("instagramOutbound")
           ? "Instagram outbound is paused by the server's migration controls"
           : null,
-        rules.sendingHours &&
-        !isWithinWorkingHours(mailboxHoursFromWeekly(rules.sendingHours), now)
-          ? `Outside sending hours (${rules.sendingHours.timezone})`
-          : null,
         a.next_send && new Date(a.next_send) > now
-          ? `Next send allowed at ${new Date(a.next_send).toISOString()}`
+          ? `${INSTAGRAM_GAP}${displayTime(new Date(a.next_send), now, displayTimeZone, { seconds: true })}`
           : null,
         Number(a.used) >= rules.newChatsPerDay
           ? "Rolling 24-hour initial DM limit used"
           : null,
+        // Every Instagram DM here is a first message.
+        leadLimit && Number(a.queued) > 0 ? leadLimit.reason : null,
       ].filter((x): x is string => Boolean(x)),
+      nextSend: a.next_send && new Date(a.next_send) > now ? new Date(a.next_send) : null,
     }));
     instagramErrors = Array.from(
       await db.execute<{
@@ -151,30 +160,43 @@ export async function diagnoseDelivery(runId?: string) {
       and (${runId ?? null}::uuid is null or run_id=${runId ?? null}::uuid) and updated_at>now()-interval '7 days' group by status,error order by n desc limit 5`),
     );
   }
-  const whatsapp = await whatsappSenders(run?.campaigns.whatsapp ?? null, Boolean(run), now, displayTimeZone);
-  const linkedin = await linkedinSenders(run?.campaigns.linkedin ?? null, Boolean(run), now, displayTimeZone);
-  const instagramRules = instagram.length ? await channelRules("instagram") : null;
+  const whatsapp = await whatsappSenders(run?.campaigns.whatsapp ?? null, Boolean(run), now, displayTimeZone, leadLimit);
+  const linkedin = await linkedinSenders(run?.campaigns.linkedin ?? null, Boolean(run), now, displayTimeZone, leadLimit);
+  // First emails of active campaigns still to go out: any connected mailbox may send them, so the limit holds each.
+  const firstEmailsWaiting = emailCampaigns.filter((c) => c.status === "active").reduce((sum, c) => sum + Number(c.unassigned), 0);
   const senders: SenderStatus[] = [
-    ...email.map((m) => emailSenderStatus({ mailbox: m.mailbox, workingHours: m.workingHours, nextEmailTime: m.nextSendAt ? new Date(m.nextSendAt) : null, gates: m.gates, queued: m.activeQueue, now })),
+    ...email.map((m) => emailSenderStatus({
+      mailbox: m.mailbox,
+      workingHours: { timezone: m.timezone },
+      nextEmailTime: m.nextSendAt ? new Date(m.nextSendAt) : null,
+      gates: m.gates,
+      queued: m.activeQueue,
+      leadLimit: m.connected && firstEmailsWaiting > 0 ? leadLimit : null,
+      now,
+    })),
     ...whatsapp,
     ...linkedin,
     ...instagram.map((a): SenderStatus => {
-      const hours = instagramRules?.sendingHours ? mailboxHoursFromWeekly(instagramRules.sendingHours) : null;
-      const nextSend = a.gates.find((gate) => gate.startsWith("Next send allowed at "))?.slice("Next send allowed at ".length) ?? null;
-      // Only the hours and the per-account gap have a known end here.
-      const timed = a.gates.every((gate) => gate.startsWith("Outside sending hours") || gate.startsWith("Next send allowed at "));
-      const opens = hours && a.gates.some((gate) => gate.startsWith("Outside sending hours")) ? nextWindowStart(hours, now) : null;
-      const next = [opens, nextSend ? new Date(nextSend) : null].filter((date): date is Date => Boolean(date)).sort((x, y) => y.getTime() - x.getTime())[0] ?? null;
-      return { channel: "instagram", account: a.account, timezone: hours?.timezone ?? null, gates: a.gates, nextAt: a.gates.length && timed ? next?.toISOString() ?? null : null, queued: a.queued, note: null, limits: null, details: [] };
+      const waiting = a.queued > 0;
+      const limited = Boolean(leadLimit && a.gates.includes(leadLimit.reason));
+      // The gap between DMs only holds a DM that waits on it.
+      const gates = waiting ? a.gates : a.gates.filter((gate) => !gate.startsWith(INSTAGRAM_GAP));
+      const details = waiting ? [] : a.gates.filter((gate) => gate.startsWith(INSTAGRAM_GAP)).map((gate) => `${gate}; no DM waits on it.`);
+      // Only the gap and the daily lead limit have a known end here.
+      const known = gates.every((gate) => gate.startsWith(INSTAGRAM_GAP) || gate === leadLimit?.reason);
+      const ends = [waiting ? a.nextSend : null, limited ? leadLimit!.resetsAt : null].filter((date): date is Date => Boolean(date)).sort((x, y) => y.getTime() - x.getTime())[0] ?? null;
+      return { channel: "instagram", account: a.account, timezone: null, gates, nextAt: gates.length && known ? ends?.toISOString() ?? null : null, queued: a.queued, note: null, limits: null, details };
     }),
   ];
+  const day = describeLeadDay(leadDay);
   const lines = [
     run
       ? `“${run.name}” is ${run.status}${run.error ? `: ${run.error}` : ""}.`
       : "Current delivery snapshot:",
+    `Daily lead limit: ${day.used}. ${day.resets}${leadLimit ? " First messages wait for the reset; follow-ups and replies are not held by it." : ""}`,
     ...email.map(
       (m) =>
-        `${m.mailbox}: ${m.activeQueue} queued. ${m.gates.map((g) => g.reason).join("; ") || "No recorded send gate is blocking this mailbox"}.${m.lastError ? ` Last mailbox error: ${m.lastError}` : ""}`,
+        `${m.mailbox}: ${m.activeQueue} queued. ${m.gates.map((g) => g.reason).join("; ") || "No recorded send gate is blocking this mailbox"}. Its daily send count resets at midnight ${m.timezone}.${m.lastError ? ` Last mailbox error: ${m.lastError}` : ""}`,
     ),
     ...emailCampaigns.map(
       (c) =>
@@ -188,14 +210,14 @@ export async function diagnoseDelivery(runId?: string) {
     ...instagramErrors.map((e) => `${e.n} Instagram ${e.status}: ${e.reason}`),
     ...whatsapp.map(
       (w) =>
-        `WhatsApp ${w.account}: ${w.queued} awaiting their next message. ${w.gates.join("; ") || "No recorded number gate is blocking sends"}${w.nextAt ? `; next send allowed at ${w.nextAt}` : ""}.${w.timezone ? ` Sending hours are in ${w.timezone}.` : " No campaign sending hours are set (any time)."}${[w.limits, ...w.details].filter(Boolean).map((line) => ` ${line}`).join("")}`,
+        `WhatsApp ${w.account}: ${w.queued} awaiting their next message. ${w.gates.join("; ") || "No recorded number gate is blocking sends"}${w.nextAt ? `; next send allowed at ${w.nextAt}` : ""}.${[w.limits, ...w.details].filter(Boolean).map((line) => ` ${line}`).join("")}`,
     ),
     ...linkedin.map(
       (l) =>
-        `LinkedIn ${l.account}: ${l.queued} invitations waiting. ${l.gates.join("; ") || "No recorded account gate is blocking sends"}${l.nextAt ? `; next send allowed at ${l.nextAt}` : ""}.${l.timezone ? ` Working hours are in ${l.timezone}.` : " No working hours are set (any time)."}${[l.limits, ...l.details].filter(Boolean).map((line) => ` ${line}`).join("")}`,
+        `LinkedIn ${l.account}: ${l.queued} invitations waiting. ${l.gates.join("; ") || "No recorded account gate is blocking sends"}${l.nextAt ? `; next send allowed at ${l.nextAt}` : ""}.${[l.limits, ...l.details].filter(Boolean).map((line) => ` ${line}`).join("")}`,
     ),
     `Times above are in ${displayTimeZone}, the organization's time zone, unless written as ISO times.`,
-    "This snapshot does not measure worker liveness or confirm future delivery. Lead cities do not determine a sender's sending timezone.",
+    "Sending is always on: no sender has sending hours, only its own limits and the gaps between sends. This snapshot does not measure worker liveness or confirm future delivery. Lead cities do not determine a sender's timezone.",
   ];
   if (!email.length && sendsOn("email")) lines.splice(1, 0, "No email mailbox is configured.");
   return {
@@ -221,7 +243,7 @@ export async function diagnoseDelivery(runId?: string) {
  * The WhatsApp numbers a run's campaign sends from (or every number of the
  * organization), with the gates send.ts applies under its lock, read the same way.
  */
-async function whatsappSenders(campaignId: string | null, forRun: boolean, now: Date, displayTimeZone: string): Promise<SenderStatus[]> {
+async function whatsappSenders(campaignId: string | null, forRun: boolean, now: Date, displayTimeZone: string, leadLimit: DailyLeadLimitHold | null): Promise<SenderStatus[]> {
   if (forRun && !campaignId) return [];
   const org = currentOrganizationId();
   const accounts = await db.execute<{
@@ -243,13 +265,12 @@ async function whatsappSenders(campaignId: string | null, forRun: boolean, now: 
     order by a.created_at`);
   if (!accounts.length) return [];
   const [rules, unipile] = await Promise.all([channelRules("whatsapp"), isPlatformConnected("unipile")]);
-  const hours = rules.sendingHours ? mailboxHoursFromWeekly(rules.sendingHours) : null;
   return accounts.map((a) => whatsappSenderStatus({
     account: a.phone || a.name || a.id,
     status: a.status,
     unipileConnected: unipile,
     paused: isMigrationControlPaused("whatsappOutbound"),
-    sendingHours: hours,
+    dailyLeadLimit: leadLimit,
     guardrails: whatsappGuardrails(rules, { newChatsPerDay: a.new_chats_per_day }),
     connectedAt: a.connected_at ? new Date(a.connected_at) : null,
     lastSentAt: a.last_sent ? new Date(a.last_sent) : null,
@@ -265,10 +286,10 @@ async function whatsappSenders(campaignId: string | null, forRun: boolean, now: 
 /**
  * The LinkedIn accounts a run's campaign sends from (or every account of the
  * organization), with the checks the LinkedIn engine makes before each run:
- * working hours (the account's own, else the organization's), the gap
- * between runs, the daily invitation limit, the account's state.
+ * the gap between runs, the daily invitation limit, the account's state
+ * (no working hours: the engine ignores an account's old ones).
  */
-async function linkedinSenders(campaignId: string | null, forRun: boolean, now: Date, displayTimeZone: string): Promise<SenderStatus[]> {
+async function linkedinSenders(campaignId: string | null, forRun: boolean, now: Date, displayTimeZone: string, leadLimit: DailyLeadLimitHold | null): Promise<SenderStatus[]> {
   if (forRun && !campaignId) return [];
   const accounts = campaignId
     ? await db.select({ account: linkedInAccounts }).from(campaignAccounts)
@@ -302,7 +323,7 @@ async function linkedinSenders(campaignId: string | null, forRun: boolean, now: 
       limitReached: account.limitReached,
       unipileConnected: unipile,
       paused: isMigrationControlPaused("linkedinOutbound"),
-      hours: withOrganizationHours(account, rules.workingHours),
+      dailyLeadLimit: leadLimit,
       nextAllowedRun: account.nextAllowedRun,
       invitationsToday: Number(sent?.n ?? 0),
       invitationsPerDay: account.dailyInviteLimit ?? (account.isPremium ? rules.invitesPerDayPremium : rules.invitesPerDayFree),

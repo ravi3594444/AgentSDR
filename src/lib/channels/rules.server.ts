@@ -2,7 +2,6 @@ import "server-only";
 
 import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
-import type { WeeklyHours } from "@/lib/outreach/workingHours";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { mergeStoredRules, resolveValues, rulesOf, validateValues, type Channel, type ChannelRuleValues } from "./rules";
 import { channelSettings } from "./schema";
@@ -29,20 +28,8 @@ async function stored(channel: Channel): Promise<Record<string, unknown>> {
   return row?.values ?? {};
 }
 
-/**
- * Sending hours were removed: sending is always on. The delivery diagnostics
- * (src/lib/assistant/deliveryDiagnostics.server.ts) still read the retired
- * keys until they are rewritten, so the resolved values carry them as null,
- * "any time". Nothing stores or accepts them (RETIRED_RULE_KEYS); delete this
- * once no reader is left.
- */
-const RETIRED_HOURS: { [C in Channel]: RetiredHours<C> } = { email: {}, linkedin: { workingHours: null }, whatsapp: { sendingHours: null }, instagram: { sendingHours: null }, general: {} };
-type RetiredHours<C extends Channel> = C extends "linkedin" ? { workingHours: WeeklyHours | null }
-  : C extends "whatsapp" | "instagram" ? { sendingHours: WeeklyHours | null }
-  : Record<never, never>;
-
-/** Resolved rules for one channel, in the organization in scope. */
-export async function channelRules<C extends Channel>(channel: C): Promise<ChannelRuleValues<C> & RetiredHours<C>> {
+/** Resolved rules for one channel, in the organization in scope. Sending hours were removed: no channel has them. */
+export async function channelRules<C extends Channel>(channel: C): Promise<ChannelRuleValues<C>> {
   const key = cacheKey(channel);
   const hit = cache.get(key);
   let values = hit && hit.expires > Date.now() ? hit.values : null;
@@ -50,7 +37,7 @@ export async function channelRules<C extends Channel>(channel: C): Promise<Chann
     values = await stored(channel);
     cache.set(key, { values, expires: Date.now() + CACHE_TTL_MS });
   }
-  return { ...resolveValues(channel, values), ...RETIRED_HOURS[channel] } as ChannelRuleValues<C> & RetiredHours<C>;
+  return resolveValues(channel, values);
 }
 
 /** What the settings page shows: every value, and which ones differ from the default. */

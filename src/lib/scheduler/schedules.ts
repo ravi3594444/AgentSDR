@@ -36,7 +36,7 @@ export const PLATFORM_JOBS: readonly PlatformJob[] = [
     schedule: everyMinutes(30),
     enabled: true,
     endpoint: "/api/linkedin/jobs/run-outreach",
-    description: "LinkedIn invitations and follow-ups (each account's limits and working hours apply)",
+    description: "LinkedIn invitations and follow-ups (each account's own limits apply)",
   },
   {
     // Not scheduled yet: today the search queue runs when someone clicks Run.

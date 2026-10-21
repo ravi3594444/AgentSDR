@@ -3,10 +3,15 @@ import "server-only";
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentOrganizationId } from "@/lib/tenancy/scope";
-import { leadOpen, leadProgress, leadReach, type LeadProgress, type LeadProgressInput } from "./runLeads";
+import { leadOpen, leadProgress, leadReach, leadTiming, type LeadProgress, type LeadProgressInput } from "./runLeads";
 
-/** `open`: its channel engine may still send it something (runLeads.ts leadOpen). */
-export type RunLead = { personId: string; who: string; channel: string; progress: LeadProgress; reach: { contacted: boolean; replied: boolean }; open: boolean };
+/**
+ * `open`: its channel engine may still send it something (runLeads.ts
+ * leadOpen). An email lead also says when its next follow-up is due
+ * (`nextAt`, when ahead), whether its next email is prepared for sending
+ * (`queued`) and whether its first email is still to go (`firstMessage`).
+ */
+export type RunLead = { personId: string; who: string; channel: string; progress: LeadProgress; reach: { contacted: boolean; replied: boolean }; open: boolean } & ReturnType<typeof leadTiming>;
 
 type Row = LeadProgressInput & { runId: string; personId: string; who: string | null };
 
@@ -17,7 +22,9 @@ export async function runLeads(runIds: readonly string[], perRun = 200): Promise
   const rows = await db.execute(sql`
     select l.run_id::text as "runId", l.person_id::text as "personId", l.channel, l.status as "runStatus",
       coalesce(p.full_name, p.phone, p.email, p.raw->'instagram'->>'username') as "who",
-      e.sequence_status as "emailStatus",
+      e.sequence_status as "emailStatus", e.next_send_at::text as "emailNextAt",
+      exists (select 1 from outreach_mailbox_queue q where q.lead_id = e.id) as "emailQueued",
+      ec.claim as "emailClaim", left(ec.error, 200) as "emailClaimError",
       w.status as "whatsappStatus", w.last_sent_at::text as "whatsappSentAt", left(w.last_error, 200) as "whatsappError",
       wm.delivered_at::text as "whatsappDeliveredAt", wm.read_at::text as "whatsappReadAt",
       li.status::text as "linkedinStatus", li."requestSentAt"::text as "linkedinRequestSentAt",
@@ -32,6 +39,14 @@ export async function runLeads(runIds: readonly string[], perRun = 200): Promise
     join outreach_runs r on r.id = l.run_id and r.organization_id = l.organization_id
     join people p on p.id = l.person_id and p.organization_id = l.organization_id
     left join outreach_leads e on l.channel = 'email' and e.person_id = l.person_id and e.campaign_id::text = r.campaigns ->> 'email'
+    -- The claim on its current step: being sent, never settled after 10 minutes (uncertain), or failed.
+    left join lateral (
+      select case when c.status = 'failed' then 'failed'
+                  when c.status = 'scheduled' and c.created_at < now() - interval '10 minutes' then 'uncertain'
+                  when c.status = 'scheduled' then 'sending' end as claim,
+             c.error
+        from outreach_emails c where c.lead_id = e.id and c.step_number = e.current_step + 1 limit 1
+    ) ec on e.id is not null
     left join whatsapp_campaign_leads w on l.channel = 'whatsapp' and w.person_id = l.person_id and w.campaign_id::text = r.campaigns ->> 'whatsapp'
     left join lateral (
       select m.delivered_at, m.read_at from whatsapp_campaign_sends s join whatsapp_messages m on m.id = s.whatsapp_message_id
@@ -50,8 +65,9 @@ export async function runLeads(runIds: readonly string[], perRun = 200): Promise
   `);
   const order = { good: 0, replied: 1, failed: 2, sent: 3, waiting: 4, stopped: 5 } as const;
   const out: Record<string, RunLead[]> = {};
+  const now = new Date();
   for (const row of Array.from(rows) as unknown as Row[]) {
-    (out[row.runId] ??= []).push({ personId: row.personId, who: row.who ?? "A lead", channel: row.channel, progress: leadProgress(row), reach: leadReach(row), open: leadOpen(row) });
+    (out[row.runId] ??= []).push({ personId: row.personId, who: row.who ?? "A lead", channel: row.channel, progress: leadProgress(row), reach: leadReach(row), open: leadOpen(row), ...leadTiming(row, now) });
   }
   for (const list of Object.values(out)) {
     list.sort((a, b) => order[a.progress.tone] - order[b.progress.tone] || a.who.localeCompare(b.who));

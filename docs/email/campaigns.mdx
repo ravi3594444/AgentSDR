@@ -76,15 +76,18 @@ Every email also gets an unsubscribe link at the bottom, which you do not need t
 Sending is deliberately slow and spread out.
 
 - **Mailboxes are one shared pool.** A campaign does not pick mailboxes. Every connected mailbox in your organization can send for any active campaign. New leads are shared across mailboxes in turn, and a lead then stays with the mailbox that sent its first email, so follow-ups come from the same address.
-- **A queue is built once a day.** Each mailbox's queue for the day is filled first with follow-ups that are due (most overdue first), then with new leads, up to its daily limit. The daily counters also reset at that point.
-- **Then emails go out one at a time.** About once a minute, each mailbox with queued leads sends one email, if it is outside its random gap (18 to 24 minutes by default). Mailboxes send at any time of day.
-- **Limits are automatic, and one is yours.** Each mailbox's daily limit and gap are applied automatically; a first email to someone no channel has contacted before also takes a place under your workspace's [daily lead limit](/workspace/sending-rules).
+- **A queue is built once a day.** Each mailbox's queue for the day is filled first with follow-ups that are due (most overdue first), then with new leads, up to its daily limit and the places left under your [daily lead limit](/workspace/sending-rules). The daily counters also reset at that point. It is built again when you launch, resume or activate a campaign, so those send the same day.
+- **Due work missing from it is added.** Every few minutes the sender looks for emails that are due but not queued (a follow-up whose day came after the morning's build, or the leads of a build that failed) and adds them, within each mailbox's daily limit. It never rebuilds a queue that is empty only because nothing is due, and it never resets a counter.
+- **Then emails go out one at a time.** About once a minute, each mailbox with queued leads sends one email, if it is outside its random gap (18 to 24 minutes by default). Mailboxes send at any time of day. An email is sent only once its step is due, so a follow-up never goes out early.
+- **Limits are automatic, and one is yours.** Each mailbox's daily limit and gap are applied automatically; a first email to someone no channel has contacted before also takes a place under your workspace's [daily lead limit](/workspace/sending-rules). When today's places are used, the first email waits, nothing is sent, and it goes out on the next day.
 
 <Note>
-Because the queue is built once a day, a campaign launched mid-day may not send until the next build. The build runs from a scheduled job inside the app, at the start of your organization's day (Settings, Organization, Defaults: Time zone and New day starts at).
+A queue build replaces the previous queue all at once: if it fails, the previous queue stays, and the launch, resume or activation that asked for it says its emails are not prepared yet. They are prepared again automatically, at the latest when your organization's next day starts (Settings, Your business: Time zone and New day starts at).
 </Note>
 
-A step is sent at most once per lead. If sending fails, the email is marked **Failed** instead of being retried automatically, and the campaign's analytics show it under **Failed sends** with a hint to check the mailbox.
+A step is sent at most once per lead. If sending fails, the email is marked **Failed** instead of being retried automatically (it is not queued again either), and the campaign's analytics show it under **Failed sends** with a hint to check the mailbox.
+
+On a plan's card and in Activity, an email lead shows where it really stands: **First email sent — waiting for a reply**, with its next follow-up's time when one is scheduled. A plan whose leads all wait on a later follow-up reads **Scheduled**; a pause between sends is only shown when it delays an email that is ready to go; and **Daily lead limit reached** says when the limit resets. The queue and the send loop are in the plan card's **Sending status**, as technical details.
 
 ## Start, pause and resume
 

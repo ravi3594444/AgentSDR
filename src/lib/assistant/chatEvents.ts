@@ -9,12 +9,32 @@
  * events and the chat that reads them.
  */
 
+import { formatChatDateTime } from "./chatTime";
+
 export type ChatEvent =
   | { kind: "search_report"; jobId: string; ok: boolean; source: string | null; found: number; contactable: number; matching: number | null; judged: number | null; error?: string | null }
   | { kind: "plan_ready"; runId: string | null; leads: number; channels: Record<string, number>; waitingReason: string | null }
   /** A launch's `note`: it started, and its messages are not prepared for sending yet (they are again automatically). */
   | { kind: "outreach_started"; runId: string | null; ok: boolean; launches: { channel: string; added: number; skipped: number; problem: string | null; note?: string | null }[]; automatic: boolean }
   | { kind: "continuation"; n: number; leads: number; target: number; spentUsd: number; capUsd: number; minutesLeft: number };
+
+/** The tool cards that are reports: their counts are a snapshot of when they were written. */
+const REPORT_TOOLS = new Set(["report", "daily_summary"]);
+
+/**
+ * When a chat report was written, for it to say "As of …" in the
+ * organization's zone, and where the current counts are: a report (the run
+ * report and Results card, the daily summary, a job's or a request's report
+ * event, which carries its report key) is a snapshot, so an early "0
+ * contacted" reads as historical. Null for anything that is not a report.
+ */
+export function reportAsOf(message: { role: string; tool?: string | null; createdAt: string; toolResult?: unknown }, timeZone: string): { label: string; pointer: string } | null {
+  const report = message.role === "event"
+    ? isRecord(message.toolResult) && typeof message.toolResult.reportKey === "string"
+    : message.role === "tool" && REPORT_TOOLS.has(message.tool ?? "");
+  const at = report ? formatChatDateTime(message.createdAt, timeZone) : "";
+  return at ? { label: `As of ${at}`, pointer: "Current counts are on the plan card and in This request." } : null;
+}
 
 export type CompactFigure = { label: string; value: string };
 export type CompactEvent = { title: string; figures: CompactFigure[]; tone: "neutral" | "good" | "warning" | "bad"; note: string | null };

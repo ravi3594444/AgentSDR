@@ -4,7 +4,7 @@ import { assemblePeriodMetrics, summarizeLeadSources, windowJson, type CurrentCo
 import { localDate, ORGANIZATION_SCOPE, periodFor, scopeIsEmpty, scopeLabel, type ResultsScope } from "./results";
 import { resultsText, type Results } from "./results.server";
 
-const closed = { open: false, blockedBy: "nothing_queued" as const, nextOpenAt: null, nextOpenLabel: null, hours: null, queued: 0 };
+const closed = { open: false, blockedBy: "nothing_queued" as const, queued: 0 };
 
 const nothingNow: CurrentCounts = {
   at: "2026-10-18T20:00:00.000Z",

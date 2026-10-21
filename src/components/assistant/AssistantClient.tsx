@@ -42,6 +42,7 @@ import * as Button from "@/components/alignui/button";
 import NeedsYouList from "@/components/assistant/NeedsYouList";
 import { RequestBar, RequestPanel, useThreadRequest } from "@/components/assistant/RequestPanel";
 import { EventRow } from "@/components/assistant/EventRow";
+import { reportAsOf } from "@/lib/assistant/chatEvents";
 import { hostOf, ProspectsList } from "@/components/assistant/ProspectsList";
 import { reportAudiences, reportLinks } from "@/lib/assistant/leadLists";
 import { useChatScroll } from "./useChatScroll";
@@ -90,7 +91,7 @@ type Job = {
 
 type RunReply = { id: string; conversationId: string; who: string; channel: string; receivedAt: string; preview: string; state: { tone: "done" | "waiting" | "you" | "failed"; text: string; at?: string; release?: boolean } };
 
-type RunLead = { personId: string; who: string; channel: string; progress: { tone: "waiting" | "sent" | "replied" | "good" | "stopped" | "failed"; text: string }; /** Contacted and replied, kept after a stop (runLeads.ts leadReach). */ reach?: { contacted: boolean; replied: boolean }; /** Its channel engine may still send it something (runLeads.ts leadOpen). */ open?: boolean };
+type RunLead = { personId: string; who: string; channel: string; progress: { tone: "waiting" | "sent" | "replied" | "good" | "stopped" | "failed"; text: string }; /** Contacted and replied, kept after a stop (runLeads.ts leadReach). */ reach?: { contacted: boolean; replied: boolean }; /** Its channel engine may still send it something (runLeads.ts leadOpen). */ open?: boolean; /** An email lead's next follow-up, while it is ahead (runLeads.ts leadTiming). */ nextAt?: string | null };
 
 type Run = { id: string; status: string; autopilot: boolean; error: string | null; campaigns: Record<string, string>; replies?: RunReply[]; leads?: RunLead[]; /** Other plans of the same request, and its searches still running. */ requestPeers?: number; /** The plan as stored now (people left out at a start are gone from it). */ plan?: ProposalData["plan"]; /** Who authorized it to send, and how (runEvidence.ts). */ authorization?: RunAuthorization };
 
@@ -347,7 +348,7 @@ function AutonomousSwitch({ thread, canManage, onChanged }: { thread: AssistantS
   const [busy, setBusy] = useState(false);
   const on = Boolean(thread.autonomous);
   async function toggle() {
-    if (!on && !window.confirm("Turn on Autonomous mode for this chat?\n\nThe assistant will work without asking you. Plans it prepares start on their own in Automatic mode, so it messages leads you have not reviewed, within your daily caps (Settings → Sending defaults) and each channel's sending limits.\n\nYou can turn it off at any time.")) return;
+    if (!on && !window.confirm("Turn on Autonomous mode for this chat?\n\nThe assistant will work without asking you. Plans it prepares start on their own in Automatic mode, so it messages leads you have not reviewed, within your daily lead limit (Settings → Daily lead limit) and each channel's own limits.\n\nYou can turn it off at any time.")) return;
     setBusy(true);
     try {
       const response = await fetch("/api/assistant/threads", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ threadId: thread.id, autonomous: !on }) });
@@ -363,7 +364,7 @@ function AutonomousSwitch({ thread, canManage, onChanged }: { thread: AssistantS
   const locked = !on && !canManage;
   const title = on
     ? "Autonomous: the assistant works without asking and starts plans on its own. Click to turn it off."
-    : locked ? "Only an owner or admin can turn on Autonomous mode." : "Let the assistant work without asking: plans start on their own in Automatic mode, within your daily caps.";
+    : locked ? "Only an owner or admin can turn on Autonomous mode." : "Let the assistant work without asking: plans start on their own in Automatic mode, within your daily lead limit.";
   return (
     <button type="button" role="switch" aria-checked={on} aria-label="Autonomous mode" title={title} disabled={busy || locked} onClick={() => void toggle()} data-testid="autonomous-switch"
       className={cn("inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-label-xs ring-1 ring-inset transition-colors", on ? "bg-primary-base text-primary-contrast ring-primary-base" : "text-text-sub-600 ring-stroke-soft-200 hover:bg-bg-weak-50", (busy || locked) && "opacity-60")}>
@@ -448,8 +449,8 @@ function ProposalCard({ message, run, canManageAutopilot, lastReplyMode, onChang
           plan.limits.emailPerMailboxPerDay ? `${plan.limits.emailPerMailboxPerDay} emails per mailbox` : null,
           plan.limits.whatsappNewChatsPerDay ? `${plan.limits.whatsappNewChatsPerDay} new WhatsApp chats per number in 24 hours, shared with its other campaigns` : null,
           plan.limits.instagramNewChatsPerDay ? `${plan.limits.instagramNewChatsPerDay} initial Instagram DMs per account in 24 hours` : null,
-          perChannel.linkedin ? "each LinkedIn account's own invitation limit and working hours (Sending status shows them)" : null,
-        ].filter(Boolean).join(", ") || "the connected channels' limits"}. Sending rules, sending hours and Do Not Contact apply. Sending uses your own accounts.
+          perChannel.linkedin ? "each LinkedIn account's own invitation limit (Sending status shows it)" : null,
+        ].filter(Boolean).join(", ") || "the connected channels' limits"}, within your daily lead limit. Messages go out at any time of day; Do Not Contact applies. Sending uses your own accounts.
         {perChannel.instagram ? " Instagram sends one initial DM; replies follow the reply mode you choose." : ""}
       </p>
       <p className="mt-1 text-paragraph-xs text-text-sub-600" data-testid="plan-channel-scope">
@@ -598,7 +599,7 @@ function SendingStatus({ runId }: { runId: string }) {
                 <p className="text-text-sub-600">
                   {sender.gates.length ? sender.gates.join("; ") : sender.queued === 0 ? "No leads waiting" : "No recorded gate is holding it"}.
                   {sender.nextAt && <> Next send allowed {state.displayTimeZone ? displayTime(new Date(sender.nextAt), new Date(state.at), state.displayTimeZone) : formatChatDateTime(sender.nextAt, timeZone)}.</>}
-                  {" "}{sender.timezone ? `Sending hours in ${sender.timezone}.` : "No sending hours set: any time."}
+                  {" "}Sends at any time of day{sender.timezone ? `; its daily count resets at midnight ${sender.timezone}` : ""}.
                   {sender.note && <> {sender.note}</>}
                 </p>
                 {sender.limits && <p className="text-text-sub-600">{sender.limits}</p>}
@@ -607,7 +608,7 @@ function SendingStatus({ runId }: { runId: string }) {
             ))}
           </ul>
           {state.notCovered.length > 0 && <p className="text-text-soft-400">Not covered here: {state.notCovered.map((channel) => CHANNEL_LABEL[channel] ?? channel).join(", ")}.</p>}
-          <p className="text-text-soft-400">Checked {formatChatTime(state.at, timeZone)} from the recorded settings and queues.{state.displayTimeZone && <> Times are in {state.displayTimeZone}, the organization&apos;s time zone; sending hours use each sender&apos;s own zone, and where leads are does not change either.</>} It does not prove the sender is running; a send is confirmed only when the provider accepts it. Next times are estimates; every gate is checked again at send time.
+          <p className="text-text-soft-400">Checked {formatChatTime(state.at, timeZone)} from the recorded settings and queues.{state.displayTimeZone && <> Times are in {state.displayTimeZone}, the organization&apos;s time zone; where leads are does not change it.</>} It does not prove the sender is running; a send is confirmed only when the provider accepts it. Next times are estimates; every gate is checked again at send time.
             {" "}<button type="button" className="underline underline-offset-2" onClick={() => void load()}>Check again</button></p>
         </div>
       )}
@@ -740,6 +741,7 @@ const CARD_LEADS = 200;
 
 /** Every lead of a started run and where it stands: waiting, sent, replied (and how), stopped or failed. */
 function LeadsList({ leads, running }: { leads: RunLead[]; running: boolean }) {
+  const timeZone = useContext(DisplayTimeZone);
   // The same counts as Activity (planCounts): a stopped lead that was messaged was still contacted.
   const { contacted, replied, failed } = planCounts(leads);
   const interested = leads.filter((lead) => lead.progress.tone === "good").length;
@@ -756,7 +758,7 @@ function LeadsList({ leads, running }: { leads: RunLead[]; running: boolean }) {
         {leads.map((lead) => (
           <li key={`${lead.personId}-${lead.channel}`} className="flex flex-wrap items-baseline justify-between gap-x-3">
             <span className="min-w-0 truncate text-text-strong-950">{lead.who} <span className="text-text-soft-400">· {CHANNEL_LABEL[lead.channel] ?? lead.channel}</span></span>
-            <span className={tone[lead.progress.tone]}>{lead.progress.text}</span>
+            <span className={tone[lead.progress.tone]}>{lead.progress.text}{lead.nextAt && <span className="text-text-soft-400"> · next follow-up <time dateTime={lead.nextAt}>{formatChatDateTime(lead.nextAt, timeZone)}</time></span>}</span>
           </li>
         ))}
       </ul>
@@ -803,6 +805,13 @@ function RepliesList({ replies, onChanged }: { replies: RunReply[]; onChanged: (
 
 type ResultsData = { period: { label: string; timeZone: string }; outreach: Record<string, number>; attention: { repliesWaiting: number; openDecisions: number }; leads: Record<string, number | unknown> };
 
+/** "As of …" under a report card: its counts are a snapshot; the current ones are on the plan card and in This request. */
+function AsOf({ message }: { message: Message }) {
+  const timeZone = useContext(DisplayTimeZone);
+  const asOf = reportAsOf(message, timeZone);
+  return asOf ? <p className="mt-2 text-paragraph-xs text-text-soft-400" data-testid="report-as-of">{asOf.label}. {asOf.pointer}</p> : null;
+}
+
 function ReportCard({ message }: { message: Message }) {
   const data = message.toolResult?.data as { results?: ResultsData; name?: string; status?: string; channels?: { channel: string; contacted: number; messagesSent: number | null; replied: number; finished: number; stopped: number }[] } | undefined;
   if (data?.results) {
@@ -810,10 +819,11 @@ function ReportCard({ message }: { message: Message }) {
       <Card title={`Results: ${data.results.period.label}`} status={message.status}>
         <p className="whitespace-pre-wrap text-paragraph-xs">{message.content.split("\n").slice(1).join("\n")}</p>
         <Link href="/assistant/reports" className="mt-2 inline-flex items-center gap-1 text-label-xs text-primary-base hover:underline">Open Reports <RiExternalLinkLine className="size-3.5" /></Link>
+        <AsOf message={message} />
       </Card>
     );
   }
-  if (!data?.channels) return <Card title={TOOL_TITLE.report!} status={message.status}><p>{message.content}</p></Card>;
+  if (!data?.channels) return <Card title={TOOL_TITLE.report!} status={message.status}><p>{message.content}</p><AsOf message={message} /></Card>;
   return (
     <Card title={`Report: ${data.name ?? ""} (${data.status ?? ""})`} status={message.status}>
       <div className="overflow-x-auto">
@@ -826,6 +836,7 @@ function ReportCard({ message }: { message: Message }) {
           </tbody>
         </table>
       </div>
+      <AsOf message={message} />
     </Card>
   );
 }
@@ -927,7 +938,7 @@ function ToolMessage({ message, jobs, runs, decisions, canManageAutopilot, lastR
   const data = message.toolResult?.data as Record<string, unknown> | undefined;
   if (message.tool === "owner_decision") return <DecisionCard message={message} state={decisions[String(data?.decisionId ?? "")]} onChanged={onChanged} />;
   if (message.tool === "daily_summary") {
-    return <Card title={`Daily summary · ${String(data?.day ?? "")}`} status={message.status}><p className="whitespace-pre-wrap text-paragraph-xs">{message.content.split("\n").slice(1).join("\n")}</p></Card>;
+    return <Card title={`Daily summary · ${String(data?.day ?? "")}`} status={message.status}><p className="whitespace-pre-wrap text-paragraph-xs">{message.content.split("\n").slice(1).join("\n")}</p><AsOf message={message} /></Card>;
   }
   if (message.tool === "find_leads" || message.tool === "find_linkedin_leads" || message.tool === "find_customers_on_web" || message.tool === "find_instagram_prospects" || message.tool === "find_social_leads") return <DiscoveryCard message={message} job={jobs.find((job) => job.id === data?.jobId)} />;
   if (message.tool === "prepare_outreach") return <ProposalCard message={message} run={runs[String(data?.runId ?? "")]} canManageAutopilot={canManageAutopilot} lastReplyMode={lastReplyMode} onChanged={onChanged} />;
@@ -1305,7 +1316,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
     if (message.role === "event") {
       // Only the newest event can offer Retry: an older failure was already followed by more work.
       const retry = message.toolResult?.data?.retry === true && message.id === shown.at(-1)?.id;
-      const row = <EventRow key={message.id} content={message.content} toolResult={message.toolResult} links={reportLinks(eventLinks(message), state.thread.id)} retry={retry} retryDisabled={sending || state.busy} onRetry={() => void retryTurn()} />;
+      const row = <EventRow key={message.id} content={message.content} toolResult={message.toolResult} links={reportLinks(eventLinks(message), state.thread.id)} retry={retry} retryDisabled={sending || state.busy} onRetry={() => void retryTurn()} asOf={reportAsOf(message, timeZone)} />;
       // A request's final report: the lists of its searches, each opening here as under its card.
       const lists = reportAudiences(message.toolResult?.data, state.jobs);
       if (!lists.length) return row;

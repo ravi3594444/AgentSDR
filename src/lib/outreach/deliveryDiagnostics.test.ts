@@ -23,15 +23,18 @@ test("a mailbox with the default (always-open) hours is never outside its hours,
   expect(emailDeliveryGates(mailbox, input)).toEqual([]);
   expect(emailDeliveryGates(mailbox, { ...input, now: new Date("2026-10-17T11:00:00Z") })).toEqual([]);
 });
-test("reports a legacy mailbox's restricted hours, as long as the send tick still reads them", () => {
+test("a legacy mailbox's restricted hours hold nothing: the send tick no longer reads them", () => {
   const legacy = { ...mailbox, workingHours: mailboxHoursFromWeekly({ timezone: "Asia/Kolkata", days: [1, 2, 3, 4, 5], start: "09:00", end: "18:00" }) };
   expect(emailDeliveryGates(legacy, input)).toEqual([]);
-  const gates = emailDeliveryGates(legacy, {
-    ...input,
-    now: new Date("2026-10-17T11:00:00Z"),
-  });
-  expect(gates.map((g) => g.code)).toEqual(["hours"]);
-  expect(gates[0]?.reason).toContain("Asia/Kolkata");
+  expect(emailDeliveryGates(legacy, { ...input, now: new Date("2026-10-17T11:00:00Z") })).toEqual([]);
+});
+test("the pause between sends is written in the display time zone, to the second, never as an ISO time; the queue in plain words", () => {
+  const gates = emailDeliveryGates({ ...mailbox, nextEmailTime: new Date("2026-10-21T16:24:42.353Z") }, { ...input, activeQueue: 0, now: new Date("2026-10-21T16:10:00Z"), displayTimeZone: "Asia/Kolkata" });
+  expect(gates).toEqual([
+    { code: "gap", reason: "Pausing between sends until 21:54:42 (Asia/Kolkata)" },
+    { code: "queue", reason: "No email of an active campaign is in this mailbox's send queue" },
+  ]);
+  expect(JSON.stringify(gates)).not.toMatch(/\d{4}-\d\d-\d\dT|send tick/);
 });
 test("reports all recorded blockers without treating a stale daily counter as today's usage", () => {
   const blocked = {

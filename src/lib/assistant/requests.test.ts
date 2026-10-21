@@ -39,8 +39,17 @@ describe("the next step: the first that applies", () => {
     expect(nextActionFor({ ...quiet, senderProblem: "the mailbox is disconnected", waitingUntil: { at: "x", label: "9:00", reason: null } })).toMatchObject({ kind: "fix_sender", href: "/getting-started", detail: "the mailbox is disconnected" });
   });
 
-  test("then waiting for a sender's hours, with the time", () => {
-    expect(nextActionFor({ ...quiet, waitingUntil: { at: "2026-10-21T09:00:00Z", label: "Tue 9:00", reason: "every sender is outside its sending hours" }, researching: true })).toMatchObject({ kind: "wait", label: "Waiting until Tue 9:00", detail: "every sender is outside its sending hours" });
+  test("then waiting for a sender or the daily lead limit, with the time", () => {
+    const limit = "Daily lead limit reached (50 of 50 new leads today); resets Wednesday 22 Oct at 00:00 (Asia/Kolkata)";
+    expect(nextActionFor({ ...quiet, waitingUntil: { at: "2026-10-21T18:30:00Z", label: "Wed 22 Oct 00:00 (Asia/Kolkata)", reason: limit }, researching: true })).toMatchObject({ kind: "wait", label: "Waiting until Wed 22 Oct 00:00 (Asia/Kolkata)", detail: limit });
+  });
+
+  test("every lead sent and waiting on a later follow-up: waiting for a reply, with when the next follow-up goes", () => {
+    const followUpAt = { at: "2026-10-23T16:24:42.353Z", label: "Fri 23 Oct 21:54 (Asia/Kolkata)" };
+    expect(nextActionFor({ ...quiet, open: true, followUpAt })).toEqual({ kind: "wait", label: "Waiting for a reply", href: null, detail: "Next follow-up Fri 23 Oct 21:54 (Asia/Kolkata)." });
+    // Research still running comes first; a plan sending without a follow-up time is just sending.
+    expect(nextActionFor({ ...quiet, open: true, researching: true, followUpAt }).kind).toBe("research");
+    expect(nextActionFor({ ...quiet, open: true }).detail).toBe("Messages go out within each channel's daily limits.");
   });
 
   test("then a paused plan, then research, then sending", () => {

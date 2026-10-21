@@ -1246,7 +1246,7 @@ export const TOOLS: Record<string, Tool> = {
   },
 
   diagnose_delivery: {
-    description: "Explain queued email and Instagram outreach using recorded sender settings, active queues, campaign/run status, sending hours and timezone, throttling, capacity and recent delivery failures. Read-only; does not change limits, rebuild a queue, send messages or measure worker liveness. Use once when asked why messages are not sending; report unknowns instead of guessing.",
+    description: "Explain queued email and Instagram outreach using recorded sender settings, active queues, campaign/run status, the daily lead limit, throttling, capacity and recent delivery failures (sending is always on: no sender has sending hours). Read-only; does not change limits, rebuild a queue, send messages or measure worker liveness. Use once when asked why messages are not sending; report unknowns instead of guessing.",
     arguments: "runId (optional: diagnose a specific run; otherwise the organization's current senders and campaigns)",
     run: async (args) => {
       const diagnostics = await diagnoseDelivery(uuid(args, "runId", false));

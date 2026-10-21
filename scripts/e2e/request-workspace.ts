@@ -178,7 +178,7 @@ await runInOrganization(a!.id, async () => {
 
   const planChild = chat!.children.plans.find((item) => item.runId === seeded.plan.id)!;
   const senderStep = ["fix_sender", "wait", "research"].includes(chat!.nextAction.kind);
-  check("while it sends, the next step follows the plan's sender state", senderStep && (planChild.state === "waiting_send" || planChild.state === "outside_hours" ? chat!.blocker === planChild.reason : true), `${chat!.nextAction.kind} / ${planChild.state} / ${chat!.blocker}`);
+  check("while it sends, the next step follows the plan's sender state", senderStep && (planChild.state === "waiting_send" ? chat!.blocker === planChild.reason : true), `${chat!.nextAction.kind} / ${planChild.state} / ${chat!.blocker}`);
   await setRunPaused(seeded.plan.id, true);
   const paused = await requestSummary(requestKey);
   check("paused: the next step is to resume it", paused?.nextAction.kind === "paused" && paused.nextAction.label.includes("Chicago dentists"), paused?.nextAction.label);

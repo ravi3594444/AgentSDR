@@ -46,6 +46,12 @@ const { buildMailboxQueues, rebuildEmailQueue } = await import("@/lib/outreach/b
 const { runSchedulerTick } = await import("@/lib/outreach/scheduler");
 const { saveChannelRules } = await import("@/lib/channels/rules.server");
 const { newLeadsToday } = await import("@/lib/channels/dailyLeadLimit.server");
+const { outreachRuns, outreachRunLeads } = await import("@/lib/assistant/schema");
+const { createAudience } = await import("@/lib/assistant/audiences.server");
+const { listWork } = await import("@/lib/activity/activity.server");
+const { runLeads } = await import("@/lib/assistant/runLeads.server");
+const { diagnoseDelivery } = await import("@/lib/assistant/deliveryDiagnostics.server");
+type OutreachPlan = import("@/lib/assistant/schema").OutreachPlan;
 const { ingestInboundReply } = await import("@/lib/crm/conversations");
 const { gridProviderCredentials, gridProviders } = await import("@/lib/grid/schema");
 const { encryptIntegrationCredentials } = await import("@/lib/integrations/credentials");
@@ -84,7 +90,9 @@ await runInOrganization(org!.id, async () => {
     firstName: r.name,
     source: "engine-check",
   }))).returning();
-  const leads = await db.insert(outreachLeads).values(persons.map((p) => ({ personId: p.id, campaignId: campaign.id }))).returning();
+  // One at a time: first emails are queued oldest first, and rows written by one statement share its time.
+  const leads: (typeof outreachLeads.$inferSelect)[] = [];
+  for (const p of persons) leads.push((await db.insert(outreachLeads).values({ personId: p.id, campaignId: campaign.id }).returning())[0]!);
   const leadOf = (name: string) => leads[recipients.findIndex((r) => r.name === name)]!;
 
   const before = emailLaunchProblems(await emailLaunchFacts({ id: campaign.id, sequence: parsed.sequence }));
@@ -413,6 +421,44 @@ await runInOrganization(org!.id, async () => {
     check("neither the replied lead nor an already-claimed step is sent again", waSent.length === 2, `${waSent.length} sends`);
     const [secondAfter] = await db.select().from(whatsappCampaignLeads).where(eq(whatsappCampaignLeads.id, second!.id));
     check("an already-sent claim advances the lead instead", secondAfter?.currentStep === 2 && secondAfter.status === "completed", `${secondAfter?.status} step ${secondAfter?.currentStep}`);
+
+    // ---------------------------------------- P04: an email plan's state, from its leads first
+    // The mailbox sends through Unipile now (connected above), so no sender problem hides the lead's own state.
+    await updateWhatsappCampaign(waCampaign.id, { status: "paused" });
+    const pausedUntil = new Date(Date.now() + 20 * 60_000);
+    await db.update(mailboxes).set({ status: "connected", provider: "unipile", unipileAccountId: `engine-check-mail-${stamp}`, nextEmailTime: pausedUntil }).where(eq(mailboxes.id, mailbox!.id));
+    await db.delete(outreachMailboxQueue).where(eq(outreachMailboxQueue.mailboxId, mailbox!.id));
+    await setCampaignStatus(campaign.id, "active");
+    const audienceId = await createAudience({ name: "Engine check P04", source: "list" });
+    const [plan] = await db.insert(outreachRuns).values({ organizationId, audienceId, name: "Direct email lead", status: "running", channels: ["email"], campaigns: { email: campaign.id }, plan: { assignments: [] } as unknown as OutreachPlan, autopilot: false }).returning();
+    await db.insert(outreachRunLeads).values({ organizationId, runId: plan!.id, personId: ahead.lead.personId, channel: "email" });
+    const planNow = async () => (await listWork(new Date(), { runIds: [plan!.id] })).find((item) => item.id === plan!.id);
+    const followUpAt = (await leadNow(ahead.lead.id)).nextSendAt!.toISOString();
+    const live = await planNow();
+    check("the live case: first email sent, its follow-up days away, an empty queue and a pause between sends read Scheduled with the follow-up's time",
+      live?.state === "scheduled" && live.stateLabel === "Scheduled" && live.reason === "1 contacted — waiting for a reply" && live.nextAt === followUpAt, `${live?.state}: ${live?.reason} ${live?.nextAt} (follow-up ${followUpAt})`);
+    const [liveLead] = (await runLeads([plan!.id]))[plan!.id] ?? [];
+    check("…the lead says First email sent — waiting for a reply, with its next follow-up", liveLead?.progress.text === "First email sent — waiting for a reply" && liveLead.nextAt === followUpAt && liveLead.queued === false, JSON.stringify(liveLead));
+    const sender = (await diagnoseDelivery(plan!.id)).senders.find((entry) => entry.channel === "email");
+    check("…its mailbox shows no hold: the pause and the empty queue are technical details", sender?.gates.length === 0 && sender.details.some((line) => line.startsWith("Pausing between sends until")) && sender.details.some((line) => /send queue/.test(line)), JSON.stringify(sender));
+
+    const due = await extraLead("zed");
+    await db.insert(outreachRunLeads).values({ organizationId, runId: plan!.id, personId: due.lead.personId, channel: "email" });
+    const missing = await planNow();
+    check("a first email due with nothing in the queue: not prepared yet, prepared again automatically (never a cooldown)", missing?.state === "waiting_send" && missing.reason === "1 due message is not prepared for sending yet; it is prepared again automatically" && missing.nextAt === null, `${missing?.state}: ${missing?.reason}`);
+    await db.insert(outreachMailboxQueue).values({ mailboxId: mailbox!.id, leadId: due.lead.id, position: 0 });
+    const cooling = await planNow();
+    check("…once it is queued, the pause between sends that delays it shows, with when it ends", cooling?.state === "waiting_send" && /^no sender can send right now: Pausing between sends until \d\d:\d\d:\d\d \(/.test(cooling.reason ?? "") && cooling.nextAt === pausedUntil.toISOString(), `${cooling?.state}: ${cooling?.reason} ${cooling?.nextAt}`);
+    await db.delete(outreachMailboxQueue).where(eq(outreachMailboxQueue.mailboxId, mailbox!.id));
+    const usedNow = await newLeadsToday();
+    await saveChannelRules("general", { newLeadsPerDay: Math.max(1, usedNow.used) }, null);
+    const limited = await planNow();
+    const limitDay = await newLeadsToday();
+    check("the daily lead limit reached shows as its own state, with the reset time", limited?.state === "daily_lead_limit" && limited.stateLabel === "Daily lead limit reached" && Boolean(limited.reason?.startsWith("Daily lead limit reached (")) && limited.nextAt === limitDay.resetsAt.toISOString(), `${limited?.state}: ${limited?.reason} ${limited?.nextAt}`);
+    await saveChannelRules("general", { newLeadsPerDay: 50 }, null);
+    await db.update(outreachRuns).set({ status: "stopped" }).where(eq(outreachRuns.id, plan!.id));
+    await setCampaignStatus(campaign.id, "paused");
+    await db.update(mailboxes).set({ status: "disabled" }).where(eq(mailboxes.id, mailbox!.id));
   } finally {
     await updateWhatsappCampaign(waCampaign.id, { status: "paused" }).catch(() => {});
     await db.delete(gridProviders).where(eq(gridProviders.id, provider!.id));

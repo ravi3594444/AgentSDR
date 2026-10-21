@@ -1,8 +1,3 @@
-import {
-  describeOpening,
-  describeWorkingHours,
-  workingWindow,
-} from "@/lib/channels/sendingWindow";
 import { emailDeliveryGates } from "@/lib/outreach/deliveryDiagnostics";
 import { isSameLocalDay } from "@/lib/outreach/workingHours";
 import type { ChannelSending } from "./results";
@@ -27,10 +22,14 @@ export function mailboxDailyRoom(
   return Math.max(0, mailbox.dailySendLimit - used);
 }
 
-/** A sender must pass its own gates; capacity from another mailbox cannot help it. */
+/**
+ * A sender must pass its own gates; capacity from another mailbox cannot
+ * help it. Sending is always on, so only the gap between sends, the daily
+ * limit and the connection can hold a mailbox with emails due.
+ */
 export function emailSendingStatus(
   mailboxes: readonly MailboxSnapshot[],
-  input: { now: Date; paused: boolean },
+  input: { now: Date; paused: boolean; displayTimeZone?: string },
 ): ChannelSending {
   const snapshots = mailboxes.map((mailbox) => ({
     mailbox,
@@ -39,7 +38,6 @@ export function emailSendingStatus(
       activeQueue: mailbox.activeQueue,
       providerConnected: mailbox.providerConnected,
     }),
-    window: workingWindow(mailbox.workingHours, input.now),
   }));
   const connected = snapshots.filter(
     ({ gates }) =>
@@ -56,49 +54,23 @@ export function emailSendingStatus(
   else if (!queued.some(({ gates }) => gates.length === 0)) {
     const allHave = (code: string) =>
       queued.every(({ gates }) => gates.some((g) => g.code === code));
-    blockedBy = allHave("hours")
-      ? "outside_hours"
-      : allHave("capacity")
-        ? "daily_limit"
-        : allHave("gap")
-          ? "throttled"
-          : "sender_checks";
+    blockedBy = allHave("capacity")
+      ? "daily_limit"
+      : allHave("gap")
+        ? "throttled"
+        : "sender_checks";
   }
-  const next = queued
-    .filter(({ window }) => window.opensAt)
-    .sort(
-      (a, b) => a.window.opensAt!.getTime() - b.window.opensAt!.getTime(),
-    )[0];
-  const governing = next ?? queued[0];
   const details = [
     ...new Set(
       snapshots
         .filter(({ mailbox }) => mailbox.activeQueue > 0)
-        .flatMap(({ gates }) =>
-          gates.filter((g) => g.code !== "hours").map((g) => g.reason),
-        ),
+        .flatMap(({ gates }) => gates.map((g) => g.reason)),
     ),
   ];
   return {
     open: blockedBy === null,
     blockedBy,
     queued: mailboxes.reduce((sum, m) => sum + m.activeQueue, 0),
-    nextOpenAt:
-      blockedBy === "outside_hours"
-        ? (next?.window.opensAt?.toISOString() ?? null)
-        : null,
-    nextOpenLabel:
-      blockedBy === "outside_hours" && next?.window.opensAt
-        ? describeOpening(
-            next.window.opensAt,
-            next.mailbox.workingHours.timezone,
-          )
-        : null,
-    hours: governing
-      ? describeWorkingHours(governing.mailbox.workingHours)
-      : null,
-    ...(blockedBy === "sender_checks" || blockedBy === "outside_hours"
-      ? { detail: details.join("; ") }
-      : {}),
+    ...(blockedBy === "sender_checks" ? { detail: details.join("; ") } : {}),
   };
 }

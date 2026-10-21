@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { canCancelJob, failedSummary, jobState, OPEN_STATES, planCounts, planOutcome, planState, REPLY_STATE_LABELS, repliesSeenUntil, replyState, runState, WORK_STATE_LABELS, type JobFacts, type PlanLead } from "./status";
+import { canCancelJob, failedSummary, jobState, nextAtPhrase, OPEN_STATES, planCounts, planOutcome, planState, REPLY_STATE_LABELS, repliesSeenUntil, replyState, runState, WORK_STATE_LABELS, type JobFacts, type PlanLead } from "./status";
 import type { SenderStatus } from "@/lib/assistant/runEvidence";
 
 const now = new Date("2026-10-18T12:00:00Z");
@@ -118,25 +118,20 @@ describe("partial work and sending hours are told apart from done and working", 
     expect(OPEN_STATES.has("partial")).toBe(false);
   });
 
-  const sender = (gates: string[], nextAt: string | null = null, queued = 3): SenderStatus => ({ channel: "whatsapp", account: "+91 98220 11111", timezone: "Asia/Kolkata", gates, nextAt, queued, note: null, limits: null, details: [] });
+  const sender = (gates: string[], nextAt: string | null = null, queued = 3): SenderStatus => ({ channel: "whatsapp", account: "+91 98220 11111", timezone: null, gates, nextAt, queued, note: null, limits: null, details: [] });
 
-  test("a running plan whose every sender is outside its hours says so, with the earliest next send", () => {
-    const linkedinAccount: SenderStatus = { ...sender(["Outside working hours (Mon–Fri 09:00–18:00 America/New_York)"], "2026-10-18T13:00:00.000Z"), channel: "linkedin", account: "Ravi" };
-    const state = planState({ status: "running", error: null, senders: [sender(["Outside campaign sending hours (Asia/Kolkata)"], "2026-10-19T03:30:00.000Z"), linkedinAccount] });
-    expect(state).toEqual({ state: "outside_hours", reason: "every sender is outside its sending hours", open: true, nextAt: "2026-10-18T13:00:00.000Z" });
-    expect(WORK_STATE_LABELS.outside_hours).toBe("Outside sending hours");
+  test("sending is always on: there is no outside-hours state", () => {
+    expect(Object.keys(WORK_STATE_LABELS)).not.toContain("outside_hours");
+    expect(Object.values(WORK_STATE_LABELS).join(" ")).not.toMatch(/hours/i);
   });
 
-  test("outside its hours and also held by something with no known end (a disconnection) names every hold, not only the hours", () => {
-    const held = planState({ status: "running", error: null, senders: [sender(["Unipile is disconnected", "Outside working hours (Mon–Fri 09:00–18:00 UTC)"], null)] });
-    expect(held).toEqual({ state: "waiting_send", reason: "no sender can send right now: Unipile is disconnected; Outside working hours (Mon–Fri 09:00–18:00 UTC)", open: true, nextAt: null });
-  });
-
-  test("one sender inside its hours keeps the plan working; every sender held by something else is waiting to send, not working, and names the holds", () => {
-    expect(planState({ status: "running", error: null, senders: [sender(["Outside campaign sending hours (Asia/Kolkata)"]), sender([])] }).state).toBe("executing");
-    const held = planState({ status: "running", error: null, senders: [sender(["Daily limit of 25 new chats used"], "2026-10-19T03:30:00.000Z")] });
-    expect(held).toEqual({ state: "waiting_send", reason: "no sender can send right now: Daily limit of 25 new chats used", open: true, nextAt: "2026-10-19T03:30:00.000Z" });
+  test("one sender with nothing holding it keeps the plan working; every sender held is waiting to send, not working, and names the holds", () => {
+    expect(planState({ status: "running", error: null, senders: [sender(["Unipile is disconnected"]), sender([])] }).state).toBe("executing");
+    const held = planState({ status: "running", error: null, senders: [sender(["25 of 25 new chats used in the last 24 hours"], "2026-10-19T03:30:00.000Z")] });
+    expect(held).toEqual({ state: "waiting_send", reason: "no sender can send right now: 25 of 25 new chats used in the last 24 hours", open: true, nextAt: "2026-10-19T03:30:00.000Z" });
     expect(WORK_STATE_LABELS.waiting_send).toBe("Waiting to send");
+    const disconnected = planState({ status: "running", error: null, senders: [sender(["Unipile is disconnected", "The number is disconnected"], null)] });
+    expect(disconnected).toEqual({ state: "waiting_send", reason: "no sender can send right now: Unipile is disconnected; The number is disconnected", open: true, nextAt: null });
   });
 
   test("a running plan with a channel that failed to launch is partial and still open; without senders it is working", () => {
@@ -167,7 +162,7 @@ describe("a running plan with nothing left to send says how it ended, never that
     const state = running([waiting(), waiting()], [sender(2)]);
     expect(state.state).toBe("executing");
     expect(state.open).toBe(true);
-    expect(state.reason).toContain("sending within each channel's hours");
+    expect(state.reason).toContain("sending within each channel's daily limits");
   });
 
   test("its only lead rejected by WhatsApp: failed, with the recorded reason and 0 contacted; nothing left to send", () => {
@@ -181,7 +176,7 @@ describe("a running plan with nothing left to send says how it ended, never that
     const state = running(leads, [sender(6)]);
     expect(state.state).toBe("executing");
     expect(state.open).toBe(true);
-    expect(state.reason).toBe("sending within each channel's hours and daily limits; sent messages show in Replies and Overview; 6 failed (WhatsApp rejected this recipient) so far");
+    expect(state.reason).toBe("sending within each channel's daily limits; sent messages show in Replies and Overview; 6 failed (WhatsApp rejected this recipient) so far");
     expect(planCounts(leads)).toEqual({ leads: 12, contacted: 6, replied: 0, failed: 6 });
   });
 
@@ -218,6 +213,68 @@ describe("a running plan with nothing left to send says how it ended, never that
     expect(planState({ status: "paused", error: null, senders: null, leads: [failed()] }).state).toBe("paused");
     expect(planState({ status: "stopped", error: null, senders: null, leads: [failed()] }).state).toBe("completed");
   });
+});
+
+// P04: the lead's real delivery state first. The live "Direct email lead"
+// case: its first email went out, its follow-up is days away, the queue is
+// empty, and the mailbox is pausing between sends. That is a plan waiting for
+// a reply with a follow-up scheduled, not "no sender can send right now".
+describe("an email plan says where its leads stand before what its senders are doing", () => {
+  const at = new Date("2026-10-21T16:30:00Z");
+  const followUp = "2026-10-23T16:24:42.353Z";
+  const mailbox = (gates: string[], queued: number, nextAt: string | null = null): SenderStatus => ({ channel: "email", account: "ravi@leadx.example", timezone: "Asia/Kolkata", gates, nextAt, queued, note: null, limits: null, details: [] });
+  const sentLead = (nextAt: string | null, queued = false): PlanLead => ({ progress: { tone: "sent", text: "First email sent — waiting for a reply" }, reach: { contacted: true, replied: false }, open: true, nextAt, queued, firstMessage: false });
+  const pendingLead = (queued: boolean): PlanLead => ({ progress: { tone: "waiting", text: "Waiting to send" }, reach: { contacted: false, replied: false }, open: true, nextAt: null, queued, firstMessage: true });
+  const running = (leads: PlanLead[], senders: SenderStatus[]) => planState({ status: "running", error: null, senders, leads, now: at });
+
+  test("the Direct email lead case: sent, a later follow-up, a gap and an empty queue read 'scheduled' with the follow-up's time", () => {
+    const gates = ["Next send is allowed at 2026-10-21T16:24:42.353Z", "No send is in this mailbox's queue for an active campaign; the send tick does not build the queue"];
+    expect(running([sentLead(followUp)], [mailbox(gates, 0, "2026-10-21T16:44:42.353Z")])).toEqual({ state: "scheduled", reason: "1 contacted — waiting for a reply", open: true, nextAt: followUp });
+    expect(WORK_STATE_LABELS.scheduled).toBe("Scheduled");
+    // The earliest follow-up of several, and the plan's failures still counted.
+    const later = "2026-10-25T09:00:00.000Z";
+    const failed: PlanLead = { progress: { tone: "failed", text: "Could not send: Gmail answered 550" }, reach: { contacted: false, replied: false }, open: false };
+    expect(running([sentLead(later), sentLead(followUp), failed], [mailbox([], 0)])).toEqual({ state: "scheduled", reason: "2 contacted — waiting for a reply; 1 failed (Gmail answered 550) so far", open: true, nextAt: followUp });
+  });
+
+  test("a first email due with nothing in the queue: not prepared yet, prepared again automatically, never a cooldown", () => {
+    // The mailbox is pausing between sends, but nothing queued waits on it: the pause is a detail (emailSenderStatus), not a hold.
+    const pausing = { ...mailbox([], 0), details: ["Pausing between sends until 22:14 (Asia/Kolkata); no queued email waits on it."] };
+    expect(running([pendingLead(false)], [pausing])).toEqual({ state: "waiting_send", reason: "1 due message is not prepared for sending yet; it is prepared again automatically", open: true, nextAt: null });
+    expect(running([pendingLead(false), sentLead(null)], [mailbox([], 0)]).reason).toBe("2 due messages are not prepared for sending yet; they are prepared again automatically");
+  });
+
+  test("…unless a sender holds it for a reason of its own: the hold is named (a disconnected mailbox, its daily send limit)", () => {
+    expect(running([pendingLead(false)], [mailbox(["Mailbox status is disconnected"], 0)])).toEqual({ state: "waiting_send", reason: "no sender can send right now: Mailbox status is disconnected", open: true, nextAt: null });
+    expect(running([pendingLead(false)], [mailbox(["Mailbox has used its daily limit of 30 (Asia/Kolkata)"], 0, "2026-10-21T18:30:00.000Z")]).nextAt).toBe("2026-10-21T18:30:00.000Z");
+  });
+
+  test("a queued first email held by the gap between sends shows the cooldown, with when it ends", () => {
+    const gap = "Pausing between sends until 22:14:42 (Asia/Kolkata)";
+    expect(running([pendingLead(true)], [mailbox([gap], 1, "2026-10-21T16:44:42.353Z")])).toEqual({ state: "waiting_send", reason: `no sender can send right now: ${gap}`, open: true, nextAt: "2026-10-21T16:44:42.353Z" });
+    expect(running([pendingLead(true)], [mailbox([], 1)]).state).toBe("executing");
+  });
+
+  test("first emails held by the daily lead limit: its own state, with the reset time", () => {
+    const limit = "Daily lead limit reached (50 of 50 new leads today); resets Thursday 22 Oct at 00:00 (Asia/Kolkata)";
+    const resets = "2026-10-21T18:30:00.000Z";
+    const state = running([pendingLead(false), sentLead(followUp)], [mailbox([limit], 0, resets)]);
+    expect(state).toEqual({ state: "daily_lead_limit", reason: limit, open: true, nextAt: resets });
+    expect(WORK_STATE_LABELS.daily_lead_limit).toBe("Daily lead limit reached");
+    expect(OPEN_STATES.has("daily_lead_limit")).toBe(true);
+    // Any channel: a WhatsApp number whose first messages wait for the limit.
+    const number = (gates: string[], nextAt: string | null): SenderStatus => ({ channel: "whatsapp", account: "+91 98220 11111", timezone: null, gates, nextAt, queued: 4, note: null, limits: null, details: [] });
+    const whatsappLead: PlanLead = { progress: { tone: "waiting", text: "Waiting to send" }, reach: { contacted: false, replied: false }, open: true };
+    expect(planState({ status: "running", error: null, senders: [number([limit], resets)], leads: [whatsappLead] })).toEqual({ state: "daily_lead_limit", reason: limit, open: true, nextAt: resets });
+    // Held by something else too: every hold is named.
+    expect(planState({ status: "running", error: null, senders: [number(["Unipile is disconnected", limit], null)], leads: [whatsappLead] }).state).toBe("waiting_send");
+  });
+});
+
+test("the time beside a plan's reason says what it is: the next follow-up, the limit's reset, or the next allowed send", () => {
+  expect(nextAtPhrase("scheduled")).toBe("next follow-up");
+  expect(nextAtPhrase("daily_lead_limit")).toBe("resets");
+  expect(nextAtPhrase("waiting_send")).toBe("the next send is allowed");
 });
 
 describe("an owner request's research (its objective job)", () => {

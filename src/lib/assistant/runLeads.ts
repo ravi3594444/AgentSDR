@@ -19,6 +19,17 @@ export type LeadProgressInput = {
   linkedinRequestSentAt?: string | null;
   instagramStatus?: string | null;
   instagramError?: string | null;
+  /** The email lead's next follow-up time (outreach_leads.next_send_at, while in its sequence), as Postgres wrote it. */
+  emailNextAt?: string | null;
+  /** Whether its next email is in a mailbox's send queue. */
+  emailQueued?: boolean | null;
+  /**
+   * The email engine's claim on its current step (outreach_emails), when one
+   * exists: being sent right now, claimed long ago and never settled
+   * (uncertain), or failed. A claimed step is never sent again on its own.
+   */
+  emailClaim?: "sending" | "uncertain" | "failed" | null;
+  emailClaimError?: string | null;
   category: string | null;
   subcategory: string | null;
 };
@@ -62,12 +73,31 @@ export function leadOpen(input: LeadProgressInput): boolean {
   if (input.runStatus === "opted_out") return false;
   const open = (status: string | null | undefined, statuses: ReadonlySet<string>) => status == null || statuses.has(status);
   switch (input.channel) {
-    case "email": return open(input.emailStatus, EMAIL_OPEN);
+    // A step whose claim failed or never settled is not sent again on its own.
+    case "email": return open(input.emailStatus, EMAIL_OPEN) && input.emailClaim !== "failed" && input.emailClaim !== "uncertain";
     case "whatsapp": return open(input.whatsappStatus, WHATSAPP_OPEN);
     case "linkedin": return open(input.linkedinStatus, LINKEDIN_OPEN);
     case "instagram": return open(input.instagramStatus, INSTAGRAM_OPEN);
     default: return true;
   }
+}
+
+/**
+ * When an email lead's next email is due and whether it is prepared for
+ * sending, for the plan's state (activity/status.ts planState): `nextAt` is
+ * its next follow-up when that is still ahead (null: due now), `queued`
+ * whether it is in a send queue or being sent, `firstMessage` whether its
+ * first email has not gone out. Empty for other channels and for an email
+ * lead with no engine row yet: nothing is known about their timing here.
+ */
+export function leadTiming(input: LeadProgressInput, now: Date): { nextAt?: string | null; queued?: boolean; firstMessage?: boolean } {
+  if (input.channel !== "email" || !input.emailStatus) return {};
+  const next = input.emailNextAt && input.emailStatus !== "pending" ? new Date(input.emailNextAt) : null;
+  return {
+    nextAt: next && !Number.isNaN(next.getTime()) && next.getTime() > now.getTime() ? next.toISOString() : null,
+    queued: Boolean(input.emailQueued) || input.emailClaim === "sending",
+    firstMessage: input.emailStatus === "pending",
+  };
 }
 
 const CATEGORY: Record<string, string> = { interested: "Interested", not_interested: "Not interested", customer: "Customer", other: "Other" };
@@ -106,10 +136,18 @@ export function leadProgress(input: LeadProgressInput): LeadProgress {
     }
   }
   if (input.channel === "email") {
+    const inSequence = input.emailStatus === "pending" || input.emailStatus === "initial_sent" || input.emailStatus === "in_follow_up";
+    // The claim on its current step: the engine's own record of what happened to the next email.
+    if (inSequence && input.emailClaim === "uncertain") return { tone: "failed", text: "Delivery uncertain; no automatic resend" };
+    if (inSequence && input.emailClaim === "failed") {
+      if (input.emailStatus === "pending") return { tone: "failed", text: `Could not send${input.emailClaimError ? `: ${input.emailClaimError}` : ""}` };
+      const [sent, next] = input.emailStatus === "initial_sent" ? ["First email", "the follow-up"] : ["Follow-up", "the next follow-up"];
+      return { tone: "failed", text: `${sent} sent; ${next} could not be sent${input.emailClaimError ? `: ${input.emailClaimError}` : ""}` };
+    }
     switch (input.emailStatus) {
-      case "pending": return { tone: "waiting", text: "Waiting to send" };
-      case "initial_sent": return { tone: "sent", text: "First message sent" };
-      case "in_follow_up": return { tone: "sent", text: "Follow-up sent" };
+      case "pending": return input.emailClaim === "sending" ? { tone: "waiting", text: "Sending the first email" } : { tone: "waiting", text: "Waiting to send" };
+      case "initial_sent": return { tone: "sent", text: "First email sent — waiting for a reply" };
+      case "in_follow_up": return { tone: "sent", text: "Follow-up sent — waiting for a reply" };
       case "reply_processing":
       case "reply_received": return replied(input);
       case "sequence_completed": return { tone: "sent", text: "All messages sent, no reply" };

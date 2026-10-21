@@ -277,7 +277,7 @@ export async function results(kind: PeriodKind, now = new Date(), scope: Results
     ...row,
     activeQueue: n(emailQueue.find((q) => q.mailbox_id === row.id)?.n),
     providerConnected: row.provider === "google" ? googleConnected : unipileConnected,
-  })), { now, paused: isMigrationControlPaused("emailOutbound") });
+  })), { now, paused: isMigrationControlPaused("emailOutbound"), displayTimeZone: period.timeZone });
 
   // The snapshot measures connection and campaigns (campaigns send at any
   // time of day); the worker still checks due leads, per-account gaps,
@@ -293,9 +293,6 @@ export async function results(kind: PeriodKind, now = new Date(), scope: Results
   const whatsappSending: ChannelSending = {
     open: whatsappBlockedBy === null,
     blockedBy: whatsappBlockedBy,
-    nextOpenAt: null,
-    nextOpenLabel: null,
-    hours: null,
     queued: whatsappQueued,
     detail: "the sender still checks due times, account gaps, warm-up and new-chat limits",
   };

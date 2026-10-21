@@ -94,8 +94,9 @@ flowchart TD
    automatically (daily limits and gaps per sender), and your
    [daily lead limit](/workspace/sending-rules) caps how many new people
    all channels together contact a day.
-   - **Email.** Once a day the app builds each mailbox's queue for the day.
-     The minute loop then sends what is due, from your connected
+   - **Email.** Once a day the app builds each mailbox's queue for the day,
+     and every few minutes it adds emails that fell due since. The minute
+     loop then sends what is due, from your connected
      [Google Workspace](/integrations/google-workspace) mailboxes.
    - **LinkedIn.** The scheduler runs invitations and follow-ups through
      [Unipile](/integrations/unipile), within each account's daily limit.

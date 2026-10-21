@@ -21,13 +21,15 @@ const TONE = {
   bad: "bg-error-lighter/70 text-text-sub-600",
 } as const;
 
-export function EventRow({ content, toolResult, links, retry, retryDisabled, onRetry }: {
+export function EventRow({ content, toolResult, links, retry, retryDisabled, onRetry, asOf = null }: {
   content: string;
   toolResult: unknown;
   links: { label: string; href: string }[];
   retry: boolean;
   retryDisabled: boolean;
   onRetry: () => void;
+  /** A report's "As of …" (chatEvents.ts reportAsOf): its counts are a snapshot. */
+  asOf?: { label: string; pointer: string } | null;
 }) {
   const [open, setOpen] = useState(false);
   const compact = compactEvent({ toolResult });
@@ -37,12 +39,16 @@ export function EventRow({ content, toolResult, links, retry, retryDisabled, onR
   const retryButton = retry && (
     <Button.Root variant="neutral" mode="stroke" size="xxsmall" className="shrink-0" disabled={retryDisabled} onClick={onRetry}>Retry</Button.Root>
   );
+  const asOfLine = asOf && <p className="mt-1 text-text-soft-400" data-testid="report-as-of">{asOf.label}. {asOf.pointer}</p>;
 
   if (!compact) {
     return (
       <div className="flex items-start gap-2 rounded-lg bg-bg-weak-50 px-3 py-2 text-paragraph-xs text-text-sub-600">
         <RiInformationLine className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-        <span className="min-w-0 flex-1">{content}{linkRow}</span>
+        <div className="min-w-0 flex-1">
+          <span>{content}{linkRow}</span>
+          {asOfLine}
+        </div>
         {retryButton}
       </div>
     );
@@ -59,6 +65,7 @@ export function EventRow({ content, toolResult, links, retry, retryDisabled, onR
             </p>
           )}
           {compact.note && <p className="mt-1 [overflow-wrap:anywhere]">{compact.note}</p>}
+          {asOfLine}
           {open && <p className="mt-2 border-t border-stroke-soft-200 pt-2 [overflow-wrap:anywhere]">{content}{linkRow}</p>}
         </div>
         {retryButton}

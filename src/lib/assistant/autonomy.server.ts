@@ -199,7 +199,7 @@ export async function autoStartPlan(threadId: string, runId: string): Promise<Au
   await addMessage({
     threadId,
     role: "event",
-    content: `“${run.name}” started on its own (Autonomous mode): ${leads} lead${leads === 1 ? "" : "s"}, Automatic replies, within each channel's sending hours and daily limits.${leftOut ? ` ${leftOut}` : ""} Pause or stop it on its card.`,
+    content: `“${run.name}” started on its own (Autonomous mode): ${leads} lead${leads === 1 ? "" : "s"}, Automatic replies, within the daily lead limit and each channel's own limits.${leftOut ? ` ${leftOut}` : ""} Pause or stop it on its card.`,
   });
   return { started: true, reason: null, leads, leftOut: leftOutTotal };
 }

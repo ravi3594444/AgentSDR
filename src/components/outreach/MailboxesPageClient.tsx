@@ -104,7 +104,7 @@ export default function MailboxesPageClient({
 
       <AccountsFrame
         title="Mailboxes"
-        description="Daily limits, sending hours and connection health."
+        description="Daily limits and connection health."
         filter={filter}
         onFilterChange={(next) => {
           setFilter(next);

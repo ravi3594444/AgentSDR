@@ -1,5 +1,27 @@
 import { describe, expect, test } from "bun:test";
-import { compactEvent, eventData } from "./chatEvents";
+import { compactEvent, eventData, reportAsOf } from "./chatEvents";
+
+// P04: a chat report is a snapshot. An early "0 contacted" must read as
+// historical: each says when it was written, in the organization's zone, and
+// points to where the current counts are.
+describe("chat reports say when they were written", () => {
+  const createdAt = "2026-10-21T05:48:10.000Z";
+  const pointer = "Current counts are on the plan card and in This request.";
+
+  test("a run report, a results card, a daily summary and a job's report event carry 'As of' in the organization's zone", () => {
+    expect(reportAsOf({ role: "tool", tool: "report", createdAt, toolResult: { data: { channels: [] } } }, "Asia/Kolkata")).toEqual({ label: "As of Wed, Oct 21, 11:18 AM", pointer });
+    expect(reportAsOf({ role: "tool", tool: "daily_summary", createdAt, toolResult: { data: { day: "2026-10-20" } } }, "UTC")?.label).toBe("As of Wed, Oct 21, 5:48 AM");
+    expect(reportAsOf({ role: "event", tool: null, createdAt, toolResult: { reportKey: "job:abc", data: { event: { kind: "outreach_started" } } } }, "Asia/Kolkata")?.pointer).toBe(pointer);
+    expect(reportAsOf({ role: "event", tool: null, createdAt, toolResult: { reportKey: "objective:o1" } }, "Asia/Kolkata")?.label).toBe("As of Wed, Oct 21, 11:18 AM");
+  });
+
+  test("anything that is not a report has none: an ordinary event, the owner's words, another tool's card", () => {
+    expect(reportAsOf({ role: "event", tool: null, createdAt, toolResult: { data: { retry: true } } }, "UTC")).toBeNull();
+    expect(reportAsOf({ role: "user", tool: null, createdAt, toolResult: null }, "UTC")).toBeNull();
+    expect(reportAsOf({ role: "tool", tool: "find_leads", createdAt, toolResult: { data: {} } }, "UTC")).toBeNull();
+    expect(reportAsOf({ role: "tool", tool: "report", createdAt: "", toolResult: null }, "UTC")).toBeNull();
+  });
+});
 
 describe("older chats render as they always did", () => {
   test("an event with text only, or other data, has no compact form", () => {

@@ -148,7 +148,7 @@ export async function listWork(now = new Date(), filter: WorkFilter = {}): Promi
   })));
   for (const { run, threadTitle } of runs) {
     // Its leads say whether anything is left to send; reading them changes nothing.
-    const { state, reason, open, nextAt } = planState({ status: run.status, error: run.error, senders: senders.get(run.id) ?? null, leads: started.includes(run.id) ? leads[run.id] ?? null : null });
+    const { state, reason, open, nextAt } = planState({ status: run.status, error: run.error, senders: senders.get(run.id) ?? null, leads: started.includes(run.id) ? leads[run.id] ?? null : null, now });
     items.push({
       id: run.id,
       type: "plan",

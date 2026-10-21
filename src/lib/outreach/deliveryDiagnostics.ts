@@ -1,10 +1,17 @@
+import { displayTime } from "@/lib/assistant/displayTime";
 import type { WorkingHours } from "./schema";
 import { mailboxAtDailyLimit } from "./sendRules";
-import { isWithinWorkingHours } from "./workingHours";
 
 export type DeliveryGate = { code: string; reason: string };
 
-/** The same persisted gates as the email scheduler, with no guessed provider state. */
+/**
+ * The same persisted gates as the email scheduler, with no guessed provider
+ * state. Sending is always on: there is no hours gate (a mailbox's time zone
+ * only sets the day its daily counter belongs to). Times are written in
+ * `displayTimeZone` (the organization's; UTC when not given). The "queue"
+ * gate is technical: an empty queue is normal while every lead waits for a
+ * reply or a follow-up that is not due (runEvidence.ts keeps it in details).
+ */
 export function emailDeliveryGates(
   mailbox: {
     status: string;
@@ -14,13 +21,14 @@ export function emailDeliveryGates(
     dailySendLimit: number;
     sendCounterResetAt: Date | null;
     nextEmailTime: Date | null;
-    workingHours: WorkingHours;
+    workingHours: Pick<WorkingHours, "timezone">;
   },
   input: {
     providerConnected: boolean;
     paused: boolean;
     activeQueue: number;
     now: Date;
+    displayTimeZone?: string;
   },
 ): DeliveryGate[] {
   const gates: DeliveryGate[] = [];
@@ -36,15 +44,10 @@ export function emailDeliveryGates(
     add("provider", `${mailbox.provider} sending integration is disconnected`);
   if (mailbox.provider === "unipile" && !mailbox.unipileAccountId)
     add("account", "Mailbox has no linked Unipile account ID");
-  if (!isWithinWorkingHours(mailbox.workingHours, input.now))
-    add(
-      "hours",
-      `Outside this mailbox's sending hours (${mailbox.workingHours.timezone})`,
-    );
   if (mailbox.nextEmailTime && mailbox.nextEmailTime > input.now)
     add(
       "gap",
-      `Next send is allowed at ${mailbox.nextEmailTime.toISOString()}`,
+      `Pausing between sends until ${displayTime(mailbox.nextEmailTime, input.now, input.displayTimeZone ?? "UTC", { seconds: true })}`,
     );
   if (mailboxAtDailyLimit(mailbox, input.now))
     add(
@@ -54,7 +57,7 @@ export function emailDeliveryGates(
   if (!input.activeQueue)
     add(
       "queue",
-      "No send is in this mailbox's queue for an active campaign; the send tick does not build the queue",
+      "No email of an active campaign is in this mailbox's send queue",
     );
   return gates;
 }

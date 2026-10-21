@@ -6,14 +6,15 @@
  */
 
 import { outcomeOf, STOP_REASONS, STOP_WORDS, type StopReason } from "@/lib/assistant/objective";
+import { DAILY_LEAD_LIMIT_GATE } from "@/lib/channels/dailyLeadLimit";
 
 export type WorkState =
   | "queued"
   | "executing"
   | "waiting_slot"
   | "waiting_quota"
-  | "outside_hours"
   | "waiting_send"
+  | "daily_lead_limit"
   | "scheduled"
   | "retrying"
   | "needs_approval"
@@ -30,8 +31,8 @@ export const WORK_STATE_LABELS: Record<WorkState, string> = {
   executing: "Working",
   waiting_slot: "Waiting for a run slot",
   waiting_quota: "Waiting for a provider limit",
-  outside_hours: "Outside sending hours",
   waiting_send: "Waiting to send",
+  daily_lead_limit: "Daily lead limit reached",
   scheduled: "Scheduled",
   retrying: "Retrying",
   needs_approval: "Needs your Start",
@@ -45,7 +46,7 @@ export const WORK_STATE_LABELS: Record<WorkState, string> = {
 };
 
 /** States that may still change by themselves; a finished item will not. */
-export const OPEN_STATES: ReadonlySet<WorkState> = new Set(["queued", "executing", "waiting_slot", "waiting_quota", "outside_hours", "waiting_send", "scheduled", "retrying", "needs_approval", "paused", "stale"]);
+export const OPEN_STATES: ReadonlySet<WorkState> = new Set(["queued", "executing", "waiting_slot", "waiting_quota", "waiting_send", "daily_lead_limit", "scheduled", "retrying", "needs_approval", "paused", "stale"]);
 
 const STALE_MS = 3 * 60_000;
 
@@ -146,16 +147,33 @@ type Sender = { gates: readonly string[]; nextAt: string | null; queued?: number
 /**
  * A plan's lead as the plan card and Activity read it (runLeads.server.ts):
  * its progress, whether it was contacted, and whether its channel engine
- * still has anything to send it (`open`).
+ * still has anything to send it (`open`). Where its channel reports timing
+ * (email, runLeads.ts leadTiming): when its next follow-up is due if that is
+ * ahead (`nextAt`; null: due now), whether its next message is prepared for
+ * sending (`queued`), and whether that is its first (`firstMessage`).
  */
-export type PlanLead = { progress: { tone: string; text: string }; reach?: { contacted: boolean; replied: boolean }; open?: boolean };
+export type PlanLead = {
+  progress: { tone: string; text: string };
+  reach?: { contacted: boolean; replied: boolean };
+  open?: boolean;
+  nextAt?: string | null;
+  queued?: boolean;
+  firstMessage?: boolean;
+};
 
-const HOURS_GATE = /^outside .*hours/i;
+function earliestOf(times: readonly (string | null | undefined)[]): string | null {
+  return times.filter((time): time is string => Boolean(time)).sort((a, b) => Date.parse(a) - Date.parse(b))[0] ?? null;
+}
 
 function earliest(senders: readonly Sender[]): string | null {
-  const times = senders.flatMap((sender) => (sender.nextAt ? [sender.nextAt] : [])).sort((a, b) => Date.parse(a) - Date.parse(b));
-  return times[0] ?? null;
+  return earliestOf(senders.map((sender) => sender.nextAt));
 }
+
+const isLeadLimit = (gate: string) => gate.startsWith(DAILY_LEAD_LIMIT_GATE);
+
+/** In a plan's reason when due messages are missing from the queue: they are prepared again on their own, so it is no sender problem. */
+export const NOT_PREPARED = "not prepared for sending yet";
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 const contactedLead = (lead: PlanLead) => lead.reach?.contacted ?? (lead.progress.tone === "replied" || lead.progress.tone === "good" || lead.progress.tone === "sent");
 
@@ -200,20 +218,26 @@ export function planOutcome(leads: readonly PlanLead[]): { state: "completed" | 
 }
 
 /**
- * A plan's state with what its senders say (the plan card's Sending status,
- * diagnoseDelivery) and where its leads stand (runLeads):
+ * A plan's state from where its leads stand (runLeads) first, then what its
+ * senders say (the plan card's Sending status, diagnoseDelivery):
  * - nothing left to send to any lead (and no sender with leads waiting):
  *   its outcome, completed, partial or failed, with the counts and the
  *   recorded failure reason; never "Working";
  * - running with a channel that failed to launch: partial;
- * - every sender outside its hours (and held by nothing without a known
- *   end): waiting for them;
- * - every sender held by something else: waiting to send, naming the holds;
+ * - where every open lead's timing is known (email): every one waiting on a
+ *   follow-up still ahead is scheduled, with the earliest follow-up; due
+ *   work missing from the queue is "not prepared yet" (the send tick's
+ *   repair or the next build prepares it), unless the daily lead limit or
+ *   a sender's own hold explains it;
+ * - every sender held: by the daily lead limit only, its own state with
+ *   the reset time; otherwise waiting to send, naming the holds (a pause
+ *   between sends shows only while a prepared message waits on it);
  * - otherwise working, which is not proof of a send.
- * `nextAt` is the earliest time a sender may send again, for the page to
- * show. `senders` null: not looked at; `leads` null: not looked at.
+ * `nextAt` is when that wait ends (a follow-up, a reset, a sender's next
+ * allowed send), for the page to show. `senders` null: not looked at;
+ * `leads` null: not looked at.
  */
-export function planState(input: { status: string; error: string | null; senders: readonly Sender[] | null; leads?: readonly PlanLead[] | null }): { state: WorkState; reason: string | null; open: boolean; nextAt: string | null } {
+export function planState(input: { status: string; error: string | null; senders: readonly Sender[] | null; leads?: readonly PlanLead[] | null; now?: Date }): { state: WorkState; reason: string | null; open: boolean; nextAt: string | null } {
   const open = ["proposed", "starting", "running", "paused"].includes(input.status);
   const state = runState(input.status);
   if (input.status !== "running") return { state, reason: input.status === "starting" || input.status === "proposed" ? null : input.error, open, nextAt: null };
@@ -228,11 +252,41 @@ export function planState(input: { status: string; error: string | null; senders
   const withFailures = (reason: string) => (failed ? `${reason}; ${failed} so far` : reason);
   if (input.error) return { state: "partial", reason: withFailures(`running on its other channels; ${input.error}`), open, nextAt: null };
   const senders = input.senders ?? [];
-  if (!senders.length || senders.some((sender) => !sender.gates.length)) return { state, reason: withFailures("sending within each channel's hours and daily limits; sent messages show in Replies and Overview"), open, nextAt: null };
+  const held = senders.length > 0 && senders.every((sender) => sender.gates.length > 0);
+
+  // The leads first, where their channel says when their next message is due.
+  const openLeads = (input.leads ?? []).filter((lead) => lead.open !== false);
+  if (openLeads.length && openLeads.every((lead) => lead.queued !== undefined)) {
+    const now = (input.now ?? new Date()).getTime();
+    const due = openLeads.filter((lead) => !lead.nextAt || Date.parse(lead.nextAt) <= now);
+    if (!due.length) {
+      return { state: "scheduled", reason: withFailures(`${openLeads.length} contacted — waiting for a reply`), open, nextAt: earliestOf(openLeads.map((lead) => lead.nextAt)) };
+    }
+    if (!due.some((lead) => lead.queued)) {
+      const limited = senders.flatMap((sender) => sender.gates).find(isLeadLimit);
+      if (limited && due.every((lead) => lead.firstMessage)) {
+        return { state: "daily_lead_limit", reason: withFailures(limited), open, nextAt: earliest(senders.filter((sender) => sender.gates.some(isLeadLimit))) };
+      }
+      if (!held) {
+        const n = due.length;
+        return { state: "waiting_send", reason: withFailures(`${plural(n, "due message is", "due messages are")} ${NOT_PREPARED}; ${n === 1 ? "it is" : "they are"} prepared again automatically`), open, nextAt: null };
+      }
+    }
+  }
+
+  if (!held) return { state, reason: withFailures("sending within each channel's daily limits; sent messages show in Replies and Overview"), open, nextAt: null };
   const nextAt = earliest(senders);
-  // Only hours (and holds that end at a known time): a sender also held without an end, such as a disconnection, is not merely waiting for its hours.
-  if (senders.every((sender) => sender.nextAt && sender.gates.some((gate) => HOURS_GATE.test(gate)))) return { state: "outside_hours", reason: withFailures("every sender is outside its sending hours"), open, nextAt };
-  return { state: "waiting_send", reason: withFailures(`no sender can send right now: ${[...new Set(senders.flatMap((sender) => sender.gates))].join("; ")}`), open, nextAt };
+  const gates = [...new Set(senders.flatMap((sender) => sender.gates))];
+  // Held by nothing but the daily lead limit: first messages wait for the next day; follow-ups are not held by it.
+  if (gates.every(isLeadLimit)) return { state: "daily_lead_limit", reason: withFailures(gates.join("; ")), open, nextAt };
+  return { state: "waiting_send", reason: withFailures(`no sender can send right now: ${gates.join("; ")}`), open, nextAt };
+}
+
+/** What a plan's `nextAt` is, in the words shown before it: "…; next follow-up Wed 23 Oct 21:54 (Asia/Kolkata)". */
+export function nextAtPhrase(state: WorkState): string {
+  if (state === "scheduled") return "next follow-up";
+  if (state === "daily_lead_limit") return "resets";
+  return "the next send is allowed";
 }
 
 /**

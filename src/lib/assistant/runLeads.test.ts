@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { leadOpen, leadProgress, leadReach, type LeadProgressInput } from "./runLeads";
+import { leadOpen, leadProgress, leadReach, leadTiming, type LeadProgressInput } from "./runLeads";
 
 const base: LeadProgressInput = { channel: "whatsapp", runStatus: "active", emailStatus: null, whatsappStatus: null, whatsappSentAt: null, whatsappError: null, linkedinStatus: null, category: null, subcategory: null };
 
@@ -43,6 +43,50 @@ describe("leadProgress", () => {
     const progress = leadProgress({ ...base, whatsappStatus: "failed", whatsappError: "Delivery of message 2 is uncertain — check Messages before resuming" });
     expect(progress.tone).toBe("failed");
     expect(progress.text).toContain("no automatic resend");
+  });
+});
+
+describe("an email lead's real delivery state comes first", () => {
+  const email: LeadProgressInput = { ...base, channel: "email" };
+
+  test("sent and waiting for a reply, first email or follow-up", () => {
+    expect(leadProgress({ ...email, emailStatus: "initial_sent" })).toEqual({ tone: "sent", text: "First email sent — waiting for a reply" });
+    expect(leadProgress({ ...email, emailStatus: "in_follow_up" })).toEqual({ tone: "sent", text: "Follow-up sent — waiting for a reply" });
+    expect(leadProgress({ ...email, emailStatus: "pending" })).toEqual({ tone: "waiting", text: "Waiting to send" });
+  });
+
+  test("a first email whose claim failed could not be sent, and nothing more is sent to it on its own", () => {
+    const failed = { ...email, emailStatus: "pending", emailClaim: "failed" as const, emailClaimError: "Gmail answered 550: mailbox unavailable" };
+    expect(leadProgress(failed)).toEqual({ tone: "failed", text: "Could not send: Gmail answered 550: mailbox unavailable" });
+    expect(leadOpen(failed)).toBe(false);
+    expect(leadReach(failed).contacted).toBe(false);
+  });
+
+  test("a follow-up whose claim failed: the lead was contacted, the follow-up could not be sent", () => {
+    const failed = { ...email, emailStatus: "initial_sent", emailClaim: "failed" as const, emailClaimError: null };
+    expect(leadProgress(failed)).toEqual({ tone: "failed", text: "First email sent; the follow-up could not be sent" });
+    expect(leadProgress({ ...failed, emailStatus: "in_follow_up", emailClaimError: "timeout" }).text).toBe("Follow-up sent; the next follow-up could not be sent: timeout");
+    expect(leadOpen(failed)).toBe(false);
+    expect(leadReach(failed).contacted).toBe(true);
+  });
+
+  test("a claim being sent right now waits; one never settled is uncertain and never resent", () => {
+    expect(leadProgress({ ...email, emailStatus: "pending", emailClaim: "sending" })).toEqual({ tone: "waiting", text: "Sending the first email" });
+    const uncertain = { ...email, emailStatus: "pending", emailClaim: "uncertain" as const };
+    expect(leadProgress(uncertain)).toEqual({ tone: "failed", text: "Delivery uncertain; no automatic resend" });
+    expect(leadOpen(uncertain)).toBe(false);
+  });
+
+  test("leadTiming: the next follow-up when it is ahead, due now otherwise, and whether the next email is prepared for sending", () => {
+    const now = new Date("2026-10-21T16:30:00Z");
+    expect(leadTiming({ ...email, emailStatus: "initial_sent", emailNextAt: "2026-10-23 16:24:42.353+00", emailQueued: false }, now)).toEqual({ nextAt: "2026-10-23T16:24:42.353Z", queued: false, firstMessage: false });
+    expect(leadTiming({ ...email, emailStatus: "in_follow_up", emailNextAt: "2026-10-21 10:00:00+00", emailQueued: true }, now)).toEqual({ nextAt: null, queued: true, firstMessage: false });
+    expect(leadTiming({ ...email, emailStatus: "pending", emailNextAt: null, emailQueued: false }, now)).toEqual({ nextAt: null, queued: false, firstMessage: true });
+    // A step being sent right now counts as prepared: it is not missing from the queue.
+    expect(leadTiming({ ...email, emailStatus: "pending", emailQueued: false, emailClaim: "sending" }, now).queued).toBe(true);
+    // Other channels, and an email lead with no engine row yet, say nothing about timing.
+    expect(leadTiming({ ...base, whatsappStatus: "queued" }, now)).toEqual({});
+    expect(leadTiming({ ...email, emailStatus: null }, now)).toEqual({});
   });
 });
 

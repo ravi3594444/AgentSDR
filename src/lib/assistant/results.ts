@@ -95,22 +95,15 @@ export function money(value: number | null | undefined): string {
 
 /**
  * Whether a channel can send at the moment the results were read, and why
- * not when it cannot. Computed from the same working-hours rules the send
- * engines gate on, so "outside its sending hours" here is the scheduler's
- * `skippedOutsideHours`, not a guess (results.server.ts).
+ * not when it cannot, from the same gates the send engines check
+ * (results.server.ts). Sending is always on: no channel has sending hours.
  */
 export type ChannelSending = {
-  /** No measured gate is blocking queued work; does not prove the worker is sending. */
+  /** No measured gate is blocking due work; does not prove the worker is sending. */
   open: boolean;
-  blockedBy: "paused" | "no_sender" | "outside_hours" | "daily_limit" | "nothing_queued" | "throttled" | "sender_checks" | null;
+  blockedBy: "paused" | "no_sender" | "daily_limit" | "nothing_queued" | "throttled" | "sender_checks" | null;
   /** Additional recorded blockers, or checks this snapshot does not measure. */
   detail?: string;
-  /** ISO instant of the next opening, when the window is what blocks it. */
-  nextOpenAt: string | null;
-  /** The same instant written in the window's own time zone, e.g. "Monday 19 Oct at 09:00". */
-  nextOpenLabel: string | null;
-  /** The window that governs, e.g. "Mon–Fri 09:00–18:00 (Asia/Kolkata)"; null is any time. */
-  hours: string | null;
   /** Leads waiting to send on this channel right now. */
   queued: number;
 };
@@ -122,18 +115,16 @@ export function describeChannelSending(sending: ChannelSending): string {
       return "is paused by an operations switch";
     case "no_sender":
       return "has no connected sending account";
-    case "outside_hours":
-      return `is outside its sending hours${sending.hours ? ` (${sending.hours})` : ""}${sending.nextOpenLabel ? ` — next window ${sending.nextOpenLabel}` : ""}${sending.detail ? `; ${sending.detail}` : ""}`;
     case "daily_limit":
-      return "has used the queued mailboxes' daily allowance; counters use each mailbox's timezone";
+      return "has used its mailboxes' daily send limits; each starts again at its own midnight";
     case "nothing_queued":
-      return "has no work in a connected sender's active queue";
+      return "has nothing due to send right now";
     case "throttled":
-      return "is waiting for the configured gap between sends";
+      return "is pausing between sends";
     case "sender_checks":
-      return `has queued work blocked by sender checks${sending.detail ? `: ${sending.detail}` : ""}`;
+      return `has messages held by its senders${sending.detail ? `: ${sending.detail}` : ""}`;
     default:
-      return `has queued work for the next send check${sending.detail ? `; ${sending.detail}` : ""}`;
+      return `has emails due and ready for the next send${sending.detail ? `; ${sending.detail}` : ""}`;
   }
 }
 

@@ -64,8 +64,10 @@ export type NextStepFacts = {
   awaitingStart: { name: string; threadId: string | null }[];
   /** An open plan whose senders cannot send: the reason. */
   senderProblem: string | null;
-  /** The earliest time a held sender may send again, and why it waits. */
+  /** The earliest time a held sender may send again (or the daily lead limit resets), and why it waits. */
   waitingUntil: { at: string; label: string; reason: string | null } | null;
+  /** Every open lead of a plan was contacted and waits on a follow-up still ahead: the earliest. */
+  followUpAt?: { at: string; label: string } | null;
   /** An open plan that is paused. */
   paused: { name: string } | null;
   /** The request's research, paused by the owner (its objective), and the chat it is resumed from. */
@@ -81,9 +83,10 @@ export type NextStepFacts = {
 /**
  * The one next step for a request, the first that applies: answer what waits
  * in the Inbox; press Start on a prepared plan; fix a sender that cannot
- * send; wait for a sender's hours or limits; resume a paused plan, then
- * paused research (from the chat: no button resumes it elsewhere); let the
- * research run; else it is done (or there is nothing to do).
+ * send; wait for a sender's limits or the daily lead limit; resume a paused
+ * plan, then paused research (from the chat: no button resumes it
+ * elsewhere); let the research run; wait for a reply while the next
+ * follow-up is scheduled; else it is done (or there is nothing to do).
  */
 export function nextActionFor(facts: NextStepFacts, chatHref: (threadId: string) => string = (id) => `/assistant?thread=${encodeURIComponent(id)}`): NextStep {
   if (facts.waitingInInbox > 0) {
@@ -102,7 +105,8 @@ export function nextActionFor(facts: NextStepFacts, chatHref: (threadId: string)
     return { kind: "paused", label: "Resume the research when ready", href: facts.researchPaused.threadId ? chatHref(facts.researchPaused.threadId) : null, detail: "It is paused: searches already running finish, and nothing new is searched until you resume it in the chat." };
   }
   if (facts.researching) return { kind: "research", label: "Research is running", href: null, detail: "Searches are still finding and checking leads." };
-  if (facts.open) return { kind: "wait", label: "Sending", href: null, detail: "Messages go out within each channel's hours and daily limits." };
+  if (facts.open && facts.followUpAt) return { kind: "wait", label: "Waiting for a reply", href: null, detail: `Next follow-up ${facts.followUpAt.label}.` };
+  if (facts.open) return { kind: "wait", label: "Sending", href: null, detail: "Messages go out within each channel's daily limits." };
   if (facts.outcome) return { kind: "done", label: "Done", href: null, detail: facts.outcome };
   return { kind: "nothing", label: "Nothing to do", href: null, detail: null };
 }

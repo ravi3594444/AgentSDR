@@ -8,8 +8,9 @@
  *   rolling new-chat limit counted across every campaign on the number), its
  *   used / limit / available line and why the campaign sender last held it back;
  * - each LinkedIn account's rest between runs to the second, the next
- *   scheduled check, its invitation limit and hours, and when the
- *   invitation-limit flag is cleared, in the organization's time zone;
+ *   scheduled check, its invitation limit, and when the invitation-limit
+ *   flag is cleared, in the organization's time zone; its old working hours
+ *   hold nothing (sending is always on);
  * - reading any of it writes nothing;
  * - each lead's delivery evidence (accepted, then delivered as WhatsApp
  *   reported, then a read receipt), never "seen";
@@ -146,9 +147,9 @@ await runInOrganization(a.org.id, async () => {
   check("…and so do its diagnosis data and summary", emailPlan.email.some((m) => m.mailbox === seeded.mailbox.emailAddress) && emailPlan.instagram.length === 0 && JSON.stringify(names(emailPlan.summary)) === JSON.stringify({ mailbox: true, instagram: false, noMailbox: false }), emailPlan.summary);
   const liDiagnosis = await diagnoseDelivery(seeded.liPlan.id);
   const liSender = liDiagnosis.senders.find((entry) => entry.channel === "linkedin");
-  check("a LinkedIn plan lists its LinkedIn account in its own working hours' time zone, nothing marked uncovered", liDiagnosis.senders.length === 1 && liSender?.account === `@${seeded.liAccount.username}` && liSender.timezone === "America/New_York" && liDiagnosis.notCovered.length === 0, JSON.stringify(liDiagnosis.senders));
+  check("a LinkedIn plan lists its LinkedIn account, its old working hours ignored (no time zone, no hours gate), nothing marked uncovered", liDiagnosis.senders.length === 1 && liSender?.account === `@${seeded.liAccount.username}` && liSender.timezone === null && !liSender.gates.some((gate) => /hours/i.test(gate)) && liDiagnosis.notCovered.length === 0, JSON.stringify(liDiagnosis.senders));
   check("…with its daily invitation limit as a gate, the next allowed time, and its 3 waiting invitations", Boolean(liSender?.gates.includes("5 of 5 invitations sent today")) && Boolean(liSender?.nextAt) && new Date(liSender!.nextAt!) > now && liSender?.queued === 3 && /Follow-up/.test(liSender?.note ?? ""), JSON.stringify(liSender));
-  check("…and diagnose_delivery tells the model the same", liDiagnosis.summary.includes(`LinkedIn @${seeded.liAccount.username}: 3 invitations waiting`) && liDiagnosis.summary.includes("America/New_York"), liDiagnosis.summary);
+  check("…and diagnose_delivery tells the model the same, with no working hours", liDiagnosis.summary.includes(`LinkedIn @${seeded.liAccount.username}: 3 invitations waiting`) && !liDiagnosis.summary.includes("America/New_York") && /Sending is always on/.test(liDiagnosis.summary), liDiagnosis.summary);
   const organizationWide = await diagnoseDelivery();
   const everySender = organizationWide.senders;
   check("the organization's own snapshot still lists every mailbox and Instagram account", everySender.some((entry) => entry.channel === "email" && entry.account === seeded.mailbox.emailAddress) && everySender.some((entry) => entry.channel === "instagram" && entry.account === `@${seeded.instagram.username}`), everySender.map((entry) => `${entry.channel} ${entry.account}`).join("; "));
@@ -230,7 +231,7 @@ await runInOrganization(a.org.id, async () => {
   check("the rest between LinkedIn runs is a gate with its end to the second, in the organization's zone", Boolean(resting?.gates.some((gate) => gate.startsWith(`Between LinkedIn runs until `) && gate.includes(`${restClock} (Asia/Kolkata)`))), JSON.stringify(resting?.gates));
   check("…the next scheduled check is a separate line, the first :00 or :30 after the rest", Boolean(resting?.details.some((line) => line.startsWith("Next scheduled check ") && line.includes(`${checkClock} (Asia/Kolkata)`) && line.includes("every 30 minutes"))), JSON.stringify(resting?.details));
   check("…LinkedIn's invitation-limit flag says it is cleared at the organization's daily reset, with when", Boolean(resting?.gates.some((gate) => /^LinkedIn reported this account's invitation limit; the flag is cleared at the organization's daily reset, .*05:30 \(Asia\/Kolkata\)$/.test(gate))), JSON.stringify(resting?.gates));
-  check("…and its own invitation limit and working hours are shown", resting?.limits === "Invitations: 5 of 5 sent today, 0 left. Working hours: Mon, Tue, Wed, Thu, Fri 09:00–18:00 (America/New_York).", resting?.limits ?? "");
+  check("…and its own invitation limit is shown, with no working hours", resting?.limits === "Invitations: 5 of 5 sent today, 0 left.", resting?.limits ?? "");
   check("…the next send, when known, is on a scheduled check", resting?.nextAt === null || new Date(resting!.nextAt!).getTime() % 1_800_000 === 0, `${resting?.nextAt}`);
 
   // Reading the status changed nothing: no lead, claim or account was written.

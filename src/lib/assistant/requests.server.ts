@@ -8,6 +8,7 @@ import { outreachCampaigns } from "@/lib/outreach/schema";
 import { whatsappCampaigns } from "@/lib/whatsapp/schema";
 import { campaigns as linkedinCampaigns } from "@/lib/linkedin/schema";
 import { listWork, type WorkItem } from "@/lib/activity/activity.server";
+import { NOT_PREPARED } from "@/lib/activity/status";
 import { reportRun } from "@/lib/assistant/outreach.server";
 import { objectiveStates, objectiveView, threadObjectives, type ObjectiveView } from "@/lib/assistant/objective.server";
 import { requestScope, runScope } from "@/lib/assistant/results.server";
@@ -338,9 +339,15 @@ export async function requestSummary(keyText: string, now = new Date()): Promise
   };
 
   const openPlans = plans.filter((plan) => plan.open);
-  const held = openPlans.find((plan) => plan.state === "waiting_send" || plan.state === "outside_hours");
-  const senderProblem = openPlans.find((plan) => plan.state === "waiting_send" && !plan.nextAt)?.reason ?? null;
+  const held = openPlans.find((plan) => (plan.state === "waiting_send" || plan.state === "daily_lead_limit") && plan.nextAt);
+  // A due message not prepared yet is prepared again on its own: not something for the owner to fix.
+  const senderProblem = openPlans.find((plan) => plan.state === "waiting_send" && !plan.nextAt && !(plan.reason ?? "").includes(NOT_PREPARED))?.reason ?? null;
   const waitingUntil = held?.nextAt ? { at: held.nextAt, label: displayTime(new Date(held.nextAt), now, timeZone), reason: held.reason } : null;
+  // Every open plan waiting on a follow-up: the earliest, unless another plan is still sending.
+  const scheduled = openPlans.filter((plan) => plan.state === "scheduled" && plan.nextAt).sort((a, b) => Date.parse(a.nextAt!) - Date.parse(b.nextAt!))[0];
+  const followUpAt = scheduled?.nextAt && !openPlans.some((plan) => plan.state === "executing")
+    ? { at: scheduled.nextAt, label: displayTime(new Date(scheduled.nextAt), now, timeZone) }
+    : null;
   const paused = openPlans.find((plan) => plan.runStatus === "paused");
   const researching = searches.some((item) => item.open) || objective?.status === "active";
   const lastPlan = plans[0];
@@ -356,6 +363,7 @@ export async function requestSummary(keyText: string, now = new Date()): Promise
     awaitingStart: plans.filter((plan) => plan.runStatus === "proposed").map((plan) => ({ name: plan.title.replace(/^Outreach plan: /, ""), threadId: plan.threadId })),
     senderProblem,
     waitingUntil,
+    followUpAt,
     paused: paused ? { name: paused.title.replace(/^Outreach plan: /, "") } : null,
     // Paused research is open while nothing else of it is, so its next step is to resume it, never "Done".
     researchPaused: objective?.status === "paused" ? { threadId: objective.threadId } : null,
@@ -365,7 +373,7 @@ export async function requestSummary(keyText: string, now = new Date()): Promise
   });
   // The objective's waiting reason is read only while it runs (objective.server.ts viewOf): a paused one is held by the pause.
   const blocker = objective?.waiting
-    ?? openPlans.find((plan) => ["waiting_send", "outside_hours", "partial", "failed"].includes(plan.state))?.reason
+    ?? openPlans.find((plan) => ["waiting_send", "partial", "failed"].includes(plan.state))?.reason
     ?? searches.find((item) => item.state === "failed")?.reason
     ?? null;
 

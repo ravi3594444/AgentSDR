@@ -216,10 +216,11 @@ await runInOrganization(a.org.id, async () => {
   check("open work counts every queued or running job", (await openWorkCount()) === 3);
 });
 
-// A plan whose only sender is outside its hours, a plan that launched on one
-// channel of two, a search cut short, and each plan's counts.
+// A plan whose only sender still carries old working hours (which hold
+// nothing: sending is always on), a plan that launched on one channel of two,
+// a search cut short, and each plan's counts.
 const hoursCase = await runInOrganization(a.org.id, async () => {
-  // Working hours that open two hours from now, so the account is outside them.
+  // Old working hours that would open two hours from now: the engine and the status ignore them.
   const hour = new Date().getUTCHours();
   const clock = (h: number) => `${String(h % 24).padStart(2, "0")}:00`;
   const end = (hour + 3) % 24 === 0 ? "23:59" : clock(hour + 3);
@@ -248,8 +249,8 @@ const hoursCase = await runInOrganization(a.org.id, async () => {
 await runInOrganization(a.org.id, async () => {
   const work = await listWork();
   const hours = work.find((item) => item.id === hoursCase.hoursRun.id);
-  check("a running plan whose every sender is outside its hours says so, with when the next send is allowed, and keeps its controls",
-    hours?.state === "outside_hours" && hours.stateLabel === "Outside sending hours" && Boolean(hours.nextAt) && Date.parse(hours.nextAt!) > Date.now() && hours.open && hours.runStatus === "running",
+  check("a running plan whose sender still carries old working hours is not held by them (sending is always on), and keeps its controls",
+    Boolean(hours) && !/hours/i.test(`${hours!.stateLabel} ${hours!.reason ?? ""}`) && hours!.open && hours!.runStatus === "running",
     `${hours?.stateLabel}: ${hours?.reason} ${hours?.nextAt}`);
   check("its counts: 5 leads, 2 contacted (an invitation sent, a reply), 1 replied; a failed send is not contacted",
     hours?.counts?.leads === 5 && hours.counts.contacted === 2 && hours.counts.replied === 1, JSON.stringify(hours?.counts));
