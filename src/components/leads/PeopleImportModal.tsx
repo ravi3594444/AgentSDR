@@ -57,7 +57,7 @@ export function PeopleImportModal({ onClose, onImported }: { onClose: () => void
             <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" className="sr-only" onChange={(event) => setFileName(event.target.files?.[0]?.name ?? "")} />
             <RiUploadCloud2Line className="size-6 text-text-soft-400" aria-hidden="true" />
             <span className="text-paragraph-sm text-text-sub-600">{fileName || "Choose an .xlsx or .csv file"}</span>
-            <span className="text-paragraph-xs text-text-soft-400">Up to 10 MB and 5,000 rows. Local numbers without + use the Default phone country (Settings → Organization).</span>
+            <span className="text-paragraph-xs text-text-soft-400">Up to 10 MB and 5,000 rows. Local numbers without + use the Default phone country (Settings → Sending defaults).</span>
           </label>
           {error && <p role="alert" className="mt-3 text-paragraph-sm text-error-base">{error}</p>}
           {result && (

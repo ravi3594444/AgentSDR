@@ -301,7 +301,7 @@ export function WhatsappCampaignWizard() {
                     ))}
                   </ul>
                 </div>
-                <p className="mt-4 text-paragraph-xs text-text-sub-600">First messages count against each number&apos;s new-chats-per-day limit (Settings → WhatsApp → Sending rules). A reply on any channel stops the sequence and lands in the Inbox.</p>
+                <p className="mt-4 text-paragraph-xs text-text-sub-600">First messages count against each number&apos;s new-chats-per-day limit (Settings → WhatsApp sending rules). A reply on any channel stops the sequence and lands in the Inbox.</p>
                 {blocker && <p className="mt-4 rounded-xl bg-warning-lighter p-3 text-paragraph-sm text-warning-dark">{blocker} before launching. You can save it paused and finish later.</p>}
                 <WizardFooter error={error} onBack={() => setStep(2)} busy={busy} secondaryLabel="Save paused" onSecondary={() => void finish(false)} nextLabel="Launch campaign" onNext={() => void finish(true)} nextDisabled={Boolean(blocker)} nextIcon={RiRocketLine} />
               </div>

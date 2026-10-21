@@ -197,7 +197,7 @@ await runInOrganization(a.org.id, async () => {
   // ------------------------------------------------------------ Reddit
   const beforeReddit = calls.length;
   const reddits = await Promise.all(["https://www.reddit.com/r/smallbusiness/comments/abc/invoicing/", "old.reddit.com/r/sales", "https://redd.it/abc123", "https://reddit.com/user/someone"].map((url) => runTool("read_webpage", { url }, context)));
-  check("Reddit addresses are refused, with the approval not recorded", reddits.every((result) => !result.ok && result.summary === "Reddit is unavailable to research: its API needs Reddit's approval for this use, and that approval is not recorded (Settings → Organization → Research sources). Nothing was read from Reddit."), reddits[0]!.summary);
+  check("Reddit addresses are refused, with the approval not recorded", reddits.every((result) => !result.ok && result.summary === "Reddit is unavailable to research: its API needs Reddit's approval for this use, and that approval is not recorded (Settings → Lead research → Research sources). Nothing was read from Reddit."), reddits[0]!.summary);
   check("nothing was fetched for Reddit, TinyFish included", calls.length === beforeReddit);
 
   const view = await settings.saveResearchSources({ redditApproved: true, redditApprovalNote: "Approved by Reddit's data team, ticket 123", redditClientId: "abcDEF123wxyz" }, a.owner.id);

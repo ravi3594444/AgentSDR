@@ -412,7 +412,7 @@ await runInOrganization(orgA!.id, async () => {
   } catch (error) {
     socialRefused = error instanceof DiscoveryUnavailableError ? error.message : String(error);
   }
-  check("Facebook Actor not approved: nothing is searched, and it says where to approve it", /not approved/.test(socialRefused) && /Settings → Organization → Apify/.test(socialRefused), socialRefused);
+  check("Facebook Actor not approved: nothing is searched, and it says where to approve it", /not approved/.test(socialRefused) && /Settings → Providers & features → Apify/.test(socialRefused), socialRefused);
   await saveApifySettings({ approvedActors: ["google_maps", "instagram_hashtags", "instagram_profiles", "instagram_search", "facebook_pages", "linkedin_companies"] }, null);
   // A company website that publishes its contacts (LinkedIn shows none).
   setDiscoveryPageOptions({

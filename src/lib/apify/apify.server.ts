@@ -126,7 +126,7 @@ export async function apifyReadiness(actor: ApifyActorKey, wantedItems: number):
   if (!(await featureEnabled("apify_discovery"))) return { usable: false, exhausted: false, reason: "Apify discovery is off for this organization" };
   const row = await settingsRow();
   if (!row?.encryptedToken) return { usable: false, exhausted: false, reason: "no Apify token is saved" };
-  if (!row.approvedActors.includes(actor)) return { usable: false, exhausted: false, reason: `the ${APIFY_ACTORS[actor].label} is not approved in Settings → Organization → Apify` };
+  if (!row.approvedActors.includes(actor)) return { usable: false, exhausted: false, reason: `the ${APIFY_ACTORS[actor].label} is not approved in Settings → Providers & features → Apify` };
   const token = decryptIntegrationCredential(row.encryptedToken);
   await sweepStaleRuns();
   const usage = await monthUsage();

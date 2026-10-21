@@ -562,7 +562,7 @@ export function AccountsClient({
           context={totalCapacity > 0 ? `${formatPercent(Math.min(totalSent / totalCapacity, 1))} of ${totalCapacity} a day` : "No connected capacity"}
           hint="Connection requests sent today, against the daily limits of connected accounts."
         />
-        <KpiCell icon={RiUserStarLine} label="Premium" value={String(premium)} context={`${accounts.length - premium} on a free plan`} hint={`Premium accounts can send ${inviteLimits.premium} connection requests a day; free accounts ${inviteLimits.free}. Change it in LinkedIn → Sending rules, or per account.`} />
+        <KpiCell icon={RiUserStarLine} label="Premium" value={String(premium)} context={`${accounts.length - premium} on a free plan`} hint={`Premium accounts can send ${inviteLimits.premium} connection requests a day; free accounts ${inviteLimits.free}. Change it in Settings → LinkedIn sending rules, or per account.`} />
       </KpiStrip>
 
       {disconnected > 0 && (

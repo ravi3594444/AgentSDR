@@ -159,7 +159,7 @@ export function workspaceReadiness(facts: ReadinessFacts): ReadinessItem {
       ? null
       : "Invitation and password-reset emails are written to the server log, not sent, until RESEND_API_KEY and AUTH_EMAIL_FROM are set on the server.",
     links: [
-      { href: "/settings/organization", label: "Organization" },
+      { href: "/settings/business", label: "Your business" },
       { href: "/settings/members", label: "Members" },
     ],
   };

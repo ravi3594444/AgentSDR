@@ -248,7 +248,7 @@ async function setupSnapshot() {
     /** The assistant's own web_search and page reading: TinyFish when connected. */
     webAccess: { tinyfish: Boolean(tinyfish), searchProvider: tinyfish?.useForWebSearch ? "TinyFish" : (await tavilyConnection()) ? "Tavily" : null, browserMinutesPerDay: tinyfish?.browserMinutesPerDay ?? 0 },
     ai: { connected: Boolean(connection?.verified), defaultModel: byok.defaultModel?.modelId ?? null },
-    /** Optional features (Settings → Organization), all off by default, and whether new inquiries can be answered. */
+    /** Optional features (Settings → Providers & features), all off by default, and whether new inquiries can be answered. */
     features: await featureState(),
     inquiryReplies: { problem: await inquiryRunReadiness() },
     /** Running runs in Automatic reply mode (each answers only its own conversations). */
@@ -260,7 +260,7 @@ const AUDIENCE_SOURCE_WORD: Record<string, string> = { discovery: "found", list:
 
 /** Website and directory search's readiness, in a sentence for check_setup. */
 function webDiscoveryLine(web: { enabled: boolean; available: boolean; provider: string | null; model: string | null; reason: string | null }): string {
-  if (!web.enabled) return "Website and directory search: off (an owner or admin can turn it on in Settings → Organization).";
+  if (!web.enabled) return "Website and directory search: off (an owner or admin can turn it on in Settings → Providers & features).";
   return web.available
     ? `Website and directory search: ready (${webSearchProviderName(web.provider)}, ${web.model}).`
     : `Website and directory search: not ready — ${web.reason}`;
@@ -908,7 +908,7 @@ export const TOOLS: Record<string, Tool> = {
   },
 
   browser_open: {
-    description: `Open a page in a remote browser (TinyFish Browser), when reading a page with read_webpage is not enough: a search form, filters, "load more" buttons, pagination by clicking, or a page that shows content only after interaction. It is paid by the minute (about $0.002) within the owner's daily browser minutes (Settings → Organization → TinyFish; off unless set), one browser per organization, each session at most ${BROWSER_LIMITS.maxSessionMinutes} minutes; it closes when the turn ends. The URL follows the same rule as read_webpage (a link the owner gave, a web_search result, or a link on a page already read). It never logs in, never types passwords, and cannot use Instagram, Facebook, X, TikTok, LinkedIn or Reddit. Returns the page text and its numbered elements for browser_click and browser_fill.`,
+    description: `Open a page in a remote browser (TinyFish Browser), when reading a page with read_webpage is not enough: a search form, filters, "load more" buttons, pagination by clicking, or a page that shows content only after interaction. It is paid by the minute (about $0.002) within the owner's daily browser minutes (Settings → Lead research → TinyFish; off unless set), one browser per organization, each session at most ${BROWSER_LIMITS.maxSessionMinutes} minutes; it closes when the turn ends. The URL follows the same rule as read_webpage (a link the owner gave, a web_search result, or a link on a page already read). It never logs in, never types passwords, and cannot use Instagram, Facebook, X, TikTok, LinkedIn or Reddit. Returns the page text and its numbered elements for browser_click and browser_fill.`,
     arguments: "url",
     run: async (args, context) => {
       const raw = text(args, "url", true)!.trim();

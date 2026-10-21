@@ -132,7 +132,7 @@ export async function objectiveForJob(job: { payload: unknown }): Promise<Object
   return objectiveForRequest(jobRequestId(job));
 }
 
-/** The organization's defaults (Settings → Organization, the "general" Sending rules). */
+/** The organization's defaults (Settings → Lead research, the "general" Sending rules). */
 export async function objectiveDefaults(): Promise<ControlDefaults> {
   const rules = await channelRules("general");
   return { leadTarget: rules.objectiveLeadTarget, hours: rules.objectiveHours, spendUsd: rules.objectiveSpendUsd };

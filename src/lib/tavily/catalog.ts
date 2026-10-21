@@ -4,7 +4,7 @@ import type { ResearchSource } from "@/lib/research/schema";
  * Tavily (tavily.com) as the web search behind "Website and directory
  * search": a search API that returns real result pages (URL, title, a
  * snippet of the page) instead of a model's answer. An organization saves
- * its own key in Settings → Organization → Tavily; while one is saved,
+ * its own key in Settings → Providers & features → Tavily; while one is saved,
  * website searches use it instead of the AI provider's web search.
  *
  * Protocol (docs.tavily.com, API reference read 2026-10-17): POST /search
@@ -26,7 +26,7 @@ export const TAVILY_LIMITS = {
   resultsPerSearch: 20,
 } as const;
 
-/** What an owner sees and edits in Settings → Organization → Tavily (never the key). */
+/** What an owner sees and edits in Settings → Providers & features → Tavily (never the key). */
 export type TavilySettingsView = {
   connected: boolean;
   keyHint: string | null;
@@ -77,5 +77,5 @@ export function tavilyPlanOf(body: unknown): TavilyPlan | null {
 export function tavilyCapProblem(usedToday: number, wanted: number, dailySearches: number): string | null {
   if (usedToday + wanted <= dailySearches) return null;
   const left = Math.max(0, dailySearches - usedToday);
-  return `the daily Tavily cap (${dailySearches} searches, Settings → Organization → Tavily) leaves ${left} search${left === 1 ? "" : "es"} in the last 24 hours, and this website search needs ${wanted}`;
+  return `the daily Tavily cap (${dailySearches} searches, Settings → Providers & features → Tavily) leaves ${left} search${left === 1 ? "" : "es"} in the last 24 hours, and this website search needs ${wanted}`;
 }

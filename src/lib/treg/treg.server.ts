@@ -99,9 +99,9 @@ export async function saveTregSettings(input: { key?: unknown; dailyCapUsd?: unk
 export class TregUnavailableError extends Error {}
 
 async function readyKey(): Promise<{ key: string; dailyCapUsd: number }> {
-  if (!(await featureEnabled("treg"))) throw new TregUnavailableError("Treg tools are off for this organization; an owner or admin can turn them on in Settings → Organization → Optional features.");
+  if (!(await featureEnabled("treg"))) throw new TregUnavailableError("Treg tools are off for this organization; an owner or admin can turn them on in Settings → Providers & features.");
   const row = await settingsRow();
-  if (!row?.encryptedKey) throw new TregUnavailableError("No Treg key is saved; an owner or admin adds one in Settings → Organization → Treg.");
+  if (!row?.encryptedKey) throw new TregUnavailableError("No Treg key is saved; an owner or admin adds one in Settings → Providers & features → Treg.");
   return { key: decryptIntegrationCredential(row.encryptedKey), dailyCapUsd: row.dailyCapUsd };
 }
 
@@ -119,7 +119,7 @@ export type TregCallOutcome =
 function refusal(error: TregError, ceilingUsd: number): string {
   if (error.status === 402 && error.code === "route_max_cost") return `it would cost more than the $${ceilingUsd} this call may spend (the rest of today's cap, at most $${TREG_LIMITS.maxUsdPerCall} a call); nothing was charged`;
   if (error.status === 402) return `the Treg balance is too low; top it up in Treg (Team → Billing) — AgentSDR never tops it up. Nothing was charged`;
-  if (error.status === 401 || error.status === 403) return "Treg rejected the saved key; an owner or admin saves a new one in Settings → Organization → Treg";
+  if (error.status === 401 || error.status === 403) return "Treg rejected the saved key; an owner or admin saves a new one in Settings → Providers & features → Treg";
   if (error.status === 429) return `Treg is busy or a free allowance is used up (${error.message}); try again later`;
   return `${error.message}${error.status ? ` (HTTP ${error.status})` : ""}`;
 }

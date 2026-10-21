@@ -341,7 +341,7 @@ export async function startInstagramProspects(
   // Every Apify run slot busy is a wait, not a reason to search something else: the job is queued below.
   const waiting = !readiness.usable && Boolean(readiness.slotsFull);
   if (!readiness.usable && !waiting) {
-    const note = `Instagram was not searched: ${apifyFallbackNote(readiness) ?? "Instagram prospect search needs Apify discovery (Settings → Organization), which is off."}`;
+    const note = `Instagram was not searched: ${apifyFallbackNote(readiness) ?? "Instagram prospect search needs Apify discovery (Settings → Providers & features), which is off."}`;
     const fallback = await startWebsiteFallback({ what: input.what, where: input.where, maxResults: input.maxResults, language: input.language }, context, options.contactAfter ?? null, options.requestMessageId ?? null);
     if (!("unavailable" in fallback)) return { ...fallback, note: `${note} ${fallback.note} Instagram accounts appear only when the web search returns their pages (and Instagram is connected).` };
     throw new DiscoveryUnavailableError(`${note} Instagram has no keyword or hashtag search of its own that AgentSDR can use, and website search cannot take it (${fallback.unavailable}), so nothing was searched.`);
@@ -396,7 +396,7 @@ export async function startSocialProspects(
   const readiness = await apifyReadiness(actor, input.maxResults);
   const waiting = !readiness.usable && Boolean(readiness.slotsFull);
   if (!readiness.usable && !waiting) {
-    throw new DiscoveryUnavailableError(`${label} search runs through Apify: ${apifyFallbackNote(readiness) ?? readiness.reason} Approve the ${APIFY_ACTORS[actor].label} in Settings → Organization → Apify to use it.`);
+    throw new DiscoveryUnavailableError(`${label} search runs through Apify: ${apifyFallbackNote(readiness) ?? readiness.reason} Approve the ${APIFY_ACTORS[actor].label} in Settings → Providers & features → Apify to use it.`);
   }
   const criteria: DiscoveryCriteria = { what: input.what, where: input.where, maxResults: input.maxResults, language: input.language };
   const phrase = `${input.what} — ${input.where}`;

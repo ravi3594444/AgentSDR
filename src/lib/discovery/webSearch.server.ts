@@ -23,7 +23,7 @@ import { reserveQuota, settleQuota } from "@/lib/quota/quota.server";
  * One web search for website and directory discovery:
  *
  * - TinyFish, whenever the organization saved a TinyFish key and keeps "Use
- *   TinyFish for web searches" on (Settings → Organization → TinyFish): a
+ *   TinyFish for web searches" on (Settings → Lead research → TinyFish): a
  *   search engine with a free daily allowance (lib/tinyfish/), given
  *   keywords plus the sentence as its purpose;
  * - Tavily, whenever the organization saved a Tavily key (Settings →
@@ -105,7 +105,7 @@ export const WEB_SEARCH_SYSTEM_PROMPT = [
   "Do not write email addresses, phone numbers or personal details, and do not describe private individuals.",
 ].join("\n");
 
-const NO_PROVIDER = "Website and directory search needs a web search: save a TinyFish key in Settings → Organization → TinyFish (free searches), a Tavily key in Settings → Organization → Tavily, or connect an AI provider that searches the web (OpenRouter, or AI/ML API with a web research model) in Settings → AI provider.";
+const NO_PROVIDER = "Website and directory search needs a web search: save a TinyFish key in Settings → Lead research → TinyFish (free searches), a Tavily key in Settings → Providers & features → Tavily, or connect an AI provider that searches the web (OpenRouter, or AI/ML API with a web research model) in Settings → AI provider.";
 
 /**
  * Whether the organization's AI settings can run a web search, and with
@@ -275,8 +275,8 @@ export async function generalSearchRoute(): Promise<GeneralSearchRoute> {
   return {
     provider: null,
     reason: tinyfish
-      ? "TinyFish is connected but turned off for web searches (Settings → Organization → TinyFish), and no Tavily key is saved"
-      : "no web search is connected: an owner or admin saves a TinyFish key in Settings → Organization → TinyFish (free searches)",
+      ? "TinyFish is connected but turned off for web searches (Settings → Lead research → TinyFish), and no Tavily key is saved"
+      : "no web search is connected: an owner or admin saves a TinyFish key in Settings → Lead research → TinyFish (free searches)",
   };
 }
 
@@ -288,7 +288,7 @@ export async function generalWebSearch(input: GeneralSearchInput, context: { thr
   if (route.provider === null) throw new WebSearchUnavailableError(route.reason);
   // A request limited to free sources ($0 spend cap) never uses Tavily's paid credits.
   if (route.provider === "tavily" && context.freeOnly) {
-    throw new WebSearchUnavailableError("this request is limited to free sources (its spend cap is $0); web search here would use Tavily's paid credits, and TinyFish's free search is not connected or is off for web search (Settings → Organization → TinyFish)");
+    throw new WebSearchUnavailableError("this request is limited to free sources (its spend cap is $0); web search here would use Tavily's paid credits, and TinyFish's free search is not connected or is off for web search (Settings → Lead research → TinyFish)");
   }
   const query = input.query.replace(/\s+/g, " ").trim().slice(0, MAX_QUERY_LENGTH);
   if (route.provider === "tinyfish") {

@@ -7,7 +7,7 @@ import { Callout } from "@/components/settings/SettingsKit";
 import { browserMinutesHint, TINYFISH_FREE_LIMITS, TINYFISH_LIMITS, type TinyfishSettingsView } from "@/lib/tinyfish/catalog";
 
 /**
- * Settings → Organization → TinyFish: the key (write-only), whether web
+ * Settings → Lead research → TinyFish: the key (write-only), whether web
  * searches use it, and the browser minutes a day (0 keeps the metered
  * browser off). Search and page reading stay within TinyFish's free daily
  * allowance; AgentSDR waits for its reset rather than spending the Wallet.

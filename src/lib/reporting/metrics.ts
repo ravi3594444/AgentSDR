@@ -9,7 +9,7 @@ import { wallTime, wallTimeToInstant } from "@/lib/scheduler/slots";
  * period, scope and time zone is the same number on both pages.
  *
  * - A period is whole local days in the organization's business time zone
- *   (the "general" Sending rule, Settings → Organization → General), as
+ *   (the "general" Sending rule, Settings → Sending defaults), as
  *   [first day 00:00, the day after the last 00:00). "Today" is the whole
  *   local day.
  * - Period figures count events inside the window. Current figures ("now")

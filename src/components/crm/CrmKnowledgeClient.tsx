@@ -2,6 +2,7 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 
 // Renders its own SettingsPage so "Add document", which opens the editor held here, sits in the section header.
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   RiAddLine,
@@ -11,6 +12,7 @@ import {
   RiBox3Line,
   RiBuilding2Line,
   RiCalendarLine,
+  RiEyeLine,
   RiFileTextLine,
   RiMoreLine,
   RiPencilLine,
@@ -34,6 +36,7 @@ import { EmptyState } from "@/components/page/EmptyState";
 import { Callout, Field } from "@/components/settings/SettingsKit";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import { ListSkeleton } from "@/components/settings/SettingsSkeletons";
+import { BUSINESS_PROFILE_HREF, PROFILE_DOCUMENT_READ_ONLY } from "@/lib/assistant/profile";
 import { cn } from "@/utils/cn";
 import { asList, asObject, crmFetch, errorMessage, formatDate } from "./crm-utils";
 
@@ -63,6 +66,11 @@ function alwaysIncluded(document: Document): boolean {
   return Boolean(document.alwaysInclude ?? document.always_include);
 }
 
+/** The business profile's copy: read-only here, edited in Settings → Your business (the server refuses edits). */
+function fromBusinessProfile(document: Document): boolean {
+  return document.businessProfile === true;
+}
+
 /** The first words of a markdown document as plain text, for the list. */
 function snippet(content: string): string {
   return content
@@ -76,6 +84,7 @@ export default function CrmKnowledgeClient() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [editor, setEditor] = useState<Document | null>(null);
+  const [viewer, setViewer] = useState<Document | null>(null);
   const [view, setView] = useState<View>("active");
   const [search, setSearch] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -129,11 +138,13 @@ export default function CrmKnowledgeClient() {
   };
 
   const openEditor = (document: Document) =>
-    setEditor({
-      ...document,
-      content: contentOf(document),
-      tags: Array.isArray(document.tags) ? document.tags.join(", ") : document.tags,
-    });
+    fromBusinessProfile(document)
+      ? setViewer(document)
+      : setEditor({
+          ...document,
+          content: contentOf(document),
+          tags: Array.isArray(document.tags) ? document.tags.join(", ") : document.tags,
+        });
 
   const counts = useMemo(
     () => ({
@@ -233,6 +244,7 @@ export default function CrmKnowledgeClient() {
                     const archived = document.active === false;
                     const title = String(document.title ?? "Untitled document");
                     const busy = busyId === String(document.id);
+                    const profileCopy = fromBusinessProfile(document);
                     return (
                       <li
                         key={String(document.id ?? index)}
@@ -257,6 +269,7 @@ export default function CrmKnowledgeClient() {
                               <Badge.Root size="small" variant="lighter" color="blue">Always included</Badge.Root>
                             )}
                             {archived && <Badge.Root size="small" variant="lighter" color="gray">Archived</Badge.Root>}
+                            {profileCopy && <Badge.Root size="small" variant="lighter" color="gray">From Your business · read-only</Badge.Root>}
                           </div>
                           <p className="mt-1 line-clamp-2 text-paragraph-sm text-text-sub-600">{text || "No content"}</p>
                           <p className="mt-1.5 flex flex-wrap items-center gap-x-1.5 text-paragraph-xs text-text-soft-400" suppressHydrationWarning>
@@ -279,14 +292,31 @@ export default function CrmKnowledgeClient() {
                               </Button.Root>
                             </Dropdown.Trigger>
                             <Dropdown.Content align="end">
-                              <Dropdown.Item onSelect={() => openEditor(document)}>
-                                <Dropdown.ItemIcon as={RiPencilLine} />
-                                Edit
-                              </Dropdown.Item>
-                              <Dropdown.Item onSelect={() => void archive(document)}>
-                                <Dropdown.ItemIcon as={archived ? RiArrowGoBackLine : RiArchiveLine} />
-                                {archived ? "Restore" : "Archive"}
-                              </Dropdown.Item>
+                              {profileCopy ? (
+                                <>
+                                  <Dropdown.Item onSelect={() => setViewer(document)}>
+                                    <Dropdown.ItemIcon as={RiEyeLine} />
+                                    View
+                                  </Dropdown.Item>
+                                  <Dropdown.Item asChild>
+                                    <Link href={BUSINESS_PROFILE_HREF}>
+                                      <Dropdown.ItemIcon as={RiPencilLine} />
+                                      Edit in Settings → Your business
+                                    </Link>
+                                  </Dropdown.Item>
+                                </>
+                              ) : (
+                                <>
+                                  <Dropdown.Item onSelect={() => openEditor(document)}>
+                                    <Dropdown.ItemIcon as={RiPencilLine} />
+                                    Edit
+                                  </Dropdown.Item>
+                                  <Dropdown.Item onSelect={() => void archive(document)}>
+                                    <Dropdown.ItemIcon as={archived ? RiArrowGoBackLine : RiArchiveLine} />
+                                    {archived ? "Restore" : "Archive"}
+                                  </Dropdown.Item>
+                                </>
+                              )}
                             </Dropdown.Content>
                           </Dropdown.Root>
                         </div>
@@ -301,7 +331,37 @@ export default function CrmKnowledgeClient() {
       </div>
 
       {editor && <KnowledgeEditor document={editor} onCancel={() => setEditor(null)} onSave={save} />}
+      {viewer && <ProfileCopyViewer document={viewer} onClose={() => setViewer(null)} />}
     </SettingsPage>
+  );
+}
+
+/** The business profile's copy, read-only: it is rewritten from Settings → Your business, so it is edited there. */
+function ProfileCopyViewer({ document, onClose }: { document: Document; onClose: () => void }) {
+  const archived = document.active === false;
+  return (
+    <Modal.Root open onOpenChange={(open) => !open && onClose()}>
+      <Modal.Content size="max-w-2xl" className="max-h-[calc(100dvh-2rem)]">
+        <Modal.Header icon={RiBookOpenLine}>
+          <Modal.Title>{String(document.title ?? "Business profile")}</Modal.Title>
+          <Modal.Description>{archived ? "Archived: the profile is empty, so drafts leave it out." : "Always included in reply drafts."}</Modal.Description>
+        </Modal.Header>
+        <Modal.Body className="space-y-4">
+          <Callout tone="info">{PROFILE_DOCUMENT_READ_ONLY}</Callout>
+          <div className="max-h-[50dvh] overflow-y-auto whitespace-pre-wrap break-words rounded-xl bg-bg-weak-50 p-4 text-paragraph-sm text-text-strong-950 ring-1 ring-inset ring-stroke-soft-200">
+            {contentOf(document) || "No content"}
+          </div>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button.Root type="button" variant="neutral" mode="stroke" size="small" onClick={onClose}>
+            Close
+          </Button.Root>
+          <Button.Root asChild variant="primary" mode="filled" size="small">
+            <Link href={BUSINESS_PROFILE_HREF}>Edit in Settings → Your business</Link>
+          </Button.Root>
+        </Modal.Footer>
+      </Modal.Content>
+    </Modal.Root>
   );
 }
 

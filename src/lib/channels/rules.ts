@@ -1,6 +1,6 @@
 /**
  * Sending rules: the numbers that used to be hardcoded in the sending
- * engines, now set per organization in Settings → <channel> → Sending rules.
+ * engines, now set per organization in Settings → Sending & automation (a page per channel, plus Sending defaults and Lead research for the "general" ones).
  *
  * Every rule is declared once here — label, help, default, unit and the
  * bounds it may take — and the settings page is generated from it, the API

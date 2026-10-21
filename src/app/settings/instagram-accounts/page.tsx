@@ -36,7 +36,7 @@ export default async function InstagramAccountsPage() {
               description="An owner or admin can turn them on under Optional features. Nothing is read from Instagram until then."
               action={
                 <Button.Root asChild variant="neutral" mode="stroke" size="small">
-                  <Link href="/settings/organization">Settings → Organization</Link>
+                  <Link href="/settings/advanced">Settings → Providers & features</Link>
                 </Button.Root>
               }
             />

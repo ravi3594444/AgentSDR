@@ -16,7 +16,7 @@ import type { SpendGuard } from "@/lib/assistant/objective.server";
 /**
  * The assistant's remote browser: one TinyFish Browser session at a time
  * per organization, only while its owner allows browser minutes for the day
- * (Settings → Organization → TinyFish; 0, the default, keeps it off). A
+ * (Settings → Lead research → TinyFish; 0, the default, keeps it off). A
  * session reserves its longest life (BROWSER_LIMITS.maxSessionMinutes) in
  * provider_usage when it opens, is closed when idle, at the end of the chat
  * turn or after that time, and settles the minutes it actually used.
@@ -40,10 +40,10 @@ export type BrowserAllowance = { available: boolean; reason: string | null; minu
 
 export async function browserAllowance(): Promise<BrowserAllowance> {
   const connection = await tinyfishConnection();
-  if (!connection) return { available: false, reason: "TinyFish is not connected (Settings → Organization → TinyFish)", minutesPerDay: 0, usedToday: 0 };
+  if (!connection) return { available: false, reason: "TinyFish is not connected (Settings → Lead research → TinyFish)", minutesPerDay: 0, usedToday: 0 };
   const used = await usedToday(TINYFISH_PROVIDER, "browser");
   if (connection.browserMinutesPerDay <= 0) {
-    return { available: false, reason: "the browser is off: an owner or admin sets browser minutes a day in Settings → Organization → TinyFish (it is paid by the minute)", minutesPerDay: 0, usedToday: used };
+    return { available: false, reason: "the browser is off: an owner or admin sets browser minutes a day in Settings → Lead research → TinyFish (it is paid by the minute)", minutesPerDay: 0, usedToday: used };
   }
   const left = connection.browserMinutesPerDay - used;
   if (left < BROWSER_LIMITS.maxSessionMinutes) {
@@ -134,7 +134,7 @@ export async function openBrowser(url: string, threadId: string, check: Navigati
     return { snapshot, reused: true, problem: await check(snapshot.url), allowance: await browserAllowance() };
   }
   const connection = await tinyfishConnection();
-  if (!connection) throw new BrowserUnavailableError("TinyFish is not connected (Settings → Organization → TinyFish)");
+  if (!connection) throw new BrowserUnavailableError("TinyFish is not connected (Settings → Lead research → TinyFish)");
   const row = await db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`browser:${currentOrganizationId()}`}, 0))`);
     const allowance = await browserAllowance();

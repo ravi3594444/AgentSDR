@@ -1,6 +1,6 @@
 /**
  * Times on the Sending status panel and in Activity, in one display time
- * zone (the organization's, Settings → Organization → Time zone) and named,
+ * zone (the organization's, Settings → Sending defaults → Time zone) and named,
  * so a sender's own sending hours, a lead's location and the time shown are
  * never confused. Pure and client-safe: Intl only.
  */
