@@ -211,9 +211,17 @@ describe("due state", () => {
     );
   });
 
-  it("treats an error and an undecided classification the same way", () => {
+  it("treats an error and an undecided classification in Action required the same way", () => {
     assert.equal(crmDueState({ ...base, workflowState: "error", now }), "immediate_reply");
-    assert.equal(crmDueState({ ...base, classificationStatus: "proposed", now }), "immediate_reply");
+    assert.equal(crmDueState({ ...base, workflowState: "action_required", classificationStatus: "proposed", now }), "immediate_reply");
+  });
+
+  it("does not call an older proposal immediate once the record left Action required", () => {
+    // Off the queue, answered and waiting on the lead: the schedule decides, as the summary says.
+    assert.equal(crmDueState({ ...base, classificationStatus: "proposed", nextActionAt: new Date("2026-09-09T12:00:00.000Z"), now }), "follow_up");
+    assert.equal(crmDueState({ ...base, classificationStatus: "proposed", hasActiveRun: true, now }), "pending");
+    // A newer reply being classified: nothing for a person yet.
+    assert.equal(crmDueState({ ...base, workflowState: "classifying", classificationStatus: "proposed", now }), "none");
   });
 
   it("does not call an auto-applied classification actionable", () => {

@@ -165,7 +165,12 @@ export function crmDueState(input: {
       ? "follow_up_ready"
       : "immediate_reply";
   }
-  if (input.classificationStatus === "proposed") return "immediate_reply";
+  // A classification held for review is the queue's to confirm, so it is
+  // immediate only while the record is in Action required — the rule the
+  // conversation summary uses. Once the conversation moved on (answered,
+  // waiting, a newer reply being classified), the schedule decides; calling
+  // it "Immediate reply" beside "nothing is waiting on you" contradicted it.
+  if (input.classificationStatus === "proposed" && input.workflowState === "action_required") return "immediate_reply";
   // Otherwise the schedule decides.
   if (input.nextActionAt) return input.nextActionAt <= now ? "past_due" : "follow_up";
   if (input.workflowState === "waiting" || input.hasActiveRun) return "pending";

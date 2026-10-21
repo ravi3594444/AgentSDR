@@ -17,6 +17,9 @@ import { mailboxes, outreachCampaigns, outreachEmails } from "@/lib/outreach/sch
 import { listPlatformStatus } from "@/lib/platform/credentials";
 import { inOrg } from "@/lib/tenancy/scope";
 import { whatsappAccounts, whatsappCampaigns, whatsappChats, whatsappMessages } from "@/lib/whatsapp/schema";
+import { instagramAccounts } from "@/lib/instagram/schema";
+import { instagramOutreachReady } from "@/lib/instagram/outreach.server";
+import { featureEnabled } from "@/lib/features/flags.server";
 import { buildReadiness, type ReadinessFacts, type ReadinessItem, type ReplyChannel, type TrafficFacts } from "./readiness";
 
 const iso = (value: Date | string | null | undefined) => (value ? new Date(value).toISOString() : null);
@@ -88,6 +91,17 @@ export async function loadReadinessFacts(ctx: OrgContext): Promise<ReadinessFact
     .from(whatsappAccounts)
     .where(inOrg(whatsappAccounts))
     .groupBy(whatsappAccounts.status);
+  // Only while the organization has Instagram on; read as channelAvailability reads it.
+  const instagram = await featureEnabled("instagram")
+    ? await Promise.all([
+      instagramOutreachReady(),
+      db.select({ status: instagramAccounts.status, n: count() }).from(instagramAccounts).where(inOrg(instagramAccounts)).groupBy(instagramAccounts.status),
+    ]).then(([ready, rows]) => {
+      const total = rows.reduce((sum, row) => sum + Number(row.n), 0);
+      const connected = Number(rows.find((row) => row.status === "connected")?.n ?? 0);
+      return { ready, connected, notConnected: total - connected };
+    })
+    : null;
   const byok = await getByokSettings();
   const [{ n: peopleCount }] = await db.select({ n: count() }).from(people).where(inOrg(people));
   const emailCampaignRows = await db
@@ -159,6 +173,7 @@ export async function loadReadinessFacts(ctx: OrgContext): Promise<ReadinessFact
     },
     linkedinAccounts: { connected: linkedinCounts.CONNECTED ?? 0, disconnected: linkedinCounts.DISCONNECTED ?? 0 },
     whatsappAccounts: { connected: whatsappConnected, notConnected: whatsappTotal - whatsappConnected },
+    instagram,
     ai: {
       provider: aiConnection?.providerKey === "openrouter" || aiConnection?.providerKey === "aimlapi" ? aiConnection.providerKey : null,
       connectionSaved: Boolean(aiConnection),

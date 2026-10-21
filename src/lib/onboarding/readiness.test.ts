@@ -328,3 +328,27 @@ describe("email through Unipile (no Google Workspace)", () => {
     expect(item.next).toContain("Gmail Pub/Sub topic");
   });
 });
+
+describe("Instagram in Getting started", () => {
+  test("no step while the organization has Instagram off", () => {
+    expect(buildReadiness(fresh()).some((item) => item.key === "instagram")).toBe(false);
+    expect(buildReadiness(fresh({ instagram: null })).some((item) => item.key === "instagram")).toBe(false);
+  });
+
+  test("with Instagram on, the step reads Unipile, the outbound tables and the accounts", () => {
+    const step = (instagram: NonNullable<ReadinessFacts["instagram"]>, unipile = true) =>
+      buildReadiness(fresh({ instagram, unipile: { ...fresh().unipile, connected: unipile } })).find((item) => item.key === "instagram")!;
+    expect(step({ ready: true, connected: 1, notConnected: 0 }, false).status).toBe("not_configured");
+    expect(step({ ready: false, connected: 1, notConnected: 0 }).status).toBe("needs_attention");
+    expect(step({ ready: true, connected: 0, notConnected: 1 }).summary).toBe("1 Instagram account not connected.");
+    expect(step({ ready: true, connected: 0, notConnected: 0 }).status).toBe("not_verified");
+    const ok = step({ ready: true, connected: 2, notConnected: 0 });
+    expect(ok.status).toBe("connected");
+    expect(ok.links.map((link) => link.href)).toEqual(["/settings/instagram-accounts", "/settings/instagram-rules"]);
+  });
+
+  test("it sits with the other channels, after WhatsApp", () => {
+    const keys = buildReadiness(fresh({ instagram: { ready: true, connected: 1, notConnected: 0 } })).map((item) => item.key);
+    expect(keys.indexOf("instagram")).toBe(keys.indexOf("whatsapp") + 1);
+  });
+});

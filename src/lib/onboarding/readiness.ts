@@ -43,7 +43,7 @@ export const READINESS_COLOR: Record<ReadinessStatus, "gray" | "orange" | "red" 
 /** A step counts toward progress when nothing is left to do on it. */
 export const isReady = (status: ReadinessStatus) => status === "connected" || status === "done" || status === "clear";
 
-export type ReadinessKey = "workspace" | "email" | "linkedin" | "whatsapp" | "ai" | "leads" | "campaigns" | "replySync" | "replies";
+export type ReadinessKey = "workspace" | "email" | "linkedin" | "whatsapp" | "instagram" | "ai" | "leads" | "campaigns" | "replySync" | "replies";
 
 export type ReadinessItem = {
   key: ReadinessKey;
@@ -100,6 +100,11 @@ export type ReadinessFacts = {
   };
   linkedinAccounts: { connected: number; disconnected: number };
   whatsappAccounts: { connected: number; notConnected: number };
+  /**
+   * Instagram, only while the organization has it on (absent or null: no
+   * step). `ready` is the outbound migration channelAvailability checks too.
+   */
+  instagram?: { ready: boolean; connected: number; notConnected: number } | null;
   ai: {
     /** The provider of the connection AI Settings selected, if any. */
     provider: "openrouter" | "aimlapi" | null;
@@ -434,6 +439,34 @@ export function whatsappReadiness(facts: ReadinessFacts): ReadinessItem {
   return { ...base, status: "connected", summary: `${plural(accounts.connected, "WhatsApp number")} synced, with webhooks registered.`, details, next: null };
 }
 
+/** Instagram, read the way the planner reads it (channelAvailability): Unipile, the outbound tables, a connected account. */
+export function instagramReadiness(facts: ReadinessFacts): ReadinessItem | null {
+  const instagram = facts.instagram;
+  if (!instagram) return null;
+  const links = [
+    { href: "/settings/instagram-accounts", label: "Instagram accounts" },
+    { href: "/settings/instagram-rules", label: "Sending rules" },
+  ];
+  const base = { key: "instagram" as const, title: "Instagram", links };
+  const blocker = unipileBlocker(facts, "Instagram", "Instagram accounts");
+  if (blocker) return { ...base, ...blocker };
+  const { canManage } = facts;
+  const details = [
+    `Instagram accounts: ${instagram.connected} connected${instagram.notConnected ? ` · ${instagram.notConnected} need attention` : ""}.`,
+    "A plan sends one first DM per lead; replies follow the plan's Automatic or Review mode (Sending rules set the daily number).",
+  ];
+  if (!instagram.ready) {
+    return { ...base, status: "needs_attention", summary: "Instagram outreach is not set up on this server yet.", details, next: forRole("Ask whoever runs the server to apply the Instagram outbound migration.", canManage) };
+  }
+  if (instagram.notConnected > 0) {
+    return { ...base, status: "needs_attention", summary: `${plural(instagram.notConnected, "Instagram account")} not connected.`, details, next: "Relink the account in the Unipile dashboard, then sync it on Instagram accounts." };
+  }
+  if (instagram.connected === 0) {
+    return { ...base, status: "not_verified", summary: "Unipile is connected, but no Instagram account is synced.", details, next: forRole("Link the Instagram account in the Unipile dashboard, then sync it on Instagram accounts.", canManage) };
+  }
+  return { ...base, status: "connected", summary: `${plural(instagram.connected, "Instagram account")} connected.`, details, next: null };
+}
+
 /**
  * Mirrors the gate every model call passes (src/lib/ai/runtimePlan.ts), in the
  * order a person fixes it. OpenRouter needs BYOK providers and a routing
@@ -620,6 +653,7 @@ export function buildReadiness(facts: ReadinessFacts): ReadinessItem[] {
     email,
     linkedin,
     whatsapp,
+    ...(instagramReadiness(facts) ? [instagramReadiness(facts)!] : []),
     aiReadiness(facts),
     leadsReadiness(facts),
     campaignsReadiness(facts, { email, linkedin, whatsapp }),

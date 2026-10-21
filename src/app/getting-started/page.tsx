@@ -25,7 +25,7 @@ export default async function GettingStartedPage() {
   const items = await runInOrganization(ctx.organizationId, () => loadReadiness(ctx));
   const byKey = new Map(items.map((item) => [item.key, item]));
   const pick = (...keys: ReadinessKey[]) => keys.map((key) => byKey.get(key)).filter((item): item is ReadinessItem => Boolean(item));
-  const channels = pick("email", "linkedin", "whatsapp");
+  const channels = pick("email", "linkedin", "whatsapp", "instagram");
   const connectedChannels = channels.filter((item) => item.status === "connected").length;
   const ready = items.filter((item) => isReady(item.status)).length;
 
