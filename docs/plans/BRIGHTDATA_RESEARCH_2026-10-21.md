@@ -123,11 +123,35 @@ Offline (every outside call stood in):
 - `npx tsc --noEmit`, ESLint, `check-organization-scope --contract`,
   `docker/deploy.test.ts`, the production build.
 
-Live (the owner's key; research only, nothing sent): see the session report.
-The probes before the code (5 credits): Reddit keyword discovery, an X
-profile, an Instagram profile (dead page, billed), a Facebook page. The
-run through the real job: `scripts/e2e/brightdata-live.ts` (Reddit only;
-the environment holds no web search key for the other three).
+Live (the owner's key; research only, nothing sent; 34 of the 100 credits
+allowed):
+
+- Probes before the code (5 credits): Reddit keyword discovery (2 full
+  post records with comments), an X profile, an Instagram profile (a dead
+  page, billed as 1), a Facebook page.
+- `scripts/e2e/brightdata-live.ts` through the real tool and job (29
+  credits, 5½ minutes), Reddit only (the environment holds no web search
+  key for the other three): two keyword inputs at 10 posts each delivered
+  19 posts with 168 comments (187 discussions, 19 credits); the authors'
+  profile hop read 10 profiles (10 credits; 2 more authors were over the
+  job's 30-record limit, and the report says so). The ledger settled both
+  rows at what Bright Data reported; the card showed 29 used, both
+  datasets "verified" with their record counts; the settings row was
+  deleted afterwards.
+- Outcome: 170 people found, 0 contactable, 170 kept as research with the
+  reason (158 "their words do not ask for anything, so their profile was
+  not read", 10 "their Reddit profile publishes no email or phone", 2
+  "the limit on authors' profiles read was reached"); 12 asked for
+  something in their own words. That is Reddit as designed: discussions
+  are evidence, and Reddit profiles rarely publish a contact route.
+- Two things to know: the plain keyword "missed calls at the front desk"
+  also pulled hotel front-desk threads (r/TalesFromTheFrontDesk) beside
+  the relevant ones (r/Businessowners "Do missed calls actually cost you
+  business?"), which the request's qualification step filters when the
+  job serves an objective (it did not here); and the need heuristic
+  (`needSignal`, shared with web discovery) counted a few questions that
+  are not asks ("What's the pricing?"). Narrower keywords and named
+  subreddits are the owner's levers.
 
 ## Deploying (not yet)
 
