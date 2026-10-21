@@ -37,8 +37,10 @@ CREATE TABLE IF NOT EXISTS assistant_objectives (
 CREATE UNIQUE INDEX IF NOT EXISTS assistant_objectives_org_request_uq ON assistant_objectives (organization_id, request_message_id);
 CREATE INDEX IF NOT EXISTS assistant_objectives_thread_idx ON assistant_objectives (thread_id, created_at);
 
+-- Every kind a later migration added too (social_research, 20261021-brightdata.sql): deploy.sh re-runs this
+-- file on every deploy, and a shorter list fails on the rows those kinds wrote.
 ALTER TABLE assistant_jobs DROP CONSTRAINT IF EXISTS assistant_jobs_kind_chk;
 ALTER TABLE assistant_jobs ADD CONSTRAINT assistant_jobs_kind_chk
-  CHECK (kind IN ('discovery', 'outreach_start', 'linkedin_search', 'web_discovery', 'apify_instagram', 'objective'));
+  CHECK (kind IN ('discovery', 'outreach_start', 'linkedin_search', 'web_discovery', 'apify_instagram', 'objective', 'social_research'));
 
 ALTER TABLE treg_calls ADD COLUMN IF NOT EXISTS request_id text;
