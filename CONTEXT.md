@@ -11,6 +11,18 @@ word means here and, where it matters, what it does not mean.
   identified by the owner's message id (`requestId`). Several jobs and plans
   can serve one objective. A child job finishing does not finish the
   objective.
+- **Research-only request**: a request whose latest words say not to contact
+  anyone ("research only", "no outreach", "do not contact anyone", "kisi ko
+  contact mat karo"). It is a veto: nothing in it authorizes outreach, and it
+  cancels an earlier outreach request nothing has acted on yet
+  (`researchOnlyStated`, `agent.ts`). A false "yes" contacts people; a false
+  "no" only makes the assistant ask.
+- **Request subject**: what a request asks to find, without how the research
+  runs (`requestSubject`, `leadFit.ts`): "Find 3 dental clinics in Pune,
+  India." of the pilot request. Leads are judged against it; budgets, time
+  limits, sources and "do not contact" are never requirements a lead fails.
+  A kind or place it names replaces the saved target customers for that
+  request.
 - **Source**: where leads come from, such as Google Maps, Instagram,
   LinkedIn, the open web, a directory, Hacker News or Stack Exchange.
 - **Provider**: who fetches from a source, such as the built-in Maps scraper
