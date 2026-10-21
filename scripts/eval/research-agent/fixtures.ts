@@ -470,8 +470,8 @@ export const CASES: Record<string, CaseFixture> = {
   c4: C4,
   c5: C5,
   c5b: { ...C5, id: "c5b", title: "Free-only request, other wording", prompt: "Find 5 yoga studios in Denver. Use only free tools." },
-  // The place arrives only in the answer to the assistant's question.
-  c6: { ...C1, id: "c6", title: "The city comes in a clarification", prompt: "Find 10 hair salons on Instagram and DM them", followUp: "Miami." },
+  // The place arrives only in the answer to the assistant's question (the profile names no place either).
+  c6: { ...C1, id: "c6", title: "The city comes in a clarification", prompt: "Find 10 hair salons on Instagram and DM them", followUp: "Miami.", profile: { businessName: "SalonFlow", offer: "Online booking and automatic appointment reminders for hair salons", targetCustomers: "hair salons", senderName: "Ravi" } },
   c7: C7,
   // Instagram asked for, no Instagram account linked, a mailbox ready: no email plan may stand in for the DMs.
   c8: { ...C1, id: "c8", title: "Instagram asked for, no Instagram sender", senders: { email: true }, expect: { ...C1.expect, planPossible: false } },

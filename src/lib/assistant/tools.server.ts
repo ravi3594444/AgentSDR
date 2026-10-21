@@ -1230,7 +1230,7 @@ export const TOOLS: Record<string, Tool> = {
 
   set_lead_fit: {
     available: (features) => features.research_agent_v2,
-    description: "Correct the verdict on one lead of the current request when the evidence shows the judge was wrong: match (only matches are contacted) or no_match. A match needs quote: the exact words from a page read in this chat (read_webpage, web_search) or from the lead's own profile that show it fits (its city, its kind of business). The server checks the quote is really there.",
+    description: "Correct the verdict on one lead of the current request when the evidence shows the judge was wrong: match (only matches are contacted) or no_match. A match needs quote: the exact words from a page read in this chat (read_webpage, web_search) or from the lead's own profile that show what was in doubt — for a place, words naming that place (a handle or a hashtag does not); for a kind of business, words saying what it is. The server checks the quote is really there.",
     arguments: "personId (from review_leads), fit (match|no_match), reason (a short sentence), quote (required for match: the exact words that prove it), url (the page the quote is from, when it is a page)",
     run: async (args, context) => {
       const objective = await objectiveForRequest(searchRequestId(context));
