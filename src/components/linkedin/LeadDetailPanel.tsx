@@ -173,7 +173,7 @@ function MessageBubble({ type, text, createdAt }: { type: string; text: string; 
           sent ? "bg-blue-600 text-white" : "bg-bg-weak-50 text-text-strong-950"
         }`}
       >
-        <p className="text-[10px] font-medium opacity-80 mb-0.5">
+        <p className="text-[12px] font-medium opacity-80 mb-0.5">
           {MESSAGE_TYPE_LABEL[type] ?? type}
           <span className="mx-1">·</span>
           {new Date(createdAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
@@ -295,19 +295,19 @@ function OutreachTemplatesEditor({
             <div className="flex items-center justify-between gap-2 mb-1.5">
               <p className="text-xs font-medium text-text-sub-600">{label}</p>
               {sent ? (
-                <span className="text-[10px] text-green-600 dark:text-green-400 font-medium">
+                <span className="text-[12px] text-green-600 dark:text-green-400 font-medium">
                   Sent{sentAt !== "sent" ? ` ${fmt(sentAt)}` : ""}
                 </span>
               ) : editable ? (
                 <button
                   type="button"
-                  className="text-[10px] font-medium text-blue-600 dark:text-blue-400 hover:underline"
+                  className="text-[12px] font-medium text-blue-600 dark:text-blue-400 hover:underline"
                   onClick={() => toggleFieldEditor(key)}
                 >
                   {editing ? "Cancel edit" : "Edit template"}
                 </button>
               ) : (
-                <span className="text-[10px] text-text-soft-400">Locked</span>
+                <span className="text-[12px] text-text-soft-400">Locked</span>
               )}
             </div>
             {editing ? (
@@ -322,7 +322,7 @@ function OutreachTemplatesEditor({
                 />
                 {key === "invitationMessage" && (
                   <p
-                    className={`mt-1 text-[10px] text-right ${
+                    className={`mt-1 text-[12px] text-right ${
                       isInvitationMessageTooLong(value) ? "text-red-600 dark:text-red-400 font-medium" : "text-text-soft-400"
                     }`}
                   >
@@ -537,7 +537,7 @@ export function LeadDetailPanel({
                   {lead.providerId && (
                     <DetailRow
                       label="Provider ID"
-                      value={<span className="font-mono text-[10px] break-all">{lead.providerId}</span>}
+                      value={<span className="font-mono text-[12px] break-all">{lead.providerId}</span>}
                     />
                   )}
                 </div>
@@ -580,7 +580,7 @@ export function LeadDetailPanel({
               <section className="space-y-2">
                 <div>
                   <h4 className="text-xs font-semibold uppercase tracking-wide text-text-soft-400">Outreach preview</h4>
-                  <p className="mt-1 text-[11px] text-text-soft-400">Rendered for {displayName}. Edit a template to view its variables.</p>
+                  <p className="mt-1 text-[13px] text-text-soft-400">Rendered for {displayName}. Edit a template to view its variables.</p>
                 </div>
                 <OutreachTemplatesEditor lead={lead} onSaved={handleTemplatesSaved} />
               </section>

@@ -169,7 +169,7 @@ export default function ImportDialog({
         <div className="flex shrink-0 items-start justify-between border-b border-stroke-soft-200 px-5 py-4">
           <div>
             <h2 className="text-[15px] font-semibold text-text-strong-950">Import data</h2>
-            <p className="text-[13px] text-text-sub-600">
+            <p className="text-[15px] text-text-sub-600">
               CSV, TSV or Excel. The first row is read as column headers.
             </p>
           </div>
@@ -208,10 +208,10 @@ export default function ImportDialog({
               ) : (
                 <RiUploadCloud2Line className="mb-3 size-7 text-text-soft-400" />
               )}
-              <span className="text-[13px] font-medium text-text-strong-950">
+              <span className="text-[15px] font-medium text-text-strong-950">
                 {busy ? "Reading file…" : "Drop a file here, or click to choose"}
               </span>
-              <span className="text-[13px] text-text-sub-600">.csv, .tsv, .txt, .xlsx, .xls</span>
+              <span className="text-[15px] text-text-sub-600">.csv, .tsv, .txt, .xlsx, .xls</span>
             </button>
           )}
 
@@ -227,11 +227,11 @@ export default function ImportDialog({
           {preview && (
             <>
               <div className="mb-3 flex flex-wrap items-center gap-2">
-                <span className="flex items-center gap-1.5 rounded-lg bg-bg-weak-50 px-2.5 py-1.5 text-[13px] font-medium text-text-strong-950">
+                <span className="flex items-center gap-1.5 rounded-lg bg-bg-weak-50 px-2.5 py-1.5 text-[15px] font-medium text-text-strong-950">
                   <RiFileExcel2Line className="size-4 text-text-soft-400" />
                   {preview.fileName}
                 </span>
-                <span className="text-[13px] text-text-sub-600">
+                <span className="text-[15px] text-text-sub-600">
                   {preview.totalRows.toLocaleString()} row
                   {preview.totalRows === 1 ? "" : "s"} · {included} of {preview.headers.length}{" "}
                   column{preview.headers.length === 1 ? "" : "s"} included
@@ -259,14 +259,14 @@ export default function ImportDialog({
               </div>
 
               {preview.truncated && (
-                <p className="mb-3 flex items-center gap-2 rounded-lg bg-amber-50 dark:bg-amber-500/10 px-3 py-2 text-[13px] text-amber-800 dark:text-amber-400">
+                <p className="mb-3 flex items-center gap-2 rounded-lg bg-amber-50 dark:bg-amber-500/10 px-3 py-2 text-[15px] text-amber-800 dark:text-amber-400">
                   <RiAlertLine className="size-4 shrink-0" />
                   Only the first {preview.maxRows.toLocaleString()} rows will be imported.
                 </p>
               )}
 
               <div className="overflow-hidden rounded-xl border border-stroke-soft-200">
-                <table className="w-full text-left text-[13px]">
+                <table className="w-full text-left text-[15px]">
                   <thead className="bg-bg-weak-50 text-text-sub-600">
                     <tr>
                       <th className="px-3 py-2 font-medium">File column</th>
@@ -350,7 +350,7 @@ export default function ImportDialog({
                                       return copy;
                                     })
                                   }
-                                  title={m.name} className="w-[200px] min-w-0 flex-1 rounded-lg border border-stroke-soft-200 bg-bg-white-0 px-2 py-1 text-[13px] text-text-strong-950 outline-none focus:border-blue-500"
+                                  title={m.name} className="w-[200px] min-w-0 flex-1 rounded-lg border border-stroke-soft-200 bg-bg-white-0 px-2 py-1 text-[15px] text-text-strong-950 outline-none focus:border-blue-500"
                                 />
                               )}
 
@@ -390,7 +390,7 @@ export default function ImportDialog({
           )}
 
           {error && (
-            <p className="mt-3 rounded-lg bg-red-50 dark:bg-red-500/10 px-3 py-2 text-[13px] text-red-700 dark:text-red-400">{error}</p>
+            <p className="mt-3 rounded-lg bg-red-50 dark:bg-red-500/10 px-3 py-2 text-[15px] text-red-700 dark:text-red-400">{error}</p>
           )}
         </div>
 
@@ -405,7 +405,7 @@ export default function ImportDialog({
                 setError(null);
               }}
               disabled={busy}
-              className="mr-auto rounded-lg px-3 py-2 text-[13px] font-medium text-text-sub-600 transition hover:bg-bg-weak-50 disabled:opacity-50"
+              className="mr-auto rounded-lg px-3 py-2 text-[15px] font-medium text-text-sub-600 transition hover:bg-bg-weak-50 disabled:opacity-50"
             >
               Choose a different file
             </button>
@@ -414,7 +414,7 @@ export default function ImportDialog({
             type="button"
             onClick={onClose}
             disabled={busy}
-            className="rounded-lg border border-stroke-soft-200 px-3 py-2 text-[13px] font-medium text-text-sub-600 transition hover:bg-bg-weak-50 disabled:opacity-50"
+            className="rounded-lg border border-stroke-soft-200 px-3 py-2 text-[15px] font-medium text-text-sub-600 transition hover:bg-bg-weak-50 disabled:opacity-50"
           >
             Cancel
           </button>
@@ -422,7 +422,7 @@ export default function ImportDialog({
             type="button"
             onClick={runImport}
             disabled={!preview || busy || included === 0 || blankName}
-            className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-[13px] font-medium text-white transition hover:bg-blue-700 disabled:opacity-50"
+            className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-[15px] font-medium text-white transition hover:bg-blue-700 disabled:opacity-50"
           >
             {busy && <RiLoader4Line className="size-4 animate-spin" />}
             {preview ? `Import ${preview.totalRows.toLocaleString()} rows` : "Import"}

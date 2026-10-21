@@ -11,12 +11,12 @@ export type LinkedInAccountRef = {
 const SIZE = {
   sm: {
     pill: "pl-0.5 pr-2 py-0.5 gap-1",
-    avatar: "h-5 w-5 text-[9px]",
+    avatar: "h-5 w-5 text-[11px]",
     text: "text-xs max-w-28",
   },
   md: {
     pill: "pl-1 pr-2.5 py-1 gap-1.5",
-    avatar: "h-6 w-6 text-[10px]",
+    avatar: "h-6 w-6 text-[12px]",
     text: "text-sm max-w-36",
   },
 } as const;
@@ -127,7 +127,7 @@ export function LinkedInAccountAvatars({
             title={account.name ? `${account.name} (@${account.username})` : `@${account.username}`}
             className="-ml-1.5 rounded-full ring-2 ring-bg-white-0 first:ml-0"
           >
-            <TagAvatar account={account} avatarClass="h-6 w-6 text-[10px]" />
+            <TagAvatar account={account} avatarClass="h-6 w-6 text-[12px]" />
             <span className="sr-only">{display}</span>
           </span>
         );
@@ -135,7 +135,7 @@ export function LinkedInAccountAvatars({
       {extra > 0 && (
         <span
           title={accounts.slice(maxVisible).map((account) => account.name ?? account.username).join(", ")}
-          className="-ml-1.5 flex h-6 items-center rounded-full bg-bg-weak-50 px-1.5 text-[10px] font-medium text-text-sub-600 ring-2 ring-bg-white-0"
+          className="-ml-1.5 flex h-6 items-center rounded-full bg-bg-weak-50 px-1.5 text-[12px] font-medium text-text-sub-600 ring-2 ring-bg-white-0"
         >
           +{extra}
         </span>

@@ -591,7 +591,7 @@ export default function WorkbookClient({
   return (
     <div className="flex h-full min-h-0 flex-col bg-bg-white-0">
       {/* ---------- breadcrumb ---------- */}
-      <div className="flex h-[46px] shrink-0 items-center gap-1.5 border-b border-stroke-soft-200 px-3 text-[13px]">
+      <div className="flex h-[46px] shrink-0 items-center gap-1.5 border-b border-stroke-soft-200 px-3 text-[15px]">
         <Link
           href="/tables"
           className="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-text-sub-600 transition hover:bg-bg-weak-50"
@@ -654,7 +654,7 @@ export default function WorkbookClient({
           // the previous table's rows fully legible under a corner spinner is
           // what made a switch look like it had not happened.
           <div className="absolute inset-0 z-20 flex items-start justify-center bg-bg-white-0/70 pt-24">
-            <span className="flex items-center gap-2 rounded-full border border-stroke-soft-200 bg-bg-white-0 px-3.5 py-2 text-[13px] font-medium text-text-sub-600 shadow-sm">
+            <span className="flex items-center gap-2 rounded-full border border-stroke-soft-200 bg-bg-white-0 px-3.5 py-2 text-[15px] font-medium text-text-sub-600 shadow-sm">
               <RiLoader4Line className="size-4 animate-spin text-blue-600 dark:text-blue-400" />
               Loading {pendingTable?.name ?? "table"}…
             </span>
@@ -701,7 +701,7 @@ export default function WorkbookClient({
                   if (!droppedRef.current) cancelTabDrag();
                 }}
                 title="Drag to reorder"
-                className={`flex shrink-0 cursor-grab items-center border-t-2 text-[13px] font-medium transition active:cursor-grabbing ${
+                className={`flex shrink-0 cursor-grab items-center border-t-2 text-[15px] font-medium transition active:cursor-grabbing ${
                   active
                     ? "border-blue-600 text-blue-600 dark:text-blue-400"
                     : "border-transparent text-text-sub-600 hover:bg-bg-weak-50"
@@ -722,7 +722,7 @@ export default function WorkbookClient({
                         if (event.key === "Enter") void finishInlineRename(t, true);
                         else if (event.key === "Escape") void finishInlineRename(t, false);
                       }}
-                      className="w-[140px] rounded border border-blue-500 bg-bg-white-0 px-1.5 py-0.5 text-[13px] font-medium text-text-strong-950 outline-none"
+                      className="w-[140px] rounded border border-blue-500 bg-bg-white-0 px-1.5 py-0.5 text-[15px] font-medium text-text-strong-950 outline-none"
                     />
                   </span>
                 ) : (
@@ -774,14 +774,14 @@ export default function WorkbookClient({
           type="button"
           onClick={addSheet}
           disabled={saving}
-          className="ml-1 flex shrink-0 items-center gap-1.5 rounded-lg border border-stroke-soft-200 px-2.5 py-[7px] text-[13px] font-medium text-text-strong-950 transition hover:bg-bg-weak-50 disabled:opacity-50"
+          className="ml-1 flex shrink-0 items-center gap-1.5 rounded-lg border border-stroke-soft-200 px-2.5 py-[7px] text-[15px] font-medium text-text-strong-950 transition hover:bg-bg-weak-50 disabled:opacity-50"
         >
           {saving ? <RiLoader4Line className="size-4 animate-spin" /> : <RiAddLine className="size-4" />}
           Add
         </button>
 
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
-          <span className="flex items-center gap-1.5 px-2 text-[13px] text-text-sub-600">
+          <span className="flex items-center gap-1.5 px-2 text-[15px] text-text-sub-600">
             <RiCheckLine className="size-4 text-emerald-500" />
             Table up to date
           </span>

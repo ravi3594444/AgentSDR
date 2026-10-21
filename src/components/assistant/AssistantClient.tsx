@@ -1225,7 +1225,7 @@ type BusinessProfileSummary = { businessName?: string; offer?: string; targetCus
 function Welcome({ firstName, profile, onStarter }: { firstName: string | null; profile: BusinessProfileSummary | undefined; onStarter: (starter: Starter) => void }) {
   return (
     <div className="assistant-welcome mx-auto flex w-full max-w-2xl flex-col items-center py-4 text-center sm:pt-[4vh]">
-      <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-soft-400">{firstName ? `Your workspace, ${firstName}` : "Your outreach workspace"}</p>
+      <p className="text-[12px] font-semibold uppercase tracking-[0.16em] text-text-soft-400">{firstName ? `Your workspace, ${firstName}` : "Your outreach workspace"}</p>
       <h2 className="mt-5 text-[clamp(30px,3.5vw,46px)] font-medium leading-[1.1] tracking-[-0.045em] text-text-strong-950">Let’s make your next<br /><span className="font-instrument-serif text-[1.15em] italic font-normal">connection.</span></h2>
       <p className="mt-4 max-w-lg text-paragraph-sm leading-relaxed text-text-sub-600">
         Find the right people{profile?.businessName ? ` for ${profile.businessName}` : ""}, shape your outreach, and keep conversations moving. What would you like to work on?
@@ -1423,7 +1423,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
   const profile = (setup as (Setup & { profile?: BusinessProfileSummary }) | null)?.profile;
 
   const assistantItems = (items: Message[]) => items.map((message) => {
-    if (message.role === "assistant") return <div key={message.id} className="text-paragraph-sm text-text-strong-950"><RichText text={message.content} /></div>;
+    if (message.role === "assistant") return <div key={message.id} className="assistant-message text-paragraph-sm text-text-strong-950"><RichText text={message.content} /></div>;
     if (message.role === "event") {
       // Only the newest event can offer Retry: an older failure was already followed by more work.
       const retry = message.toolResult?.data?.retry === true && message.id === shown.at(-1)?.id;
@@ -1435,7 +1435,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
   return (
     <DisplayTimeZone.Provider value={timeZone}>
     <div
-      className="relative flex h-full min-h-0 flex-col bg-bg-white-0"
+      className="assistant-workspace relative flex h-full min-h-0 flex-col bg-bg-white-0"
       onDragOver={(event) => { if (event.dataTransfer.types.includes("Files")) { event.preventDefault(); setDragging(true); } }}
       onDragLeave={(event) => { if (event.currentTarget === event.target) setDragging(false); }}
       onDrop={(event) => { event.preventDefault(); setDragging(false); addFiles(Array.from(event.dataTransfer.files)); }}
@@ -1480,7 +1480,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
               <div key={turn.owner?.id ?? `turn-${index}`} className="flex flex-col gap-3">
                 {turn.owner && (
                   <div className="flex flex-col items-end gap-2">
-                    <span className="px-1 text-[11px] text-text-soft-400">You · {formatChatTime(turn.owner.createdAt, timeZone)}</span>
+                    <span className="px-1 text-[13px] text-text-soft-400">You · {formatChatTime(turn.owner.createdAt, timeZone)}</span>
                     {turn.owner.content && <div className="max-w-[min(36rem,90%)] whitespace-pre-wrap rounded-2xl rounded-br-md bg-bg-weak-50 px-4 py-3 text-paragraph-sm leading-6 text-text-strong-950 [overflow-wrap:anywhere]">{turn.owner.content}</div>}
                     {turn.owner.attachments.map((file) => (
                       <span key={file.name} className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-paragraph-xs text-text-sub-600 ring-1 ring-inset ring-stroke-soft-200">
@@ -1570,7 +1570,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
               <button type="button" onClick={() => fileInput.current?.click()} disabled={sending} title="Attach a PDF, Word or text document, or a CSV/Excel contact list" className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-label-xs text-text-sub-600 hover:bg-bg-weak-50 disabled:opacity-50">
                 <RiAttachment2 className="size-4" aria-hidden="true" /><span>Attach</span>
               </button>
-              <span className="hidden flex-1 truncate text-[11px] text-text-soft-400 sm:block">Enter to send · Shift + Enter for a new line</span>
+              <span className="hidden flex-1 truncate text-[13px] text-text-soft-400 sm:block">Enter to send · Shift + Enter for a new line</span>
               <Button.Root variant="primary" mode="filled" size="small" onClick={() => void send()} disabled={thinking || (!text.trim() && !files.length)} aria-label="Send" className="ml-auto size-9 rounded-xl p-0">
                 {sending ? <Button.Icon as={RiLoader4Line} className="animate-spin" /> : <Button.Icon as={RiArrowUpLine} />}
               </Button.Root>

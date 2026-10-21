@@ -157,7 +157,7 @@ export function ReadingEmpty({
 /** A key cap for shortcut hints. */
 export function Kbd({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <kbd className={cn("inline-flex h-5 min-w-5 items-center justify-center rounded-md bg-bg-white-0 px-1 font-sans text-[11px] font-medium leading-none text-text-sub-600 ring-1 ring-inset ring-stroke-soft-200", className)}>
+    <kbd className={cn("inline-flex h-5 min-w-5 items-center justify-center rounded-md bg-bg-white-0 px-1 font-sans text-[13px] font-medium leading-none text-text-sub-600 ring-1 ring-inset ring-stroke-soft-200", className)}>
       {children}
     </kbd>
   );
@@ -305,7 +305,7 @@ function TabCount({ count, title, active }: { count: number; title?: string; act
     <span
       title={title}
       className={cn(
-        "rounded-full px-1.5 text-[11px] font-medium leading-[1.125rem] tabular-nums",
+        "rounded-full px-1.5 text-[13px] font-medium leading-[1.125rem] tabular-nums",
         active ? "bg-bg-weak-50 text-text-strong-950 ring-1 ring-inset ring-stroke-soft-200" : "text-text-soft-400",
       )}
     >
@@ -446,7 +446,7 @@ function initialsOf(name: string): string {
   return (parts[0][0] + (parts[1]?.[0] ?? "")).toUpperCase();
 }
 
-const AVATAR_SIZE = { xs: "size-6 text-[10px]", sm: "size-8 text-label-xs", md: "size-9 text-label-xs", lg: "size-14 text-label-lg" } as const;
+const AVATAR_SIZE = { xs: "size-6 text-[12px]", sm: "size-8 text-label-xs", md: "size-9 text-label-xs", lg: "size-14 text-label-lg" } as const;
 
 /**
  * A person's photo, or their initials when there is none. Stored LinkedIn
@@ -558,7 +558,7 @@ export function ConversationRow({
           <span className="mt-0.5 flex items-center gap-2">
             <span className={cn("min-w-0 flex-1 line-clamp-2 text-paragraph-xs leading-5 [overflow-wrap:anywhere]", unread && !headline ? "text-text-strong-950" : "text-text-sub-600")}>{snippet}</span>
             {count > 0 && (
-              <span className="flex h-[1.125rem] min-w-[1.125rem] shrink-0 items-center justify-center rounded-full bg-primary-base px-1 text-[11px] font-semibold leading-none text-primary-contrast" aria-label={`${count} unread`}>
+              <span className="flex h-[1.125rem] min-w-[1.125rem] shrink-0 items-center justify-center rounded-full bg-primary-base px-1 text-[13px] font-semibold leading-none text-primary-contrast" aria-label={`${count} unread`}>
                 {count > 9 ? "9+" : count}
               </span>
             )}

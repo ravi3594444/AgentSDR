@@ -109,7 +109,7 @@ function Section({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center justify-between rounded-t-xl bg-bg-weak-50 px-4 py-3 text-left text-[14px] font-semibold text-text-strong-950"
+        className="flex w-full items-center justify-between rounded-t-xl bg-bg-weak-50 px-4 py-3 text-left text-[16px] font-semibold text-text-strong-950"
       >
         {title}
         <RiArrowDownSLine className={`size-4 text-text-soft-400 transition ${open ? "rotate-180" : ""}`} />
@@ -493,7 +493,7 @@ export default function AiDialog({
         <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-5">
           {/* ---- use case ---- */}
           <div>
-            <label className="text-[13px] font-semibold text-text-strong-950">Use case</label>
+            <label className="text-[15px] font-semibold text-text-strong-950">Use case</label>
             <div className="mt-2 space-y-1.5">
               {AI_USE_CASES.map((item) => (
                 <button
@@ -517,8 +517,8 @@ export default function AiDialog({
                   }`}
                 >
                   <span className="min-w-0 flex-1">
-                    <span className="block text-[13px] font-medium text-text-strong-950">{item.name}</span>
-                    <span className="mt-0.5 block text-[12px] leading-4 text-text-sub-600">{item.description}</span>
+                    <span className="block text-[15px] font-medium text-text-strong-950">{item.name}</span>
+                    <span className="mt-0.5 block text-[14px] leading-4 text-text-sub-600">{item.description}</span>
                   </span>
                   {useCase === item.key && <RiCheckLine className="mt-0.5 size-4 shrink-0 text-blue-600 dark:text-blue-400" />}
                 </button>
@@ -528,17 +528,17 @@ export default function AiDialog({
 
           {/* ---- model ---- */}
           <div>
-            <label className="text-[13px] font-semibold text-text-strong-950">Model</label>
+            <label className="text-[15px] font-semibold text-text-strong-950">Model</label>
             <button
               type="button"
               onClick={() => setModelOpen((v) => !v)}
-              className="mt-2 flex w-full items-center gap-2 rounded-lg border border-stroke-soft-200 px-3 py-2.5 text-left text-[13px]"
+              className="mt-2 flex w-full items-center gap-2 rounded-lg border border-stroke-soft-200 px-3 py-2.5 text-left text-[15px]"
             >
               {model && provider ? (
                 <>
                   <AiBrandIcon identifier={model.modelId} label={model.name} className="size-6" />
                   <span className="flex-1 truncate text-text-strong-950">{selectedChoice?.upstreamProviderName ?? provider.name} &gt; {model.name}</span>
-                  <span className="shrink-0 rounded-full border border-stroke-soft-200 px-2 py-0.5 text-[11px] text-text-sub-600">{model.creditsPerRun}</span>
+                  <span className="shrink-0 rounded-full border border-stroke-soft-200 px-2 py-0.5 text-[13px] text-text-sub-600">{model.creditsPerRun}</span>
                 </>
               ) : (
                 <span className="flex-1 text-text-soft-400">{modelsLoading ? "Loading models…" : "Select a model"}</span>
@@ -555,7 +555,7 @@ export default function AiDialog({
                     value={modelSearch}
                     onChange={(e) => setModelSearch(e.target.value)}
                     placeholder="Search models..."
-                    className="min-w-0 flex-1 bg-transparent text-[13px] outline-none placeholder:text-text-soft-400"
+                    className="min-w-0 flex-1 bg-transparent text-[15px] outline-none placeholder:text-text-soft-400"
                   />
                 </label>
                 <div className="max-h-[280px] overflow-y-auto">
@@ -574,14 +574,14 @@ export default function AiDialog({
                     >
                       <AiBrandIcon identifier={m.modelId} label={m.name} className="mt-0.5 size-7" />
                       <span className="min-w-0 flex-1">
-                        <span className="block text-[13px] font-medium text-text-strong-950">{upstreamProviderName} · {m.name}</span>
-                        <span className="mt-0.5 block text-[12px] leading-4 text-text-sub-600">{m.description}</span>
+                        <span className="block text-[15px] font-medium text-text-strong-950">{upstreamProviderName} · {m.name}</span>
+                        <span className="mt-0.5 block text-[14px] leading-4 text-text-sub-600">{m.description}</span>
                       </span>
-                      <span className="shrink-0 rounded-full border border-stroke-soft-200 px-2 py-0.5 text-[11px] text-text-sub-600">{m.creditsPerRun}</span>
+                      <span className="shrink-0 rounded-full border border-stroke-soft-200 px-2 py-0.5 text-[13px] text-text-sub-600">{m.creditsPerRun}</span>
                     </button>
                   ))}
                   {!filteredChoices.length && (
-                    <p className="px-3 py-6 text-center text-[13px] text-text-sub-600">No models match that search.</p>
+                    <p className="px-3 py-6 text-center text-[15px] text-text-sub-600">No models match that search.</p>
                   )}
                 </div>
               </div>
@@ -589,7 +589,7 @@ export default function AiDialog({
           </div>
 
           {provider && !connectionId && (
-            <div className="rounded-xl border border-amber-200 dark:border-amber-500/30 bg-amber-50 dark:bg-amber-500/10 p-4 text-[13px] text-amber-900 dark:text-amber-400">
+            <div className="rounded-xl border border-amber-200 dark:border-amber-500/30 bg-amber-50 dark:bg-amber-500/10 p-4 text-[15px] text-amber-900 dark:text-amber-400">
               No AI provider is configured. Connect OpenRouter or AI/ML API and choose models in <Link className="font-semibold underline" href="/settings/ai">AI Settings</Link>.{" "}
               <DocsLink page="integrations/openrouter#set-it-up" appearance="inline" className="ml-1 text-current underline" />
             </div>
@@ -598,7 +598,7 @@ export default function AiDialog({
           {/* ---- prompt ---- */}
           <Section title="Configuration">
             <div>
-              <label className="text-[13px] font-medium text-text-strong-950">Prompt</label>
+              <label className="text-[15px] font-medium text-text-strong-950">Prompt</label>
               <div className="relative mt-1.5">
                 <textarea
                   ref={promptRef}
@@ -625,7 +625,7 @@ export default function AiDialog({
                     }
                   }}
                   placeholder="For the person with linkedin url {{linkedin_url}}, find their current job title."
-                  className="w-full resize-y rounded-lg border border-stroke-soft-200 px-3 py-2.5 text-[13px] leading-5 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 dark:focus:ring-blue-500/20"
+                  className="w-full resize-y rounded-lg border border-stroke-soft-200 px-3 py-2.5 text-[15px] leading-5 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 dark:focus:ring-blue-500/20"
                 />
                 {picker && pickerAt && pickerColumns.length > 0 && createPortal(
                   <div
@@ -642,10 +642,10 @@ export default function AiDialog({
                         onMouseDown={(e) => e.preventDefault()}
                         onMouseEnter={() => setPickerIndex(index)}
                         onClick={() => insertColumn(c.key)}
-                        className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] text-text-strong-950 ${index === pickerIndex ? "bg-bg-weak-50" : ""}`}
+                        className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[15px] text-text-strong-950 ${index === pickerIndex ? "bg-bg-weak-50" : ""}`}
                       >
                         <span className="truncate">{c.name}</span>
-                        <span className="ml-auto shrink-0 font-mono text-[11px] text-text-soft-400">{`{{${c.key}}}`}</span>
+                        <span className="ml-auto shrink-0 font-mono text-[13px] text-text-soft-400">{`{{${c.key}}}`}</span>
                       </button>
                     ))}
                   </div>,
@@ -653,14 +653,14 @@ export default function AiDialog({
                 )}
               </div>
               {unknownTokens.length > 0 && (
-                <p className="mt-1.5 text-[12px] text-amber-700 dark:text-amber-400">
+                <p className="mt-1.5 text-[14px] text-amber-700 dark:text-amber-400">
                   {unknownTokens.map((key) => `{{${key}}}`).join(", ")}{" "}
                   {unknownTokens.length === 1 ? "is not a column" : "are not columns"} in this table, so{" "}
                   {unknownTokens.length === 1 ? "it would be" : "they would be"} sent blank. Replace with a column below.
                 </p>
               )}
               {usedColumns.length > 0 && (
-                <p className="mt-1.5 text-[12px] text-text-sub-600">
+                <p className="mt-1.5 text-[14px] text-text-sub-600">
                   {usedColumns.map((c, index) => (
                     <span key={c.id}>
                       {index > 0 && ", "}
@@ -669,7 +669,7 @@ export default function AiDialog({
                   ))}
                 </p>
               )}
-              <p className="mt-1.5 text-[12px] text-text-soft-400">
+              <p className="mt-1.5 text-[14px] text-text-soft-400">
                 Type <kbd className="rounded bg-bg-weak-50 px-1 font-mono">/</kbd> or{" "}
                 <kbd className="rounded bg-bg-weak-50 px-1 font-mono">{"{{"}</kbd> to insert a column.
               </p>
@@ -679,14 +679,14 @@ export default function AiDialog({
           {/* ---- outputs ---- */}
           <Section title="Define outputs">
             {model?.producesImages ? (
-              <p className="text-[13px] text-text-sub-600">
+              <p className="text-[15px] text-text-sub-600">
                 Image models return a single image, which lands in one image column.
               </p>
             ) : (
               <>
                 <div className="flex gap-4">
                   {(["fields", "json_schema"] as const).map((value) => (
-                    <label key={value} className="flex items-center gap-2 text-[13px] text-text-strong-950">
+                    <label key={value} className="flex items-center gap-2 text-[15px] text-text-strong-950">
                       <input type="radio" checked={outputFormat === value} onChange={() => setOutputFormat(value)} className="size-4" />
                       {value === "fields" ? "Fields" : "JSON Schema"}
                     </label>
@@ -701,7 +701,7 @@ export default function AiDialog({
                           value={field.name}
                           onChange={(e) => setOutput(index, { name: e.target.value })}
                           placeholder="response"
-                          className="min-w-0 flex-1 rounded-lg border border-stroke-soft-200 px-3 py-2 text-[13px] outline-none focus:border-blue-400"
+                          className="min-w-0 flex-1 rounded-lg border border-stroke-soft-200 px-3 py-2 text-[15px] outline-none focus:border-blue-400"
                         />
                         <Select.Root size="small" value={field.type} onValueChange={(next) => setOutput(index, { type: next as StaticColumnType })}>
                           <Select.Trigger aria-label="Output type" className="w-[140px] shrink-0">
@@ -732,7 +732,7 @@ export default function AiDialog({
                           { key: fieldKey("field", new Set(c.map((f) => f.key))), name: "", type: "text" },
                         ])
                       }
-                      className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-stroke-sub-300 py-2 text-[13px] font-medium text-text-sub-600 transition hover:bg-bg-weak-50"
+                      className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-stroke-sub-300 py-2 text-[15px] font-medium text-text-sub-600 transition hover:bg-bg-weak-50"
                     >
                       <RiAddLine className="size-4" />Add output
                     </button>
@@ -743,7 +743,7 @@ export default function AiDialog({
                     rows={8}
                     onChange={(e) => setSchemaText(e.target.value)}
                     placeholder='{ "type": "object", "properties": { "name": { "type": "string" } } }'
-                    className="w-full resize-y rounded-lg border border-stroke-soft-200 px-3 py-2.5 font-mono text-[12px] outline-none focus:border-blue-400"
+                    className="w-full resize-y rounded-lg border border-stroke-soft-200 px-3 py-2.5 font-mono text-[14px] outline-none focus:border-blue-400"
                   />
                 )}
               </>
@@ -752,13 +752,13 @@ export default function AiDialog({
 
           {/* ---- examples ---- */}
           <Section title="Examples">
-            <p className="text-[13px] text-text-sub-600">
+            <p className="text-[15px] text-text-sub-600">
               Give examples of how the AI should respond — <span className="text-text-soft-400">optional</span>
             </p>
             {examples.map((example, index) => (
               <div key={index} className="rounded-lg border border-stroke-soft-200 p-3">
                 <div className="flex items-center justify-between">
-                  <span className="text-[13px] font-medium text-text-strong-950">Custom example</span>
+                  <span className="text-[15px] font-medium text-text-strong-950">Custom example</span>
                   <button
                     type="button"
                     onClick={() => setExamples((c) => c.filter((_, i) => i !== index))}
@@ -770,7 +770,7 @@ export default function AiDialog({
                 </div>
                 {columns.filter((c) => prompt.includes(`{{${c.key}}}`)).map((c) => (
                   <div key={c.id} className="mt-2">
-                    <label className="text-[12px] text-text-sub-600">{c.name}:</label>
+                    <label className="text-[14px] text-text-sub-600">{c.name}:</label>
                     <input
                       value={example.inputs[c.key] ?? ""}
                       onChange={(e) =>
@@ -780,25 +780,25 @@ export default function AiDialog({
                           ),
                         )
                       }
-                      className="mt-1 w-full rounded-lg border border-stroke-soft-200 px-3 py-1.5 text-[13px] outline-none focus:border-blue-400"
+                      className="mt-1 w-full rounded-lg border border-stroke-soft-200 px-3 py-1.5 text-[15px] outline-none focus:border-blue-400"
                     />
                   </div>
                 ))}
-                <label className="mt-2 block text-[12px] text-text-sub-600">Expected response:</label>
+                <label className="mt-2 block text-[14px] text-text-sub-600">Expected response:</label>
                 <textarea
                   value={example.response}
                   rows={2}
                   onChange={(e) =>
                     setExamples((all) => all.map((item, i) => (i === index ? { ...item, response: e.target.value } : item)))
                   }
-                  className="mt-1 w-full resize-y rounded-lg border border-stroke-soft-200 px-3 py-1.5 text-[13px] outline-none focus:border-blue-400"
+                  className="mt-1 w-full resize-y rounded-lg border border-stroke-soft-200 px-3 py-1.5 text-[15px] outline-none focus:border-blue-400"
                 />
               </div>
             ))}
             <button
               type="button"
               onClick={() => setExamples((c) => [...c, { inputs: {}, response: "" }])}
-              className="flex items-center gap-1.5 rounded-lg border border-stroke-soft-200 px-3 py-1.5 text-[13px] font-medium text-text-strong-950 transition hover:bg-bg-weak-50"
+              className="flex items-center gap-1.5 rounded-lg border border-stroke-soft-200 px-3 py-1.5 text-[15px] font-medium text-text-strong-950 transition hover:bg-bg-weak-50"
             >
               <RiAddLine className="size-4" />Add examples
             </button>
@@ -807,15 +807,15 @@ export default function AiDialog({
           {/* ---- run settings ---- */}
           <Section title="Run settings">
             <label className="flex items-center justify-between">
-              <span className="text-[13px] font-medium text-text-strong-950">Auto-run</span>
+              <span className="text-[15px] font-medium text-text-strong-950">Auto-run</span>
               <input type="checkbox" checked={autoRun} onChange={(e) => setAutoRun(e.target.checked)} className="size-4" />
             </label>
 
             <label className="flex items-start gap-2">
               <input type="checkbox" checked={conditionEnabled} onChange={(e) => setConditionEnabled(e.target.checked)} className="mt-0.5 size-4" />
               <span>
-                <span className="block text-[13px] text-text-strong-950">Add run condition</span>
-                <span className="block text-[12px] text-text-sub-600">Only run if this formula resolves to true.</span>
+                <span className="block text-[15px] text-text-strong-950">Add run condition</span>
+                <span className="block text-[14px] text-text-sub-600">Only run if this formula resolves to true.</span>
               </span>
             </label>
             {conditionEnabled && (
@@ -823,18 +823,18 @@ export default function AiDialog({
                 value={runCondition}
                 onChange={(e) => setRunCondition(e.target.value)}
                 placeholder="{{email}} != &quot;&quot;"
-                className="w-full rounded-lg border border-stroke-soft-200 px-3 py-2 font-mono text-[12px] outline-none focus:border-blue-400"
+                className="w-full rounded-lg border border-stroke-soft-200 px-3 py-2 font-mono text-[14px] outline-none focus:border-blue-400"
               />
             )}
 
             <div>
-              <span className="text-[13px] font-medium text-text-strong-950">Delay run</span>
+              <span className="text-[15px] font-medium text-text-strong-950">Delay run</span>
               <div className="mt-1.5 space-y-1.5">
-                <label className="flex items-center gap-2 text-[13px] text-text-strong-950">
+                <label className="flex items-center gap-2 text-[15px] text-text-strong-950">
                   <input type="radio" checked={!delayEnabled} onChange={() => setDelayEnabled(false)} className="size-4" />
                   Run immediately
                 </label>
-                <label className="flex items-center gap-2 text-[13px] text-text-strong-950">
+                <label className="flex items-center gap-2 text-[15px] text-text-strong-950">
                   <input type="radio" checked={delayEnabled} onChange={() => setDelayEnabled(true)} className="size-4" />
                   Run after delay
                 </label>
@@ -845,7 +845,7 @@ export default function AiDialog({
                     max={600}
                     value={delaySeconds}
                     onChange={(e) => setDelaySeconds(Number(e.target.value))}
-                    className="w-[140px] rounded-lg border border-stroke-soft-200 px-3 py-1.5 text-[13px] outline-none focus:border-blue-400"
+                    className="w-[140px] rounded-lg border border-stroke-soft-200 px-3 py-1.5 text-[15px] outline-none focus:border-blue-400"
                   />
                 )}
               </div>
@@ -854,9 +854,9 @@ export default function AiDialog({
         </div>
 
         {/* footer */}
-        {error && <p role="alert" className="mx-5 mb-3 mt-3 shrink-0 rounded-lg bg-red-50 dark:bg-red-500/10 px-3 py-2 text-[13px] text-red-700 dark:text-red-400">{error}</p>}
+        {error && <p role="alert" className="mx-5 mb-3 mt-3 shrink-0 rounded-lg bg-red-50 dark:bg-red-500/10 px-3 py-2 text-[15px] text-red-700 dark:text-red-400">{error}</p>}
         <div className="flex shrink-0 items-center justify-between gap-3 border-t border-stroke-soft-200 px-5 py-3.5">
-          <span className="rounded-full border border-stroke-soft-200 px-2.5 py-1 text-[12px] text-text-sub-600">
+          <span className="rounded-full border border-stroke-soft-200 px-2.5 py-1 text-[14px] text-text-sub-600">
             {model ? `${model.creditsPerRun} / row` : "—"}
           </span>
           <div className="flex items-center gap-2">
@@ -864,7 +864,7 @@ export default function AiDialog({
               type="button"
               onClick={() => void save(false)}
               disabled={busy}
-              className="rounded-lg border border-stroke-soft-200 px-3 py-2 text-[13px] font-medium text-text-strong-950 transition hover:bg-bg-weak-50 disabled:opacity-50"
+              className="rounded-lg border border-stroke-soft-200 px-3 py-2 text-[15px] font-medium text-text-strong-950 transition hover:bg-bg-weak-50 disabled:opacity-50"
             >
               Save
             </button>
@@ -872,7 +872,7 @@ export default function AiDialog({
               type="button"
               onClick={() => void save(true)}
               disabled={busy}
-              className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-[13px] font-medium text-white transition hover:bg-blue-700 disabled:opacity-50"
+              className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-[15px] font-medium text-white transition hover:bg-blue-700 disabled:opacity-50"
             >
               {busy && <RiLoader4Line className="size-4 animate-spin" />}
               Save and run 10 rows

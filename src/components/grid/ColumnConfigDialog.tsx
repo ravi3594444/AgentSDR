@@ -262,7 +262,7 @@ export default function ColumnConfigDialog({
             <h2 className="text-[15px] font-semibold text-text-strong-950">
               {column ? "Configure" : "Add"} {type === "formula" ? "formula" : "HTTP API"} column
             </h2>
-            <p className="mt-0.5 text-[13px] text-text-sub-600">
+            <p className="mt-0.5 text-[15px] text-text-sub-600">
               {type === "formula"
                 ? <>Type <span className="font-mono">/</span> to insert another column.</>
                 : <>Reference row values with tokens such as <span className="font-mono">{"{{email}}"}</span>.</>}
@@ -281,16 +281,16 @@ export default function ColumnConfigDialog({
           {type === "formula" ? (
             <>
               <div className="rounded-xl border border-violet-200 dark:border-violet-500/30 bg-violet-50/60 dark:bg-violet-500/10 p-3">
-                <div className="flex items-center gap-2 text-[13px] font-semibold text-violet-900 dark:text-violet-400"><RiMagicLine className="size-4" />Generate formula with AI</div>
-                <p className="mt-1 text-[12px] text-violet-700 dark:text-violet-400">Describe the result you want. AI can use this workbook’s columns and cross-table LOOKUP.</p>
+                <div className="flex items-center gap-2 text-[15px] font-semibold text-violet-900 dark:text-violet-400"><RiMagicLine className="size-4" />Generate formula with AI</div>
+                <p className="mt-1 text-[14px] text-violet-700 dark:text-violet-400">Describe the result you want. AI can use this workbook’s columns and cross-table LOOKUP.</p>
                 <textarea value={aiPrompt} onChange={(event) => setAiPrompt(event.target.value)} rows={3} maxLength={2000} placeholder='Example: Find the industry from the Companies table by matching this row’s company domain' className={`${inputClass} mt-3 resize-y`} />
                 <div className="mt-2 flex items-center justify-between gap-3">
-                  <p className={`text-[12px] ${generationError ? "text-red-600 dark:text-red-400" : "text-violet-700 dark:text-violet-400"}`} role={generationError ? "alert" : undefined}>
+                  <p className={`text-[14px] ${generationError ? "text-red-600 dark:text-red-400" : "text-violet-700 dark:text-violet-400"}`} role={generationError ? "alert" : undefined}>
                     {generationError ?? (suggestion ? "Formula generated and inserted below." : "")}
                   </p>
-                  <button type="button" disabled={generating || !aiPrompt.trim()} onClick={() => void generateWithAi()} className="flex shrink-0 items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-2 text-[12px] font-semibold text-white hover:bg-violet-700 disabled:opacity-50">{generating ? <RiLoader4Line className="size-4 animate-spin" /> : <RiMagicLine className="size-4" />}{generating ? "Generating…" : "Generate"}</button>
+                  <button type="button" disabled={generating || !aiPrompt.trim()} onClick={() => void generateWithAi()} className="flex shrink-0 items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-2 text-[14px] font-semibold text-white hover:bg-violet-700 disabled:opacity-50">{generating ? <RiLoader4Line className="size-4 animate-spin" /> : <RiMagicLine className="size-4" />}{generating ? "Generating…" : "Generate"}</button>
                 </div>
-                {suggestion && <p className="mt-2 text-[12px] text-text-sub-600">{suggestion.explanation}</p>}
+                {suggestion && <p className="mt-2 text-[14px] text-text-sub-600">{suggestion.explanation}</p>}
               </div>
               <Field label="Formula" hint={'JavaScript, FormulaJS, lodash (_), moment, and LOOKUP("Table", {{value}}, "Match column", "Return column") are available.'}>
                 <div className="relative">
@@ -344,7 +344,7 @@ export default function ColumnConfigDialog({
                       <button type="button" aria-label="Remove header" onClick={() => setHeaders((all) => all.filter((_, i) => i !== index))} className="rounded-lg border border-stroke-soft-200 text-text-soft-400 hover:bg-bg-weak-50"><RiCloseLine className="mx-auto size-4" /></button>
                     </div>
                   ))}
-                  <button type="button" onClick={() => setHeaders((all) => [...all, { key: "", value: "" }])} className="flex items-center gap-1 text-[13px] font-medium text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-400"><RiAddLine className="size-4" /> Add header</button>
+                  <button type="button" onClick={() => setHeaders((all) => [...all, { key: "", value: "" }])} className="flex items-center gap-1 text-[15px] font-medium text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-400"><RiAddLine className="size-4" /> Add header</button>
                 </div>
               </Field>
 
@@ -360,22 +360,22 @@ export default function ColumnConfigDialog({
 
           {type === "formula" && (
             <div className="rounded-xl border border-stroke-soft-200 bg-bg-weak-50 p-3">
-              <div className="mb-1 text-[12px] font-semibold uppercase tracking-wide text-text-sub-600">Live preview</div>
-              {!previewRowId ? <p className="text-[13px] text-text-sub-600">Add a row to preview this formula.</p> : preview.state === "loading" ? <p className="flex items-center gap-2 text-[13px] text-text-sub-600"><RiLoader4Line className="size-4 animate-spin" /> Evaluating row 1…</p> : preview.state === "error" ? <p className="break-words text-[13px] text-red-600 dark:text-red-400">{preview.error}</p> : preview.state === "success" ? <pre className="max-h-36 overflow-auto whitespace-pre-wrap break-words text-[13px] text-text-strong-950">{formatPreview(preview.value)}</pre> : <p className="text-[13px] text-text-sub-600">Enter a formula to preview row 1.</p>}
+              <div className="mb-1 text-[14px] font-semibold uppercase tracking-wide text-text-sub-600">Live preview</div>
+              {!previewRowId ? <p className="text-[15px] text-text-sub-600">Add a row to preview this formula.</p> : preview.state === "loading" ? <p className="flex items-center gap-2 text-[15px] text-text-sub-600"><RiLoader4Line className="size-4 animate-spin" /> Evaluating row 1…</p> : preview.state === "error" ? <p className="break-words text-[15px] text-red-600 dark:text-red-400">{preview.error}</p> : preview.state === "success" ? <pre className="max-h-36 overflow-auto whitespace-pre-wrap break-words text-[15px] text-text-strong-950">{formatPreview(preview.value)}</pre> : <p className="text-[15px] text-text-sub-600">Enter a formula to preview row 1.</p>}
             </div>
           )}
 
-          <label className="flex items-center gap-2 text-[13px] text-text-strong-950">
+          <label className="flex items-center gap-2 text-[15px] text-text-strong-950">
             <input type="checkbox" checked={autoRun} onChange={(event) => setAutoRun(event.target.checked)} className="size-4 rounded border-stroke-sub-300" />
             Auto-run when input columns change
           </label>
         </div>
 
-        {(error || formulaSyntaxError) && <p role="alert" className="mx-5 mt-3 rounded-lg bg-red-50 dark:bg-red-500/10 px-3 py-2 text-[13px] text-red-700 dark:text-red-400">{error ?? `Formula syntax error: ${formulaSyntaxError}`}</p>}
+        {(error || formulaSyntaxError) && <p role="alert" className="mx-5 mt-3 rounded-lg bg-red-50 dark:bg-red-500/10 px-3 py-2 text-[15px] text-red-700 dark:text-red-400">{error ?? `Formula syntax error: ${formulaSyntaxError}`}</p>}
         <div className="mt-3 flex justify-end gap-2 border-t border-stroke-soft-200 px-5 py-4">
-          <button type="button" onClick={onClose} disabled={busy} className="rounded-lg border border-stroke-soft-200 px-3 py-2 text-[13px] font-medium text-text-strong-950 hover:bg-bg-weak-50">Cancel</button>
-          <button type="button" onClick={() => void save()} disabled={busy || !!formulaSyntaxError} className="relative rounded-lg border border-blue-200 dark:border-blue-500/30 px-3 py-2 text-[13px] font-medium text-blue-700 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-500/10 disabled:opacity-50"><span className={busy && !busyRun ? "invisible" : undefined}>Save</span>{busy && !busyRun && <RiLoader4Line className="absolute inset-0 m-auto size-4 animate-spin" />}</button>
-          <button type="button" onClick={() => void save(true)} disabled={busy || !!formulaSyntaxError} className="relative rounded-lg bg-blue-600 px-3 py-2 text-[13px] font-medium text-white hover:bg-blue-700 disabled:opacity-50"><span className={busy && busyRun ? "invisible" : undefined}>Save &amp; run</span>{busy && busyRun && <RiLoader4Line className="absolute inset-0 m-auto size-4 animate-spin" />}</button>
+          <button type="button" onClick={onClose} disabled={busy} className="rounded-lg border border-stroke-soft-200 px-3 py-2 text-[15px] font-medium text-text-strong-950 hover:bg-bg-weak-50">Cancel</button>
+          <button type="button" onClick={() => void save()} disabled={busy || !!formulaSyntaxError} className="relative rounded-lg border border-blue-200 dark:border-blue-500/30 px-3 py-2 text-[15px] font-medium text-blue-700 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-500/10 disabled:opacity-50"><span className={busy && !busyRun ? "invisible" : undefined}>Save</span>{busy && !busyRun && <RiLoader4Line className="absolute inset-0 m-auto size-4 animate-spin" />}</button>
+          <button type="button" onClick={() => void save(true)} disabled={busy || !!formulaSyntaxError} className="relative rounded-lg bg-blue-600 px-3 py-2 text-[15px] font-medium text-white hover:bg-blue-700 disabled:opacity-50"><span className={busy && busyRun ? "invisible" : undefined}>Save &amp; run</span>{busy && busyRun && <RiLoader4Line className="absolute inset-0 m-auto size-4 animate-spin" />}</button>
         </div>
       </div>
     </div>,
@@ -383,18 +383,18 @@ export default function ColumnConfigDialog({
   );
 }
 
-const inputClass = "w-full rounded-lg border border-stroke-soft-200 bg-bg-white-0 px-3 py-2 text-[13px] text-text-strong-950 outline-none placeholder:text-text-soft-400 focus:border-blue-500 focus:ring-1 focus:ring-blue-500";
+const inputClass = "w-full rounded-lg border border-stroke-soft-200 bg-bg-white-0 px-3 py-2 text-[15px] text-text-strong-950 outline-none placeholder:text-text-soft-400 focus:border-blue-500 focus:ring-1 focus:ring-blue-500";
 
 function emptySubscribe() {
   return () => {};
 }
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
-  return <label className="block"><span className="mb-1.5 block text-[13px] font-medium text-text-strong-950">{label}</span>{children}{hint && <span className="mt-1 block text-[12px] text-text-sub-600">{hint}</span>}</label>;
+  return <label className="block"><span className="mb-1.5 block text-[15px] font-medium text-text-strong-950">{label}</span>{children}{hint && <span className="mt-1 block text-[14px] text-text-sub-600">{hint}</span>}</label>;
 }
 
 function ColumnPicker({ columns, onPick, onClose }: { columns: GridColumn[]; onPick: (key: string) => void; onClose: () => void }) {
-  return <div className="absolute left-2 top-full z-20 mt-1 max-h-52 w-72 overflow-y-auto rounded-lg border border-stroke-soft-200 bg-bg-white-0 p-1 shadow-lg">{columns.length ? columns.map((column) => <button key={column.id} type="button" onClick={() => onPick(column.key)} className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-bg-weak-50"><span className="truncate text-text-strong-950">{column.name}</span><span className="ml-2 font-mono text-[11px] text-text-soft-400">{column.key}</span></button>) : <p className="px-2 py-1.5 text-[13px] text-text-sub-600">No other columns yet.</p>}<button type="button" onClick={onClose} className="mt-1 w-full border-t border-stroke-soft-200 px-2 py-1.5 text-left text-[12px] text-text-soft-400">Close</button></div>;
+  return <div className="absolute left-2 top-full z-20 mt-1 max-h-52 w-72 overflow-y-auto rounded-lg border border-stroke-soft-200 bg-bg-white-0 p-1 shadow-lg">{columns.length ? columns.map((column) => <button key={column.id} type="button" onClick={() => onPick(column.key)} className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-[15px] hover:bg-bg-weak-50"><span className="truncate text-text-strong-950">{column.name}</span><span className="ml-2 font-mono text-[13px] text-text-soft-400">{column.key}</span></button>) : <p className="px-2 py-1.5 text-[15px] text-text-sub-600">No other columns yet.</p>}<button type="button" onClick={onClose} className="mt-1 w-full border-t border-stroke-soft-200 px-2 py-1.5 text-left text-[14px] text-text-soft-400">Close</button></div>;
 }
 
 function formatPreview(value: unknown): string {

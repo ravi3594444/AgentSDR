@@ -29,6 +29,8 @@ import * as Tooltip from "@/components/alignui/tooltip";
 import { SETTINGS_HOME } from "@/components/settings/settingsNav";
 import { CommandPalette } from "@/components/nav/CommandPalette";
 import { ThemeToggleButton } from "@/components/theme/ThemeSwitch";
+import { themeToggleLabel } from "@/components/theme/themes";
+import { useTheme } from "@/components/theme/ThemeProvider";
 import { activeHref, NAV_FOOTER, visibleNavSections, type NavBadges, type NavData, type NavEntry, type NavGroup, type NavLink, type NavSection } from "@/components/nav/navConfig";
 import type { FeatureState } from "@/lib/features/catalog";
 import { APP_VERSION, bugReportUrl, SUPPORT_LINKS } from "@/lib/support";
@@ -260,6 +262,7 @@ function GroupRow({ group, current, open, onToggle, badges, collapsed, compact }
 export default function Sidebar({ mobile = false, onClose }: { mobile?: boolean; onClose?: () => void } = {}) {
   const pathname = usePathname();
   const current = activeHref(pathname);
+  const theme = useTheme();
   const { badges, features } = useBadges(pathname);
   const sections = useMemo(() => visibleNavSections(features), [features]);
   const [storedCollapsed, setCollapsed] = useState(false);
@@ -360,7 +363,7 @@ export default function Sidebar({ mobile = false, onClose }: { mobile?: boolean;
             </Link>
           )}
           <div className={cn("flex items-center", collapsed && "hidden")}>
-          <RailTip label="Light or dark">
+          <RailTip label={themeToggleLabel(theme.preference, theme.resolved)}>
             <span><ThemeToggleButton /></span>
           </RailTip>
           {mobile ? (
@@ -423,13 +426,13 @@ export default function Sidebar({ mobile = false, onClose }: { mobile?: boolean;
                   ? <div className="mx-2 mb-2 border-t border-stroke-soft-200" />
                   : section.collapsible
                   ? (
-                    <button type="button" onClick={() => toggleSection(section)} aria-expanded={open} className="mb-1 flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-text-soft-400 outline-none transition-colors hover:text-text-sub-600 focus-visible:ring-2 focus-visible:ring-primary-base">
+                    <button type="button" onClick={() => toggleSection(section)} aria-expanded={open} className="mb-1 flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-[12px] font-semibold uppercase tracking-[0.12em] text-text-soft-400 outline-none transition-colors hover:text-text-sub-600 focus-visible:ring-2 focus-visible:ring-primary-base">
                       <span className="flex-1 text-left">{section.label}</span>
                       {waiting && <span className="size-2 shrink-0 rounded-full bg-warning-base" aria-label="Needs attention" />}
                       <RiArrowDownSLine className={cn("size-4 shrink-0 transition-transform duration-200", !open && "-rotate-90")} aria-hidden="true" />
                     </button>
                   )
-                  : <p className="mb-2 px-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-text-soft-400">{section.label}</p>)}
+                  : <p className="mb-2 px-2 text-[12px] font-semibold uppercase tracking-[0.12em] text-text-soft-400">{section.label}</p>)}
                 {open && <div className="space-y-0.5">{section.entries.map((e) => renderEntry(e))}</div>}
               </div>
             );

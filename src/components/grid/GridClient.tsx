@@ -192,8 +192,8 @@ const theme = themeQuartz.withParams({
   headerBackgroundColor: "var(--grid-bg)",
   headerTextColor: "var(--grid-fg)",
   headerFontWeight: 600,
-  headerFontSize: 13,
-  fontSize: 13,
+  headerFontSize: 14,
+  fontSize: 14,
   fontFamily: "var(--font-sans), system-ui, sans-serif",
   rowHoverColor: "var(--grid-row-hover)",
   selectedRowBackgroundColor: "var(--grid-row-selected)",
@@ -224,9 +224,9 @@ function MultiSelectEditor(props: CustomCellEditorProps<RowData, unknown> & { op
   };
   return (
     <div className="max-h-64 min-w-[200px] overflow-auto rounded-lg border border-stroke-soft-200 bg-bg-white-0 p-1.5 shadow-lg">
-      {choices.length === 0 && <p className="px-2 py-1.5 text-[12px] text-text-sub-600">This column has no options.</p>}
+      {choices.length === 0 && <p className="px-2 py-1.5 text-[14px] text-text-sub-600">This column has no options.</p>}
       {choices.map((value) => (
-        <label key={value} className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] text-text-strong-950 hover:bg-bg-weak-50">
+        <label key={value} className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[15px] text-text-strong-950 hover:bg-bg-weak-50">
           <input type="checkbox" checked={current.includes(value)} onChange={() => toggle(value)} />
           <span className="truncate">{value}</span>
         </label>
@@ -452,13 +452,13 @@ function GutterCell(props: ICellRendererParams<RowData> & {
   onToggle: (rowId: string) => void;
 }) {
   if (props.node.rowPinned === "top") {
-    return <span className="text-[11px] font-medium text-text-soft-400">%</span>;
+    return <span className="text-[13px] font-medium text-text-soft-400">%</span>;
   }
   const rowOffset = Number((props as ICellRendererParams<RowData> & { rowOffset?: number }).rowOffset ?? 0);
   const selected = props.isSelected(props.data!.__id);
   return (
     <div className="group relative flex size-full items-center justify-center">
-      <span className={`text-[11px] tabular-nums text-text-soft-400 ${selected ? "hidden" : "group-hover:hidden group-focus-within:hidden"}`}>
+      <span className={`text-[13px] tabular-nums text-text-soft-400 ${selected ? "hidden" : "group-hover:hidden group-focus-within:hidden"}`}>
         {rowOffset + (props.node.rowIndex ?? 0) + 1}
       </span>
       <Checkbox.Root
@@ -595,7 +595,7 @@ function IntegrationOutputCell(props: ICellRendererParams<RowData> & { sourceCol
     }
     if (type === "json" || typeof props.value === "object") {
       const json = JSON.stringify(props.value);
-      return <span title={json} className="block truncate font-mono text-[11px] text-text-sub-600">{json}</span>;
+      return <span title={json} className="block truncate font-mono text-[13px] text-text-sub-600">{json}</span>;
     }
     return String(props.value);
   }
@@ -624,7 +624,7 @@ function AddRowsControl(props: {
         type="button"
         onClick={props.onAdd}
         disabled={props.busy}
-        className="flex items-center gap-1.5 rounded-lg border border-stroke-soft-200 px-2.5 py-[7px] text-[13px] font-medium text-text-strong-950 transition hover:bg-bg-weak-50 disabled:opacity-50"
+        className="flex items-center gap-1.5 rounded-lg border border-stroke-soft-200 px-2.5 py-[7px] text-[15px] font-medium text-text-strong-950 transition hover:bg-bg-weak-50 disabled:opacity-50"
       >
         <RiAddLine className="size-4" />
         Add
@@ -637,9 +637,9 @@ function AddRowsControl(props: {
         onChange={(event) =>
           props.onCountChange(Math.max(1, Math.min(1000, Number(event.target.value) || 1)))
         }
-        className="w-[68px] rounded-lg border border-stroke-soft-200 px-2 py-[7px] text-[13px] text-text-strong-950 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+        className="w-[68px] rounded-lg border border-stroke-soft-200 px-2 py-[7px] text-[15px] text-text-strong-950 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
       />
-      <span className="text-[13px] text-text-sub-600">more rows at the bottom</span>
+      <span className="text-[15px] text-text-sub-600">more rows at the bottom</span>
     </div>
   );
 }
@@ -2534,7 +2534,7 @@ export default function GridClient({
           <button
             type="button"
             onClick={toggleAutoRun}
-            className={`flex items-center gap-1.5 rounded-l-lg px-2.5 py-[7px] text-[13px] font-medium transition ${
+            className={`flex items-center gap-1.5 rounded-l-lg px-2.5 py-[7px] text-[15px] font-medium transition ${
               autoRun ? "text-text-strong-950 hover:bg-bg-weak-50" : "text-text-soft-400 hover:bg-bg-weak-50"
             }`}
           >
@@ -2542,14 +2542,14 @@ export default function GridClient({
             Auto-run
           </button>
           <div className="h-5 w-px bg-bg-soft-200" />
-          <span className="flex items-center gap-1.5 px-2.5 py-[7px] text-[13px] text-text-sub-600">
+          <span className="flex items-center gap-1.5 px-2.5 py-[7px] text-[15px] text-text-sub-600">
             <RiTableLine className="size-4 text-text-soft-400" />
             {activeJobs}
           </span>
         </div>
 
         {(activeJobs > 0 || pendingCells) && (
-          <div className="flex items-center gap-1.5 rounded-lg border border-blue-200 dark:border-blue-500/30 bg-blue-50 dark:bg-blue-500/10 py-[3px] pl-2.5 pr-[3px] text-[13px] font-medium text-blue-700 dark:text-blue-400">
+          <div className="flex items-center gap-1.5 rounded-lg border border-blue-200 dark:border-blue-500/30 bg-blue-50 dark:bg-blue-500/10 py-[3px] pl-2.5 pr-[3px] text-[15px] font-medium text-blue-700 dark:text-blue-400">
             <RiLoader4Line className="size-4 animate-spin" />
             <span>
               Running{activeJobs > 0 ? ` · ${activeJobs.toLocaleString()} left` : ""}
@@ -2558,7 +2558,7 @@ export default function GridClient({
               type="button"
               disabled={stopping}
               onClick={() => void stopRun()}
-              className="flex items-center gap-1 rounded-md bg-bg-white-0 px-2 py-1 text-[12px] font-semibold text-red-600 dark:text-red-400 shadow-sm ring-1 ring-inset ring-stroke-soft-200 transition hover:bg-red-50 dark:hover:bg-red-500/10 disabled:opacity-50"
+              className="flex items-center gap-1 rounded-md bg-bg-white-0 px-2 py-1 text-[14px] font-semibold text-red-600 dark:text-red-400 shadow-sm ring-1 ring-inset ring-stroke-soft-200 transition hover:bg-red-50 dark:hover:bg-red-500/10 disabled:opacity-50"
             >
               <RiStopCircleLine className="size-3.5" />
               {stopping ? "Stopping…" : "Stop"}
@@ -2568,7 +2568,7 @@ export default function GridClient({
 
         <button
           type="button"
-          className="flex items-center gap-1.5 rounded-lg px-2.5 py-[7px] text-[13px] font-medium text-text-strong-950 transition hover:bg-bg-weak-50"
+          className="flex items-center gap-1.5 rounded-lg px-2.5 py-[7px] text-[15px] font-medium text-text-strong-950 transition hover:bg-bg-weak-50"
         >
           <RiTableLine className="size-4 text-text-soft-400" />
           Default view
@@ -2606,7 +2606,7 @@ export default function GridClient({
           onClick={openPanel("columns")}
         />
 
-        <span className="flex items-center gap-1.5 rounded-lg px-2.5 py-[7px] text-[13px] font-medium text-text-strong-950">
+        <span className="flex items-center gap-1.5 rounded-lg px-2.5 py-[7px] text-[15px] font-medium text-text-strong-950">
           <RiTableLine className="size-4 text-text-soft-400" />
           {rowCount}/{unfiltered} rows
         </span>
@@ -2642,7 +2642,7 @@ export default function GridClient({
               setSearch("");
               void runSearch("");
             }}
-            className="flex items-center gap-1 rounded-md bg-blue-50 dark:bg-blue-500/10 px-2 py-1 text-[12px] font-medium text-blue-700 dark:text-blue-400"
+            className="flex items-center gap-1 rounded-md bg-blue-50 dark:bg-blue-500/10 px-2 py-1 text-[14px] font-medium text-blue-700 dark:text-blue-400"
           >
             “{appliedSearch}”
             <RiCloseLine className="size-3.5" />
@@ -2653,14 +2653,14 @@ export default function GridClient({
 
         <div className="ml-auto flex items-center gap-1.5">
           {selectedRowIds.length > 0 && (
-            <span className="rounded-md bg-blue-50 dark:bg-blue-500/10 px-2.5 py-[7px] text-[13px] font-medium text-blue-700 dark:text-blue-400">
+            <span className="rounded-md bg-blue-50 dark:bg-blue-500/10 px-2.5 py-[7px] text-[15px] font-medium text-blue-700 dark:text-blue-400">
               {selectedRowIds.length} selected
             </span>
           )}
           <button
             type="button"
             onClick={() => setImportOpen(true)}
-            className="flex items-center gap-1.5 rounded-lg border border-stroke-soft-200 px-2.5 py-[7px] text-[13px] font-medium text-text-strong-950 transition hover:bg-bg-weak-50"
+            className="flex items-center gap-1.5 rounded-lg border border-stroke-soft-200 px-2.5 py-[7px] text-[15px] font-medium text-text-strong-950 transition hover:bg-bg-weak-50"
           >
             <RiUploadCloud2Line className="size-4 text-text-soft-400" />
             Import
@@ -2668,7 +2668,7 @@ export default function GridClient({
           <button
             type="button"
             onClick={(event) => setRowActionsRect(event.currentTarget.getBoundingClientRect())}
-            className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-[7px] text-[13px] font-medium text-white transition hover:bg-blue-700"
+            className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-[7px] text-[15px] font-medium text-white transition hover:bg-blue-700"
           >
             {selectedRowIds.length ? <RiMore2Line className="size-4" /> : <RiToolsLine className="size-4" />}
             Actions
@@ -2678,7 +2678,7 @@ export default function GridClient({
       </div>
 
       {selectedRowIds.length > 0 && (
-        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-primary-alpha-20 bg-primary-alpha-10 px-3 py-2 text-[13px] text-text-sub-600">
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-primary-alpha-20 bg-primary-alpha-10 px-3 py-2 text-[15px] text-text-sub-600">
           <span>
             {allMatchingSelected
               ? `All ${rowCount.toLocaleString()} matching rows are selected.`
@@ -2764,7 +2764,7 @@ export default function GridClient({
             </div>
           )}
           {cellSavingLabel && (
-            <div className="pointer-events-none absolute right-3 top-3 z-20 flex items-center gap-1.5 rounded-md border border-blue-200 dark:border-blue-500/30 bg-bg-white-0/95 px-2.5 py-1.5 text-[12px] font-medium text-blue-700 dark:text-blue-400 shadow-sm">
+            <div className="pointer-events-none absolute right-3 top-3 z-20 flex items-center gap-1.5 rounded-md border border-blue-200 dark:border-blue-500/30 bg-bg-white-0/95 px-2.5 py-1.5 text-[14px] font-medium text-blue-700 dark:text-blue-400 shadow-sm">
               <RiLoader4Line className="size-3.5 animate-spin" />
               {cellSavingLabel}
             </div>
@@ -2772,7 +2772,7 @@ export default function GridClient({
         </div>
       </div>
 
-      <div className="flex min-h-14 shrink-0 items-center justify-between gap-4 border-t border-stroke-soft-200 bg-bg-white-0 px-3 text-[13px] text-text-sub-600">
+      <div className="flex min-h-14 shrink-0 items-center justify-between gap-4 border-t border-stroke-soft-200 bg-bg-white-0 px-3 text-[15px] text-text-sub-600">
         <AddRowsControl addRows={addRows} busy={busy} onAdd={appendRows} onCountChange={setAddRows} />
         <span className="ml-auto whitespace-nowrap tabular-nums">
           {visibleRange.start.toLocaleString()}–{visibleRange.end.toLocaleString()} of {rowCount.toLocaleString()}
@@ -2815,15 +2815,15 @@ export default function GridClient({
       {runMenu && (
         <Popover anchorRect={runMenu.rect} onClose={closeRunMenu} width={260}>
           <div className="p-2">
-            <p className="truncate px-3 pb-1.5 pt-1 text-[11px] font-semibold uppercase tracking-wide text-text-soft-400">
+            <p className="truncate px-3 pb-1.5 pt-1 text-[13px] font-semibold uppercase tracking-wide text-text-soft-400">
               Run {runMenu.column.name}
             </p>
             {selectedRowIds.length > 0 && (
-              <button type="button" disabled={busy} onClick={() => void runColumn(runMenu.column, selectedRowIds)} className="flex w-full items-center gap-2 rounded-lg bg-primary-alpha-10 px-3 py-2 text-left text-[13px] font-semibold text-primary-base hover:bg-primary-alpha-20 disabled:opacity-50"><RiPlayLine className="size-4" />Run {selectedRowIds.length.toLocaleString()} selected row{selectedRowIds.length === 1 ? "" : "s"}</button>
+              <button type="button" disabled={busy} onClick={() => void runColumn(runMenu.column, selectedRowIds)} className="flex w-full items-center gap-2 rounded-lg bg-primary-alpha-10 px-3 py-2 text-left text-[15px] font-semibold text-primary-base hover:bg-primary-alpha-20 disabled:opacity-50"><RiPlayLine className="size-4" />Run {selectedRowIds.length.toLocaleString()} selected row{selectedRowIds.length === 1 ? "" : "s"}</button>
             )}
-            <button type="button" disabled={busy} onClick={() => void runColumn(runMenu.column, rowData.slice(0, 10).map((row) => row.__id))} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] font-medium text-text-strong-950 hover:bg-bg-weak-50 disabled:opacity-50"><RiPlayLine className="size-4" />Run first 10 rows on this page</button>
-            <button type="button" disabled={busy} onClick={() => void runColumn(runMenu.column)} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] font-medium text-text-strong-950 hover:bg-bg-weak-50 disabled:opacity-50"><RiPlayLine className="size-4" />Run all rows</button>
-            <button type="button" disabled={busy} onClick={() => void runColumn(runMenu.column, undefined, { onlyEmpty: true })} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] font-medium text-text-strong-950 hover:bg-bg-weak-50 disabled:opacity-50"><RiPlayLine className="size-4" />Run empty cells only</button>
+            <button type="button" disabled={busy} onClick={() => void runColumn(runMenu.column, rowData.slice(0, 10).map((row) => row.__id))} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[15px] font-medium text-text-strong-950 hover:bg-bg-weak-50 disabled:opacity-50"><RiPlayLine className="size-4" />Run first 10 rows on this page</button>
+            <button type="button" disabled={busy} onClick={() => void runColumn(runMenu.column)} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[15px] font-medium text-text-strong-950 hover:bg-bg-weak-50 disabled:opacity-50"><RiPlayLine className="size-4" />Run all rows</button>
+            <button type="button" disabled={busy} onClick={() => void runColumn(runMenu.column, undefined, { onlyEmpty: true })} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[15px] font-medium text-text-strong-950 hover:bg-bg-weak-50 disabled:opacity-50"><RiPlayLine className="size-4" />Run empty cells only</button>
           </div>
         </Popover>
       )}
@@ -2875,12 +2875,12 @@ export default function GridClient({
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search"
-                className="min-w-0 flex-1 bg-transparent text-[13px] text-text-strong-950 outline-none placeholder:text-text-soft-400"
+                className="min-w-0 flex-1 bg-transparent text-[15px] text-text-strong-950 outline-none placeholder:text-text-soft-400"
               />
             </div>
             <button
               type="submit"
-              className="shrink-0 rounded-lg border border-stroke-soft-200 px-2.5 py-2 text-[13px] font-medium text-text-strong-950 transition hover:bg-bg-weak-50"
+              className="shrink-0 rounded-lg border border-stroke-soft-200 px-2.5 py-2 text-[15px] font-medium text-text-strong-950 transition hover:bg-bg-weak-50"
             >
               Search
             </button>
@@ -2977,7 +2977,7 @@ export default function GridClient({
             {/* The four column types worth one click. Everything else is a
                 keystroke away behind "More column types", rather than making
                 this menu a duplicate of the add-column list. */}
-            <p className="px-2.5 pb-1 pt-1.5 text-[11px] font-semibold uppercase tracking-wide text-text-soft-400">
+            <p className="px-2.5 pb-1 pt-1.5 text-[13px] font-semibold uppercase tracking-wide text-text-soft-400">
               Add column
             </p>
             {QUICK_COLUMN_TYPES.map((type) => {
@@ -2990,7 +2990,7 @@ export default function GridClient({
                     setRowActionsRect(null);
                     void addColumn(type);
                   }}
-                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] text-text-strong-950 transition hover:bg-bg-weak-50"
+                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[15px] text-text-strong-950 transition hover:bg-bg-weak-50"
                 >
                   <meta.icon className="size-[17px] shrink-0 text-text-soft-400" />
                   {meta.label}
@@ -3004,14 +3004,14 @@ export default function GridClient({
                 setRowActionsRect(null);
                 setAddMenu({ rect });
               }}
-              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] text-text-strong-950 transition hover:bg-bg-weak-50"
+              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[15px] text-text-strong-950 transition hover:bg-bg-weak-50"
             >
               <RiAddLine className="size-[17px] shrink-0 text-text-soft-400" />
               More column types…
             </button>
 
             <div className="my-1.5 h-px bg-bg-weak-50" />
-            <p className="px-2.5 pb-1 text-[11px] font-semibold uppercase tracking-wide text-text-soft-400">
+            <p className="px-2.5 pb-1 text-[13px] font-semibold uppercase tracking-wide text-text-soft-400">
               Table
             </p>
             <button
@@ -3020,7 +3020,7 @@ export default function GridClient({
                 setRowActionsRect(null);
                 setImportOpen(true);
               }}
-              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] text-text-strong-950 transition hover:bg-bg-weak-50"
+              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[15px] text-text-strong-950 transition hover:bg-bg-weak-50"
             >
               <RiUploadCloud2Line className="size-[17px] shrink-0 text-text-soft-400" />
               Import CSV or Excel
@@ -3032,14 +3032,14 @@ export default function GridClient({
             {selectedRowIds.length > 0 && (
               <>
                 <div className="my-1.5 h-px bg-bg-weak-50" />
-                <p className="px-2.5 pb-1 text-[11px] font-semibold uppercase tracking-wide text-text-soft-400">
+                <p className="px-2.5 pb-1 text-[13px] font-semibold uppercase tracking-wide text-text-soft-400">
                   {selectedRowIds.length} selected row{selectedRowIds.length === 1 ? "" : "s"}
                 </p>
                 <button
                   type="button"
                   disabled={busy}
                   onClick={() => void exportSelectedRows()}
-                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] font-medium text-text-strong-950 transition hover:bg-bg-weak-50 disabled:cursor-not-allowed disabled:opacity-40"
+                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[15px] font-medium text-text-strong-950 transition hover:bg-bg-weak-50 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <RiDownload2Line className="size-[17px] text-text-soft-400" />
                   Export selected rows as CSV
@@ -3052,7 +3052,7 @@ export default function GridClient({
                     setRowActionsRect(null);
                     setCreateCampaignOpen(true);
                   }}
-                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] font-medium text-blue-700 dark:text-blue-400 transition hover:bg-blue-50 dark:hover:bg-blue-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[15px] font-medium text-blue-700 dark:text-blue-400 transition hover:bg-blue-50 dark:hover:bg-blue-500/10 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <RiMegaphoneLine className="size-[17px]" />
                   Create campaign
@@ -3063,7 +3063,7 @@ export default function GridClient({
                     setRowActionsRect(null);
                     void deleteSelectedRows();
                   }}
-                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] font-medium text-red-600 dark:text-red-400 transition hover:bg-red-50 dark:hover:bg-red-500/10"
+                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[15px] font-medium text-red-600 dark:text-red-400 transition hover:bg-red-50 dark:hover:bg-red-500/10"
                 >
                   <RiDeleteBin6Line className="size-[17px]" />
                   Delete {selectedRowIds.length} row{selectedRowIds.length === 1 ? "" : "s"}
@@ -3196,7 +3196,7 @@ export default function GridClient({
 function Toast({ tone, onClose, children }: { tone: "error" | "success"; onClose: () => void; children: React.ReactNode }) {
   return (
     <div
-      className={`pointer-events-auto flex max-w-xl items-start gap-2 rounded-lg border px-3 py-2 text-[13px] shadow-lg ${
+      className={`pointer-events-auto flex max-w-xl items-start gap-2 rounded-lg border px-3 py-2 text-[15px] shadow-lg ${
         tone === "error"
           ? "border-red-200 dark:border-red-500/30 bg-red-50 dark:bg-red-950 text-red-700 dark:text-red-400"
           : "border-emerald-200 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-400"
@@ -3230,7 +3230,7 @@ function ToolbarToggle({
       type="button"
       title={title}
       onClick={onClick}
-      className={`flex items-center gap-1.5 rounded-lg px-2.5 py-[7px] text-[13px] font-medium transition ${
+      className={`flex items-center gap-1.5 rounded-lg px-2.5 py-[7px] text-[15px] font-medium transition ${
         active
           ? "bg-bg-weak-50 text-text-strong-950"
           : highlight

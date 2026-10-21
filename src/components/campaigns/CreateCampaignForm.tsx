@@ -34,7 +34,7 @@ const PLATFORM_OPTIONS = [
 
 function Label({ children }: { children: React.ReactNode }) {
   return (
-    <label className="text-[10px] font-bold text-text-strong-950/70 uppercase tracking-widest">
+    <label className="text-[12px] font-bold text-text-strong-950/70 uppercase tracking-widest">
       {children}
     </label>
   );
@@ -138,7 +138,7 @@ export default function CreateCampaignForm() {
             placeholder="150"
             className={inputCls}
           />
-          <p className="text-[11px] text-text-strong-950/45">
+          <p className="text-[13px] text-text-strong-950/45">
             Fetches this many top domains (highest revenue first) and runs qualification on all of
             them, whatever fraction ends up qualified.
           </p>
@@ -153,7 +153,7 @@ export default function CreateCampaignForm() {
             placeholder="3000"
             className={inputCls}
           />
-          <p className="text-[11px] text-text-strong-950/45">Stops once qualified leads reach this number.</p>
+          <p className="text-[13px] text-text-strong-950/45">Stops once qualified leads reach this number.</p>
         </div>
       )}
 

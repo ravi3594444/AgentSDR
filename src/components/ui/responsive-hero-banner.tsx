@@ -148,7 +148,7 @@ export default function ResponsiveHeroBanner({
       <div className="relative z-10 mx-auto flex min-h-[688px] max-w-7xl flex-col justify-between px-6 pb-10 pt-24 sm:pt-28 lg:min-h-[calc(100vh-72px)] lg:pt-32">
         <div className="mx-auto max-w-4xl text-center">
           <div className="animate-fade-slide-in-1 mb-7 inline-flex items-center gap-3 rounded-full bg-black/20 p-1.5 pr-4 ring-1 ring-white/20 backdrop-blur-xl">
-            <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold text-neutral-900">{badgeLabel}</span>
+            <span className="rounded-full bg-white px-2.5 py-1 text-[13px] font-semibold text-neutral-900">{badgeLabel}</span>
             <span className="text-sm font-medium text-white/85">{badgeText}</span>
           </div>
 
@@ -180,7 +180,7 @@ export default function ResponsiveHeroBanner({
                 key={partner.name ?? partner.logoUrl}
                 href={partner.href}
                 aria-label={partner.name ?? `Partner ${index + 1}`}
-                className="flex h-16 items-center justify-center border-r border-white/15 text-[11px] font-semibold tracking-[.12em] text-white/65 transition-colors last:border-r-0 hover:bg-white/5 hover:text-white"
+                className="flex h-16 items-center justify-center border-r border-white/15 text-[13px] font-semibold tracking-[.12em] text-white/65 transition-colors last:border-r-0 hover:bg-white/5 hover:text-white"
               >
                 {partner.logoUrl ? (
                   <span aria-hidden="true" className="h-8 w-28 bg-contain bg-center bg-no-repeat" style={{ backgroundImage: `url(${partner.logoUrl})` }} />

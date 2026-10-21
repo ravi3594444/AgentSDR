@@ -18,7 +18,7 @@ export function DaySeparator({ date }: { date: Date }) {
   return (
     <div className="my-5 flex items-center gap-3 first:mt-1" role="separator" aria-label={dayHeading(date)}>
       <span className="h-px flex-1 bg-stroke-soft-200" />
-      <span className="rounded-full bg-bg-weak-50 px-3 py-1 text-[11px] font-medium text-text-sub-600" suppressHydrationWarning>
+      <span className="rounded-full bg-bg-weak-50 px-3 py-1 text-[13px] font-medium text-text-sub-600" suppressHydrationWarning>
         {dayHeading(date)}
       </span>
       <span className="h-px flex-1 bg-stroke-soft-200" />
@@ -74,7 +74,7 @@ export function Bubble({
       )}
     >
       {children}
-      {footer && <div className="mt-1.5 flex items-center justify-end gap-1 text-[11px] leading-4 text-text-soft-400">{footer}</div>}
+      {footer && <div className="mt-1.5 flex items-center justify-end gap-1 text-[13px] leading-4 text-text-soft-400">{footer}</div>}
     </div>
   );
 }

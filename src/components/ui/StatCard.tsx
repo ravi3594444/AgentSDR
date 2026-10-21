@@ -15,10 +15,10 @@ export default function StatCard({
 }) {
   return (
     <div className="bg-bg-white-0 border border-stroke-soft-200 rounded-2xl px-4 py-3.5">
-      <p className="text-[11px] text-text-strong-950/45 mb-1.5">{label}</p>
+      <p className="text-[13px] text-text-strong-950/45 mb-1.5">{label}</p>
       <div className="flex items-baseline gap-2">
         <p className="text-xl font-bold text-text-strong-950">{value}</p>
-        {trend && <span className={`text-[11px] font-semibold ${TREND_CLS[trend.direction]}`}>{trend.label}</span>}
+        {trend && <span className={`text-[13px] font-semibold ${TREND_CLS[trend.direction]}`}>{trend.label}</span>}
       </div>
     </div>
   );

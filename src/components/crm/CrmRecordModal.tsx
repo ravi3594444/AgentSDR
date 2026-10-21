@@ -224,7 +224,7 @@ function UpNext({ items, onOpen }: { items: QueueItem[]; onOpen: (id: string) =>
       <div className="flex -space-x-1.5">
         {items.map((item) => (
           <button key={item.id} type="button" onClick={() => onOpen(item.id)} title={`Open ${item.name}`} aria-label={`Open ${item.name}`} className="rounded-full ring-2 ring-bg-white-0 transition hover:z-10 hover:-translate-y-0.5 focus-visible:z-10 focus-visible:outline-none focus-visible:ring-stroke-strong-950">
-            <ContactAvatar src={item.avatarUrl} fallback={initials(item.name)} className="size-6 bg-bg-weak-50 text-[10px] text-text-sub-600" />
+            <ContactAvatar src={item.avatarUrl} fallback={initials(item.name)} className="size-6 bg-bg-weak-50 text-[12px] text-text-sub-600" />
           </button>
         ))}
       </div>

@@ -492,7 +492,7 @@ function InstagramMessageList({ messages, threadKey, leadName }: { messages: Ins
                     </p>
                   ))}
                   {message.body && <p className="whitespace-pre-wrap break-words">{message.body}</p>}
-                  <div className="mt-0.5 flex items-center justify-end gap-1 text-[11px] leading-4 text-text-soft-400">
+                  <div className="mt-0.5 flex items-center justify-end gap-1 text-[13px] leading-4 text-text-soft-400">
                     {message.historical && <span className="sr-only">History, </span>}
                     <span className="tabular-nums" suppressHydrationWarning>{formatMessageTime(message.sentAt)}</span>
                   </div>

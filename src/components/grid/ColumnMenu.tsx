@@ -153,20 +153,20 @@ export default function ColumnMenu({
             .finally(() => setBusy(false));
         }}
       >
-        <label className="mb-1.5 block text-[12px] font-medium text-text-sub-600">Options, one per line</label>
+        <label className="mb-1.5 block text-[14px] font-medium text-text-sub-600">Options, one per line</label>
         <textarea
           autoFocus
           rows={6}
           value={optionsText}
           onChange={(event) => setOptionsText(event.target.value)}
-          className="w-full resize-y rounded-lg border border-blue-500 px-2.5 py-2 text-[13px] text-text-strong-950 outline-none ring-1 ring-blue-500"
+          className="w-full resize-y rounded-lg border border-blue-500 px-2.5 py-2 text-[15px] text-text-strong-950 outline-none ring-1 ring-blue-500"
         />
-        {optionsError && <p className="mt-1.5 text-[12px] text-red-600 dark:text-red-400">{optionsError}</p>}
+        {optionsError && <p className="mt-1.5 text-[14px] text-red-600 dark:text-red-400">{optionsError}</p>}
         <div className="mt-2 flex justify-end gap-2">
-          <button type="button" onClick={() => setEditingOptions(false)} className="rounded-md px-2.5 py-1.5 text-[12px] text-text-sub-600 hover:bg-bg-weak-50">
+          <button type="button" onClick={() => setEditingOptions(false)} className="rounded-md px-2.5 py-1.5 text-[14px] text-text-sub-600 hover:bg-bg-weak-50">
             Cancel
           </button>
-          <button type="submit" disabled={busy} className="rounded-md bg-blue-600 px-2.5 py-1.5 text-[12px] font-medium text-white disabled:opacity-50">
+          <button type="submit" disabled={busy} className="rounded-md bg-blue-600 px-2.5 py-1.5 text-[14px] font-medium text-white disabled:opacity-50">
             Save {options.length} option{options.length === 1 ? "" : "s"}
           </button>
         </div>
@@ -184,7 +184,7 @@ export default function ColumnMenu({
           else void submitRename();
         }}
       >
-        <label className="mb-1.5 block text-[12px] font-medium text-text-sub-600">
+        <label className="mb-1.5 block text-[14px] font-medium text-text-sub-600">
           Rename column
         </label>
         <input
@@ -194,19 +194,19 @@ export default function ColumnMenu({
             setName(event.target.value);
             setRenameError(null);
           }}
-          className="w-full rounded-lg border border-blue-500 px-2.5 py-2 text-[13px] text-text-strong-950 outline-none ring-1 ring-blue-500"
+          className="w-full rounded-lg border border-blue-500 px-2.5 py-2 text-[15px] text-text-strong-950 outline-none ring-1 ring-blue-500"
           onFocus={(event) => event.currentTarget.select()}
         />
         {(renameError || nameTaken) && (
-          <p className="mt-1.5 text-[12px] text-red-600 dark:text-red-400">
+          <p className="mt-1.5 text-[14px] text-red-600 dark:text-red-400">
             {renameError ?? "Another column already has this name."}
           </p>
         )}
         <div className="mt-2 flex justify-end gap-2">
-          <button type="button" onClick={() => setRenaming(false)} className="rounded-md px-2.5 py-1.5 text-[12px] text-text-sub-600 hover:bg-bg-weak-50">
+          <button type="button" onClick={() => setRenaming(false)} className="rounded-md px-2.5 py-1.5 text-[14px] text-text-sub-600 hover:bg-bg-weak-50">
             Cancel
           </button>
-          <button type="submit" disabled={!canSaveName} className="rounded-md bg-blue-600 px-2.5 py-1.5 text-[12px] font-medium text-white disabled:opacity-50">
+          <button type="submit" disabled={!canSaveName} className="rounded-md bg-blue-600 px-2.5 py-1.5 text-[14px] font-medium text-white disabled:opacity-50">
             Save
           </button>
         </div>
@@ -249,7 +249,7 @@ export default function ColumnMenu({
       <Divider />
       <MenuButton icon={RiGitBranchLine} label={`Used in${usedIn.length ? ` (${usedIn.length})` : "…"}`} suffix active={showUsedIn} onClick={() => setShowUsedIn((value) => !value)} />
       {showUsedIn && (
-        <div className="ml-7 border-l border-stroke-soft-200 py-1 pl-3 text-[12px] text-text-sub-600">
+        <div className="ml-7 border-l border-stroke-soft-200 py-1 pl-3 text-[14px] text-text-sub-600">
           {usedIn.length ? usedIn.map((dependent) => <div key={dependent.id} className="py-1">{dependent.name}</div>) : "No columns depend on this one."}
         </div>
       )}
@@ -367,7 +367,7 @@ function MenuButton({
       title={title}
       onClick={onClick}
       onFocus={onFocus}
-      className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 text-left transition ${compact ? "py-1.5 text-[12px]" : "py-2 text-[13px]"} ${
+      className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 text-left transition ${compact ? "py-1.5 text-[14px]" : "py-2 text-[15px]"} ${
         disabled
           ? "cursor-not-allowed text-text-disabled-300"
           : danger

@@ -36,7 +36,7 @@ export const avatarVariants = tv({
       '40': { root: 'size-10 text-label-md' },
       '32': { root: 'size-8 text-label-sm' },
       '24': { root: 'size-6 text-label-xs' },
-      '20': { root: 'size-5 text-label-xs' },
+      '20': { root: 'size-5 text-label-2xs' },
     },
     color: {
       gray: { root: 'bg-bg-soft-200 text-text-strong-950' },

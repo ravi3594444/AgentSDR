@@ -61,7 +61,7 @@ function ColumnMappingSelect({
         </Select.Content>
       </Select.Root>
       {!compatible.length && (
-        <span className="mt-1 block text-[11px] text-amber-700 dark:text-amber-400">
+        <span className="mt-1 block text-[13px] text-amber-700 dark:text-amber-400">
           No compatible {input.acceptedColumnTypes.join(" or ")} column exists.
         </span>
       )}
@@ -496,17 +496,17 @@ export default function EnrichmentDialog({
           <>
             <div className="min-h-0 flex-1 overflow-y-auto bg-bg-weak-50/50 p-5">
               <section className="mb-4">
-                <h3 className="text-[13px] font-semibold text-text-strong-950">Action</h3>
+                <h3 className="text-[15px] font-semibold text-text-strong-950">Action</h3>
                 <div className="mt-2 rounded-xl border border-stroke-soft-200 bg-bg-white-0 p-4">
-                  <p className="text-[14px] font-semibold text-text-strong-950">{integration?.name} <span className="mx-1 text-text-soft-400">›</span> {action.name}</p>
-                  <p className="mt-1 text-[13px] text-text-sub-600">{action.description}</p>
-                  <a href={action.docsUrl} target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 text-[12px] font-medium text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-400 hover:underline">View documentation <RiExternalLinkLine className="size-3.5" /></a>
-                  <p className="mt-2 text-[11px] font-medium text-text-soft-400">{categoryName} · Enrichment</p>
+                  <p className="text-[16px] font-semibold text-text-strong-950">{integration?.name} <span className="mx-1 text-text-soft-400">›</span> {action.name}</p>
+                  <p className="mt-1 text-[15px] text-text-sub-600">{action.description}</p>
+                  <a href={action.docsUrl} target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 text-[14px] font-medium text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-400 hover:underline">View documentation <RiExternalLinkLine className="size-3.5" /></a>
+                  <p className="mt-2 text-[13px] font-medium text-text-soft-400">{categoryName} · Enrichment</p>
                 </div>
               </section>
 
               <section className="mb-4 overflow-hidden rounded-xl border border-stroke-soft-200 bg-bg-white-0">
-                <h3 className="bg-bg-weak-50 px-4 py-3 text-[14px] font-semibold text-text-strong-950">Account</h3>
+                <h3 className="bg-bg-weak-50 px-4 py-3 text-[16px] font-semibold text-text-strong-950">Account</h3>
                 <div className="p-4">
                   {connections.length > 0 && (
                     <Select.Root size="small" value={connectionId} onValueChange={(next) => { setConnectionId(next); setError(null); }}>
@@ -524,35 +524,35 @@ export default function EnrichmentDialog({
                     </Select.Root>
                   )}
                   {!addingAccount ? (
-                    <button type="button" onClick={() => setAddingAccount(true)} className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2.5 text-[13px] font-medium text-white hover:bg-blue-700"><RiAddLine className="size-4" />Add account</button>
+                    <button type="button" onClick={() => setAddingAccount(true)} className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2.5 text-[15px] font-medium text-white hover:bg-blue-700"><RiAddLine className="size-4" />Add account</button>
                   ) : (
                     <div className="mt-2 rounded-lg border border-blue-200 dark:border-blue-500/30 bg-blue-50/50 dark:bg-blue-500/10 p-3">
-                      <input value={accountName} onChange={(event) => { setAccountName(event.target.value); setError(null); }} placeholder={`${integration?.name} account name`} className="mt-2 w-full rounded-lg border border-stroke-soft-200 bg-bg-white-0 px-3 py-2 text-[13px] outline-none focus:border-blue-500" />
+                      <input value={accountName} onChange={(event) => { setAccountName(event.target.value); setError(null); }} placeholder={`${integration?.name} account name`} className="mt-2 w-full rounded-lg border border-stroke-soft-200 bg-bg-white-0 px-3 py-2 text-[15px] outline-none focus:border-blue-500" />
                       {integration?.auth.fields.map((field) => (
                         <label key={field.key} className="mt-2 block">
-                          <span className="mb-1 block text-[11px] font-medium text-text-sub-600">{field.label}{field.required && <span className="text-red-500"> *</span>}</span>
-                          <input type={field.inputType} autoComplete="off" value={credentialValues[field.key] ?? ""} onChange={(event) => { setCredentialValues((current) => ({ ...current, [field.key]: event.target.value })); setError(null); }} placeholder={field.placeholder} className="w-full rounded-lg border border-stroke-soft-200 bg-bg-white-0 px-3 py-2 text-[13px] outline-none focus:border-blue-500" />
+                          <span className="mb-1 block text-[13px] font-medium text-text-sub-600">{field.label}{field.required && <span className="text-red-500"> *</span>}</span>
+                          <input type={field.inputType} autoComplete="off" value={credentialValues[field.key] ?? ""} onChange={(event) => { setCredentialValues((current) => ({ ...current, [field.key]: event.target.value })); setError(null); }} placeholder={field.placeholder} className="w-full rounded-lg border border-stroke-soft-200 bg-bg-white-0 px-3 py-2 text-[15px] outline-none focus:border-blue-500" />
                         </label>
                       ))}
-                      <p className="mt-2 text-[11px] text-text-sub-600">The key is encrypted before it is stored and is never shown again.</p>
-                      <div className="mt-2 flex justify-end gap-2"><button type="button" onClick={() => { setAddingAccount(false); setCredentialValues({}); }} className="px-2 py-1.5 text-[12px] text-text-sub-600">Cancel</button><button type="button" onClick={() => void addAccount()} disabled={busy || integration?.auth.fields.some((field) => field.required && !credentialValues[field.key]?.trim())} className="rounded-md bg-blue-600 px-2.5 py-1.5 text-[12px] font-medium text-white disabled:opacity-50">{busy ? "Verifying…" : "Verify & connect"}</button></div>
+                      <p className="mt-2 text-[13px] text-text-sub-600">The key is encrypted before it is stored and is never shown again.</p>
+                      <div className="mt-2 flex justify-end gap-2"><button type="button" onClick={() => { setAddingAccount(false); setCredentialValues({}); }} className="px-2 py-1.5 text-[14px] text-text-sub-600">Cancel</button><button type="button" onClick={() => void addAccount()} disabled={busy || integration?.auth.fields.some((field) => field.required && !credentialValues[field.key]?.trim())} className="rounded-md bg-blue-600 px-2.5 py-1.5 text-[14px] font-medium text-white disabled:opacity-50">{busy ? "Verifying…" : "Verify & connect"}</button></div>
                     </div>
                   )}
                 </div>
               </section>
 
               <section className="mb-4 overflow-hidden rounded-xl border border-stroke-soft-200 bg-bg-white-0">
-                <h3 className="bg-bg-weak-50 px-4 py-3 text-[14px] font-semibold text-text-strong-950">Column mapping</h3>
+                <h3 className="bg-bg-weak-50 px-4 py-3 text-[16px] font-semibold text-text-strong-950">Column mapping</h3>
                 <div className="space-y-4 p-4">
                   {standardInputs.length > 0 && (
                     <div className="space-y-4">
-                      <p className="text-[12px] font-semibold uppercase tracking-wide text-text-sub-600">Setup inputs</p>
+                      <p className="text-[14px] font-semibold uppercase tracking-wide text-text-sub-600">Setup inputs</p>
                       {standardInputs.map((input) => (
                         <label key={input.key} className="block">
-                          <span className="mb-1.5 block text-[13px] font-medium text-text-strong-950">
+                          <span className="mb-1.5 block text-[15px] font-medium text-text-strong-950">
                             {input.name}{input.required && <span className="text-red-500"> *</span>}
                           </span>
-                          {input.description && <span className="mb-2 block text-[12px] text-text-sub-600">{input.description}</span>}
+                          {input.description && <span className="mb-2 block text-[14px] text-text-sub-600">{input.description}</span>}
                           <ColumnMappingSelect
                             input={input}
                             columns={inputColumns}
@@ -567,8 +567,8 @@ export default function EnrichmentDialog({
                   {action.filterBuilder && (
                     <div className="space-y-3">
                       <div>
-                        <p className="text-[12px] font-semibold uppercase tracking-wide text-text-sub-600">Search filters</p>
-                        <p className="mt-1 text-[12px] leading-5 text-text-sub-600">
+                        <p className="text-[14px] font-semibold uppercase tracking-wide text-text-sub-600">Search filters</p>
+                        <p className="mt-1 text-[14px] leading-5 text-text-sub-600">
                           Add a Cleanlist filter, then choose the table column whose values should be sent for it.
                         </p>
                       </div>
@@ -577,8 +577,8 @@ export default function EnrichmentDialog({
                         <div key={input.key} className="rounded-lg border border-amber-200 dark:border-amber-500/30 bg-amber-50/70 dark:bg-amber-500/10 p-3">
                           <div className="flex items-start justify-between gap-2">
                             <div>
-                              <p className="text-[13px] font-medium text-amber-950 dark:text-amber-400">Legacy JSON filters</p>
-                              <p className="mt-1 text-[12px] leading-5 text-amber-800 dark:text-amber-400">
+                              <p className="text-[15px] font-medium text-amber-950 dark:text-amber-400">Legacy JSON filters</p>
+                              <p className="mt-1 text-[14px] leading-5 text-amber-800 dark:text-amber-400">
                                 This saved mapping still works. Add named filters below when you want a guided setup.
                               </p>
                             </div>
@@ -606,7 +606,7 @@ export default function EnrichmentDialog({
                         <div key={input.key} className="rounded-lg border border-stroke-soft-200 bg-bg-weak-50/60 p-3">
                           <div className="flex items-start gap-2">
                             <label className="min-w-0 flex-1">
-                              <span className="mb-1 block text-[11px] font-medium text-text-sub-600">Filter</span>
+                              <span className="mb-1 block text-[13px] font-medium text-text-sub-600">Filter</span>
                               <Select.Root size="small" value={input.key} onValueChange={(next) => replaceFilter(input.key, next)}>
                                 <Select.Trigger aria-label="Filter" className="w-full">
                                   <Select.Value />
@@ -628,9 +628,9 @@ export default function EnrichmentDialog({
                               <RiCloseLine className="size-4" />
                             </button>
                           </div>
-                          {input.description && <p className="mt-2 text-[12px] text-text-sub-600">{input.description}</p>}
+                          {input.description && <p className="mt-2 text-[14px] text-text-sub-600">{input.description}</p>}
                           <label className="mt-3 block">
-                            <span className="mb-1 block text-[11px] font-medium text-text-sub-600">Map values from</span>
+                            <span className="mb-1 block text-[13px] font-medium text-text-sub-600">Map values from</span>
                             <ColumnMappingSelect
                               input={input}
                               columns={inputColumns}
@@ -643,7 +643,7 @@ export default function EnrichmentDialog({
 
                       {unusedFilterInputs.length > 0 && (
                         <label className="block">
-                          <span className="mb-1 block text-[11px] font-medium text-text-sub-600">Add filter</span>
+                          <span className="mb-1 block text-[13px] font-medium text-text-sub-600">Add filter</span>
                           <Select.Root size="small" value="" onValueChange={addFilter}>
                             <Select.Trigger aria-label="Add filter" className="w-full border-dashed border-blue-300 dark:border-blue-500/30 bg-blue-50/40 dark:bg-blue-500/10 text-blue-700 dark:text-blue-400">
                               <Select.Value placeholder="+ Choose a filter" />
@@ -658,7 +658,7 @@ export default function EnrichmentDialog({
                       )}
 
                       {activeFilterInputs.length === 0 && legacyMappedFilterInputs.length === 0 && (
-                        <p className="rounded-lg bg-amber-50 dark:bg-amber-500/10 px-3 py-2 text-[12px] text-amber-800 dark:text-amber-400">
+                        <p className="rounded-lg bg-amber-50 dark:bg-amber-500/10 px-3 py-2 text-[14px] text-amber-800 dark:text-amber-400">
                           Add and map at least one filter to continue.
                         </p>
                       )}
@@ -667,16 +667,16 @@ export default function EnrichmentDialog({
 
                   {advancedInputs.length > 0 && (
                     <details className="rounded-lg border border-stroke-soft-200">
-                      <summary className="cursor-pointer px-3 py-2.5 text-[13px] font-medium text-text-strong-950">
+                      <summary className="cursor-pointer px-3 py-2.5 text-[15px] font-medium text-text-strong-950">
                         Advanced settings
                       </summary>
                       <div className="space-y-4 border-t border-stroke-soft-200 p-3">
                         {advancedInputs.map((input) => (
                           <label key={input.key} className="block">
-                            <span className="mb-1.5 block text-[13px] font-medium text-text-strong-950">
+                            <span className="mb-1.5 block text-[15px] font-medium text-text-strong-950">
                               {input.name}{input.required && <span className="text-red-500"> *</span>}
                             </span>
-                            {input.description && <span className="mb-2 block text-[12px] text-text-sub-600">{input.description}</span>}
+                            {input.description && <span className="mb-2 block text-[14px] text-text-sub-600">{input.description}</span>}
                             <ColumnMappingSelect
                               input={input}
                               columns={inputColumns}
@@ -692,28 +692,28 @@ export default function EnrichmentDialog({
               </section>
 
               <section className="overflow-hidden rounded-xl border border-stroke-soft-200 bg-bg-white-0">
-                <h3 className="bg-bg-weak-50 px-4 py-3 text-[14px] font-semibold text-text-strong-950">Run settings</h3>
-                <div className="space-y-4 p-4 text-[13px]">
+                <h3 className="bg-bg-weak-50 px-4 py-3 text-[16px] font-semibold text-text-strong-950">Run settings</h3>
+                <div className="space-y-4 p-4 text-[15px]">
                   <Toggle label="Auto-run" checked={autoRun} onChange={setAutoRun} />
                   <Toggle label="Run in batches" checked={runInBatches} onChange={setRunInBatches} disabled />
-                  <label className="flex items-start gap-2"><input type="checkbox" checked={conditionEnabled} onChange={(event) => setConditionEnabled(event.target.checked)} className="mt-0.5 size-4" /><span><span className="font-medium text-text-strong-950">Add run condition</span><span className="block text-[12px] text-text-sub-600">Only run if this expression resolves to true.</span></span></label>
-                  {conditionEnabled && <input value={runCondition} onChange={(event) => setRunCondition(event.target.value)} placeholder="Example: {{email}} != ''" className="w-full rounded-lg border border-stroke-soft-200 px-3 py-2 text-[13px] outline-none focus:border-blue-500" />}
+                  <label className="flex items-start gap-2"><input type="checkbox" checked={conditionEnabled} onChange={(event) => setConditionEnabled(event.target.checked)} className="mt-0.5 size-4" /><span><span className="font-medium text-text-strong-950">Add run condition</span><span className="block text-[14px] text-text-sub-600">Only run if this expression resolves to true.</span></span></label>
+                  {conditionEnabled && <input value={runCondition} onChange={(event) => setRunCondition(event.target.value)} placeholder="Example: {{email}} != ''" className="w-full rounded-lg border border-stroke-soft-200 px-3 py-2 text-[15px] outline-none focus:border-blue-500" />}
                   <div><p className="font-medium text-text-strong-950">Delay run</p><label className="mt-2 flex items-center gap-2"><input type="radio" checked={!delayEnabled} onChange={() => setDelayEnabled(false)} />Run immediately</label><label className="mt-2 flex items-center gap-2"><input type="radio" checked={delayEnabled} onChange={() => setDelayEnabled(true)} />Run after delay</label>{delayEnabled && <label className="mt-2 flex items-center gap-2 pl-5"><input type="number" min={1} max={600} value={delaySeconds} onChange={(event) => setDelaySeconds(Math.max(1, Math.min(600, Number(event.target.value) || 1)))} className="w-20 rounded-lg border border-stroke-soft-200 px-2 py-1.5" />seconds</label>}</div>
                 </div>
               </section>
             </div>
-            {error && <p role="alert" className="mx-5 mb-3 mt-3 shrink-0 rounded-lg bg-red-50 dark:bg-red-500/10 px-3 py-2 text-[13px] text-red-700 dark:text-red-400">{error}</p>}
-            <div className="flex shrink-0 items-center justify-between border-t border-stroke-soft-200 bg-bg-white-0 px-5 py-4"><span className="text-[12px] text-text-sub-600">{configuredConnection ? "Account connected" : "API key required"}</span><button type="button" onClick={continueToOutputs} disabled={busy || missingInputs || !configuredConnection} className="rounded-lg bg-blue-600 px-4 py-2.5 text-[13px] font-semibold text-white disabled:bg-blue-300">Continue to add fields</button></div>
+            {error && <p role="alert" className="mx-5 mb-3 mt-3 shrink-0 rounded-lg bg-red-50 dark:bg-red-500/10 px-3 py-2 text-[15px] text-red-700 dark:text-red-400">{error}</p>}
+            <div className="flex shrink-0 items-center justify-between border-t border-stroke-soft-200 bg-bg-white-0 px-5 py-4"><span className="text-[14px] text-text-sub-600">{configuredConnection ? "Account connected" : "API key required"}</span><button type="button" onClick={continueToOutputs} disabled={busy || missingInputs || !configuredConnection} className="rounded-lg bg-blue-600 px-4 py-2.5 text-[15px] font-semibold text-white disabled:bg-blue-300">Continue to add fields</button></div>
           </>
         ) : (
           <>
             <div className="min-h-0 flex-1 overflow-y-auto p-5">
-              <div className="flex items-start justify-between gap-3"><div><h3 className="text-[18px] font-semibold text-text-strong-950">Add data as columns to your table</h3><p className="mt-2 text-[13px] leading-5 text-text-sub-600">Select the data points you want added as columns. The integration runs once per row.</p></div><span className="shrink-0 text-[13px] text-text-sub-600">{outputs.size} selected</span></div>
-              <label className="mt-5 flex items-center gap-2 rounded-lg border border-stroke-soft-200 px-3 py-2.5"><RiSearchLine className="size-4 text-text-soft-400" /><input value={outputSearch} onChange={(event) => setOutputSearch(event.target.value)} placeholder="Search data columns" className="min-w-0 flex-1 text-[13px] outline-none" /></label>
-              <div className="mt-4 space-y-2">{filteredOutputs.map((output) => { const selected = outputs.has(output.key); const alreadyAdded = column ? Object.prototype.hasOwnProperty.call((column.config as EnrichmentConfig).outputs, output.key) : false; return <button key={output.key} type="button" disabled={alreadyAdded} onClick={() => { setError(null); setOutputs((current) => { const next = new Set(current); if (selected) next.delete(output.key); else next.add(output.key); return next; }); }} className="flex w-full items-center gap-3 rounded-lg bg-bg-weak-50 px-3 py-3 text-left hover:bg-bg-weak-50 disabled:cursor-default">{selected ? <RiCheckboxLine className="size-5 text-blue-600 dark:text-blue-400" /> : <RiCheckboxBlankLine className="size-5 text-text-soft-400" />}<span className="min-w-0 flex-1"><span className="font-medium text-text-strong-950">{output.name}</span>{output.example && <span className="ml-2 text-text-sub-600">{output.example}</span>}<span className="block text-[11px] text-text-soft-400">{output.columnType}{alreadyAdded ? " · already added" : ""}</span></span></button>; })}</div>
+              <div className="flex items-start justify-between gap-3"><div><h3 className="text-[18px] font-semibold text-text-strong-950">Add data as columns to your table</h3><p className="mt-2 text-[15px] leading-5 text-text-sub-600">Select the data points you want added as columns. The integration runs once per row.</p></div><span className="shrink-0 text-[15px] text-text-sub-600">{outputs.size} selected</span></div>
+              <label className="mt-5 flex items-center gap-2 rounded-lg border border-stroke-soft-200 px-3 py-2.5"><RiSearchLine className="size-4 text-text-soft-400" /><input value={outputSearch} onChange={(event) => setOutputSearch(event.target.value)} placeholder="Search data columns" className="min-w-0 flex-1 text-[15px] outline-none" /></label>
+              <div className="mt-4 space-y-2">{filteredOutputs.map((output) => { const selected = outputs.has(output.key); const alreadyAdded = column ? Object.prototype.hasOwnProperty.call((column.config as EnrichmentConfig).outputs, output.key) : false; return <button key={output.key} type="button" disabled={alreadyAdded} onClick={() => { setError(null); setOutputs((current) => { const next = new Set(current); if (selected) next.delete(output.key); else next.add(output.key); return next; }); }} className="flex w-full items-center gap-3 rounded-lg bg-bg-weak-50 px-3 py-3 text-left hover:bg-bg-weak-50 disabled:cursor-default">{selected ? <RiCheckboxLine className="size-5 text-blue-600 dark:text-blue-400" /> : <RiCheckboxBlankLine className="size-5 text-text-soft-400" />}<span className="min-w-0 flex-1"><span className="font-medium text-text-strong-950">{output.name}</span>{output.example && <span className="ml-2 text-text-sub-600">{output.example}</span>}<span className="block text-[13px] text-text-soft-400">{output.columnType}{alreadyAdded ? " · already added" : ""}</span></span></button>; })}</div>
             </div>
-            {error && <p role="alert" className="mx-5 mb-3 mt-3 shrink-0 rounded-lg bg-red-50 dark:bg-red-500/10 px-3 py-2 text-[13px] text-red-700 dark:text-red-400">{error}</p>}
-            <div className="flex shrink-0 items-center justify-end gap-2 border-t border-stroke-soft-200 bg-bg-white-0 px-5 py-4"><button type="button" onClick={() => void save(false)} disabled={busy || !outputs.size} className="rounded-lg border border-stroke-soft-200 px-3 py-2.5 text-[13px] font-semibold text-text-strong-950 hover:bg-bg-weak-50 disabled:opacity-50">{column ? "Save changes" : "Save without running"}</button><button type="button" title={action.implemented ? undefined : "The live Apollo handler is not implemented yet"} onClick={() => void save(true)} disabled={busy || !outputs.size || !action.implemented} className="flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2.5 text-[13px] font-semibold text-white disabled:bg-blue-300">{busy && <RiLoader4Line className="size-4 animate-spin" />}Save &amp; run 10 rows</button></div>
+            {error && <p role="alert" className="mx-5 mb-3 mt-3 shrink-0 rounded-lg bg-red-50 dark:bg-red-500/10 px-3 py-2 text-[15px] text-red-700 dark:text-red-400">{error}</p>}
+            <div className="flex shrink-0 items-center justify-end gap-2 border-t border-stroke-soft-200 bg-bg-white-0 px-5 py-4"><button type="button" onClick={() => void save(false)} disabled={busy || !outputs.size} className="rounded-lg border border-stroke-soft-200 px-3 py-2.5 text-[15px] font-semibold text-text-strong-950 hover:bg-bg-weak-50 disabled:opacity-50">{column ? "Save changes" : "Save without running"}</button><button type="button" title={action.implemented ? undefined : "The live Apollo handler is not implemented yet"} onClick={() => void save(true)} disabled={busy || !outputs.size || !action.implemented} className="flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2.5 text-[15px] font-semibold text-white disabled:bg-blue-300">{busy && <RiLoader4Line className="size-4 animate-spin" />}Save &amp; run 10 rows</button></div>
           </>
         )}
       </div>
@@ -768,17 +768,17 @@ function Catalog({
         <input autoFocus value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search providers and enrichments…" className="min-w-0 flex-1 text-[15px] outline-none placeholder:text-text-soft-400" />
       </label>
       <div className="flex h-[54px] shrink-0 items-end gap-6 border-b border-stroke-soft-200 px-6">
-        <span className="border-b-2 border-blue-600 px-1 pb-3 text-[14px] font-semibold text-blue-600 dark:text-blue-400">Integrations</span>
-        <span className="px-1 pb-3 text-[14px] text-text-disabled-300">Discover</span>
-        <span className="px-1 pb-3 text-[14px] text-text-disabled-300">Templates</span>
-        <span className="px-1 pb-3 text-[14px] text-text-disabled-300">Functions</span>
+        <span className="border-b-2 border-blue-600 px-1 pb-3 text-[16px] font-semibold text-blue-600 dark:text-blue-400">Integrations</span>
+        <span className="px-1 pb-3 text-[16px] text-text-disabled-300">Discover</span>
+        <span className="px-1 pb-3 text-[16px] text-text-disabled-300">Templates</span>
+        <span className="px-1 pb-3 text-[16px] text-text-disabled-300">Functions</span>
       </div>
       <div className="flex min-h-0 flex-1">
         <aside className="w-64 shrink-0 overflow-y-auto border-r border-stroke-soft-200 p-3">
           {INTEGRATIONS.map((candidate) => {
             const candidateConnected = connectedIntegrationKeys.has(candidate.key);
             return (
-              <button key={candidate.key} type="button" onClick={() => setIntegrationKey(candidate.key)} className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-[14px] font-medium ${candidate.key === integrationKey ? "bg-bg-weak-50" : "hover:bg-bg-weak-50"}`}>
+              <button key={candidate.key} type="button" onClick={() => setIntegrationKey(candidate.key)} className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-[16px] font-medium ${candidate.key === integrationKey ? "bg-bg-weak-50" : "hover:bg-bg-weak-50"}`}>
                 <span className={candidateConnected ? "" : "grayscale opacity-50"}><IntegrationIcon integration={candidate} size={28} /></span>
                 <span className={candidateConnected ? "text-text-strong-950" : "text-text-sub-600"}>{candidate.name}</span>
                 <span className={`ml-auto size-2 rounded-full ${candidateConnected ? "bg-emerald-500" : "bg-bg-sub-300"}`} />
@@ -788,46 +788,46 @@ function Catalog({
         </aside>
         <main className="min-w-0 flex-1 overflow-y-auto">
           <div className="flex items-start justify-between gap-4 border-b border-stroke-soft-200 px-6 py-4">
-            <div><h3 className="text-[16px] font-semibold">{integration?.name}</h3><p className="mt-1 text-[13px] text-text-sub-600">{integration?.description}</p></div>
+            <div><h3 className="text-[16px] font-semibold">{integration?.name}</h3><p className="mt-1 text-[15px] text-text-sub-600">{integration?.description}</p></div>
             {connectionsLoading ? (
-              <span className="shrink-0 rounded-full bg-bg-weak-50 px-2 py-1 text-[11px] font-medium text-text-sub-600">Checking connection…</span>
+              <span className="shrink-0 rounded-full bg-bg-weak-50 px-2 py-1 text-[13px] font-medium text-text-sub-600">Checking connection…</span>
             ) : connected ? (
-              <span className="shrink-0 rounded-full bg-emerald-50 dark:bg-emerald-500/10 px-2 py-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-400">Connected</span>
+              <span className="shrink-0 rounded-full bg-emerald-50 dark:bg-emerald-500/10 px-2 py-1 text-[13px] font-medium text-emerald-700 dark:text-emerald-400">Connected</span>
             ) : (
-              <button type="button" onClick={() => onAddingAccountChange(true)} className="shrink-0 rounded-lg bg-blue-600 px-3 py-2 text-[12px] font-semibold text-white hover:bg-blue-700"><RiAddLine className="mr-1 inline size-4" />Add integration</button>
+              <button type="button" onClick={() => onAddingAccountChange(true)} className="shrink-0 rounded-lg bg-blue-600 px-3 py-2 text-[14px] font-semibold text-white hover:bg-blue-700"><RiAddLine className="mr-1 inline size-4" />Add integration</button>
             )}
           </div>
           {!connectionsLoading && !connected && (
             <div className="border-b border-stroke-soft-200 bg-blue-50/40 dark:bg-blue-500/10 px-6 py-4">
               {!addingAccount ? (
                 <div>
-                  <p className="text-[13px] font-semibold text-text-strong-950">Connect {integration?.name} to use its actions</p>
-                  <p className="mt-1 text-[12px] text-text-sub-600">
+                  <p className="text-[15px] font-semibold text-text-strong-950">Connect {integration?.name} to use its actions</p>
+                  <p className="mt-1 text-[14px] text-text-sub-600">
                     Your credentials will be verified before the integration is enabled.{" "}
-                    <DocsLink page="integrations/enrichment-providers#connect-a-provider-account" appearance="inline" className="ml-1 text-[12px]" />
+                    <DocsLink page="integrations/enrichment-providers#connect-a-provider-account" appearance="inline" className="ml-1 text-[14px]" />
                   </p>
                 </div>
               ) : (
                 <div className="rounded-xl border border-blue-200 dark:border-blue-500/30 bg-bg-white-0 p-4">
-                  <h4 className="text-[14px] font-semibold text-text-strong-950">Add {integration?.name} account</h4>
+                  <h4 className="text-[16px] font-semibold text-text-strong-950">Add {integration?.name} account</h4>
                   <label className="mt-3 block">
-                    <span className="mb-1 block text-[12px] font-medium text-text-strong-950">Account name</span>
-                    <input value={accountName} onChange={(event) => onAccountNameChange(event.target.value)} placeholder={`${integration?.name ?? "Integration"} account`} className="w-full rounded-lg border border-stroke-soft-200 px-3 py-2 text-[13px] outline-none focus:border-blue-500" />
+                    <span className="mb-1 block text-[14px] font-medium text-text-strong-950">Account name</span>
+                    <input value={accountName} onChange={(event) => onAccountNameChange(event.target.value)} placeholder={`${integration?.name ?? "Integration"} account`} className="w-full rounded-lg border border-stroke-soft-200 px-3 py-2 text-[15px] outline-none focus:border-blue-500" />
                   </label>
                   {integration?.auth.fields.map((field) => (
                     <label key={field.key} className="mt-3 block">
-                      <span className="mb-1 block text-[12px] font-medium text-text-strong-950">{field.label}{field.required && <span className="text-red-500"> *</span>}</span>
-                      <input type={field.inputType} autoComplete="off" value={credentialValues[field.key] ?? ""} onChange={(event) => onCredentialChange(field.key, event.target.value)} placeholder={field.placeholder} className="w-full rounded-lg border border-stroke-soft-200 px-3 py-2 text-[13px] outline-none focus:border-blue-500" />
+                      <span className="mb-1 block text-[14px] font-medium text-text-strong-950">{field.label}{field.required && <span className="text-red-500"> *</span>}</span>
+                      <input type={field.inputType} autoComplete="off" value={credentialValues[field.key] ?? ""} onChange={(event) => onCredentialChange(field.key, event.target.value)} placeholder={field.placeholder} className="w-full rounded-lg border border-stroke-soft-200 px-3 py-2 text-[15px] outline-none focus:border-blue-500" />
                     </label>
                   ))}
                   <div className="mt-2 flex items-center justify-between gap-3">
-                    <p className="text-[11px] text-text-sub-600">Credentials are encrypted and never shown again.</p>
-                    {integration?.auth.helpUrl && <a href={integration.auth.helpUrl} target="_blank" rel="noreferrer" className="shrink-0 text-[11px] font-medium text-blue-600 dark:text-blue-400 hover:underline">Find your API key <RiExternalLinkLine className="inline size-3" /></a>}
+                    <p className="text-[13px] text-text-sub-600">Credentials are encrypted and never shown again.</p>
+                    {integration?.auth.helpUrl && <a href={integration.auth.helpUrl} target="_blank" rel="noreferrer" className="shrink-0 text-[13px] font-medium text-blue-600 dark:text-blue-400 hover:underline">Find your API key <RiExternalLinkLine className="inline size-3" /></a>}
                   </div>
-                  {error && <p className="mt-3 rounded-lg bg-red-50 dark:bg-red-500/10 px-3 py-2 text-[12px] text-red-700 dark:text-red-400">{error}</p>}
+                  {error && <p className="mt-3 rounded-lg bg-red-50 dark:bg-red-500/10 px-3 py-2 text-[14px] text-red-700 dark:text-red-400">{error}</p>}
                   <div className="mt-4 flex justify-end gap-2">
-                    <button type="button" disabled={busy} onClick={() => onAddingAccountChange(false)} className="rounded-lg px-3 py-2 text-[12px] font-medium text-text-sub-600 hover:bg-bg-weak-50 disabled:opacity-50">Cancel</button>
-                    <button type="button" disabled={busy || integration?.auth.fields.some((field) => field.required && !credentialValues[field.key]?.trim())} onClick={() => void onAddAccount()} className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-[12px] font-semibold text-white hover:bg-blue-700 disabled:bg-blue-300">{busy && <RiLoader4Line className="size-3.5 animate-spin" />}{busy ? "Verifying…" : "Verify & connect"}</button>
+                    <button type="button" disabled={busy} onClick={() => onAddingAccountChange(false)} className="rounded-lg px-3 py-2 text-[14px] font-medium text-text-sub-600 hover:bg-bg-weak-50 disabled:opacity-50">Cancel</button>
+                    <button type="button" disabled={busy || integration?.auth.fields.some((field) => field.required && !credentialValues[field.key]?.trim())} onClick={() => void onAddAccount()} className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-[14px] font-semibold text-white hover:bg-blue-700 disabled:bg-blue-300">{busy && <RiLoader4Line className="size-3.5 animate-spin" />}{busy ? "Verifying…" : "Verify & connect"}</button>
                   </div>
                 </div>
               )}
@@ -838,9 +838,9 @@ function Catalog({
               <button type="button" disabled={!connected || connectionsLoading} aria-disabled={!connected || connectionsLoading} onClick={() => chooseAction(candidate.key)} className="flex min-w-0 flex-1 items-start gap-3 px-6 py-4 text-left disabled:cursor-not-allowed">
                 {integration && <span className={connected ? "" : "grayscale opacity-50"}><IntegrationIcon integration={integration} size={28} /></span>}
                 <span>
-                  <span className={`block text-[14px] font-semibold ${connected ? "text-text-strong-950" : "text-text-sub-600"}`}>{candidate.name}</span>
-                  <span className={`mt-1 block text-[13px] ${connected ? "text-text-sub-600" : "text-text-soft-400"}`}>{candidate.description}</span>
-                  <span className={`mt-1.5 block text-[12px] ${connected ? "text-text-sub-600" : "text-text-soft-400"}`}><RiFlashlightLine className="mr-1 inline size-3.5" />Enrichment · {integration?.name}</span>
+                  <span className={`block text-[16px] font-semibold ${connected ? "text-text-strong-950" : "text-text-sub-600"}`}>{candidate.name}</span>
+                  <span className={`mt-1 block text-[15px] ${connected ? "text-text-sub-600" : "text-text-soft-400"}`}>{candidate.description}</span>
+                  <span className={`mt-1.5 block text-[14px] ${connected ? "text-text-sub-600" : "text-text-soft-400"}`}><RiFlashlightLine className="mr-1 inline size-3.5" />Enrichment · {integration?.name}</span>
                 </span>
               </button>
               <a href={candidate.docsUrl} target="_blank" rel="noreferrer" aria-label={`Open documentation for ${candidate.name}`} title="View documentation" className="m-4 rounded-md p-2 text-text-soft-400 hover:bg-bg-white-0 hover:text-blue-600 dark:hover:text-blue-400"><RiExternalLinkLine className="size-4" /></a>
@@ -853,5 +853,5 @@ function Catalog({
 }
 
 function Toggle({ label, checked, onChange, disabled = false }: { label: string; checked: boolean; onChange: (checked: boolean) => void; disabled?: boolean }) {
-  return <div className="flex items-center justify-between"><span><span className="font-medium text-text-strong-950">{label}</span>{disabled && <span className="ml-2 text-[11px] text-text-soft-400">Coming later</span>}</span><button type="button" disabled={disabled} aria-pressed={checked} onClick={() => onChange(!checked)} className={`relative h-6 w-11 rounded-full transition ${checked ? "bg-blue-600" : "bg-bg-sub-300"} disabled:opacity-50`}><span className={`absolute top-1 size-4 rounded-full bg-static-white transition ${checked ? "left-6" : "left-1"}`} /></button></div>;
+  return <div className="flex items-center justify-between"><span><span className="font-medium text-text-strong-950">{label}</span>{disabled && <span className="ml-2 text-[13px] text-text-soft-400">Coming later</span>}</span><button type="button" disabled={disabled} aria-pressed={checked} onClick={() => onChange(!checked)} className={`relative h-6 w-11 rounded-full transition ${checked ? "bg-blue-600" : "bg-bg-sub-300"} disabled:opacity-50`}><span className={`absolute top-1 size-4 rounded-full bg-static-white transition ${checked ? "left-6" : "left-1"}`} /></button></div>;
 }

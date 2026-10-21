@@ -42,7 +42,7 @@ export default function ColumnsMenu({
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search"
-            className="min-w-0 flex-1 bg-transparent text-[13px] text-text-strong-950 outline-none placeholder:text-text-soft-400"
+            className="min-w-0 flex-1 bg-transparent text-[15px] text-text-strong-950 outline-none placeholder:text-text-soft-400"
           />
         </div>
       </div>
@@ -51,7 +51,7 @@ export default function ColumnsMenu({
         type="button"
         onClick={() => onChange([])}
         disabled={!hidden.length}
-        className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-[13px] text-text-strong-950 transition hover:bg-bg-weak-50 disabled:text-text-disabled-300"
+        className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-[15px] text-text-strong-950 transition hover:bg-bg-weak-50 disabled:text-text-disabled-300"
       >
         <RiEyeLine className="size-[18px] shrink-0 text-text-soft-400" />
         Show all columns
@@ -60,7 +60,7 @@ export default function ColumnsMenu({
         type="button"
         onClick={() => onChange(columns.map((c) => c.key))}
         disabled={hidden.length === columns.length}
-        className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-[13px] text-text-strong-950 transition hover:bg-bg-weak-50 disabled:text-text-disabled-300"
+        className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-[15px] text-text-strong-950 transition hover:bg-bg-weak-50 disabled:text-text-disabled-300"
       >
         <RiSortAsc className="size-[18px] shrink-0 text-text-soft-400" />
         Hide all columns
@@ -70,7 +70,7 @@ export default function ColumnsMenu({
 
       <div className="max-h-[320px] overflow-y-auto">
         {filtered.length === 0 && (
-          <p className="px-3 py-3 text-[13px] text-text-soft-400">No columns match.</p>
+          <p className="px-3 py-3 text-[15px] text-text-soft-400">No columns match.</p>
         )}
         {filtered.map((c) => {
           const isHidden = hiddenSet.has(c.key);
@@ -86,7 +86,7 @@ export default function ColumnsMenu({
                 className={`size-[18px] shrink-0 ${isHidden ? "text-text-disabled-300" : "text-text-soft-400"}`}
               />
               <span
-                className={`min-w-0 flex-1 truncate text-[13px] ${
+                className={`min-w-0 flex-1 truncate text-[15px] ${
                   isHidden ? "text-text-disabled-300" : "text-text-strong-950"
                 }`}
               >
