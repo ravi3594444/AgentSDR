@@ -27,14 +27,18 @@ import { getAiRuntime } from "./runtime";
  * The tag does not promise json_schema itself: DeepSeek Chat is tagged
  * `structured_output` and `tools`, yet its request schema allows only text
  * and json_object, so its json_schema request is refused with HTTP 400
- * before inference (21 Oct 2026). When a json_schema request gets a 400 and
+ * before inference (21 Oct 2026). When a json_schema request gets any 400
+ * (AI/ML's body says only "Validation failed", so the cause is not read) and
  * the model is also tagged `tools` (aimlFunctionCallFallback), the same
  * attempt is sent once more as a forced function call (same model, prompts
  * and schema) and the rest of the call stays a function call. That is the
  * only switch: never back, never twice, and only for a 400 — 401, 403, 404,
  * 422, 429, 5xx and timeouts behave as below. The refused request is not
  * counted as an attempt (it produced no answer), so a call makes at most
- * `maxAttempts` + 1 requests.
+ * `maxAttempts` + 1 requests. Nothing is remembered between calls: every
+ * call asks for json_schema first, so a model that always refuses it costs
+ * one refused request per call, and one unrelated 400 never moves a model
+ * off json_schema for later calls.
  *
  * OpenRouter — a function call, never `response_format`. JSON mode is the
  * parameter the pinned providers
@@ -53,8 +57,9 @@ import { getAiRuntime } from "./runtime";
  * call's arguments can still miss the schema, each attempt is judged and
  * a bad one is retried: no tool call, arguments that are not a JSON object,
  * arguments the caller's `accept` rejects, or a transient transport error
- * (429, 5xx, timeout). Routing and configuration errors (400, 401, 403,
- * 404) are not retried — another attempt would fail the same way.
+ * (429, 5xx, timeout). Routing and configuration errors (400 apart from
+ * the one AI/ML json_schema fallback above, 401, 403, 404) are not retried —
+ * another attempt would fail the same way.
  *
  * Reasoning models spend `max_tokens` on thinking before the call:
  * minimax-m3 was measured using 799 of an 800-token budget on reasoning and
@@ -114,6 +119,21 @@ function httpStatusOf(error: unknown): number | undefined {
   const candidate = error as { status?: unknown; statusCode?: unknown } | null;
   const status = Number(candidate?.status ?? candidate?.statusCode);
   return Number.isFinite(status) && status > 0 ? status : undefined;
+}
+
+/**
+ * What callers read off a provider's error, for an error that wraps it: the
+ * HTTP status (the reply agent stops on a permanent 4xx) and the SDK's code,
+ * type, body and request id (the AI-column audit stops at the first error in
+ * the chain that carries a status).
+ */
+function providerErrorFields(error: unknown): Record<string, unknown> {
+  const status = httpStatusOf(error);
+  const source = error && typeof error === "object" ? error as Record<string, unknown> : {};
+  return Object.fromEntries([
+    ["status", status],
+    ...(["code", "type", "error", "requestID"] as const).map((key) => [key, source[key]] as const),
+  ].filter(([, value]) => value !== undefined && value !== null));
 }
 
 function describeResponseError(response: unknown): string | null {
@@ -406,9 +426,7 @@ export async function completeStructured(
       const retryable = error instanceof RejectedAttemptError || isRetryableOpenRouterError(error);
       if (!retryable || input.signal?.aborted) {
         if (!schemaRefusal) throw error;
-        // Callers read the HTTP status (the reply agent stops on a permanent 4xx); keep it on the wrapper.
-        const status = httpStatusOf(error);
-        throw Object.assign(new Error(afterRefusal(messageOf(error)), { cause: error }), status === undefined ? {} : { status });
+        throw Object.assign(new Error(afterRefusal(messageOf(error)), { cause: error }), providerErrorFields(error));
       }
     }
   }

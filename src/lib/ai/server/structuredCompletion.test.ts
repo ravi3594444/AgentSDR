@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
+import { APIConnectionError, APIConnectionTimeoutError } from "openai";
 import { completeStructured, isStrictJsonSchema, type StructuredCompletionRuntime } from "./structuredCompletion";
 import { actionsProblem, agentReplySchema, nextAgentBatch, outreachRequested, parseAgentReply, type AgentReply } from "@/lib/assistant/agent";
 import { parseWriterReply, writerReplyInstructions, WRITER_REPLY_SCHEMAS } from "@/lib/assistant/writerReply";
@@ -235,7 +236,7 @@ describe("completeStructured with AI/ML API (JSON schema)", () => {
  * of the request it gets (message content for json_schema, a function call
  * otherwise), so a test can tell which format reached the provider.
  */
-function fallbackRuntime(replies: Array<{ status?: number; message?: string; answer?: string }>, options: {
+function fallbackRuntime(replies: Array<{ status?: number; message?: string; throws?: Error; answer?: string; finish?: string; refusal?: string }>, options: {
   functionCallFallback?: boolean;
   providerKey?: "aimlapi" | "openrouter";
   schemaName?: string;
@@ -254,8 +255,9 @@ function fallbackRuntime(replies: Array<{ status?: number; message?: string; ans
       requests.push(request);
       const reply = replies.shift();
       if (!reply) throw new Error("scripted client ran out of replies");
+      if (reply.throws) throw reply.throws;
       if (reply.status) throw Object.assign(new Error(reply.message ?? `${reply.status} status code`), { status: reply.status });
-      if (request.response_format) return { choices: [{ finish_reason: "stop", message: { content: reply.answer ?? null } }] };
+      if (request.response_format) return { choices: [{ finish_reason: reply.finish ?? "stop", message: { content: reply.answer ?? null, refusal: reply.refusal ?? null } }] };
       return { choices: [{ finish_reason: "tool_calls", message: { content: null, tool_calls: [{ type: "function", function: { name: options.schemaName ?? "submit", arguments: reply.answer ?? "" } }] } }] };
     } } } },
   });
@@ -286,8 +288,12 @@ describe("AI/ML API: one function-call retry when a json_schema request is refus
       { answer: '{"category":"a"}' },
     ], { functionCallFallback: true });
     const accepted: string[] = [];
+    const waits: number[] = [];
     let retries = 0;
-    const result = await completeStructured({ ...strictInput, accept: (text) => { accepted.push(text); }, onRetry: () => { retries++; } }, { runtime, sleep: noSleep });
+    const result = await completeStructured(
+      { ...strictInput, accept: (text) => { accepted.push(text); }, onRetry: () => { retries++; } },
+      { runtime, sleep: async (ms) => { waits.push(ms); } },
+    );
     assert.equal(requests.length, 2);
     const [first, second] = requests;
     assert.equal(format(first), "json_schema");
@@ -303,6 +309,8 @@ describe("AI/ML API: one function-call retry when a json_schema request is refus
     assert.equal(result.request, second);
     // The refused request never produced an answer: no "asking again" note, no backoff.
     assert.equal(retries, 0);
+    assert.deepEqual(waits, []);
+    assert.equal(result.attempts, 1);
   });
 
   test("a model that does not list tools keeps the 400", async () => {
@@ -321,8 +329,8 @@ describe("AI/ML API: one function-call retry when a json_schema request is refus
     }
   });
 
-  test("429 and 5xx keep their retries, every one of them in json_schema", async () => {
-    for (const code of [429, 500, 503]) {
+  test("408, 409, 429 and 5xx keep their retries, every one of them in json_schema", async () => {
+    for (const code of [408, 409, 429, 500, 503]) {
       const recovered = fallbackRuntime([{ status: code }, { answer: '{"category":"a"}' }], { functionCallFallback: true });
       assert.equal((await completeStructured(strictInput, { runtime: recovered.runtime, sleep: noSleep })).attempts, 2);
       assert.deepEqual(recovered.requests.map(format), ["json_schema", "json_schema"]);
@@ -333,16 +341,51 @@ describe("AI/ML API: one function-call retry when a json_schema request is refus
     }
   });
 
+  test("timeouts, connection errors and rejected answers behave exactly as without the fallback, all in json_schema", async () => {
+    const accept = (text: string) => { if (JSON.parse(text).category !== "a") throw new Error("category must be a"); };
+    const failures: Array<[string, { throws?: Error; answer?: string; finish?: string; refusal?: string }, number]> = [
+      // The SDK's own classes carry no status and no distinguishing name, so they end the call as before.
+      ["SDK timeout", { throws: new APIConnectionTimeoutError() }, 1],
+      ["SDK connection error", { throws: new APIConnectionError({ message: "Connection error." }) }, 1],
+      ["named timeout", { throws: Object.assign(new Error("Request timed out."), { name: "APIConnectionTimeoutError" }) }, 2],
+      ["connection reset", { throws: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }) }, 2],
+      ["rejected answer", { answer: '{"category":"z"}' }, 2],
+      ["length finish", { answer: '{"categ', finish: "length" }, 2],
+      ["prose", { answer: "Sure, it is a." }, 2],
+      ["refusal", { answer: "", refusal: "I cannot help with that" }, 2],
+    ];
+    const run = async (failure: (typeof failures)[number][1], functionCallFallback: boolean) => {
+      const { runtime, requests } = fallbackRuntime([failure, { answer: '{"category":"a"}' }], { functionCallFallback });
+      const outcome = await completeStructured({ ...strictInput, accept }, { runtime, sleep: noSleep })
+        .then((result) => `answered ${result.text} in ${result.attempts}`, (error: unknown) => `threw ${(error as Error).message}`);
+      return { formats: requests.map(format), outcome };
+    };
+    for (const [label, failure, requestCount] of failures) {
+      const withFallback = await run(failure, true);
+      assert.deepEqual(withFallback, await run(failure, false), label);
+      assert.deepEqual(withFallback.formats, Array(requestCount).fill("json_schema"), label);
+    }
+  });
+
   test("a function-call retry that is refused too ends it, with both reasons and the HTTP status", async () => {
     const { runtime, requests } = fallbackRuntime([
       { status: 400, message: "400 Validation failed: response_format.type" },
-      { status: 400, message: "400 Validation failed: tools" },
+      {
+        throws: Object.assign(new Error("400 Validation failed: tools"), {
+          status: 400, code: "invalid_value", type: "invalid_request_error", requestID: "req_2", error: { message: "Validation failed" },
+        }),
+      },
       { answer: '{"category":"a"}' },
     ], { functionCallFallback: true });
     const error = await completeStructured(strictInput, { runtime, sleep: noSleep }).then(() => null, (thrown: unknown) => thrown);
     assert.ok(error instanceof Error);
     assert.equal((error as { status?: unknown }).status, 400);
     assert.equal(((error as { cause?: { status?: unknown } }).cause)?.status, 400);
+    // The AI-column audit reads these off the first error that carries a status: the wrapper.
+    assert.deepEqual(
+      { code: (error as { code?: unknown }).code, type: (error as { type?: unknown }).type, requestID: (error as { requestID?: unknown }).requestID, error: (error as { error?: unknown }).error },
+      { code: "invalid_value", type: "invalid_request_error", requestID: "req_2", error: { message: "Validation failed" } },
+    );
     assert.match(error.message, /json_schema request was rejected \(400 Validation failed: response_format\.type\)/);
     assert.match(error.message, /function-call retry also failed: 400 Validation failed: tools/);
     assert.deepEqual(requests.map(format), ["json_schema", "tool_call"]);

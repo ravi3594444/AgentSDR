@@ -17,9 +17,10 @@
 import { agentReplySchema, parseAgentReply } from "@/lib/assistant/agent";
 import { assistantSystemPrompt } from "@/lib/assistant/agent.server";
 import { TOOL_NAMES } from "@/lib/assistant/tools.server";
-import { aimlFunctionCallFallback, aimlStructuredMode } from "@/lib/ai/aimlapi-types";
-import { createAimlClient, listAimlModels } from "@/lib/ai/server/aimlapi";
-import { completeStructured, type StructuredCompletionRuntime } from "@/lib/ai/server/structuredCompletion";
+import { AIML_PROVIDER_KEY, AIML_PROVIDER_NAME } from "@/lib/ai/aimlapi-types";
+import { listAimlModels } from "@/lib/ai/server/aimlapi";
+import { runtimeFor } from "@/lib/ai/server/runtime";
+import { completeStructured } from "@/lib/ai/server/structuredCompletion";
 
 const key = process.env.AIML_API_KEY;
 if (!key) {
@@ -43,17 +44,15 @@ const userPrompt = [
 
 let failures = 0;
 for (const modelId of models) {
-  const entry = catalog.find((model) => model.id === modelId);
-  const mode = entry ? aimlStructuredMode(entry.capabilities) : "json_schema";
-  const runtime: StructuredCompletionRuntime = async () => ({
-    providerKey: "aimlapi",
-    selection: { provider: modelId.split("/")[0]!, modelId },
-    routing: {},
-    structuredOutput: mode,
-    functionCallFallback: entry ? aimlFunctionCallFallback(entry.capabilities) : false,
-    supportsPlugins: false,
-    client: createAimlClient(key, 120_000) as never,
-  });
+  // The runtime the app builds for this model (runtimeFor, as getAiRuntime does), from the catalog read above.
+  const runtime = await runtimeFor(
+    { providerKey: AIML_PROVIDER_KEY, selection: { provider: AIML_PROVIDER_KEY, modelId }, routing: {}, structuredOutput: "json_schema", supportsPlugins: false },
+    { id: "aiml-live", providerKey: AIML_PROVIDER_KEY, name: AIML_PROVIDER_NAME, enabled: true, verified: true },
+    key,
+    120_000,
+    { listModels: async () => catalog },
+  );
+  const mode = runtime.structuredOutput;
   const started = performance.now();
   try {
     const result = await completeStructured({
@@ -65,7 +64,7 @@ for (const modelId of models) {
       systemPrompt,
       userPrompt,
       accept: (text) => void parseAgentReply(text, TOOL_NAMES),
-    }, { runtime });
+    }, { runtime: async () => runtime });
     const reply = parseAgentReply(result.text, TOOL_NAMES);
     const ok = reply.actions.length > 0;
     if (!ok) failures++;

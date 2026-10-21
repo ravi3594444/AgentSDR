@@ -51,10 +51,20 @@ verified with `GET /v1/key`, which costs nothing and answers 401 for a bad key
 management key, BYOK provider list or routing confirmation.
 
 Selectable models are the chat-completion models in AI/ML's catalog
-(`GET /v1/models?include=capabilities`) tagged `structured_output`; they are
-revalidated against the live catalog on save. Structured answers use
-`response_format: json_schema`, strict when the schema qualifies
-(`isStrictJsonSchema`), and the answer is the message content.
+(`GET /v1/models?include=capabilities`) tagged `structured_output` or
+`tools`; they are revalidated against the live catalog on save. A model
+tagged `structured_output` is asked with `response_format: json_schema`,
+strict when the schema qualifies (`isStrictJsonSchema`), and the answer is
+the message content; a model tagged only `tools` (Claude, Grok) is asked
+with one forced function call (`aimlStructuredMode`).
+
+When a json_schema request is answered with HTTP 400 and the model is also
+tagged `tools` (`aimlFunctionCallFallback`), that attempt is sent once more
+as a forced function call with the same model, prompts and schema, and the
+rest of the call stays a function call. DeepSeek Chat needs it: tagged
+`structured_output`, it accepts only text and json_object response formats.
+No other error falls back, OpenRouter never does, and nothing is remembered
+for the next call (`server/structuredCompletion.ts`).
 
 Not available through AI/ML API, and refused with a message that says so:
 

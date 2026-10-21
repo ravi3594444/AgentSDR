@@ -1,10 +1,10 @@
 import "server-only";
 
 import { getByokSettings } from "../byok";
-import { getAiConnection, getAiCredentials } from "../connections";
+import { getAiConnection, getAiCredentials, type AiConnection } from "../connections";
 import type { OpenRouterModelSelection } from "../openrouter-types";
 import { RUNTIME_PROVIDERS, planAiRuntime, type AiRuntimePlan } from "../runtimePlan";
-import { aimlFunctionCallFallback, aimlStructuredMode } from "../aimlapi-types";
+import { aimlFunctionCallFallback, aimlStructuredMode, type AimlModelSummary } from "../aimlapi-types";
 import { createAimlClient, listAimlModelsCached } from "./aimlapi";
 import { createOpenRouterClient } from "./openrouter";
 
@@ -30,27 +30,40 @@ export async function getAiRuntime(
   const connection = settings.connectionId ? await getAiConnection(settings.connectionId) : null;
   const planned = planAiRuntime(settings, connection, requested);
   if (!planned.ok) throw new Error(planned.error);
-  const { plan } = planned;
 
   const credentials = await getAiCredentials(connection!.id);
-  if (!credentials?.apiKey) throw new Error(`Reconnect ${RUNTIME_PROVIDERS[plan.providerKey]} in AI Settings`);
-  const structured = plan.providerKey === "openrouter" ? null : await aimlModeFor(plan.selection.modelId, plan.structuredOutput);
-
-  return {
-    ...plan,
-    structuredOutput: structured?.structuredOutput ?? plan.structuredOutput,
-    ...(structured ? { functionCallFallback: structured.functionCallFallback } : {}),
-    client: plan.providerKey === "openrouter"
-      ? createOpenRouterClient(credentials.apiKey, timeout)
-      : createAimlClient(credentials.apiKey, timeout),
-    apiKey: credentials.apiKey,
-    connection: connection!,
-  } satisfies AiRuntimePlan & Record<string, unknown>;
+  if (!credentials?.apiKey) throw new Error(`Reconnect ${RUNTIME_PROVIDERS[planned.plan.providerKey]} in AI Settings`);
+  return runtimeFor(planned.plan, connection!, credentials.apiKey, timeout);
 }
 
 export type AiRuntime = Awaited<ReturnType<typeof getAiRuntime>>;
 
 const CATALOG_WAIT_MS = 5_000;
+
+/**
+ * A gated plan made into a runtime: its provider's client, and how its model
+ * is asked for structured answers. Separate from getAiRuntime, which reads
+ * the database, so tests can give it a catalog.
+ */
+export async function runtimeFor(
+  plan: AiRuntimePlan,
+  connection: AiConnection,
+  apiKey: string,
+  timeout: number,
+  catalog: { listModels?: () => Promise<AimlModelSummary[]>; waitMs?: number } = {},
+) {
+  const structured = plan.providerKey === "openrouter" ? null : await aimlModeFor(plan.selection.modelId, plan.structuredOutput, catalog);
+  return {
+    ...plan,
+    structuredOutput: structured?.structuredOutput ?? plan.structuredOutput,
+    ...(structured ? { functionCallFallback: structured.functionCallFallback } : {}),
+    client: plan.providerKey === "openrouter"
+      ? createOpenRouterClient(apiKey, timeout)
+      : createAimlClient(apiKey, timeout),
+    apiKey,
+    connection,
+  } satisfies AiRuntimePlan & Record<string, unknown>;
+}
 
 /**
  * How an AI/ML API model is asked for structured answers, from its tags in
@@ -62,11 +75,14 @@ const CATALOG_WAIT_MS = 5_000;
 async function aimlModeFor(
   modelId: string,
   fallback: AiRuntimePlan["structuredOutput"],
+  { listModels = listAimlModelsCached, waitMs = CATALOG_WAIT_MS }: { listModels?: () => Promise<AimlModelSummary[]>; waitMs?: number },
 ): Promise<Pick<AiRuntimePlan, "structuredOutput"> & { functionCallFallback: boolean }> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
   const models = await Promise.race([
-    listAimlModelsCached().catch(() => null),
-    new Promise<null>((resolve) => setTimeout(() => resolve(null), CATALOG_WAIT_MS)),
+    listModels().catch(() => null),
+    new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), waitMs); }),
   ]);
+  clearTimeout(timer);
   const model = models?.find((entry) => entry.id === modelId);
   return model
     ? { structuredOutput: aimlStructuredMode(model.capabilities), functionCallFallback: aimlFunctionCallFallback(model.capabilities) }
