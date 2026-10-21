@@ -7,8 +7,8 @@ import {
   type OpenRouterModelSelection,
 } from "@/lib/ai/openrouter-types";
 import { AIML_PROVIDER_KEY } from "@/lib/ai/aimlapi-types";
-import { RUNTIME_PROVIDERS, type AiRuntimePlan } from "@/lib/ai/runtimePlan";
-import { getAiRuntime } from "./runtime";
+import { ENGINE_NAMES, type AiEngineKey, type AiRuntimePlan } from "@/lib/ai/runtimePlan";
+import { structuredRuntime } from "@/lib/ai/claudeCode/runtime.server";
 
 /**
  * Every structured answer in the app comes through here. How it is asked for
@@ -168,7 +168,9 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 export type StructuredCompletionRuntime = (
   requested: OpenRouterModelSelection | undefined,
   timeoutMs: number,
-) => Promise<Pick<AiRuntimePlan, "providerKey" | "selection" | "routing" | "structuredOutput" | "functionCallFallback" | "supportsPlugins"> & {
+) => Promise<Pick<AiRuntimePlan, "selection" | "routing" | "structuredOutput" | "functionCallFallback" | "supportsPlugins"> & {
+  /** An API provider (runtime.ts), or Claude Code (claudeCode/runtime.server.ts). */
+  providerKey: AiEngineKey;
   client: { chat: { completions: { create: (request: never, options: { signal?: AbortSignal }) => Promise<StructuredChatResponse> } } };
 }>;
 
@@ -230,7 +232,7 @@ export async function completeStructured(
   input: StructuredCompletionInput,
   dependencies: { runtime?: StructuredCompletionRuntime; sleep?: typeof sleep } = {},
 ): Promise<StructuredCompletionResult> {
-  const { client, selection, routing, structuredOutput, functionCallFallback, supportsPlugins, providerKey } = await (dependencies.runtime ?? getAiRuntime)(
+  const { client, selection, routing, structuredOutput, functionCallFallback, supportsPlugins, providerKey } = await (dependencies.runtime ?? structuredRuntime)(
     input.requestedModel,
     input.timeoutMs,
   );
@@ -241,7 +243,7 @@ export async function completeStructured(
   if (input.plugins?.length && !supportsPlugins) {
     // Answering a web-research question from the model's memory would look
     // like a researched answer; refuse instead.
-    throw new Error(`Web search runs through OpenRouter's web plugin, which ${RUNTIME_PROVIDERS[providerKey]} does not offer. Select an OpenRouter connection in AI Settings for this feature.`);
+    throw new Error(`Web search runs through OpenRouter's web plugin, which ${ENGINE_NAMES[providerKey]} does not offer. Select an OpenRouter connection in AI Settings for this feature.`);
   }
   const maxAttempts = Math.max(1, Math.floor(input.maxAttempts ?? DEFAULT_MAX_ATTEMPTS));
   let outputTokens = input.maxOutputTokens;
@@ -310,7 +312,7 @@ export async function completeStructured(
       const content = typeof message?.content === "string" ? message.content : "";
       if (!content.trim()) {
         const detail = describeResponseError(response);
-        if (detail) throw new Error(`${RUNTIME_PROVIDERS[providerKey]} returned no ${input.schemaName} answer: ${detail}`);
+        if (detail) throw new Error(`${ENGINE_NAMES[providerKey]} returned no ${input.schemaName} answer: ${detail}`);
         if (typeof message?.refusal === "string" && message.refusal.trim()) {
           throw new RejectedAttemptError(`The model refused: ${message.refusal.trim().slice(0, 300)}`);
         }
@@ -340,7 +342,7 @@ export async function completeStructured(
     ))?.function;
     if (!call) {
       const detail = describeResponseError(response);
-      if (detail) throw new Error(`${RUNTIME_PROVIDERS[providerKey]} returned no ${input.schemaName} call: ${detail}`);
+      if (detail) throw new Error(`${ENGINE_NAMES[providerKey]} returned no ${input.schemaName} call: ${detail}`);
       if (choice?.finish_reason === "length") {
         const spent = outputTokens;
         outputTokens *= 2;

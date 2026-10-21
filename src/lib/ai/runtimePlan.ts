@@ -1,5 +1,6 @@
 import { AIML_PROVIDER_KEY, AIML_PROVIDER_NAME } from "./aimlapi-types";
 import { strictProviderRouting, type ByokSettings, type OpenRouterModelSelection } from "./openrouter-types";
+import { CLAUDE_CODE_ENGINE_KEY, CLAUDE_CODE_ENGINE_NAME } from "./claudeCode/contract";
 
 /**
  * The gate every model call passes, as a pure function of the organization's
@@ -23,6 +24,18 @@ export type AiProviderKey = "openrouter" | typeof AIML_PROVIDER_KEY;
 export const RUNTIME_PROVIDERS: Record<AiProviderKey, string> = {
   openrouter: "OpenRouter",
   [AIML_PROVIDER_KEY]: AIML_PROVIDER_NAME,
+};
+
+/**
+ * What can answer a structured call: an API provider above, or Claude Code
+ * (the owner's own Claude login, src/lib/ai/claudeCode/), which is selected
+ * apart from the connection and has no plan here.
+ */
+export type AiEngineKey = AiProviderKey | typeof CLAUDE_CODE_ENGINE_KEY;
+
+export const ENGINE_NAMES: Record<AiEngineKey, string> = {
+  ...RUNTIME_PROVIDERS,
+  [CLAUDE_CODE_ENGINE_KEY]: CLAUDE_CODE_ENGINE_NAME,
 };
 
 export function isRuntimeProvider(value: string): value is AiProviderKey {

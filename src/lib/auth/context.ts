@@ -1,11 +1,12 @@
 import "server-only";
 
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { headers as nextHeaders } from "next/headers";
 import { cache } from "react";
 import { db } from "@/lib/db";
 import { runInOrganization } from "@/lib/tenancy/scope";
 import { roles, type OrgRole } from "./permissions";
+import { operatorOrganizationId } from "./operator.server";
 import { members, organizations } from "./schema";
 import { auth } from "./server";
 import { BRAND } from "@/lib/brand";
@@ -177,22 +178,6 @@ export async function withOrgContext<T>(
 export async function isPlatformOperator(ctx: Pick<OrgContext, "organizationId" | "roles">): Promise<boolean> {
   if (!ctx.roles.some((role) => role === "owner" || role === "admin")) return false;
   return ctx.organizationId === (await operatorOrganizationId());
-}
-
-/** The organization flagged `initial`, else the oldest one. */
-async function operatorOrganizationId(): Promise<string | null> {
-  const [flagged] = await db
-    .select({ id: organizations.id })
-    .from(organizations)
-    .where(sql`${organizations.metadata}::jsonb ->> 'initial' = 'true'`)
-    .limit(1);
-  if (flagged) return flagged.id;
-  const [oldest] = await db
-    .select({ id: organizations.id })
-    .from(organizations)
-    .orderBy(organizations.createdAt)
-    .limit(1);
-  return oldest?.id ?? null;
 }
 
 export async function requirePlatformOperator(ctx: Pick<OrgContext, "organizationId" | "roles">): Promise<void> {
