@@ -34,15 +34,15 @@ export type AimlModelSummary = {
 };
 
 /**
- * How a model is asked for a structured answer: a strict JSON schema when
- * AI/ML marks it `structured_output`, else one function call (`tools`).
- * AI/ML's tags are incomplete: every Claude model lacks `structured_output`
- * although Claude Haiku 5.5 answered strict JSON correctly on 17 Oct 2026;
- * the function call worked for it too and is what OpenRouter uses for every
- * model, so it is the safe way for a model only tagged `tools`.
+ * Prefer the explicitly advertised function-call API. `structured_output`
+ * does not distinguish JSON-object mode from strict JSON-schema mode:
+ * DeepSeek Chat advertises it while its request schema rejects json_schema
+ * (AI/ML docs-json, checked 21 Oct 2026). A model advertising both must use
+ * tools; otherwise an ordinary greeting fails before inference with HTTP 400.
+ * Schema-only models retain the existing JSON-schema path.
  */
 export function aimlStructuredMode(capabilities: readonly string[]): "json_schema" | "tool_call" {
-  return capabilities.includes("structured_output") ? "json_schema" : "tool_call";
+  return capabilities.includes("structured_output") && !capabilities.includes("tools") ? "json_schema" : "tool_call";
 }
 
 /**

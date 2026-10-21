@@ -13,10 +13,11 @@ import { getAiRuntime } from "./runtime";
  * Every structured answer in the app comes through here. How it is asked for
  * depends on the provider the organization selected (runtimePlan.ts):
  *
- * AI/ML API — strict JSON schema (`response_format: json_schema`) for the
- * models AI/ML marks `structured_output`, the answer being the message
- * content; models it marks only `tools` (every Claude model, Grok) answer
- * with one function call like OpenRouter (aimlStructuredMode,
+ * AI/ML API — one function call for models advertising `tools`, including
+ * ones also tagged `structured_output`: that tag can mean JSON-object mode
+ * only, and does not establish json_schema support (DeepSeek Chat). Models
+ * advertising only structured output retain the JSON-schema path. See
+ * aimlStructuredMode,
  * runtime.ts). Probed on 13 Oct 2026 with the CRM classifier and
  * draft schemas (anyOf null, enum, minLength, format: date-time) against
  * openai/gpt-4o-mini, google/gemini-3.5-flash-lite and

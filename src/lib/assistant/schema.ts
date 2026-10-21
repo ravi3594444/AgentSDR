@@ -647,6 +647,8 @@ export type ReplyAgentTurn = {
   reply: string | null;
   problems: string[];
   error: string | null;
+  /** Provider status when the request failed before an answer existed. */
+  httpStatus?: number;
 };
 
 /**

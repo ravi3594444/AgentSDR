@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { agentSystemPrompt, agentUserPrompt, fallbackReply, hardStop, MAX_TURNS, ownerNoteToDecision, parseAgentDecision, replyProblems, wrongNumberClosing } from "./agent";
+import { agentSystemPrompt, agentUserPrompt, hardStop, ownerNoteToDecision, parseAgentDecision, replyProblems, wrongNumberClosing } from "./agent";
 
 const knowledge = "Business: Bright Path\n\nOffer: Monthly maintenance plan: ₹2,499 per chair per month, includes two visits.\n\nService area: Pune.\n\nHow meetings are booked: https://cal.example.test/brightpath";
 
@@ -24,13 +24,7 @@ describe("what must never go out is fed back, never invented", () => {
     expect(replyProblems("", "whatsapp", knowledge)).toEqual(["the reply is empty"]);
   });
 
-  test("the safe line after MAX_TURNS is honest and in the lead's language", () => {
-    expect(MAX_TURNS).toBe(3);
-    expect(fallbackReply("How much for X-ray servicing?", "Ravi Kumar")).toBe("Thanks! Let me check on that and get back to you shortly. – Ravi");
-    expect(fallbackReply("X-ray ka kitna lagega bhai?", "Ravi")).toContain("check karke");
-    expect(fallbackReply("एक्स-रे का कितना लगेगा?", "Ravi")).toContain("धन्यवाद");
-    for (const text of [fallbackReply("a", "R"), fallbackReply("kya hai", null)]) expect(replyProblems(text, "whatsapp", knowledge)).toEqual([]);
-  });
+
 });
 
 describe("the hard rules", () => {

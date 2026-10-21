@@ -14,7 +14,7 @@ import { withCrmTransaction, type CrmExecutor } from "@/lib/crm/repository";
 import { crmConversationMessages, crmConversations, crmDrafts, crmRecords, crmSubcategories } from "@/lib/crm/schema";
 import { sendDraft, type CrmSendAdapter } from "@/lib/crm/send";
 import type { ReplyConversationMessage } from "@/lib/crm/ai/replyConversation";
-import { closingAcknowledgement, detectsOptOutWording, detectsWrongNumber } from "@/lib/crm/wrongNumber";
+import { detectsOptOutWording, detectsWrongNumber } from "@/lib/crm/wrongNumber";
 import { closeWrongNumber, type CloseWrongNumberOutcome } from "@/lib/crm/wrongNumberAck.server";
 import { wrongRouteForConversation } from "@/lib/crm/wrongRoutes";
 import { companies, people } from "@/lib/leads/schema";
@@ -28,17 +28,12 @@ import { autopilotReplies, autopilotTakeovers, ownerDecisions, replyAgentRuns, t
 import { recordUsage } from "../usage.server";
 import {
   agentSystemPrompt,
-  agentUserPrompt,
   DECISION_SCHEMA,
-  fallbackReply,
   hardStop,
-  MAX_TURNS,
   ownerNoteToDecision,
   parseAgentDecision,
-  replyProblems,
   wrongNumberClosing,
   type AgentChannel,
-  type AgentDecision,
   type HardFacts,
 } from "./agent";
 
@@ -53,8 +48,8 @@ import {
  * One model call answers a normal message. Only a reply with something that
  * must never go out (an invented price, day, time or link, a placeholder, a
  * claim that something was done) costs another turn, and the agent is told
- * exactly what to fix. After MAX_TURNS the lead gets an honest holding line
- * and the owner a card, so a lead is never left without an answer.
+ * exactly what to fix. If no usable answer can be produced, the failure
+ * remains visible to the owner and no invented holding message is sent.
  *
  * Sends use the same path as a person's Approve & send (sendDraft: Do Not
  * Contact, duplicate protection) with a reservation under the organization's
@@ -62,8 +57,8 @@ import {
  * its time and the outcome are kept in reply_agent_runs.
  */
 
-export type AgentModelResult = { text: string; provider?: string; model?: string; request?: unknown; response?: unknown; usage?: { inputTokens?: number; outputTokens?: number } };
-export type AgentModel = (input: { systemPrompt: string; userPrompt: string }) => Promise<AgentModelResult>;
+export type { AgentModel, AgentModelResult } from "./generation";
+import { runReplyGeneration, type AgentModel } from "./generation";
 
 export type ReplyAgentDependencies = {
   /** A stand-in for the model (tests). */
@@ -363,6 +358,7 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
     const systemPrompt = agentSystemPrompt({ channel, profile });
     const lead = leadFacts(person, profileRow?.company);
 
+    let requestedModel: string | null = null;
     const model: AgentModel = deps.model ?? (async (input) => {
       const result = await completeStructured({
         timeoutMs: MODEL_TIMEOUT_MS,
@@ -374,67 +370,55 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
         systemPrompt: input.systemPrompt,
         userPrompt: input.userPrompt,
         accept: (text) => void parseAgentDecision(text),
+        onRequest: (request) => { requestedModel = typeof request.model === "string" ? request.model : null; },
       });
       await recordUsage("reply_agent", result, membership.runId);
       return result;
     });
 
-    // The loop: the agent decides, the harness checks, problems go back to the agent.
-    const turns: ReplyAgentTurn[] = [];
-    let decision: AgentDecision | null = null;
-    let lastResult: AgentModelResult | null = null;
-    let problems: string[] = [];
-    let previousReply: string | null = null;
-    for (let turn = 1; turn <= MAX_TURNS && !decision; turn += 1) {
-      const began = Date.now();
-      try {
-        const result = await model({
-          systemPrompt,
-          userPrompt: agentUserPrompt({ channel, profile, knowledge, lead, conversation, leadMessage: scope.leadMessage, problems, previousReply, turn }),
-        });
-        lastResult = result;
-        const parsed = parseAgentDecision(result.text);
-        const found = parsed.action === "reply" ? replyProblems(parsed.reply, channel, knowledge) : [];
-        // A wrong-number apology is not handed back: one that fails its check
-        // is replaced by the fixed line in their language (closeWrongNumber).
-        const replaced = parsed.action === "wrong_number" ? closingAcknowledgement(parsed.reply, scope.leadMessage, channel).problems : [];
-        turns.push({ turn, ms: Date.now() - began, action: parsed.action, reply: parsed.reply || null, problems: [...found, ...replaced], error: null });
-        if (found.length) {
-          problems = found;
-          previousReply = parsed.reply;
-        } else {
-          decision = parsed;
-        }
-      } catch (error) {
-        turns.push({ turn, ms: Date.now() - began, action: null, reply: null, problems: [], error: errorText(error) });
-      }
-    }
-    await db.update(replyAgentRuns).set({ turns, updatedAt: new Date() }).where(eq(replyAgentRuns.id, runRowId));
+    const generation = await runReplyGeneration({
+      systemPrompt,
+      context: { channel, profile, knowledge, lead, conversation, leadMessage: scope.leadMessage },
+      model,
+      requestedModel: () => requestedModel,
+    });
+    let decision = generation.decision;
+    const { turns, lastResult } = generation;
+    const modelName = generation.model;
+    await db.update(replyAgentRuns).set({ turns, model: modelName, updatedAt: new Date() }).where(eq(replyAgentRuns.id, runRowId));
 
     // No usable answer for a message that plainly says "wrong number": close
     // it with the fixed apology, never a holding line that promises more.
     if (!decision && detectsWrongNumber(scope.leadMessage)) {
       decision = { action: "wrong_number", reply: "", ownerNote: null, category: "other", confidence: 0.6, reasoning: "The model gave no usable answer; the message says it is a wrong number." };
     }
-    // No usable answer: an honest holding line for the lead (once a day per
-    // chat, so a broken AI connection never repeats it), a card for the owner.
+    // A provider/configuration failure is not a customer answer. Preserve the
+    // failed attempts and show the owner the error; never turn it into a sent
+    // promise or a successful reply. Wrong-number closure above is unchanged.
     if (!decision) {
-      const modelFailed = !previousReply;
-      const holding = fallbackReply(scope.leadMessage, profile.senderName ?? null);
-      const [heldRecently] = await db.select({ id: replyAgentRuns.id }).from(replyAgentRuns)
-        .where(and(eq(replyAgentRuns.organizationId, organizationId), eq(replyAgentRuns.conversationId, scope.conversationId), eq(replyAgentRuns.reply, holding), gte(replyAgentRuns.createdAt, new Date(Date.now() - 24 * 60 * 60_000)))).limit(1);
-      decision = {
-        action: heldRecently ? "tell_owner" : "reply",
-        reply: heldRecently ? "" : holding,
-        ownerNote: modelFailed
-          ? { kind: "other", note: `the AI model gave no answer (${turns.at(-1)?.error ?? "no answer"}); the assistant sent a holding line` }
-          : { kind: "question", note: `the assistant could not answer without guessing (${problems.join("; ")}); it sent a holding line` },
-        category: "other",
-        confidence: 0.3,
-        reasoning: modelFailed ? "The model did not answer." : `Still unbacked after ${MAX_TURNS} tries: ${problems.join("; ")}`,
-      };
+      const late = hardStop(await readFacts(db, scope, person?.email ?? null));
+      if (late) return { ...(await finish(runRowId, scope, startedAt, { status: "stopped", reason: late.reason, turns, model: modelName })), ...(late.answered ? { answered: true } : {}) };
+      const reason = generation.failureReason!;
+      const current = await withCrmTransaction(async (tx) => {
+        const record = await lockCrmRecord(tx, scope.recordId);
+        if (record.latestInboundMessageId !== messageId || record.contextVersion !== scope.contextVersion) return false;
+        await tx.update(crmRecords).set({ workflowState: "error", nextActionAt: null, updatedAt: new Date() }).where(eq(crmRecords.id, record.id));
+        await appendCrmEvent(tx, {
+          personId: record.personId, crmRecordId: record.id, pipelineId: record.pipelineId,
+          eventType: "reply.generation_failed", actorType: "ai", actorRef: AUTOPILOT_ACTOR,
+          toData: { messageId }, meta: { error: reason, model: modelName, attempts: turns.length },
+          contextVersion: record.contextVersion,
+        });
+        return true;
+      });
+      if (!current) return finish(runRowId, scope, startedAt, { status: "stopped", reason: "the conversation changed while the assistant was answering", turns, model: modelName });
+      const decisionId = await tellOwner({
+        scope, facts, leadName, kind: "uncertain", note: reason,
+        decision: "The assistant has not answered this message. Check the AI provider error or answer from the conversation.",
+        draftId: null, told: false, brief: false,
+      });
+      return finish(runRowId, scope, startedAt, { status: "failed", reason, turns, model: modelName, decisionId });
     }
-    const modelName = lastResult?.model ?? null;
     const closing = wrongNumberClosing(decision, scope.leadMessage);
     // A wrong number is filed as "Wrong Number" (other), never as a buyer's answer.
     const wrongNumberSubcategory = closing ? await wrongNumberSubcategoryId(scope.pipelineId) : null;
