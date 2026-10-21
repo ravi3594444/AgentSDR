@@ -1,28 +1,30 @@
 "use client";
 
 import { useId } from "react";
-import { RiCheckLine, RiComputerLine, RiMoonLine, RiSunLine } from "@remixicon/react";
+import { RiCheckLine, RiCloudLine, RiComputerLine, RiMoonLine, RiSunLine } from "@remixicon/react";
 import { cn } from "@/utils/cn";
 import { useTheme, type ThemePreference } from "./ThemeProvider";
 
 const OPTIONS: Array<{ value: ThemePreference; label: string; description: string; icon: typeof RiSunLine }> = [
   { value: "light", label: "Light", description: "A clean white canvas", icon: RiSunLine },
   { value: "dark", label: "Pure black", description: "True black, clear contrast", icon: RiMoonLine },
+  { value: "golden", label: "Golden clouds", description: "Warm light and soft clouds", icon: RiCloudLine },
   { value: "system", label: "System", description: "Follows your device", icon: RiComputerLine },
 ];
 
 /** A small layout preview, always in its own colours, regardless of the selected theme. */
 function ThemePreview({ theme }: { theme: ThemePreference }) {
   const dark = theme === "dark";
+  const golden = theme === "golden";
   return (
-    <div aria-hidden="true" className={cn("relative flex h-24 overflow-hidden rounded-lg border p-2", dark ? "border-neutral-800 bg-black" : "border-neutral-200 bg-white")}>
-      <div className={cn("flex w-1/4 flex-col gap-2 border-r pr-2", dark ? "border-neutral-800" : "border-neutral-200")}>
+    <div aria-hidden="true" className={cn("relative flex h-24 overflow-hidden rounded-lg border p-2", dark ? "border-neutral-800 bg-black" : golden ? "golden-clouds-preview border-[#dec9a4]" : "border-neutral-200 bg-white")}>
+      <div className={cn("flex w-1/4 flex-col gap-2 border-r pr-2", dark ? "border-neutral-800" : golden ? "border-[#dec9a4]" : "border-neutral-200")}>
         <div className={cn("mb-1 size-3 rounded-sm", dark ? "bg-white" : "bg-black")} />
-        {[0, 1, 2].map((line) => <span key={line} className={cn("h-1 rounded-full", dark ? "bg-neutral-700" : "bg-neutral-200")} />)}
+        {[0, 1, 2].map((line) => <span key={line} className={cn("h-1 rounded-full", dark ? "bg-neutral-700" : golden ? "bg-[#d4c3a7]" : "bg-neutral-200")} />)}
       </div>
       <div className="flex flex-1 flex-col gap-2 pl-2">
         <div className={cn("mt-1 h-1.5 w-2/3 rounded-full", dark ? "bg-neutral-300" : "bg-neutral-800")} />
-        <div className="mt-1 grid flex-1 grid-cols-2 gap-1.5">{[0, 1].map((card) => <span key={card} className={cn("rounded border", dark ? "border-neutral-800 bg-neutral-950" : "border-neutral-200 bg-neutral-50")} />)}</div>
+        <div className="mt-1 grid flex-1 grid-cols-2 gap-1.5">{[0, 1].map((card) => <span key={card} className={cn("rounded border", dark ? "border-neutral-800 bg-neutral-950" : golden ? "border-[#e6dac5] bg-[#fffdf9]" : "border-neutral-200 bg-neutral-50")} />)}</div>
         <span className={cn("h-1 w-4/5 rounded-full", dark ? "bg-neutral-800" : "bg-neutral-200")} />
       </div>
       {theme === "system" && <div className="pointer-events-none absolute inset-y-0 right-0 w-1/2 bg-white mix-blend-difference" />}
@@ -36,7 +38,7 @@ export function ThemeSwitch({ className, variant = "compact" }: { className?: st
   const name = useId();
   const cards = variant === "cards";
   return (
-    <fieldset className={cn(cards ? "grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-3" : "flex min-w-0 gap-0.5 rounded-lg bg-bg-weak-50 p-0.5 ring-1 ring-inset ring-stroke-soft-200", className)}>
+    <fieldset className={cn(cards ? "grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4" : "flex min-w-0 flex-wrap gap-0.5 rounded-lg bg-bg-weak-50 p-0.5 ring-1 ring-inset ring-stroke-soft-200", className)}>
       <legend className="sr-only">Colour theme</legend>
       {OPTIONS.map(({ value, label, description, icon: Icon }) => (
         <label key={value} className="relative min-w-0 flex-1 cursor-pointer">
@@ -50,7 +52,7 @@ export function ThemeSwitch({ className, variant = "compact" }: { className?: st
               <Icon className="size-3.5 shrink-0" aria-hidden="true" />{cards ? label : value === "dark" ? "Dark" : label}
               {cards && <span className={cn("ml-auto flex size-4 items-center justify-center rounded-full border", preference === value ? "border-primary-base bg-primary-base text-primary-contrast" : "border-stroke-sub-300")} aria-hidden="true">{preference === value && <RiCheckLine className="size-3" />}</span>}
             </span>
-            {cards && <span className="mt-1 block text-[11px] leading-relaxed text-text-sub-600">{description}</span>}
+            {cards && <span className="mt-1 block text-paragraph-xs leading-relaxed text-text-sub-600">{description}</span>}
           </span>
         </label>
       ))}

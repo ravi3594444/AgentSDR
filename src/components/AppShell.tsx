@@ -89,7 +89,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           resolve against the initial containing block, escape this scroller's
           clipping, and stretch the document's scroll area to the full content
           height — leaving a tall blank band below the app. */}
-      <div className="relative min-h-0 min-w-0 flex-1 overflow-y-auto">{children}</div>
+      <div className="workspace-canvas relative min-h-0 min-w-0 flex-1 overflow-y-auto">{children}</div>
     </div>
     </div>
     </SessionGate>

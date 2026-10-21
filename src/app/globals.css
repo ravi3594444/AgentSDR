@@ -385,19 +385,19 @@
   --text-label-md--font-weight: 500;
   
   
-  --text-label-sm: .875rem;
-  --text-label-sm--line-height: 1.25rem;
+  --text-label-sm: .9375rem;
+  --text-label-sm--line-height: 1.375rem;
   --text-label-sm--letter-spacing: -0.006em;
   --text-label-sm--font-weight: 500;
   
   
-  --text-label-xs: .75rem;
-  --text-label-xs--line-height: 1rem;
+  --text-label-xs: .8125rem;
+  --text-label-xs--line-height: 1.125rem;
   --text-label-xs--letter-spacing: 0em;
   --text-label-xs--font-weight: 500;
   
   
-  --text-label-2xs: .6875rem;
+  --text-label-2xs: .75rem;
   --text-label-2xs--line-height: 1rem;
   --text-label-2xs--letter-spacing: 0em;
   --text-label-2xs--font-weight: 500;
@@ -421,14 +421,14 @@
   --text-paragraph-md--font-weight: 400;
   
   
-  --text-paragraph-sm: .875rem;
-  --text-paragraph-sm--line-height: 1.25rem;
+  --text-paragraph-sm: .9375rem;
+  --text-paragraph-sm--line-height: 1.375rem;
   --text-paragraph-sm--letter-spacing: -0.006em;
   --text-paragraph-sm--font-weight: 400;
   
   
-  --text-paragraph-xs: .75rem;
-  --text-paragraph-xs--line-height: 1rem;
+  --text-paragraph-xs: .8125rem;
+  --text-paragraph-xs--line-height: 1.125rem;
   --text-paragraph-xs--letter-spacing: 0em;
   --text-paragraph-xs--font-weight: 400;
   
@@ -901,6 +901,35 @@ body {
   font-family: var(--font-sans);
   margin: 0;
   padding: 0;
+}
+
+/* Optional workspace appearance. The clouds are static CSS: no downloaded
+   image, canvas, animation, filter or extra request. Native controls stay in
+   light mode; the normal light and pure-black palettes remain separate. */
+html[data-appearance="golden-clouds"] .app-workspace {
+  --color-bg-white-0: #fffdf9;
+  --color-bg-weak-50: #f7f2e8;
+  --color-bg-weak-25: #fbf7ef;
+  --color-stroke-soft-200: #e9e0d0;
+  --color-stroke-sub-300: #d5c7b1;
+  --color-text-sub-600: #63574d;
+  --color-text-soft-400: #6b5b49;
+}
+
+html[data-appearance="golden-clouds"] .workspace-canvas,
+.golden-clouds-preview {
+  background-color: #fbf4e6;
+  background-image:
+    radial-gradient(ellipse 38% 16% at 6% 22%, #fffdf8 10%, transparent 76%),
+    radial-gradient(ellipse 40% 22% at 29% 14%, rgb(255 255 255 / 94%) 10%, transparent 78%),
+    radial-gradient(ellipse 44% 22% at 95% 34%, #fffaf0 14%, transparent 78%),
+    radial-gradient(ellipse 45% 20% at 74% 42%, rgb(255 255 255 / 85%) 10%, transparent 80%),
+    radial-gradient(ellipse 55% 26% at 14% 86%, rgb(255 255 255 / 88%) 18%, transparent 80%),
+    linear-gradient(145deg, #fdf7eb 5%, #f2dfba 42%, #fcf7ed 72%, #e9d5ad);
+}
+
+html[data-appearance="golden-clouds"] .assistant-workspace {
+  background-color: transparent;
 }
 
 /* ---------------------------------------------------------------------------

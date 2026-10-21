@@ -3,28 +3,30 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 /**
- * Light / dark / system theme, remembered per browser.
+ * Light / dark / system / golden-clouds theme, remembered per browser.
  *
  * The AlignUI token layer (globals.css) already carries a full dark palette
  * under `.dark`; switching themes is toggling that class on <html> (plus
  * data-theme and color-scheme, so native controls and the OS-preference
  * block agree). THEME_INIT_SCRIPT runs in <head> before first paint so a
  * dark page never flashes light; this provider then keeps it in sync.
+ * Golden clouds uses the light control palette and a separate appearance
+ * attribute; components that resolve only light/dark keep their contract.
  */
 
-export type ThemePreference = "light" | "dark" | "system";
+export type ThemePreference = "light" | "dark" | "system" | "golden";
 export type ResolvedTheme = "light" | "dark";
 
 export const THEME_STORAGE_KEY = "agentsdr-theme";
 const DEFAULT_PREFERENCE: ThemePreference = "light";
 
 /** Inlined into <head> by the root layout. Keep it dependency-free and tiny. */
-export const THEME_INIT_SCRIPT = `(function(){try{var p=localStorage.getItem("${THEME_STORAGE_KEY}")||"${DEFAULT_PREFERENCE}";var d=p==="dark"||(p==="system"&&window.matchMedia("(prefers-color-scheme: dark)").matches);var e=document.documentElement;e.classList.toggle("dark",d);e.setAttribute("data-theme",d?"dark":"light");e.style.colorScheme=d?"dark":"light";}catch(_){}})();`;
+export const THEME_INIT_SCRIPT = `(function(){try{var p=localStorage.getItem("${THEME_STORAGE_KEY}")||"${DEFAULT_PREFERENCE}";var d=p==="dark"||(p==="system"&&window.matchMedia("(prefers-color-scheme: dark)").matches);var e=document.documentElement;e.classList.toggle("dark",d);e.setAttribute("data-theme",d?"dark":"light");e.setAttribute("data-appearance",p==="golden"?"golden-clouds":"plain");e.style.colorScheme=d?"dark":"light";}catch(_){}})();`;
 
 function readPreference(): ThemePreference {
   try {
     const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
-    return stored === "dark" || stored === "light" || stored === "system" ? stored : DEFAULT_PREFERENCE;
+    return stored === "dark" || stored === "light" || stored === "system" || stored === "golden" ? stored : DEFAULT_PREFERENCE;
   } catch {
     return DEFAULT_PREFERENCE;
   }
@@ -37,10 +39,11 @@ function subscribeToSystem(onChange: () => void) {
 }
 const systemIsDark = () => window.matchMedia("(prefers-color-scheme: dark)").matches;
 
-function apply(theme: ResolvedTheme) {
+function apply(theme: ResolvedTheme, preference: ThemePreference) {
   const el = document.documentElement;
   el.classList.toggle("dark", theme === "dark");
   el.setAttribute("data-theme", theme);
+  el.setAttribute("data-appearance", preference === "golden" ? "golden-clouds" : "plain");
   el.style.colorScheme = theme;
 }
 
@@ -66,8 +69,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (stored !== null) apply(resolved);
-  }, [stored, resolved]);
+    if (stored !== null) apply(resolved, preference);
+  }, [stored, resolved, preference]);
 
   const setPreference = useCallback((next: ThemePreference) => {
     setPreferenceState(next);

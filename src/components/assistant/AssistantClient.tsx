@@ -1424,7 +1424,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
 
   return (
     <div
-      className="relative flex h-full min-h-0 flex-col bg-bg-white-0"
+      className="assistant-workspace relative flex h-full min-h-0 flex-col bg-bg-white-0"
       onDragOver={(event) => { if (event.dataTransfer.types.includes("Files")) { event.preventDefault(); setDragging(true); } }}
       onDragLeave={(event) => { if (event.currentTarget === event.target) setDragging(false); }}
       onDrop={(event) => { event.preventDefault(); setDragging(false); addFiles(Array.from(event.dataTransfer.files)); }}

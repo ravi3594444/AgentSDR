@@ -15,7 +15,7 @@ export default function AppearanceSettings() {
         <ThemeSwitch variant="cards" />
         <div className="mt-5 flex items-start gap-2 border-t border-stroke-soft-200 pt-4 text-paragraph-xs leading-relaxed text-text-sub-600" role="status">
           <RiComputerLine className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-          {preference === "system" ? `Following your device. Currently showing ${resolved === "dark" ? "pure black" : "light"} mode.` : `${resolved === "dark" ? "Pure black" : "Light"} mode is selected. Choose System to match your device automatically.`}
+          {preference === "system" ? `Following your device. Currently showing ${resolved === "dark" ? "pure black" : "light"} mode.` : preference === "golden" ? "Golden clouds is selected. A warm canvas with clear, solid cards for your work." : `${resolved === "dark" ? "Pure black" : "Light"} mode is selected. Choose System to match your device automatically.`}
         </div>
       </FramePanel>
       <FrameFooter>Saved on this browser. Your other devices keep their own appearance.</FrameFooter>
