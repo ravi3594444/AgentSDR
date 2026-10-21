@@ -312,3 +312,15 @@ All four stages are built and committed on `claude/dreamy-fermi-h5woha`.
 - **Settings labels** (N3): Business profile, Sending defaults, Lead
   research, Providers & features; channel rule rows read "Email sending
   rules" and so on so labels stay unique in ⌘K.
+
+### Gates (21 October, on a fresh local database)
+
+- Upgrade path: the base schema plus the 8 migrations, run twice, matches a fresh install. No new migration in this rework.
+- e2e: all 25 suites pass, including the new `inbox` (22), `request-workspace` (23) and `business-profile` (31). `assistant` first failed 72/73 on its own expectation of the old alert-email link; with the test updated it passes 73/73.
+- Unit 1,904 pass; organization-scope contract passes; tsc clean; eslint 0 errors (6 warnings, all in LinkedIn files this work did not touch).
+- Production build (webpack under Node, 4 GB heap) in 316 s, peak 6.3 GB on the machine; served by `bun server.js`: worker starts, tenancy isolation passes on every page and route (the same 16 review items as the last release), smoke 13/13 pages, and 38 browser checks at desktop and phone width (Inbox views, Leads board, sidebar, Requests, Reports, the request beside the chat, old links redirected with their filters, older chat events unchanged and new ones compact).
+- `docker/deploy.test.ts` now fails if a default migration is missing from `.dockerignore`'s allow list (the gap fixed in `dad5303`).
+
+### Deploying
+
+Nothing new to migrate: `docker/deploy.sh` with its default `MIGRATIONS` re-runs the existing, re-runnable ones. Old bookmarks and the alert emails already sent keep working through the redirects.
