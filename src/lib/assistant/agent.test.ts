@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { actionsProblem, agentReplySchema, cleanSuggestions, searchArgsKey, searchRequestFor, displayThreadTitle, groundingCorpus, isSmallTalk, MAX_ACTIONS_PER_REPLY, MAX_ACTIONS_PER_STEP, nextAgentBatch, outreachIntent, outreachRequested, outreachRequestProblem, parseAgentReply, pendingOutreachRequest, sameMessage, standingOutreachRequestIndex, outreachRevoked, threadTitleFrom, transcriptText, unbackedClaim, ungroundedContacts, urlGiven, type AgentReply, type TranscriptMessage } from "./agent";
+import { actionsProblem, agentReplySchema, cleanSuggestions, searchArgsKey, searchRequestFor, displayThreadTitle, groundingCorpus, isSmallTalk, MAX_ACTIONS_PER_REPLY, MAX_ACTIONS_PER_STEP, nextAgentBatch, outreachIntent, outreachRequested, outreachRequestProblem, parseAgentReply, pendingOutreachRequest, researchOnlyStated, sameMessage, standingOutreachRequestIndex, outreachRevoked, threadTitleFrom, transcriptText, unbackedClaim, ungroundedContacts, urlGiven, type AgentReply, type TranscriptMessage } from "./agent";
 
 const TOOLS = ["find_leads", "save_business_info", "prepare_outreach"];
 
@@ -250,6 +250,106 @@ describe("outreachRequested", () => {
     expect(outreachIntent("contcat them")).toBe(true);
     expect(outreachIntent("whatsap them")).toBe(true);
     expect(outreachIntent("our prices are fair")).toBe(false);
+  });
+
+  // Pilot finding L01: words a typo away from an outreach word, budget
+  // wording and a research-only statement must never authorize outreach.
+  const PILOT_PROMPT = "Research only. Find 3 dental clinics in Pune, India. Use free sources only with a $0 source budget, and finish within 5 minutes. Save a lead list. Do not contact anyone. No outreach. No messages. No campaigns.";
+
+  test("budget wording is not a request to send", () => {
+    expect(outreachRequested("Research only. Spend $0. Do not contact anyone.")).toBe(false);
+    expect(outreachRequested("Find 20 gyms in Mumbai. Spend cap $2, free sources first.")).toBe(false);
+    expect(outreachRequested("How much have we spent so far?")).toBe(false);
+    expect(outreachRequested("Find dentists in Pune, spend up to $1 and email them.")).toBe(true);
+  });
+
+  test("a real word within a typo of an outreach word is not one", () => {
+    const nearMisses = [
+      "spend", "spent", "sent", "contract", "content", "context", "connect", "massage", "passage", "fellow", "hollow", "fallow",
+      "beach", "teach", "peach", "roach", "ranch", "react", "bleach", "breach", "preach", "each",
+      "patch", "witch", "ditch", "hitch", "stitch", "pinch", "itch", "pitcher",
+      "mall", "main", "maid", "nail", "rail", "sail", "tail", "jail", "hail", "male", "mild", "mile",
+      "seed", "sand", "bend", "lend", "tend", "mend", "fend", "vend", "linked", "followers",
+    ];
+    for (const word of nearMisses) {
+      expect(outreachIntent(`Find clinics near the ${word}`)).toBe(false);
+      expect(outreachIntent(`${word} them`)).toBe(false);
+    }
+    expect(outreachRequested("Rank each clinic by rating, the main ones first, with their contracts and website content.")).toBe(false);
+    expect(outreachRequested("How many were sent yesterday?")).toBe(false);
+    expect(outreachRequested("List the ones on the beach road with a patch of parking; show spending by source.")).toBe(false);
+  });
+
+  test("genuine misspellings and inflections still ask for outreach", () => {
+    expect(outreachIntent("campagion them")).toBe(true);
+    expect(outreachIntent("contcat the clinics")).toBe(true);
+    expect(outreachIntent("emial them the offer")).toBe(true);
+    expect(outreachIntent("whatsap them")).toBe(true);
+    expect(outreachIntent("start contacting them")).toBe(true);
+    expect(outreachIntent("I messaged two already, do the rest")).toBe(true);
+    expect(outreachIntent("send the emails today")).toBe(true);
+    expect(outreachIntent("reach out to them")).toBe(true);
+    expect(outreachIntent("pitch them on whatsapp")).toBe(true);
+  });
+
+  test("contact details asked for as data are not outreach: a verb directed at me or us, or a channel named as a thing", () => {
+    expect(outreachRequested("Find dentists in Pune and send me their emails")).toBe(false);
+    expect(outreachRequested("email me the list")).toBe(false);
+    expect(outreachRequested("Find 50 real estate agents in Austin and send us their email and whatsapp numbers")).toBe(false);
+    expect(outreachRequested("collect their contact details and linkedin profiles")).toBe(false);
+    expect(outreachRequested("Find clinics with an email address and a whatsapp number")).toBe(false);
+    expect(outreachRequested("message me when done")).toBe(false);
+    expect(outreachRequested("send the list to me")).toBe(false);
+    expect(outreachRequested("Find dentists in Pune and email them")).toBe(true);
+    expect(outreachRequested("Find dentists in Pune and send them our offer")).toBe(true);
+    expect(outreachRequested("write them an email about our plan")).toBe(true);
+    expect(outreachRequested("whatsapp the clinics that have no website")).toBe(true);
+    expect(outreachRequested("email every clinic on the list")).toBe(true);
+  });
+
+  test("an explicit research-only statement prevents outreach, whatever else the message says", () => {
+    expect(researchOnlyStated("Research only.")).toBe(true);
+    expect(researchOnlyStated("research-only please")).toBe(true);
+    expect(researchOnlyStated("only research for now")).toBe(true);
+    expect(researchOnlyStated("just research, no outreach")).toBe(true);
+    expect(researchOnlyStated("Do not contact anyone.")).toBe(true);
+    expect(researchOnlyStated("don't contact anybody")).toBe(true);
+    expect(researchOnlyStated("dont contact them")).toBe(true);
+    expect(researchOnlyStated("never contact people")).toBe(true);
+    expect(researchOnlyStated("find them without contacting anyone")).toBe(true);
+    expect(researchOnlyStated("Find 20 clinics. No messages.")).toBe(true);
+    expect(researchOnlyStated("Find 20 clinics, no campaigns")).toBe(true);
+    expect(researchOnlyStated(PILOT_PROMPT)).toBe(true);
+    expect(researchOnlyStated("Find dentists in Pune and email them")).toBe(false);
+    expect(researchOnlyStated("We do market research for clinics; email them our offer")).toBe(false);
+    expect(researchOnlyStated("send no more than 20 messages a day")).toBe(false);
+    expect(outreachRequested("Find clinics and email me the list. Research only, do not contact anyone.")).toBe(false);
+    expect(outreachRequested("Find 30 dentists in Pune and whatsapp them. Research only.")).toBe(false);
+    expect(outreachRequested(PILOT_PROMPT)).toBe(false);
+    expect(outreachRequested("Switch the target niche to orthodontists. Research only, no outreach.")).toBe(false);
+    expect(outreachRequested("Change the niche to pilates studios in Pune and email them")).toBe(true);
+    // A yes to an offer does not override the owner's own research-only words.
+    expect(outreachRequested("yes, research only", "Shall I email them?")).toBe(false);
+    expect(outreachRevoked("From now on research only.")).toBe(true);
+  });
+
+  test("a negation of one channel still requests outreach on the other", () => {
+    expect(researchOnlyStated("don't email them, WhatsApp them")).toBe(false);
+    expect(outreachRequested("don't email them, WhatsApp them")).toBe(true);
+    expect(researchOnlyStated("Do not contact them by email; WhatsApp them instead.")).toBe(false);
+    expect(outreachRequested("Do not contact them by email; WhatsApp them instead.")).toBe(true);
+    expect(outreachRequested("no emails, whatsapp only")).toBe(true);
+  });
+
+  test("genuine requests stay requests: typos, Hinglish and a yes to an offer", () => {
+    expect(outreachRequested("find 20 dentists in pune and contcat them on whatsap")).toBe(true);
+    expect(outreachRequested("Pune ke dentists ko whatsapp pe message bhejo")).toBe(true);
+    expect(outreachRequested("inko sampark karo")).toBe(true);
+    expect(outreachRequested("do outreach to 50 gyms in Mumbai, spend up to $2")).toBe(true);
+    expect(outreachRequested("yes", "Shall I email the 12 clinics I found?")).toBe(true);
+    expect(outreachRequested("haan karo", "Shall I message them on WhatsApp?")).toBe(true);
+    expect(outreachRequested("run an email campaign for the ones with no website")).toBe(true);
+    expect(outreachRequested("follow up with the ones who did not reply")).toBe(true);
   });
 
   test("sameMessage spots a repeated message, not a different one", () => {
