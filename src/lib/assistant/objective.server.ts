@@ -755,11 +755,9 @@ export async function postObjectiveReport(objectiveId: string): Promise<boolean>
         objectiveId: objective.id,
         data: {
           objective: view,
+          // Shown under the report as its searches' own lists (the chat renders one per id), so it does not link to the chat it is in.
           audienceIds: facts.audienceIds,
-          links: [
-            { label: "Lead lists in this chat", href: `/assistant?thread=${objective.threadId}` },
-            { label: "Saved leads", href: "/leads" },
-          ],
+          links: [{ label: "All saved leads", href: "/leads" }],
         },
       },
     }, tx);

@@ -46,6 +46,12 @@ const { listRequests, requestSummary, threadRequests } = await import("@/lib/ass
 const { requestScope, runScope, results } = await import("@/lib/assistant/results.server");
 const { reportRun, setRunPaused, stopRun } = await import("@/lib/assistant/outreach.server");
 const { setObjectiveState } = await import("@/lib/assistant/objective.server");
+const { addAudienceMembers } = await import("@/lib/assistant/audiences.server");
+const { audienceProspects } = await import("@/lib/assistant/qualification.server");
+const { assistantState } = await import("@/lib/assistant/http.server");
+const { leadAudienceMembers } = await import("@/lib/assistant/schema");
+const { reportAudiences, searchListOf, workCounts } = await import("@/lib/assistant/leadLists");
+type OrgContext = import("@/lib/auth/context").OrgContext;
 
 let failures = 0;
 function check(label: string, ok: boolean, detail = "") {
@@ -225,7 +231,61 @@ await runInOrganization(a!.id, async () => {
   check("keys that are not keys are refused", (await requestSummary("r:not-a-uuid")) === null && (await requestSummary(`run:${crypto.randomUUID()}`)) === null);
 });
 
+// Leads polish: each search's own list stays one click away (under its row, its card and the
+// report, after a reload too), and a business saved without a person's name is named by the
+// business, never by an invented person. Run last: the extra jobs below would otherwise be
+// listed as requests of the chat.
+const lists = await runInOrganization(a!.id, async () => {
+  const org = a!.id;
+  const summary = await requestSummary(requestKey);
+  const searchItem = summary?.children.searches.find((item) => item.id === seeded.search.id);
+  check("a finished search under the request offers its own list, counted by its contactable leads",
+    Boolean(searchItem) && JSON.stringify(searchListOf(searchItem!)) === JSON.stringify({ audienceId: seeded.search.audienceId, count: 3 }) && workCounts(searchItem!) === "3 found · 3 contactable",
+    JSON.stringify(searchItem && { list: searchListOf(searchItem), counts: workCounts(searchItem) }));
+
+  // A long chat: the search its card names and the one only the final report names are both older than its 20 newest jobs.
+  const olderAudience = await createAudience({ name: `Older search ${stamp}`, source: "discovery" });
+  const [olderSearch] = await db.insert(assistantJobs).values({ organizationId: org, threadId: seeded.thread.id, kind: "web_discovery", status: "succeeded", stage: "done", audienceId: olderAudience, payload: { phrase: "older search" }, progress: { source: "Website and directory search" }, result: { found: 4, eligible: 2 }, createdAt: minutesAgo(600), finishedAt: minutesAgo(590) }).returning();
+  await db.update(assistantJobs).set({ createdAt: minutesAgo(560) }).where(eq(assistantJobs.id, seeded.search.id));
+  const reportData = { audienceIds: [seeded.search.audienceId, olderAudience], links: [{ label: "Lead lists in this chat", href: `/assistant?thread=${seeded.thread.id}` }, { label: "Saved leads", href: "/leads" }] };
+  await db.insert(assistantMessages).values([
+    { organizationId: org, threadId: seeded.thread.id, role: "tool", tool: "find_leads", status: "ok", content: "Searching Google Maps for dentists in Chicago", toolResult: { data: { jobId: seeded.search.id, audienceId: seeded.search.audienceId, phrase: "dentists in Chicago" } }, createdAt: minutesAgo(58) },
+    { organizationId: org, threadId: seeded.thread.id, role: "event", content: "Research finished.", toolResult: { data: reportData }, createdAt: minutesAgo(2) },
+  ]);
+  await db.insert(assistantJobs).values(Array.from({ length: 21 }, (_, index) => ({ organizationId: org, threadId: seeded.thread.id, kind: "discovery" as const, status: "succeeded" as const, stage: "done", payload: { phrase: `later search ${index}` }, result: { found: 0, eligible: 0 }, createdAt: minutesAgo(30 - index), finishedAt: minutesAgo(29 - index) })));
+  // Among the newest, the job that started a plan from the older search's list: it shares the list, it is not its search.
+  await db.insert(assistantJobs).values({ organizationId: org, threadId: seeded.thread.id, kind: "outreach_start", status: "succeeded", stage: "done", audienceId: olderAudience, payload: {}, createdAt: minutesAgo(5), finishedAt: minutesAgo(4) });
+  const ctx = { userId: owner!.id, userName: "Owner A", userEmail: owner!.email, organizationId: org, organizationName: a!.name, organizationSlug: a!.slug, roles: ["owner"] } as unknown as OrgContext;
+  const state = await assistantState(seeded.thread.id, ctx, false);
+  check("reopening a chat with more than 20 searches still loads the search its card names", state.jobs.some((job) => job.id === seeded.search.id), `${state.jobs.length} jobs`);
+  check("…and the searches its final report's lists come from, so each list keeps its count and source",
+    state.jobs.some((job) => job.id === olderSearch!.id) && JSON.stringify(reportAudiences(reportData, state.jobs)) ===JSON.stringify([{ audienceId: seeded.search.audienceId, count: 3, title: "Lead search" }, { audienceId: olderAudience, count: 2, title: "Website and directory search" }]),
+    JSON.stringify(reportAudiences(reportData, state.jobs)));
+  check("…without loading another chat's jobs", state.jobs.every((job) => job.id !== seeded.oldSearch.id));
+
+  // A Maps business without a website (kept as raw.company) and a directory contact (only a pseudo-name in raw.businessName).
+  const tail = String(stamp % 100_000).padStart(5, "0");
+  const [business] = await db.insert(people).values({ organizationId: org, source: "discovery:google-maps", phone: `+9198${tail}01`, raw: { businessName: "Bright Path Dental", company: "Bright Path Dental", companyName: "Bright Path Dental" } }).returning();
+  const [listed] = await db.insert(people).values({ organizationId: org, source: "discovery:web-search", phone: `+9198${tail}02`, raw: { businessName: `+9198${tail}02 (listed on guide.example)` } }).returning();
+  const fresh = await createAudience({ name: `Naming ${stamp}`, source: "discovery" });
+  await addAudienceMembers(fresh, [{ personId: business!.id, source: "google_maps" }, { personId: listed!.id, source: "web_search" }]);
+  const freshNames = new Map((await db.select({ personId: leadAudienceMembers.personId, name: leadAudienceMembers.name }).from(leadAudienceMembers).where(eq(leadAudienceMembers.audienceId, fresh))).map((row) => [row.personId, row.name]));
+  check("a new list member is named by the business it was saved under, ahead of its phone; a directory contact keeps its phone",
+    freshNames.get(business!.id) === "Bright Path Dental" && freshNames.get(listed!.id) === listed!.phone, JSON.stringify([...freshNames.values()]));
+  // Members stored before: named by their phone.
+  const legacy = await createAudience({ name: `Stored before ${stamp}`, source: "discovery" });
+  await db.insert(leadAudienceMembers).values([business!, listed!].map((person) => ({ organizationId: org, audienceId: legacy, personId: person.id, name: person.phone!, status: "eligible" as const, channels: ["whatsapp" as const], source: "google_maps" })));
+  const legacyNames = (await audienceProspects(legacy))?.prospects.map((prospect) => prospect.name) ?? [];
+  check("a member stored under its phone is shown by its business now; the directory contact still by its phone",
+    legacyNames.includes("Bright Path Dental") && legacyNames.includes(listed!.phone!) && !legacyNames.includes(business!.phone!), JSON.stringify(legacyNames));
+  const [after] = await db.select({ fullName: people.fullName }).from(people).where(eq(people.id, business!.id));
+  const storedNames = (await db.select({ name: leadAudienceMembers.name }).from(leadAudienceMembers).where(eq(leadAudienceMembers.audienceId, legacy))).map((row) => row.name);
+  check("…and nothing was written: no person name invented, the stored member names unchanged", after?.fullName === null && storedNames.every((name) => name.startsWith("+9198")), JSON.stringify({ after, storedNames }));
+  return { legacy };
+});
+
 await runInOrganization(b!.id, async () => {
+  check("another organization gets no lead list of the first one's", (await audienceProspects(lists.legacy)) === null);
   const none = await Promise.all([requestKey, runKey, campaignKey, `job:${seeded.search.id}`].map((key) => requestSummary(key)));
   check("another organization gets nothing for any of the first one's keys", none.every((summary) => summary === null));
   const listed = await listRequests();

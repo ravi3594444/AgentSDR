@@ -309,8 +309,12 @@ await runInOrganization(a.org.id, async () => {
       reports.length === 1 && /^Research finished: the target of 10 was reached/.test(reports[0]!.content) && /12 qualified leads \(contactable and matching your request\) of the 10 wanted\./.test(reports[0]!.content)
         && /Their contact routes \(one person can have several\): 12 by email/.test(reports[0]!.content) && /Google Maps through the built-in scraper: 2 searches, 12 found, 12 can be contacted/.test(reports[0]!.content) && /Recorded spend: \$0\.00 of the \$5\.00 cap/.test(reports[0]!.content),
       reports.map((row) => row.content).join(" | "));
-    const links = ((reports[0]?.toolResult as { data?: { links?: { href: string }[] } } | null)?.data?.links ?? []).map((link) => link.href);
-    check("…with links to the saved results", links.includes(`/assistant?thread=${thread.id}`) && links.includes("/leads"), links.join(" "));
+    const reportData = (reports[0]?.toolResult as { data?: { links?: { label: string; href: string }[]; audienceIds?: unknown[] } } | null)?.data;
+    const links = reportData?.links ?? [];
+    // The report sits in this chat: its lists are shown under it (audienceIds), so it does not link to the chat it is in.
+    check("…with its searches' lists, and a link to every saved lead that says so (not to the chat it is in)",
+      links.length === 1 && links[0]?.label === "All saved leads" && links[0].href === "/leads" && Array.isArray(reportData?.audienceIds) && reportData.audienceIds.length === searches.length,
+      JSON.stringify(reportData && { links, audienceIds: reportData.audienceIds }));
     // Duplicate callbacks, the reconciliation and a direct call post nothing more.
     await reportFinishedJob(await jobRow(driver.id));
     await objectives.postObjectiveReport(objective.id);

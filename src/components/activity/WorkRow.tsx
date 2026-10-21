@@ -8,14 +8,17 @@ import { formatChatDateTime } from "@/lib/assistant/chatTime";
 import { displayTime } from "@/lib/assistant/displayTime";
 import { Badge, secondaryButtonClass } from "@/components/crm/CrmLayout";
 import { timeAgo } from "@/components/crm/crm-utils";
+import { ProspectsList } from "@/components/assistant/ProspectsList";
+import { searchListOf, workCounts } from "@/lib/assistant/leadLists";
 import { cn } from "@/utils/cn";
 
 /**
  * One search or outreach plan, as Activity showed it and a request's summary
  * lists it underneath: its state, why, its counts, its chat, and the run
  * controls that apply (cancel a search; pause, resume or stop a plan; a
- * proposed plan is started from its chat). Its times are written in
- * `timeZone`, the organization's (chatTime.ts).
+ * proposed plan is started from its chat). A finished search opens its own
+ * lead list underneath (View leads), the same list as under its card in the
+ * chat. Its times are written in `timeZone`, the organization's (chatTime.ts).
  */
 
 export const WORK_TONE: Record<WorkState, "neutral" | "success" | "info" | "danger" | "warning"> = {
@@ -47,11 +50,8 @@ export function chatHref(threadId: string): string {
  * the column already sits in.
  */
 export function WorkRow({ item, busy, timeZone, onCancel, onRun, compact = false }: { item: WorkItem; busy: boolean; timeZone: string; onCancel: (item: WorkItem) => void; onRun: (item: WorkItem, action: "pause" | "resume" | "stop") => void; compact?: boolean }) {
-  const counts = [
-    item.found !== null ? `${item.found} found` : null,
-    item.eligible !== null ? `${item.eligible} new` : null,
-    item.counts ? `${item.counts.leads} ${item.counts.leads === 1 ? "lead" : "leads"} · ${item.counts.contacted} contacted · ${item.counts.replied} replied${item.counts.failed ? ` · ${item.counts.failed} failed` : ""}` : null,
-  ].filter(Boolean).join(" · ");
+  const counts = workCounts(item);
+  const list = searchListOf(item);
   const nextAt = item.nextAt ? displayTime(new Date(item.nextAt), new Date(), timeZone) : null;
   const running = item.runStatus === "running";
   const small = "h-8 px-2.5";
@@ -73,6 +73,7 @@ export function WorkRow({ item, busy, timeZone, onCancel, onRun, compact = false
             </Link>
           )}
         </p>
+        {list && <div className="pt-1"><ProspectsList audienceId={list.audienceId} count={list.count} timeZone={timeZone} /></div>}
       </div>
       <div className="flex shrink-0 flex-wrap gap-2">
         {item.canCancel && <button type="button" disabled={busy} className={cn(secondaryButtonClass, small)} onClick={() => onCancel(item)}>Cancel</button>}
