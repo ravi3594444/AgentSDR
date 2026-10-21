@@ -57,7 +57,7 @@ import type { LeadFunnel } from "./leadFit";
 export type Objective = typeof assistantObjectives.$inferSelect;
 
 /** The searches an objective counts (its jobs); outreach starts and the driver itself are not. */
-export const SEARCH_JOB_KINDS = ["discovery", "linkedin_search", "web_discovery", "apify_instagram"] as const;
+export const SEARCH_JOB_KINDS = ["discovery", "linkedin_search", "web_discovery", "apify_instagram", "social_research"] as const;
 
 type Executor = Pick<typeof db, "select">;
 
@@ -267,7 +267,8 @@ export async function objectiveSpend(objective: Pick<Objective, "requestMessageI
     .where(and(inOrg(providerUsage), or(sql`${providerUsage.detail} ->> 'requestId' = ${requestId}`, ids.length ? inArray(providerUsage.jobId, ids) : undefined)));
   for (const row of usage) rows.push({ ledger: "usage", ...row });
   for (const job of children) {
-    if (job.kind !== "web_discovery") continue;
+    // Social research finds its X, Instagram and Facebook pages with the same web searches, recorded the same way.
+    if (job.kind !== "web_discovery" && job.kind !== "social_research") continue;
     const payload = (job.payload ?? {}) as Parameters<typeof webSearchLedger>[0];
     const result = (job.result ?? {}) as { searches?: unknown };
     rows.push(...webSearchLedger({ ...payload, searches: payload.searches ?? result.searches }));
@@ -379,6 +380,11 @@ function childLabel(job: ObjectiveChild): string {
   const result = (job.result ?? {}) as { provider?: unknown };
   if (job.kind === "linkedin_search") return "LinkedIn people search through Unipile";
   if (job.kind === "apify_instagram") return "Instagram through Apify";
+  if (job.kind === "social_research") {
+    const platforms = ((payload as { criteria?: { platforms?: unknown } }).criteria?.platforms ?? []) as string[];
+    const names: Record<string, string> = { reddit: "Reddit", x: "X", instagram: "Instagram", facebook: "Facebook" };
+    return `${platforms.map((platform) => names[platform] ?? platform).join(", ") || "Social platforms"} through Bright Data`;
+  }
   if (job.kind === "web_discovery") return `Websites and directories through ${webProviderName(payload.searchProvider)}`;
   const source = payload.target === "facebook" ? "Facebook" : payload.target === "linkedin" ? "LinkedIn" : payload.target === "instagram" ? "Instagram" : "Google Maps";
   const provider = result.provider === "apify" || result.provider === "scraper" ? result.provider : payload.provider;

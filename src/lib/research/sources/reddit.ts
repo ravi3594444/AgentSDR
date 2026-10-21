@@ -1,10 +1,12 @@
 /**
- * Reddit is not a research source. Its API needs Reddit's approval for this
- * use, and the owner decided: no reader and no workaround (no anonymous
- * JSON, scraping, RSS, browser automation or Apify). An organization can
- * record that approval (Settings → Lead research → Research sources), but
- * even then nothing reads Reddit until a reader is built. Reddit's rules
- * also forbid automated unsolicited messages: no Reddit sender exists.
+ * Reddit is not read by the assistant's own tools (read_webpage, web
+ * research): its API needs Reddit's approval for this use, and the owner
+ * decided on no reader and no workaround here (no anonymous JSON, scraping,
+ * RSS or browser automation). The one path is social research through
+ * Bright Data (src/lib/discovery/socialResearch.server.ts), which an owner
+ * turns on per organization in the Bright Data settings, accepting that
+ * Reddit's terms restrict automated collection. Reddit's rules also forbid
+ * automated unsolicited messages: no Reddit sender exists, anywhere.
  */
 
 // reddit.com and every subdomain (www, old, new, np, m, …); redd.it and its media hosts.

@@ -12,6 +12,9 @@ import { searchAreaProblem } from "@/lib/discovery/geocode";
 import { extractContacts, publicLinks, visibleText } from "@/lib/discovery/contacts";
 import { assertPublicPageUrl, fetchPublicPage, LOGIN_WALLED_HOST, PageRedirectRefusedError } from "@/lib/discovery/websiteContacts.server";
 import { normalizeWebCriteria, startWebDiscovery, WebDiscoveryLimitError, WebDiscoveryUnavailableError } from "@/lib/discovery/webDiscovery.server";
+import { normalizeSocialCriteria, SocialResearchUnavailableError, startSocialResearch, urlFinderName } from "@/lib/discovery/socialResearch.server";
+import { brightdataSettingsView } from "@/lib/brightdata/brightdata.server";
+import { BRIGHTDATA_LIMITS, PLATFORM_NAMES } from "@/lib/brightdata/catalog";
 import { generalWebSearch, webSearchAvailability, webSearchAvailabilityFrom, webSearchProviderName, WebSearchUnavailableError } from "@/lib/discovery/webSearch.server";
 import { fetchFailureText } from "@/lib/tinyfish/catalog";
 import { fetchWithTinyfish, tinyfishConnection, TinyfishWaitError } from "@/lib/tinyfish/tinyfish.server";
@@ -598,6 +601,49 @@ export const TOOLS: Record<string, Tool> = {
         // Its open searches are a wait, not a limit: a request pursued on its own tries again when one finishes.
         if (error instanceof WebDiscoveryLimitError && error.slotsFull) return { ok: false, summary: error.message, data: { waiting: true } };
         if (error instanceof WebDiscoveryUnavailableError) return { ok: false, summary: error.message };
+        throw error;
+      }
+    },
+  },
+
+  research_social_sources: {
+    available: (features) => features.brightdata,
+    description: "Research what people say on social platforms through Bright Data (metered from the owner's Bright Data account: one credit per record, within the monthly limit set in Settings): Reddit posts with their comments, found by keyword and in named subreddits — only when the owner turned Reddit research on in the Bright Data settings (the result says when it is off) — and X, Instagram and Facebook posts, profiles and pages that a web search returns for the terms, read through Bright Data. Every finding keeps its link, the words quoted, who wrote them and when it was read. A relevant discussion is research evidence, not a lead: someone can be contacted only when their own profile or page, or the website it lists, publishes an email or phone (or, on Instagram, by one DM through a connected Instagram sender after plan approval); everyone else stays in the list as excluded, with the reason, and AgentSDR never messages anyone on Reddit, X or Facebook. Use it for discussions and stated needs (people asking for, complaining about or recommending what the owner sells). For Facebook business pages or Instagram accounts by keyword and place, find_social_leads (Apify) is the right tool when it is on; never run both for the same question. Runs in the background and announces the result.",
+    arguments: `platforms (array of reddit|x|instagram|facebook), customers (who the customers are, from the owner's words or the business profile), need (what they would be asking about or struggling with, in plain words: the search terms come from it), where (optional city or area; leave it out for a topic without a place), subreddits (optional array of subreddit names the owner named, without r/), keywords (optional array of up to 3 exact search phrases the owner gave), maxResults (5-${BRIGHTDATA_LIMITS.maxRecordsPerSearch.max} records across the job, default 40; the organization's own cap applies), contactAfter (true only when the owner asked to contact the people found), channels (optional, with contactAfter: array of email|whatsapp|linkedin|instagram, only when the owner's own words named how to contact them)`,
+    run: async (args, context) => {
+      if (!(await featureEnabled("brightdata"))) return { ok: false, summary: new FeatureDisabledError("brightdata").message };
+      const [profile, settings] = await Promise.all([getBusinessProfile(), brightdataSettingsView()]);
+      if (!settings.connected) return { ok: false, summary: "Bright Data research is not available: no Bright Data key is saved (Settings → Providers & features → Bright Data)." };
+      const criteria = normalizeSocialCriteria({
+        platforms: args.platforms,
+        customers: text(args, "customers") ?? profile.targetCustomers,
+        need: args.need,
+        where: args.where,
+        subreddits: args.subreddits,
+        keywords: args.keywords,
+        maxResults: args.maxResults,
+        language: profile.language,
+      }, { maxRecordsPerSearch: settings.maxRecordsPerSearch }, profile.language ?? "en");
+      if ("error" in criteria) throw new ToolArgumentError(criteria.error);
+      if (args.contactAfter !== undefined && typeof args.contactAfter !== "boolean") throw new ToolArgumentError("contactAfter must be true or false");
+      const request = args.contactAfter === true ? requireOutreachRequest(context) : null;
+      const contactAfter = request ? { channels: channels(args) ?? (criteria.platforms.includes("instagram") ? ["instagram", "email", "whatsapp"] as AudienceChannel[] : null), ownerRequest: request, requestId: searchRequestId(context) ?? undefined } : null;
+      const objective = await searchObjective(context);
+      if (objective.problem) return objectiveRefusal(objective.problem);
+      try {
+        const started = await startSocialResearch(criteria, context, { contactAfter, requestMessageId: searchRequestId(context) });
+        const lines = started.sources.map((source) => `${PLATFORM_NAMES[source.platform]}: ${source.state === "pending" ? `searching for ${source.queries.map((query) => `“${query}”`).join(", ")}` : `NOT searched (${source.reason})`}`);
+        const searching = started.sources.filter((source) => source.state === "pending").map((source) => PLATFORM_NAMES[source.platform]);
+        const finder = started.sources.some((source) => source.state === "pending" && source.platform !== "reddit") ? ` X, Instagram and Facebook pages are found with ${urlFinderName(started.urlFinder)}, then read through Bright Data.` : "";
+        return withControls({
+          ok: true,
+          summary: `Social research started for “${started.phrase}” through Bright Data (up to ${criteria.maxResults} records): ${lines.join("; ")}.${finder} Job ${started.jobId}, audience ${started.audienceId}. Results are announced in the chat when done; discussions are evidence, and only people whose own profile, page or website publishes a contact route can be contacted.${contactAfter ? ` The outreach plan will be prepared automatically for those who can be contacted, ${followUpChannels(contactAfter)}.` : ""}`,
+          display: `Researching ${searching.join(", ") || "social platforms"} for “${started.phrase}” (Bright Data, up to ${criteria.maxResults} records).`,
+          data: { jobId: started.jobId, audienceId: started.audienceId, phrase: started.phrase, criteria, sources: started.sources, urlFinder: started.urlFinder, provider: "brightdata" },
+        }, objective.line);
+      } catch (error) {
+        if (error instanceof SocialResearchUnavailableError && error.slotsFull) return { ok: false, summary: error.message, data: { waiting: true } };
+        if (error instanceof SocialResearchUnavailableError) return { ok: false, summary: error.message };
         throw error;
       }
     },
@@ -1332,7 +1378,7 @@ function joinable(tool: Tool): Tool {
   };
 }
 
-for (const name of ["find_leads", "find_instagram_prospects", "find_social_leads", "find_customers_on_web", "find_linkedin_leads"]) TOOLS[name] = joinable(TOOLS[name]!);
+for (const name of ["find_leads", "find_instagram_prospects", "find_social_leads", "find_customers_on_web", "find_linkedin_leads", "research_social_sources"]) TOOLS[name] = joinable(TOOLS[name]!);
 
 export const TOOL_NAMES = Object.keys(TOOLS);
 

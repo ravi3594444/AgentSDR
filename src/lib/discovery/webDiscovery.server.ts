@@ -234,6 +234,11 @@ export function setWebDiscoveryMailCheck(check: ((domain: string) => Promise<Mai
   mailCheck = check ?? ((domain) => mailDomainCheck(domain));
 }
 
+/** The mail-server check as set (social research shares it, so one stand-in covers both). */
+export function webDiscoveryMailCheck(domain: string): Promise<MailDomainCheck> {
+  return mailCheck(domain);
+}
+
 export function normalizeWebCriteria(
   input: { customers?: unknown; where?: unknown; maxResults?: unknown; language?: unknown; offer?: unknown; ownWebsite?: unknown },
   fallbackLanguage = "en",
@@ -270,9 +275,9 @@ export async function instagramReadiness(): Promise<{ usable: boolean; reason: s
  * its WhatsApp numbers, and the website in its business profile (and the
  * one the search started with).
  */
-type OwnerIdentity = { instagram: Set<string>; emails: Set<string>; domains: string[]; phones: Set<string> };
+export type OwnerIdentity = { instagram: Set<string>; emails: Set<string>; domains: string[]; phones: Set<string> };
 
-async function ownerIdentity(criteria: WebDiscoveryCriteria): Promise<OwnerIdentity> {
+export async function ownerIdentity(criteria: Pick<WebDiscoveryCriteria, "ownWebsite">): Promise<OwnerIdentity> {
   const [accounts, boxes, numbers, profile] = await Promise.all([
     db.select({ username: instagramAccounts.username }).from(instagramAccounts).where(inOrg(instagramAccounts)),
     db.select({ email: mailboxes.emailAddress }).from(mailboxes).where(inOrg(mailboxes)),
@@ -297,8 +302,8 @@ async function ownerIdentity(criteria: WebDiscoveryCriteria): Promise<OwnerIdent
   };
 }
 
-const ownsDomain = (owner: OwnerIdentity, domain: string | null) => Boolean(domain) && owner.domains.some((own) => domain === own || domain!.endsWith(`.${own}`));
-const ownsEmail = (owner: OwnerIdentity, email: string) => owner.emails.has(email.toLowerCase()) || owner.domains.some((own) => emailMatchesDomain(email.toLowerCase(), own));
+export const ownsDomain = (owner: OwnerIdentity, domain: string | null) => Boolean(domain) && owner.domains.some((own) => domain === own || domain!.endsWith(`.${own}`));
+export const ownsEmail = (owner: OwnerIdentity, email: string) => owner.emails.has(email.toLowerCase()) || owner.domains.some((own) => emailMatchesDomain(email.toLowerCase(), own));
 
 /** Starts a website and directory discovery: an audience to fill and the job that fills it. */
 export async function startWebDiscovery(

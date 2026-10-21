@@ -8,7 +8,7 @@
  * itself counts. Pure; coverage.server.ts reads the jobs.
  */
 
-export type Platform = "google_maps" | "instagram" | "facebook" | "linkedin" | "web";
+export type Platform = "google_maps" | "instagram" | "facebook" | "linkedin" | "web" | "reddit" | "x";
 
 export const PLATFORM_LABELS: Record<Platform, string> = {
   google_maps: "Google Maps",
@@ -16,7 +16,11 @@ export const PLATFORM_LABELS: Record<Platform, string> = {
   facebook: "Facebook",
   linkedin: "LinkedIn",
   web: "Websites and directories",
+  reddit: "Reddit",
+  x: "X",
 };
+
+const isPlatform = (value: unknown): value is Platform => typeof value === "string" && value in PLATFORM_LABELS;
 
 const NAMED: [Platform, RegExp][] = [
   ["google_maps", /\b(?:google\s*maps?|g\s*maps?|maps)\b/i],
@@ -28,6 +32,9 @@ const NAMED: [Platform, RegExp][] = [
   // A business's own website ("with their websites") is something to find for it, not a place to search; Google alone ("google reviews",
   // "work at Google") is not a web search, but Google where a platform goes ("on google", "via google") is, unless it is Google Maps.
   ["web", /\b(?:(?<!\b(?:their|its|his|her|our|your|my|with|own)\s+)websites?|web\s*search|directories|directory|google\s+search(?:es)?|search(?:ing)?\s+(?:on\s+)?google|(?<=\b(?:on|via)\s+)google\b(?!\s*(?:maps?|reviews?)\b))\b/i],
+  ["reddit", /\b(?:reddit|subreddits?|r\/[a-z0-9_]{2,})\b/i],
+  // X only as the platform: "on X", "X.com", "twitter", "tweets"; a bare "x" is a letter.
+  ["x", /\b(?:twitter|tweets?|x\.com|(?<=\b(?:on|via|through|from)\s+)x)\b/i],
 ];
 
 /** The platforms the owner's words name, in a fixed order; none for a request that leaves the choice to the assistant. */
@@ -45,8 +52,19 @@ export type CoverageJob = {
   error: string | null;
 };
 
-/** The platform a search job searches, or null for jobs that are not searches. */
+/** The platforms a search job searches: one for most kinds, the ones its criteria name for social research. */
+export function platformsOfJob(job: Pick<CoverageJob, "kind" | "payload">): Platform[] {
+  if (job.kind === "social_research") {
+    const platforms = (job.payload?.criteria as { platforms?: unknown } | undefined)?.platforms;
+    return Array.isArray(platforms) ? platforms.filter(isPlatform) : [];
+  }
+  const one = platformOfJob(job);
+  return one ? [one] : [];
+}
+
+/** The platform a search job searches, or null for jobs that are not searches (the first, for social research). */
 export function platformOfJob(job: Pick<CoverageJob, "kind" | "payload">): Platform | null {
+  if (job.kind === "social_research") return platformsOfJob(job)[0] ?? null;
   if (job.kind === "apify_instagram") return "instagram";
   if (job.kind === "web_discovery") return "web";
   if (job.kind === "linkedin_search") return "linkedin";
@@ -92,7 +110,7 @@ function webToolDetail(use: WebToolUse | null): string | null {
  */
 export function requestCoverage(named: readonly Platform[], jobs: readonly CoverageJob[], webTools: WebToolUse | null = null): PlatformCoverage[] {
   return named.map((platform) => {
-    const states = jobs.filter((job) => platformOfJob(job) === platform).map(jobState);
+    const states = jobs.filter((job) => platformsOfJob(job).includes(platform)).map(jobState);
     if (!states.length) {
       // No website-search job (it may be off): the web searches the assistant ran itself still cover the web.
       const searchedItself = platform === "web" ? webToolDetail(webTools) : null;

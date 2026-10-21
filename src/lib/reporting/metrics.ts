@@ -344,6 +344,7 @@ const SOURCE_NAMES: Record<string, string> = {
   apify_linkedin: "LinkedIn companies",
   web_search: "Website search",
   linkedin_search: "LinkedIn search",
+  social_research: "Social research",
   list: "Your list",
   existing: "Your leads",
   "inquiry:website_form": "Website form inquiry",
@@ -358,6 +359,7 @@ const PROVIDER_NAMES: Record<string, string> = {
   aimlapi: "AI/ML API",
   openrouter: "OpenRouter",
   unipile: "Unipile",
+  brightdata: "Bright Data",
 };
 
 /** The provider a source always runs on, when it has only one. */
@@ -366,6 +368,7 @@ const FIXED_PROVIDER: Record<string, string> = {
   apify_facebook: "apify",
   apify_linkedin: "apify",
   linkedin_search: "unipile",
+  social_research: "brightdata",
 };
 
 /**

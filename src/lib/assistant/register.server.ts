@@ -3,6 +3,7 @@ import "server-only";
 import { and, eq, sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { runDiscoveryStep, sourceLabel } from "@/lib/discovery/discovery.server";
+import { runSocialResearchStep } from "@/lib/discovery/socialResearch.server";
 import { runWebDiscoveryStep } from "@/lib/discovery/webDiscovery.server";
 import { inOrg } from "@/lib/tenancy/scope";
 import { continueAfterEvent, runToolInThread } from "./agent.server";
@@ -70,6 +71,36 @@ function instagramProspectMessage(job: AssistantJob): string {
   return `The Instagram prospect search for ${String(result.phrase ?? "")} (through Apify) finished: ${found} accounts found — potential matches, not interested customers. ${count("eligible")} have a contact route for an approved plan (${count("withEmail")} by email, ${count("withPhoneOnly")} by phone only, ${count("withInstagram")} with Instagram profiles); ${count("excluded")} were left out with the reason recorded${count("duplicates") ? `; ${count("duplicates")} duplicates skipped` : ""}.${providerNote}`;
 }
 
+type SocialSource = { platform: string; label: string; state: string; reason: string | null; found: number; credits: number };
+
+function socialSourcesText(sources: SocialSource[]): string {
+  return sources.map((item) => `${item.label}: ${item.state === "searched"
+    ? `${item.found} finding${item.found === 1 ? "" : "s"}${item.credits ? `, ${item.credits} credits` : ""}`
+    : `${item.state === "failed" ? "failed" : "not searched"} (${item.reason ?? "no reason recorded"})`}`).join("; ");
+}
+
+/** The platforms a social research job searched, for the compact line ("Reddit, X (Bright Data)"). */
+function socialSourceLabel(job: AssistantJob): string {
+  const sources = ((job.result ?? {}) as { sources?: SocialSource[] }).sources ?? [];
+  const searched = sources.filter((item) => item.state === "searched").map((item) => item.label.replace(/ \(Bright Data\)$/, ""));
+  return searched.length ? `${searched.join(", ")} (Bright Data)` : "Social research (Bright Data)";
+}
+
+/** A finished social research job (Bright Data): what was read where, who can be contacted, and the credits it took. */
+function socialResearchMessage(job: AssistantJob): string {
+  if (job.status === "failed") return `The social research failed: ${job.error ?? "unknown error"}`;
+  const result = (job.result ?? {}) as Record<string, unknown> & { sources?: SocialSource[] };
+  const count = (key: string) => Number(result[key] ?? 0);
+  const sources = socialSourcesText(result.sources ?? []);
+  const credits = count("creditsUsed") ? ` Bright Data credits used: ${count("creditsUsed")} (estimated from the records it delivered).` : "";
+  if (!count("found")) return `${String(result.note ?? `The social research for “${String(result.phrase ?? "")}” found nothing.`)}${sources ? ` Sources — ${sources}.` : ""}${credits}`;
+  const extra: string[] = [];
+  if (count("needSignals")) extra.push(`${count("needSignals")} asked for something like this in their own words`);
+  if (count("alreadyKnown")) extra.push(`${count("alreadyKnown")} already in your leads (reused, not duplicated)`);
+  if (count("duplicates")) extra.push(`${count("duplicates")} duplicates skipped`);
+  return `The social research for “${String(result.phrase ?? "")}” finished: ${count("discussions")} relevant post${count("discussions") === 1 ? "" : "s"} and comments read, ${count("found")} people or businesses found, ${count("eligible")} can be contacted (${count("withEmail")} by email, ${count("withPhoneOnly")} by phone only, ${count("withInstagram")} with Instagram profiles); ${count("excluded")} kept as research only, each with the reason recorded${extra.length ? `; ${extra.join(", ")}` : ""}. Sources — ${sources}.${credits}${result.note ? ` ${String(result.note)}` : ""}`;
+}
+
 /** How a search's contactable leads were judged against the request (only matches count toward it), when they were. */
 function fitText(job: AssistantJob): string {
   const result = (job.result ?? {}) as { fit?: LeadFunnel; fitNote?: unknown };
@@ -80,6 +111,7 @@ function fitText(job: AssistantJob): string {
 function discoveryMessage(job: AssistantJob): string {
   if (job.kind === "web_discovery") return webDiscoveryMessage(job);
   if (job.kind === "apify_instagram") return instagramProspectMessage(job);
+  if (job.kind === "social_research") return socialResearchMessage(job);
   if (job.status === "failed") return `The lead search failed: ${job.error ?? "unknown error"}`;
   const result = (job.result ?? {}) as Record<string, unknown>;
   const found = Number(result.found ?? 0);
@@ -112,6 +144,7 @@ function reportEvent(job: AssistantJob, search: boolean): ChatEvent {
   const source = job.kind === "linkedin_search" ? "LinkedIn"
     : job.kind === "web_discovery" ? "websites and directories"
     : job.kind === "apify_instagram" ? "Instagram"
+    : job.kind === "social_research" ? socialSourceLabel(job)
     : sourceLabel(target, (result.provider === "apify" || result.provider === "scraper" ? result.provider : payload.provider) ?? null);
   const fit = result.fit && result.fit.contactable ? result.fit : null;
   return {
@@ -205,6 +238,7 @@ export function registerAssistantJobs(): void {
   registerAssistantJobHandler("web_discovery", held(judged(runWebDiscoveryStep)));
   // Instagram prospects through Apify run on the discovery job's stages (discovery.server.ts).
   registerAssistantJobHandler("apify_instagram", held(judged(runDiscoveryStep)));
+  registerAssistantJobHandler("social_research", held(judged(runSocialResearchStep)));
   registerAssistantJobHandler("objective", runObjectiveStep);
   onAssistantJobFinished(reportFinishedJob);
 }
@@ -261,7 +295,7 @@ export async function reportFinishedJob(job: AssistantJob): Promise<void> {
     return;
   }
   const threadId = job.threadId;
-  const search = job.kind === "discovery" || job.kind === "linkedin_search" || job.kind === "web_discovery" || job.kind === "apify_instagram";
+  const search = job.kind === "discovery" || job.kind === "linkedin_search" || job.kind === "web_discovery" || job.kind === "apify_instagram" || job.kind === "social_research";
   const found = search && job.status === "succeeded" && Boolean(job.audienceId) && Number((job.result ?? {}).eligible ?? 0) > 0;
   // The owner asked to contact what is found: the plan is prepared here,
   // not left to the model's judgement. It still waits for the owner's Start.

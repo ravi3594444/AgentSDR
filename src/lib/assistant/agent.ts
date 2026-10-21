@@ -326,7 +326,7 @@ export function inquiryRepliesRequested(ownerText: string, lastAssistantText?: s
 
 type HistoryMessage = Pick<TranscriptMessage, "role" | "content" | "tool" | "toolInput" | "status">;
 
-const CONTACT_AFTER_TOOLS = new Set(["find_leads", "find_linkedin_leads", "find_customers_on_web", "find_instagram_prospects", "find_social_leads"]);
+const CONTACT_AFTER_TOOLS = new Set(["find_leads", "find_linkedin_leads", "find_customers_on_web", "find_instagram_prospects", "find_social_leads", "research_social_sources"]);
 
 const actsOnOutreach = (message: HistoryMessage) => message.role === "tool" && message.status === "ok"
   && (message.tool === "prepare_outreach" || (CONTACT_AFTER_TOOLS.has(message.tool ?? "") && message.toolInput?.contactAfter === true));

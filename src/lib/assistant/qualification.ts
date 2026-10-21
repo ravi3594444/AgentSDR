@@ -82,6 +82,7 @@ const SOURCE_LABELS: Record<string, string> = {
   apify_instagram: "Instagram (via Apify)",
   apify_facebook: "Facebook page (via Apify)",
   apify_linkedin: "LinkedIn company (via Apify)",
+  social_research: "Social research (via Bright Data)",
   list: "Your list",
   existing: "Your leads",
   "inquiry:website_form": "Website form inquiry",

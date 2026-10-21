@@ -115,7 +115,7 @@ function partialSearch(job: JobFacts): { state: WorkState; reason: string } | nu
  * controlled through the plan itself (Pause, Resume, Stop), never by
  * cancelling its job, which would leave the run starting or launching.
  */
-export const CANCELLABLE_JOB_KINDS = ["discovery", "web_discovery", "linkedin_search", "apify_instagram"] as const;
+export const CANCELLABLE_JOB_KINDS = ["discovery", "web_discovery", "linkedin_search", "apify_instagram", "social_research"] as const;
 
 export function isCancellableJobKind(kind: string): boolean {
   return (CANCELLABLE_JOB_KINDS as readonly string[]).includes(kind);

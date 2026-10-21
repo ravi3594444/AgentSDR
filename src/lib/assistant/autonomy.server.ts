@@ -64,7 +64,7 @@ export async function setThreadAutonomous(threadId: string, on: boolean, userId:
   return rows.length > 0;
 }
 
-const SEARCH_JOB_KINDS = ["discovery", "linkedin_search", "web_discovery", "apify_instagram"] as const;
+const SEARCH_JOB_KINDS = ["discovery", "linkedin_search", "web_discovery", "apify_instagram", "social_research"] as const;
 
 /** Lead searches started in the last 24 hours from chats that are in Autonomous mode. */
 export async function autonomousSearchesToday(): Promise<number> {

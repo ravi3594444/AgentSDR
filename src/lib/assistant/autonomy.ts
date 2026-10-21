@@ -15,7 +15,7 @@
 export const AUTONOMOUS_MAX_STEPS = 16;
 
 /** The tools that start a lead search (each counts toward the daily search cap). */
-export const SEARCH_TOOLS = new Set(["find_leads", "find_linkedin_leads", "find_customers_on_web", "find_instagram_prospects", "find_social_leads"]);
+export const SEARCH_TOOLS = new Set(["find_leads", "find_linkedin_leads", "find_customers_on_web", "find_instagram_prospects", "find_social_leads", "research_social_sources"]);
 
 export type AutonomyCaps = { runsPerDay: number; leadsPerDay: number; searchesPerDay: number };
 

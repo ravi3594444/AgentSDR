@@ -73,6 +73,7 @@ const JOB_TITLES: Record<string, string> = {
   web_discovery: "Website and directory search",
   linkedin_search: "LinkedIn people search",
   apify_instagram: "Instagram search",
+  social_research: "Social research",
   outreach_start: "Starting outreach",
   objective: "Lead request",
 };
