@@ -1,8 +1,44 @@
 import { describe, expect, test } from "bun:test";
-import { isWithinWorkingHours, mailboxHoursFromWeekly, nextWindowStart } from "./workingHours";
+import { DEFAULT_WORKING_HOURS } from "./schema";
+import { alwaysOpenHours, isAlwaysOpen, isWithinWorkingHours, mailboxHoursFromWeekly, nextWindowStart } from "./workingHours";
 
 // Monday to Friday, 09:00–18:00 in India (UTC+5:30, no daylight saving).
 const india = mailboxHoursFromWeekly({ timezone: "Asia/Kolkata", days: [1, 2, 3, 4, 5], start: "09:00", end: "18:00" });
+
+describe("always open: every mailbox sends any time, every day", () => {
+  const instants = [
+    "2026-10-17T11:00:00Z", // the Saturday of the reported incident
+    "2026-10-18T23:59:30Z",
+    "2026-10-19T00:00:00.000Z",
+    "2026-10-19T12:00:00Z",
+    "2026-03-08T07:30:00Z", // New York's spring-forward morning
+    "2026-11-01T05:30:00Z", // and its fall-back hour
+    "2026-09-06T04:00:00Z", // Santiago skips its local midnight that night
+  ].map((at) => new Date(at));
+
+  test("a new mailbox's hours keep only its time zone, the day its daily count resets on", () => {
+    const hours = alwaysOpenHours("Asia/Kolkata");
+    expect(hours.timezone).toBe("Asia/Kolkata");
+    expect(Object.values(hours.days)).toEqual(Array(7).fill({ enabled: true, from: "00:00", to: "00:00" }));
+    expect(isAlwaysOpen(hours)).toBe(true);
+    expect(isAlwaysOpen(india)).toBe(false);
+  });
+
+  test("open at every instant, in any zone, across daylight saving and at midnight", () => {
+    for (const zone of ["UTC", "Asia/Kolkata", "America/New_York", "America/Santiago"]) {
+      for (const at of instants) expect(isWithinWorkingHours(alwaysOpenHours(zone), at)).toBe(true);
+    }
+  });
+
+  test("never waits for a window", () => {
+    for (const at of instants) expect(nextWindowStart(alwaysOpenHours("America/Santiago"), at)).toBeNull();
+  });
+
+  test("the column default is always open", () => {
+    expect(isAlwaysOpen(DEFAULT_WORKING_HOURS)).toBe(true);
+    expect(DEFAULT_WORKING_HOURS).toEqual(alwaysOpenHours("UTC"));
+  });
+});
 
 describe("nextWindowStart", () => {
   test("inside the window there is nothing to wait for", () => {

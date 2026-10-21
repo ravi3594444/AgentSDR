@@ -1,15 +1,15 @@
 /**
- * When a channel may send next, and how to say it. Pure (no database), so the
+ * When a mailbox may send next, and how to say it. Pure (no database), so the
  * Results page, the assistant's results tool and the daily summary all
- * describe sending from the same rules the send engines gate on
- * (`src/lib/outreach/workingHours.ts`): a closed window here is exactly the
- * scheduler's `skippedOutsideHours`.
+ * describe sending from the same hours the email tick gates on
+ * (`src/lib/outreach/workingHours.ts`). Sending is always on, so every
+ * mailbox's hours are always open and the window is too; a closed one is
+ * only a legacy mailbox the always-on migration has not reached yet.
  */
 import { fromZonedTime, toZonedTime } from "date-fns-tz";
 
-import type { WeeklyHours } from "./rules";
 import type { WorkingHours } from "@/lib/outreach/schema";
-import { isWithinWorkingHours, mailboxHoursFromWeekly } from "@/lib/outreach/workingHours";
+import { isAlwaysOpen, isWithinWorkingHours } from "@/lib/outreach/workingHours";
 
 export type SendingWindow = {
   /** True inside the window, or when no hours are set (any time). */
@@ -55,12 +55,6 @@ export function workingWindow(working: WorkingHours, now: Date = new Date()): Se
   return { open: false, opensAt: nextOpening(working, now) };
 }
 
-/** The window of a channel rule (`sendingHours`). Null means any time. */
-export function sendingWindow(hours: WeeklyHours | null, now: Date = new Date()): SendingWindow {
-  if (!hours) return { open: true, opensAt: null };
-  return workingWindow(mailboxHoursFromWeekly(hours), now);
-}
-
 /** "Mon–Fri", "Mon, Wed, Fri", "every day", "no days" — from Monday-first indexes. */
 function dayRuns(indexes: number[]): string {
   const sorted = [...new Set(indexes)].sort((a, b) => a - b);
@@ -84,19 +78,15 @@ function dayRuns(indexes: number[]): string {
   return runs.join(", ");
 }
 
-/** How a mailbox's hours read in a sentence: "Mon–Fri 09:00–18:00 (Asia/Kolkata)". */
+/** How a mailbox's hours read in a sentence: "any time, every day (UTC)", or a legacy "Mon–Fri 09:00–18:00 (Asia/Kolkata)". */
 export function describeWorkingHours(working: WorkingHours): string {
+  if (isAlwaysOpen(working)) return `any time, every day (${working.timezone})`;
   const enabled = WEEK.filter(({ key }) => working.days[key].enabled);
   if (!enabled.length) return `no sending days enabled, ${working.timezone}`;
   const windows = new Set(enabled.map(({ key }) => `${working.days[key].from}–${working.days[key].to}`));
   const times = windows.size === 1 ? [...windows][0]! : "times vary by day";
   const indexes = enabled.map(({ key }) => WEEK.findIndex((day) => day.key === key));
   return `${dayRuns(indexes)} ${times} (${working.timezone})`;
-}
-
-/** How a channel rule's hours read in a sentence, or null when it may send any time. */
-export function describeWeeklyHours(hours: WeeklyHours | null): string | null {
-  return hours ? describeWorkingHours(mailboxHoursFromWeekly(hours)) : null;
 }
 
 /** "Monday 19 Oct at 09:00", in the window's own time zone. */

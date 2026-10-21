@@ -7,7 +7,7 @@
  * - Platform-wide jobs below, each one slot at a time across every
  *   organization (the job's own code iterates organizations).
  * - The daily rollover, once per organization at the start of that
- *   organization's day (Settings → Sending defaults → Time zone / New day starts
+ *   organization's day (Settings → Your business → Time zone / New day starts
  *   at): builds its email queues, renews its Gmail watches, resets its
  *   LinkedIn daily limits. Its claim key is `daily-rollover:<organization id>`.
  *

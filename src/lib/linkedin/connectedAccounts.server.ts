@@ -27,10 +27,6 @@ export async function loadConnectedAccounts() {
         limitReached: linkedInAccounts.limitReached,
         isPremium: linkedInAccounts.isPremium,
         dailyInviteLimit: linkedInAccounts.dailyInviteLimit,
-        workTimezone: linkedInAccounts.workTimezone,
-        workStartTime: linkedInAccounts.workStartTime,
-        workEndTime: linkedInAccounts.workEndTime,
-        workDays: linkedInAccounts.workDays,
         nextAllowedRun: linkedInAccounts.nextAllowedRun,
       })
       .from(linkedInAccounts)

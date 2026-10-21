@@ -43,14 +43,6 @@ export function setDefaultWhatsappAccount(id: string): Promise<WhatsappAccountSu
   });
 }
 
-/** The number's own new-chats-a-day limit; null follows the organization's rule. */
-export function setWhatsappNewChatsPerDay(id: string, newChatsPerDay: number | null): Promise<WhatsappAccountSummary> {
-  return jsonFetch(`/accounts/${encodeURIComponent(id)}`, {
-    method: "PATCH",
-    body: JSON.stringify({ newChatsPerDay }),
-  });
-}
-
 /** Pulls the account's recent chats from Unipile into AgentSDR. */
 export function backfillWhatsappAccount(id: string): Promise<unknown> {
   return jsonFetch(`/accounts/${encodeURIComponent(id)}/backfill`, { method: "POST" });

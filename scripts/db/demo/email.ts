@@ -21,6 +21,7 @@ import { ingestGmailReply } from "@/lib/outreach/replyBridge";
 import type { InboundMessage } from "@/lib/outreach/gmail";
 import { suppressEmailOutreach } from "@/lib/outreach/suppression";
 import { renderEmail } from "@/lib/outreach/render";
+import { alwaysOpenHours } from "@/lib/outreach/workingHours";
 import { personVariables } from "@/lib/leads/variables";
 import { createStepLogger } from "@/lib/debugLog";
 import { inboxContacts, inboxMessages, inboxNotes, inboxTasks } from "@/lib/inbox/schema";
@@ -286,13 +287,11 @@ export async function seedEmail(ctx: DemoContext): Promise<void> {
     sam: "Europe/London",
     lena: "Europe/Berlin",
   };
-  const weekdays = ["monday", "tuesday", "wednesday", "thursday", "friday"] as const;
   const mailboxRows = await db
     .insert(mailboxes)
     .values(
       MAILBOXES.map((m, i) => {
         const created = new Date(ctx.now.getTime() - (104 - i * 3) * DAY + rand.int(8, 17) * HOUR);
-        const day = (enabled: boolean) => ({ enabled, from: "08:30", to: "17:30" });
         const team = TEAM[m.owner];
         return {
           organizationId: org,
@@ -306,14 +305,8 @@ export async function seedEmail(ctx: DemoContext): Promise<void> {
           sendCounterResetAt: startOfToday,
           nextEmailTime: new Date(ctx.now.getTime() + rand.int(3, 25) * MINUTE),
           signatureHtml: `${team.name}\n${team.title}, Northwind`,
-          workingHours: {
-            timezone: zones[m.owner],
-            days: {
-              ...Object.fromEntries(weekdays.map((w) => [w, day(true)])),
-              saturday: day(false),
-              sunday: day(false),
-            },
-          } as never,
+          // Always open: sending runs at any time. The zone is the day the mailbox's daily count resets on.
+          workingHours: alwaysOpenHours(zones[m.owner]!),
           createdAt: created,
           updatedAt: created,
         };

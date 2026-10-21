@@ -4,7 +4,7 @@ description: "Find leads with LinkedIn search, send connection requests, follow 
 icon: "linkedin"
 ---
 
-A LinkedIn campaign sends a connection request to each lead, then a short sequence of messages once they accept. Sending is paced in small runs, within daily limits and each account's working hours. You find campaigns under **LinkedIn → Campaigns**, and lead searches under **LinkedIn → Search**.
+A LinkedIn campaign sends a connection request to each lead, then a short sequence of messages once they accept. Sending is paced in small runs, within daily limits, at any time of day. You find campaigns under **LinkedIn → Campaigns**, and lead searches under **LinkedIn → Search**.
 
 <Info>
 Before you start, [connect Unipile and at least one LinkedIn account](/linkedin/accounts). Read [Responsible use](/responsible-use) too: LinkedIn's terms do not allow automation.
@@ -29,7 +29,7 @@ Before you start, [connect Unipile and at least one LinkedIn account](/linkedin/
   </Step>
 </Steps>
 
-Each account can pull a limited number of leads from searches per day, 400 by default (see [Sending rules](/workspace/sending-rules)). **Search capacity today** shows what is left. A URL that runs out of quota shows **Paused — quota** and can be run again after the daily reset. Heavy searching is one of the faster ways to have an account limited, so keep the number modest.
+Each account can pull a limited number of leads from searches per day, 400 by default, applied automatically. **Search capacity today** shows what is left. A URL that runs out of quota shows **Paused — quota** and can be run again after the daily reset. Heavy searching is one of the faster ways to have an account limited, so keep the number modest.
 
 ## Create a campaign
 
@@ -88,7 +88,7 @@ A scheduled job (every 30 minutes) runs the engine for every connected account. 
 3. **Sends messages.** Acceptance messages and due follow-ups, a few at a time.
 4. **Rests.** The account waits a random time before its next pass.
 
-The defaults, all editable in [Sending rules](/workspace/sending-rules):
+This pacing is automatic (see [Sending rules](/workspace/sending-rules)):
 
 | What | Default |
 | --- | --- |
@@ -100,7 +100,7 @@ The defaults, all editable in [Sending rules](/workspace/sending-rules):
 | Follow-up messages per run | 3 to 6 |
 | Profile lookups per run | 4 to 8 |
 
-An individual account can override its daily limit and its working hours in [LinkedIn accounts](/linkedin/accounts). The engine does nothing for an account outside its working hours. Within a pass, older campaigns go first, and within a campaign older leads go first. A person already contacted by an account is not invited again by it.
+An account that already had a daily limit of its own keeps it. A connection request to someone no channel has contacted before takes one place under your workspace's [daily lead limit](/workspace/sending-rules); once today's places are used, requests to new people wait for the reset while requests to people already contacted go on. Within a pass, older campaigns go first, and within a campaign older leads go first. A person already contacted by an account is not invited again by it.
 
 A request or message is claimed in the database before it is sent, so a lead is never invited or messaged twice by the same step. Leads marked Do Not Contact anywhere in your workspace are skipped, and this is checked again right before sending.
 
@@ -138,13 +138,13 @@ Select a lead to see and edit its messages. Messages that have not been sent yet
 
 <CardGroup cols={2}>
   <Card title="LinkedIn accounts" icon="linkedin" href="/linkedin/accounts">
-    Connect accounts, set limits and hours.
+    Connect accounts and see their requests today.
   </Card>
   <Card title="LinkedIn messages" icon="message-circle" href="/linkedin/messages">
     Read and answer replies.
   </Card>
   <Card title="Sending rules" icon="settings" href="/workspace/sending-rules">
-    Change the defaults.
+    The daily lead limit and automatic pacing.
   </Card>
   <Card title="Import leads" icon="users" href="/leads/import">
     File formats and column mapping.

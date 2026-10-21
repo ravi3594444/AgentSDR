@@ -152,18 +152,33 @@ the store once (verifying each); keep it as the record of that move.
 
 ## Sending rules, not constants
 
-Operational numbers — emails a day, send gaps, sending hours, LinkedIn
-invitations and run sizes, WhatsApp warm-up and new chats a day, the default
-phone country — are per-organization **Sending rules**, declared once in
-`src/lib/channels/rules.ts` (client-safe: default, hard min/max, a `safe`
+Operational numbers — emails a day, send gaps, LinkedIn invitations and run
+sizes, WhatsApp warm-up and new chats a day, the daily lead limit, the
+default phone country — are per-organization **Sending rules**, declared once
+in `src/lib/channels/rules.ts` (client-safe: default, hard min/max, a `safe`
 edge past which the page warns). Stored in `channel_settings` (one row per
 organization and channel, only the keys that differ from the default), read
 through `channelRules(channel)` in `rules.server.ts` (cached 30 s). Resolution
 is account override → organization rule → default; the overrides are
 `"LinkedInAccount"."dailyInviteLimit"`, `whatsapp_accounts.new_chats_per_day`
-and the mailbox's own `daily_send_limit`. The settings form is generated from
-the registry, so a new limit is a registry entry plus the engine reading it —
-never a new constant or env var.
+and the mailbox's own `daily_send_limit`. A new limit is a registry entry plus
+the engine reading it — never a new constant or env var.
+
+**Sending is always on.** No engine has sending hours or days, and nothing may
+add them back: the hour rules are retired (`RETIRED_RULE_KEYS`, refused on
+save), mailboxes get always-open `working_hours` (`alwaysOpenHours`; its
+timezone is only the day the mailbox's daily counter resets on, never change
+it), LinkedIn `work*` fields stay null. **One input is visible**: the
+"general" rule `newLeadsPerDay` (Settings → Daily lead limit), a
+workspace-wide count of people contacted for the first time, across every
+channel, on the workspace's day (general `timeZone` + `dayStartsAt`, on Your
+business). It is enforced by `newLeadAllowance(tx, { personId, now })`
+(`src/lib/channels/dailyLeadLimit.server.ts`) inside each engine's own
+first-touch claim transaction, after that engine's lock, taking the
+`new-leads:<org>` advisory lock last; the count is derived from the engines'
+claim rows (no counter of its own). A new first-touch sender calls it the same
+way. Per-channel pacing and the Autonomous caps keep their rules but have no
+settings page (`GENERAL_RULE_PAGES.hidden`).
 
 The `WHATSAPP_*` constants in `src/lib/whatsapp/contract.ts` remain only as
 the defaults the extension shows (and agentsdr.ai, which copies this file) (that file must stay

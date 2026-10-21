@@ -2,23 +2,26 @@ import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { defaultFeatureState } from "@/lib/features/catalog";
-import { withQuery } from "@/lib/nav/legacyRoutes";
+import { resolveLegacyRoute, withQuery } from "@/lib/nav/legacyRoutes";
 import { itemPages, SETTINGS_HOME, SETTINGS_NAV, visibleSettingsNav } from "./settingsNav";
 
 const APP = join(import.meta.dir, "../../app");
 const everything = { ...defaultFeatureState(), instagram: true, inquiry_intake: true };
 const pages = (nav: typeof SETTINGS_NAV) => nav.flatMap((group) => group.items.flatMap((item) => itemPages(item).map((page) => page.href)));
 
-/** Every settings page before the regrouping (navigation rework N3), General aside. */
+/** Every settings page before the regrouping (navigation rework N3), General and the per-channel sending rules aside. */
 const OLD_PAGES = [
   "/settings/members", "/settings/teams",
-  "/settings/email-accounts", "/settings/email-connection", "/settings/email-rules",
-  "/settings/linkedin-accounts", "/settings/linkedin-connection", "/settings/linkedin-rules",
-  "/settings/whatsapp-accounts", "/settings/whatsapp-connection", "/settings/whatsapp-rules",
-  "/settings/instagram-accounts", "/settings/instagram-rules",
+  "/settings/email-accounts", "/settings/email-connection",
+  "/settings/linkedin-accounts", "/settings/linkedin-connection",
+  "/settings/whatsapp-accounts", "/settings/whatsapp-connection",
+  "/settings/instagram-accounts",
   "/settings/instructions", "/settings/knowledge", "/settings/ai",
   "/settings/lead-categories", "/settings/columns", "/settings/inquiries", "/settings/appearance",
 ];
+
+/** The per-channel pacing pages: their limits are automatic now, and each address opens the daily lead limit. */
+const RETIRED_RULE_PAGES = ["email-rules", "linkedin-rules", "whatsapp-rules", "instagram-rules"];
 
 describe("the settings rail", () => {
   test("five groups, in order", () => {
@@ -32,11 +35,12 @@ describe("the settings rail", () => {
     expect(withQuery(SETTINGS_HOME, { tab: "x", ids: ["1", "2"] })).toBe("/settings/business?tab=x&ids=1&ids=2");
   });
 
-  test("every old page is still listed, exactly once, and General is folded away", () => {
+  test("every old page is still listed, exactly once, and General and the per-channel rules are folded away", () => {
     const all = pages(SETTINGS_NAV);
     for (const href of OLD_PAGES) expect(all.filter((page) => page === href)).toEqual([href]);
     expect(new Set(all).size).toBe(all.length);
     expect(all).not.toContain("/settings/organization");
+    for (const name of RETIRED_RULE_PAGES) expect(all).not.toContain(`/settings/${name}`);
     expect(all.sort()).toEqual([...OLD_PAGES, "/settings/business", "/settings/sending", "/settings/research", "/settings/advanced"].sort());
   });
 
@@ -47,7 +51,9 @@ describe("the settings rail", () => {
       "/settings/email-accounts", "/settings/email-connection", "/settings/linkedin-accounts", "/settings/linkedin-connection",
       "/settings/whatsapp-accounts", "/settings/whatsapp-connection", "/settings/instagram-accounts", "/settings/ai",
     ]);
-    expect(group("Sending & automation")).toEqual(["/settings/sending", "/settings/email-rules", "/settings/linkedin-rules", "/settings/whatsapp-rules", "/settings/instagram-rules"]);
+    // The one visible sending input: everything else that paces sending is automatic.
+    expect(group("Sending & automation")).toEqual(["/settings/sending"]);
+    expect(SETTINGS_NAV.find((g) => g.label === "Sending & automation")!.items[0]!.label).toBe("Daily lead limit");
     expect(group("Research & budget")).toEqual(["/settings/research"]);
     expect(group("Advanced")).toEqual(["/settings/advanced", "/settings/lead-categories", "/settings/columns", "/settings/inquiries", "/settings/appearance"]);
   });
@@ -66,15 +72,26 @@ describe("the settings rail", () => {
   });
 });
 
+describe("the retired per-channel sending rules pages", () => {
+  for (const name of RETIRED_RULE_PAGES) {
+    test(`/settings/${name} opens the daily lead limit, keeping the query, as a page or a pop-up`, () => {
+      expect(resolveLegacyRoute(`/settings/${name}`)).toBe("/settings/sending");
+      expect(resolveLegacyRoute(`/settings/${name}?from=readiness&ids=1`)).toBe("/settings/sending?from=readiness&ids=1");
+      // The redirect (next.config.ts) runs before routing, so no page or pop-up twin is left behind it.
+      expect(existsSync(join(APP, "settings", name))).toBe(false);
+      expect(existsSync(join(APP, "@modal", "(.)settings", name))).toBe(false);
+    });
+  }
+});
+
 describe("rows behind an optional feature", () => {
-  test("Instagram's two rows and Inquiries show only while their feature is on", () => {
+  test("Instagram's row and Inquiries show only while their feature is on", () => {
     const shown = (features: Parameters<typeof visibleSettingsNav>[0]) => pages(visibleSettingsNav(features));
     for (const features of [null, defaultFeatureState()]) {
       expect(shown(features)).not.toContain("/settings/instagram-accounts");
-      expect(shown(features)).not.toContain("/settings/instagram-rules");
       expect(shown(features)).not.toContain("/settings/inquiries");
     }
-    expect(shown({ ...defaultFeatureState(), instagram: true })).toEqual(expect.arrayContaining(["/settings/instagram-accounts", "/settings/instagram-rules"]));
+    expect(shown({ ...defaultFeatureState(), instagram: true })).toEqual(expect.arrayContaining(["/settings/instagram-accounts"]));
     expect(shown({ ...defaultFeatureState(), instagram: true })).not.toContain("/settings/inquiries");
     expect(shown(everything)).toEqual(pages(SETTINGS_NAV));
   });

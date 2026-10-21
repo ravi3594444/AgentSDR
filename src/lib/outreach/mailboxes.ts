@@ -2,10 +2,8 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { mailboxes } from "./schema";
 import { testMailboxConnection } from "./gmail";
-import { channelRules } from "@/lib/channels/rules.server";
-import { mailboxHoursFromWeekly } from "./workingHours";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
-import { retestUnipileMailbox } from "./mailboxProviders";
+import { newMailboxSending, retestUnipileMailbox } from "./mailboxProviders";
 
 export async function listMailboxes() {
   return db.select().from(mailboxes).where(inOrg(mailboxes)).orderBy(mailboxes.createdAt);
@@ -55,9 +53,8 @@ export async function connectMailbox(input: {
     if (elsewhere) return { ok: false, error: `${emailAddress} is already connected to another organization` };
   }
 
-  // A new mailbox starts from the organization's sending rules; after that its
-  // own limit and hours are edited per mailbox.
-  const rules = existing ? null : await channelRules("email");
+  // A new mailbox starts with the organization's emails a day and always-open
+  // hours (newMailboxSending); an existing one keeps its own.
   const mailboxId =
     existing?.id ??
     (
@@ -69,8 +66,7 @@ export async function connectMailbox(input: {
           displayName: input.displayName?.trim() || null,
           signatureHtml: input.signatureHtml?.trim() || null,
           status: "connecting",
-          dailySendLimit: rules!.dailySendLimit,
-          workingHours: mailboxHoursFromWeekly(rules!.sendingHours),
+          ...(await newMailboxSending()),
         })
         .returning({ id: mailboxes.id })
     )[0].id;

@@ -7,7 +7,17 @@
 import { isWithinInterval, addDays, set as setTime } from "date-fns";
 import { toZonedTime, fromZonedTime } from "date-fns-tz";
 import type { WorkingHours, WorkingDay } from "./schema";
-import type { WeeklyHours } from "@/lib/channels/rules";
+
+/** One window on chosen days, the shape the retired channel "sending hours" rules had. */
+export type WeeklyHours = {
+  /** IANA time zone, e.g. Asia/Kolkata. */
+  timezone: string;
+  /** 0 = Sunday … 6 = Saturday. */
+  days: number[];
+  /** "HH:mm", 24-hour. */
+  start: string;
+  end: string;
+};
 
 function parseHHmm(hhmm: string): { hours: number; minutes: number } {
   const [h, m] = hhmm.split(":").map(Number);
@@ -15,6 +25,25 @@ function parseHHmm(hhmm: string): { hours: number; minutes: number } {
 }
 
 const DAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"] as const;
+
+const ALL_DAY: WorkingDay = { enabled: true, from: "00:00", to: "00:00" };
+
+/**
+ * A mailbox's hours now that sending is always on: every day, all day. Only
+ * the time zone still matters, as the day its daily send counter resets on
+ * (sendRules.ts, buildQueue.ts), so it is kept as given.
+ */
+export function alwaysOpenHours(timezone: string): WorkingHours {
+  return { timezone, days: Object.fromEntries(DAY_NAMES.map((name) => [name, { ...ALL_DAY }])) as WorkingHours["days"] };
+}
+
+/** True for alwaysOpenHours' shape: every day enabled from 00:00 to 00:00. */
+export function isAlwaysOpen(workingHours: WorkingHours): boolean {
+  return DAY_NAMES.every((name) => {
+    const day = workingHours.days?.[name];
+    return day?.enabled === true && day.from === "00:00" && day.to === "00:00";
+  });
+}
 
 function isWithinDayWindow(day: WorkingDay, now: Date, timezone: string): boolean {
   const zonedNow = toZonedTime(now, timezone);
@@ -43,8 +72,14 @@ function isWithinDayWindow(day: WorkingDay, now: Date, timezone: string): boolea
   return isWithinInterval(now, { start: startUtc, end: endUtc });
 }
 
-/** True if `now` falls inside this mailbox's configured send window for the current day (in its timezone). */
+/**
+ * True if `now` falls inside this mailbox's configured send window for the
+ * current day (in its timezone). Always-open hours are open at every
+ * instant, explicitly: not through the overnight branch, which a zone whose
+ * clocks skip local midnight would leave a gap in.
+ */
 export function isWithinWorkingHours(workingHours: WorkingHours, now: Date = new Date()): boolean {
+  if (isAlwaysOpen(workingHours)) return true;
   try {
     const zonedNow = toZonedTime(now, workingHours.timezone);
     const dayName = DAY_NAMES[zonedNow.getDay()];
@@ -80,10 +115,7 @@ export function isSameLocalDay(last: Date | null, now: Date, timezone: string): 
   }
 }
 
-/**
- * A mailbox's per-day hours from the organization's default sending hours
- * (Settings → Email → Sending rules): the same window on every chosen day.
- */
+/** Per-day mailbox hours from one weekly window: the same window on every chosen day. */
 export function mailboxHoursFromWeekly(hours: WeeklyHours): WorkingHours {
   const days = Object.fromEntries(
     DAY_NAMES.map((name, index) => [name, { enabled: hours.days.includes(index), from: hours.start, to: hours.end }]),

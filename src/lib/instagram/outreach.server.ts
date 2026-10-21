@@ -4,6 +4,11 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { channelRules } from "@/lib/channels/rules.server";
 import { pickInRange } from "@/lib/channels/rules";
+import {
+  contactedByAutomation,
+  newLeadAllowance,
+  newLeadsToday,
+} from "@/lib/channels/dailyLeadLimit.server";
 import { featureEnabled, isMissingTable } from "@/lib/features/flags.server";
 import { isPlatformConnected } from "@/lib/platform/credentials";
 import {
@@ -11,10 +16,6 @@ import {
   inOrg,
   runInOrganization,
 } from "@/lib/tenancy/scope";
-import {
-  isWithinWorkingHours,
-  mailboxHoursFromWeekly,
-} from "@/lib/outreach/workingHours";
 import { isMigrationControlPaused } from "@/lib/migration/controls";
 import { people } from "@/lib/leads/schema";
 import { outreachRuns } from "@/lib/assistant/schema";
@@ -119,24 +120,28 @@ async function runForOrganization(): Promise<void> {
   await db.execute(sql`update instagram_outreach_queue set status = case when attempted_at is null then 'queued' else 'uncertain' end,
     locked_by = null, locked_until = null, error = case when attempted_at is null then error else 'The sender restarted before delivery was confirmed; no automatic resend' end, updated_at = now()
     where organization_id = ${org} and status in ('resolving','sending') and locked_until < now()`);
-  if (
-    rules.sendingHours &&
-    !isWithinWorkingHours(mailboxHoursFromWeekly(rules.sendingHours), now)
-  )
-    return;
+  // Initial DMs go out at any time of day. With today's new-lead places
+  // used, only people automated outreach already reached may be picked (they
+  // take no place), so they are not stuck behind new ones until the reset.
+  const today = await newLeadsToday(now);
+  const contactedOnly =
+    today.used >= today.limit
+      ? sql` and ${await contactedByAutomation(sql`q.person_id`)}`
+      : sql``;
   const token = randomUUID();
   const job = await db.transaction(async (tx) => {
     const rows = await tx.execute<{
       id: string;
       account_id: string;
-    }>(sql`select q.id,q.account_id from instagram_outreach_queue q
+      person_id: string;
+    }>(sql`select q.id,q.account_id,q.person_id from instagram_outreach_queue q
       join outreach_runs r on r.id=q.run_id and r.organization_id=q.organization_id
       join instagram_accounts a on a.id=q.account_id and a.organization_id=q.organization_id
       where q.organization_id=${org} and q.status='queued' and r.status='running' and r.approved_at is not null and r.approved_by is not null
         and a.status='connected' and (a.outreach_next_send_at is null or a.outreach_next_send_at <= now())
         and (select count(*) from instagram_outreach_queue used where used.organization_id=q.organization_id
           and used.account_id=q.account_id and used.attempted_at>now()-interval '24 hours') < least(${rules.newChatsPerDay},
-            coalesce((r.plan->'limits'->>'instagramNewChatsPerDay')::int,${rules.newChatsPerDay}))
+            coalesce((r.plan->'limits'->>'instagramNewChatsPerDay')::int,${rules.newChatsPerDay}))${contactedOnly}
       order by q.created_at for update of q skip locked limit 1`);
     const row = rows[0];
     if (!row) return null;
@@ -161,6 +166,10 @@ async function runForOrganization(): Promise<void> {
     }>(sql`select count(*)::int as n from instagram_outreach_queue
       where organization_id=${org} and account_id=${account.id} and attempted_at > now()-interval '24 hours'`);
     if (Number(used[0]?.n ?? 0) >= rules.newChatsPerDay) return null;
+    // Not resolved through Unipile while today's new-lead places are used;
+    // the reserve below decides for good.
+    if (!(await newLeadAllowance(tx, { personId: row.person_id, now })).ok)
+      return null;
     const [claimed] = await tx
       .update(instagramOutreachQueue)
       .set({
@@ -200,24 +209,6 @@ async function runForOrganization(): Promise<void> {
         const liveRules = await channelRules("instagram");
         const enabled = await featureEnabled("instagram");
         return db.transaction(async (tx) => {
-          if (
-            liveRules.sendingHours &&
-            !isWithinWorkingHours(
-              mailboxHoursFromWeekly(liveRules.sendingHours),
-              new Date(),
-            )
-          ) {
-            await tx
-              .update(instagramOutreachQueue)
-              .set({
-                status: "queued",
-                lockedBy: null,
-                lockedUntil: null,
-                updatedAt: new Date(),
-              })
-              .where(owned);
-            return false;
-          }
           await tx.execute(
             sql`select pg_advisory_xact_lock(hashtextextended(${`instagram-send:${job.accountId}`},0))`,
           );
@@ -270,10 +261,13 @@ async function runForOrganization(): Promise<void> {
             liveRules.newChatsPerDay,
             rows[0]?.approved_limit ?? liveRules.newChatsPerDay,
           );
+          // The daily lead limit's place is taken last, under the
+          // organization's lock, and held by the 'sending' row written below.
           if (
             Number(used[0]?.n ?? 0) >= cap ||
             (account?.outreachNextSendAt &&
-              account.outreachNextSendAt > new Date())
+              account.outreachNextSendAt > new Date()) ||
+            !(await newLeadAllowance(tx, { personId: job.personId })).ok
           ) {
             await tx
               .update(instagramOutreachQueue)

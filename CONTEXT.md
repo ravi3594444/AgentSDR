@@ -105,6 +105,20 @@ word means here and, where it matters, what it does not mean.
   records against the owner's monthly limit, reserved at a collection's
   most before it starts; the count is "estimated" because the API does not
   report the account's balance. It never tops up or upgrades the account.
+- **Daily lead limit**: the one sending setting, "Maximum new leads to
+  contact per day" (`general.newLeadsPerDay`): how many people the
+  workspace may contact for the first time on its day, across every
+  channel. A person counts once, when their first automated message is
+  claimed; follow-ups, replies and messages sent by hand do not count.
+- **New lead**: a person with no automated outreach claim on any channel
+  before today. Counted from the engines' own claim rows; an uncertain
+  claim stays counted, a definite failure frees its place.
+- **Always on**: sending has no hours or days. A mailbox's `working_hours`
+  is always open, and its time zone only marks the day its daily counter
+  resets on.
+- **Pacing**: each sender's own automatic limits (emails a day per
+  mailbox, gaps, LinkedIn invitations and runs, WhatsApp warm-up and new
+  chats per number, Instagram DMs per account). No settings page.
 
 ## Background work
 
@@ -113,7 +127,7 @@ word means here and, where it matters, what it does not mean.
 - **Claim**: a worker's hold on a job (`locked_by` plus `heartbeat_at`). A
   claim older than three minutes counts as stale and can be taken over.
 - **Waiting**: a job that is queued with a `run_after` and a recorded reason,
-  such as a provider slot, a quota reset or sending hours. Waiting is not
+  such as a provider slot, a quota reset or the daily lead limit. Waiting is not
   running and not failed.
 - **Report key**: the idempotency key of an objective's or job's terminal
   report. It ensures one report per outcome, even after duplicate callbacks

@@ -219,7 +219,6 @@ async function fixture(
       {
         newChatsPerDay: opts.ruleCap ?? 10,
         sendGapMinutes: [1, 1],
-        sendingHours: null,
       },
     ],
   );
@@ -305,7 +304,7 @@ async function chatFixture(name: string, autonomous = false, role = "owner") {
   );
   await pg.query(
     "insert into channel_settings(organization_id,channel,values) values($1,'instagram',$2)",
-    [org, { newChatsPerDay: 10, sendGapMinutes: [1, 1], sendingHours: null }],
+    [org, { newChatsPerDay: 10, sendGapMinutes: [1, 1] }],
   );
   await pg.query(
     "insert into instagram_accounts(id,organization_id,unipile_account_id,username,status) values($1,$2,$3,'sender','connected')",
@@ -683,29 +682,44 @@ try {
   assert.equal((await gap.status()).status, "queued");
   await gap.finish();
 
-  const hours = await fixture("hours_change");
-  const beforeHours = posts;
+  // Initial DMs go out at any time; the daily lead limit is decided again
+  // when the DM is reserved. Here another new person takes today's last
+  // place while the recipient resolves: nothing is sent and the DM waits.
+  const limited = await fixture("daily_lead_limit_change");
+  const beforeLimit = posts;
   resolveHook = async () => {
-    await hours.scope(() =>
-      saveChannelRules(
-        "instagram",
-        {
-          sendingHours: {
-            timezone: "UTC",
-            days: [(new Date().getUTCDay() + 1) % 7],
-            start: "00:00",
-            end: "23:59",
-          },
-        },
-        null,
-      ),
+    await limited.scope(() =>
+      saveChannelRules("general", { newLeadsPerDay: 1 }, null),
+    );
+    const other = crypto.randomUUID();
+    await pg.query(
+      "insert into people(id,organization_id,full_name,raw,source) values($1,$2,'Another new lead','{}','fixture')",
+      [other, limited.org],
+    );
+    await pg.query(
+      "insert into instagram_outreach_queue(organization_id,run_id,person_id,account_id,username,body,status,attempted_at,sent_at) values($1,$2,$3,$4,'another_lead','Hello','sent',now(),now())",
+      [limited.org, limited.run, other, limited.account],
     );
   };
+  const limitedStatus = async () =>
+    (
+      await pg.query(
+        "select status from instagram_outreach_queue where run_id=$1 and person_id=$2",
+        [limited.run, limited.person],
+      )
+    ).rows[0]?.status;
   await runInstagramOutreachTick();
   resolveHook = null;
-  assert.equal(posts, beforeHours);
-  assert.equal((await hours.status()).status, "queued");
-  await hours.finish();
+  assert.equal(posts, beforeLimit);
+  assert.equal(await limitedStatus(), "queued");
+  // With a place free again, the same DM goes out once.
+  await limited.scope(() =>
+    saveChannelRules("general", { newLeadsPerDay: 2 }, null),
+  );
+  await runInstagramOutreachTick();
+  assert.equal(posts, beforeLimit + 1);
+  assert.equal(await limitedStatus(), "sent");
+  await limited.finish();
 
   for (const mode of ["approved_cap", "organization_cap"]) {
     const f = await fixture(mode, {

@@ -4,8 +4,6 @@ import { and, eq, inArray, or, sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { getByokSettings } from "@/lib/ai/byok";
 import { AUTOPILOT_LIMITS } from "@/lib/crm/autopilot";
-import { channelRules } from "@/lib/channels/rules.server";
-import { describeOpening, describeWeeklyHours, sendingWindow } from "@/lib/channels/sendingWindow";
 import { isMigrationControlPaused } from "@/lib/migration/controls";
 import { mailboxProviderConnected } from "@/lib/outreach/mailboxProviders";
 import { mailboxes } from "@/lib/outreach/schema";
@@ -258,7 +256,7 @@ export async function results(kind: PeriodKind, now = new Date(), scope: Results
 
   // Limits now.
   const dayStart = periodFor("today", period.timeZone, now).from!;
-  const [autopilotUsed, mailboxRows, emailQueue, researchToday, byok, whatsappRules, whatsappSenders, googleConnected, unipileConnected] = await Promise.all([
+  const [autopilotUsed, mailboxRows, emailQueue, researchToday, byok, whatsappSenders, googleConnected, unipileConnected] = await Promise.all([
     one(sql`SELECT count(*)::int AS n FROM autopilot_replies WHERE organization_id = ${org} AND status IN ('reserved', 'sent', 'failed') AND created_at >= ${ts(new Date(now.getTime() - 24 * 3_600_000))}`),
     db.select().from(mailboxes).where(inOrg(mailboxes)),
     rows(sql`SELECT q.mailbox_id, count(*)::int AS n FROM outreach_mailbox_queue q
@@ -266,7 +264,6 @@ export async function results(kind: PeriodKind, now = new Date(), scope: Results
       WHERE c.organization_id=${org} AND c.status='active' GROUP BY q.mailbox_id`),
     one(sql`SELECT count(*)::int AS n FROM lead_research WHERE organization_id = ${org} AND created_at >= ${ts(dayStart)}`).catch(() => null),
     getByokSettings().catch(() => null),
-    channelRules("whatsapp"),
     one(sql`SELECT count(DISTINCT a.id)::int AS n FROM whatsapp_accounts a
       JOIN whatsapp_campaign_accounts ca ON ca.account_id=a.id JOIN whatsapp_campaigns c ON c.id=ca.campaign_id
       WHERE a.organization_id=${org} AND c.organization_id=${org} AND a.status='connected' AND a.unipile_account_id<>''
@@ -282,26 +279,23 @@ export async function results(kind: PeriodKind, now = new Date(), scope: Results
     providerConnected: row.provider === "google" ? googleConnected : unipileConnected,
   })), { now, paused: isMigrationControlPaused("emailOutbound") });
 
-  // The snapshot measures connection and campaign windows; the worker still
-  // checks due leads, per-account gaps, warm-up and new-chat limits before POST.
+  // The snapshot measures connection and campaigns (campaigns send at any
+  // time of day); the worker still checks due leads, per-account gaps,
+  // warm-up, new-chat limits and the daily lead limit before POST.
   const whatsappQueued = nowCounts.stillToSend.whatsapp;
-  const whatsappHours = whatsappRules.sendingHours;
-  const whatsappWindow = sendingWindow(whatsappHours, now);
   const whatsappBlockedBy: ChannelSending["blockedBy"] = isMigrationControlPaused("whatsappOutbound")
     ? "paused"
     : !unipileConnected || !n(whatsappSenders.n)
       ? "no_sender"
-      : !whatsappWindow.open
-        ? "outside_hours"
-        : whatsappQueued <= 0
-          ? "nothing_queued"
-          : null;
+      : whatsappQueued <= 0
+        ? "nothing_queued"
+        : null;
   const whatsappSending: ChannelSending = {
     open: whatsappBlockedBy === null,
     blockedBy: whatsappBlockedBy,
-    nextOpenAt: whatsappWindow.opensAt?.toISOString() ?? null,
-    nextOpenLabel: whatsappWindow.opensAt && whatsappHours ? describeOpening(whatsappWindow.opensAt, whatsappHours.timezone) : null,
-    hours: describeWeeklyHours(whatsappHours),
+    nextOpenAt: null,
+    nextOpenLabel: null,
+    hours: null,
     queued: whatsappQueued,
     detail: "the sender still checks due times, account gaps, warm-up and new-chat limits",
   };

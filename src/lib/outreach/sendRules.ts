@@ -3,6 +3,14 @@ import { isSameLocalDay } from "./workingHours";
 
 /** Pure rules of the email send tick (scheduler.ts), unit-tested on their own. */
 
+/**
+ * The error a step claim (outreach_emails row) gets when Person-global Do
+ * Not Contact stops it before the provider is called: a definite non-send,
+ * so the daily lead limit does not count it (dailyLeadLimit.server.ts). Every
+ * other failed claim may have been delivered and stays counted.
+ */
+export const EMAIL_DNC_BLOCKED_ERROR = "Blocked by Person-global Do Not Contact policy before provider submission";
+
 /** True when the mailbox has already sent its daily limit today (in its own timezone). */
 export function mailboxAtDailyLimit(
   mailbox: { todayEmailsSent: number; dailySendLimit: number; sendCounterResetAt: Date | null; workingHours: Pick<WorkingHours, "timezone"> },

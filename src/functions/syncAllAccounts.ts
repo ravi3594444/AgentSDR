@@ -4,12 +4,6 @@ import { db } from "@/lib/db";
 import { linkedInAccounts } from "@/lib/linkedin/schema";
 import { getLinkedInAccounts, getProfile } from "@/services/unipile.service";
 import { serializeError } from "@/lib/linkedin/serializeError";
-import {
-  DEFAULT_WORK_DAYS,
-  DEFAULT_WORK_END,
-  DEFAULT_WORK_START,
-  DEFAULT_WORK_TIMEZONE,
-} from "@/lib/linkedin/workingHours";
 import { currentOrganizationId, inOrg, maybeCurrentOrganizationId, runInOrganization } from "@/lib/tenancy/scope";
 import { unipileOrganizationIds } from "@/lib/linkedin/organizations.server";
 
@@ -97,7 +91,8 @@ const syncOrganizationAccounts = async (): Promise<void> => {
       savedId = existing.id;
     } else {
       // updatedAt has no database default (Prisma set it client-side), so an
-      // INSERT must supply it explicitly or it violates NOT NULL.
+      // INSERT must supply it explicitly or it violates NOT NULL. No working
+      // hours: an account works at any time.
       const [created] = await db
         .insert(linkedInAccounts)
         .values({
@@ -106,10 +101,6 @@ const syncOrganizationAccounts = async (): Promise<void> => {
           name: acc.name,
           username: acc.username,
           status,
-          workTimezone: DEFAULT_WORK_TIMEZONE,
-          workStartTime: DEFAULT_WORK_START,
-          workEndTime: DEFAULT_WORK_END,
-          workDays: DEFAULT_WORK_DAYS,
           updatedAt: new Date(),
         })
         .returning({ id: linkedInAccounts.id });

@@ -1,19 +1,17 @@
 import type { ReactNode } from "react";
-import { ChannelRulesForm } from "@/components/settings/ChannelRulesForm";
 import { ComingSoonCard, PlatformConnection, type ComingSoonConnection } from "@/components/settings/PlatformConnection";
 import { SettingsPage } from "@/components/settings/SettingsPage";
-import { can, requirePageOrgContext } from "@/lib/auth/context";
-import type { Channel } from "@/lib/channels/rules";
-import { channelRulesForSettings } from "@/lib/channels/rules.server";
+import { requirePageOrgContext } from "@/lib/auth/context";
 import type { PlatformKey } from "@/lib/platform/catalog";
 import { listPlatformStatus } from "@/lib/platform/credentials";
 import { runInOrganization } from "@/lib/tenancy/scope";
 
 /**
- * The two kinds of page every channel section in Settings has besides its
- * accounts list: Connection (the platform integrations it runs on, one card
- * each) and Sending rules (src/lib/channels/rules.ts). Each route under /settings is a
- * one-line use of these, plus its @modal/(.)settings twin.
+ * The page every channel section in Settings has besides its accounts list:
+ * Connection, the platform integrations it runs on, one card each. Each
+ * route under /settings is a one-line use of it, plus its @modal/(.)settings
+ * twin. Channels have no sending-rules page: their pacing is automatic, and
+ * the one sending setting is the daily lead limit (/settings/sending).
  */
 
 export async function ConnectionSettingsPage({
@@ -44,16 +42,6 @@ export async function ConnectionSettingsPage({
         ))}
         {children}
       </div>
-    </SettingsPage>
-  );
-}
-
-export async function RulesSettingsPage({ channel, title, description }: { channel: Channel; title: string; description: string }) {
-  const ctx = await requirePageOrgContext();
-  const { values } = await runInOrganization(ctx.organizationId, () => channelRulesForSettings(channel));
-  return (
-    <SettingsPage title={title} description={description} width="narrow">
-      <ChannelRulesForm channel={channel} initialValues={values} canEdit={can(ctx, { integrations: ["manage"] })} />
     </SettingsPage>
   );
 }

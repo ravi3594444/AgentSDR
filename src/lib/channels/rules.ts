@@ -1,13 +1,23 @@
 /**
  * Sending rules: the numbers that used to be hardcoded in the sending
- * engines, now set per organization in Settings → Sending & automation (a page per channel, plus Sending defaults and Lead research for the "general" ones).
+ * engines, set per organization and read by them through `channelRules()`
+ * (rules.server.ts).
+ *
+ * Sending is always on: no channel has sending hours or days, and the one
+ * sending input a person sees is the "general" rule `newLeadsPerDay`, the
+ * workspace-wide daily lead limit (Settings → Daily lead limit, enforced by
+ * dailyLeadLimit.server.ts). The per-channel pacing below (emails per
+ * mailbox, gaps, LinkedIn invitations and runs, WhatsApp warm-up and new
+ * chats per number, Instagram DMs per account) is applied automatically and
+ * has no settings page; a value an organization stored earlier keeps
+ * applying. The other "general" rules are shown on Your business (the day
+ * and phone numbers) and Lead research (a request's defaults), or hidden
+ * (the Autonomous caps, still enforced): GENERAL_RULE_PAGES.
  *
  * Every rule is declared once here — label, help, default, unit and the
- * bounds it may take — and the settings page is generated from it, the API
- * validates against it, and the engines read resolved values through
- * `channelRules()` (rules.server.ts). Today's behaviour is each rule's
- * default, so an organization that never opens the page behaves exactly as
- * before.
+ * bounds it may take — and a settings form is generated from it, the API
+ * validates against it. Today's behaviour is each rule's default, so an
+ * organization that never changed one behaves exactly as before.
  *
  * Two bounds per rule:
  *  - min / max: hard limits. A value outside them is refused, so a typo
@@ -15,7 +25,7 @@
  *  - safe: the edge of what the platforms tolerate. Beyond it the page
  *    shows the rule's `warning` but still saves.
  *
- * Some rules can be overridden per connected account (a mailbox's daily
+ * Some rules are overridden per connected account (a mailbox's daily
  * limit, a LinkedIn account's invitations, a WhatsApp number's new chats);
  * `override` says where. Resolution: account override → organization rule →
  * default.
@@ -28,15 +38,21 @@ import { resolveTimeZone } from "@/lib/timeZone";
 export const CHANNELS = ["email", "linkedin", "whatsapp", "instagram", "general"] as const;
 export type Channel = (typeof CHANNELS)[number];
 
-export type WeeklyHours = {
-  /** IANA time zone, e.g. Asia/Kolkata. */
-  timezone: string;
-  /** 0 = Sunday … 6 = Saturday. */
-  days: number[];
-  /** "HH:mm", 24-hour. */
-  start: string;
-  end: string;
+/**
+ * Rules that no longer exist: each channel's sending hours. A save naming
+ * one is refused with RETIRED_RULE_ERROR, a stored copy is ignored when read
+ * and dropped by the next save (db/migrations/20261022-always-on-sending.sql
+ * strips the stored ones).
+ */
+export const RETIRED_RULE_KEYS: Record<Channel, readonly string[]> = {
+  email: ["sendingHours"],
+  linkedin: ["workingHours"],
+  whatsapp: ["sendingHours"],
+  instagram: ["sendingHours"],
+  general: [],
 };
+
+export const RETIRED_RULE_ERROR = "Sending hours were removed: sending is always on, any time, every day. The daily lead limit is the one sending setting.";
 
 type Common = {
   key: string;
@@ -67,13 +83,6 @@ export type RangeRule = Common & {
   warning?: string;
 };
 
-export type HoursRule = Common & {
-  kind: "hours";
-  default: WeeklyHours | null;
-  /** May be null, meaning "any time". */
-  optional?: boolean;
-};
-
 export type CountryRule = Common & { kind: "country"; default: string };
 
 /** An IANA time zone, stored under its current name (src/lib/timeZone.ts). */
@@ -82,7 +91,7 @@ export type TimeZoneRule = Common & { kind: "timezone"; default: string };
 /** A time of day, "HH:mm", 24-hour. */
 export type ClockRule = Common & { kind: "time"; default: string };
 
-export type Rule = NumberRule | RangeRule | HoursRule | CountryRule | TimeZoneRule | ClockRule;
+export type Rule = NumberRule | RangeRule | CountryRule | TimeZoneRule | ClockRule;
 
 export const CHANNEL_RULES = {
   email: [
@@ -97,7 +106,7 @@ export const CHANNEL_RULES = {
       max: 200,
       safe: { above: 50 },
       warning: "Above about 50 a day from one Google Workspace mailbox, deliverability usually drops and Google may throttle it.",
-      override: "Each mailbox can set its own limit in Email → Accounts.",
+      override: "Each mailbox keeps the limit it was connected with.",
     },
     {
       key: "sendGapMinutes",
@@ -110,13 +119,6 @@ export const CHANNEL_RULES = {
       max: 240,
       safe: { below: 10 },
       warning: "Sending more often than every 10 minutes from one mailbox looks automated to spam filters.",
-    },
-    {
-      key: "sendingHours",
-      kind: "hours",
-      label: "Sending hours for new mailboxes",
-      help: "When a newly connected mailbox may send. Each mailbox can change its own hours in Email → Accounts.",
-      default: { timezone: "Asia/Kolkata", days: [1, 2, 3, 4, 5], start: "09:00", end: "18:00" },
     },
   ],
   linkedin: [
@@ -131,7 +133,7 @@ export const CHANNEL_RULES = {
       max: 100,
       safe: { above: 30 },
       warning: "LinkedIn restricts accounts that send much more than 30 invitations a day.",
-      override: "Each account can set its own limit in LinkedIn → Accounts.",
+      override: "An account's own limit, when it has one, wins.",
     },
     {
       key: "invitesPerDayFree",
@@ -144,7 +146,7 @@ export const CHANNEL_RULES = {
       max: 50,
       safe: { above: 10 },
       warning: "Free accounts have a much smaller weekly invitation allowance; more than 10 a day uses it up fast.",
-      override: "Each account can set its own limit in LinkedIn → Accounts.",
+      override: "An account's own limit, when it has one, wins.",
     },
     {
       key: "invitesPerRun",
@@ -218,24 +220,8 @@ export const CHANNEL_RULES = {
       safe: { above: 1000 },
       warning: "Heavy searching is one of the faster ways to have an account limited.",
     },
-    {
-      key: "workingHours",
-      kind: "hours",
-      label: "Working hours for accounts without their own",
-      help: "Any time unless you set hours here. An account's own working hours (LinkedIn → Accounts) always win.",
-      default: null,
-      optional: true,
-    },
   ],
   whatsapp: [
-    {
-      key: "sendingHours",
-      kind: "hours",
-      label: "Sending hours for campaigns",
-      help: "Any time unless you set hours here. Campaign messages only go out inside these hours; messages you send yourself are not affected.",
-      default: null,
-      optional: true,
-    },
     {
       key: "warmupHours",
       kind: "number",
@@ -259,7 +245,7 @@ export const CHANNEL_RULES = {
       max: 200,
       safe: { above: 25 },
       warning: "WhatsApp bans numbers that start many chats with people who don't have them saved.",
-      override: "Each number can set its own limit in WhatsApp → Accounts.",
+      override: "A number's own limit, when it has one, wins.",
     },
     {
       key: "secondsBetweenSends",
@@ -277,11 +263,10 @@ export const CHANNEL_RULES = {
   instagram: [
     { key: "newChatsPerDay", kind: "number", label: "New conversations per account", help: "Initial outreach DMs one connected Instagram account may attempt in a rolling 24 hours. Replies use the run's reply limits.", unit: "new chats / 24 hours", default: 10, min: 1, max: 100 },
     { key: "sendGapMinutes", kind: "range", label: "Time between initial DMs", help: "Wait between initial outreach messages from the same account.", unit: "minutes", default: [5, 10], min: 1, max: 1440 },
-    { key: "sendingHours", kind: "hours", label: "Sending hours", help: "Initial DMs wait outside these hours. The time zone is explicit; replies follow their run's controls.", default: { timezone: "UTC", days: [1, 2, 3, 4, 5], start: "09:00", end: "17:00" }, optional: true },
   ],
   general: [
     {
-      // Read by the daily rollover (src/lib/scheduler/dailyRollover.ts).
+      // Read by the daily rollover (src/lib/scheduler/dailyRollover.ts) and the daily lead limit (dailyLeadLimit.server.ts).
       key: "timeZone",
       kind: "timezone",
       label: "Time zone",
@@ -292,7 +277,7 @@ export const CHANNEL_RULES = {
       key: "dayStartsAt",
       kind: "time",
       label: "New day starts at",
-      help: "Daily limits reset and the day's email queue is built at this time.",
+      help: "The daily lead limit and other daily limits reset, and the day's email queue is built, at this time.",
       default: "00:00",
     },
     {
@@ -301,6 +286,20 @@ export const CHANNEL_RULES = {
       label: "Default phone country",
       help: "The country assumed for phone numbers typed or imported without a + and country code.",
       default: "",
+    },
+    {
+      // The one sending input a person sees (Settings → Daily lead limit). Enforced in each
+      // engine's first-touch claim by newLeadAllowance (src/lib/channels/dailyLeadLimit.server.ts).
+      key: "newLeadsPerDay",
+      kind: "number",
+      label: "Maximum new leads to contact per day",
+      help: "People contacted for the first time, across email, LinkedIn, WhatsApp and Instagram together. A person counts once, when the first automated message to them starts sending; someone already contacted on any channel does not count again. Follow-ups, replies and messages you send yourself do not count. Each sender's own pacing still applies on top.",
+      unit: "new leads / day",
+      default: 50,
+      min: 1,
+      max: 1_000,
+      safe: { above: 200 },
+      warning: "Contacting more than about 200 new people a day risks your mailboxes, LinkedIn accounts and WhatsApp numbers being flagged as spam.",
     },
     {
       // Read by the assistant's Autonomous mode (src/lib/assistant/autonomy.server.ts).
@@ -383,8 +382,6 @@ export const CHANNEL_RULES = {
 /** The resolved, typed values of one channel's rules. */
 type ValueOf<R> = R extends { kind: "number" } ? number
   : R extends { kind: "range" } ? [number, number]
-  : R extends { kind: "hours"; optional: true } ? WeeklyHours | null
-  : R extends { kind: "hours" } ? WeeklyHours
   : R extends { kind: "country" } ? string
   : R extends { kind: "timezone" } ? string
   : R extends { kind: "time" } ? string
@@ -402,15 +399,20 @@ export function rulesOf(channel: Channel): readonly Rule[] {
 }
 
 /**
- * The "general" rules are shown on two settings pages: the organization's
- * day, phone numbers and Autonomous caps on Sending defaults
- * (/settings/sending), and a request's research defaults on Lead research
- * (/settings/research). Storage stays one row per organization and channel.
- * Every general rule is on exactly one of them (rules.test.ts).
+ * Where the "general" rules are shown: the daily lead limit alone on
+ * Settings → Daily lead limit (/settings/sending), the organization's day
+ * and phone numbers on Your business (/settings/business), a request's
+ * research defaults on Lead research (/settings/research). The Autonomous
+ * caps are hidden: no page shows them, and they keep their stored or
+ * default values in autonomy.server.ts. Storage stays one row per
+ * organization and channel. Every general rule is in exactly one entry
+ * (rules.test.ts).
  */
 export const GENERAL_RULE_PAGES = {
-  sending: ["timeZone", "dayStartsAt", "defaultPhoneCountry", "autonomousRunsPerDay", "autonomousLeadsPerDay", "autonomousSearchesPerDay"],
+  sending: ["newLeadsPerDay"],
+  business: ["timeZone", "dayStartsAt", "defaultPhoneCountry"],
   research: ["objectiveLeadTarget", "objectiveHours", "objectiveSpendUsd"],
+  hidden: ["autonomousRunsPerDay", "autonomousLeadsPerDay", "autonomousSearchesPerDay"],
 } as const satisfies Record<string, readonly (keyof ChannelRuleValues<"general">)[]>;
 
 /** The rules a form shows: all of the channel's, or only `keys`, in registry order. An unknown key throws. */
@@ -435,10 +437,13 @@ export function ruleSubmission(rules: readonly Rule[], values: Record<string, un
  * The stored row after saving `values` (already validated): each submitted
  * rule replaces its stored value, or is dropped when it equals the default
  * (so an improved default reaches everyone who never changed it); rules not
- * submitted keep what is stored.
+ * submitted keep what is stored. A retired rule's stored copy is dropped; a
+ * key this version does not know at all is kept, since a newer release
+ * (during a rolling deploy) may have written it.
  */
 export function mergeStoredRules(channel: Channel, stored: Record<string, unknown>, values: Record<string, unknown>): Record<string, unknown> {
   const next: Record<string, unknown> = { ...stored };
+  for (const key of RETIRED_RULE_KEYS[channel]) delete next[key];
   for (const rule of rulesOf(channel)) {
     if (!(rule.key in values)) continue;
     const value = values[rule.key];
@@ -488,20 +493,6 @@ export function ruleError(rule: Rule, value: unknown): string | null {
       if (lo > hi) return `${rule.label}: the lowest value can't be above the highest`;
       return null;
     }
-    case "hours": {
-      if (value === null && rule.optional) return null;
-      const h = value as Partial<WeeklyHours> | null;
-      if (!h || typeof h !== "object") return `${rule.label} is not valid`;
-      if (typeof h.timezone !== "string" || !isTimeZone(h.timezone)) return `${rule.label}: unknown time zone`;
-      if (!Array.isArray(h.days) || !h.days.length || !h.days.every((d) => Number.isInteger(d) && d >= 0 && d <= 6)) {
-        return `${rule.label}: pick at least one day`;
-      }
-      if (typeof h.start !== "string" || !HHMM.test(h.start) || typeof h.end !== "string" || !HHMM.test(h.end)) {
-        return `${rule.label}: times must look like 09:00`;
-      }
-      if (h.start >= h.end) return `${rule.label}: the end must be after the start`;
-      return null;
-    }
     case "country": {
       if (value === "") return null;
       if (typeof value !== "string" || !COUNTRY.test(value)) return `${rule.label} must be a two-letter country code, like IN or US`;
@@ -517,10 +508,6 @@ export function ruleError(rule: Rule, value: unknown): string | null {
 /** A valid value in its stored form: time zones under their current IANA name. */
 function normalize(rule: Rule, value: unknown): unknown {
   if (rule.kind === "timezone") return resolveTimeZone(value as string);
-  if (rule.kind === "hours" && value !== null) {
-    const h = value as WeeklyHours;
-    return { ...h, days: [...new Set(h.days)].sort((a, b) => a - b) };
-  }
   return value;
 }
 
@@ -553,6 +540,7 @@ export function validateValues(channel: Channel, input: Record<string, unknown>)
   const values: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(input)) {
     const rule = known.get(key);
+    if (!rule && RETIRED_RULE_KEYS[channel].includes(key)) return { ok: false, error: RETIRED_RULE_ERROR };
     if (!rule) return { ok: false, error: `Unknown setting: ${key}` };
     const error = ruleError(rule, value);
     if (error) return { ok: false, error };

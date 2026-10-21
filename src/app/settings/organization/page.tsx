@@ -5,7 +5,7 @@ import { withQuery } from "@/lib/nav/legacyRoutes";
 export const dynamic = "force-dynamic";
 
 // The old General page was split up: name, URL and the business profile are on
-// Your business (here), the day and Autonomous caps on Sending defaults, research
+// Your business (here, with the day and phone country), research
 // defaults, TinyFish and sources on Lead research, and optional features and
 // providers on Providers & features. Old links keep their query.
 export default async function OldOrganizationSettingsPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {

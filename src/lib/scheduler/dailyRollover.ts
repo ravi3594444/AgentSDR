@@ -18,7 +18,7 @@ import { latestDailySlot } from "./slots";
 
 /**
  * The daily rollover: once per organization, at the start of that
- * organization's day (Settings → Sending defaults → Time zone and New day starts
+ * organization's day (Settings → Your business → Time zone and New day starts
  * at, stored with the other organization defaults in channel_settings), it
  *
  *   a. builds the organization's email send queues (buildQueue.ts),

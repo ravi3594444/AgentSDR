@@ -3,10 +3,10 @@
  * local database:
  * - who authorized each plan (Start, a request approval, Autonomous mode,
  *   or not started at all);
- * - each WhatsApp number's configured time zone, the gate holding it and the
- *   earliest time it may send (outside hours, the rolling new-chat limit
- *   counted across every campaign on the number), its used / limit /
- *   available line and why the campaign sender last held it back;
+ * - each WhatsApp number, sending at any time (no hours, no invented time
+ *   zone), the gate holding it and the earliest time it may send (the
+ *   rolling new-chat limit counted across every campaign on the number), its
+ *   used / limit / available line and why the campaign sender last held it back;
  * - each LinkedIn account's rest between runs to the second, the next
  *   scheduled check, its invitation limit and hours, and when the
  *   invitation-limit flag is cleared, in the organization's time zone;
@@ -27,7 +27,6 @@
  */
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
-import { fromZonedTime, toZonedTime } from "date-fns-tz";
 
 if (!/@(localhost|127\.0\.0\.1)[:/]/.test(process.env.DATABASE_URL ?? "")) {
   console.error("Refusing to run: DATABASE_URL must point at a local, disposable database.");
@@ -72,21 +71,15 @@ async function organization(label: string) {
 const a = await organization("a");
 const b = await organization("b");
 
-// A sending window that is closed right now: two to three hours from now, in India.
 const now = new Date();
-const indiaHour = toZonedTime(now, "Asia/Kolkata").getHours();
-const pad = (hour: number) => `${String(hour % 24).padStart(2, "0")}:00`;
-const hours = { timezone: "Asia/Kolkata", days: [0, 1, 2, 3, 4, 5, 6], start: pad(indiaHour + 2), end: pad(indiaHour + 3) };
-const zoned = toZonedTime(now, "Asia/Kolkata");
-const opens = new Date(zoned);
-opens.setHours(indiaHour + 2, 0, 0, 0); // rolls over to tomorrow past midnight
-const expectedOpen = fromZonedTime(opens, "Asia/Kolkata").toISOString();
 
 const seeded = await runInOrganization(a.org.id, async () => {
   // A stand-in Unipile connection, stored before anything reads it (so no cache to wait out). Nothing calls it.
   const [provider] = await db.insert(gridProviders).values({ organizationId: a.org.id, key: "platform-unipile", name: "Unipile (delivery check)" }).returning();
   await db.insert(gridProviderCredentials).values({ providerId: provider!.id, encryptedPayload: encryptIntegrationCredentials({ apiKey: "delivery-check", dsn: "https://unipile.invalid" }) });
-  await saveChannelRules("whatsapp", { sendingHours: hours }, a.owner.id);
+  // Sending hours are gone: a save that still names them is refused, and nothing is stored.
+  const refusedHours = await saveChannelRules("whatsapp", { sendingHours: { timezone: "Asia/Kolkata", days: [1], start: "09:00", end: "10:00" } }, a.owner.id).then(() => null, (error: Error) => error.message);
+  if (!refusedHours || !/always on/.test(refusedHours)) throw new Error(`a save naming sending hours was not refused: ${refusedHours}`);
   // The organization's own time zone and new day: the panel writes its times in it.
   await saveChannelRules("general", { timeZone: "Asia/Kolkata", dayStartsAt: "05:30" }, a.owner.id);
   const [account] = await db.insert(whatsappAccounts).values({ organizationId: a.org.id, unipileAccountId: `delivery-check-${stamp}`, name: "Sales number", phone: "+919800000099", status: "connected", connectedAt: new Date(now.getTime() - 3 * 86_400_000) }).returning();
@@ -139,8 +132,7 @@ const seeded = await runInOrganization(a.org.id, async () => {
 await runInOrganization(a.org.id, async () => {
   const diagnostics = await diagnoseDelivery(seeded.started.id);
   const sender = diagnostics.senders.find((entry) => entry.channel === "whatsapp");
-  check("the plan's number is listed with its configured time zone", sender?.account === "+919800000099" && sender.timezone === "Asia/Kolkata", JSON.stringify(sender));
-  check("outside its hours it says so and names when the window opens", sender?.gates.join() === "Outside campaign sending hours (Asia/Kolkata)" && sender.nextAt === expectedOpen, `${sender?.gates.join("; ")} next ${sender?.nextAt} (expected ${expectedOpen})`);
+  check("the plan's number is listed, sending at any time: no time zone is invented and nothing is holding it", sender?.account === "+919800000099" && sender.timezone === null && sender.gates.length === 0 && sender.nextAt === null, JSON.stringify(sender));
   check("its two leads are counted as waiting", sender?.queued === 2);
   check("the summary never infers a time zone from leads", /Lead cities do not determine/.test(diagnostics.summary) && /Asia\/Kolkata/.test(diagnostics.summary));
   check("a WhatsApp plan lists no mailbox or Instagram account it does not send from", diagnostics.senders.every((entry) => entry.channel === "whatsapp"), diagnostics.senders.map((entry) => `${entry.channel} ${entry.account}`).join("; "));
@@ -162,9 +154,6 @@ await runInOrganization(a.org.id, async () => {
   check("the organization's own snapshot still lists every mailbox and Instagram account", everySender.some((entry) => entry.channel === "email" && entry.account === seeded.mailbox.emailAddress) && everySender.some((entry) => entry.channel === "instagram" && entry.account === `@${seeded.instagram.username}`), everySender.map((entry) => `${entry.channel} ${entry.account}`).join("; "));
   check("…in its summary too", names(organizationWide.summary).mailbox && names(organizationWide.summary).instagram, organizationWide.summary);
 
-  await saveChannelRules("whatsapp", { sendingHours: null }, a.owner.id);
-  const anyTime = (await diagnoseDelivery(seeded.started.id)).senders.find((entry) => entry.channel === "whatsapp");
-  check("with no hours set: no time zone is invented and nothing is holding it", anyTime?.timezone === null && anyTime.gates.length === 0 && anyTime.nextAt === null, JSON.stringify(anyTime));
 
   // The first lead got a message: a chat this number started, delivered as WhatsApp reported.
   const [lead1, lead2] = seeded.leads;

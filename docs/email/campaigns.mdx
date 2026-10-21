@@ -4,7 +4,7 @@ description: "Build a multi-step email sequence, add leads, launch it, and see h
 icon: "send"
 ---
 
-An email campaign sends a sequence of emails to a list of leads from your connected mailboxes. It sends slowly and inside working hours, and it stops for a lead as soon as that person replies, bounces or unsubscribes. You find campaigns under **Email → Campaigns**, on a page titled **Send campaigns**.
+An email campaign sends a sequence of emails to a list of leads from your connected mailboxes. It sends slowly, at any time of day, and it stops for a lead as soon as that person replies, bounces or unsubscribes. You find campaigns under **Email → Campaigns**, on a page titled **Send campaigns**.
 
 <Frame caption="Summary figures on top, then one row per campaign with its status.">
   <img src="/assets/screenshots/app/email-campaigns.png" alt="The Send campaigns page with summary figures and a list of campaigns showing status, leads, sent, replies and last send" />
@@ -77,8 +77,8 @@ Sending is deliberately slow and spread out.
 
 - **Mailboxes are one shared pool.** A campaign does not pick mailboxes. Every connected mailbox in your organization can send for any active campaign. New leads are shared across mailboxes in turn, and a lead then stays with the mailbox that sent its first email, so follow-ups come from the same address.
 - **A queue is built once a day.** Each mailbox's queue for the day is filled first with follow-ups that are due (most overdue first), then with new leads, up to its daily limit. The daily counters also reset at that point.
-- **Then emails go out one at a time.** About once a minute, each mailbox with queued leads sends one email, if it is outside its random gap (18 to 24 minutes by default) and inside its [sending hours](/email/connect).
-- **Limits come from your rules.** Daily limits, gaps and hours are set in [Sending rules](/workspace/sending-rules).
+- **Then emails go out one at a time.** About once a minute, each mailbox with queued leads sends one email, if it is outside its random gap (18 to 24 minutes by default). Mailboxes send at any time of day.
+- **Limits are automatic, and one is yours.** Each mailbox's daily limit and gap are applied automatically; a first email to someone no channel has contacted before also takes a place under your workspace's [daily lead limit](/workspace/sending-rules).
 
 <Note>
 Because the queue is built once a day, a campaign launched mid-day may not send until the next build. The build runs from a scheduled job inside the app, at the start of your organization's day (Settings, Organization, Defaults: Time zone and New day starts at).
@@ -126,13 +126,13 @@ The cards above the tabs show follow-ups due today, new leads reached today and 
 
 <CardGroup cols={2}>
   <Card title="Connect email" icon="mail" href="/email/connect">
-    Mailboxes, signatures, sending hours.
+    Mailboxes and signatures.
   </Card>
   <Card title="Inbox" icon="inbox" href="/email/inbox">
     Read and answer replies.
   </Card>
   <Card title="Sending rules" icon="settings" href="/workspace/sending-rules">
-    Daily limits and gaps.
+    The daily lead limit and automatic pacing.
   </Card>
   <Card title="Responsible use" icon="shield-check" href="/responsible-use">
     Compliance and deliverability.

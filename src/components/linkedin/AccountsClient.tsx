@@ -8,18 +8,13 @@ import {
   RiMoreLine,
   RiRefreshLine,
   RiSendPlaneLine,
-  RiTimeLine,
-  RiDashboard3Line,
   RiUserFollowLine,
   RiUserStarLine,
 } from "@remixicon/react";
 import * as Avatar from "@/components/alignui/avatar";
 import * as Badge from "@/components/alignui/badge";
 import * as Button from "@/components/alignui/button";
-import * as Checkbox from "@/components/alignui/checkbox";
 import * as Dropdown from "@/components/alignui/dropdown";
-import * as Modal from "@/components/alignui/modal";
-import * as Select from "@/components/alignui/select";
 import * as Table from "@/components/alignui/table";
 import { Frame, FramePanel } from "@/components/analytics/kit/Frame";
 import { KpiCell, KpiStrip } from "@/components/analytics/kit/KpiStrip";
@@ -33,21 +28,9 @@ import {
   PresenceDot,
   type AccountFilter,
 } from "@/components/settings/AccountsOverview";
-import { Callout, Field, Meter } from "@/components/settings/SettingsKit";
-import { AccountLimitDialog } from "@/components/settings/AccountLimitDialog";
-import { numberRule } from "@/lib/channels/rules";
-import { timeInputClass } from "@/components/outreach/WorkingHoursModal";
+import { Callout, Meter } from "@/components/settings/SettingsKit";
 import { ConnectAccountButton, useHostedAuthRedirect } from "@/components/linkedin/HostedAuth";
-import {
-  DEFAULT_WORK_END,
-  DEFAULT_WORK_START,
-  DEFAULT_WORK_TIMEZONE,
-  hasWorkingHoursConfigured,
-  parseWorkDays,
-  WEEKDAY_LABELS,
-} from "@/lib/linkedin/workingHours";
 import { formatNextAllowedRun } from "@/lib/linkedin/nextAllowedRun";
-import { cn } from "@/utils/cn";
 
 export type AccountRow = {
   id: string;
@@ -57,36 +40,12 @@ export type AccountRow = {
   status: string;
   limitReached: boolean;
   isPremium: boolean;
-  /** This account's own invitations a day; null follows the organization's rule. */
+  /** This account's own invitations a day (set before limits became automatic); null follows the organization's rule. */
   dailyInviteLimit: number | null;
-  workTimezone: string | null;
-  workStartTime: string | null;
-  workEndTime: string | null;
-  workDays: string | null;
   nextAllowedRun: string | null;
 };
 
 const LINKEDIN = CHANNEL_META.linkedin.color;
-
-const TIMEZONES = [
-  "Asia/Kolkata",
-  "America/New_York",
-  "America/Chicago",
-  "America/Denver",
-  "America/Los_Angeles",
-  "America/Toronto",
-  "Europe/London",
-  "Europe/Paris",
-  "Europe/Berlin",
-  "Asia/Dubai",
-  "Asia/Singapore",
-  "Asia/Tokyo",
-  "Australia/Sydney",
-  "UTC",
-];
-
-/** Monday first, the way people read a week; values stay 0 = Sunday … 6 = Saturday. */
-const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0];
 
 function LinkedInPremiumIcon() {
   return (
@@ -109,7 +68,7 @@ function initialsFor(name: string) {
   return initials || "?";
 }
 
-/** The organization's invitations a day (Settings → LinkedIn → Sending rules). */
+/** The organization's invitations a day (the LinkedIn sending rules, applied automatically). */
 export type InviteLimits = { premium: number; free: number };
 
 function organizationLimit(account: AccountRow, limits: InviteLimits) {
@@ -123,22 +82,6 @@ function dailyLimit(account: AccountRow, limits: InviteLimits) {
 
 const connected = (a: AccountRow) => a.status === "CONNECTED";
 const healthy = (a: AccountRow) => connected(a) && !a.limitReached;
-
-/** "Mon–Sat, 09:00–18:00" for a configured window, "Any time" otherwise. */
-function hoursSummary(account: AccountRow): { main: string; tz: string | null } {
-  if (!hasWorkingHoursConfigured(account)) return { main: "Any time", tz: null };
-  const days = parseWorkDays(account.workDays);
-  const key = [...days].sort((a, b) => a - b).join(",");
-  const dayLabel =
-    days.length === 7
-      ? "Every day"
-      : key === "1,2,3,4,5"
-        ? "Mon–Fri"
-        : key === "1,2,3,4,5,6"
-          ? "Mon–Sat"
-          : WEEK_ORDER.filter((d) => days.includes(d)).map((d) => WEEKDAY_LABELS[d]).join(", ");
-  return { main: `${dayLabel}, ${account.workStartTime}–${account.workEndTime}`, tz: account.workTimezone };
-}
 
 function StatusBadge({ account }: { account: AccountRow }) {
   if (healthy(account))
@@ -163,164 +106,6 @@ function StatusBadge({ account }: { account: AccountRow }) {
   );
 }
 
-function WorkingHoursDialog({
-  account,
-  onClose,
-  onSaved,
-}: {
-  account: AccountRow;
-  onClose: () => void;
-  onSaved: (updated: AccountRow) => void;
-}) {
-  const [enabled, setEnabled] = useState(hasWorkingHoursConfigured(account));
-  const [timezone, setTimezone] = useState(account.workTimezone ?? DEFAULT_WORK_TIMEZONE);
-  const [startTime, setStartTime] = useState(account.workStartTime ?? DEFAULT_WORK_START);
-  const [endTime, setEndTime] = useState(account.workEndTime ?? DEFAULT_WORK_END);
-  const [days, setDays] = useState<number[]>(() => parseWorkDays(account.workDays));
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const timezones = TIMEZONES.includes(timezone) ? TIMEZONES : [timezone, ...TIMEZONES];
-  const noDays = enabled && days.length === 0;
-  const inverted = enabled && startTime >= endTime;
-
-  const toggleDay = (day: number) => {
-    setDays((prev) => (prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day].sort((a, b) => a - b)));
-  };
-
-  const handleSave = async () => {
-    if (noDays) {
-      setError("Select at least one working day");
-      return;
-    }
-
-    setSaving(true);
-    setError(null);
-    try {
-      const res = await fetch(`/api/linkedin/accounts/${account.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          enabled
-            ? {
-                workHoursEnabled: true,
-                workTimezone: timezone,
-                workStartTime: startTime,
-                workEndTime: endTime,
-                workDays: days.join(","),
-              }
-            : { workHoursEnabled: false },
-        ),
-      });
-      const data = await res.json();
-      if (!data.ok) {
-        setError(data.error ?? "Save failed");
-        return;
-      }
-      const a = data.account;
-      onSaved({
-        ...account,
-        workTimezone: a.workTimezone,
-        workStartTime: a.workStartTime,
-        workEndTime: a.workEndTime,
-        workDays: a.workDays,
-      });
-      onClose();
-    } catch {
-      setError("Network error");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <Modal.Root open onOpenChange={(open) => !open && onClose()}>
-      <Modal.Content size="max-w-lg">
-        <Modal.Header icon={RiTimeLine}>
-          <Modal.Title>Working hours</Modal.Title>
-          <Modal.Description>
-            For {account.name || `@${account.username}`}. Profile enrichment, connection requests and follow-ups only run inside this window.
-          </Modal.Description>
-        </Modal.Header>
-        <Modal.Body className="space-y-5">
-          <label className="flex cursor-pointer items-start gap-3 rounded-xl p-3 ring-1 ring-inset ring-stroke-soft-200">
-            <Checkbox.Root className="mt-0.5" checked={enabled} onCheckedChange={(c) => setEnabled(c === true)} />
-            <span>
-              <span className="block text-label-sm text-text-strong-950">Restrict outreach to working hours</span>
-              <span className="mt-0.5 block text-paragraph-xs text-text-sub-600">Off: this account works whenever its campaigns are due.</span>
-            </span>
-          </label>
-
-          {enabled && (
-            <>
-              <Field label="Timezone">
-                <Select.Root size="small" value={timezone} onValueChange={setTimezone}>
-                  <Select.Trigger aria-label="Timezone">
-                    <Select.Value />
-                  </Select.Trigger>
-                  <Select.Content>
-                    {timezones.map((tz) => (
-                      <Select.Item key={tz} value={tz}>
-                        {tz}
-                      </Select.Item>
-                    ))}
-                  </Select.Content>
-                </Select.Root>
-              </Field>
-
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="Start" htmlFor={`li-start-${account.id}`}>
-                  <input id={`li-start-${account.id}`} type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} className={cn(timeInputClass, inverted && "ring-error-base")} />
-                </Field>
-                <Field label="End" htmlFor={`li-end-${account.id}`} error={inverted ? "Ends before it starts." : undefined}>
-                  <input id={`li-end-${account.id}`} type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} className={cn(timeInputClass, inverted && "ring-error-base")} />
-                </Field>
-              </div>
-
-              <fieldset>
-                <legend className="text-label-sm text-text-strong-950">Working days</legend>
-                <div className="mt-1.5 flex flex-wrap gap-1.5">
-                  {WEEK_ORDER.map((day) => {
-                    const on = days.includes(day);
-                    return (
-                      <button
-                        key={day}
-                        type="button"
-                        aria-pressed={on}
-                        onClick={() => toggleDay(day)}
-                        className={cn(
-                          "h-8 min-w-11 rounded-lg px-2.5 text-label-sm outline-none ring-1 ring-inset transition focus-visible:shadow-button-important-focus",
-                          on
-                            ? "bg-bg-strong-950 text-text-white-0 ring-bg-strong-950"
-                            : "bg-bg-white-0 text-text-sub-600 ring-stroke-soft-200 hover:bg-bg-weak-50 hover:text-text-strong-950",
-                        )}
-                      >
-                        {WEEKDAY_LABELS[day]}
-                      </button>
-                    );
-                  })}
-                </div>
-                {noDays && <p className="mt-1.5 text-paragraph-xs text-error-base">Select at least one working day.</p>}
-              </fieldset>
-            </>
-          )}
-
-          {error && <Callout tone="error">{error}</Callout>}
-        </Modal.Body>
-        <Modal.Footer>
-          <Button.Root variant="neutral" mode="stroke" size="small" onClick={onClose}>
-            Cancel
-          </Button.Root>
-          <Button.Root variant="primary" mode="filled" size="small" onClick={handleSave} disabled={saving || noDays}>
-            {saving && <Button.Icon as={RiLoader4Line} className="animate-spin" />}
-            {saving ? "Saving…" : "Save hours"}
-          </Button.Root>
-        </Modal.Footer>
-      </Modal.Content>
-    </Modal.Root>
-  );
-}
-
 /**
  * One account. "Reconnect" mints a Unipile hosted-auth link scoped to this
  * account and navigates to it — the same wizard as connecting a new account,
@@ -333,19 +118,14 @@ function AccountTableRow({
   sentToday,
   pending,
   limits,
-  onEditHours,
-  onEditLimit,
 }: {
   account: AccountRow;
   sentToday: number;
   pending: number;
   limits: InviteLimits;
-  onEditHours: () => void;
-  onEditLimit: () => void;
 }) {
   const { redirecting, error, start } = useHostedAuthRedirect();
   const displayName = account.name || account.username;
-  const hours = hoursSummary(account);
 
   return (
     <Table.Row aria-busy={redirecting || undefined}>
@@ -406,9 +186,8 @@ function AccountTableRow({
       </Table.Cell>
 
       <Table.Cell className="px-4">
-        <p className="truncate text-paragraph-sm text-text-strong-950" title={hours.tz ? `${hours.main} (${hours.tz})` : hours.main}>{hours.main}</p>
-        <p className="truncate text-paragraph-xs text-text-sub-600" suppressHydrationWarning>
-          Next: {formatNextAllowedRun(account.nextAllowedRun ? new Date(account.nextAllowedRun) : null)}
+        <p className="truncate text-paragraph-sm text-text-strong-950" suppressHydrationWarning>
+          {formatNextAllowedRun(account.nextAllowedRun ? new Date(account.nextAllowedRun) : null)}
         </p>
       </Table.Cell>
 
@@ -425,14 +204,6 @@ function AccountTableRow({
                 <Dropdown.ItemIcon as={RiRefreshLine} />
                 Reconnect account
               </Dropdown.Item>
-              <Dropdown.Item onSelect={onEditHours}>
-                <Dropdown.ItemIcon as={RiTimeLine} />
-                {hasWorkingHoursConfigured(account) ? "Edit working hours" : "Set working hours"}
-              </Dropdown.Item>
-              <Dropdown.Item onSelect={onEditLimit}>
-                <Dropdown.ItemIcon as={RiDashboard3Line} />
-                Daily request limit
-              </Dropdown.Item>
             </Dropdown.Content>
           </Dropdown.Root>
         </div>
@@ -446,15 +217,11 @@ function AccountsTable({
   sentTodayMap,
   pendingLeadsMap,
   limits,
-  onEditHours,
-  onEditLimit,
 }: {
   accounts: AccountRow[];
   sentTodayMap: Record<string, number>;
   pendingLeadsMap: Record<string, number>;
   limits: InviteLimits;
-  onEditHours: (account: AccountRow) => void;
-  onEditLimit: (account: AccountRow) => void;
 }) {
   return (
     <Table.Root className="min-w-190 [&>table]:table-fixed">
@@ -464,7 +231,7 @@ function AccountsTable({
           <Table.Head scope="col" className="w-32 px-4">Status</Table.Head>
           <Table.Head scope="col" className="w-36 px-4">Requests today</Table.Head>
           <Table.Head scope="col" className="w-20 px-4 text-right" title="Leads waiting for a connection request from this account">Pending</Table.Head>
-          <Table.Head scope="col" className="w-48 px-4">Schedule</Table.Head>
+          <Table.Head scope="col" className="w-48 px-4" title="Accounts work at any time; after each run an account rests before the next">Next run</Table.Head>
           <Table.Head scope="col" className="w-14 px-4"><span className="sr-only">Actions</span></Table.Head>
         </Table.Row>
       </Table.Header>
@@ -476,8 +243,6 @@ function AccountsTable({
             sentToday={sentTodayMap[account.id] ?? 0}
             pending={pendingLeadsMap[account.id] ?? 0}
             limits={limits}
-            onEditHours={() => onEditHours(account)}
-            onEditLimit={() => onEditLimit(account)}
           />
         ))}
       </Table.Body>
@@ -486,7 +251,7 @@ function AccountsTable({
 }
 
 export function AccountsClient({
-  accounts: initialAccounts,
+  accounts,
   sentTodayMap,
   pendingLeadsMap,
   inviteLimits,
@@ -496,9 +261,6 @@ export function AccountsClient({
   pendingLeadsMap: Record<string, number>;
   inviteLimits: InviteLimits;
 }) {
-  const [accounts, setAccounts] = useState(initialAccounts);
-  const [editingAccount, setEditingAccount] = useState<AccountRow | null>(null);
-  const [limitAccount, setLimitAccount] = useState<AccountRow | null>(null);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<AccountFilter>("all");
 
@@ -560,9 +322,9 @@ export function AccountsClient({
           label="Requests today"
           value={totalSent.toLocaleString("en-US")}
           context={totalCapacity > 0 ? `${formatPercent(Math.min(totalSent / totalCapacity, 1))} of ${totalCapacity} a day` : "No connected capacity"}
-          hint="Connection requests sent today, against the daily limits of connected accounts."
+          hint="Connection requests sent today, against the daily limits of connected accounts. New people also count toward your daily lead limit."
         />
-        <KpiCell icon={RiUserStarLine} label="Premium" value={String(premium)} context={`${accounts.length - premium} on a free plan`} hint={`Premium accounts can send ${inviteLimits.premium} connection requests a day; free accounts ${inviteLimits.free}. Change it in Settings → LinkedIn sending rules, or per account.`} />
+        <KpiCell icon={RiUserStarLine} label="Premium" value={String(premium)} context={`${accounts.length - premium} on a free plan`} hint={`Premium accounts send up to ${inviteLimits.premium} connection requests a day, free accounts ${inviteLimits.free}. AgentSDR paces each account automatically to keep it safe.`} />
       </KpiStrip>
 
       {disconnected > 0 && (
@@ -573,7 +335,7 @@ export function AccountsClient({
 
       <AccountsFrame
         title="Accounts"
-        description="Daily request limits, working hours and when each account next works."
+        description="Requests sent today, leads waiting, and when each account next works. Accounts work at any time of day."
         filter={filter}
         onFilterChange={setFilter}
         counts={{ all: accounts.length, healthy: healthyCount, attention: accounts.length - healthyCount }}
@@ -584,41 +346,9 @@ export function AccountsClient({
         {filtered.length === 0 ? (
           <AccountsNoMatch noun="accounts" />
         ) : (
-          <AccountsTable accounts={filtered} sentTodayMap={sentTodayMap} pendingLeadsMap={pendingLeadsMap} limits={inviteLimits} onEditHours={setEditingAccount} onEditLimit={setLimitAccount} />
+          <AccountsTable accounts={filtered} sentTodayMap={sentTodayMap} pendingLeadsMap={pendingLeadsMap} limits={inviteLimits} />
         )}
       </AccountsFrame>
-
-      {editingAccount && (
-        <WorkingHoursDialog
-          key={editingAccount.id}
-          account={editingAccount}
-          onClose={() => setEditingAccount(null)}
-          onSaved={(updated) => {
-            setAccounts((prev) => prev.map((a) => (a.id === updated.id ? updated : a)));
-          }}
-        />
-      )}
-      {limitAccount && (
-        <AccountLimitDialog
-          key={limitAccount.id}
-          title="Daily request limit"
-          accountLabel={limitAccount.name || `@${limitAccount.username}`}
-          rule={numberRule("linkedin", limitAccount.isPremium ? "invitesPerDayPremium" : "invitesPerDayFree")}
-          organizationValue={organizationLimit(limitAccount, inviteLimits)}
-          value={limitAccount.dailyInviteLimit}
-          onClose={() => setLimitAccount(null)}
-          onSave={async (dailyInviteLimit) => {
-            const res = await fetch(`/api/linkedin/accounts/${limitAccount.id}`, {
-              method: "PATCH",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ dailyInviteLimit }),
-            });
-            const data = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
-            if (!data?.ok) throw new Error(data?.error ?? "Save failed");
-            setAccounts((prev) => prev.map((a) => (a.id === limitAccount.id ? { ...a, dailyInviteLimit } : a)));
-          }}
-        />
-      )}
     </div>
   );
 }

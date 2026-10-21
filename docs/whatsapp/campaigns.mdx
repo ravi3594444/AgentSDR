@@ -56,7 +56,8 @@ Sending is a loop that runs about every 30 seconds.
 - **One message per number per round.** Each connected number assigned to an active campaign sends at most one message in a round. This keeps the gap between messages natural and under your sending rules.
 - **Follow-ups first.** If a number has both follow-ups and first messages due, it sends a follow-up.
 - **A lead stays on one number.** Later steps go from the number that sent the first message.
-- **Sending hours.** If you set **Sending hours for campaigns** under **Settings → WhatsApp → Sending rules**, nothing sends outside them. With none set, campaigns send at any time.
+- **Any time of day.** Campaigns have no sending hours; they send whenever a step is due.
+- **The daily lead limit.** A first message to someone no channel has contacted before takes one of today's places under your [daily lead limit](/workspace/sending-rules). When they are used, first messages to new people wait for the reset; follow-ups, and first messages to people already contacted elsewhere, go on.
 - **Same guards as everything else.** Warm-up, new chats per day, the gap between sends and Do Not Contact all apply.
 
 When a guard refuses a message, AgentSDR reacts to the reason:
@@ -109,7 +110,7 @@ Messages in a conversation carry an origin: **lead**, **agentsdr** (sent through
     Where replies land.
   </Card>
   <Card title="Sending rules" icon="settings" href="/workspace/sending-rules">
-    Change limits and hours.
+    The daily lead limit and automatic pacing.
   </Card>
   <Card title="Responsible use" icon="shield-check" href="/responsible-use">
     Consent and compliance.

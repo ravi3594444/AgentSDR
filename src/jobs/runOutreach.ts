@@ -7,7 +7,6 @@ import { resolveProfiles } from "../functions/resolveProfiles";
 import { sendInvitations } from "../functions/sendInvitations";
 import { sendFollowUps } from "../functions/sendFollowUps";
 import { computeNextAllowedRun, formatNextAllowedRun, isAccountRunnable } from "@/lib/linkedin/nextAllowedRun";
-import { formatWorkingHoursSummary, isWithinWorkingHours, withOrganizationHours } from "@/lib/linkedin/workingHours";
 import { channelRules } from "@/lib/channels/rules.server";
 import { isMigrationControlPaused } from "@/lib/migration/controls";
 import { inOrg, runInOrganization } from "@/lib/tenancy/scope";
@@ -63,16 +62,11 @@ const runOrganizationOutreach = async (resolutionPaused: boolean, outboundPaused
   console.log(`[runOutreach] Running pipeline for ${accounts.length} account(s)`);
   const rules = await channelRules("linkedin");
 
+  // Accounts work at any time of day, every day: sending hours were removed
+  // (an account's old work* fields are ignored). Pacing is the rest between
+  // runs, the run sizes and the daily invitation limits.
   for (const account of accounts) {
     console.log(`[runOutreach] ── Account: ${account.username} ──`);
-
-    const hours = withOrganizationHours(account, rules.workingHours);
-    if (!isWithinWorkingHours(hours)) {
-      console.log(
-        `[runOutreach] Outside working hours (${formatWorkingHoursSummary(hours)}) — skipping profile enrichment, invites, and follow-ups`
-      );
-      continue;
-    }
 
     if (!isAccountRunnable(account.nextAllowedRun)) {
       console.log(

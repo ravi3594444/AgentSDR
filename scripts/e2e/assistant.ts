@@ -216,7 +216,7 @@ await runInOrganization(org!.id, async () => {
   // Sending accounts: a fake Unipile connection, an email inbox linked in it, a WhatsApp number.
   const [unipile] = await db.insert(gridProviders).values({ organizationId: orgId, key: "platform-unipile", name: "Unipile (assistant check)" }).returning();
   await db.insert(gridProviderCredentials).values({ providerId: unipile!.id, encryptedPayload: encryptIntegrationCredentials({ baseUrl: UNIPILE, apiKey: "assistant-check", notifySecret: "assistant-check" }) });
-  const ALL_DAY = { enabled: true, from: "00:00", to: "23:59" };
+  // Hours left to the column default: always open (sending is always on).
   const [mailbox] = await db.insert(mailboxes).values({
     organizationId: orgId,
     emailAddress: mailboxAddress,
@@ -224,7 +224,6 @@ await runInOrganization(org!.id, async () => {
     unipileAccountId: unipileAccount,
     displayName: "Ravi from Bright Path",
     status: "connected",
-    workingHours: { timezone: "UTC", days: { monday: ALL_DAY, tuesday: ALL_DAY, wednesday: ALL_DAY, thursday: ALL_DAY, friday: ALL_DAY, saturday: ALL_DAY, sunday: ALL_DAY } },
   }).returning();
   const [whatsapp] = await db.insert(whatsappAccounts).values({
     organizationId: orgId,

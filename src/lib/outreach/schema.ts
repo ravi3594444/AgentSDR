@@ -32,17 +32,21 @@ export type WorkingHours = {
   };
 };
 
-/** Mon–Fri 9am–6pm IST, weekends off — a sane default so a mailbox sends immediately after connecting without extra setup. */
+/**
+ * Every day, all day, in UTC: sending is always on (alwaysOpenHours in
+ * workingHours.ts). Code that creates a mailbox sets the workspace's time
+ * zone instead, since a mailbox's zone is the day its daily counter resets on.
+ */
 export const DEFAULT_WORKING_HOURS: WorkingHours = {
-  timezone: "Asia/Kolkata",
+  timezone: "UTC",
   days: {
-    monday: { enabled: true, from: "09:00", to: "18:00" },
-    tuesday: { enabled: true, from: "09:00", to: "18:00" },
-    wednesday: { enabled: true, from: "09:00", to: "18:00" },
-    thursday: { enabled: true, from: "09:00", to: "18:00" },
-    friday: { enabled: true, from: "09:00", to: "18:00" },
-    saturday: { enabled: false, from: "09:00", to: "18:00" },
-    sunday: { enabled: false, from: "09:00", to: "18:00" },
+    monday: { enabled: true, from: "00:00", to: "00:00" },
+    tuesday: { enabled: true, from: "00:00", to: "00:00" },
+    wednesday: { enabled: true, from: "00:00", to: "00:00" },
+    thursday: { enabled: true, from: "00:00", to: "00:00" },
+    friday: { enabled: true, from: "00:00", to: "00:00" },
+    saturday: { enabled: true, from: "00:00", to: "00:00" },
+    sunday: { enabled: true, from: "00:00", to: "00:00" },
   },
 };
 
@@ -77,7 +81,11 @@ export const mailboxes = pgTable("outreach_mailboxes", {
   sendCounterResetAt: timestamp("send_counter_reset_at", { withTimezone: true }),
   nextEmailTime: timestamp("next_email_time", { withTimezone: true }),
   signatureHtml: text("signature_html"),
-  /** Per-day send window + timezone — the scheduler won't send outside this window. Defaults to Mon-Fri 9-6 ET. */
+  /**
+   * Always open (every day, all day) since sending hours were removed; its
+   * timezone is the day the daily counter (todayEmailsSent) resets on, and
+   * is never changed once set.
+   */
   workingHours: jsonb("working_hours").$type<WorkingHours>().notNull().default(DEFAULT_WORKING_HOURS),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),

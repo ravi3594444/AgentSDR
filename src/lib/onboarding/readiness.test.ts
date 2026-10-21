@@ -72,13 +72,11 @@ describe("a fresh workspace", () => {
       "/settings/members",
       "/settings/email-connection",
       "/settings/email-accounts",
-      "/settings/email-rules",
       "/settings/linkedin-connection",
       "/settings/linkedin-accounts",
-      "/settings/linkedin-rules",
       "/settings/whatsapp-connection",
       "/settings/whatsapp-accounts",
-      "/settings/whatsapp-rules",
+      "/settings/sending",
       "/settings/ai",
       "/leads",
       "/outreach/campaigns",
@@ -86,6 +84,13 @@ describe("a fresh workspace", () => {
       "/whatsapp/campaigns",
       "/inbox",
     ]));
+  });
+
+  test("each channel's one sending setting is the daily lead limit, shared by every channel", () => {
+    for (const item of buildReadiness(fresh({ instagram: { ready: true, connected: 1, notConnected: 0 } })).filter((step) => ["email", "linkedin", "whatsapp", "instagram"].includes(step.key))) {
+      expect(item.links.filter((link) => link.href.endsWith("-rules"))).toEqual([]);
+      expect(item.links).toContainEqual({ href: "/settings/sending", label: "Daily lead limit" });
+    }
   });
 
   test("says when invitation email is only logged", () => {
@@ -383,7 +388,7 @@ describe("Instagram in Getting started", () => {
     expect(step({ ready: true, connected: 0, notConnected: 0 }).status).toBe("not_verified");
     const ok = step({ ready: true, connected: 2, notConnected: 0 });
     expect(ok.status).toBe("connected");
-    expect(ok.links.map((link) => link.href)).toEqual(["/settings/instagram-accounts", "/settings/instagram-rules"]);
+    expect(ok.links.map((link) => link.href)).toEqual(["/settings/instagram-accounts", "/settings/sending"]);
   });
 
   test("it sits with the other channels, after WhatsApp", () => {
