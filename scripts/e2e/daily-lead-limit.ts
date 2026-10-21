@@ -22,7 +22,8 @@
  *   with the time zone and today's counters untouched, LinkedIn working
  *   hours are cleared, stored hour rules are stripped, and a second run
  *   changes nothing;
- * - campaigns and accounts send at any time (no hours gate is left).
+ * - WhatsApp campaigns and Instagram DMs send at any time, even with an old
+ *   restricted sending-hours value still stored (no hours gate is left).
  *
  *   bun run --conditions=react-server scripts/e2e/daily-lead-limit.ts
  *
@@ -117,6 +118,8 @@ const waSend = (async (request: { personId?: string | null }) => {
 }) as unknown as WaSend;
 const waTick = (now?: Date) => runWhatsappCampaignTick({ send: waSend, now });
 const minutes = (n: number) => new Date(Date.now() + n * 60_000);
+/** A retired hours value that would have kept every sender closed right now: tomorrow only. */
+const closedNow = { timezone: "UTC", days: [(new Date().getUTCDay() + 1) % 7], start: "00:00", end: "23:59" };
 const phone = (n: number) => `+1415555${String((stamp + n) % 10_000).padStart(4, "0")}`;
 
 /** A WhatsApp number with a two-step campaign (the follow-up an hour later), active. */
@@ -161,6 +164,9 @@ const seededA = await runInOrganization(a.org.id, async () => {
   const wa = await whatsappSetup(a.org.id, "a");
   await enroll(wa.campaign.id, p1!.id, minutes(-3));
   await enroll(wa.campaign.id, p2!.id, minutes(-2));
+  // An old restricted "sending hours" value left in the store (open tomorrow only): nothing reads it any more.
+  await db.execute(sql`insert into channel_settings (organization_id, channel, values) values (${a.org.id}, 'whatsapp', ${JSON.stringify({ sendingHours: closedNow })}::jsonb)
+    on conflict (organization_id, channel) do update set values = channel_settings.values || excluded.values`);
   return { p1: p1!, p2: p2!, p3: p3!, p4: p4!, ...wa };
 });
 const seededB = await runInOrganization(b.org.id, async () => {
@@ -175,7 +181,7 @@ const seededB = await runInOrganization(b.org.id, async () => {
 try {
   // ------------------------------------------------------------ WhatsApp
   await waTick();
-  check("with a limit of 1, the first new person gets their WhatsApp first message", whatsappSent.join() === seededA.p1.id, whatsappSent.join());
+  check("with a limit of 1, the first new person gets their WhatsApp first message (an old stored sending-hours value closed now is ignored)", whatsappSent.join() === seededA.p1.id, whatsappSent.join());
   await waTick();
   const p2Lead = await waLead(seededA.campaign.id, seededA.p2.id);
   const [numberA] = await db.select().from(whatsappAccounts).where(eq(whatsappAccounts.id, seededA.account.id));
@@ -215,6 +221,8 @@ try {
   const instagramA = await runInOrganization(a.org.id, async () => {
     await setFeature("instagram", true, a.owner.id);
     await saveChannelRules("instagram", { sendGapMinutes: [1, 1] }, a.owner.id);
+    // As for WhatsApp, an old stored sending-hours value that is closed now: ignored.
+    await db.execute(sql`update channel_settings set values = values || ${JSON.stringify({ sendingHours: closedNow })}::jsonb where organization_id = ${a.org.id} and channel = 'instagram'`);
     const [account] = await db.insert(instagramAccounts).values({ organizationId: a.org.id, unipileAccountId: `lead-limit-ig-${stamp}`, username: `lead_limit_sender_${stamp}`, status: "connected" }).returning();
     const thread = await createThread(a.owner.id);
     const audienceId = await createAudience({ name: "lead limit check", source: "list" });
@@ -233,7 +241,7 @@ try {
   const igRows = await db.select().from(instagramOutreachQueue).where(eq(instagramOutreachQueue.runId, instagramA.run.id));
   const igOf = (personId: string) => igRows.find((row) => row.personId === personId);
   check("a different new person is refused on Instagram: still queued, never resolved through Unipile", igOf(seededA.p4.id)?.status === "queued" && !instagramResolved.includes(`p4_${stamp}`), `${igOf(seededA.p4.id)?.status}; resolved ${instagramResolved.join()}`);
-  check("the person already reached is not stuck behind them: their Instagram DM goes out", igOf(seededA.p1.id)?.status === "sent" && instagramPosted.join() === `dm-p1_${stamp}`, `${igOf(seededA.p1.id)?.status}; posted ${instagramPosted.join()}`);
+  check("the person already reached is not stuck behind them: their Instagram DM goes out, old stored sending hours notwithstanding",igOf(seededA.p1.id)?.status === "sent" && instagramPosted.join() === `dm-p1_${stamp}`, `${igOf(seededA.p1.id)?.status}; posted ${instagramPosted.join()}`);
 
   // ------------------------------------------------------------ follow-ups and the second organization
   await db.update(whatsappCampaignLeads).set({ nextSendAt: minutes(-1) }).where(inArray(whatsappCampaignLeads.campaignId, [seededA.campaign.id, seededB.campaign.id]));
