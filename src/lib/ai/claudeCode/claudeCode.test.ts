@@ -5,10 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { completeStructured } from "@/lib/ai/server/structuredCompletion";
 import { accountAuthStatus, accountPaths, setClaudeCliForTests, setClaudeDataDirForTests, type ClaudeAccount } from "./cli.server";
-import { claudeLoginCode, claudeLoginPrompt, claudeSignInLink, generationArgs, limitRefusal, parseAuthStatus, readGeneration } from "./cliOutput";
+import { claudeLoginCode, claudeLoginPrompt, claudeSignInLink, GENERATION_SETTINGS, generationArgs, limitRefusal, parseAuthStatus, readGeneration } from "./cliOutput";
 import { normalizeClaudeEngine } from "./engine.server";
 import { ClaudeLoginController } from "./login.server";
-import { accountUsage, ClaudeCodeError, resetRunnerForTests, runGeneration, runningOn } from "./runner.server";
+import { accountUsage, claudeHoldUntil, ClaudeCodeError, resetRunnerForTests, runGeneration, runningOn } from "./runner.server";
 import { claudeCodeRuntime } from "./runtime.server";
 
 // Every case starts several CLI processes.
@@ -98,8 +98,14 @@ describe("reading the CLI", () => {
     expect(parseAuthStatus("not json", 0).state).toBe("unknown");
   });
 
-  test("a generation runs with no tools, no settings, no MCP and nothing kept", () => {
-    const args = generationArgs({ model: "default", systemPrompt: "S", jsonSchema: SCHEMA });
+  test("a generation runs with no tools, no file reads, no settings, no MCP and nothing kept", () => {
+    const args = generationArgs({ model: "default", systemPromptFile: "/w/system-prompt.txt", jsonSchema: SCHEMA });
+    // The CLI reads `@path` mentions in a prompt even with no tools; only a Read deny stops it (probed on 2.1.306).
+    expect(JSON.parse(args[args.indexOf("--settings") + 1]).permissions.deny).toContain("Read");
+    expect(args[args.indexOf("--settings") + 1]).toBe(GENERATION_SETTINGS);
+    // The system prompt goes in a file, not on the command line.
+    expect(args).not.toContain("--system-prompt");
+    expect(args[args.indexOf("--system-prompt-file") + 1]).toBe("/w/system-prompt.txt");
     expect(args).toContain("-p");
     expect(args[args.indexOf("--tools") + 1]).toBe("");
     expect(args[args.indexOf("--setting-sources") + 1]).toBe("");
@@ -107,7 +113,7 @@ describe("reading the CLI", () => {
     expect(args).not.toContain("--model");
     expect(args).not.toContain("--bare");
     expect(args).not.toContain("--dangerously-skip-permissions");
-    expect(generationArgs({ model: "opus", systemPrompt: "S", jsonSchema: SCHEMA })).toContain("opus");
+    expect(generationArgs({ model: "opus", systemPromptFile: "/w/s", jsonSchema: SCHEMA })).toContain("opus");
   });
 
   test("real 2.1.306 frames: the structured answer, the model, usage and the reported windows", () => {
@@ -200,6 +206,12 @@ describe("signing in through the CLI (fake CLI)", () => {
     const running = generation(target);
     await Bun.sleep(400);
     await expect(login.signOut()).rejects.toThrow("running on this Claude login");
+    // A second Sign in while one is being set up is refused, not a second CLI login.
+    const racing = account();
+    const raceLogin = controller(racing);
+    const [first, second] = await Promise.allSettled([raceLogin.start("claudeai"), raceLogin.start("claudeai")]);
+    expect([first.status, second.status].sort()).toEqual(["fulfilled", "rejected"]);
+    await raceLogin.cancel();
     await running;
     await login.signOut();
     expect((await accountAuthStatus(target)).state).toBe("out");
@@ -324,10 +336,83 @@ describe("structured answers through completeStructured (fake CLI)", () => {
     await expect(ask(runtime)).rejects.toMatchObject({ kind: "limit" });
     expect(generations(target)).toHaveLength(1);
     const usage = accountUsage(target);
-    expect(usage.limit?.resetsAt).not.toBeNull();
+    expect(usage.limits[0]?.resetsAt).not.toBeNull();
+    expect((failure as ClaudeCodeError).retryAt?.toISOString()).toBe(usage.limits[0]?.resetsAt ?? "");
+    expect(claudeHoldUntil(failure)?.toISOString()).toBe(usage.limits[0]?.resetsAt ?? "");
+    expect(claudeHoldUntil(new ClaudeCodeError("signed_out", "x"))).toBeNull();
     expect(usage.windows.find((window) => window.window === "five_hour")?.utilization).toBe(1);
     // Once the reported reset has passed, calls run again.
-    expect(accountUsage(target, Date.now() + 2 * 3_600_000).limit).toBeNull();
+    expect(accountUsage(target, Date.now() + 2 * 3_600_000).limits).toHaveLength(0);
+  });
+
+  test("one model's weekly limit holds only that model; a model check still runs while held", async () => {
+    const { target } = await bound({ generation: "opus_limit" });
+    const opus = { account: target, model: "opus" as const, systemPrompt: "S", userPrompt: "U", jsonSchema: SCHEMA, timeoutMs: 20_000 };
+    await expect(runGeneration(opus)).rejects.toMatchObject({ kind: "limit" });
+    expect(accountUsage(target).limits).toMatchObject([{ window: "seven_day_opus", model: "opus", modelSpecific: true }]);
+    setScenario(target, {});
+    const callsBefore = generations(target).length;
+    await expect(runGeneration(opus)).rejects.toMatchObject({ kind: "limit" });
+    expect(generations(target)).toHaveLength(callsBefore);
+    expect(JSON.parse((await generation(target)).text).verdict).toBe("match");
+    expect(JSON.parse((await runGeneration({ ...opus, ignoreHolds: true })).text).verdict).toBe("match");
+  });
+
+  test("extra usage: the answer already billed is kept, then the account is held and nothing more runs", async () => {
+    const { target, runtime } = await bound({ generation: "overage" });
+    const first = await ask(runtime);
+    expect(JSON.parse(first.text).verdict).toBe("match");
+    // Cached prompt tokens count as input (10 + 90 + 20).
+    expect(first.usage.inputTokens).toBe(120);
+    const held = await ask(runtime).catch((error: unknown) => error);
+    expect(held).toMatchObject({ kind: "overage", status: 402 });
+    expect((held as Error).message).toContain("extra usage");
+    expect(generations(target)).toHaveLength(1);
+  });
+
+  test("a credential from the server's own settings is refused and its answer not used", async () => {
+    const { runtime } = await bound({ generation: "env_key" });
+    await expect(ask(runtime)).rejects.toThrow("not this account's own login");
+  });
+
+  test("a login the CLI refused as signed out shows as expired, and Sign in runs the CLI login again", async () => {
+    const target = account();
+    await signIn(target);
+    setScenario(target, { generation: "signed_out" });
+    await expect(generation(target)).rejects.toMatchObject({ kind: "signed_out" });
+    expect(accountUsage(target).signedOutAt).not.toBeNull();
+    // The stored file still says signed in; signing in again must still run the CLI's login.
+    const login = controller(target);
+    const started = await login.start("claudeai", true);
+    expect(started.phase).toBe("waiting");
+    expect((await login.complete(started.flowId, VALID_CODE)).phase).toBe("succeeded");
+    expect(accountUsage(target).signedOutAt).toBeNull();
+  });
+
+  test("the model id the CLI ran is what the result records; the system prompt reached the CLI from its file", async () => {
+    const { target, runtime } = await bound({});
+    const result = await ask(runtime);
+    expect(result.model).toBe("claude-sonnet-5-5");
+    expect(generations(target)[0].systemPromptFromFile).toBeGreaterThan(0);
+  });
+
+  test("a call aborted before it starts never runs; a scratch directory that cannot be made leaks no slot", async () => {
+    const { target } = await bound({});
+    const aborted = new AbortController();
+    aborted.abort(new Error("cancelled"));
+    await expect(runGeneration({ account: target, model: "sonnet", systemPrompt: "S", userPrompt: "U", jsonSchema: SCHEMA, timeoutMs: 5_000, signal: aborted.signal })).rejects.toThrow("cancelled");
+    expect(generations(target)).toHaveLength(0);
+    const work = accountPaths(target).work;
+    rmSync(work, { recursive: true, force: true });
+    writeFileSync(work, "not a directory");
+    try {
+      await expect(generation(target)).rejects.toThrow();
+      expect(runningOn(target)).toBe(0);
+    } finally {
+      rmSync(work, { force: true });
+      accountPaths(target);
+    }
+    expect(JSON.parse((await generation(target)).text).verdict).toBe("match");
   });
 
   test("an expired login and an unavailable model are not retried", async () => {
@@ -346,9 +431,31 @@ describe("structured answers through completeStructured (fake CLI)", () => {
 
     const hung = await bound({ generation: "slow", slowMs: 30_000 });
     const began = Date.now();
-    await expect(runGeneration({ account: hung.target, model: "sonnet", systemPrompt: "S", userPrompt: "U", jsonSchema: SCHEMA, timeoutMs: 1_500 })).rejects.toMatchObject({ kind: "transient", status: 503 });
+    await expect(runGeneration({ account: hung.target, model: "sonnet", systemPrompt: "S", userPrompt: "U", jsonSchema: SCHEMA, timeoutMs: 1_500 })).rejects.toMatchObject({ kind: "timeout", status: 504, retryable: false });
     expect(Date.now() - began).toBeLessThan(8_000);
     expect(runningOn(hung.target)).toBe(0);
+  });
+
+  test("a timeout or a busy server is not retried by completeStructured", async () => {
+    const saved = process.env.AGENTSDR_CLAUDE_CODE_MAX_PROCESSES;
+    process.env.AGENTSDR_CLAUDE_CODE_MAX_PROCESSES = "1";
+    try {
+      const hung = await bound({ generation: "slow", slowMs: 30_000 });
+      const short = async () => claudeCodeRuntime({ account: hung.target, model: "sonnet" }, -18_500);
+      const holder = ask(short).catch((error: unknown) => error);
+      await Bun.sleep(300);
+      // The one slot is taken: this call waits until its own 1 s deadline, then fails busy, once (three tries would take 3 s).
+      const waitStarted = Date.now();
+      const waiting = await completeStructured({ timeoutMs: -19_000, systemPrompt: "S", userPrompt: "U", maxOutputTokens: 100, jsonSchema: SCHEMA, schemaName: "judge_lead" }, { runtime: async () => claudeCodeRuntime({ account: hung.target, model: "sonnet" }, -19_000), sleep: async () => {} }).catch((error: unknown) => error);
+      expect(waiting).toMatchObject({ kind: "busy", retryable: false });
+      expect(Date.now() - waitStarted).toBeLessThan(2_500);
+      // The holder timed out once: a retry would have outlived the 30 s hung CLI's first kill and started a second process.
+      expect(await holder).toMatchObject({ kind: "timeout" });
+      expect(runningOn(hung.target)).toBe(0);
+    } finally {
+      if (saved === undefined) delete process.env.AGENTSDR_CLAUDE_CODE_MAX_PROCESSES;
+      else process.env.AGENTSDR_CLAUDE_CODE_MAX_PROCESSES = saved;
+    }
   });
 
   test("at most AGENTSDR_CLAUDE_CODE_MAX_PROCESSES generations run at once", async () => {

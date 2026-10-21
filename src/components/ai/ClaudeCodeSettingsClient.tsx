@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { RiExternalLinkLine, RiLoader4Line } from "@remixicon/react";
 import { StepFrame } from "@/components/ai/ByokSettingsClient";
 import * as Button from "@/components/alignui/button";
@@ -21,7 +21,7 @@ const ENDPOINT = "/api/ai/claude-code";
 
 async function readJson<T>(response: Response): Promise<T> {
   const body = await response.json().catch(() => null) as { error?: string } | null;
-  if (!response.ok) throw new Error(body?.error ?? "Something went wrong. Please try again.");
+  if (!response.ok) throw Object.assign(new Error(body?.error ?? "Something went wrong. Please try again."), { status: response.status });
   return body as T;
 }
 
@@ -30,6 +30,7 @@ function post<T>(body: Record<string, unknown>): Promise<T> {
 }
 
 const WINDOW_LABELS: Record<string, string> = { five_hour: "5-hour window", seven_day: "Weekly", seven_day_opus: "Weekly (Opus)", seven_day_sonnet: "Weekly (Sonnet)" };
+const modelLabel = (key: ClaudeCodeModel) => CLAUDE_CODE_MODELS.find((entry) => entry.key === key)?.label ?? key;
 
 function when(iso: string | null): string {
   return iso ? new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "not reported";
@@ -46,6 +47,7 @@ export default function ClaudeCodeSettingsClient({ onChanged }: { onChanged?: ()
   const [signIn, setSignIn] = useState<ClaudeCodeSignIn | null>(null);
   const [method, setMethod] = useState<ClaudeCodeLoginMethod>("claudeai");
   const [model, setModel] = useState<ClaudeCodeModel>("default");
+  const modelChosen = useRef(false);
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -53,7 +55,8 @@ export default function ClaudeCodeSettingsClient({ onChanged }: { onChanged?: ()
   const apply = useCallback((next: ClaudeCodeStatus) => {
     setStatus(next);
     setSignIn(next.signIn);
-    setModel(next.engine.ownedByYou ? next.engine.model : "default");
+    // The model picker follows the saved engine only until the owner picks one.
+    if (!modelChosen.current && next.engine.ownedByYou) setModel(next.engine.model);
   }, []);
 
   const load = useCallback(async () => {
@@ -79,7 +82,11 @@ export default function ClaudeCodeSettingsClient({ onChanged }: { onChanged?: ()
           setSignIn(next);
           void load();
         })
-        .catch(() => { void load(); });
+        .catch((cause: { status?: number; message?: string }) => {
+          // The server no longer holds this sign-in (it restarted, or it expired).
+          if (cause?.status === 404) setSignIn({ phase: "failed", flowId: waitingFlow, authorizationUrl: null, expiresAt: null, message: cause.message });
+          void load();
+        });
     }, 2_500);
     return () => window.clearInterval(timer);
   }, [waitingFlow, load]);
@@ -110,13 +117,19 @@ export default function ClaudeCodeSettingsClient({ onChanged }: { onChanged?: ()
   const engine = status.engine;
   const check = engine.checks[model];
   const usingMine = engine.selected && engine.ownedByYou;
+  const switchingModel = usingMine && model !== engine.model;
+  const signOut = () => {
+    if (usingMine && !window.confirm("Your Claude login answers this organization's AI steps. After signing out they fail until you sign in again; they do not move to the API provider. Sign out?")) return;
+    void act("sign_out", { action: "sign_out" });
+  };
 
   return (
     <div className="space-y-4">
       <Callout tone="info">
-        Runs Anthropic&apos;s own Claude Code program on this server, signed in with your own Claude account. Your organization&apos;s AI steps (the assistant, lead judging, outreach writing, reply sorting, drafts and the reply agent) then use your account&apos;s usage limits instead of an API key. Nothing switches to a paid API when your limit is reached or you are signed out: those steps wait or fail with the reason. Table AI columns saved for an API model, AI web search and call transcription keep using the API provider above.
+        Runs Anthropic&apos;s own Claude Code program on this server, signed in with your own account. This organization&apos;s AI steps (the assistant, lead judging, outreach writing, reply sorting, drafts and the reply agent) then run on that account: with a Claude subscription they use your plan&apos;s usage limits; with an Anthropic Console account Anthropic bills each use to that account. When a limit is reached or the login expires, those steps fail with the reason and nothing moves to an API key. Table AI columns saved for an API model, AI web search and call transcription keep using the API provider above.
       </Callout>
       {error && <Callout tone="error">{error}</Callout>}
+      {engine.blocked && <Callout tone="warning" title="Claude Code cannot run for this organization">{engine.blocked}</Callout>}
 
       <StepFrame step={1} done={Boolean(status.cli)} title="Claude Code on this server" description="The unmodified Claude Code CLI, installed with the server image.">
         {status.cli
@@ -130,7 +143,7 @@ export default function ClaudeCodeSettingsClient({ onChanged }: { onChanged?: ()
         title="Sign in with your own account"
         description="Claude Code's own sign-in opens on Anthropic's site. After you sign in there, Anthropic shows a code: paste it here and it goes straight to Claude Code on this server. It is not stored."
         actions={signedIn ? (
-          <Button.Root type="button" variant="neutral" mode="stroke" size="small" disabled={busy !== null || usingMine} onClick={() => void act("sign_out", { action: "sign_out" })} title={usingMine ? "Stop using Claude Code for AI steps first" : undefined}>
+          <Button.Root type="button" variant="neutral" mode="stroke" size="small" disabled={busy !== null || status.running > 0} onClick={signOut} title={status.running > 0 ? "Wait for the AI steps running on this login to finish" : undefined}>
             {busy === "sign_out" && <RiLoader4Line className="size-4 animate-spin" aria-hidden="true" />}Sign out
           </Button.Root>
         ) : undefined}
@@ -168,12 +181,13 @@ export default function ClaudeCodeSettingsClient({ onChanged }: { onChanged?: ()
               </Select.Root>
             </Field>
             <Button.Root type="button" variant="primary" mode="filled" size="small" disabled={busy !== null || !status.cli} onClick={() => void act("sign_in", { action: "sign_in", method })}>
-              {busy === "sign_in" && <RiLoader4Line className="size-4 animate-spin" aria-hidden="true" />}{engine.ownedByYou ? "Sign in again" : "Sign in"}
+              {busy === "sign_in" && <RiLoader4Line className="size-4 animate-spin" aria-hidden="true" />}{engine.ownedByYou || status.account.expired ? "Sign in again" : "Sign in"}
             </Button.Root>
           </div>
         )}
         {signIn && signIn.phase !== "waiting" && signIn.phase !== "succeeded" && signIn.message && <Callout tone="warning" className="mt-3 max-w-xl">{signIn.message}</Callout>}
-        {engine.selected && engine.ownedByYou && !signedIn && <Callout tone="error" className="mt-3 max-w-xl">Your Claude login answers this organization&apos;s AI steps, and it is signed out. Those steps fail until you sign in again.</Callout>}
+        {status.account.expired && <Callout tone="warning" className="mt-3 max-w-xl">Claude Code reported this login as signed out or expired on its last AI step. Sign in again.</Callout>}
+        {usingMine && status.account.signedIn === false && <Callout tone="error" className="mt-3 max-w-xl">Your Claude login answers this organization&apos;s AI steps, and it is signed out. Those steps fail until you sign in again.</Callout>}
       </StepFrame>
 
       <StepFrame
@@ -184,7 +198,7 @@ export default function ClaudeCodeSettingsClient({ onChanged }: { onChanged?: ()
       >
         <div className="flex max-w-xl flex-col gap-3 sm:flex-row sm:items-end">
           <Field label="Model" className="flex-1">
-            <Select.Root size="small" value={model} onValueChange={(value) => setModel(value as ClaudeCodeModel)} disabled={!signedIn}>
+            <Select.Root size="small" value={model} onValueChange={(value) => { modelChosen.current = true; setModel(value as ClaudeCodeModel); }} disabled={!signedIn}>
               <Select.Trigger aria-label="Model"><Select.Value /></Select.Trigger>
               <Select.Content>
                 {CLAUDE_CODE_MODELS.map((entry) => <Select.Item key={entry.key} value={entry.key}>{entry.label}</Select.Item>)}
@@ -194,22 +208,24 @@ export default function ClaudeCodeSettingsClient({ onChanged }: { onChanged?: ()
           <Button.Root type="button" variant="neutral" mode="stroke" size="small" disabled={busy !== null || !signedIn} onClick={() => void act("check_model", { action: "check_model", model })}>
             {busy === "check_model" && <RiLoader4Line className="size-4 animate-spin" aria-hidden="true" />}Check
           </Button.Root>
-          {usingMine
+          {usingMine && !switchingModel
             ? <Button.Root type="button" variant="neutral" mode="stroke" size="small" disabled={busy !== null} onClick={() => void act("stop_using", { action: "stop_using" })}>Stop using</Button.Root>
-            : <Button.Root type="button" variant="primary" mode="filled" size="small" disabled={busy !== null || !signedIn || !check?.ok} onClick={() => void act("use", { action: "use", model })}>Use Claude Code</Button.Root>}
+            : <Button.Root type="button" variant="primary" mode="filled" size="small" disabled={busy !== null || !signedIn || !check?.ok || Boolean(engine.blocked)} onClick={() => void act("use", { action: "use", model })}>{switchingModel ? "Use this model" : "Use Claude Code"}</Button.Root>}
         </div>
         {check && (check.ok
           ? <p className="mt-2 text-paragraph-xs text-text-sub-600">Checked {when(check.checkedAt)}: answered as {check.modelId}.</p>
           : <Callout tone="warning" className="mt-3 max-w-xl">Checked {when(check.checkedAt)}: {check.error}</Callout>)}
         {engine.selected && !engine.ownedByYou && <Callout tone="info" className="mt-3 max-w-xl">This organization&apos;s AI steps use another owner&apos;s Claude login. Using yours switches them to your account.</Callout>}
-        {usingMine && <Callout tone="success" className="mt-3 max-w-xl">This organization&apos;s AI steps run on your Claude account ({CLAUDE_CODE_MODELS.find((entry) => entry.key === engine.model)?.label}). Stop using it to return them to the API provider above.</Callout>}
+        {usingMine && <Callout tone="success" className="mt-3 max-w-xl">This organization&apos;s AI steps run on your Claude account ({modelLabel(engine.model)}). Stop using it to return them to the API provider above.</Callout>}
       </StepFrame>
 
-      {(status.running > 0 || status.limit || status.windows.length > 0) && (
-        <StepFrame step={4} done={!status.limit} title="Usage" description="Only what Claude Code itself reported; nothing here is estimated.">
+      {(status.running > 0 || status.limits.length > 0 || status.windows.length > 0) && (
+        <StepFrame step={4} done={!status.limits.length} title="Usage" description="Only what Claude Code itself reported; nothing here is estimated.">
           <div className="max-w-xl space-y-2 text-paragraph-sm text-text-sub-600">
-            {status.running > 0 && <p>{status.running} AI {status.running === 1 ? "step is" : "steps are"} running on this login now.</p>}
-            {status.limit && <Callout tone="warning">{status.limit.message}</Callout>}
+            {status.running > 0 && <p>{status.running} AI {status.running === 1 ? "step is" : "steps are"} running or waiting on this login now.</p>}
+            {status.limits.map((limit) => (
+              <Callout key={`${limit.window}:${limit.model ?? "all"}`} tone="warning">{limit.model ? `${modelLabel(limit.model)}: ` : ""}{limit.message}</Callout>
+            ))}
             {status.windows.length > 0 && (
               <ul className="space-y-1">
                 {status.windows.map((window) => (

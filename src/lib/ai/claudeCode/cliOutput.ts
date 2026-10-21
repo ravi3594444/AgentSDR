@@ -17,6 +17,12 @@
  * model and the tools (only StructuredOutput with `--tools ""`),
  * `rate_limit_event` carries `rate_limit_info`, and `result` carries
  * `structured_output`, `usage` and `is_error`.
+ *
+ * With no tools the CLI still reads files a prompt names with `@path` (2.1.306,
+ * 21 Oct 2026: a lead's text naming `@../../config/.credentials.json` put that
+ * file into the request; another account's absolute path too). The deny
+ * rules in GENERATION_SETTINGS stop that, and the system prompt goes in a
+ * file rather than on the command line.
  */
 
 import { stripVTControlCharacters } from "node:util";
@@ -74,26 +80,38 @@ export function parseAuthStatus(stdout: string, exitCode: number | null): AuthSt
   }
 }
 
+/** No file, shell or web access, including the `@path` reads a prompt can trigger without any tool. */
+export const GENERATION_SETTINGS = JSON.stringify({
+  permissions: { deny: ["Read", "Edit", "Write", "Glob", "Grep", "Bash", "NotebookEdit", "WebFetch", "WebSearch"] },
+});
+
 /**
  * One isolated generation: no built-in tools (the only tool the model gets is
- * the CLI's StructuredOutput), no MCP servers, no settings files, no slash
- * commands, nothing kept on disk. `--bare` is not used: it never reads the
- * OAuth login this engine exists for.
+ * the CLI's StructuredOutput), no file reads, no MCP servers, no settings
+ * files, no slash commands, nothing kept on disk. `--bare` is not used: it
+ * never reads the OAuth login this engine exists for.
  */
-export function generationArgs(input: { model: ClaudeCodeModel; systemPrompt: string; jsonSchema: Record<string, unknown> }): string[] {
+export function generationArgs(input: { model: ClaudeCodeModel; systemPromptFile: string; jsonSchema: Record<string, unknown> }): string[] {
   return [
     "-p",
     "--output-format", "stream-json",
     "--verbose",
     "--tools", "",
+    "--settings", GENERATION_SETTINGS,
     "--no-session-persistence",
     "--strict-mcp-config",
     "--setting-sources", "",
     "--disable-slash-commands",
     ...(input.model === "default" ? [] : ["--model", input.model]),
-    "--system-prompt", input.systemPrompt,
+    "--system-prompt-file", input.systemPromptFile,
     "--json-schema", JSON.stringify(input.jsonSchema),
   ];
+}
+
+/** Credentials that come from this server's settings or environment rather than the account's own login. */
+const FOREIGN_KEY_SOURCES = new Set(["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "apiKeyHelper"]);
+export function foreignKeySource(source: string | null): boolean {
+  return source !== null && FOREIGN_KEY_SOURCES.has(source);
 }
 
 const USAGE_LIMIT = /\busage limit\b|\bhit your (?:(?!rate\b)[\w'’-]+ ){0,3}(?:limit|budget)\b|\b(?:weekly|daily|monthly|subscription|usage|session|5-hour) limit reached\b|\bout of (?:usage(?: credits)?|extra usage|credits)\b/i;
@@ -116,6 +134,10 @@ export type GenerationOutcome = {
   /** The answer as JSON text (structured_output) or, failing that, whatever text the CLI ended with. */
   text: string | null;
   modelId: string | null;
+  /** What the CLI says authenticated the call (`none` for its own login). */
+  apiKeySource: string | null;
+  /** Set when the CLI reported the call ran on extra usage: the plan's window it went past, and its reset. */
+  overage: { window: string | null; resetsAt: string | null } | null;
   usage: { inputTokens?: number; outputTokens?: number };
   windows: ClaudeCodeWindow[];
   failure: ClaudeFailure | null;
@@ -170,7 +192,19 @@ export function limitRefusal(info: unknown, timeZone = "UTC"): ClaudeCodeLimit |
   if (!record || record.status !== "rejected" || record.isUsingOverage === true) return null;
   const window = typeof record.rateLimitType === "string" ? record.rateLimitType : null;
   const resetsAt = epochIso(record.resetsAt);
-  return { window, resetsAt, message: limitMessage(window, resetsAt, timeZone) };
+  return { window, resetsAt, message: limitMessage(window, resetsAt, timeZone), modelSpecific: modelWindow(window) };
+}
+
+/** A weekly window for one model family (seven_day_opus, seven_day_sonnet): the account's other models still answer. */
+export function modelWindow(window: string | null | undefined): boolean {
+  return /^seven_day_(?!overage)[a-z]+$/.test(window ?? "");
+}
+
+/** The plan's window a call went past when the CLI says extra usage paid for it, or null. */
+export function overageFrom(info: unknown): { window: string | null; resetsAt: string | null } | null {
+  const record = asRecord(info);
+  if (!record || record.isUsingOverage !== true) return null;
+  return { window: typeof record.rateLimitType === "string" ? record.rateLimitType : null, resetsAt: epochIso(record.resetsAt) };
 }
 
 export function limitMessage(window: string | null, resetsAt: string | null, timeZone = "UTC", said?: string): string {
@@ -182,10 +216,10 @@ export function limitMessage(window: string | null, resetsAt: string | null, tim
     } catch {
       when = `${resetsAt.slice(0, 16).replace("T", " ")} UTC`;
     }
-    return `Your Claude account reached its ${name}, which resets ${when}. AI steps on Claude Code wait until then; nothing is sent to another provider.`;
+    return `Your Claude account reached its ${name}, which resets ${when}. Until then AI steps on Claude Code fail with this reason (CRM reply sorting is tried again after the reset); nothing is sent to another provider.`;
   }
   const words = said?.trim().replace(/[.\s]+$/, "");
-  return `Your Claude account reached its ${name}${words ? ` (Claude Code says: "${words.slice(0, 200)}")` : ""}. AI steps on Claude Code wait until it resets; nothing is sent to another provider.`;
+  return `Your Claude account reached its ${name}${words ? ` (Claude Code says: "${words.slice(0, 200)}")` : ""}. Until it resets AI steps on Claude Code fail with this reason; nothing is sent to another provider.`;
 }
 
 function frameText(frame: Frame): string {
@@ -208,7 +242,7 @@ function resultError(frame: Frame): string {
 function classify(text: string, kind: unknown, status: unknown, limit: ClaudeCodeLimit | null, timeZone: string): ClaudeFailure {
   if (limit) return { kind: "limit", limit };
   if (USAGE_LIMIT.test(text) || kind === "usage_limit_reached") {
-    return { kind: "limit", limit: { window: null, resetsAt: null, message: limitMessage(null, null, timeZone, text) } };
+    return { kind: "limit", limit: { window: null, resetsAt: null, message: limitMessage(null, null, timeZone, text), modelSpecific: false } };
   }
   if (SIGNED_OUT.test(text) || kind === "authentication_failed" || status === 401) {
     return { kind: "signed_out", message: "Claude Code is signed out on this server (its login is missing or expired). Sign in again in Settings → AI provider." };
@@ -224,7 +258,7 @@ function classify(text: string, kind: unknown, status: unknown, limit: ClaudeCod
 
 /** Reads one generation's stream-json lines (stdout split on newlines; blank and non-JSON lines are skipped). */
 export function readGeneration(lines: readonly string[], timeZone = "UTC"): GenerationOutcome {
-  const outcome: GenerationOutcome = { text: null, modelId: null, usage: {}, windows: [], failure: null, finished: false };
+  const outcome: GenerationOutcome = { text: null, modelId: null, apiKeySource: null, overage: null, usage: {}, windows: [], failure: null, finished: false };
   let limit: ClaudeCodeLimit | null = null;
   let apiError: { text: string; kind: unknown } | null = null;
   for (const line of lines) {
@@ -238,12 +272,14 @@ export function readGeneration(lines: readonly string[], timeZone = "UTC"): Gene
     } catch {
       continue;
     }
-    if (frame.type === "system" && frame.subtype === "init" && typeof frame.model === "string") {
-      outcome.modelId = frame.model;
+    if (frame.type === "system" && frame.subtype === "init") {
+      if (typeof frame.model === "string") outcome.modelId = frame.model;
+      if (typeof frame.apiKeySource === "string") outcome.apiKeySource = frame.apiKeySource;
     } else if (frame.type === "rate_limit_event") {
       const windows = windowsFrom(frame.rate_limit_info);
       if (windows.length) outcome.windows = windows;
       limit = limitRefusal(frame.rate_limit_info, timeZone) ?? limit;
+      outcome.overage = overageFrom(frame.rate_limit_info) ?? outcome.overage;
     } else if (frame.type === "assistant" && (frame.is_api_error_message === true || typeof frame.error === "string")) {
       apiError = { text: frameText(frame), kind: frame.error };
       const params = asRecord(frame.api_error_params);
@@ -252,8 +288,11 @@ export function readGeneration(lines: readonly string[], timeZone = "UTC"): Gene
       outcome.finished = true;
       const usage = asRecord(frame.usage);
       if (usage) {
+        // Cached prompt tokens are input too: the prompt is re-sent on every call.
+        const input = ["input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"]
+          .map((key) => usage[key]).filter((value): value is number => typeof value === "number");
         outcome.usage = {
-          ...(typeof usage.input_tokens === "number" ? { inputTokens: usage.input_tokens } : {}),
+          ...(input.length ? { inputTokens: input.reduce((sum, value) => sum + value, 0) } : {}),
           ...(typeof usage.output_tokens === "number" ? { outputTokens: usage.output_tokens } : {}),
         };
       }

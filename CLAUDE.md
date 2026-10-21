@@ -162,10 +162,13 @@ keep it within Anthropic's conditions:
   client, or read its credential files. The code Anthropic's page shows goes
   once to the waiting CLI process and is never stored or logged.
 - The CLI gets the allowlisted environment from `cli.server.ts`, its own
-  per-account `CLAUDE_CONFIG_DIR` and `HOME`, `--tools ""` and an empty
-  working directory. Do not give it tools, MCP servers or the server's env.
+  per-account `CLAUDE_CONFIG_DIR` and `HOME`, `--tools ""`, the deny rules in
+  `GENERATION_SETTINGS` (without them a prompt's `@path` makes the CLI read
+  files, credentials included, even with no tools) and an empty working
+  directory. Do not give it tools, MCP servers or the server's env.
 - Selected-but-failing never falls back to an API provider. One person's
-  login answers only their own organization's work.
+  login answers only their own organization's work, and only while they are
+  its only member.
 
 ## Sending rules, not constants
 

@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { stripVTControlCharacters } from "node:util";
 import { accountAuthStatus, accountEnvironment, accountKey, accountPaths, runCliCommand, spawnCli, stopCli, type ClaudeAccount } from "./cli.server";
 import { claudeLoginCode, claudeLoginPrompt, loginArgs } from "./cliOutput";
+import { clearSignedOut } from "./runner.server";
 import type { ClaudeCodeLoginMethod, ClaudeCodeSignIn } from "./contract";
 
 /**
@@ -52,6 +53,8 @@ const DEFAULT_TIMINGS: LoginTimings = { startupMs: 30_000, lifetimeMs: 15 * 60_0
 export class ClaudeLoginController {
   private flow: Flow | null = null;
   private busy: Promise<unknown> | null = null;
+  /** Set synchronously while a sign-in is being set up, so two clicks cannot start two CLI logins. */
+  private starting = false;
 
   constructor(
     private readonly account: ClaudeAccount,
@@ -64,13 +67,24 @@ export class ClaudeLoginController {
     return this.flow ? { ...this.flow.status } : null;
   }
 
-  async start(method: ClaudeCodeLoginMethod): Promise<ClaudeCodeSignIn> {
+  /**
+   * Starts the CLI's sign-in. `again`: the CLI's own login was refused as
+   * signed out or expired, so sign in even if `auth status` still says
+   * signed in (it reads only the stored file).
+   */
+  async start(method: ClaudeCodeLoginMethod, again = false): Promise<ClaudeCodeSignIn> {
     if (this.flow?.status.phase === "waiting") {
       if (this.flow.ready) return { ...this.flow.status };
       throw new Error("A Claude sign-in is already starting. Wait for its link.");
     }
+    if (this.starting) throw new Error("A Claude sign-in is already starting. Wait for its link.");
     if (this.busy) throw new Error("Claude Code is still signing out. Try again in a moment.");
-    await this.flow?.stopping;
+    this.starting = true;
+    try {
+      await this.flow?.stopping;
+    } catch {
+      // A failed stop is reported by its own flow.
+    }
     return new Promise<ClaudeCodeSignIn>((resolveStart, reject) => {
       const flow: Flow = {
         status: { phase: "waiting", flowId: randomUUID(), authorizationUrl: null, expiresAt: new Date(Date.now() + this.timings.lifetimeMs).toISOString() },
@@ -86,10 +100,11 @@ export class ClaudeLoginController {
       flow.startupTimer.unref();
       flow.expiryTimer.unref();
       this.flow = flow;
+      this.starting = false;
       // Never replace a working login because Sign in was clicked twice.
       void accountAuthStatus(this.account).then((auth) => {
         if (flow.status.phase !== "waiting") return;
-        if (auth.state === "in") this.finish(flow, "succeeded");
+        if (auth.state === "in" && !again) this.finish(flow, "succeeded");
         else this.login(flow, method);
       }, () => this.finish(flow, "failed", UNREADABLE));
     });
@@ -123,7 +138,7 @@ export class ClaudeLoginController {
 
   /** Signs this account's CLI out (`claude auth logout`) and confirms it. Refused while a sign-in or a generation runs. */
   async signOut(): Promise<void> {
-    if (this.flow?.status.phase === "waiting") throw new Error("Finish or cancel the Claude sign-in in progress before signing out.");
+    if (this.flow?.status.phase === "waiting" || this.starting) throw new Error("Finish or cancel the Claude sign-in in progress before signing out.");
     if (this.running() > 0) throw new Error(`${this.running()} AI ${this.running() === 1 ? "step is" : "steps are"} running on this Claude login. Sign out when ${this.running() === 1 ? "it finishes" : "they finish"}.`);
     if (this.busy) throw new Error("Claude Code is already signing out.");
     const run = (async () => {
@@ -135,9 +150,10 @@ export class ClaudeLoginController {
       if (auth.state === "unknown") throw new Error("Claude Code could not confirm the sign-out. Try again, or update Claude Code on the server.");
     })();
     this.busy = run;
+    const before = this.flow;
     try {
       await run;
-      this.flow = null;
+      if (this.flow === before) this.flow = null;
     } finally {
       this.busy = null;
     }
@@ -215,6 +231,7 @@ export class ClaudeLoginController {
       flow.completion = undefined;
     }
     flow.stopping = stopCli(flow.child).then(() => undefined, () => undefined);
+    if (phase === "succeeded") clearSignedOut(this.account);
   }
 }
 

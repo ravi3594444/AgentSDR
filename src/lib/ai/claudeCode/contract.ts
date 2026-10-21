@@ -59,7 +59,8 @@ export type ClaudeCodeModelCheck =
 /** One usage window exactly as the CLI's `rate_limit_event` reported it. */
 export type ClaudeCodeWindow = { window: string; utilization: number | null; resetsAt: string | null };
 
-export type ClaudeCodeLimit = { window: string | null; resetsAt: string | null; message: string };
+/** A usage window that refused this account. `modelSpecific`: a weekly window of one model family, so only that model is held. */
+export type ClaudeCodeLimit = { window: string | null; resetsAt: string | null; message: string; modelSpecific: boolean; model?: ClaudeCodeModel };
 
 export type ClaudeCodeStatus = {
   /** Whether this person may use the engine: the owner of the platform operator's organization (owner-only pilot). */
@@ -68,22 +69,28 @@ export type ClaudeCodeStatus = {
   /** The CLI on this server, or null when it is not installed. */
   cli: { version: string } | null;
   cliError?: string;
-  /** This person's own login in this organization. `signedIn` null: the CLI could not say. */
-  account: { signedIn: boolean | null; method: string | null };
+  /**
+   * This person's own login in this organization. `signedIn` null: the CLI
+   * could not say. `expired`: a generation was refused as signed out or
+   * expired since the last sign-in, whatever `auth status` says.
+   */
+  account: { signedIn: boolean | null; method: string | null; expired: boolean };
   signIn: ClaudeCodeSignIn | null;
   engine: {
     /** The organization's AI steps run on this engine. */
     selected: boolean;
-    /** Whose login the organization's AI steps use; only they can change it. */
+    /** Whose login the organization's AI steps use. Any owner here may stop it or switch it to their own. */
     ownerUserId: string | null;
     ownedByYou: boolean;
     model: ClaudeCodeModel;
     checks: Partial<Record<ClaudeCodeModel, ClaudeCodeModelCheck>>;
+    /** Why this organization cannot use Claude Code now (for example other members), or null. */
+    blocked: string | null;
   };
-  /** Generations running on this login right now. */
+  /** Generations running or waiting on this login right now. */
   running: number;
-  /** Set while the CLI has reported a usage limit that has not reset yet. */
-  limit: ClaudeCodeLimit | null;
+  /** Usage limits the CLI reported that have not reset yet (a model's own, or the whole account's). */
+  limits: ClaudeCodeLimit[];
   /** The last usage the CLI reported for this login, if any. Never estimated. */
   windows: ClaudeCodeWindow[];
   windowsReportedAt: string | null;

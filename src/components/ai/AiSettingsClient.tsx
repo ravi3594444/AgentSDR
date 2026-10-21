@@ -64,6 +64,11 @@ export default function AiSettingsClient() {
 
   return (
     <div className="space-y-4">
+      {claude.selected && !claude.allowed && (
+        <p className="rounded-xl bg-information-lighter px-3.5 py-3 text-paragraph-sm text-information-dark ring-1 ring-inset ring-information-light">
+          This organization&apos;s AI steps run on an owner&apos;s own Claude account through Claude Code. The provider below keeps table AI columns, AI web search and call transcription. Only that owner can change this.
+        </p>
+      )}
       <div role="radiogroup" aria-label="AI provider" className={cn("grid gap-2 md:grid-cols-2", claude.allowed && "xl:grid-cols-3")}>
         {[...CHOICES, ...(claude.allowed ? [CLAUDE_CHOICE] : [])].map((choice) => {
           const shown = choice.key === view;

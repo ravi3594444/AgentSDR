@@ -31,7 +31,9 @@ Rechecked on 21 Oct 2026 at <https://code.claude.com/docs/en/legal-and-complianc
 - **Not a shared backend.** Only an owner of the platform operator's
   organization (the team running this server) can sign in or select the
   engine, and only that organization's work runs on that person's login.
-  Other organizations cannot enable it (owner-only pilot).
+  It also refuses to run while the organization has any other member,
+  because their chats and the work they start would run on one person's
+  account. Other organizations cannot enable it (owner-only pilot).
 - **Ordinary, individual use.** The page also says "Advertised usage limits for
   Pro and Max plans assume ordinary, individual usage of Claude Code and the
   Agent SDK." Background AI steps (reply sorting, lead judging) on a
@@ -77,6 +79,16 @@ container:
   That is exactly the case the engine guards against: a login the CLI reports
   that is not stored in the account's own directories is treated as signed
   out (`hasOwnLogin`), and no generation runs on it.
+- **`@path` in a prompt is read even with no tools.** Found in review and
+  reproduced against a local stub API (dummy key, no account): with
+  `--tools ""` and the other isolation flags, a lead's text naming
+  `@../../config/.credentials.json` (relative to the generation's working
+  directory) or another account's absolute path put that file into every
+  request. `--disallowedTools Read` did not stop it; a deny rule passed in
+  `--settings` (`{"permissions":{"deny":["Read", …]}}`) did. Every generation
+  now carries that rule (`GENERATION_SETTINGS`), and the probe through the
+  app's own `runGeneration` sends 4 requests with neither marker; with the
+  rule removed, both markers are in all 4.
 
 ## How it works
 
@@ -114,17 +126,20 @@ silently turn a subscription login into API billing) or
 signed in), returns Anthropic's link once the CLI prints it, and holds the
 process for 15 minutes. `submit_code` writes the pasted code to that process's
 stdin once; the CLI's exit and `auth status` decide success. `cancel` stops
-it. `sign_out` runs `claude auth logout` and confirms; it is refused while
-the person's login answers the organization's AI steps or while a generation
-runs on it. Signing in again after an expiry is the same flow ("Sign in
-again").
+it; a second Sign in while one is being set up is refused. `sign_out` runs
+`claude auth logout` and confirms; it is refused while a sign-in is in
+progress or a generation runs or waits on the login. While the login
+answers the organization's AI steps the page asks first: those steps then
+fail until a sign-in, never moving to the API provider. Signing in again
+after an expiry is the same flow ("Sign in again").
 
 **Selecting it.** `check_model` sends one short generation on the person's
 account and records the model id the CLI actually ran (or why not), per
-person. `use` requires a successful check of that model and binds the
-organization to that person's login; switching from another owner's login
-waits while generations run on it. `stop_using` returns the organization's AI
-steps to the API provider.
+person. `use` requires a successful check of that model and an organization
+whose only member is that person, and binds the organization to their login;
+choosing another checked model while in use is the same `use`. Switching from
+another owner's login is refused while generations run or wait on it.
+`stop_using` returns the organization's AI steps to the API provider.
 
 **What runs on it.** Every `completeStructured` call that names no model:
 the assistant's turns, lead judging (`sortLeads`), the outreach writers and
@@ -136,33 +151,57 @@ it as it judges an API model's. Everything around those calls is unchanged:
 the organization-scoped dispatcher, budgets and spend guards, pause/stop,
 Review/Automatic, Do Not Contact, run state, takeover, and send idempotency
 all sit outside the model call. The CLI has no route around them: `--tools ""`
-leaves it only `StructuredOutput`, with `--strict-mcp-config`,
-`--setting-sources ""`, `--disable-slash-commands`, `--no-session-persistence`
-and an empty working directory. Nothing is resumed between calls.
+leaves it only `StructuredOutput`; `--settings` denies Read, Edit, Write,
+Glob, Grep, Bash, NotebookEdit, WebFetch and WebSearch (which also stops
+`@path` reads); `--strict-mcp-config`, `--setting-sources ""`,
+`--disable-slash-commands`, `--no-session-persistence`, an empty working
+directory, and the system prompt in a file there (`--system-prompt-file`,
+so it is not on the command line). Nothing is resumed between calls. A call
+the CLI says was authenticated by a key from the server's own settings
+(`apiKeySource` `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or
+`apiKeyHelper`) is refused and its answer not used.
 
 **What does not.** A call that names an API model (a table AI column saved for
 one) keeps that connection. A call that needs OpenRouter's web plugin is
-refused ("Claude Code does not offer"), never answered from memory. Call
-transcription and the AI-provider web search read their own model settings
-and stay on the API provider. These are named on the settings card.
+refused ("Claude Code does not offer"), never answered from memory; that
+includes Prospecting's parent-company lookup. Call transcription and the
+AI-provider web search read their own model settings and stay on the API
+provider. These are named on the settings card, and admins and members, who
+cannot open the Claude Code card, see a line saying that AI steps run on an
+owner's Claude account.
 
-**Limits and failures.** Errors carry statuses the app's retry rules already
-read: signed out or not signed in 401, usage limit 402, model unavailable 404
-(none retried; the reply agent stops on them), a process that died, timed out
-or was overloaded 503 (retried with the existing backoff, up to the caller's
-attempts), anything else 400. A usage limit is held per account until the
-reset the CLI reported (15 minutes when it reported none), and calls in that
-time fail at once without starting the CLI. Usage shown on the card is only
-what the CLI's `rate_limit_event` reported (window, share used, reset), with
-the time it was reported. The CLI's `total_cost_usd` (an API-price estimate)
-is not recorded as spend: usage rows for Claude Code have no cost. Nothing
-ever moves to another provider on a failure.
+**Limits and failures.** Each error says whether `completeStructured` may
+try again (`retryable`): only a CLI that died before answering or an
+overloaded API is retried. Its HTTP-like status serves the reply agent,
+which stops on a 4xx: signed out or not signed in 401, usage limit or extra
+usage 402, model unavailable 404, timeout 504, busy 503, anything else 400.
+A usage limit is held until the reset the CLI reported (15 minutes when it
+reported none): for one model's weekly window only that model is held, for
+the 5-hour or weekly window the whole account. Held calls fail at once
+without starting the CLI; a model check still runs, so the owner can find a
+model that answers. When the CLI reports that a call ran on extra usage
+(billed beyond the plan), that answer is kept and the account is held until
+the window resets, so nothing more is billed that way. A generation refused
+as signed out or expired marks the login expired on the card (whatever the
+stored file says), and Sign in again then runs the CLI's login even though
+`auth status` still says signed in. While held, CRM reply sorting is put
+back for the reset time; the reply agent puts the message in Inbox → Needs
+you with the reason; other steps fail with the reason. Usage shown on the
+card is only what the CLI's `rate_limit_event` reported (window, share used,
+reset), with the time it was reported. The CLI's `total_cost_usd` (an
+API-price estimate) is not recorded as spend: usage rows for Claude Code have
+no cost, and they record the model id the CLI ran. Input tokens include
+cached prompt tokens. Nothing ever moves to another provider on a failure.
 
 **Processes.** At most `AGENTSDR_CLAUDE_CODE_MAX_PROCESSES` (default 2, at
-most 8) CLI processes run at once; each was measured at about 260 MB. A call
-waits for a slot within its own timeout, else fails as busy (503). A
-generation past its timeout (the caller's plus 20 s for process start) or
-whose caller aborts has its process group stopped. Sign-in flows live in
+most 8) generations run at once; each CLI was measured at about 260 MB. The
+short `auth` and `--version` commands are not counted. A call waits at most
+30 s (and never past its own timeout) for a slot, else fails as busy, not
+retried. A generation past its timeout (the caller's plus 20 s for process
+start) or whose caller aborts has its process group stopped; an
+already-aborted call never starts. Generations waiting for a slot count as
+running, so sign-out and switching see them. The engine row and the member
+count are cached per organization for 30 s (a save updates the row at once). Sign-in flows live in
 memory: a restart ends one in progress (the page says to start again); the
 CLI's login on disk survives, and work interrupted by a restart is picked up
 by the existing job workers like any other interrupted model call.
@@ -176,7 +215,9 @@ by the existing job workers like any other interrupted model call.
    ```
 
    It builds the image with Claude Code 2.1.306 for x86-64 (version and
-   tarball SHA-512 pinned in the file), mounts the `claude-code-data` volume
+   tarball SHA-512 pinned in the file; the download layer comes before the
+   per-commit layers, so it is cached across deploys), mounts the
+   `claude-code-data` volume
    at `/var/lib/agentsdr/claude-code` and sets two processes at a time. On an
    arm64 server, or for another version, set `AGENTSDR_CLAUDE_CODE_VERSION`
    and `AGENTSDR_CLAUDE_CODE_SHA512` in `.env`; the SHA-512 is the hex digest
@@ -193,40 +234,57 @@ by the existing job workers like any other interrupted model call.
 
 Local development: install Claude Code on the machine (or set
 `AGENTSDR_CLAUDE_CODE_CLI` to its path); logins go to `./.data/claude-code`
-(git-ignored) unless `AGENTSDR_CLAUDE_CODE_DATA_DIR` says otherwise.
+(ignored by git and by the Docker build context) unless
+`AGENTSDR_CLAUDE_CODE_DATA_DIR` says otherwise. The image carries
+OpenMausBot's license and notice under `/app/licenses/third-party`.
 
 ## Tests
 
-- `src/lib/ai/claudeCode/claudeCode.test.ts`, 21 tests (`bun test
+- `src/lib/ai/claudeCode/claudeCode.test.ts`, 28 tests (`bun test
   --conditions=react-server src/lib/ai/claudeCode/`): the readers against the
-  real 2.1.306 output above; and against the fake CLI: sign-in success with
-  the code passed once and found in no file the app wrote, the other login
-  methods passed through, cancel, a wrong code, no link in time, sign-out
-  refused while a generation runs then sign-out and reconnect, restart
-  (a sign-in in progress is gone, the login on disk remains), cross-account
-  isolation (same organization and another one), a login reported from
-  elsewhere on the machine, the allowlisted environment, valid output through
-  `completeStructured`, prose and caller-rejected answers retried with the
-  reason then failing, a usage limit (not retried, held, released after its
-  reset, windows recorded), an expired login and an unavailable model (not
-  retried), a crash retried, a hung process killed at the timeout, and the
-  process bound.
-- `scripts/e2e/claude-code-engine.ts`, 24 checks on the local database with
+  real 2.1.306 output above and the generation flags (the Read deny rule, the
+  system prompt by file); and against the fake CLI: sign-in success with the
+  code passed once and found in no file the app wrote, the other login
+  methods passed through, cancel, a wrong code, no link in time, a double
+  Sign in refused, sign-out refused while a generation runs then sign-out and
+  reconnect, restart (a sign-in in progress is gone, the login on disk
+  remains), an expired login marked and signed in again although the stored
+  file still says signed in, cross-account isolation (same organization and
+  another one), a login reported from elsewhere on the machine, a credential
+  from the server's settings refused, the allowlisted environment, valid
+  output through `completeStructured` with the model id the CLI ran, prose
+  and caller-rejected answers retried with the reason then failing, a usage
+  limit (not retried, held, released after its reset), one model's weekly
+  limit holding only that model while a check still runs, extra usage (the
+  billed answer kept, the account then held; cached tokens counted), an
+  expired login and an unavailable model (not retried), a crash retried, a
+  hung process killed at the timeout and not retried, a busy server not
+  retried, an already-aborted call never started, a scratch directory that
+  cannot be made leaking no slot, and the process bound.
+- `scripts/e2e/claude-code-engine.ts`, 28 checks on the local database with
   the fake CLI and every API request intercepted: nothing changes before
   selection; the pilot gate (operator owner yes; member, admin, another
   organization's owner no); sign-in, model check, selection; the real
   `sortLeads` and `classifyCrmReply` answered through Claude Code with their
-  own validation and no API call; usage rows without cost; a rejected answer
-  retried; an API-model call kept off Claude Code; web search refused; a usage
-  limit failing and holding without CLI or API; a demoted owner refused;
-  another organization's selection refused and never run on the owner's
-  login; Stop using returns to the API path.
+  own validation and no API call; usage rows with the model id the CLI ran
+  and no cost; a rejected answer retried; an API-model call kept off Claude
+  Code; web search refused; a usage limit failing and holding without CLI or
+  API; another member in the organization stops it (and the card says why)
+  until the owner is alone again; a demoted owner refused; another
+  organization's selection refused and never run on the owner's login; Stop
+  using returns to the API path.
+- The `@path` probe above, through the app's own `runGeneration` with the
+  real 2.1.306 binary and a local stub API: 0 of 4 requests carry either
+  credential marker; with the deny rule removed, all 4 carry both.
 - Each safeguard was removed once to confirm a test fails without it: the
   own-login check (3 unit tests fail), the allowlisted environment (1), a
   non-retried limit (1), the operator gate (2 e2e checks), the API-model rule
-  (2 e2e checks).
-- The full unit suite (2029 tests), `npx tsc --noEmit`, eslint on the changed
-  files and a production build (`next build --webpack`) pass.
+  (2 e2e checks), the Read deny rule (the probe).
+- The CRM worker putting a classification back for the reset time on a held
+  login is a two-line mapping in `handleClassificationJob`, checked by
+  reading and by the unit test of `claudeHoldUntil`, not by a CRM run.
+- The full unit suite, `npx tsc --noEmit`, eslint on the changed files and a
+  production build (`next build --webpack`) pass.
 
 ## Remaining limits and what is not verified
 
@@ -244,10 +302,16 @@ Local development: install Claude Code on the machine (or set
   a Console login shows as signed out after succeeding, that is the cause.
 - **Model choices** are the CLI's aliases (account default, Sonnet, Opus,
   Haiku); which work is learned only by checking each on the account.
-- **Members of the pilot organization** use the owner's login for the
-  organization's AI steps they trigger (the assistant chat included). For a
-  one-owner pilot that is the owner's own use; before adding staff or
-  customers, each person needs their own sign-in, which is not built.
+- **Only a one-person organization can use it.** Claude Code refuses to run
+  while the organization has any member besides the owner who signed in;
+  per-person sign-ins for staff are not built.
 - **Usage** shown is the last report the CLI made; there is no reading of the
   account's remaining allowance between calls, and no estimate is made.
 - The settings card was checked in a browser with the fake CLI only.
+- The JSON schema still goes on the command line (`--json-schema` takes no
+  file); the largest is a few KB, well under the 128 KB per-argument limit.
+- A person who leaves the organization keeps their login directory on disk;
+  nothing removes it yet (sign out first, or delete
+  `accounts/<organization>/<person>` from the volume).
+- The reply agent does not wait for a usage limit's reset: it puts the
+  message in Needs you with the reason. Only CRM reply sorting is put back.

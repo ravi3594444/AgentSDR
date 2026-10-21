@@ -4,6 +4,8 @@
 *.dump
 *.key
 *.pem
+# The Claude Code engine's local logins (AGENTSDR_CLAUDE_CODE_DATA_DIR default).
+.data
 # docker/deploy.sh's database dumps and saved VM edits (`*.dump` above only
 # matches at the top level).
 deploy-backups
@@ -19,6 +21,7 @@ feedback
 .claude
 .conductor
 docs
+!docs/third-party
 tests
 extensions/*/dist
 extensions/*/release

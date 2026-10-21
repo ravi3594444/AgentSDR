@@ -95,13 +95,11 @@ async function signIn(account: { organizationId: string; userId: string }) {
 }
 
 // ------------------------------------------------------------------ fixtures
-let operatorId = await operatorOrganizationId();
-let createdOperator = false;
-if (!operatorId) {
-  const [org] = await db.insert(organizations).values({ name: `Claude Code check operator ${stamp}`, slug: `claude-code-operator-${stamp}`, metadata: JSON.stringify({ initial: true }) }).returning();
-  operatorId = org!.id;
-  createdOperator = true;
-}
+// A disposable database already has its operator organization; this check acts as one of its own.
+const [orgA] = await db.insert(organizations).values({ name: `Claude Code check A ${stamp}`, slug: `claude-code-a-${stamp}` }).returning();
+const operatorId = orgA!.id;
+engineModule.setOperatorOrganizationForTests(operatorId);
+check("the database still has its own operator organization", (await operatorOrganizationId()) !== null);
 const [orgB] = await db.insert(organizations).values({ name: `Claude Code check B ${stamp}`, slug: `claude-code-b-${stamp}` }).returning();
 const person = async (label: string) => (await db.insert(users).values({ name: `Claude check ${label}`, email: `claude-${label}-${stamp}@claude-code-check.test`, emailVerified: true }).returning())[0]!;
 const ownerA = await person("owner-a");
@@ -109,12 +107,10 @@ const memberM = await person("member-m");
 const ownerB = await person("owner-b");
 await db.insert(members).values([
   { organizationId: operatorId, userId: ownerA.id, role: "owner" },
-  { organizationId: operatorId, userId: memberM.id, role: "member" },
   { organizationId: orgB!.id, userId: ownerB.id, role: "owner" },
 ]);
 const accountA = { organizationId: operatorId, userId: ownerA.id };
 const accountB = { organizationId: orgB!.id, userId: ownerB.id };
-const savedEngine = await runInOrganization(operatorId, () => engineModule.getClaudeEngine());
 
 const LEAD_ANSWER = { leads: [{ index: 0, group: "Dental clinics", approach: "standard", reason: "A dental clinic in Miami.", requestFit: "fits", noWebsiteRequired: false }] };
 const CLASSIFY_ANSWER = { categoryKey: "interested", subcategoryKey: "demo_requested", confidence: 0.94, reasoning: "The person asked for a demo.", suggestedNextActionAt: null };
@@ -166,7 +162,7 @@ try {
   check("no API provider was called", apiCalls.length === 0, apiCalls);
   const usageAfter = await db.select().from(assistantUsage).where(eq(assistantUsage.organizationId, operatorId));
   const newUsage = usageAfter.filter((row) => !usageBefore.some((old) => old.id === row.id));
-  check("usage is recorded with no invented cost", newUsage.length >= 1 && newUsage.every((row) => row.costUsd === null && row.model === "sonnet"), newUsage.map((row) => ({ kind: row.kind, model: row.model, cost: row.costUsd })));
+  check("usage is recorded with the model the CLI ran and no invented cost", newUsage.length >= 1 && newUsage.every((row) => row.costUsd === null && row.model === "claude-sonnet-5-5"), newUsage.map((row) => ({ kind: row.kind, model: row.model, cost: row.costUsd })));
 
   // 5. A validator's rejection is fed back and retried on the same login.
   scenario(accountA, { answer: { leads: [] } });
@@ -190,8 +186,23 @@ try {
   const held = await runInOrganization(operatorId, () => failsWith(judge));
   check("…and holds the next call without starting the CLI", held instanceof ClaudeCodeError && held.kind === "limit" && generations(accountA) === beforeLimit + 1);
   check("…and no API provider is called", apiCalls.length === apiBeforeLimit, apiCalls.slice(apiBeforeLimit));
-  const status = await runInOrganization(operatorId, () => engineModule.claudeCodeStatus({ organizationId: operatorId!, userId: ownerA.id, roles: ["owner"] }));
-  check("the settings status shows the limit and the reported windows", status.limit !== null && status.windows.some((window) => window.window === "five_hour") && status.account.signedIn === true && status.engine.selected, { limit: status.limit, windows: status.windows });
+  const status = await runInOrganization(operatorId, () => engineModule.claudeCodeStatus({ organizationId: operatorId, userId: ownerA.id, roles: ["owner"] }));
+  check("the settings status shows the limit and the reported windows", status.limits.length > 0 && status.windows.some((window) => window.window === "five_hour") && status.account.signedIn === true && status.engine.selected, { limits: status.limits, windows: status.windows });
+
+  // 7b. Another member in the organization: their work would run on A's account, so nothing runs.
+  scenario(accountA, {});
+  const { resetRunnerForTests } = await import("@/lib/ai/claudeCode/runner.server");
+  resetRunnerForTests();
+  await db.insert(members).values({ organizationId: operatorId, userId: memberM.id, role: "member" });
+  engineModule.resetClaudeEngineCachesForTests();
+  const beforeMember = generations(accountA);
+  const withMember = await runInOrganization(operatorId, () => failsWith(() => plainCall()));
+  check("with another member in the organization, nothing runs on the owner's login", withMember instanceof ClaudeCodeError && withMember.message.includes("other member") && generations(accountA) === beforeMember, withMember?.message);
+  check("…and the settings say why", (await runInOrganization(operatorId, () => engineModule.claudeCodeStatus({ organizationId: operatorId, userId: ownerA.id, roles: ["owner"] }))).engine.blocked?.includes("1 other member") === true);
+  await db.delete(members).where(and(eq(members.organizationId, operatorId), eq(members.userId, memberM.id)));
+  engineModule.resetClaudeEngineCachesForTests();
+  const alone = await runInOrganization(operatorId, () => plainCall().then(() => null, (error: unknown) => error));
+  check("once the owner is the only member again, it runs", alone === null && generations(accountA) === beforeMember + 1, alone instanceof Error ? alone.message : alone);
 
   // 8. A demoted owner's login stops answering; no fallback.
   await db.update(members).set({ role: "admin" }).where(and(eq(members.organizationId, operatorId), eq(members.userId, ownerA.id)));
@@ -211,20 +222,18 @@ try {
   check("pointing another organization at A's login is refused", borrowed instanceof ClaudeCodeError && generations(accountA) === beforeB, borrowed?.message);
 
   // 10. Stop using: the work returns to the API path.
-  await runInOrganization(operatorId, () => engineModule.saveClaudeEngine({ ...savedEngine, selected: false, ownerUserId: ownerA.id }));
+  await runInOrganization(operatorId, () => engineModule.saveClaudeEngine({ selected: false, ownerUserId: ownerA.id, model: "sonnet", checks: {} }));
   const beforeStop = generations(accountA);
   await runInOrganization(operatorId, () => failsWith(() => plainCall()));
   check("after Stop using, the CLI is not started", generations(accountA) === beforeStop);
 } finally {
   globalThis.fetch = realFetch;
-  await runInOrganization(operatorId!, () => engineModule.saveClaudeEngine(savedEngine)).catch(() => undefined);
-  await db.delete(gridProviders).where(and(eq(gridProviders.organizationId, orgB!.id), eq(gridProviders.key, "claude-code-engine")));
-  await db.delete(assistantUsage).where(inArray(assistantUsage.organizationId, [orgB!.id]));
-  await db.delete(assistantUsage).where(and(eq(assistantUsage.organizationId, operatorId!), eq(assistantUsage.model, "sonnet"), gte(assistantUsage.createdAt, startedAt)));
+  engineModule.setOperatorOrganizationForTests(null);
+  await db.delete(gridProviders).where(and(inArray(gridProviders.organizationId, [operatorId, orgB!.id]), eq(gridProviders.key, "claude-code-engine")));
+  await db.delete(assistantUsage).where(and(inArray(assistantUsage.organizationId, [operatorId, orgB!.id]), gte(assistantUsage.createdAt, startedAt)));
   await db.delete(members).where(inArray(members.userId, [ownerA.id, memberM.id, ownerB.id]));
   await db.delete(users).where(inArray(users.id, [ownerA.id, memberM.id, ownerB.id]));
-  await db.delete(organizations).where(eq(organizations.id, orgB!.id));
-  if (createdOperator) await db.delete(organizations).where(eq(organizations.id, operatorId!));
+  await db.delete(organizations).where(inArray(organizations.id, [operatorId, orgB!.id]));
   rmSync(dataDir, { recursive: true, force: true });
 }
 

@@ -1,9 +1,10 @@
 import "server-only";
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { gridProviders } from "@/lib/grid/schema";
 import { isOrganizationOwner, operatorOrganizationId } from "@/lib/auth/operator.server";
+import { members } from "@/lib/auth/schema";
 import type { OrgRole } from "@/lib/auth/permissions";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { accountAuthStatus, cliVersion, type ClaudeAccount } from "./cli.server";
@@ -22,8 +23,9 @@ import { accountUsage, ClaudeCodeError, runGeneration, runningOn } from "./runne
  * its default model stay in use.
  *
  * Owner-only pilot: only an owner of the platform operator's organization
- * (the team running this server) can sign in or select it, so one person's
- * subscription never becomes a shared backend for other organizations.
+ * (the team running this server) can sign in or select it, and only while
+ * that owner is the organization's only member, so one person's
+ * subscription never answers for anyone else's work.
  */
 
 const KEY = "claude-code-engine";
@@ -66,10 +68,19 @@ export function normalizeClaudeEngine(value: unknown): ClaudeEngine {
   };
 }
 
+/** Read on every structured call, so cached per organization for 30 s like other settings; a save here updates it at once. */
+const ENGINE_CACHE_MS = 30_000;
+const engineCache = new Map<string, { engine: ClaudeEngine; at: number }>();
+
 export async function getClaudeEngine(): Promise<ClaudeEngine> {
+  const organizationId = currentOrganizationId();
+  const cached = engineCache.get(organizationId);
+  if (cached && Date.now() - cached.at < ENGINE_CACHE_MS) return cached.engine;
   const [row] = await db.select({ config: gridProviders.config }).from(gridProviders)
     .where(and(inOrg(gridProviders), eq(gridProviders.key, KEY))).limit(1);
-  return row ? normalizeClaudeEngine(row.config) : EMPTY;
+  const engine = row ? normalizeClaudeEngine(row.config) : EMPTY;
+  engineCache.set(organizationId, { engine, at: Date.now() });
+  return engine;
 }
 
 export async function saveClaudeEngine(engine: ClaudeEngine): Promise<ClaudeEngine> {
@@ -77,11 +88,23 @@ export async function saveClaudeEngine(engine: ClaudeEngine): Promise<ClaudeEngi
   await db.insert(gridProviders)
     .values({ organizationId: currentOrganizationId(), key: KEY, name: "Claude Code engine", config: value, enabled: true })
     .onConflictDoUpdate({ target: [gridProviders.organizationId, gridProviders.key], set: { config: value, updatedAt: new Date() } });
+  engineCache.set(currentOrganizationId(), { engine: value, at: Date.now() });
   return value;
 }
 
 let operatorCache: { id: string | null; at: number } | null = null;
+let operatorOverride: string | null = null;
+/** e2e: a disposable database already has an operator organization; the check runs in its own. */
+export function setOperatorOrganizationForTests(id: string | null): void {
+  operatorOverride = id;
+  resetClaudeEngineCachesForTests();
+}
+export function resetClaudeEngineCachesForTests(): void {
+  engineCache.clear();
+  membersCache.clear();
+}
 async function operatorOrganization(): Promise<string | null> {
+  if (operatorOverride) return operatorOverride;
   if (operatorCache && Date.now() - operatorCache.at < 60_000) return operatorCache.id;
   const id = await operatorOrganizationId();
   operatorCache = { id, at: Date.now() };
@@ -95,6 +118,29 @@ export async function claudeCodeAccess(ctx: { organizationId: string; roles: rea
     return { allowed: false, reason: "Claude Code is a pilot for the organization that runs this server; each person uses their own Claude account." };
   }
   return { allowed: true };
+}
+
+/**
+ * Why this organization cannot run on `ownerUserId`'s login, or null. While
+ * anyone else is a member, their chats and the work they start would run on
+ * that one person's Claude account, which the pilot does not allow.
+ */
+export async function claudeCodeBlocked(organizationId: string, ownerUserId: string): Promise<string | null> {
+  const others = await otherMembers(organizationId, ownerUserId);
+  if (!others) return null;
+  return `This organization has ${others} other ${others === 1 ? "member" : "members"}. Their chats and the work they start would run on one person's Claude account, so Claude Code is only for an organization whose only member is the owner who signs in. Use an API provider, or remove the other members first.`;
+}
+
+const membersCache = new Map<string, { count: number; at: number }>();
+async function otherMembers(organizationId: string, userId: string): Promise<number> {
+  const key = `${organizationId}:${userId}`;
+  const cached = membersCache.get(key);
+  if (cached && Date.now() - cached.at < ENGINE_CACHE_MS) return cached.count;
+  const [row] = await db.select({ count: sql<number>`count(*)::int` }).from(members)
+    .where(and(eq(members.organizationId, organizationId), ne(members.userId, userId)));
+  const count = row?.count ?? 0;
+  membersCache.set(key, { count, at: Date.now() });
+  return count;
 }
 
 /**
@@ -112,6 +158,8 @@ export async function claudeCodeBinding(): Promise<{ account: ClaudeAccount; mod
   if (!(await isOrganizationOwner(organizationId, engine.ownerUserId))) {
     throw new ClaudeCodeError("not_signed_in", "Claude Code is selected, but the person whose Claude login it uses is no longer an owner here. An owner must sign in with their own account or choose another AI provider in Settings → AI provider.");
   }
+  const blocked = await claudeCodeBlocked(organizationId, engine.ownerUserId);
+  if (blocked) throw new ClaudeCodeError("error", `Claude Code is selected, but it cannot run here: ${blocked}`);
   return { account: { organizationId, userId: engine.ownerUserId }, model: engine.model };
 }
 
@@ -123,10 +171,6 @@ async function cachedVersion(): Promise<string | null> {
   return version;
 }
 
-export function forgetCliVersion(): void {
-  versionCache = null;
-}
-
 /** Everything the settings card shows for this person. */
 export async function claudeCodeStatus(ctx: { organizationId: string; userId: string; roles: readonly OrgRole[] }): Promise<ClaudeCodeStatus> {
   const access = await claudeCodeAccess(ctx);
@@ -135,27 +179,31 @@ export async function claudeCodeStatus(ctx: { organizationId: string; userId: st
     allowed: access.allowed,
     ...(access.reason ? { reason: access.reason } : {}),
     cli: null,
-    account: { signedIn: null, method: null },
+    account: { signedIn: null, method: null, expired: false },
     signIn: null,
-    engine: { selected: engine.selected, ownerUserId: engine.ownerUserId, ownedByYou: engine.ownerUserId === ctx.userId, model: engine.model, checks: engine.checks[ctx.userId] ?? {} },
+    engine: { selected: engine.selected, ownerUserId: engine.ownerUserId, ownedByYou: engine.ownerUserId === ctx.userId, model: engine.model, checks: engine.checks[ctx.userId] ?? {}, blocked: null },
     running: 0,
-    limit: null,
+    limits: [],
     windows: [],
     windowsReportedAt: null,
   };
   if (!access.allowed) return base;
   const account = { organizationId: ctx.organizationId, userId: ctx.userId };
+  const blocked = await claudeCodeBlocked(ctx.organizationId, ctx.userId);
   const version = await cachedVersion();
-  if (!version) return { ...base, cliError: "Claude Code is not installed on this server, or will not run. See docs/plans/CLAUDE_CODE_LOGIN.md to install it." };
+  if (!version) return { ...base, engine: { ...base.engine, blocked }, cliError: "Claude Code is not installed on this server, or will not run. See docs/plans/CLAUDE_CODE_LOGIN.md to install it." };
   const auth = await accountAuthStatus(account);
   const usage = accountUsage(account);
+  // A generation refused as signed out outranks a status that still says signed in.
+  const expired = usage.signedOutAt !== null;
   return {
     ...base,
     cli: { version },
-    account: { signedIn: auth.state === "unknown" ? null : auth.state === "in", method: auth.own ? auth.method : null },
+    account: { signedIn: auth.state === "unknown" ? null : auth.state === "in" && !expired, method: auth.own ? auth.method : null, expired },
+    engine: { ...base.engine, blocked },
     signIn: loginController(account, () => runningOn(account)).current(),
     running: usage.running,
-    limit: usage.limit,
+    limits: usage.limits,
     windows: usage.windows,
     windowsReportedAt: usage.windowsAt,
   };
@@ -178,6 +226,7 @@ export async function checkClaudeModel(account: ClaudeAccount, model: ClaudeCode
       userPrompt: "Connection check.",
       jsonSchema: CHECK_SCHEMA,
       timeoutMs: 90_000,
+      ignoreHolds: true,
     });
     const answer: unknown = JSON.parse(result.text || "null");
     if (!answer || typeof answer !== "object" || (answer as { ok?: unknown }).ok !== true) {

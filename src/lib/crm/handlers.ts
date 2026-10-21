@@ -37,6 +37,7 @@ import {
 } from "./schema";
 import { startSequenceRunInTransaction } from "./sequences";
 import { PermanentCrmJobError, registerCrmJobHandlers, RetryCrmJobLaterError, STALE_LOCK_MS } from "./worker";
+import { claudeHoldUntil } from "@/lib/ai/claudeCode/runner.server";
 import { detectsOptOutWording, detectsWrongNumber } from "./wrongNumber";
 import { wrongRouteForConversation } from "./wrongRoutes";
 import { inOrg } from "@/lib/tenancy/scope";
@@ -549,6 +550,9 @@ export async function handleClassificationJob(
       }, { send: sending.send });
     }
   } catch (error) {
+    // The organization's Claude Code login is held by a usage limit: sort the reply again once it resets.
+    const heldUntil = claudeHoldUntil(error);
+    if (heldUntil) throw new RetryCrmJobLaterError(error instanceof Error ? error.message : String(error), heldUntil);
     // Put back to wait for another worker's claim is not a failed classification: the record stays as it is.
     if (!(error instanceof PermanentCrmJobError) && !(error instanceof RetryCrmJobLaterError)) await recordClassificationFailure(job.entityId, error);
     throw error;

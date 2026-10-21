@@ -23,7 +23,7 @@ const VALID_CODE = "GOOD-CODE-1234#state";
 
 type Scenario = {
   /** Generation outcome. */
-  generation?: "valid" | "prose" | "limit" | "signed_out" | "crash" | "crash_once" | "slow" | "model_unavailable" | "overloaded";
+  generation?: "valid" | "prose" | "limit" | "opus_limit" | "overage" | "env_key" | "signed_out" | "crash" | "crash_once" | "slow" | "model_unavailable" | "overloaded";
   /** The structured answer to return; generated from the schema when absent. */
   answer?: Record<string, unknown>;
   /** auth status says logged in without a credential in this directory (an inherited login). */
@@ -48,6 +48,9 @@ function scenario(): Scenario {
 function record(extra: Record<string, unknown> = {}) {
   if (!config) return;
   const shown = args.map((arg, index) => (args[index - 1] === "--system-prompt" ? `<system prompt ${arg.length} chars>` : arg));
+  const fileArg = args.indexOf("--system-prompt-file");
+  const systemPrompt = fileArg >= 0 ? (() => { try { return readFileSync(args[fileArg + 1], "utf8"); } catch { return null; } })() : null;
+  extra = { systemPromptFromFile: systemPrompt === null ? null : systemPrompt.length, ...extra };
   appendFileSync(join(config, "fake-calls.jsonl"), `${JSON.stringify({ args: shown, envKeys: Object.keys(process.env).sort(), home: process.env.HOME, cwd: process.cwd(), startedAt, endedAt: Date.now(), ...extra })}\n`);
 }
 
@@ -87,22 +90,37 @@ async function generate() {
   const callsSoFar = existsSync(join(config, "fake-calls.jsonl")) ? readFileSync(join(config, "fake-calls.jsonl"), "utf8").split("\n").filter((line) => line.includes("\"-p\"")).length : 0;
   const outcome = current.generation ?? "valid";
   const done = (extra: Record<string, unknown> = {}) => record({ promptChars: prompt.length, rejectedFeedback: prompt.includes("Your previous answer was rejected"), ...extra });
+  const keySource = outcome === "env_key" ? "ANTHROPIC_API_KEY" : "none";
 
   if (!existsSync(credentials()) && !current.foreignLogin) {
-    emit({ type: "system", subtype: "init", model, apiKeySource: "none", tools: ["StructuredOutput"] });
+    emit({ type: "system", subtype: "init", model, apiKeySource: keySource, tools: ["StructuredOutput"] });
     emit({ type: "assistant", error: "authentication_failed", is_api_error_message: true, message: { model: "<synthetic>", content: [{ type: "text", text: "Not logged in · Please run /login" }] } });
     emit({ type: "result", subtype: "success", is_error: true, result: "Not logged in · Please run /login" });
     done();
     return;
   }
   if (outcome === "crash" || (outcome === "crash_once" && callsSoFar === 0)) {
-    emit({ type: "system", subtype: "init", model, apiKeySource: "none", tools: ["StructuredOutput"] });
+    emit({ type: "system", subtype: "init", model, apiKeySource: keySource, tools: ["StructuredOutput"] });
     done({ crashed: true });
     process.exit(1);
   }
   if (outcome === "slow") await sleep(current.slowMs ?? 10_000);
-  emit({ type: "system", subtype: "init", model, apiKeySource: "none", tools: ["StructuredOutput"] });
+  emit({ type: "system", subtype: "init", model, apiKeySource: keySource, tools: ["StructuredOutput"] });
   const resetsAt = Math.floor(Date.now() / 1000) + 3_600;
+  if (outcome === "opus_limit") {
+    emit({ type: "rate_limit_event", rate_limit_info: { status: "rejected", resetsAt: resetsAt + 86_400, rateLimitType: "seven_day_opus", isUsingOverage: false } });
+    emit({ type: "assistant", error: "rate_limit", is_api_error_message: true, message: { model: "<synthetic>", content: [{ type: "text", text: "You've hit your weekly Opus limit" }] } });
+    emit({ type: "result", subtype: "success", is_error: true, api_error: "usage_limit_reached", result: "You've hit your weekly Opus limit" });
+    done();
+    return;
+  }
+  if (outcome === "overage") {
+    emit({ type: "rate_limit_event", rate_limit_info: { status: "rejected", resetsAt, rateLimitType: "five_hour", isUsingOverage: true, overageStatus: "allowed", unifiedWindows: { five_hour: { utilization: 1, resetsAt } } } });
+    const answer = current.answer ?? example(schema);
+    emit({ type: "result", subtype: "success", is_error: false, result: JSON.stringify(answer), structured_output: answer, usage: { input_tokens: 10, cache_read_input_tokens: 90, cache_creation_input_tokens: 20, output_tokens: 30 } });
+    done();
+    return;
+  }
   if (outcome === "limit") {
     emit({ type: "rate_limit_event", rate_limit_info: { status: "rejected", resetsAt, rateLimitType: "five_hour", isUsingOverage: false, unifiedWindows: { five_hour: { utilization: 1, resetsAt }, seven_day: { utilization: 0.4, resetsAt: resetsAt + 86_400 } } } });
     emit({ type: "assistant", error: "rate_limit", is_api_error_message: true, message: { model: "<synthetic>", content: [{ type: "text", text: "You've hit your 5-hour limit · resets 6pm" }] } });

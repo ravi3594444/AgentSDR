@@ -83,7 +83,8 @@ configured. While it is selected, `completeStructured` calls that name no
 model run as one CLI generation each (`claudeCode/runtime.server.ts`), with
 the same schema, `accept` validation and retries; calls that name an API
 model, web-plugin calls (refused), transcription and AI web search keep the
-API provider. A failure never falls back to the API.
+API provider. A failure never falls back to the API. It runs only while
+the owner who signed in is the organization's only member.
 
 ## Columns
 

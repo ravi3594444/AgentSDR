@@ -2,9 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { authContextErrorResponse, withOrgContext, type OrgContext } from "@/lib/auth/context";
 import { isClaudeCodeLoginMethod, isClaudeCodeModel } from "@/lib/ai/claudeCode/contract";
 import { accountAuthStatus, type ClaudeAccount } from "@/lib/ai/claudeCode/cli.server";
-import { checkClaudeModel, claudeCodeAccess, claudeCodeStatus, getClaudeEngine, saveClaudeEngine } from "@/lib/ai/claudeCode/engine.server";
+import { checkClaudeModel, claudeCodeAccess, claudeCodeBlocked, claudeCodeStatus, getClaudeEngine, saveClaudeEngine } from "@/lib/ai/claudeCode/engine.server";
 import { loginController } from "@/lib/ai/claudeCode/login.server";
-import { runningOn } from "@/lib/ai/claudeCode/runner.server";
+import { accountUsage, runningOn } from "@/lib/ai/claudeCode/runner.server";
 
 /**
  * Settings → AI provider → Claude Code: the signed-in person's own Claude
@@ -63,7 +63,8 @@ export async function POST(request: NextRequest) {
         case "sign_in": {
           const method = body?.method ?? "claudeai";
           if (!isClaudeCodeLoginMethod(method)) return refused("Choose how to sign in");
-          const signIn = await controller.start(method);
+          // After a generation was refused as signed out, sign in again even if the stored file still looks signed in.
+          const signIn = await controller.start(method, accountUsage(account).signedOutAt !== null);
           return NextResponse.json({ signIn });
         }
         case "submit_code": {
@@ -76,10 +77,7 @@ export async function POST(request: NextRequest) {
           return NextResponse.json(await claudeCodeStatus(ctx));
         }
         case "sign_out": {
-          const engine = await getClaudeEngine();
-          if (engine.selected && engine.ownerUserId === ctx.userId) {
-            return refused("Your Claude login answers this organization's AI steps. Stop using Claude Code first, then sign out.", 409);
-          }
+          // Allowed while selected (the page asks first): AI steps then fail until a sign-in, never moving to an API.
           await controller.signOut();
           return NextResponse.json(await claudeCodeStatus(ctx));
         }
@@ -94,6 +92,8 @@ export async function POST(request: NextRequest) {
         case "use": {
           if (!isClaudeCodeModel(body?.model)) return refused("Choose a model");
           if ((await accountAuthStatus(account)).state !== "in") return refused("Sign in to Claude Code first", 409);
+          const blocked = await claudeCodeBlocked(ctx.organizationId, ctx.userId);
+          if (blocked) return refused(blocked, 409);
           const engine = await getClaudeEngine();
           if (!engine.checks[ctx.userId]?.[body.model]?.ok) return refused("Check this model on your account before using it");
           if (engine.selected && engine.ownerUserId && engine.ownerUserId !== ctx.userId) {
