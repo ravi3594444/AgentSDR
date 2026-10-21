@@ -8,6 +8,8 @@ import {
   contactedByAutomation,
   newLeadAllowance,
   newLeadsToday,
+  recordNewLead,
+  releaseNewLead,
 } from "@/lib/channels/dailyLeadLimit.server";
 import { featureEnabled, isMissingTable } from "@/lib/features/flags.server";
 import { isPlatformConnected } from "@/lib/platform/credentials";
@@ -196,6 +198,8 @@ async function runForOrganization(): Promise<void> {
     eq(instagramOutreachQueue.id, job.id),
     eq(instagramOutreachQueue.lockedBy, token),
   );
+  // When the DM is reserved: its attempt time, and the new-lead place recorded with it.
+  const reservedAt = new Date();
   await deliverInitialInstagramDm(
     {
       id: job.id,
@@ -263,12 +267,11 @@ async function runForOrganization(): Promise<void> {
           );
           // The daily lead limit's place is taken last, under the
           // organization's lock, and held by the 'sending' row written below.
-          if (
+          const held =
             Number(used[0]?.n ?? 0) >= cap ||
-            (account?.outreachNextSendAt &&
-              account.outreachNextSendAt > new Date()) ||
-            !(await newLeadAllowance(tx, { personId: job.personId })).ok
-          ) {
+            Boolean(account?.outreachNextSendAt && account.outreachNextSendAt > new Date());
+          const allowance = held ? null : await newLeadAllowance(tx, { personId: job.personId });
+          if (!allowance?.ok) {
             await tx
               .update(instagramOutreachQueue)
               .set({ status: "queued", lockedBy: null, lockedUntil: null })
@@ -287,10 +290,11 @@ async function runForOrganization(): Promise<void> {
             .set({
               status: "sending",
               messagingId: recipient.messagingId,
-              attemptedAt: new Date(),
+              attemptedAt: reservedAt,
               updatedAt: new Date(),
             })
             .where(owned);
+          if (allowance.counted) await recordNewLead(tx, { personId: job.personId, channel: "instagram", at: reservedAt });
           await tx
             .update(instagramAccounts)
             .set({
@@ -371,6 +375,8 @@ async function runForOrganization(): Promise<void> {
             updatedAt: new Date(),
           })
           .where(owned);
+        // A definite failure sent nothing: its new-lead place goes back. An uncertain one keeps it.
+        if (!uncertain) await releaseNewLead(db, { personId: job.personId, since: reservedAt });
       },
     },
   );

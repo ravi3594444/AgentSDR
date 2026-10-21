@@ -267,9 +267,10 @@ export function planState(input: { status: string; error: string | null; senders
       if (limited && due.every((lead) => lead.firstMessage)) {
         return { state: "daily_lead_limit", reason: withFailures(limited), open, nextAt: earliest(senders.filter((sender) => sender.gates.some(isLeadLimit))) };
       }
-      if (!held) {
+      // Only with the senders looked at: without them nothing says the work can be prepared at all.
+      if (!held && input.senders !== null) {
         const n = due.length;
-        return { state: "waiting_send", reason: withFailures(`${plural(n, "due message is", "due messages are")} ${NOT_PREPARED}; ${n === 1 ? "it is" : "they are"} prepared again automatically`), open, nextAt: null };
+        return { state: "waiting_send", reason: withFailures(`${plural(n, "due message is", "due messages are")} ${NOT_PREPARED}; the queue is topped up every 10 minutes while ${n === 1 ? "its" : "their"} sender is connected and has room today`), open, nextAt: null };
       }
     }
   }
@@ -280,6 +281,11 @@ export function planState(input: { status: string; error: string | null; senders
   // Held by nothing but the daily lead limit: first messages wait for the next day; follow-ups are not held by it.
   if (gates.every(isLeadLimit)) return { state: "daily_lead_limit", reason: withFailures(gates.join("; ")), open, nextAt };
   return { state: "waiting_send", reason: withFailures(`no sender can send right now: ${gates.join("; ")}`), open, nextAt };
+}
+
+/** Whether a plan's reason already says when its wait ends ("…; resets Thursday 22 Oct at 00:00", "Pausing between sends until 19:27"), so its `nextAt` is not shown again. */
+export function reasonGivesTime(reason: string | null): boolean {
+  return /\b(?:resets|until)\b/i.test(reason ?? "");
 }
 
 /** What a plan's `nextAt` is, in the words shown before it: "…; next follow-up Wed 23 Oct 21:54 (Asia/Kolkata)". */

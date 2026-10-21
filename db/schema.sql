@@ -2650,6 +2650,18 @@ CREATE TABLE public.lead_audiences (
 );
 
 --
+-- Name: lead_first_contacts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.lead_first_contacts (
+    organization_id uuid NOT NULL,
+    person_id uuid NOT NULL,
+    first_at timestamp with time zone NOT NULL,
+    channel text NOT NULL,
+    CONSTRAINT lead_first_contacts_channel_chk CHECK ((channel = ANY (ARRAY['email'::text, 'linkedin'::text, 'whatsapp'::text, 'instagram'::text])))
+);
+
+--
 -- Name: lead_research; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4189,6 +4201,13 @@ ALTER TABLE ONLY public.lead_audiences
     ADD CONSTRAINT lead_audiences_pkey PRIMARY KEY (id);
 
 --
+-- Name: lead_first_contacts lead_first_contacts_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lead_first_contacts
+    ADD CONSTRAINT lead_first_contacts_pkey PRIMARY KEY (organization_id, person_id);
+
+--
 -- Name: lead_research lead_research_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5562,6 +5581,12 @@ CREATE UNIQUE INDEX lead_audience_members_person_uq ON public.lead_audience_memb
 --
 
 CREATE INDEX lead_audiences_organization_idx ON public.lead_audiences USING btree (organization_id, created_at);
+
+--
+-- Name: lead_first_contacts_day_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX lead_first_contacts_day_idx ON public.lead_first_contacts USING btree (organization_id, first_at);
 
 --
 -- Name: lead_person_idx; Type: INDEX; Schema: public; Owner: -
@@ -7155,6 +7180,20 @@ ALTER TABLE ONLY public.lead_audience_members
 
 ALTER TABLE ONLY public.lead_audiences
     ADD CONSTRAINT lead_audiences_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
+
+--
+-- Name: lead_first_contacts lead_first_contacts_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lead_first_contacts
+    ADD CONSTRAINT lead_first_contacts_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
+
+--
+-- Name: lead_first_contacts lead_first_contacts_person_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lead_first_contacts
+    ADD CONSTRAINT lead_first_contacts_person_id_fkey FOREIGN KEY (person_id) REFERENCES public.people(id) ON DELETE CASCADE;
 
 --
 -- Name: lead_audiences lead_audiences_thread_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -

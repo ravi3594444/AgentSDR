@@ -44,3 +44,59 @@ UPDATE channel_settings
 UPDATE channel_settings
    SET values = values - 'workingHours', updated_at = now()
  WHERE channel = 'linkedin' AND values ? 'workingHours';
+
+-- The daily lead limit's ledger (src/lib/channels/dailyLeadLimit.server.ts):
+-- each person's first automated contact, written in the same transaction as
+-- the engine's claim. Deleting a campaign, a lead or a claim gives no place
+-- back; only an engine's definite failure releases it. Filled once from the
+-- claims already recorded (the earliest per person; re-runs keep the
+-- earliest).
+CREATE TABLE IF NOT EXISTS lead_first_contacts (
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  person_id uuid NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+  first_at timestamptz NOT NULL,
+  channel text NOT NULL,
+  CONSTRAINT lead_first_contacts_pkey PRIMARY KEY (organization_id, person_id),
+  CONSTRAINT lead_first_contacts_channel_chk CHECK (channel IN ('email', 'linkedin', 'whatsapp', 'instagram'))
+);
+CREATE INDEX IF NOT EXISTS lead_first_contacts_day_idx ON lead_first_contacts (organization_id, first_at);
+
+INSERT INTO lead_first_contacts (organization_id, person_id, first_at, channel)
+SELECT DISTINCT ON (organization_id, person_id) organization_id, person_id, at, channel FROM (
+  SELECT c.organization_id, l.person_id, coalesce(e.created_at, e.sent_at) AS at, 'email' AS channel
+    FROM outreach_emails e
+    JOIN outreach_leads l ON l.id = e.lead_id
+    JOIN outreach_campaigns c ON c.id = l.campaign_id
+   WHERE NOT (e.status = 'failed' AND e.error IS NOT DISTINCT FROM 'Blocked by Person-global Do Not Contact policy before provider submission')
+  UNION ALL
+  SELECT m."organizationId", ld."personId", (m."createdAt" AT TIME ZONE 'UTC'), 'linkedin'
+    FROM "Message" m
+    JOIN "Lead" ld ON ld.id = m."leadId" AND ld."organizationId" = m."organizationId"
+   WHERE m.type = 'INVITATION' AND m."duplicateOfMessageId" IS NULL
+  UNION ALL
+  SELECT wc.organization_id, wl.person_id, s.created_at, 'whatsapp'
+    FROM whatsapp_campaign_sends s
+    JOIN whatsapp_campaign_leads wl ON wl.id = s.lead_id
+    JOIN whatsapp_campaigns wc ON wc.id = wl.campaign_id
+   WHERE s.status IN ('sending', 'sent')
+) touched
+WHERE person_id IS NOT NULL AND at IS NOT NULL
+ORDER BY organization_id, person_id, at
+ON CONFLICT (organization_id, person_id) DO UPDATE
+  SET first_at = LEAST(lead_first_contacts.first_at, EXCLUDED.first_at),
+      channel = CASE WHEN EXCLUDED.first_at < lead_first_contacts.first_at THEN EXCLUDED.channel ELSE lead_first_contacts.channel END;
+
+-- Instagram outreach is optional: its queue table exists only where it was installed.
+DO $$
+BEGIN
+  IF to_regclass('public.instagram_outreach_queue') IS NOT NULL THEN
+    INSERT INTO lead_first_contacts (organization_id, person_id, first_at, channel)
+    SELECT DISTINCT ON (organization_id, person_id) organization_id, person_id, attempted_at, 'instagram'
+      FROM instagram_outreach_queue
+     WHERE status IN ('sending', 'sent', 'uncertain') AND attempted_at IS NOT NULL AND person_id IS NOT NULL
+     ORDER BY organization_id, person_id, attempted_at
+    ON CONFLICT (organization_id, person_id) DO UPDATE
+      SET first_at = LEAST(lead_first_contacts.first_at, EXCLUDED.first_at),
+          channel = CASE WHEN EXCLUDED.first_at < lead_first_contacts.first_at THEN EXCLUDED.channel ELSE lead_first_contacts.channel END;
+  END IF;
+END $$;

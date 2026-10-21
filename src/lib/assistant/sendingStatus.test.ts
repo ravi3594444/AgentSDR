@@ -52,7 +52,7 @@ test("readiness is never presented as evidence that a send happened, and the que
   const status = emailSendingStatus([mailbox], input);
   expect(status.open).toBe(true);
   expect(describeChannelSending(status)).toBe("has emails due and ready for the next send");
-  expect(describeChannelSending(emailSendingStatus([{ ...mailbox, activeQueue: 0 }], input))).toBe("has nothing due to send right now");
+  expect(describeChannelSending(emailSendingStatus([{ ...mailbox, activeQueue: 0 }], input))).toBe("has no message waiting in its sending queue right now");
   expect(
     emailSendingStatus([mailbox], { ...input, paused: true }).blockedBy,
   ).toBe("paused");

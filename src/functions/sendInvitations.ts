@@ -22,7 +22,7 @@ import { linkedinRouteIsWrong } from "@/lib/crm/wrongRoutes";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { channelRules } from "@/lib/channels/rules.server";
 import { pickInRange } from "@/lib/channels/rules";
-import { newLeadAllowance } from "@/lib/channels/dailyLeadLimit.server";
+import { contactedByAutomation, newLeadAllowance, newLeadsToday, recordNewLead, releaseNewLead } from "@/lib/channels/dailyLeadLimit.server";
 
 // Daily limits, run sizes and delays come from the LinkedIn sending rules
 // (src/lib/channels/rules.ts), applied automatically; an account's own
@@ -86,6 +86,10 @@ export const sendInvitations = async (account: LinkedInAccount): Promise<void> =
   // Leads with no campaign sort last (PostgreSQL: NULL sorts after all non-null ASC values).
   // The campaign-age ordering needs the joined Campaign row, so this is a
   // leftJoin (campaignId is nullable) selecting only the lead columns.
+  // While today's new-lead places are used, only people automated outreach already reached can be
+  // invited (they take no place), so they are picked, not left behind new people the limit refuses.
+  const leadDay = await newLeadsToday();
+  const contactedOnly = leadDay.used >= leadDay.limit ? await contactedByAutomation(sql`${leads.personId}`) : null;
   const pendingLeads = (
     await db
       .select({ lead: leads, person: people, company: companies, campaignInvitationMessage: campaigns.invitationMessage })
@@ -93,7 +97,7 @@ export const sendInvitations = async (account: LinkedInAccount): Promise<void> =
       .innerJoin(people, eq(leads.personId, people.id))
       .leftJoin(companies, eq(people.companyId, companies.id))
       .leftJoin(campaigns, eq(leads.campaignId, campaigns.id))
-      .where(await pendingLeadsSendableByAccount(account.id))
+      .where(contactedOnly ? and(await pendingLeadsSendableByAccount(account.id), contactedOnly) : await pendingLeadsSendableByAccount(account.id))
       .orderBy(asc(campaigns.createdAt), asc(leads.createdAt))
       .limit(sessionSize)
   ).map((r) => ({ ...r.lead, invitationMessage: r.campaignInvitationMessage ?? r.lead.invitationMessage, linkedinUrl: r.person.linkedinUrl!, variables: personVariables(r.person, r.company) }));
@@ -124,6 +128,8 @@ export const sendInvitations = async (account: LinkedInAccount): Promise<void> =
     // Atomically claim the lead before touching Unipile.
     // If another account (in a shared campaign) already claimed it, the
     // conditional UPDATE matches no row and returns [] — skip.
+    // The claim's time: its new-lead place is recorded with it, and given back only by this claim's revert.
+    const claimedAt = new Date();
     const claimed = await db.transaction(async (tx) => {
       // Serialize every claim for this sender/person pair, then recheck after
       // acquiring the lock. This closes the cross-campaign same-batch race.
@@ -160,8 +166,9 @@ export const sendInvitations = async (account: LinkedInAccount): Promise<void> =
         leadId: lead.id,
         seen: true,
         // UTC, as the LinkedIn tables store it, whatever the session's time zone (the daily lead limit reads it).
-        createdAt: new Date(),
+        createdAt: claimedAt,
       }).onConflictDoNothing().returning({ id: messages.id });
+      if (messageClaim && allowance.counted) await recordNewLead(tx, { personId, channel: "linkedin", at: claimedAt });
       return { messageId: messageClaim?.id ?? null };
     });
 
@@ -182,6 +189,8 @@ export const sendInvitations = async (account: LinkedInAccount): Promise<void> =
       await db.transaction(async (tx) => {
         await tx.delete(messages).where(and(inOrg(messages), eq(messages.id, claimed.messageId!)));
         await tx.update(leads).set({ status: "FAILED" }).where(and(inOrg(leads), eq(leads.id, lead.id)));
+        // Nothing was sent: the new-lead place goes back.
+        await releaseNewLead(tx, { personId, since: claimedAt });
       });
       console.warn(`[sendInvitations] ${lead.linkedinUrl} blocked by ${barred}`);
       continue;
@@ -214,6 +223,7 @@ export const sendInvitations = async (account: LinkedInAccount): Promise<void> =
           eq(messages.id, claimed.messageId),
           sql`${messages.linkedinMessageId} is null`,
         ));
+        await releaseNewLead(db, { personId, since: claimedAt });
         await db
           .update(linkedInAccounts)
           .set({ limitReached: true })

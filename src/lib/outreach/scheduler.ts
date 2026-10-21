@@ -27,9 +27,9 @@ import type { SendEmailParams, SendEmailResult } from "./gmail";
 import { mailboxProviderConnected, sendFromMailbox, type SendingMailbox } from "./mailboxProviders";
 import type { MailboxProvider } from "./schema";
 import { isSuppressed } from "./suppression";
-import { leadAfterSend, leadDueNow, mailboxAtDailyLimit } from "./sendRules";
+import { EMAIL_DNC_BLOCKED_ERROR, leadAfterSend, leadDueNow, mailboxAtDailyLimit } from "./sendRules";
 import { topUpMailboxQueues } from "./buildQueue";
-import { newLeadAllowance } from "@/lib/channels/dailyLeadLimit.server";
+import { newLeadAllowance, recordNewLead, releaseNewLead } from "@/lib/channels/dailyLeadLimit.server";
 import { channelRules } from "@/lib/channels/rules.server";
 import { pickInRange } from "@/lib/channels/rules";
 import { fillTemplate, renderEmail, unsubscribePostUrl } from "./render";
@@ -143,13 +143,17 @@ const IN_SEQUENCE: OutreachLeadStatus[] = ["pending", "initial_sent", "in_follow
  * with an address and a connected mailbox to send it. One platform-level
  * enumeration, like the tick's own below; each top-up then runs in its
  * organization's scope. A queue that is empty because nothing is due yet
- * matches nothing.
+ * matches nothing. At most REPAIR_ORGANIZATIONS a pass: those with a due
+ * follow-up first (a first email can wait for the next build; a follow-up
+ * is late), the rest in an order that changes every pass, so organizations
+ * whose backlog a top-up cannot shrink (a full mailbox, the daily lead
+ * limit) never keep the others out.
  */
 async function organizationsMissingWork(now: Date, only: string[] | null): Promise<string[]> {
   if (only && !only.length) return [];
   const at = now.toISOString();
   const rows = await db.execute<{ organization_id: string }>(sql`
-    select distinct c.organization_id
+    select c.organization_id, bool_or(l.sequence_status in ('initial_sent', 'in_follow_up')) as follow_up
       from outreach_leads l
       join outreach_campaigns c on c.id = l.campaign_id and c.status = 'active'
      where (
@@ -162,6 +166,8 @@ async function organizationsMissingWork(now: Date, only: string[] | null): Promi
        and not exists (select 1 from outreach_mailbox_queue q where q.lead_id = l.id)
        and not exists (select 1 from outreach_emails e where e.lead_id = l.id and e.step_number = l.current_step + 1)
        ${only ? sql`and c.organization_id in (${sql.join(only.map((id) => sql`${id}::uuid`), sql`, `)})` : sql``}
+     group by c.organization_id
+     order by follow_up desc, md5(c.organization_id::text || ${String(Math.floor(now.getTime() / REPAIR_EVERY_MS))})
      limit ${REPAIR_ORGANIZATIONS}`);
   return Array.from(rows).map((row) => row.organization_id);
 }
@@ -373,6 +379,7 @@ async function sendNextStep(
       const allowance = await newLeadAllowance(tx, { personId: lead.personId, now });
       if (!allowance.ok) return { refused: allowance.reason };
       const [row] = await tx.insert(outreachEmails).values(claimRow).onConflictDoNothing(claimTarget).returning();
+      if (row && allowance.counted) await recordNewLead(tx, { personId: lead.personId, channel: "email", at: now });
       return { row };
     })
     : { row: (await db.insert(outreachEmails).values(claimRow).onConflictDoNothing(claimTarget).returning())[0] };
@@ -392,8 +399,10 @@ async function sendNextStep(
   if (await isPersonDoNotContact(db, lead.personId)) {
     await db.update(outreachEmails).set({
       status: "failed",
-      error: "Blocked by Person-global Do Not Contact policy before provider submission",
+      error: EMAIL_DNC_BLOCKED_ERROR,
     }).where(eq(outreachEmails.id, emailRow.id));
+    // Nothing went out: a first email's place is given back.
+    if (lead.currentStep === 0) await releaseNewLead(db, { personId: lead.personId, since: now });
     await db.update(outreachLeads).set({
       sequenceStatus: "suppressed",
       nextSendAt: null,

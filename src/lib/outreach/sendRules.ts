@@ -37,8 +37,9 @@ export function leadDueNow(lead: { sequenceStatus: OutreachLeadStatus; nextSendA
 /**
  * How many more rows a top-up may add to a mailbox's queue: its daily
  * limit less what it sent today and what is already queued. Null when its
- * counter is from an earlier local day: only the daily build resets a
- * counter, and topping up against a stale one could pass the daily limit.
+ * counter is from an earlier local day (the caller resets it first, once a
+ * day, as the build does): topping up against a stale one could pass the
+ * daily limit.
  */
 export function topUpRoom(
   mailbox: { todayEmailsSent: number; dailySendLimit: number; sendCounterResetAt: Date | null; workingHours: Pick<WorkingHours, "timezone"> },

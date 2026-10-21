@@ -253,19 +253,17 @@ await runInOrganization(org!.id, async () => {
   check("an empty queue whose only work is a follow-up not due yet is not rebuilt: nothing queued or sent, the count untouched",
     idle.sent === 0 && (await queueOf()).length === 0 && (await mailboxNow()).todayEmailsSent === 3, JSON.stringify(idle));
   await db.update(outreachLeads).set({ nextSendAt: past() }).where(eq(outreachLeads.id, late.lead.id));
-  const counterDay = (await mailboxNow()).sendCounterResetAt;
+  // Its counter from an earlier day, as when the day's build failed or the mailbox's own midnight came before the
+  // workspace's day began: the repair resets it once, as the build would, and the due follow-up still goes out.
   await db.update(mailboxes).set({ sendCounterResetAt: new Date(Date.now() - 2 * 86_400_000) }).where(eq(mailboxes.id, mailbox!.id));
-  const stale = await repairTick();
-  check("a mailbox whose daily counter is from an earlier day is not topped up (only the daily build resets a counter)",
-    stale.sent === 0 && (await queueOf()).length === 0 && (await mailboxNow()).todayEmailsSent === 3, JSON.stringify(stale));
-  await db.update(mailboxes).set({ sendCounterResetAt: counterDay }).where(eq(mailboxes.id, mailbox!.id));
   const repaired = await repairTick();
   const afterRepair = await mailboxNow();
-  check("the follow-up that fell due after the build is topped up by the tick and sent once", repaired.sent === 1 && sentTo(late.email) === 1 && (await leadNow(late.lead.id)).sequenceStatus === "sequence_completed", JSON.stringify(repaired));
-  check("…today's count goes on from 3 to 4, never reset", afterRepair.todayEmailsSent === 4 && afterRepair.sendCounterResetAt?.getTime() === counterDay?.getTime(), `${afterRepair.todayEmailsSent} reset ${afterRepair.sendCounterResetAt?.toISOString()}`);
+  check("the follow-up that fell due after the build is topped up by the tick and sent once, even with a counter from an earlier day", repaired.sent === 1 && sentTo(late.email) === 1 && (await leadNow(late.lead.id)).sequenceStatus === "sequence_completed", JSON.stringify(repaired));
+  check("…that counter was reset once, as the day's build would, and counts this send", afterRepair.todayEmailsSent === 1 && Date.now() - (afterRepair.sendCounterResetAt?.getTime() ?? 0) < 60_000, `${afterRepair.todayEmailsSent} reset ${afterRepair.sendCounterResetAt?.toISOString()}`);
   await readyMailbox();
   await repairTick();
-  check("…and the next repair sends that lead nothing more", sentTo(late.email) === 1);
+  const afterSecond = await mailboxNow();
+  check("…and the next repair the same day neither resets it again nor sends that lead anything more", sentTo(late.email) === 1 && afterSecond.todayEmailsSent === 1 && afterSecond.sendCounterResetAt?.getTime() === afterRepair.sendCounterResetAt?.getTime(), `${afterSecond.todayEmailsSent} reset ${afterSecond.sendCounterResetAt?.toISOString()}`);
 
   // Two new leads, queued by a build; then a rebuild that fails after deleting the old rows.
   const mira = await extraLead("mira");
@@ -282,7 +280,7 @@ await runInOrganization(org!.id, async () => {
     check("a rebuild interrupted after deleting the old queue keeps the old queue: all or nothing", JSON.stringify(queuedAfter) === JSON.stringify(queuedBefore), `${JSON.stringify(queuedBefore)} → ${JSON.stringify(queuedAfter)}`);
     check("…and reports the organization as failed, with its error", interrupted.failedOrganizations.length === 1 && interrupted.failedOrganizations[0]!.organizationId === organizationId && /queue insert refused/.test(interrupted.failedOrganizations[0]!.error), JSON.stringify(interrupted.failedOrganizations));
     const note = await rebuildEmailQueue();
-    check("…which a launch, a resume or an activation reports as a note, not as a failed campaign", Boolean(note && /not prepared for sending yet/.test(note) && /prepared again automatically/.test(note)), note ?? "no note");
+    check("…which a launch, a resume or an activation reports as a note, not as a failed campaign", Boolean(note && /not in the sending queue yet/.test(note) && /topped up again within 10 minutes/.test(note)), note ?? "no note");
   } finally {
     await db.execute(sql.raw(`drop trigger if exists ${trigger} on outreach_mailbox_queue`));
     await db.execute(sql.raw(`drop function if exists ${trigger}()`));
@@ -304,7 +302,7 @@ await runInOrganization(org!.id, async () => {
   check("with one place left the first new lead is emailed; the next is refused at its claim and nothing is sent to her",
     firstNew.sent === 1 && sentTo(mira.email) === 1 && refusedTick.sent === 0 && refusedTick.skippedDailyLeadLimit === 1 && sentTo(noor.email) === 0, `${JSON.stringify(firstNew)} ${JSON.stringify(refusedTick)}`);
   check("…no claim is written, the mailbox's next send time is untouched, and she stays pending for the next build",
-    noorClaims.length === 0 && afterRefusal.nextEmailTime === null && afterRefusal.todayEmailsSent === 5 && (await leadNow(noor.lead.id)).sequenceStatus === "pending", `${noorClaims.length} claims, next ${afterRefusal.nextEmailTime?.toISOString()}, ${afterRefusal.todayEmailsSent} sent`);
+    noorClaims.length === 0 && afterRefusal.nextEmailTime === null && afterRefusal.todayEmailsSent === 2 && (await leadNow(noor.lead.id)).sequenceStatus === "pending", `${noorClaims.length} claims, next ${afterRefusal.nextEmailTime?.toISOString()}, ${afterRefusal.todayEmailsSent} sent`);
   const day = await newLeadsToday();
   check("…today's count stops at the limit", day.used === day.limit, `${day.used} of ${day.limit}`);
   const sameDay = await buildMailboxQueues({ organizationIds: [organizationId] });
@@ -445,7 +443,7 @@ await runInOrganization(org!.id, async () => {
     const due = await extraLead("zed");
     await db.insert(outreachRunLeads).values({ organizationId, runId: plan!.id, personId: due.lead.personId, channel: "email" });
     const missing = await planNow();
-    check("a first email due with nothing in the queue: not prepared yet, prepared again automatically (never a cooldown)", missing?.state === "waiting_send" && missing.reason === "1 due message is not prepared for sending yet; it is prepared again automatically" && missing.nextAt === null, `${missing?.state}: ${missing?.reason}`);
+    check("a first email due with nothing in the queue: not prepared yet, and what prepares it (never a cooldown)", missing?.state === "waiting_send" && missing.reason === "1 due message is not prepared for sending yet; the queue is topped up every 10 minutes while its sender is connected and has room today" && missing.nextAt === null, `${missing?.state}: ${missing?.reason}`);
     await db.insert(outreachMailboxQueue).values({ mailboxId: mailbox!.id, leadId: due.lead.id, position: 0 });
     const cooling = await planNow();
     check("…once it is queued, the pause between sends that delays it shows, with when it ends", cooling?.state === "waiting_send" && /^no sender can send right now: Pausing between sends until \d\d:\d\d:\d\d \(/.test(cooling.reason ?? "") && cooling.nextAt === pausedUntil.toISOString(), `${cooling?.state}: ${cooling?.reason} ${cooling?.nextAt}`);

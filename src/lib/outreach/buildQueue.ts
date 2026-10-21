@@ -86,12 +86,11 @@ export async function topUpMailboxQueues(options: { organizationIds: string[]; n
 
 /**
  * What a launch, a resume or an activation says when the queue it rebuilt
- * could not be prepared. The tick's repair tops the queue up within minutes
- * where a mailbox's counter is today's; the daily build does it otherwise.
+ * could not be prepared: in the owner's words (the database's own error
+ * stays in the server log). The send tick's repair tops the queue up every
+ * 10 minutes, resetting a mailbox's daily counter first when its day changed.
  */
-export function queueNotPreparedNote(error: string): string {
-  return `Its emails are not prepared for sending yet (${error.slice(0, 200)}); they are prepared again automatically, at the latest when the next day starts.`;
-}
+export const QUEUE_NOT_PREPARED_NOTE = "Its emails are not in the sending queue yet (the queue could not be updated just now); it is topped up again within 10 minutes.";
 
 /**
  * Rebuilds the queue of the organization in scope after a launch, a resume
@@ -102,10 +101,11 @@ export function queueNotPreparedNote(error: string): string {
 export async function rebuildEmailQueue(): Promise<string | null> {
   try {
     const result = await buildMailboxQueues({ organizationIds: [currentOrganizationId()] });
-    const failed = result.failedOrganizations[0];
-    return failed ? queueNotPreparedNote(failed.error) : null;
+    // buildMailboxQueues logged the organization's own error.
+    return result.failedOrganizations.length ? QUEUE_NOT_PREPARED_NOTE : null;
   } catch (error) {
-    return queueNotPreparedNote(errorText(error));
+    console.error("[outreach/buildQueue] rebuilding the queue after a launch failed:", errorText(error));
+    return QUEUE_NOT_PREPARED_NOTE;
   }
 }
 
@@ -160,39 +160,48 @@ async function buildOrganizationQueues(mode: Mode, now: Date): Promise<Counts> {
       .from(mailboxes)
       .where(and(inOrg(mailboxes), eq(mailboxes.status, "connected")));
 
+    // Reset each mailbox's daily counter only if it hasn't already been reset
+    // today (in that mailbox's own timezone) — safe to repeat any number of
+    // times a day (a duplicate cron fire, a manual re-run, a top-up) without
+    // granting a second full daily allowance by re-zeroing todayEmailsSent.
+    // A top-up does it too, so a day whose build failed, or a mailbox whose
+    // midnight comes before the workspace's day starts, still gets its work.
+    const mailboxesNeedingReset = connectedMailboxes.filter(
+      (m) => !isSameLocalDay(m.sendCounterResetAt, now, m.workingHours.timezone),
+    );
+    if (mailboxesNeedingReset.length > 0) {
+      await tx
+        .update(mailboxes)
+        .set({ todayEmailsSent: 0, sendCounterResetAt: now })
+        .where(and(inOrg(mailboxes), inArray(mailboxes.id, mailboxesNeedingReset.map((m) => m.id))));
+    }
+    const resetIds = new Set(mailboxesNeedingReset.map((m) => m.id));
+    const current = connectedMailboxes.map((m) => (resetIds.has(m.id) ? { ...m, todayEmailsSent: 0, sendCounterResetAt: now } : m));
+
     const queues = new Map<string, MailboxCapacity>();
+    // First emails already queued and not yet claimed hold a place each until claimed (a top-up keeps them).
+    let placesLeft = places;
     if (mode === "rebuild") {
       // Supersede the previous queue: inside this transaction, so it stays if the build fails.
       await tx.delete(outreachMailboxQueue).where(inArray(outreachMailboxQueue.mailboxId, orgMailboxIds()));
-
-      // Reset each mailbox's daily counter only if it hasn't already been reset
-      // today (in that mailbox's own timezone) — build-queue must stay safe to
-      // re-run more than once in a day (duplicate cron fire, or a manual re-run
-      // to pick up a newly-launched campaign) without granting a second full
-      // daily allowance by re-zeroing todayEmailsSent.
-      const mailboxesNeedingReset = connectedMailboxes.filter(
-        (m) => !isSameLocalDay(m.sendCounterResetAt, now, m.workingHours.timezone),
-      );
-      if (mailboxesNeedingReset.length > 0) {
-        await tx
-          .update(mailboxes)
-          .set({ todayEmailsSent: 0, sendCounterResetAt: now })
-          .where(and(inOrg(mailboxes), inArray(mailboxes.id, mailboxesNeedingReset.map((m) => m.id))));
+      for (const mailbox of current) {
+        queues.set(mailbox.id, { mailboxId: mailbox.id, queue: [], currentAvailableCapacity: Math.max(0, mailbox.dailySendLimit - mailbox.todayEmailsSent), start: 0 });
       }
-      const resetIds = new Set(mailboxesNeedingReset.map((m) => m.id));
-      for (const mailbox of connectedMailboxes) {
-        const todaySent = resetIds.has(mailbox.id) ? 0 : mailbox.todayEmailsSent;
-        queues.set(mailbox.id, { mailboxId: mailbox.id, queue: [], currentAvailableCapacity: Math.max(0, mailbox.dailySendLimit - todaySent), start: 0 });
-      }
-    } else if (connectedMailboxes.length > 0) {
+    } else if (current.length > 0) {
+      const [held] = await tx
+        .select({ n: count() })
+        .from(outreachMailboxQueue)
+        .innerJoin(outreachLeads, eq(outreachLeads.id, outreachMailboxQueue.leadId))
+        .where(and(inArray(outreachMailboxQueue.mailboxId, current.map((m) => m.id)), eq(outreachLeads.sequenceStatus, "pending"), sql`not ${contacted}`));
+      placesLeft = Math.max(0, places - Number(held?.n ?? 0));
       const existing = new Map(
         (await tx
           .select({ mailboxId: outreachMailboxQueue.mailboxId, rows: count(), last: max(outreachMailboxQueue.position) })
           .from(outreachMailboxQueue)
-          .where(inArray(outreachMailboxQueue.mailboxId, connectedMailboxes.map((m) => m.id)))
+          .where(inArray(outreachMailboxQueue.mailboxId, current.map((m) => m.id)))
           .groupBy(outreachMailboxQueue.mailboxId)).map((row) => [row.mailboxId, row]),
       );
-      for (const mailbox of connectedMailboxes) {
+      for (const mailbox of current) {
         const queued = existing.get(mailbox.id);
         const room = topUpRoom(mailbox, Number(queued?.rows ?? 0), now);
         if (room === null || room === 0) continue;
@@ -263,18 +272,18 @@ async function buildOrganizationQueues(mode: Mode, now: Date): Promise<Counts> {
         .orderBy(asc(outreachLeads.createdAt))
         .limit(limit);
       let newLeadIds: string[];
-      if (places >= netCapacity) {
+      if (placesLeft >= netCapacity) {
         newLeadIds = (await firstEmails(pending, netCapacity)).map((lead) => lead.id);
       } else {
         // Fewer places than capacity: people automated outreach already
         // reached take none, so they are not stuck behind the limit.
         const reached = await firstEmails(and(pending, contacted), netCapacity);
-        const fresh = places > 0 ? await firstEmails(and(pending, sql`not ${contacted}`), places) : [];
+        const fresh = placesLeft > 0 ? await firstEmails(and(pending, sql`not ${contacted}`), placesLeft) : [];
         const candidates = [
           ...reached.map((lead) => ({ ...lead, contacted: true })),
           ...fresh.map((lead) => ({ ...lead, contacted: false })),
         ].sort((a, b) => (a.createdAt?.getTime() ?? 0) - (b.createdAt?.getTime() ?? 0));
-        newLeadIds = newLeadsToQueue(candidates, { places, capacity: netCapacity });
+        newLeadIds = newLeadsToQueue(candidates, { places: placesLeft, capacity: netCapacity });
       }
 
       const cycle = Array.from(queues.values()).filter((cap) => cap.queue.length < cap.currentAvailableCapacity);

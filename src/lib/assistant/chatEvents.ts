@@ -14,7 +14,7 @@ import { formatChatDateTime } from "./chatTime";
 export type ChatEvent =
   | { kind: "search_report"; jobId: string; ok: boolean; source: string | null; found: number; contactable: number; matching: number | null; judged: number | null; error?: string | null }
   | { kind: "plan_ready"; runId: string | null; leads: number; channels: Record<string, number>; waitingReason: string | null }
-  /** A launch's `note`: it started, and its messages are not prepared for sending yet (they are again automatically). */
+  /** A launch's `note`: it started, and its messages are not in the sending queue yet (the repair tops it up). */
   | { kind: "outreach_started"; runId: string | null; ok: boolean; launches: { channel: string; added: number; skipped: number; problem: string | null; note?: string | null }[]; automatic: boolean }
   | { kind: "continuation"; n: number; leads: number; target: number; spentUsd: number; capUsd: number; minutesLeft: number };
 

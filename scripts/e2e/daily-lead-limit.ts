@@ -91,7 +91,8 @@ const { createThread } = await import("@/lib/assistant/threads.server");
 const { createAudience } = await import("@/lib/assistant/audiences.server");
 const { setFeature } = await import("@/lib/features/flags.server");
 const { saveChannelRules } = await import("@/lib/channels/rules.server");
-const { newLeadAllowance, newLeadsToday } = await import("@/lib/channels/dailyLeadLimit.server");
+const { newLeadAllowance, newLeadsToday, recordNewLead, releaseNewLead } = await import("@/lib/channels/dailyLeadLimit.server");
+const { deleteCampaign } = await import("@/lib/outreach/campaigns");
 const { DAILY_LEAD_LIMIT_GATE } = await import("@/lib/channels/dailyLeadLimit");
 const { EMAIL_DNC_BLOCKED_ERROR } = await import("@/lib/outreach/sendRules");
 const { isAlwaysOpen, isWithinWorkingHours } = await import("@/lib/outreach/workingHours");
@@ -198,6 +199,8 @@ try {
     // The new person first (older), then the one WhatsApp already reached.
     const [newLead] = await db.insert(linkedin.leads).values({ organizationId: a.org.id, personId: seededA.p3.id, linkedinUrl: seededA.p3.linkedinUrl, providerId: `provider-p3-${stamp}`, campaignId: campaign!.id, invitationMessage: "Hi", createdAt: new Date(Date.now() - 120_000), updatedAt: new Date() }).returning();
     const [knownLead] = await db.insert(linkedin.leads).values({ organizationId: a.org.id, personId: seededA.p1.id, linkedinUrl: seededA.p1.linkedinUrl, providerId: `provider-p1-${stamp}`, campaignId: campaign!.id, invitationMessage: "Hi", createdAt: new Date(Date.now() - 60_000), updatedAt: new Date() }).returning();
+    // A run of one: while the limit is used, the one already reached is picked, not the older new person.
+    await saveChannelRules("linkedin", { invitesPerRun: [1, 1], inviteDelaySeconds: [5, 5] }, a.owner.id);
     await sendInvitations(account!);
     return { account: account!, newLead: newLead!, knownLead: knownLead! };
   });
@@ -206,7 +209,7 @@ try {
   check("a different new person is refused on LinkedIn: still pending, no invitation claimed, Unipile not called", p3After?.status === "PENDING" && p3After.requestSentAt === null && p3Messages.length === 0 && !invitationsSent.includes(`provider-p3-${stamp}`), `${p3After?.status}, ${p3Messages.length} messages, sent ${invitationsSent.join()}`);
   const [p1Linkedin] = await db.select().from(linkedin.leads).where(eq(linkedin.leads.id, linkedinA.knownLead.id));
   const p1Messages = await db.select().from(linkedin.messages).where(and(eq(linkedin.messages.leadId, linkedinA.knownLead.id), eq(linkedin.messages.type, "INVITATION")));
-  check("a person already reached on WhatsApp is not counted again: their LinkedIn invitation goes out", p1Linkedin?.status === "REQUEST_SENT" && p1Messages.length === 1 && invitationsSent.join() === `provider-p1-${stamp}`, `${p1Linkedin?.status}, sent ${invitationsSent.join()}`);
+  check("a person already reached on WhatsApp is not counted again: their LinkedIn invitation goes out, even with a new person ahead and a run of one", p1Linkedin?.status === "REQUEST_SENT" && p1Messages.length === 1 && invitationsSent.join() === `provider-p1-${stamp}`, `${p1Linkedin?.status}, sent ${invitationsSent.join()}`);
   check("…and the day still counts one new lead", (await runInOrganization(a.org.id, () => newLeadsToday())).used === 1);
 
   // ------------------------------------------------------------ Instagram
@@ -266,25 +269,34 @@ try {
 }
 
 // ------------------------------------------------------------ what counts
+// Each simulated claim takes its place as its engine does (recordNewLead in the claim transaction) and,
+// for a definite failure, gives it back after the claim is failed (releaseNewLead); the rest keep theirs.
 const c = await organization("c");
 await runInOrganization(c.org.id, async () => {
-  await saveChannelRules("general", { newLeadsPerDay: 2 }, c.owner.id);
-  const persons = await db.insert(people).values(["dnc", "transport", "refused", "doubt", "yesterday", "fresh", "race1", "race2"].map((name, index) => ({
+  await saveChannelRules("general", { newLeadsPerDay: 3 }, c.owner.id);
+  const persons = await db.insert(people).values(["dnc", "transport", "refused", "doubt", "yesterday", "fresh", "race1", "race2", "deleted", "timeout", "other"].map((name, index) => ({
     organizationId: c.org.id, fullName: `Count ${name}`, phone: phone(40 + index), source: "lead-limit-check",
   }))).returning();
   const person = (name: string) => persons.find((row) => row.fullName === `Count ${name}`)!;
+  const take = (name: string, channel: "email" | "linkedin" | "whatsapp" | "instagram", at = new Date()) => db.transaction((tx) => recordNewLead(tx, { personId: person(name).id, channel, at }));
   // Email: one step Do Not Contact stopped before the provider (a definite non-send), one transport error (may have gone out).
   const [emailCampaign] = await db.insert(outreachCampaigns).values({ organizationId: c.org.id, name: "Count check", status: "paused" }).returning();
   const emailLeads = await db.insert(outreachLeads).values([person("dnc"), person("transport")].map((p) => ({ personId: p.id, campaignId: emailCampaign!.id }))).returning();
+  const claimedAt = new Date();
   await db.insert(outreachEmails).values([
-    { leadId: emailLeads[0]!.id, stepNumber: 1, status: "failed", error: EMAIL_DNC_BLOCKED_ERROR },
-    { leadId: emailLeads[1]!.id, stepNumber: 1, status: "failed", error: "socket hang up" },
+    { leadId: emailLeads[0]!.id, stepNumber: 1, status: "failed", error: EMAIL_DNC_BLOCKED_ERROR, createdAt: claimedAt },
+    { leadId: emailLeads[1]!.id, stepNumber: 1, status: "failed", error: "socket hang up", createdAt: claimedAt },
   ]);
+  await take("dnc", "email", claimedAt);
+  await take("transport", "email", claimedAt);
+  await releaseNewLead(db, { personId: person("dnc").id, since: claimedAt });
   // WhatsApp: a claim failed for good (the recipient refused).
   const wa = await whatsappSetup(c.org.id, "ccc");
   await enroll(wa.campaign.id, person("refused").id, minutes(60));
   const refusedLead = await waLead(wa.campaign.id, person("refused").id);
   await db.insert(whatsappCampaignSends).values({ leadId: refusedLead.id, step: 0, stepId: "refused", status: "failed", accountId: wa.account.id, body: "Hi", error: "WhatsApp refused the recipient" });
+  await take("refused", "whatsapp", claimedAt);
+  await releaseNewLead(db, { personId: person("refused").id, since: claimedAt });
   await db.update(whatsappCampaigns).set({ status: "paused" }).where(eq(whatsappCampaigns.id, wa.campaign.id));
   // Instagram: a DM in doubt after the provider call.
   await setFeature("instagram", true, c.owner.id);
@@ -292,32 +304,69 @@ await runInOrganization(c.org.id, async () => {
   const thread = await createThread(c.owner.id);
   const audienceId = await createAudience({ name: "count check", source: "list" });
   const [run] = await db.insert(outreachRuns).values({ organizationId: c.org.id, threadId: thread.id, audienceId, name: "Count check", status: "stopped", channels: ["instagram"], autopilot: false, createdBy: c.owner.id, plan: { assignments: [] } as never }).returning();
-  await db.insert(instagramOutreachQueue).values({ organizationId: c.org.id, runId: run!.id, personId: person("doubt").id, accountId: igAccount!.id, username: `doubt_${stamp}`, body: "Hi", status: "uncertain", attemptedAt: new Date() });
-  // LinkedIn: an invitation claimed yesterday (UTC, as the LinkedIn tables store it).
+  await db.insert(instagramOutreachQueue).values({ organizationId: c.org.id, runId: run!.id, personId: person("doubt").id, accountId: igAccount!.id, username: `doubt_${stamp}`, body: "Hi", status: "uncertain", attemptedAt: claimedAt });
+  await take("doubt", "instagram", claimedAt);
+  // LinkedIn: an invitation claimed two days ago (UTC, as the LinkedIn tables store it).
+  const twoDaysAgo = new Date(Date.now() - 86_400_000 * 2);
   const [liAccount] = await db.insert(linkedin.linkedInAccounts).values({ organizationId: c.org.id, linkedinId: `lead-limit-li-c-${stamp}`, username: `lead-limit-li-c-${stamp}`, name: "Ravi", status: "CONNECTED", updatedAt: new Date() }).returning();
-  const [liLead] = await db.insert(linkedin.leads).values({ organizationId: c.org.id, personId: person("yesterday").id, linkedinAccountId: liAccount!.id, status: "REQUEST_SENT", requestSentAt: new Date(Date.now() - 86_400_000 * 2), updatedAt: new Date() }).returning();
-  await db.insert(linkedin.messages).values({ organizationId: c.org.id, type: "INVITATION", text: "Hi", leadId: liLead!.id, seen: true, createdAt: new Date(Date.now() - 86_400_000 * 2) });
+  const [liLead] = await db.insert(linkedin.leads).values({ organizationId: c.org.id, personId: person("yesterday").id, linkedinAccountId: liAccount!.id, status: "REQUEST_SENT", requestSentAt: twoDaysAgo, updatedAt: new Date() }).returning();
+  await db.insert(linkedin.messages).values({ organizationId: c.org.id, type: "INVITATION", text: "Hi", leadId: liLead!.id, seen: true, createdAt: twoDaysAgo });
+  await take("yesterday", "linkedin", twoDaysAgo);
 
   const today = await newLeadsToday();
   check("uncertain claims stay counted, definite failures do not: 2 new today (the email that may have gone out, the Instagram DM in doubt)", today.used === 2, `${today.used} used`);
   const yesterday = await db.transaction((tx) => newLeadAllowance(tx, { personId: person("yesterday").id }));
   check("a person reached on an earlier day is already contacted: allowed, and not counted", yesterday.ok && !yesterday.counted, JSON.stringify(yesterday));
+
+  // Deleting the campaign that reached someone today gives no place back, and they are not new again.
+  const [gone] = await db.insert(outreachCampaigns).values({ organizationId: c.org.id, name: "Deleted later", status: "paused" }).returning();
+  const [goneLead] = await db.insert(outreachLeads).values({ personId: person("deleted").id, campaignId: gone!.id }).returning();
+  await db.insert(outreachEmails).values({ leadId: goneLead!.id, stepNumber: 1, status: "sent", sentAt: new Date(), createdAt: new Date() });
+  await take("deleted", "email");
+  await deleteCampaign(gone!.id);
+  const afterDelete = await newLeadsToday();
+  const deletedAgain = await db.transaction((tx) => newLeadAllowance(tx, { personId: person("deleted").id }));
+  check("deleting a campaign gives no place back: today still counts the person it reached", afterDelete.used === 3, `${afterDelete.used} used`);
+  check("…and that person is not new again", deletedAgain.ok && !deletedAgain.counted, JSON.stringify(deletedAgain));
+
   for (const name of ["dnc", "refused", "fresh"]) {
     const allowance = await db.transaction((tx) => newLeadAllowance(tx, { personId: person(name).id }));
-    check(`a person whose only claim ${name === "fresh" ? "is none" : "failed for good"} (${name}) is new, and refused at 2 of 2`, !allowance.ok && allowance.reason.startsWith(DAILY_LEAD_LIMIT_GATE), JSON.stringify(allowance));
+    check(`a person whose only claim ${name === "fresh" ? "is none" : "failed for good"} (${name}) is new, and refused at 3 of 3`, !allowance.ok && allowance.reason.startsWith(DAILY_LEAD_LIMIT_GATE), JSON.stringify(allowance));
   }
 
-  // Two claims racing for the last place: raise the limit to 3, so exactly one place is free.
-  await saveChannelRules("general", { newLeadsPerDay: 3 }, c.owner.id);
+  // A WhatsApp first message that times out after the provider took it: its place stays taken, and
+  // once its delivery is known it is not held behind the limit.
+  await saveChannelRules("general", { newLeadsPerDay: 4 }, c.owner.id);
+  await db.update(whatsappCampaigns).set({ status: "active" }).where(eq(whatsappCampaigns.id, wa.campaign.id));
+  await enroll(wa.campaign.id, person("timeout").id, minutes(-1));
+  await enroll(wa.campaign.id, person("other").id, minutes(-1));
+  const timedOut: string[] = [];
+  const flakySend = (async (request: { personId?: string | null }) => {
+    timedOut.push(request.personId ?? "");
+    throw new Error("socket hang up");
+  }) as unknown as WaSend;
+  ownOrganizations.push(c.org.id);
+  await runWhatsappCampaignTick({ send: flakySend });
+  const afterTimeout = await newLeadsToday();
+  check("a first message that timed out keeps its place: only one new person was tried under the last place", timedOut.length === 1 && afterTimeout.used === 4, `tried ${timedOut.length}, ${afterTimeout.used} used`);
+  const tried = timedOut[0]!;
+  const retry = await db.transaction((tx) => newLeadAllowance(tx, { personId: tried }));
+  check("…and that person is not counted again when it is retried", retry.ok && !retry.counted, JSON.stringify(retry));
+  await db.update(whatsappCampaigns).set({ status: "paused" }).where(eq(whatsappCampaigns.id, wa.campaign.id));
+
+  // Two claims racing for the last place, each taking it in its claim transaction as an engine does.
+  await saveChannelRules("general", { newLeadsPerDay: 5 }, c.owner.id);
   const claim = (name: string) => db.transaction(async (tx) => {
     const allowance = await newLeadAllowance(tx, { personId: person(name).id });
     if (!allowance.ok) return false;
-    await tx.insert(instagramOutreachQueue).values({ organizationId: c.org.id, runId: run!.id, personId: person(name).id, accountId: igAccount!.id, username: `${name}_${stamp}`, body: "Hi", status: "sending", attemptedAt: new Date() });
+    const at = new Date();
+    await tx.insert(instagramOutreachQueue).values({ organizationId: c.org.id, runId: run!.id, personId: person(name).id, accountId: igAccount!.id, username: `${name}_${stamp}`, body: "Hi", status: "sending", attemptedAt: at });
+    if (allowance.counted) await recordNewLead(tx, { personId: person(name).id, channel: "instagram", at });
     await new Promise((resolve) => setTimeout(resolve, 300));
     return true;
   });
   const raced = await Promise.all([claim("race1"), claim("race2")]);
-  check("two claims racing for the last place: exactly one gets it, the count never passes the limit", raced.filter(Boolean).length === 1 && (await newLeadsToday()).used === 3, JSON.stringify(raced));
+  check("two claims racing for the last place: exactly one gets it, the count never passes the limit", raced.filter(Boolean).length === 1 && (await newLeadsToday()).used === 5, JSON.stringify(raced));
   await db.update(instagramOutreachQueue).set({ status: "failed" }).where(eq(instagramOutreachQueue.organizationId, c.org.id));
 });
 

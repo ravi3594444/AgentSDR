@@ -92,6 +92,7 @@ const OWNED_TABLES = [
   "grid_provider_credentials",
   "grid_providers",
   "channel_settings",
+  "lead_first_contacts",
   "grid_rows",
   "grid_tables",
   "grid_workbooks",

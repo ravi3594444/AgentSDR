@@ -20,7 +20,7 @@ The one sending setting you choose is the **daily lead limit**. Everything else 
 - **What does not count:** follow-ups, replies (yours or the assistant's) and messages you send yourself.
 - **The day** is your workspace's own: the **Time zone** and **New day starts at** on **Settings → Your business**. The page shows today's count against the limit, and when it next resets.
 - **When the limit is reached**, first messages to new people wait until the reset; nothing is lost or skipped. Follow-ups, replies, and first messages to people already contacted on another channel still go out.
-- **Nothing resets early.** The count is read from the messages AgentSDR has actually started, so a restart or a second server does not grant more. A message whose delivery is uncertain keeps its place; one that definitely did not go out (for example, stopped by Do Not Contact) frees its place again.
+- **Nothing resets early.** Each person's first contact is recorded the moment the first message to them starts sending, so a restart or a second server does not grant more, and deleting a campaign or removing a lead does not give a place back or make that person new again. A message whose delivery is uncertain (a timeout after the provider took it) keeps its place; one that definitely did not go out (stopped by Do Not Contact, refused by the platform) frees its place again.
 
 Edit the value and choose **Save changes**. **Use default** puts it back to 50. Only owners and admins can change it; members see it read-only.
 

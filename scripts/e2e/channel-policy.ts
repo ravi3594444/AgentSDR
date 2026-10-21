@@ -195,7 +195,7 @@ await runInOrganization(org!.id, async () => {
     JSON.stringify({ job: started.jobId, status: launched?.status, error: launched?.error, run: run?.status, campaigns: run?.campaigns }));
   const emailLaunch = ((launched?.result ?? {}) as { launches?: { channel: string; problem: string | null; note?: string | null }[] }).launches?.find((entry) => entry.channel === "email");
   check("…a launch whose email queue could not be prepared is still started, and says so in a note, not as a failure",
-    Boolean(emailLaunch && emailLaunch.problem === null && /not prepared for sending yet/.test(emailLaunch.note ?? "") && /queue insert refused/.test(emailLaunch.note ?? "")) && !run?.error,
+    Boolean(emailLaunch && emailLaunch.problem === null && /not in the sending queue yet/.test(emailLaunch.note ?? "") && !/queue insert refused/.test(emailLaunch.note ?? "")) && !run?.error,
     JSON.stringify({ emailLaunch, error: run?.error }));
   const enrolled = await db.select({ personId: outreachLeads.personId }).from(outreachLeads).where(eq(outreachLeads.campaignId, run!.campaigns.email!));
   check("…the email campaign holds the email lead only", enrolled.length === 1 && enrolled[0]!.personId === asha.id, JSON.stringify(enrolled));

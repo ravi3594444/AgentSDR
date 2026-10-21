@@ -76,8 +76,9 @@ export const SCOPED_TABLES: readonly ScopedTable[] = [
   snake("grid_workbooks"),
   snake("grid_tables"),
   snake("grid_providers"),
-  // Sending rules
+  // Sending rules, and the daily lead limit's ledger
   snake("channel_settings"),
+  snake("lead_first_contacts"),
   // Calling and WhatsApp
   snake("call_campaigns"),
   snake("call_sessions"),

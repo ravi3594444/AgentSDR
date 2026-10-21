@@ -15,7 +15,7 @@ import "server-only";
  */
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { contactedByAutomation, newLeadAllowance } from "@/lib/channels/dailyLeadLimit.server";
+import { contactedByAutomation, newLeadAllowance, recordNewLead, releaseNewLead } from "@/lib/channels/dailyLeadLimit.server";
 import { companies, people } from "@/lib/leads/schema";
 import { unipileOrganizationIds } from "@/lib/linkedin/organizations.server";
 import { isMigrationControlPaused } from "@/lib/migration/controls";
@@ -296,15 +296,19 @@ async function processLead(
       ))
       .for("update", { skipLocked: true });
     if (!locked) return { kind: "lost" as const };
+    let counted = false;
     if (stepIndex === 0) {
       const allowance = await newLeadAllowance(tx, { personId: picked.personId, now });
       if (!allowance.ok) return { kind: "daily_lead_limit" as const, reason: allowance.reason };
+      counted = allowance.counted;
     }
     const [inserted] = await tx
       .insert(whatsappCampaignSends)
       .values({ leadId: picked.id, step: stepIndex, stepId: step.id, status: "sending", accountId: account.id, body: text })
       .onConflictDoNothing()
       .returning({ id: whatsappCampaignSends.id });
+    // At the claim row's own time (created_at defaults to the database's now), not the tick's clock.
+    if (inserted && counted) await recordNewLead(tx, { personId: picked.personId, channel: "whatsapp", at: new Date() });
     if (inserted) return { kind: "claimed" as const, id: inserted.id };
     const [existing] = await tx
       .select()
@@ -457,34 +461,45 @@ async function handleSendFailure(
 ): Promise<StepOutcome> {
   const action: SendFailureAction = classifySendError(error);
   const message = error instanceof Error ? error.message : String(error);
+  // A first message refused before it went out gives its new-lead place back, once its claim is gone.
+  // A transient error may have delivered it (retry_later), so that place stays taken.
+  const freePlace = async () => {
+    if (lead.currentStep === 0) await releaseNewLead(db, { personId: lead.personId, since: now });
+  };
   // A hold on the number (not on this lead): its reason is kept, the claim released, the lead untouched.
   const heldBack = heldBackReason(error, action);
   if (heldBack) await recordHeldBack(accountId, heldBack);
   switch (action.kind) {
     case "stop_account":
       await deleteClaim(claimId);
+      await freePlace();
       result.skipped += 1;
       return "stop_account";
     case "block_first_messages":
       await deleteClaim(claimId);
+      await freePlace();
       result.skipped += 1;
       return "block_first_messages";
     case "skip_account":
       await deleteClaim(claimId);
+      await freePlace();
       result.skipped += 1;
       return "stop_account";
     case "stop_organization":
       await deleteClaim(claimId);
+      await freePlace();
       result.skipped += 1;
       console.warn(`[whatsapp/campaigns] Unipile is not connected for organization ${currentOrganizationId()}; stopping`);
       return "stop_organization";
     case "stop_lead":
       await deleteClaim(claimId);
+      await freePlace();
       await updateOpenLead(lead.id, { status: "stopped", lastError: action.error, nextSendAt: null }, now);
       result.skipped += 1;
       return "continue";
     case "fail_lead":
       await failClaim(claimId, action.error);
+      await freePlace();
       await updateOpenLead(lead.id, { status: "failed", lastError: action.error }, now);
       result.failed += 1;
       return "continue";

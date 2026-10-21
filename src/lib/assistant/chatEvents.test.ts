@@ -63,7 +63,7 @@ describe("the compact line for each report", () => {
   });
 
   test("outreach started whose emails are not prepared yet: still started, in warning tone, with the launch note", () => {
-    const note = "Its emails are not prepared for sending yet (lock timeout); they are prepared again automatically.";
+    const note = "Its emails are not in the sending queue yet (the queue could not be updated just now); it is topped up again within 10 minutes.";
     const line = compactEvent({ toolResult: { data: { event: { kind: "outreach_started", runId: "r", ok: true, automatic: true, launches: [{ channel: "email", added: 4, skipped: 0, problem: null, note }] } } } });
     expect(line).toMatchObject({ title: "Outreach started · Automatic replies", tone: "warning", figures: [{ label: "Email", value: "4" }] });
     expect(line?.note).toBe(`Email: ${note}`);

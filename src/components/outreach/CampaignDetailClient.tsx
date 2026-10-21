@@ -15,6 +15,7 @@ import {
 } from "@remixicon/react";
 
 import * as Badge from "@/components/alignui/badge";
+import { useDialogs } from "@/components/DialogProvider";
 import * as Button from "@/components/alignui/button";
 import { PageContainer, PageHeader } from "@/components/page/PageHeader";
 import { PageTabs } from "@/components/page/PageTabs";
@@ -100,6 +101,7 @@ export default function CampaignDetailClient({
   pulse: CampaignPulse;
 }) {
   const router = useRouter();
+  const dialogs = useDialogs();
   const [tab, setTab] = useState<TabId>("analytics");
   const [launching, setLaunching] = useState(false);
   const [launchError, setLaunchError] = useState<string | null>(null);
@@ -121,11 +123,13 @@ export default function CampaignDetailClient({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: "active" }),
       });
-      const data = await res.json();
+      const data = await res.json() as { error?: string; warning?: string };
       if (!res.ok) {
         setLaunchError(data.error ?? "Failed to launch");
         return;
       }
+      // Started, but its emails could not be queued yet: say so, as the list and the wizard do.
+      if (data.warning) await dialogs.alert({ title: campaign.status === "paused" ? "Campaign resumed" : "Campaign launched", description: data.warning, variant: "info" });
       router.refresh();
     } finally {
       setLaunching(false);

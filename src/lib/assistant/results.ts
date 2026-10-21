@@ -118,7 +118,7 @@ export function describeChannelSending(sending: ChannelSending): string {
     case "daily_limit":
       return "has used its mailboxes' daily send limits; each starts again at its own midnight";
     case "nothing_queued":
-      return "has nothing due to send right now";
+      return "has no message waiting in its sending queue right now";
     case "throttled":
       return "is pausing between sends";
     case "sender_checks":

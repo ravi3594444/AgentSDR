@@ -5,32 +5,30 @@ import "server-only";
  * for the first time per workspace day, across email, LinkedIn, WhatsApp
  * and Instagram together.
  *
- * No counter is kept. Each engine already writes a durable claim row before
- * it calls the provider, and removes or fails that row itself when the send
- * definitely did not happen; the count is derived from those rows:
+ * The count is a ledger, lead_first_contacts: one row per person, written
+ * by recordNewLead in the same transaction as the engine's first-touch claim
+ * row (the claim is the reservation; the ledger row is the place). A person
+ * is new on the day of that row and is counted once, whichever channel
+ * reached them first. The row outlives the campaign, lead and claim rows, so
+ * deleting a campaign or a lead, or an engine dropping a claim whose send
+ * may have gone out (a timeout), gives no place back. Only a definite
+ * failure — the engine knows nothing was sent — releases it
+ * (releaseNewLead), and only when no other counted claim reached the person:
  *
- *   email      outreach_emails, every status except a step Do Not Contact
- *              stopped before the provider (EMAIL_DNC_BLOCKED_ERROR)
- *   LinkedIn   "Message" rows of type INVITATION (deleted on a block or an
- *              account-limit revert, kept when the outcome is uncertain)
- *   WhatsApp   whatsapp_campaign_sends in sending or sent (a definite
- *              failure is deleted or marked failed)
- *   Instagram  instagram_outreach_queue in sending, sent or uncertain
- *
- * A person is new on the day of their earliest claim and is counted once,
- * whichever channel reached them first; follow-ups, replies and messages a
- * person sends by hand write none of these rows for someone not already in
- * them. So usage survives restarts, an uncertain claim keeps its place, and
- * a definite failure frees it again through the engine's existing code.
+ *   email      a step Do Not Contact stopped before the provider
+ *              (EMAIL_DNC_BLOCKED_ERROR)
+ *   LinkedIn   a claim removed on a block or an account-limit revert
+ *   WhatsApp   a claim deleted or failed for a refusal, a ban or a held number
+ *   Instagram  a claim marked failed (not uncertain)
  *
  * newLeadAllowance runs inside an engine's own first-touch claim
  * transaction, after that engine's own lock, and takes the organization's
  * `new-leads:<org>` advisory lock last (lock order is acyclic: no holder of
- * this lock waits for another engine lock). The claim row the engine then
- * writes in the same transaction is the reservation.
+ * this lock waits for another engine lock).
  */
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
+import { leadFirstContacts } from "./schema";
 import { EMAIL_DNC_BLOCKED_ERROR } from "@/lib/outreach/sendRules";
 import { currentOrganizationId } from "@/lib/tenancy/scope";
 import { dailyLeadLimitReason, leadDayWindow } from "./dailyLeadLimit";
@@ -81,9 +79,11 @@ async function instagramQueueExists(): Promise<boolean> {
 }
 
 /**
- * Every automated outreach claim of the organization, (person_id, at): the
- * instant the claim was written. LinkedIn stores UTC in `timestamp without
- * time zone` (src/lib/linkedin/schema.ts), read here as that instant.
+ * Every counted automated outreach claim of the organization, (person_id,
+ * at): the instant the claim was written. LinkedIn stores UTC in `timestamp
+ * without time zone` (src/lib/linkedin/schema.ts), read here as that
+ * instant. The ledger was filled from these once (the always-on-sending
+ * migration); releaseNewLead reads them to keep a place another claim holds.
  */
 function touches(org: string, instagram: boolean): SQL {
   return sql`
@@ -119,16 +119,13 @@ function touches(org: string, instagram: boolean): SQL {
  * behind new ones; the claim's newLeadAllowance still decides.
  */
 export async function contactedByAutomation(person: SQL): Promise<SQL> {
-  return sql`EXISTS (SELECT 1 FROM (${touches(currentOrganizationId(), await instagramQueueExists())}) touched WHERE touched.person_id = ${person})`;
+  return sql`EXISTS (SELECT 1 FROM lead_first_contacts f WHERE f.organization_id = ${currentOrganizationId()} AND f.person_id = ${person})`;
 }
 
 async function usage(executor: Executor, org: string, start: Date, personId: string | null): Promise<{ used: number; touched: boolean }> {
-  const instagram = await instagramQueueExists();
   const [row] = await executor.execute<{ used: number; touched: boolean }>(sql`
-    WITH t AS (${touches(org, instagram)}),
-    firsts AS (SELECT person_id, min(at) AS first_at FROM t WHERE person_id IS NOT NULL GROUP BY person_id)
-    SELECT (SELECT count(*)::int FROM firsts WHERE first_at >= ${start.toISOString()}::timestamptz) AS used,
-           ${personId ? sql`EXISTS (SELECT 1 FROM firsts WHERE person_id = ${personId}::uuid)` : sql`false`} AS touched`);
+    SELECT (SELECT count(*)::int FROM lead_first_contacts WHERE organization_id = ${org} AND first_at >= ${start.toISOString()}::timestamptz) AS used,
+           ${personId ? sql`EXISTS (SELECT 1 FROM lead_first_contacts WHERE organization_id = ${org} AND person_id = ${personId}::uuid)` : sql`false`} AS touched`);
   return { used: Number(row?.used ?? 0), touched: Boolean(row?.touched) };
 }
 
@@ -150,6 +147,29 @@ export async function newLeadAllowance(tx: Tx, input: { personId: string; now?: 
   if (touched) return { ok: true, counted: false, used, limit: day.limit };
   if (used < day.limit) return { ok: true, counted: true, used: used + 1, limit: day.limit };
   return { ok: false, used, limit: day.limit, resetsAt: day.resetsAt, timeZone: day.timeZone, reason: dailyLeadLimitReason(used, day.limit, day.resetsAt, day.timeZone) };
+}
+
+/**
+ * Takes today's place for a new person: call it in the claim transaction,
+ * right after the engine's claim row is written, when newLeadAllowance said
+ * `counted`. `at` is the claim's time (releaseNewLead matches it).
+ */
+export async function recordNewLead(tx: Tx, input: { personId: string; channel: "email" | "linkedin" | "whatsapp" | "instagram"; at: Date }): Promise<void> {
+  await tx.insert(leadFirstContacts).values({ organizationId: currentOrganizationId(), personId: input.personId, firstAt: input.at, channel: input.channel }).onConflictDoNothing();
+}
+
+/**
+ * Gives a place back after a definite failure (nothing was sent): the
+ * person's ledger row, if this claim wrote it (at or after `since`) and no
+ * other counted claim reaches them. Call it after the engine has removed or
+ * failed its own claim. A claim whose send may have gone out never calls it.
+ */
+export async function releaseNewLead(executor: Executor, input: { personId: string; since: Date }): Promise<void> {
+  const org = currentOrganizationId();
+  await executor.execute(sql`
+    DELETE FROM lead_first_contacts
+     WHERE organization_id = ${org} AND person_id = ${input.personId}::uuid AND first_at >= ${input.since.toISOString()}::timestamptz
+       AND NOT EXISTS (SELECT 1 FROM (${touches(org, await instagramQueueExists())}) t WHERE t.person_id = ${input.personId}::uuid)`);
 }
 
 /** Today's count against the limit, without the lock: the settings page and the status screens. */

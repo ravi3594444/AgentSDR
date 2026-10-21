@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { canCancelJob, failedSummary, jobState, nextAtPhrase, OPEN_STATES, planCounts, planOutcome, planState, REPLY_STATE_LABELS, repliesSeenUntil, replyState, runState, WORK_STATE_LABELS, type JobFacts, type PlanLead } from "./status";
+import { canCancelJob, failedSummary, jobState, nextAtPhrase, OPEN_STATES, planCounts, planOutcome, planState, reasonGivesTime, REPLY_STATE_LABELS, repliesSeenUntil, replyState, runState, WORK_STATE_LABELS, type JobFacts, type PlanLead } from "./status";
 import type { SenderStatus } from "@/lib/assistant/runEvidence";
 
 const now = new Date("2026-10-18T12:00:00Z");
@@ -237,11 +237,23 @@ describe("an email plan says where its leads stand before what its senders are d
     expect(running([sentLead(later), sentLead(followUp), failed], [mailbox([], 0)])).toEqual({ state: "scheduled", reason: "2 contacted — waiting for a reply; 1 failed (Gmail answered 550) so far", open: true, nextAt: followUp });
   });
 
-  test("a first email due with nothing in the queue: not prepared yet, prepared again automatically, never a cooldown", () => {
+  test("a reason that already says when its wait ends does not get the time again", () => {
+    expect(reasonGivesTime("Daily lead limit reached (8 of 8 new leads today); resets Thursday 22 Oct at 00:00 (UTC)")).toBe(true);
+    expect(reasonGivesTime("Pausing between sends until 19:27:03 (UTC)")).toBe(true);
+    expect(reasonGivesTime("3 contacted — waiting for a reply")).toBe(false);
+    expect(reasonGivesTime(null)).toBe(false);
+  });
+
+  test("due work with the senders not looked at: no promise that it is prepared", () => {
+    const state = planState({ status: "running", error: null, senders: null, leads: [pendingLead(false)], now: at });
+    expect(state.reason ?? "").not.toContain("not prepared");
+  });
+
+  test("a first email due with nothing in the queue: not prepared yet, and what prepares it; never a cooldown", () => {
     // The mailbox is pausing between sends, but nothing queued waits on it: the pause is a detail (emailSenderStatus), not a hold.
     const pausing = { ...mailbox([], 0), details: ["Pausing between sends until 22:14 (Asia/Kolkata); no queued email waits on it."] };
-    expect(running([pendingLead(false)], [pausing])).toEqual({ state: "waiting_send", reason: "1 due message is not prepared for sending yet; it is prepared again automatically", open: true, nextAt: null });
-    expect(running([pendingLead(false), sentLead(null)], [mailbox([], 0)]).reason).toBe("2 due messages are not prepared for sending yet; they are prepared again automatically");
+    expect(running([pendingLead(false)], [pausing])).toEqual({ state: "waiting_send", reason: "1 due message is not prepared for sending yet; the queue is topped up every 10 minutes while its sender is connected and has room today", open: true, nextAt: null });
+    expect(running([pendingLead(false), sentLead(null)], [mailbox([], 0)]).reason).toBe("2 due messages are not prepared for sending yet; the queue is topped up every 10 minutes while their sender is connected and has room today");
   });
 
   test("…unless a sender holds it for a reason of its own: the hold is named (a disconnected mailbox, its daily send limit)", () => {
