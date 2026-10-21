@@ -694,7 +694,8 @@ export function ungroundedContacts(contacts: unknown, corpus: string): string[] 
 
 /** Tools whose successful result is a source: a page read, a search's results, a Treg answer, a browser page. */
 function isSourceTool(tool: string | null): boolean {
-  return tool === "read_webpage" || tool === "web_search" || tool === "treg_call" || Boolean(tool?.startsWith("browser_"));
+  // review_leads (research agent v2) shows the request's leads as the server stored them: their sites and profiles may be opened.
+  return tool === "read_webpage" || tool === "web_search" || tool === "treg_call" || tool === "review_leads" || Boolean(tool?.startsWith("browser_"));
 }
 
 function parsedLink(value: string): URL | null {

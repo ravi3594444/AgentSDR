@@ -58,7 +58,10 @@ import { audienceProspects } from "./qualification.server";
 import { diagnoseDelivery } from "./deliveryDiagnostics.server";
 import { parseInstagramContacts } from "./instagramContacts";
 import { createInstagramContactsAudience } from "./instagramContacts.server";
-import { controlsSentence, ensureObjective, objectiveForRequest, objectiveLine, objectiveStartProblem, requestHoldReason, requestSpendCap, requestSpendGuard, setObjectiveState, threadObjectives } from "./objective.server";
+import { withoutContactAfter } from "./agentV2";
+import { activeRequest, matchingLeadsAudience, objectiveBrief, ownerMessagesSince, reviewLeadsText, setLeadFit, type ReviewFilter } from "./agentV2.server";
+import { briefLine, checkBrief } from "./brief";
+import { controlsSentence, ensureObjective, objectiveDefaults, objectiveForRequest, setObjectiveBrief, stopObjective, objectiveLine, objectiveStartProblem, requestHoldReason, requestSpendCap, requestSpendGuard, setObjectiveState, threadObjectives } from "./objective.server";
 
 /**
  * What the assistant can do, and nothing else. Each tool is a call into an
@@ -90,6 +93,8 @@ export type ToolContext = {
   requestMessageId?: string | null;
   /** The request this turn's searches serve, decided once per turn (agent.ts searchRequestFor). */
   searchRequestId?: string | null;
+  /** Research agent v2 (agentV2.ts): the model writes the brief and prepares outreach itself; no search prepares a plan. */
+  v2?: boolean;
 };
 
 /**
@@ -109,6 +114,12 @@ export function searchRequestId(context: ToolContext): string | null {
  */
 async function searchObjective(context: ToolContext): Promise<{ problem: string | null; line: string | null }> {
   const requestId = searchRequestId(context);
+  if (context.v2) {
+    // v2: the brief (set_brief) creates the request's objective; a search never guesses its controls.
+    const objective = await objectiveForRequest(requestId);
+    if (!objective?.controls.brief) return { problem: "this request has no brief yet: call set_brief first, with what the owner asked", line: null };
+    return { problem: await objectiveStartProblem(requestId), line: null };
+  }
   const ensured = await ensureObjective({ requestMessageId: requestId, threadId: context.threadId, userId: context.userId });
   if (!ensured) return { problem: null, line: null };
   const problem = await objectiveStartProblem(requestId);
@@ -406,6 +417,64 @@ function pageResult(page: { url: string; title: string; body: string; contacts: 
       : `${host}${title ? ` · ${title}` : ""} · ${contacts.length} contact${contacts.length === 1 ? "" : "s"} found`,
     data: { url: page.url, title, contacts, links, ...(page.evidence?.length ? { evidence: page.evidence } : {}) },
   };
+}
+
+/** What a prepared plan says to the model (both agents). */
+function planSummary(proposal: Awaited<ReturnType<typeof prepareOutreach>>, autonomous: boolean | undefined): string {
+  const plan = proposal.plan;
+  const sorted = plan.groups?.length
+    ? ` Sorted into ${plan.groups.map((group) => `“${group.label}” (${group.count})`).join(", ")}; ${plan.personal?.length ?? 0} written to individually; ${plan.skipped?.length ?? 0} left out${plan.skipped?.length ? ` (${[...new Set(plan.skipped.map((item) => item.reason))].slice(0, 3).join("; ")})` : ""}.`
+    : "";
+  const dropped = plan.droppedSteps?.length
+    ? ` Left out of the sequence because they kept a claim your information does not back: ${plan.droppedSteps.map((item) => `${item.channel} message ${item.step} for “${item.group}” (${item.problem})`).join("; ")}.`
+    : "";
+  return `Plan ${proposal.runId} ready for “${proposal.name}”: ${planChannelsLine(plan)}, about ${plan.estimate.days ?? "?"} days, AI cost about ${plan.estimate.aiCostUsd === null ? "unknown" : `$${plan.estimate.aiCostUsd}`}.${sorted}${dropped}${autonomous ? " Autonomous mode: it starts on its own right after this unless a daily cap stops it; the next event line says which." : " It is shown to the owner with sample messages and a Start button; nothing is sent until they press Start."}`;
+}
+
+/**
+ * prepare_outreach in research agent v2: one plan for the request, from its
+ * matching leads only (each person once, up to the brief's target), on the
+ * brief's channels only, written from the brief's goal. Preparing sends
+ * nothing; in Autonomous mode a plan starts on its own, so there the owner's
+ * own words must have asked to contact people.
+ */
+async function prepareOutreachV2(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
+  const objective = await objectiveForRequest(searchRequestId(context));
+  const brief = objectiveBrief(objective);
+  if (!objective || !brief) throw new ToolArgumentError("this request has no brief yet: call set_brief first");
+  if (!brief.contact) throw new ToolArgumentError("the brief says research only; the owner did not ask to contact these leads. Update the brief only if the owner asks for outreach");
+  if (context.autonomous) {
+    const words = (await ownerMessagesSince(context.threadId, objective.requestMessageId)).join("\n");
+    if (!outreachRequested(words, context.lastAssistantText)) throw new ToolArgumentError(outreachRequestProblem("", null)!);
+  }
+  if (args.autopilot !== undefined && typeof args.autopilot !== "boolean") throw new ToolArgumentError("autopilot must be true or false");
+  const maxLeads = args.maxLeads === undefined ? undefined : Number(args.maxLeads);
+  if (maxLeads !== undefined && (!Number.isFinite(maxLeads) || maxLeads < 1)) throw new ToolArgumentError("maxLeads must be a positive number");
+  const cap = Math.min(maxLeads ?? Number.POSITIVE_INFINITY, brief.leadTarget ?? 100);
+  // Always from matching leads only: the request's lists, or the one list named (people the owner gave count as matching).
+  const built = await matchingLeadsAudience({ objective, brief, threadId: context.threadId, userId: context.userId, max: cap, audienceId: uuid(args, "audienceId", false) ?? null });
+  if ("problem" in built) return { ok: false, summary: `No plan prepared: ${built.problem}.` };
+  const audienceId = built.audienceId;
+  try {
+    const proposal = await prepareOutreach({
+      audienceId,
+      channels: brief.channels ?? channels(args),
+      onlyChannels: brief.channels,
+      maxLeads: cap,
+      autopilot: args.autopilot as boolean | undefined,
+      instructions: text(args, "instructions") ?? null,
+      basedOnRunId: uuid(args, "basedOnRunId", false) ?? null,
+      ownerRequest: brief.goal,
+      requestId: objective.requestMessageId,
+      includeSkipped: false,
+      threadId: context.threadId,
+      userId: context.userId,
+    });
+    return { ok: true, summary: planSummary(proposal, context.autonomous), data: proposal as unknown as Record<string, unknown> };
+  } catch (error) {
+    if (error instanceof OutreachError) return { ok: false, summary: error.message };
+    throw error;
+  }
 }
 
 export const TOOLS: Record<string, Tool> = {
@@ -1116,6 +1185,80 @@ export const TOOLS: Record<string, Tool> = {
     },
   },
 
+  set_brief: {
+    available: (features) => features.research_agent_v2,
+    description: "Write down the lead request the owner made, before its first search and whenever they change it: what they want, how many leads, whether to contact them and on which channels, their budget and time, and what finished means. Every later step reads it: the lead judge, the plan, the writer and the final report. Use only what the owner said (their messages and answers); leave a field null when they said nothing. The server checks it: a limit above the organization's default must be one the owner wrote.",
+    arguments: "goal (the request in one or two sentences, from all of the owner's messages about it, e.g. 'Find 10 hair salons in Miami on Instagram and DM them'), leadTarget (the number of leads the owner asked for, or null), contact (true when the owner asked to contact, email, message or DM them; false for research only), channels (array of email|whatsapp|linkedin|instagram the owner allowed, or null when they named none), spendCapUsd (dollars the owner allows on paid sources; 0 when they said free tools only; null when they said nothing), timeLimitMinutes (minutes the owner allows, or null), done (what finished means, in a sentence), newRequest (true when this is a new, different request from the one in progress)",
+    run: async (args, context) => {
+      if (args.newRequest !== undefined && typeof args.newRequest !== "boolean") throw new ToolArgumentError("newRequest must be true or false");
+      const current = await activeRequest(context.threadId);
+      const requestId = args.newRequest === true || !current ? context.requestMessageId ?? null : current.requestMessageId;
+      if (!requestId) throw new ToolArgumentError("there is no owner message to make a request of");
+      const words = (await ownerMessagesSince(context.threadId, requestId)).join("\n");
+      const checked = checkBrief(args, words, await objectiveDefaults());
+      if (!checked.ok) throw new ToolArgumentError(checked.error);
+      if (args.newRequest === true && current && current.requestMessageId !== requestId) {
+        await stopObjective(current, "finished", "the owner moved on to a new request");
+      }
+      const saved = await setObjectiveBrief({ requestMessageId: requestId, threadId: context.threadId, userId: context.userId, brief: checked.brief, controls: checked.controls });
+      if ("problem" in saved) return { ok: false, summary: `Brief not saved: ${saved.problem}.` };
+      const line = briefLine(checked.brief, checked.controls);
+      return {
+        ok: true,
+        summary: `Brief ${saved.created ? "saved" : "updated"}: ${line}.`,
+        display: `${saved.created ? "Noted" : "Updated"} the request — ${line}`,
+        data: { objectiveId: saved.objective.id, requestId, brief: checked.brief, controls: checked.controls },
+      };
+    },
+  },
+
+  review_leads: {
+    available: (features) => features.research_agent_v2,
+    description: "The leads of the current request, one line per person: the verdict on the request (match, unconfirmed, no match, not judged) with the judge's reason, how each can be contacted, the facts it was judged on (place, kind, bio, website notes) and its source link; accounts that were not saved, and why. Use it after searches finish to see which leads really fit, and to find verdicts to correct with set_lead_fit.",
+    arguments: "filter (optional: all|match|unconfirmed|no_match|unjudged|not_saved, default all), limit (optional, 1-80, default 40), audienceId (optional: one list only)",
+    run: async (args, context) => {
+      const objective = await objectiveForRequest(searchRequestId(context));
+      if (!objective) return { ok: false, summary: "This chat has no lead request yet (set_brief starts one)." };
+      const filters: ReviewFilter[] = ["all", "match", "unconfirmed", "no_match", "unjudged", "not_saved"];
+      const filter = (text(args, "filter") ?? "all") as ReviewFilter;
+      if (!filters.includes(filter)) throw new ToolArgumentError(`filter must be one of ${filters.join(", ")}`);
+      const limit = Math.min(80, Math.max(1, Math.round(Number(args.limit ?? 40)) || 40));
+      const review = await reviewLeadsText({ objective, audienceId: uuid(args, "audienceId", false) ?? null, filter, limit });
+      return { ok: true, summary: review.text, display: `Reviewed ${review.shown} of ${review.total} leads`, data: { shown: review.shown, total: review.total } };
+    },
+  },
+
+  set_lead_fit: {
+    available: (features) => features.research_agent_v2,
+    description: "Correct the verdict on one lead of the current request when the evidence shows the judge was wrong: match (only matches are contacted) or no_match. A match needs quote: the exact words from a page read in this chat (read_webpage, web_search) or from the lead's own profile that show it fits (its city, its kind of business). The server checks the quote is really there.",
+    arguments: "personId (from review_leads), fit (match|no_match), reason (a short sentence), quote (required for match: the exact words that prove it), url (the page the quote is from, when it is a page)",
+    run: async (args, context) => {
+      const objective = await objectiveForRequest(searchRequestId(context));
+      if (!objective) return { ok: false, summary: "This chat has no lead request yet." };
+      const fit = text(args, "fit", true);
+      if (fit !== "match" && fit !== "no_match") throw new ToolArgumentError("fit must be match or no_match");
+      const reason = text(args, "reason", true)!;
+      const result = await setLeadFit({ objective, threadId: context.threadId, personId: uuid(args, "personId")!, fit, reason, quote: text(args, "quote") ?? null, url: text(args, "url") ?? null });
+      if (!result.ok) throw new ToolArgumentError(result.problem);
+      return { ok: true, summary: `“${result.name}” is now ${fit === "match" ? "a match" : "not a match"} for this request (${reason}).`, display: `Marked “${result.name}” as ${fit === "match" ? "a match" : "not a match"}` };
+    },
+  },
+
+  finish_request: {
+    available: (features) => features.research_agent_v2,
+    description: "End the current request because what the owner asked is done (its brief's done condition), or nothing more fits within its limits. Searches still running finish and their leads are kept; the owner then gets one final report with the counts. A plan already prepared still waits for the owner's Start.",
+    arguments: "summary (one sentence: what was done, e.g. 'Both tests ran: Google Maps found 5 dentists and the web search 5')",
+    run: async (args, context) => {
+      const objective = await activeRequest(context.threadId);
+      if (!objective) return { ok: false, summary: "This chat has no request in progress to finish." };
+      const summary = text(args, "summary", true)!.replace(/\s+/g, " ").trim().slice(0, 400);
+      const stopped = await stopObjective(objective, "finished", summary.replace(/\.$/, ""));
+      return stopped
+        ? { ok: true, summary: "Request finished; the final report is posted when any search still running ends.", display: "Finished the request" }
+        : { ok: false, summary: "This request had already ended." };
+    },
+  },
+
   list_audiences: {
     description: "The lead lists so far (found or uploaded), newest first, with how many can be contacted.",
     arguments: "none",
@@ -1131,6 +1274,7 @@ export const TOOLS: Record<string, Tool> = {
   },
 
   describe_audience: {
+    available: (features) => !features.research_agent_v2,
     description: "One lead list in detail: how many leads per channel, who was left out and why, and a few examples with where their contact details came from.",
     arguments: "audienceId",
     run: async (args) => {
@@ -1154,6 +1298,7 @@ export const TOOLS: Record<string, Tool> = {
     description: "Write the outreach for a lead list and plan the run. It first sorts the leads by itself: what kind of lead each is (each kind gets its own messages), which leads deserve a first message written for them alone, and which clearly do not fit the owner's offer (left out with the reason). Then it plans which channel each lead gets, the messages (with real samples), daily limits, how long it takes and the AI cost. Creates nothing and sends nothing; the owner reviews the plan, chooses Automatic or Review replies and presses Start. Only when the owner asked for outreach (or said yes to your offer of it). To contact more people with an earlier run's messages, pass basedOnRunId (a new plan the owner approves again).",
     arguments: "audienceId; channels (optional array of email|whatsapp|linkedin|instagram, only when the owner's own words named how to contact them; otherwise leave it out and each lead gets its best ready route: a list the owner did not ask for only changes the order); maxLeads (optional, default up to 100); autopilot (optional true/false: propose Automatic replies); instructions (optional text, e.g. tone or angle for this run); basedOnRunId (optional: reuse that run's messages); includeSkipped (optional true: also contact the leads the sorting leaves out, when the owner asks)",
     run: async (args, context) => {
+      if (context.v2) return prepareOutreachV2(args, context);
       const request = context.authorizedBy === "search" ? context.ownerText : requireOutreachRequest(context);
       if (args.includeSkipped !== undefined && typeof args.includeSkipped !== "boolean") throw new ToolArgumentError("includeSkipped must be true or false");
       const audienceId = uuid(args, "audienceId")!;
@@ -1175,18 +1320,7 @@ export const TOOLS: Record<string, Tool> = {
           threadId: context.threadId,
           userId: context.userId,
         });
-        const plan = proposal.plan;
-        const sorted = plan.groups?.length
-          ? ` Sorted into ${plan.groups.map((group) => `“${group.label}” (${group.count})`).join(", ")}; ${plan.personal?.length ?? 0} written to individually; ${plan.skipped?.length ?? 0} left out${plan.skipped?.length ? ` (${[...new Set(plan.skipped.map((item) => item.reason))].slice(0, 3).join("; ")})` : ""}.`
-          : "";
-        const dropped = plan.droppedSteps?.length
-          ? ` Left out of the sequence because they kept a claim your information does not back: ${plan.droppedSteps.map((item) => `${item.channel} message ${item.step} for “${item.group}” (${item.problem})`).join("; ")}.`
-          : "";
-        return {
-          ok: true,
-          summary: `Plan ${proposal.runId} ready for “${proposal.name}”: ${planChannelsLine(plan)}, about ${plan.estimate.days ?? "?"} days, AI cost about ${plan.estimate.aiCostUsd === null ? "unknown" : `$${plan.estimate.aiCostUsd}`}.${sorted}${dropped}${context.autonomous ? " Autonomous mode: it starts on its own right after this unless a daily cap stops it; the next event line says which." : " It is shown to the owner with sample messages and a Start button; nothing is sent until they press Start."}`,
-          data: proposal as unknown as Record<string, unknown>,
-        };
+        return { ok: true, summary: planSummary(proposal, context.autonomous), data: proposal as unknown as Record<string, unknown> };
       } catch (error) {
         if (error instanceof OutreachError) return { ok: false, summary: error.message };
         throw error;
@@ -1391,6 +1525,12 @@ export function toolNamesFor(features: FeatureState): string[] {
 export async function runTool(name: string, args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
   const tool = TOOLS[name];
   if (!tool) return { ok: false, summary: `There is no tool called ${name}.` };
+  if (context.v2 && FOLLOW_UP_TOOLS.has(name)) {
+    // v2: searches and added contacts only make lists; the model prepares the plan after reviewing them.
+    args = { ...args };
+    delete args.contactAfter;
+    delete args.channels;
+  }
   try {
     return await tool.run(args, context);
   } catch (error) {
@@ -1400,9 +1540,24 @@ export async function runTool(name: string, args: Record<string, unknown>, conte
   }
 }
 
+/** Tools that can prepare a plan when they finish (contactAfter); v2 leaves that to the model. */
+const FOLLOW_UP_TOOLS = new Set(["find_leads", "find_linkedin_leads", "find_customers_on_web", "find_instagram_prospects", "find_social_leads", "research_social_sources", "add_contacts", "add_instagram_contacts"]);
+
+/** Research agent v2's own wording of tools whose behaviour differs there (prepareOutreachV2). */
+const V2_TOOL_TEXT: Record<string, { description: string; arguments: string }> = {
+  prepare_outreach: {
+    description: "Prepare one outreach plan for the current request from its matching leads only (each person once, up to the brief's lead target), on the brief's channels, written from the brief's goal. Sends nothing: the owner reviews it and presses Start (in Autonomous mode it starts within the daily caps).",
+    arguments: "audienceId (optional: only this list's matching leads, e.g. people the owner gave), maxLeads (optional, fewer than the target), autopilot (optional true/false: propose Automatic replies), instructions (optional: tone or angle), basedOnRunId (optional: reuse that run's messages)",
+  },
+};
+
 /** The tools as the model reads them, only those `features` allow. */
 export function toolCatalog(features: FeatureState): string {
-  return toolNamesFor(features).map((name) => `- ${name}: ${TOOLS[name]!.description} Arguments: ${TOOLS[name]!.arguments}.`).join("\n");
+  return toolNamesFor(features).map((name) => {
+    const v2 = features.research_agent_v2 ? V2_TOOL_TEXT[name] : undefined;
+    const args = v2?.arguments ?? (features.research_agent_v2 && FOLLOW_UP_TOOLS.has(name) ? withoutContactAfter(TOOLS[name]!.arguments) : TOOLS[name]!.arguments);
+    return `- ${name}: ${v2?.description ?? TOOLS[name]!.description} Arguments: ${args}.`;
+  }).join("\n");
 }
 
 export { setupSnapshot };

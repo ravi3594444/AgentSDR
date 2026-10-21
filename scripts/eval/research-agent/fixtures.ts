@@ -422,7 +422,7 @@ const C7: CaseFixture = {
   senders: { email: true },
   expect: { contact: true, channels: ["email"], target: 5, minMatches: 3, planPossible: true },
   maps: (phrase) => [
-    ...nyClinics.map(({ email: _email, ...row }) => row),
+    ...nyClinics.map(({ title, category, address, city, website, phone }) => ({ title, category, address, city, website, phone })),
     ...(/dent/i.test(phrase) ? [] : [
       { title: "Joe's Pizza", category: "Pizza restaurant", address: "7 Carmine St, New York, NY 10014", city: "New York", website: site("joespizzanyc") },
       { title: "Hudson Legal Group", category: "Law firm", address: "100 Wall St, New York, NY 10005", city: "New York", website: site("hudsonlegal") },

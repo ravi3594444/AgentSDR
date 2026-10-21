@@ -337,7 +337,8 @@ export async function eligibleAudienceMembers(audienceId: string) {
     .orderBy(asc(leadAudienceMembers.createdAt));
 }
 
-export async function listAudiences(limit = 20) {
+/** The organization's newest lead lists; `threadId`: only that chat's. */
+export async function listAudiences(limit = 20, threadId: string | null = null) {
   const rows = await db.select({
     id: leadAudiences.id,
     name: leadAudiences.name,
@@ -347,7 +348,7 @@ export async function listAudiences(limit = 20) {
     eligible: sql<number>`count(*) filter (where ${leadAudienceMembers.status} = 'eligible')`,
   }).from(leadAudiences)
     .leftJoin(leadAudienceMembers, eq(leadAudienceMembers.audienceId, leadAudiences.id))
-    .where(inOrg(leadAudiences))
+    .where(threadId ? and(inOrg(leadAudiences), eq(leadAudiences.threadId, threadId)) : inOrg(leadAudiences))
     .groupBy(leadAudiences.id)
     .orderBy(sql`${leadAudiences.createdAt} desc`)
     .limit(limit);

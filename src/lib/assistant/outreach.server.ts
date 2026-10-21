@@ -27,7 +27,7 @@ import { requeueRunAutopilot } from "./autopilotRun.server";
 import { eligibleAudienceMembers, memberInsights, summarizeAudience } from "./audiences.server";
 import { orderedFindings } from "./qualification";
 import { countReasons } from "./audiences";
-import { CHANNEL_NAMES, channelPolicy, unreachableReason } from "./channelPolicy";
+import { CHANNEL_NAMES, channelList, channelPolicy, unreachableReason } from "./channelPolicy";
 import { judgeLeads, leadFacts, loadPeople, storeVerdicts, type PersonRow } from "./qualify.server";
 import { availableTokens, groundSequences, leadTextKey, MAX_PERSONAL, perLeadSteps, personalizationKey, sequenceClaimProblem, settleGroups, templateTokens, type LeadApproach } from "./messages";
 import { displayBusinessName, pitchProblems } from "./pitch";
@@ -161,6 +161,8 @@ export type PrepareInput = {
   sortLeads?: boolean;
   /** Contact leads the sorting would leave out, too. */
   includeSkipped?: boolean;
+  /** The only channels the request allows (research agent v2's brief), whatever the wording; null or absent: the owner's words decide. */
+  onlyChannels?: AudienceChannel[] | null;
   threadId: string | null;
   userId: string | null;
 };
@@ -204,7 +206,9 @@ export async function prepareOutreach(input: PrepareInput): Promise<Proposal> {
   if (input.basedOnRunId && !base) throw new OutreachError("That earlier run does not exist.");
   const availability = await channelAvailability();
   // The owner's words restrict the channels; the model's list, an earlier run and the saved preference only order them.
-  const policy = channelPolicy({ requested: input.channels ?? [], ownerText: input.ownerRequest ?? "", preferred: profile.preferredChannels ?? [], base: base?.channels ?? [] });
+  const worded = channelPolicy({ requested: input.channels ?? [], ownerText: input.ownerRequest ?? "", preferred: profile.preferredChannels ?? [], base: base?.channels ?? [] });
+  const only = input.onlyChannels?.length ? input.onlyChannels : null;
+  const policy = only ? { order: [...only, ...worded.order].filter((channel, index, all) => only.includes(channel) && all.indexOf(channel) === index), restricted: true, note: `the request allows only ${channelList(only)}` } : worded;
   const usable = policy.order.filter((channel) => availability[channel].available);
   if (!usable.length) {
     throw new OutreachError(`None of the ${policy.restricted ? "channels you asked for" : "channels"} can send yet: ${policy.order.map((channel) => `${CHANNEL_NAMES[channel]} — ${availability[channel].reason}`).join("; ")}.`);
@@ -1082,7 +1086,8 @@ export async function reportRun(runId: string): Promise<RunReport | null> {
   return { runId: run.id, name: run.name, status: run.status, autopilot: run.autopilot, leads, channels, error: run.error };
 }
 
-export async function listRuns(limit = 10) {
+/** The organization's newest runs; `threadId`: only that chat's. */
+export async function listRuns(limit = 10, threadId: string | null = null) {
   return db.select({ id: outreachRuns.id, name: outreachRuns.name, status: outreachRuns.status, channels: outreachRuns.channels, autopilot: outreachRuns.autopilot, createdAt: outreachRuns.createdAt })
-    .from(outreachRuns).where(inOrg(outreachRuns)).orderBy(desc(outreachRuns.createdAt)).limit(limit);
+    .from(outreachRuns).where(threadId ? and(inOrg(outreachRuns), eq(outreachRuns.threadId, threadId)) : inOrg(outreachRuns)).orderBy(desc(outreachRuns.createdAt)).limit(limit);
 }

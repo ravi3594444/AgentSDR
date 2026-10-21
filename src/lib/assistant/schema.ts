@@ -3,6 +3,7 @@ import { sql } from "drizzle-orm";
 import { organizations } from "@/lib/auth/schema";
 import { companies, people } from "@/lib/leads/schema";
 import type { Continuation, ObjectiveStatus, StopReason } from "./objective";
+import type { Brief } from "./brief";
 import type { RequestApproval } from "./requestApproval";
 import type { LeadApproach } from "./messages";
 
@@ -347,7 +348,8 @@ export const assistantObjectives = pgTable(
     deadlineAt: timestamp("deadline_at", { withTimezone: true }).notNull(),
     spendCapUsd: doublePrecision("spend_cap_usd").notNull(),
     /** Which controls the owner named (the rest are the organization's defaults). */
-    controls: jsonb("controls").$type<{ named?: { target: boolean; time: boolean; spend: boolean } }>().notNull().default({}),
+    /** Which limits the owner named, and (research agent v2) the brief the assistant wrote (brief.ts). */
+    controls: jsonb("controls").$type<{ named?: { target: boolean; time: boolean; spend: boolean }; brief?: Brief }>().notNull().default({}),
     status: text("status").notNull().default("active").$type<ObjectiveStatus>(),
     stopReason: text("stop_reason").$type<StopReason>(),
     /** The exact reason, as the report says it (which limit, who cancelled, what failed). */
@@ -366,7 +368,7 @@ export const assistantObjectives = pgTable(
     uniqueIndex("assistant_objectives_org_request_uq").on(t.organizationId, t.requestMessageId),
     index("assistant_objectives_thread_idx").on(t.threadId, t.createdAt),
     check("assistant_objectives_status_chk", sql`${t.status} IN ('active', 'paused', 'stopped')`),
-    check("assistant_objectives_stop_reason_chk", sql`${t.stopReason} IS NULL OR ${t.stopReason} IN ('target_reached', 'sources_exhausted', 'budget_spent', 'time_limit', 'cancelled', 'failed')`),
+    check("assistant_objectives_stop_reason_chk", sql`${t.stopReason} IS NULL OR ${t.stopReason} IN ('target_reached', 'finished', 'sources_exhausted', 'budget_spent', 'time_limit', 'cancelled', 'failed')`),
     check("assistant_objectives_limits_chk", sql`${t.leadTarget} >= 1 AND ${t.timeLimitMinutes} >= 1 AND ${t.spendCapUsd} >= 0`),
   ],
 );

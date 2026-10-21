@@ -9,6 +9,8 @@ import { inOrg } from "@/lib/tenancy/scope";
 import type { FeatureState } from "@/lib/features/catalog";
 import { TREG_LIMITS } from "@/lib/treg/catalog";
 import { featureState } from "@/lib/features/flags.server";
+import { startedNotFinishedClaim, systemPromptV2, transcriptV2, V2_AUTONOMOUS_MAX_STEPS, V2_MAX_STEPS } from "./agentV2";
+import { currentRequest, v2ContextText } from "./agentV2.server";
 import { actionsProblem, agentReplySchema, groundingCorpus, searchArgsKey, searchRequestFor, inquiryRepliesRequested, isSmallTalk, MAX_ACTIONS_PER_STEP, MAX_STEPS, DIRECT_CONTACT_TOOLS, nextAgentBatch, parseAgentReply, pendingOutreachRequestIndex, sameMessage, standingOutreachRequestIndex, transcriptText, unbackedClaim, type AgentReply } from "./agent";
 import { AUTONOMOUS_MAX_STEPS, autonomousRules, SEARCH_TOOLS, searchCapProblem, type AutonomyCaps } from "./autonomy";
 import { autonomousSearchesToday, autonomyCaps, autoStartPlan, threadAutonomy } from "./autonomy.server";
@@ -80,13 +82,14 @@ function systemPrompt(features: FeatureState, autonomy: AutonomyCaps | null = nu
   ].join("\n");
 }
 
-async function contextBlock(): Promise<{ text: string; outreachStarted: boolean; profile: BusinessProfile }> {
+/** The setup the model reads first. `threadId` (research agent v2): lists, runs and jobs of this chat only, not the whole organization's. */
+async function contextBlock(threadId: string | null = null): Promise<{ text: string; outreachStarted: boolean; profile: BusinessProfile }> {
   const setup = await setupSnapshot();
   const [audiences, runs, jobs, decisions, timeZone] = await Promise.all([
-    listAudiences(8),
-    listRuns(8),
+    listAudiences(8, threadId),
+    listRuns(8, threadId),
     db.select({ id: assistantJobs.id, kind: assistantJobs.kind, status: assistantJobs.status, stage: assistantJobs.stage, audienceId: assistantJobs.audienceId, runId: assistantJobs.runId })
-      .from(assistantJobs).where(and(inOrg(assistantJobs), inArray(assistantJobs.status, ["queued", "running"]), ne(assistantJobs.kind, "objective"))).orderBy(desc(assistantJobs.createdAt)).limit(5),
+      .from(assistantJobs).where(and(inOrg(assistantJobs), inArray(assistantJobs.status, ["queued", "running"]), ne(assistantJobs.kind, "objective"), ...(threadId ? [eq(assistantJobs.threadId, threadId)] : []))).orderBy(desc(assistantJobs.createdAt)).limit(5),
     listOpenDecisions(8),
     organizationTimeZone(),
   ]);
@@ -231,24 +234,30 @@ export async function runAgentTurn(input: {
     const outreachRequestId = continuation ? (continuation.outreach ? continuation.requestMessageId : null) : requestIndex === null ? null : history[requestIndex]!.id;
     const requestMessageId = continuation?.requestMessageId ?? eventRequest?.id ?? (lastOwnerIndex >= 0 ? history[lastOwnerIndex]!.id : null);
     const outreachResearch = outreachRequestId && !continuation ? await objectiveForRequest(outreachRequestId).catch(() => null) : null;
-    const searchRequestId = searchRequestFor({
+    const features = await featureState();
+    // Research agent v2: the model keeps the request's brief; a turn serves the chat's current request, or starts one.
+    const v2 = features.research_agent_v2;
+    const v2Request = v2 && !continuation && !eventRequest ? await currentRequest(input.threadId) : null;
+    const searchRequestId = v2
+      ? continuation?.requestMessageId ?? eventRequest?.id ?? v2Request?.requestMessageId ?? (lastOwnerIndex >= 0 ? history[lastOwnerIndex]!.id : null)
+      : searchRequestFor({
       continuationRequestId: continuation?.requestMessageId ?? eventRequest?.id ?? null,
       latestOwnerId: lastOwnerIndex >= 0 ? history[lastOwnerIndex]!.id : null,
       outreachRequestId,
       outreachPending: requestIndex !== null && requestIndex === pendingIndex,
       outreachResearchStopped: outreachResearch?.status === "stopped",
     });
-    const context: ToolContext = { threadId: input.threadId, userId: input.userId, ownerText, lastAssistantText, outreachRequest, outreachRequestId, autonomous: autonomy.on, requestMessageId, searchRequestId };
-    const askedForOutreach = outreachRequest !== null;
+    const context: ToolContext = { threadId: input.threadId, userId: input.userId, ownerText, lastAssistantText, outreachRequest, outreachRequestId, autonomous: autonomy.on, requestMessageId, searchRequestId, v2 };
+    // v2: whether to contact is the brief's, and preparing a plan sends nothing (prepare_outreach checks the owner's words where a plan would start on its own).
+    const askedForOutreach = v2 || outreachRequest !== null;
     const askedForInquiryReplies = inquiryRepliesRequested(ownerText, lastAssistantText);
     const said: string[] = [];
     // A greeting or thanks runs no tools (see actionsProblem).
     const smallTalk = input.text !== null && !input.attachments?.length && isSmallTalk(input.text);
     const documentsText = smallTalk ? "" : await ownerDocumentsText();
     const succeeded: string[] = [];
-    const features = await featureState();
     const toolNames = toolNamesFor(features);
-    const maxSteps = autonomy.on ? AUTONOMOUS_MAX_STEPS : MAX_STEPS;
+    const maxSteps = v2 ? (autonomy.on ? V2_AUTONOMOUS_MAX_STEPS : V2_MAX_STEPS) : autonomy.on ? AUTONOMOUS_MAX_STEPS : MAX_STEPS;
     let pendingReply: AgentReply | null = null;
     // A "Retrying" note this turn posted while the model was asked again (updated, then hidden or turned into the failure summary).
     let retryNoteId: string | null = null;
@@ -258,7 +267,7 @@ export async function runAgentTurn(input: {
     // A long turn keeps the thread claimed: one step (writing a plan) can take minutes.
     heartbeat = setInterval(() => void touchThread(input.threadId).catch(() => undefined), 60_000);
     for (let step = 0; step < maxSteps; step += 1) {
-      const { text: setupText, outreachStarted, profile } = await contextBlock();
+      const { text: setupText, outreachStarted, profile } = await contextBlock(v2 ? input.threadId : null);
       const messages = await listMessages(input.threadId, 80);
       // What the owner wrote or attached: business information is saved only from it.
       const ownerCorpus = groundingCorpus(messages, documentsText);
@@ -271,7 +280,8 @@ export async function runAgentTurn(input: {
         // Completion messages stay held until the last batch. Re-check them
         // and every queued batch against the latest results and profile.
         const startsNow = autonomy.on && parsed.actions.some((action) => action.tool === "prepare_outreach");
-        const problem = unbackedClaim(parsed.message, parsed.actions.length ? ["(pending)"] : succeeded, outreachStarted || startsNow);
+        const problem = unbackedClaim(parsed.message, parsed.actions.length ? ["(pending)"] : succeeded, outreachStarted || startsNow)
+          ?? (v2 ? startedNotFinishedClaim(parsed.message, parsed.actions, (tool) => SEARCH_TOOLS.has(tool)) : null);
         if (problem) throw new Error(problem);
       };
       try {
@@ -298,8 +308,8 @@ export async function runAgentTurn(input: {
             schemaName: "assistant_reply",
             schemaDescription: "Your message to the owner and the tools to run now.",
             jsonSchema: agentReplySchema(toolNames),
-            systemPrompt: systemPrompt(features, caps),
-            userPrompt: `${setupText}\n\nCONVERSATION (newest last):\n${transcriptText(messages)}${replanReason ? `\n\nRe-plan the remaining work: ${replanReason.slice(0, 600)}. Use the latest TOOL results and do not repeat successful actions.` : ""}\n\nYour turn.`,
+            systemPrompt: v2 ? systemPromptV2({ features, catalog: toolCatalog(features), autonomy: caps }) : systemPrompt(features, caps),
+            userPrompt: `${setupText}${v2 ? `\n\n${await v2ContextText({ threadId: input.threadId, requestMessageId: searchRequestId })}` : ""}\n\nCONVERSATION (newest last):\n${v2 ? transcriptV2(messages) : transcriptText(messages)}${replanReason ? `\n\nRe-plan the remaining work: ${replanReason.slice(0, 600)}. Use the latest TOOL results and do not repeat successful actions.` : ""}\n\nYour turn.`,
             accept: (text) => {
               const parsed = parseAgentReply(text, toolNames, { allowEmpty: step > 0 });
               validateBatch(nextAgentBatch(parsed).batch);

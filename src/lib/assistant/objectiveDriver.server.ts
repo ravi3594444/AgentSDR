@@ -179,6 +179,7 @@ async function continueRequest(objective: Objective, facts: ObjectiveFacts, step
           sources: facts.sources,
           web: facts.web,
           funnel: facts.funnel,
+          v2: Boolean(objective.controls.brief),
         }),
         toolResult: {
           objectiveNote: noteKey,

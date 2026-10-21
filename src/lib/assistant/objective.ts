@@ -21,14 +21,15 @@ import type { LeadFunnel } from "./leadFit";
 
 export type ObjectiveStatus = "active" | "paused" | "stopped";
 
-export type StopReason = "target_reached" | "sources_exhausted" | "budget_spent" | "time_limit" | "cancelled" | "failed";
-export const STOP_REASONS: readonly StopReason[] = ["target_reached", "sources_exhausted", "budget_spent", "time_limit", "cancelled", "failed"];
+/** "finished": the assistant ended it as the owner asked (research agent v2's finish_request), whatever the target. */
+export type StopReason = "target_reached" | "finished" | "sources_exhausted" | "budget_spent" | "time_limit" | "cancelled" | "failed";
+export const STOP_REASONS: readonly StopReason[] = ["target_reached", "finished", "sources_exhausted", "budget_spent", "time_limit", "cancelled", "failed"];
 
 /** How the request ended, for the chat and Activity: the target reached is complete; any other limit leaves it partial. */
 export type ObjectiveOutcome = "completed" | "partial" | "cancelled" | "failed";
 
 export function outcomeOf(reason: StopReason): ObjectiveOutcome {
-  if (reason === "target_reached") return "completed";
+  if (reason === "target_reached" || reason === "finished") return "completed";
   if (reason === "cancelled") return "cancelled";
   if (reason === "failed") return "failed";
   return "partial";
@@ -523,7 +524,12 @@ export function continuationNote(input: {
   sources: readonly SourceYield[];
   web: WebUse | null;
   funnel?: LeadFunnel;
+  /** Research agent v2: the model holds the brief and the counts; the note only wakes it, without pressing for more searches. */
+  v2?: boolean;
 }): string {
+  if (input.v2) {
+    return `The searches for your request have finished for now (step ${input.n}); the counts are in PROGRESS. Next: review the leads, correct verdicts the evidence contradicts, prepare outreach when the brief says contact and enough leads match, search another source if the brief still needs leads, or finish_request when its done condition is met.`;
+  }
   const request = input.request.replace(/\s+/g, " ").trim().slice(0, 200);
   return [
     `Continuing your request “${request}” on its own (step ${input.n}): ${input.leads} of ${input.leadTarget} qualified leads so far (contactable and matching the request), ${Math.max(0, input.leadTarget - input.leads)} to go.`,
@@ -547,6 +553,7 @@ function funnelText(funnel: LeadFunnel): string {
 
 export const STOP_WORDS: Record<StopReason, string> = {
   target_reached: "the target was reached",
+  finished: "the assistant finished what was asked",
   sources_exhausted: "no further source was left to try",
   budget_spent: "the spend cap was used",
   time_limit: "the time limit passed",
@@ -573,11 +580,14 @@ export function objectiveReportText(input: {
   funnel?: LeadFunnel;
   /** The counts when it stopped: more found by searches already running then are explained, not printed as a second total. */
   atStop?: { qualified: number } | null;
+  /** False when the owner named no number (a brief without one): the count is not set against a default target. */
+  targetNamed?: boolean;
 }): string {
-  const head = input.reason === "target_reached" ? "Research finished" : "Research stopped";
+  const head = input.reason === "target_reached" || input.reason === "finished" ? "Research finished" : "Research stopped";
   // A reached target is said without the count it was recorded with: the line below gives the one total.
   const why = input.reason === "target_reached" ? `the target of ${input.leadTarget} was reached` : input.detail ? input.detail : STOP_WORDS[input.reason];
-  const remaining = Math.max(0, input.leadTarget - input.leads);
+  const targetNamed = input.targetNamed ?? true;
+  const remaining = targetNamed && input.reason !== "finished" ? Math.max(0, input.leadTarget - input.leads) : 0;
   const routes = [
     input.routes.email ? `${input.routes.email} by email` : null,
     input.routes.whatsapp ? `${input.routes.whatsapp} by WhatsApp or phone` : null,
@@ -592,7 +602,7 @@ export function objectiveReportText(input: {
     : "";
   return [
     `${head}: ${why} (request “${request}”).`,
-    `${plural(input.leads, "qualified lead")} (contactable and matching your request) of the ${input.leadTarget} wanted${remaining ? `; ${remaining} still to find` : ""}.${late}${routes.length ? ` Their contact routes (one person can have several): ${routes.join(", ")}.` : ""}`,
+    `${plural(input.leads, "qualified lead")} (contactable and matching your request)${targetNamed ? ` of the ${input.leadTarget} wanted` : ""}${remaining ? `; ${remaining} still to find` : ""}.${late}${routes.length ? ` Their contact routes (one person can have several): ${routes.join(", ")}.` : ""}`,
     input.funnel && input.funnel.found ? `${funnelText(input.funnel)}.` : null,
     `Searched — ${sourcesText(input.sources, input.web)}.`,
     `Recorded spend: ${spendText(input.spend, input.spendCapUsd)}. The AI model's own use for chat, judging leads and writing is not in this figure; your AI provider bills it.`,

@@ -2,6 +2,7 @@ import "server-only";
 
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
+import { featureEnabled } from "@/lib/features/flags.server";
 import { addAudienceMembers, createAudience, type NewMember } from "@/lib/assistant/audiences.server";
 import { assistantJobs, type AudienceChannel, type ContactEvidence, type LeadSignal } from "@/lib/assistant/schema";
 import type { AssistantJob, StepOutcome } from "@/lib/assistant/worker";
@@ -1021,7 +1022,10 @@ async function savePlace(place: EnrichedPlace, payload: DiscoveryPayload): Promi
   // exclude it: a DM through the connected Instagram account is its route once a plan is approved.
   if (place.origin) {
     const hold = instagramResearchHold({ profileRead: place.origin.profileRead !== false, placeNamed: place.origin.placeNamed, where: payload.criteria.where });
-    if (hold) return { member: { personId: null, name: place.displayName, reason: hold, ...base }, outcome: "excluded", email: false };
+    // Research agent v2 checks the place itself (review_leads, then set_lead_fit with the words that show it): an account
+    // whose profile was read is saved as a lead with its location unknown, judged unconfirmed, and contacted only once marked a match.
+    const placeOnly = hold !== null && place.origin.profileRead !== false && (await featureEnabled("research_agent_v2"));
+    if (hold && !placeOnly) return { member: { personId: null, name: place.displayName, reason: hold, ...base }, outcome: "excluded", email: false };
   }
 
   let email: string | null = null;
