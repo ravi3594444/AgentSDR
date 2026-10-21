@@ -3,6 +3,9 @@ import { describe, test } from "node:test";
 import { completeStructured, isStrictJsonSchema, type StructuredCompletionRuntime } from "./structuredCompletion";
 import { actionsProblem, agentReplySchema, nextAgentBatch, outreachRequested, parseAgentReply, type AgentReply } from "@/lib/assistant/agent";
 import { parseWriterReply, writerReplyInstructions, WRITER_REPLY_SCHEMAS } from "@/lib/assistant/writerReply";
+import { aimlStructuredMode } from "../aimlapi-types";
+import { DECISION_SCHEMA } from "@/lib/assistant/replyAgent/decisionSchema";
+import { parseAgentDecision } from "@/lib/assistant/replyAgent/agent";
 
 type Reply = { toolArgs?: string; content?: string; throws?: Error; error?: unknown; finish?: string };
 
@@ -44,6 +47,29 @@ const input = {
   schemaName: "submit",
 };
 const noSleep = async () => {};
+
+test("DeepSeek's catalog tags do not cause an unsupported json_schema reply request", async () => {
+  const answer = JSON.stringify({ action: "reply", reply: "Hi! How do you currently handle incoming calls?", ownerNote: null, category: "other", confidence: 0.5, reasoning: "A greeting, not buying interest." });
+  let calls = 0;
+  const runtime: StructuredCompletionRuntime = async () => ({
+    providerKey: "aimlapi", selection: { provider: "aimlapi", modelId: "deepseek/deepseek-chat" }, routing: {},
+    structuredOutput: aimlStructuredMode(["file_input", "parallel_tool_calls", "streaming", "structured_output", "tools"]),
+    supportsPlugins: false,
+    client: { chat: { completions: { create: async (payload: never) => {
+      calls++;
+      const request = payload as Record<string, unknown>;
+      // AI/ML's published model-specific request schema permits text and
+      // json_object response formats, not json_schema, despite the tag.
+      if (request.response_format) throw Object.assign(new Error("400 Validation failed: response_format.type"), { status: 400 });
+      assert.deepEqual(request.tool_choice, { type: "function", function: { name: "reply_decision" } });
+      assert.deepEqual((request.tools as Array<{ function: { parameters: unknown } }>)[0].function.parameters, DECISION_SCHEMA);
+      return { choices: [{ finish_reason: "tool_calls", message: { tool_calls: [{ type: "function", function: { name: "reply_decision", arguments: answer } }] } }] };
+    } } } },
+  });
+  const result = await completeStructured({ ...input, maxOutputTokens: 1_500, schemaName: "reply_decision", jsonSchema: DECISION_SCHEMA, accept: (text) => { parseAgentDecision(text); } }, { runtime, sleep: noSleep });
+  assert.equal(calls, 1);
+  assert.equal(parseAgentDecision(result.text).reply, "Hi! How do you currently handle incoming calls?");
+});
 
 describe("completeStructured", () => {
   test("asks for the answer as a tool call, never as a response_format", async () => {

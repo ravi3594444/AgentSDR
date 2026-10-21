@@ -106,8 +106,11 @@ describe("selectableAimlModels", () => {
     });
   });
 
-  test("a model tagged structured_output is asked for strict JSON, one tagged only tools for a function call", () => {
-    expect(aimlStructuredMode(["tools", "structured_output"])).toBe("json_schema");
+  test("function calling wins over an ambiguous structured_output tag", () => {
+    // DeepSeek Chat advertises both, but its live request schema only accepts
+    // text/json_object response formats. Its function-call API is supported.
+    expect(aimlStructuredMode(["tools", "structured_output"])).toBe("tool_call");
+    expect(aimlStructuredMode(["structured_output"])).toBe("json_schema");
     // AI/ML lists every Claude model like this (17 Oct 2026).
     expect(aimlStructuredMode(["reasoning", "streaming", "tools", "vision", "web_search"])).toBe("tool_call");
   });

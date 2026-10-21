@@ -1,7 +1,6 @@
 import { draftLeaks, draftPlaceholders, unverifiedActionClaims } from "@/lib/crm/ai/grounding";
 import { detectsOptOutWording, detectsWrongNumber } from "@/lib/crm/wrongNumber";
 import type { ReplyConversationMessage } from "@/lib/crm/ai/replyConversation";
-import { messageLanguage } from "../handoff";
 import { CHANNEL_RULES } from "../messages";
 import { nextStepOf } from "../profile";
 import { unbackedLinks, unbackedNumbers, unbackedTimes } from "../replyCheck";
@@ -25,13 +24,11 @@ import type { AudienceChannel, BusinessProfile } from "../schema";
  * need no code: the agent decides, and the owner steers it with text.
  */
 
-export const AGENT_ACTIONS = ["reply", "tell_owner", "stop_contact", "no_reply", "wrong_number"] as const;
+import { AGENT_ACTIONS, OWNER_NOTE_KINDS, AGENT_CATEGORIES } from "./decisionSchema";
+export { AGENT_ACTIONS, OWNER_NOTE_KINDS, AGENT_CATEGORIES, DECISION_SCHEMA } from "./decisionSchema";
 export type AgentAction = (typeof AGENT_ACTIONS)[number];
 
-export const OWNER_NOTE_KINDS = ["ready", "person", "complaint", "question", "other"] as const;
 export type OwnerNoteKind = (typeof OWNER_NOTE_KINDS)[number];
-
-export const AGENT_CATEGORIES = ["interested", "not_interested", "other"] as const;
 
 /** What the agent decides for one message. A reply may carry a note for the owner as well. */
 export type AgentDecision = {
@@ -46,30 +43,8 @@ export type AgentDecision = {
   reasoning: string;
 };
 
-/** How many times the agent may try before the harness sends the safe line and tells the owner. */
+/** Maximum model/check turns before reporting a failure to the owner. */
 export const MAX_TURNS = 3;
-
-export const DECISION_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  required: ["reasoning", "action", "reply", "ownerNote", "category", "confidence"],
-  properties: {
-    reasoning: { type: "string", description: "One or two sentences: what the lead means and what you do about it." },
-    action: { type: "string", enum: [...AGENT_ACTIONS] },
-    reply: { type: "string", description: "The message to send, in the lead's language. Empty unless action is reply or wrong_number (then only the one short apology)." },
-    ownerNote: {
-      type: ["object", "null"],
-      additionalProperties: false,
-      required: ["kind", "note"],
-      properties: {
-        kind: { type: "string", enum: [...OWNER_NOTE_KINDS] },
-        note: { type: "string", description: "What the owner should know, in one sentence (what the lead wants, or what you could not answer)." },
-      },
-    },
-    category: { type: "string", enum: [...AGENT_CATEGORIES] },
-    confidence: { type: "number", minimum: 0, maximum: 1 },
-  },
-};
 
 export function parseAgentDecision(text: string): AgentDecision {
   const body = JSON.parse(text) as Partial<AgentDecision> & { ownerNote?: unknown };
@@ -121,15 +96,6 @@ export function replyProblems(reply: string, channel: AgentChannel, knowledge: s
   const claims = unverifiedActionClaims(text, []);
   if (claims.length) problems.push(`it says something was already done (${claims.slice(0, 2).join("; ")}); nothing has been sent, booked or attached`);
   return problems;
-}
-
-/** The one line sent when no backed reply could be written in MAX_TURNS: honest, in the lead's language. */
-export function fallbackReply(leadMessage: string, senderName: string | null): string {
-  const language = messageLanguage(leadMessage);
-  const who = senderName?.trim().split(/\s+/)[0] || null;
-  if (language === "hi") return "धन्यवाद! मैं इसकी जानकारी लेकर आपको जल्द बताता हूँ।";
-  if (language === "hinglish") return "Thanks! Main ye check karke aapko jaldi batata hoon.";
-  return who ? `Thanks! Let me check on that and get back to you shortly. – ${who}` : "Thanks! Let me check on that and get back to you shortly.";
 }
 
 export type HardFacts = {
