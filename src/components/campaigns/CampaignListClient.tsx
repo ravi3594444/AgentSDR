@@ -24,7 +24,7 @@ function StatusBadge({ status }: { status: string }) {
       ? "bg-bg-weak-50 text-text-strong-950/60"
       : "bg-indigo-50 dark:bg-indigo-500/10 text-indigo-700 dark:text-indigo-400";
   return (
-    <span className={`text-[10px] px-2 py-0.5 rounded font-medium uppercase tracking-wide ${tone}`}>
+    <span className={`text-[12px] px-2 py-0.5 rounded font-medium uppercase tracking-wide ${tone}`}>
       {status}
     </span>
   );
@@ -116,7 +116,7 @@ export default function CampaignListClient({ campaigns }: { campaigns: CampaignR
               <p className="text-sm font-mono font-semibold text-text-strong-950">
                 {c.accumulatedLeadCount.toLocaleString()}
               </p>
-              <p className="text-[10px] text-text-strong-950/40 uppercase tracking-wide">leads</p>
+              <p className="text-[12px] text-text-strong-950/40 uppercase tracking-wide">leads</p>
             </div>
             <DeleteCampaignButton campaignId={c.id} />
           </div>

@@ -152,7 +152,7 @@ export default function PreviewModal({
               {loading ? "…" : "↻ Reload"}
             </button>
 
-            {hasSpinText && <span className="text-[11px] text-text-strong-950/35">reload re-rolls {"{A|B}"} variants</span>}
+            {hasSpinText && <span className="text-[13px] text-text-strong-950/35">reload re-rolls {"{A|B}"} variants</span>}
           </div>
         </div>
 
@@ -171,7 +171,7 @@ export default function PreviewModal({
                 </div>
               )}
 
-              <div className="mb-1 text-[11px] uppercase tracking-wide text-text-strong-950/35">From</div>
+              <div className="mb-1 text-[13px] uppercase tracking-wide text-text-strong-950/35">From</div>
               <p className="text-sm text-text-strong-950 mb-3">
                 {preview.mailbox
                   ? `${preview.mailbox.displayName ? `${preview.mailbox.displayName} · ` : ""}${preview.mailbox.emailAddress}`
@@ -185,15 +185,15 @@ export default function PreviewModal({
                   )}
               </p>
 
-              <div className="mb-1 text-[11px] uppercase tracking-wide text-text-strong-950/35">To</div>
+              <div className="mb-1 text-[13px] uppercase tracking-wide text-text-strong-950/35">To</div>
               <p className="text-sm text-text-strong-950 mb-3">{preview.lead?.email ?? "—"}</p>
 
-              <div className="mb-1 text-[11px] uppercase tracking-wide text-text-strong-950/35">Subject</div>
+              <div className="mb-1 text-[13px] uppercase tracking-wide text-text-strong-950/35">Subject</div>
               <p className={`text-sm mb-4 ${preview.subject.trim() ? "text-text-strong-950 font-semibold" : "text-text-strong-950/35 italic"}`}>
                 {preview.subject.trim() || "(blank — will continue the previous thread)"}
               </p>
 
-              <div className="mb-1 text-[11px] uppercase tracking-wide text-text-strong-950/35">Body</div>
+              <div className="mb-1 text-[13px] uppercase tracking-wide text-text-strong-950/35">Body</div>
               {/* Rendered as HTML because that is the part recipients actually
                   see — it is how you confirm links arrive clickable. The markup
                   is built by toHtmlBody(), which escapes the text first. */}

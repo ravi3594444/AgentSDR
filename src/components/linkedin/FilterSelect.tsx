@@ -46,7 +46,7 @@ function OptionAvatar({
   remainingCount?: number;
 }) {
   const [err, setErr] = useState(false);
-  const cls = size === "sm" ? "h-6 w-6 text-[10px]" : "h-7 w-7 text-xs";
+  const cls = size === "sm" ? "h-6 w-6 text-[12px]" : "h-7 w-7 text-xs";
   const initials = name
     .split(/[\s/@]/)
     .filter(Boolean)

@@ -61,7 +61,7 @@ const STATUS_TONE: Record<string, string> = {
 function StatusBadge({ status }: { status: string }) {
   return (
     <span
-      className={`text-[10px] px-2 py-0.5 rounded font-medium uppercase tracking-wide ${
+      className={`text-[12px] px-2 py-0.5 rounded font-medium uppercase tracking-wide ${
         STATUS_TONE[status] ?? "bg-bg-weak-50 text-text-strong-950/60"
       }`}
     >
@@ -109,12 +109,12 @@ function ParentCell({ domain, campaignId }: { domain: DomainRow; campaignId: str
           <Link
             href={`/campaigns/${domain.parentCampaignId}`}
             onClick={(event) => event.stopPropagation()}
-            className="text-[10px] font-medium text-indigo-600 dark:text-indigo-400 hover:underline"
+            className="text-[12px] font-medium text-indigo-600 dark:text-indigo-400 hover:underline"
           >
             (previously added)
           </Link>
         ) : previouslyAdded ? (
-          <span className="text-[10px] text-text-strong-950/40">(previously added)</span>
+          <span className="text-[12px] text-text-strong-950/40">(previously added)</span>
         ) : null}
       </span>
     );
@@ -128,7 +128,7 @@ function ParentCell({ domain, campaignId }: { domain: DomainRow; campaignId: str
 function Stat({ label, value, pulse }: { label: string; value: string; pulse?: boolean }) {
   return (
     <div className="bg-bg-white-0 border border-stroke-soft-200 rounded-xl px-4 py-3">
-      <p className="text-[10px] text-text-strong-950/40 uppercase tracking-widest">{label}</p>
+      <p className="text-[12px] text-text-strong-950/40 uppercase tracking-widest">{label}</p>
       <p className={`text-lg font-bold text-text-strong-950 mt-0.5 font-mono ${pulse ? "animate-pulse" : ""}`}>
         {value}
       </p>
@@ -138,7 +138,7 @@ function Stat({ label, value, pulse }: { label: string; value: string; pulse?: b
 
 function JsonBlock({ value }: { value: unknown }) {
   return (
-    <pre className="max-h-80 overflow-auto rounded-lg bg-slate-950 px-3 py-2 text-[11px] leading-relaxed text-slate-100">
+    <pre className="max-h-80 overflow-auto rounded-lg bg-slate-950 px-3 py-2 text-[13px] leading-relaxed text-slate-100">
       {JSON.stringify(value ?? null, null, 2)}
     </pre>
   );
@@ -486,7 +486,7 @@ export default function CampaignDetailClient({
       {/* Apollo link */}
       {apolloLink && (
         <div className="bg-bg-white-0 border border-stroke-soft-200 rounded-xl px-4 py-3">
-          <p className="text-[10px] text-text-strong-950/40 uppercase tracking-widest mb-1.5">
+          <p className="text-[12px] text-text-strong-950/40 uppercase tracking-widest mb-1.5">
             Apollo link (qualified domains)
           </p>
           <div className="flex items-center gap-2">
@@ -526,7 +526,7 @@ export default function CampaignDetailClient({
       <div className="bg-bg-white-0 border border-stroke-soft-200 rounded-xl overflow-hidden">
         <table className="w-full text-sm">
           <thead>
-            <tr className="bg-bg-weak-50 text-left text-[10px] text-text-strong-950/50 uppercase tracking-widest">
+            <tr className="bg-bg-weak-50 text-left text-[12px] text-text-strong-950/50 uppercase tracking-widest">
               <th className="px-4 py-2.5 font-semibold">Domain</th>
               <th className="px-4 py-2.5 font-semibold">Timestamp</th>
               <th className="px-4 py-2.5 font-semibold">Status</th>

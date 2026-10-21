@@ -718,7 +718,7 @@ function SenderPicker({ conversations, value, onChange }: { conversations: Data[
   const senderName = (item: Data) => text(item.accountName ?? item.accountLabel ?? item.accountRef, "Connected account");
   const identity = (item: Data) => (
     <>
-      <ContactAvatar src={item.accountAvatarUrl ? String(item.accountAvatarUrl) : null} fallback={initials(senderName(item))} className="size-6 shrink-0 bg-primary-alpha-10 text-[10px] text-primary-base" />
+      <ContactAvatar src={item.accountAvatarUrl ? String(item.accountAvatarUrl) : null} fallback={initials(senderName(item))} className="size-6 shrink-0 bg-primary-alpha-10 text-[12px] text-primary-base" />
       <span className="min-w-0 truncate text-label-sm text-text-strong-950">{senderName(item)}</span>
       <span className="inline-flex shrink-0 items-center gap-1 text-paragraph-xs text-text-soft-400">{channelIcon(item.channel, "size-3.5")}{channelLabel(item.channel)}{item.status === "closed" ? " · closed" : ""}</span>
     </>

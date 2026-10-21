@@ -247,7 +247,7 @@ export default function ReplyComposer({
           {replyToName ? `Reply to ${replyToName}…` : "Reply…"}
           <span className="ml-2 hidden text-paragraph-xs sm:inline">from {from}</span>
         </span>
-        <kbd className="hidden shrink-0 rounded-md bg-bg-weak-50 px-1.5 py-0.5 font-sans text-[11px] text-text-sub-600 ring-1 ring-inset ring-stroke-soft-200 sm:inline">R</kbd>
+        <kbd className="hidden shrink-0 rounded-md bg-bg-weak-50 px-1.5 py-0.5 font-sans text-[13px] text-text-sub-600 ring-1 ring-inset ring-stroke-soft-200 sm:inline">R</kbd>
       </button>
     );
   }

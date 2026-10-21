@@ -118,7 +118,7 @@ export default function MergeFieldChips({
                     className="flex w-full items-center justify-between gap-3 rounded-lg px-2 py-1.5 text-left outline-none transition hover:bg-bg-weak-50 focus-visible:bg-bg-weak-50"
                   >
                     <span className="min-w-0 truncate text-paragraph-sm text-text-strong-950">{f.label}</span>
-                    <span className="max-w-36 shrink-0 truncate font-mono text-[11px] text-text-soft-400">{`{{${f.token}}}`}</span>
+                    <span className="max-w-36 shrink-0 truncate font-mono text-[13px] text-text-soft-400">{`{{${f.token}}}`}</span>
                   </button>
                 </li>
               ))

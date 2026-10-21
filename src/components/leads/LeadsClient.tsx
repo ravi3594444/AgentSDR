@@ -162,7 +162,7 @@ export default function LeadsClient({ initialTab, initialRows, initialTotal }: P
   ];
 
   return (
-    <main className="h-full w-full overflow-y-auto bg-bg-white-0">
+    <main className="workspace-surface h-full w-full overflow-y-auto bg-bg-white-0">
       <PageContainer>
         <PageHeader
           title="Leads"

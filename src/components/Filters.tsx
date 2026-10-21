@@ -54,7 +54,7 @@ const PAGE_SIZE_OPTIONS = [
 
 function Label({ children }: { children: React.ReactNode }) {
   return (
-    <label className="text-[10px] font-bold text-text-strong-950/70 uppercase tracking-widest">
+    <label className="text-[12px] font-bold text-text-strong-950/70 uppercase tracking-widest">
       {children}
     </label>
   );

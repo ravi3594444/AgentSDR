@@ -102,7 +102,7 @@ function FilterValueInput({
           commitRef.current(draftRef.current);
         }, VALUE_DEBOUNCE_MS);
       }}
-      className="w-[150px] shrink-0 rounded-lg border border-stroke-soft-200 px-2 py-1.5 text-[13px] text-text-strong-950 outline-none focus:border-blue-500 disabled:bg-bg-weak-50 disabled:text-text-disabled-300"
+      className="w-[150px] shrink-0 rounded-lg border border-stroke-soft-200 px-2 py-1.5 text-[15px] text-text-strong-950 outline-none focus:border-blue-500 disabled:bg-bg-weak-50 disabled:text-text-disabled-300"
     />
   );
 }
@@ -150,7 +150,7 @@ export default function FilterPanel({
   return (
     <div className="p-3">
       {value.conditions.length === 0 && (
-        <p className="mb-2 px-1 text-[13px] text-text-sub-600">
+        <p className="mb-2 px-1 text-[15px] text-text-sub-600">
           No filters yet — every row is shown.
         </p>
       )}
@@ -209,7 +209,7 @@ export default function FilterPanel({
 
           return (
             <div key={i} className="flex items-center gap-2">
-              <span className="w-11 shrink-0 text-[13px] text-text-sub-600">
+              <span className="w-11 shrink-0 text-[15px] text-text-sub-600">
                 {i === 0 ? (
                   "Where"
                 ) : (
@@ -302,7 +302,7 @@ export default function FilterPanel({
                         removeAt(i);
                         setMenuFor(null);
                       }}
-                      className="w-full px-3 py-1.5 text-left text-[13px] text-red-600 dark:text-red-400 hover:bg-bg-weak-50"
+                      className="w-full px-3 py-1.5 text-left text-[15px] text-red-600 dark:text-red-400 hover:bg-bg-weak-50"
                     >
                       Remove
                     </button>
@@ -319,7 +319,7 @@ export default function FilterPanel({
           type="button"
           onClick={addCondition}
           disabled={!columns.length}
-          className="flex items-center gap-1.5 rounded-lg border border-blue-200 dark:border-blue-500/30 px-2.5 py-1.5 text-[13px] font-medium text-text-strong-950 transition hover:bg-bg-weak-50 disabled:opacity-50"
+          className="flex items-center gap-1.5 rounded-lg border border-blue-200 dark:border-blue-500/30 px-2.5 py-1.5 text-[15px] font-medium text-text-strong-950 transition hover:bg-bg-weak-50 disabled:opacity-50"
         >
           <RiAddLine className="size-4" />
           Add filter
@@ -328,7 +328,7 @@ export default function FilterPanel({
           type="button"
           onClick={addGroup}
           disabled={!columns.length}
-          className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[13px] font-medium text-text-strong-950 transition hover:bg-bg-weak-50 disabled:opacity-50"
+          className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[15px] font-medium text-text-strong-950 transition hover:bg-bg-weak-50 disabled:opacity-50"
         >
           <RiAddLine className="size-4" />
           Add filter group
@@ -337,7 +337,7 @@ export default function FilterPanel({
           type="button"
           onClick={() => onChange(EMPTY_FILTERS)}
           disabled={!value.conditions.length}
-          className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[13px] font-medium text-red-600 dark:text-red-400 transition hover:bg-red-50 dark:hover:bg-red-500/10 disabled:opacity-40"
+          className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[15px] font-medium text-red-600 dark:text-red-400 transition hover:bg-red-50 dark:hover:bg-red-500/10 disabled:opacity-40"
         >
           <RiCloseLine className="size-4" />
           Clear filters

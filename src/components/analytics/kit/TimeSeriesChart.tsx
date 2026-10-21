@@ -99,8 +99,8 @@ export function TimeSeriesChart<K extends string>({
   const axes = (
     <>
       <CartesianGrid vertical={false} stroke={GRID_STROKE} strokeWidth={1} />
-      <XAxis dataKey="date" tickLine={false} axisLine={false} tickMargin={10} minTickGap={44} interval="preserveStartEnd" tick={{ fill: AXIS_TEXT, fontSize: 12 }} tickFormatter={(v: string) => formatBucket(v, bucket)} />
-      {showYAxis ? <YAxis width={40} tickLine={false} axisLine={false} tickCount={4} allowDecimals={false} tick={{ fill: AXIS_TEXT, fontSize: 12 }} tickFormatter={(v: number) => formatCompact(v)} /> : <YAxis hide />}
+      <XAxis dataKey="date" tickLine={false} axisLine={false} tickMargin={10} minTickGap={44} interval="preserveStartEnd" tick={{ fill: AXIS_TEXT, fontSize: 13 }} tickFormatter={(v: string) => formatBucket(v, bucket)} />
+      {showYAxis ? <YAxis width={40} tickLine={false} axisLine={false} tickCount={4} allowDecimals={false} tick={{ fill: AXIS_TEXT, fontSize: 13 }} tickFormatter={(v: number) => formatCompact(v)} /> : <YAxis hide />}
     </>
   );
   const tooltip = (cursor: object) => (

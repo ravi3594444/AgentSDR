@@ -39,7 +39,7 @@ export default function SortPanel({
   return (
     <div className="p-3">
       {value.length === 0 && (
-        <p className="mb-2 px-1 text-[13px] text-text-sub-600">
+        <p className="mb-2 px-1 text-[15px] text-text-sub-600">
           No sorts yet — rows keep their natural order.
         </p>
       )}
@@ -111,7 +111,7 @@ export default function SortPanel({
         type="button"
         onClick={add}
         disabled={!columns.length}
-        className="mt-2 w-full rounded-lg border border-stroke-soft-200 py-2 text-center text-[13px] text-text-sub-600 transition hover:bg-bg-weak-50 disabled:opacity-50"
+        className="mt-2 w-full rounded-lg border border-stroke-soft-200 py-2 text-center text-[15px] text-text-sub-600 transition hover:bg-bg-weak-50 disabled:opacity-50"
       >
         Add sort
       </button>

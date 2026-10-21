@@ -379,20 +379,20 @@
   --text-label-lg--font-weight: 500;
   
   
-  --text-label-md: 1rem;
-  --text-label-md--line-height: 1.5rem;
+  --text-label-md: 1.0625rem;
+  --text-label-md--line-height: 1.625rem;
   --text-label-md--letter-spacing: -0.011em;
   --text-label-md--font-weight: 500;
   
   
-  --text-label-sm: .9375rem;
-  --text-label-sm--line-height: 1.375rem;
+  --text-label-sm: 1rem;
+  --text-label-sm--line-height: 1.5rem;
   --text-label-sm--letter-spacing: -0.006em;
   --text-label-sm--font-weight: 500;
   
   
-  --text-label-xs: .8125rem;
-  --text-label-xs--line-height: 1.125rem;
+  --text-label-xs: .875rem;
+  --text-label-xs--line-height: 1.25rem;
   --text-label-xs--letter-spacing: 0em;
   --text-label-xs--font-weight: 500;
   
@@ -415,20 +415,20 @@
   --text-paragraph-lg--font-weight: 400;
   
   
-  --text-paragraph-md: 1rem;
-  --text-paragraph-md--line-height: 1.5rem;
+  --text-paragraph-md: 1.0625rem;
+  --text-paragraph-md--line-height: 1.625rem;
   --text-paragraph-md--letter-spacing: -0.011em;
   --text-paragraph-md--font-weight: 400;
   
   
-  --text-paragraph-sm: .9375rem;
-  --text-paragraph-sm--line-height: 1.375rem;
+  --text-paragraph-sm: 1rem;
+  --text-paragraph-sm--line-height: 1.5rem;
   --text-paragraph-sm--letter-spacing: -0.006em;
   --text-paragraph-sm--font-weight: 400;
   
   
-  --text-paragraph-xs: .8125rem;
-  --text-paragraph-xs--line-height: 1.125rem;
+  --text-paragraph-xs: .875rem;
+  --text-paragraph-xs--line-height: 1.25rem;
   --text-paragraph-xs--letter-spacing: 0em;
   --text-paragraph-xs--font-weight: 400;
   
@@ -439,20 +439,20 @@
   --text-subheading-md--font-weight: 500;
   
   
-  --text-subheading-sm: .875rem;
-  --text-subheading-sm--line-height: 1.25rem;
+  --text-subheading-sm: .9375rem;
+  --text-subheading-sm--line-height: 1.375rem;
   --text-subheading-sm--letter-spacing: 0.06em;
   --text-subheading-sm--font-weight: 500;
   
   
-  --text-subheading-xs: .75rem;
-  --text-subheading-xs--line-height: 1rem;
+  --text-subheading-xs: .8125rem;
+  --text-subheading-xs--line-height: 1.125rem;
   --text-subheading-xs--letter-spacing: 0.04em;
   --text-subheading-xs--font-weight: 500;
   
   
-  --text-subheading-2xs: .6875rem;
-  --text-subheading-2xs--line-height: .75rem;
+  --text-subheading-2xs: .75rem;
+  --text-subheading-2xs--line-height: 1rem;
   --text-subheading-2xs--letter-spacing: 0.02em;
   --text-subheading-2xs--font-weight: 500;
   
@@ -905,23 +905,27 @@ body {
 
 /* Optional illustrated workspace backgrounds. Only the selected full-size
    artwork is used; the picker uses small thumbnails. White stays the default.
-   Cards, tables and the composer retain solid surfaces for readability. */
-html[data-appearance="golden-clouds"] .app-workspace {
+   Cards, tables and the composer retain solid surfaces for readability.
+   The colours are set on <html>, so menus, popovers, dialogs and the phone
+   navigation drawer (portals outside the app shell) match the workspace.
+   Each tint was chosen against the artwork's own pixels so the secondary and
+   hint text that sits directly on the picture keeps about 4.5:1 or better. */
+html[data-appearance="golden-clouds"] {
   --workspace-art: url("/themes/golden-clouds.webp");
-  --workspace-art-tint: rgb(255 249 237 / 45%);
+  --workspace-art-tint: rgb(255 249 237 / 55%);
   --workspace-art-base: #e8cda2;
   --color-bg-white-0: #fffdf9;
   --color-bg-weak-50: #f7f2e8;
   --color-bg-weak-25: #fbf7ef;
   --color-stroke-soft-200: #e9e0d0;
   --color-stroke-sub-300: #d5c7b1;
-  --color-text-sub-600: #63574d;
-  --color-text-soft-400: #6b5b49;
+  --color-text-sub-600: #3f352c;
+  --color-text-soft-400: #4a3f35;
 }
 
-html[data-appearance="dark-forest"] .app-workspace {
+html[data-appearance="dark-forest"] {
   --workspace-art: url("/themes/dark-forest.webp");
-  --workspace-art-tint: rgb(0 10 6 / 35%);
+  --workspace-art-tint: rgb(0 10 6 / 62%);
   --workspace-art-base: #101e1b;
   --color-bg-white-0: #0c1512;
   --color-bg-weak-50: #17231e;
@@ -929,12 +933,12 @@ html[data-appearance="dark-forest"] .app-workspace {
   --color-stroke-soft-200: #293a31;
   --color-stroke-sub-300: #52675b;
   --color-text-sub-600: #c2d0c7;
-  --color-text-soft-400: #a4b7aa;
+  --color-text-soft-400: #b3c4b8;
 }
 
-html[data-appearance="deep-space"] .app-workspace {
+html[data-appearance="deep-space"] {
   --workspace-art: url("/themes/deep-space.webp");
-  --workspace-art-tint: rgb(3 5 17 / 30%);
+  --workspace-art-tint: rgb(3 5 17 / 62%);
   --workspace-art-base: #0b1020;
   --color-bg-white-0: #0b0e1b;
   --color-bg-weak-50: #191e32;
@@ -942,12 +946,12 @@ html[data-appearance="deep-space"] .app-workspace {
   --color-stroke-soft-200: #303852;
   --color-stroke-sub-300: #5b6688;
   --color-text-sub-600: #c7cce0;
-  --color-text-soft-400: #adb7d4;
+  --color-text-soft-400: #b9c2dc;
 }
 
-html[data-appearance="moonlit-ocean"] .app-workspace {
+html[data-appearance="moonlit-ocean"] {
   --workspace-art: url("/themes/moonlit-ocean.webp");
-  --workspace-art-tint: rgb(1 8 18 / 35%);
+  --workspace-art-tint: rgb(1 8 18 / 62%);
   --workspace-art-base: #0d1b2b;
   --color-bg-white-0: #0b141f;
   --color-bg-weak-50: #162638;
@@ -955,7 +959,7 @@ html[data-appearance="moonlit-ocean"] .app-workspace {
   --color-stroke-soft-200: #2c4158;
   --color-stroke-sub-300: #576f8a;
   --color-text-sub-600: #c5d2e0;
-  --color-text-soft-400: #a9bed4;
+  --color-text-soft-400: #b6c8db;
 }
 
 html:is([data-appearance="golden-clouds"], [data-appearance="dark-forest"], [data-appearance="deep-space"], [data-appearance="moonlit-ocean"]) .workspace-canvas {
@@ -968,6 +972,13 @@ html:is([data-appearance="golden-clouds"], [data-appearance="dark-forest"], [dat
 
 html:is([data-appearance="golden-clouds"], [data-appearance="dark-forest"], [data-appearance="deep-space"], [data-appearance="moonlit-ocean"]) .assistant-workspace {
   background-color: transparent;
+}
+
+/* Section pages with dense lists (email, LinkedIn, WhatsApp, calls,
+   Instagram, tables, the Leads list) keep a mostly opaque surface over the
+   picture, so it shows faintly behind them without costing readability. */
+html:is([data-appearance="golden-clouds"], [data-appearance="dark-forest"], [data-appearance="deep-space"], [data-appearance="moonlit-ocean"]) .workspace-surface {
+  background-color: color-mix(in srgb, var(--color-bg-white-0) 88%, transparent);
 }
 
 html:is([data-appearance="golden-clouds"], [data-appearance="dark-forest"], [data-appearance="deep-space"], [data-appearance="moonlit-ocean"]) .assistant-message {
@@ -1042,7 +1053,7 @@ html:is([data-appearance="golden-clouds"], [data-appearance="dark-forest"], [dat
 
 .grid-clay .grid-coverage-cell {
   color: var(--color-text-soft-400);
-  font-size: 11px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -1121,7 +1132,7 @@ html:is([data-appearance="golden-clouds"], [data-appearance="dark-forest"], [dat
   align-items: center;
   padding: 0 12px;
   color: var(--color-text-soft-400);
-  font-size: 12px;
+  font-size: 13px;
   font-style: italic;
   font-weight: 500;
   line-height: normal;

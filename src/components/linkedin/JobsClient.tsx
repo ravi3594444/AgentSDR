@@ -176,7 +176,7 @@ function RunRows({ run }: { run: JobRun }) {
                         <span className="shrink-0 select-none tabular-nums text-text-soft-400" suppressHydrationWarning>
                           {new Date(log.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
                         </span>
-                        <span className={cn("mt-px w-8 shrink-0 text-[10px] font-bold uppercase", LEVEL_TEXT[log.level] ?? "text-text-sub-600")}>
+                        <span className={cn("mt-px w-8 shrink-0 text-[12px] font-bold uppercase", LEVEL_TEXT[log.level] ?? "text-text-sub-600")}>
                           {LEVEL_TAG[log.level] ?? "INF"}
                         </span>
                         <span className={cn("min-w-0 break-words", LEVEL_TEXT[log.level] ?? "text-text-strong-950")}>{log.message}</span>

@@ -21,7 +21,7 @@ export default function Badge({
 }) {
   return (
     <span
-      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold whitespace-nowrap ${TONE_CLS[tone]}`}
+      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[13px] font-semibold whitespace-nowrap ${TONE_CLS[tone]}`}
     >
       {dot && <span className="w-1.5 h-1.5 rounded-full bg-current" />}
       {label}

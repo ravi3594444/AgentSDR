@@ -73,7 +73,7 @@ export default function AddColumnMenu({
                 onPick(m.type);
                 onClose();
               }}
-              className={`flex w-full items-center gap-2.5 px-3 py-[7px] text-left text-[13px] transition ${
+              className={`flex w-full items-center gap-2.5 px-3 py-[7px] text-left text-[15px] transition ${
                 m.available
                   ? "text-text-strong-950 hover:bg-bg-weak-50"
                   : "cursor-not-allowed text-text-disabled-300"

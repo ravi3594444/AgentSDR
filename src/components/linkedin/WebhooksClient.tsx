@@ -189,7 +189,7 @@ function EventRows({ ev }: { ev: WebhookEventRow }) {
                             <span className="shrink-0 select-none tabular-nums text-text-soft-400">
                               {new Date(entry.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
                             </span>
-                            <span className={cn("mt-px w-8 shrink-0 text-[10px] font-bold uppercase", LEVEL_TEXT[entry.level] ?? "text-text-sub-600")}>
+                            <span className={cn("mt-px w-8 shrink-0 text-[12px] font-bold uppercase", LEVEL_TEXT[entry.level] ?? "text-text-sub-600")}>
                               {LEVEL_TAG[entry.level] ?? "INF"}
                             </span>
                             <span className={cn("min-w-0 break-words", LEVEL_TEXT[entry.level] ?? "text-text-strong-950")}>{entry.message}</span>

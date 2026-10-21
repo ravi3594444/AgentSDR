@@ -174,7 +174,7 @@ function ProviderModelPicker({
   } else if (!hasModels && provider.modelFilterRestricted) {
     unavailableMessage = <>
       This key is restricted to {provider.allowedModelCount} model{provider.allowedModelCount === 1 ? "" : "s"}, but none could be resolved to a selectable OpenRouter text or image model.
-      {provider.unmatchedAllowedModels.length > 0 && <span className="mt-1 block break-words font-mono text-[11px]">{provider.unmatchedAllowedModels.join(", ")}</span>}
+      {provider.unmatchedAllowedModels.length > 0 && <span className="mt-1 block break-words font-mono text-[13px]">{provider.unmatchedAllowedModels.join(", ")}</span>}
       <span className="mt-1 block">For Azure deployments, set <code>model_slug</code> and <strong>This key applies to</strong> to the canonical ID (for example, <code>openai/gpt-4o</code>), not the Azure deployment name.</span>
     </>;
   } else if (!hasModels) {

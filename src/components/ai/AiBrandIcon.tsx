@@ -86,7 +86,7 @@ export function AiBrandIcon({
     case "amazon": mark = <RiAmazonFill className={iconClass} />; break;
     case "microsoft": mark = <RiMicrosoftFill className={iconClass} />; break;
     case "xai": mark = <RiTwitterXFill className={iconClass} />; break;
-    default: mark = <span className="text-[10px] font-bold leading-none">{label.trim().slice(0, 1).toUpperCase() || "AI"}</span>;
+    default: mark = <span className="text-[12px] font-bold leading-none">{label.trim().slice(0, 1).toUpperCase() || "AI"}</span>;
   }
 
   return (

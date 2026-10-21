@@ -27,7 +27,7 @@ export default async function GridIndexPage({
     ]);
 
     return (
-      <div className="flex h-full overflow-hidden bg-bg-white-0">
+      <div className="workspace-surface flex h-full overflow-hidden bg-bg-white-0">
         <div className="min-w-0 flex-1 overflow-y-auto">
           <WorkbookListClient
             folderId={folderId}

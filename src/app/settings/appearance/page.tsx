@@ -5,7 +5,7 @@ export const metadata = { title: "Appearance" };
 
 export default function AppearancePage() {
   return (
-    <SettingsPage title="Appearance" description="Light, dark, or matched to your system." width="narrow">
+    <SettingsPage title="Appearance" description="Plain white, pure black, your device's setting, or an illustrated background." width="narrow">
       <AppearanceSettings />
     </SettingsPage>
   );

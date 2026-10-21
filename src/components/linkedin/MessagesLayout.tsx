@@ -803,7 +803,7 @@ export function MessagesLayout({
                       {accounts.map((a) => (
                         <Select.Item key={a.id} value={a.id}>
                           <span className="flex min-w-0 items-center gap-2">
-                            <InboxAvatar name={a.name ?? a.username} src={a.profilePictureUrl} size="xs" className="size-5 text-[9px]" />
+                            <InboxAvatar name={a.name ?? a.username} src={a.profilePictureUrl} size="xs" className="size-5 text-[11px]" />
                             <span className="truncate">{a.name ?? `@${a.username}`}</span>
                             {a.name && <span className="truncate text-text-soft-400">@{a.username}</span>}
                           </span>

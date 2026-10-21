@@ -330,7 +330,7 @@ export default function NotesTasksClient({ mode }: { mode: "tasks" | "notes" }) 
                     {item.description && <p className="mt-0.5 line-clamp-2 text-paragraph-xs text-text-sub-600">{item.description}</p>}
                     {lead && (
                       <p className="mt-1.5 flex min-w-0 items-center gap-1.5 text-paragraph-xs text-text-soft-400">
-                        <InboxAvatar name={lead} size="sm" className="size-4 text-[8px] ring-0" />
+                        <InboxAvatar name={lead} size="sm" className="size-4 text-[10px] ring-0" />
                         <span className="truncate">{lead}</span>
                       </p>
                     )}

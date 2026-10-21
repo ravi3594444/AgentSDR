@@ -1,7 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useId } from "react";
-import { RiCheckLine, RiCloudLine, RiComputerLine, RiMoonLine, RiPlanetLine, RiSunLine, RiTreeLine, RiWaterFlashLine } from "@remixicon/react";
+import { RiCheckLine, RiCloudLine, RiComputerLine, RiMoonLine, RiPaletteLine, RiPlanetLine, RiSunLine, RiTreeLine, RiWaterFlashLine } from "@remixicon/react";
 import { cn } from "@/utils/cn";
 import { useTheme, type ThemePreference } from "./ThemeProvider";
 import { THEMES } from "./themes";
@@ -67,14 +68,27 @@ export function ThemeSwitch({ className, variant = "compact" }: { className?: st
   );
 }
 
-/** Flip away from the currently displayed theme. */
+const TOGGLE_CLASS = "flex size-8 items-center justify-center rounded-lg text-text-sub-600 outline-none transition hover:bg-bg-weak-50 hover:text-text-strong-950 focus-visible:ring-2 focus-visible:ring-primary-base";
+
+/**
+ * Flip away from the currently displayed theme. With an illustrated
+ * background selected there is no plain opposite to flip to, so the button
+ * opens Settings → Appearance instead of silently replacing the picture.
+ */
 export function ThemeToggleButton({ className }: { className?: string }) {
-  const { resolved, setPreference } = useTheme();
+  const { preference, resolved, setPreference } = useTheme();
+  if (THEMES[preference].thumbnail) {
+    const label = `${THEMES[preference].label} is on. Change the appearance`;
+    return (
+      <Link href="/settings/appearance" aria-label={label} title={label} className={cn(TOGGLE_CLASS, className)}>
+        <RiPaletteLine className="size-[18px]" aria-hidden="true" />
+      </Link>
+    );
+  }
   const next = resolved === "dark" ? "light" : "dark";
   const Icon = resolved === "dark" ? RiSunLine : RiMoonLine;
   return (
-    <button type="button" onClick={() => setPreference(next)} aria-label={`Switch to ${next} mode`} title={`Switch to ${next} mode`}
-      className={cn("flex size-8 items-center justify-center rounded-lg text-text-sub-600 outline-none transition hover:bg-bg-weak-50 hover:text-text-strong-950 focus-visible:ring-2 focus-visible:ring-primary-base", className)}>
+    <button type="button" onClick={() => setPreference(next)} aria-label={`Switch to ${next} mode`} title={`Switch to ${next} mode`} className={cn(TOGGLE_CLASS, className)}>
       <Icon className="size-[18px]" aria-hidden="true" />
     </button>
   );
