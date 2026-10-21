@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { RiArrowDownSLine, RiChat3Line, RiListCheck3, RiRefreshLine } from "@remixicon/react";
 import type { RequestRow, RequestSummary } from "@/lib/assistant/requests.server";
+import { formatChatDateTime } from "@/lib/assistant/chatTime";
 import { CONVERSATION_CHANNEL_META } from "@/components/analytics/theme";
 import { Badge, ErrorState, LoadingRows, secondaryButtonClass } from "@/components/crm/CrmLayout";
 import { timeAgo } from "@/components/crm/crm-utils";
@@ -47,7 +48,7 @@ function Chips<T extends string>({ label, value, options, onChange }: { label: s
   );
 }
 
-function RequestItem({ row, expanded, onToggle }: { row: RequestRow; expanded: boolean; onToggle: () => void }) {
+function RequestItem({ row, timeZone, expanded, onToggle }: { row: RequestRow; timeZone: string; expanded: boolean; onToggle: () => void }) {
   const [summary, setSummary] = useState<RequestSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const load = useCallback(async () => {
@@ -79,7 +80,7 @@ function RequestItem({ row, expanded, onToggle }: { row: RequestRow; expanded: b
             })}
             {parts && <span>{parts}</span>}
             {counts && <span>{counts}</span>}
-            <span title={new Date(row.startedAt).toLocaleString()}>Started {timeAgo(row.startedAt)}</span>
+            <span title={formatChatDateTime(row.startedAt, timeZone)}>Started {timeAgo(row.startedAt)}</span>
             {row.threadTitle ? <span className="inline-flex items-center gap-1"><RiChat3Line className="size-3.5" aria-hidden="true" />{row.threadTitle}</span> : row.kind !== "campaign" ? <span>Not from a chat</span> : null}
           </p>
         </div>
@@ -103,7 +104,7 @@ function RequestItem({ row, expanded, onToggle }: { row: RequestRow; expanded: b
 export function RequestsClient() {
   const [channel, setChannel] = useState<Channel>("");
   const [state, setState] = useState<StateFilter>("");
-  const [data, setData] = useState<{ requests: RequestRow[]; manualCampaigns: RequestRow[] } | null>(null);
+  const [data, setData] = useState<{ requests: RequestRow[]; manualCampaigns: RequestRow[]; timeZone: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
 
@@ -131,9 +132,9 @@ export function RequestsClient() {
       if (channel) query.set("channel", channel);
       if (state) query.set("state", state);
       const response = await fetch(`/api/assistant/requests?${query}`, { cache: "no-store" });
-      const body = (await response.json().catch(() => ({}))) as { requests?: RequestRow[]; manualCampaigns?: RequestRow[]; error?: string };
+      const body = (await response.json().catch(() => ({}))) as { requests?: RequestRow[]; manualCampaigns?: RequestRow[]; timeZone?: string; error?: string };
       if (!response.ok) throw new Error(body.error ?? `Request failed (HTTP ${response.status})`);
-      setData({ requests: body.requests ?? [], manualCampaigns: body.manualCampaigns ?? [] });
+      setData({ requests: body.requests ?? [], manualCampaigns: body.manualCampaigns ?? [], timeZone: body.timeZone ?? "UTC" });
       setError(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -144,9 +145,9 @@ export function RequestsClient() {
   useVisiblePolling(() => void load(), POLL_MS);
 
   const toggle = (key: string) => setExpanded((current) => (current === key ? null : key));
-  const list = (rows: RequestRow[]) => (
+  const list = (rows: RequestRow[], timeZone: string) => (
     <ul className="divide-y divide-stroke-soft-200 overflow-hidden rounded-xl bg-bg-white-0 ring-1 ring-inset ring-stroke-soft-200">
-      {rows.map((row) => <RequestItem key={row.key} row={row} expanded={expanded === row.key} onToggle={() => toggle(row.key)} />)}
+      {rows.map((row) => <RequestItem key={row.key} row={row} timeZone={timeZone} expanded={expanded === row.key} onToggle={() => toggle(row.key)} />)}
     </ul>
   );
 
@@ -165,14 +166,14 @@ export function RequestsClient() {
       {error && <ErrorState message={error} onRetry={() => void load()} />}
       {data === null ? <LoadingRows /> : (
         <>
-          {data.requests.length ? list(data.requests) : (
+          {data.requests.length ? list(data.requests, data.timeZone) : (
             <EmptyState icon={RiListCheck3} title={channel || state ? "Nothing matches these filters" : "No requests yet"} description="Ask the assistant for leads or outreach in the chat; each request shows here with its progress for 30 days, and for as long as it is still open." />
           )}
           {data.manualCampaigns.length > 0 && (
             <section aria-labelledby="manual-campaigns" className="space-y-2">
               <h2 id="manual-campaigns" className="text-label-sm text-text-sub-600">Campaigns made by hand</h2>
               <p className="text-paragraph-xs text-text-soft-400">Campaigns created on a channel&apos;s own page (Advanced in the sidebar), not from a chat.</p>
-              {list(data.manualCampaigns)}
+              {list(data.manualCampaigns, data.timeZone)}
             </section>
           )}
         </>

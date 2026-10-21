@@ -9,7 +9,7 @@ import { CHANNEL_RULES, ensureSignOff, leadClaimProblem, personalLineProblem, pe
 import { lineClash, PERSONAL_LINE_LIMITS, pitchProblems } from "./pitch";
 import { profileKnowledgeText } from "./profile";
 import type { AudienceChannel, BusinessProfile, PlannedStep } from "./schema";
-import type { RequestFit } from "./leadFit";
+import { leadSortingSystemPrompt, type RequestFit } from "./leadFit";
 
 /**
  * The AI that writes outreach: one sequence per channel from the owner's
@@ -315,8 +315,11 @@ export async function writePersonalLines(input: {
  * facts make that clearly better), or not at all ("skip", a clear misfit for
  * the owner's offer, with the reason). Unsure means standard. It also judges
  * each lead against the owner's request (requestFit, leadFit.ts): what they
- * stated is a requirement, an unknown fact is never a contradiction, and a
- * keyword is a hint.
+ * stated of the lead is a requirement, an unknown fact is never a
+ * contradiction, a keyword is a hint, how the research runs (budget, time,
+ * sources, no outreach) is no requirement at all, and the kind and place the
+ * request names outrank the target customers saved with the business. The
+ * caller passes the request's subject (requestSubject) for that reason.
  */
 export async function sortLeads(input: {
   context: string;
@@ -335,17 +338,7 @@ export async function sortLeads(input: {
     schemaName: "lead_sorting",
     schemaDescription: "Submit the group, approach and reason for every lead.",
     jsonSchema: WRITER_REPLY_SCHEMAS.lead_sorting,
-    systemPrompt: [
-      "You sort a business owner's leads before outreach, so each gets the right message. You do not write the messages.",
-      "group: name the kind of lead in 2 to 4 words ('Real estate agents', 'Cleaning companies', 'Dental clinics'), the same words for leads of the same kind." + (input.knownGroups.length ? ` Reuse these names when they fit: ${input.knownGroups.map((group) => `'${group}'`).join(", ")}.` : ""),
-      "approach 'standard': the group's message fits this lead. This is the default.",
-      "approach 'personal': rare. Every standard message already opens with a line from the lead's address, rating and category, so choose 'personal' only when the facts show something particular to this lead that the group's message would miss (a specialty, a stated need, a detail from its website or title) and it fits the owner's offer well.",
-      "approach 'skip': clearly not a fit for the owner's offer (a different kind of business, a competitor of the owner, closed, or obviously out of reach). Never skip only because little is known.",
-      "reason: one short sentence the owner reads, based only on the facts given. Never invent facts about a lead. A finding from their own website (hiring, booking, websiteSays, websiteNeed, decisionMakers) is a reason they may fit, never a sign they want to buy: say 'may', never 'wants' or 'needs'.",
-      "requestFit: whether the lead is what the OWNER'S REQUEST asks for. What the owner stated (the kind of business or person, the place, a condition such as having no website) is a requirement wherever it applies to this lead; words in a title or name ('agent', 'founder', 'realty') are hints, not proof. 'fits': the facts show it is what they asked for. 'does_not_fit': a fact contradicts what they asked (another kind of business or role, another place, a website found when they asked for ones without), or it is a skip. 'unconfirmed': nothing contradicts it, but the facts cannot show a requirement (the place is not shown, whether it has a website is not known). Never call a lead does_not_fit only because little is known. With no request given, judge against the owner's business and offer.",
-      "noWebsiteRequired: true only when the owner's request asks for leads like this one to have no website (a request can list several kinds of lead and say it of only one). websiteStatus says what is known of its website: 'none listed' is not proof it has none, and 'could not be checked' is not proof either.",
-      "reason, when requestFit is not 'fits': say which requirement is unmet or unconfirmed.",
-    ].join("\n"),
+    systemPrompt: leadSortingSystemPrompt(input.knownGroups),
     userPrompt: [
       writerReplyInstructions("lead_sorting"),
       `THE OWNER'S BUSINESS:\n${input.context.slice(0, 2_500)}`,

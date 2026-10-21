@@ -10,6 +10,7 @@ import { useRecordChanged } from "@/components/crm/recordEvents";
 import type { NeedsYouPayload } from "@/components/assistant/NeedsYouList";
 import { LeadSourcesTable } from "@/components/reporting/LeadSourcesTable";
 import { MetricDefinitions, SHARED_METRIC_KEYS } from "@/components/reporting/MetricDefinitions";
+import { formatChatDateTime } from "@/lib/assistant/chatTime";
 import { describeChannelSending, figure, money, percent, PERIOD_KINDS, type PeriodKind } from "@/lib/assistant/results";
 import type { Results } from "@/lib/assistant/results.server";
 import { cn } from "@/utils/cn";
@@ -146,7 +147,7 @@ export default function ResultsClient({ initial, onPeriodChange, children }: { i
       <div className="grid gap-4 lg:grid-cols-2">
         <Section title="Interested people" collapsible>
           <p className="mb-3 text-paragraph-xs text-text-soft-400">Replies the AI classified as Interested in this period (applied or accepted). A record moved by hand is not counted here; the By channel section&apos;s Positive counts every move into Interested or Customer, and Pipeline shows who is Interested now. Open Leads to read the full conversations.</p>
-          <List items={r.interestedPeople.map((p) => `${p.name}${p.what ? ` — ${p.what}` : ""} (${new Date(p.at).toLocaleString()})`)} empty="No interested replies in this period." />
+          <List items={r.interestedPeople.map((p) => `${p.name}${p.what ? ` — ${p.what}` : ""} (${formatChatDateTime(p.at, r.period.timeZone)})`)} empty="No interested replies in this period." />
           <Link href="/leads?view=board" className="mt-4 inline-block text-label-xs text-text-strong-950 underline underline-offset-4">Open the Leads board</Link>
         </Section>
         <Section title="Where leads came from" collapsible>

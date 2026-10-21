@@ -68,6 +68,8 @@ export type NextStepFacts = {
   waitingUntil: { at: string; label: string; reason: string | null } | null;
   /** An open plan that is paused. */
   paused: { name: string } | null;
+  /** The request's research, paused by the owner (its objective), and the chat it is resumed from. */
+  researchPaused: { threadId: string | null } | null;
   /** A search or the request's objective still running. */
   researching: boolean;
   /** Anything still open (a search, a plan with something to send, an objective). */
@@ -79,7 +81,8 @@ export type NextStepFacts = {
 /**
  * The one next step for a request, the first that applies: answer what waits
  * in the Inbox; press Start on a prepared plan; fix a sender that cannot
- * send; wait for a sender's hours or limits; resume a paused plan; let the
+ * send; wait for a sender's hours or limits; resume a paused plan, then
+ * paused research (from the chat: no button resumes it elsewhere); let the
  * research run; else it is done (or there is nothing to do).
  */
 export function nextActionFor(facts: NextStepFacts, chatHref: (threadId: string) => string = (id) => `/assistant?thread=${encodeURIComponent(id)}`): NextStep {
@@ -95,8 +98,34 @@ export function nextActionFor(facts: NextStepFacts, chatHref: (threadId: string)
   if (facts.senderProblem) return { kind: "fix_sender", label: "Fix the sender", href: "/getting-started", detail: facts.senderProblem };
   if (facts.waitingUntil) return { kind: "wait", label: `Waiting until ${facts.waitingUntil.label}`, href: null, detail: facts.waitingUntil.reason };
   if (facts.paused) return { kind: "paused", label: `Resume “${facts.paused.name}” when ready`, href: null, detail: "It is paused; nothing is sent until you resume it." };
+  if (facts.researchPaused) {
+    return { kind: "paused", label: "Resume the research when ready", href: facts.researchPaused.threadId ? chatHref(facts.researchPaused.threadId) : null, detail: "It is paused: searches already running finish, and nothing new is searched until you resume it in the chat." };
+  }
   if (facts.researching) return { kind: "research", label: "Research is running", href: null, detail: "Searches are still finding and checking leads." };
   if (facts.open) return { kind: "wait", label: "Sending", href: null, detail: "Messages go out within each channel's hours and daily limits." };
   if (facts.outcome) return { kind: "done", label: "Done", href: null, detail: facts.outcome };
   return { kind: "nothing", label: "Nothing to do", href: null, detail: null };
+}
+
+/** What a request's state is read from: its work items (newest first) and its objective, when it has one. */
+export type RequestStateFacts = {
+  items: readonly { type: "job" | "plan"; state: string; stateLabel: string; open: boolean }[];
+  objective: { status: "active" | "paused" | "stopped"; waiting: string | null } | null;
+};
+
+/**
+ * The state a request shows: its first open plan's, else its first open
+ * search's; else, while its objective still runs (between one search
+ * ending and the continuation starting the next, or paused), researching
+ * with the objective's waiting reason; else its newest item's. Open while
+ * any of those holds, so a request never reads Done from a finished child
+ * while its research goes on (pilot finding L03).
+ */
+export function requestState(facts: RequestStateFacts): { state: string; stateLabel: string; open: boolean } {
+  const lead = facts.items.find((item) => item.open && item.type === "plan") ?? facts.items.find((item) => item.open);
+  if (lead) return { state: lead.state, stateLabel: lead.stateLabel, open: true };
+  if (facts.objective?.status === "active") return { state: "researching", stateLabel: facts.objective.waiting ? `Researching (${facts.objective.waiting})` : "Researching", open: true };
+  if (facts.objective?.status === "paused") return { state: "paused", stateLabel: "Research paused", open: true };
+  const newest = facts.items[0];
+  return newest ? { state: newest.state, stateLabel: newest.stateLabel, open: false } : { state: "completed", stateLabel: "Finished", open: false };
 }

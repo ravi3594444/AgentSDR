@@ -4,6 +4,7 @@ import Link from "next/link";
 import { RiChat3Line } from "@remixicon/react";
 import type { WorkItem } from "@/lib/activity/activity.server";
 import type { WorkState } from "@/lib/activity/status";
+import { formatChatDateTime } from "@/lib/assistant/chatTime";
 import { displayTime } from "@/lib/assistant/displayTime";
 import { Badge, secondaryButtonClass } from "@/components/crm/CrmLayout";
 import { timeAgo } from "@/components/crm/crm-utils";
@@ -13,7 +14,8 @@ import { cn } from "@/utils/cn";
  * One search or outreach plan, as Activity showed it and a request's summary
  * lists it underneath: its state, why, its counts, its chat, and the run
  * controls that apply (cancel a search; pause, resume or stop a plan; a
- * proposed plan is started from its chat).
+ * proposed plan is started from its chat). Its times are written in
+ * `timeZone`, the organization's (chatTime.ts).
  */
 
 export const WORK_TONE: Record<WorkState, "neutral" | "success" | "info" | "danger" | "warning"> = {
@@ -39,15 +41,13 @@ export function chatHref(threadId: string): string {
   return `/assistant?thread=${encodeURIComponent(threadId)}`;
 }
 
-export function WorkRow({ item, busy, timeZone, onCancel, onRun }: { item: WorkItem; busy: boolean; timeZone: string | null; onCancel: (item: WorkItem) => void; onRun: (item: WorkItem, action: "pause" | "resume" | "stop") => void }) {
+export function WorkRow({ item, busy, timeZone, onCancel, onRun }: { item: WorkItem; busy: boolean; timeZone: string; onCancel: (item: WorkItem) => void; onRun: (item: WorkItem, action: "pause" | "resume" | "stop") => void }) {
   const counts = [
     item.found !== null ? `${item.found} found` : null,
     item.eligible !== null ? `${item.eligible} new` : null,
     item.counts ? `${item.counts.leads} ${item.counts.leads === 1 ? "lead" : "leads"} · ${item.counts.contacted} contacted · ${item.counts.replied} replied${item.counts.failed ? ` · ${item.counts.failed} failed` : ""}` : null,
   ].filter(Boolean).join(" · ");
-  const nextAt = item.nextAt
-    ? timeZone ? displayTime(new Date(item.nextAt), new Date(), timeZone) : new Date(item.nextAt).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
-    : null;
+  const nextAt = item.nextAt ? displayTime(new Date(item.nextAt), new Date(), timeZone) : null;
   const running = item.runStatus === "running";
   const small = "h-8 px-2.5";
   return (
@@ -61,7 +61,7 @@ export function WorkRow({ item, busy, timeZone, onCancel, onRun }: { item: WorkI
         <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-paragraph-xs text-text-soft-400">
           {item.source && <span>{item.source}</span>}
           {counts && <span>{counts}</span>}
-          <span title={new Date(item.startedAt).toLocaleString()}>Started {timeAgo(item.startedAt)}</span>
+          <span title={formatChatDateTime(item.startedAt, timeZone)}>Started {timeAgo(item.startedAt)}</span>
           {item.threadId && (
             <Link href={chatHref(item.threadId)} className="inline-flex items-center gap-1 text-text-sub-600 underline-offset-2 hover:text-text-strong-950 hover:underline">
               <RiChat3Line className="size-3.5" aria-hidden="true" />{item.threadTitle ?? "Open chat"}

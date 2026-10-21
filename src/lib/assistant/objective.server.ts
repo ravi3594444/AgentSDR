@@ -132,6 +132,34 @@ export async function objectiveForJob(job: { payload: unknown }): Promise<Object
   return objectiveForRequest(jobRequestId(job));
 }
 
+/** What the Requests list needs of an objective: whose request it is, whether it still runs, and why it waits. */
+export type ObjectiveState = { id: string; requestMessageId: string; status: ObjectiveStatus; waiting: string | null };
+
+/** The objectives of these requests (by request message id) and these driver jobs' objectives (by id), in one read. */
+export async function objectiveStates(input: { requestIds: readonly string[]; objectiveIds: readonly string[] }): Promise<ObjectiveState[]> {
+  const requestIds = input.requestIds.filter((id) => UUID.test(id));
+  const objectiveIds = input.objectiveIds.filter((id) => UUID.test(id));
+  if (!requestIds.length && !objectiveIds.length) return [];
+  return tolerant(async () => {
+    const rows = await db.select({ id: assistantObjectives.id, requestMessageId: assistantObjectives.requestMessageId, status: assistantObjectives.status, progress: assistantObjectives.progress })
+      .from(assistantObjectives)
+      .where(and(inOrg(assistantObjectives), or(
+        requestIds.length ? inArray(assistantObjectives.requestMessageId, requestIds) : sql`false`,
+        objectiveIds.length ? inArray(assistantObjectives.id, objectiveIds) : sql`false`,
+      )));
+    return rows.map((row) => ({ id: row.id, requestMessageId: row.requestMessageId, status: row.status, waiting: waitingOf(row) }));
+  }, []);
+}
+
+/**
+ * Why a running objective waits. A pause keeps the reason saved before it
+ * (only a stop clears it), but what holds a paused objective is the pause,
+ * so its old reason is not shown.
+ */
+function waitingOf(objective: Pick<Objective, "status" | "progress">): string | null {
+  return objective.status === "active" ? (objective.progress as ObjectiveProgress).waiting ?? null : null;
+}
+
 /** The organization's defaults (Settings → Lead research, the "general" Sending rules). */
 export async function objectiveDefaults(): Promise<ControlDefaults> {
   const rules = await channelRules("general");
@@ -524,7 +552,7 @@ function viewOf(facts: ObjectiveFacts, now = new Date()): ObjectiveView {
     deadlineAt: objective.deadlineAt.toISOString(),
     msLeft: objective.status === "stopped" ? 0 : Math.max(0, objective.deadlineAt.getTime() - now.getTime()),
     nextEligibleAt: objective.nextEligibleAt?.toISOString() ?? null,
-    waiting: (objective.progress as ObjectiveProgress).waiting ?? null,
+    waiting: waitingOf(objective),
     continuations: (objective.progress as ObjectiveProgress).continuation?.n ?? 0,
     named: objective.controls.named ?? { target: false, time: false, spend: false },
     sources: facts.sources,

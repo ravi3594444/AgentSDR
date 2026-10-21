@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   aiReadiness,
   buildReadiness,
@@ -268,6 +270,43 @@ describe("Gmail watch and incoming replies", () => {
     expect(failed.details.join(" ")).toContain("topic not found");
     const partial = emailReadiness(fresh({ ...emailReady, google: { ...googleOn, gmailWatch: { status: "partial", at: "2026-10-13T08:01:00.000Z", registered: 1, attempted: 2 } } }));
     expect(partial.summary).toContain("1 of 2");
+  });
+
+  // Pilot finding L05: replies follow each plan's Review or Automatic mode, and what waits is in the Inbox.
+  test("Getting started describes the reply modes and sends people to the Inbox, never promising approval of every reply", () => {
+    const facts = fresh({ ...emailReady, unipile: unipileOn, linkedinAccounts: { connected: 1, disconnected: 0 } });
+    const channels = { email: emailReadiness(facts), linkedin: linkedinReadiness(facts), whatsapp: whatsappReadiness(facts) };
+    const texts = [
+      ...aiReadiness(fresh()).details,
+      ...aiReadiness(fresh({ ai: { ...fresh().ai, provider: "aimlapi", connectionSaved: true, connectionVerified: true, providers: 1, defaultModel: { provider: "aimlapi", modelId: "gpt-4o" }, defaultModelEnabled: true } })).details,
+      ...repliesReadiness(fresh()).details,
+      ...repliesReadiness(fresh({ replies: { actionRequired: 1, draftsAwaitingReview: 0 } })).details,
+      repliesReadiness(fresh({ replies: { actionRequired: 1, draftsAwaitingReview: 0 } })).next ?? "",
+      replySyncReadiness(facts, channels).next ?? "",
+    ];
+    for (const text of texts) {
+      expect(text).not.toContain("Action required");
+      expect(text).not.toMatch(/wait(?:s)? for your review|without your approval|for your approval/);
+    }
+    const modes = aiReadiness(fresh()).details[0] ?? "";
+    expect(modes).toContain("Review mode drafts wait for you");
+    expect(modes).toContain("Automatic mode ordinary replies are sent and anything unusual waits for you");
+    expect(modes).toContain("Inbox (Needs you)");
+    expect(repliesReadiness(fresh({ replies: { actionRequired: 1, draftsAwaitingReview: 0 } })).next).toBe("Open the Inbox (Needs you).");
+    expect(repliesReadiness(fresh()).details[0]).toContain("land in the Inbox");
+    expect(replySyncReadiness(facts, channels).next).toContain("appears in the Inbox");
+    expect(repliesReadiness(fresh()).links).toEqual([{ href: "/inbox", label: "Inbox" }]);
+  });
+
+  // Review of pilot L05: the Getting started page's own AI header, and the
+  // AI/ML API settings, still promised that every draft waits for review.
+  test("the Getting started page and the AI/ML API settings never promise review of every reply", () => {
+    const read = (...parts: string[]) => readFileSync(join(import.meta.dir, "..", "..", ...parts), "utf8");
+    const page = read("app", "getting-started", "page.tsx");
+    for (const source of [page, read("components", "ai", "AimlSettingsClient.tsx")]) {
+      expect(source).not.toMatch(/for your review|always wait|without your approval|Action required/);
+    }
+    expect(page).toContain("replies follow each plan's Review or Automatic mode");
   });
 
   test("a connected channel is proven only by a reply that actually arrived", () => {

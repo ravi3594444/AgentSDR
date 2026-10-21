@@ -359,7 +359,7 @@ export default function AimlSettingsClient({ onSaved }: { onSaved?: () => void }
           </Select.Root>
         </Field>
         <Callout tone="info" className="mt-4 max-w-2xl">
-          With {AIML_PROVIDER_NAME}, call transcription stays off (it has not been checked with {AIML_PROVIDER_NAME}&apos;s audio models yet), and web-research or image AI columns in Tables need OpenRouter. Drafts always wait for your review.
+          With {AIML_PROVIDER_NAME}, call transcription stays off (it has not been checked with {AIML_PROVIDER_NAME}&apos;s audio models yet), and web-research or image AI columns in Tables need OpenRouter. Replies follow each plan&apos;s reply mode, as with OpenRouter: in Review mode drafts wait for you; in Automatic mode ordinary replies are sent and anything unusual waits for you. What needs you is in the Inbox (Needs you).
         </Callout>
       </StepFrame>
 

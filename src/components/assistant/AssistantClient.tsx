@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   RiAddLine,
@@ -37,6 +37,7 @@ import type { RunAuthorization, SenderStatus } from "@/lib/assistant/runEvidence
 import { AUTOPILOT_LIMITS } from "@/lib/crm/autopilot";
 import { planCounts, planOutcome } from "@/lib/activity/status";
 import { displayTime } from "@/lib/assistant/displayTime";
+import { formatChatDate, formatChatDateTime, formatChatTime } from "@/lib/assistant/chatTime";
 import * as Button from "@/components/alignui/button";
 import NeedsYouList from "@/components/assistant/NeedsYouList";
 import { RequestBar, RequestPanel, useThreadRequest } from "@/components/assistant/RequestPanel";
@@ -111,6 +112,8 @@ export type AssistantStatePayload = {
   viewer?: { firstName: string | null };
   threads: { id: string; title: string; updatedAt: string | Date }[];
   busy: boolean;
+  /** The organization's time zone, which every time in the chat is written in (chatTime.ts): the server and the browser agree. */
+  timeZone?: string;
   messages: Message[];
   jobs: Job[];
   runs: Record<string, Run>;
@@ -119,6 +122,9 @@ export type AssistantStatePayload = {
   /** The reply mode the owner chose on their latest started run: the plan card starts with it selected. */
   lastReplyMode?: "automatic" | "review" | null;
 };
+
+/** The zone the chat's times are written in: the organization's, from the state (UTC until it says). */
+const DisplayTimeZone = createContext("UTC");
 
 const ACCEPT = ".pdf,.docx,.txt,.md,.csv,.tsv,.xlsx,.xls";
 // The reply limits the server enforces (src/lib/crm/autopilot.ts), shown before Start.
@@ -271,10 +277,11 @@ type ProspectsPayload = { counts: Record<string, number>; prospects: ProspectVie
 
 /** What the lead's own website showed, kept apart from need: each line with its page, and what the pages read did not show. */
 function WebsiteFindings({ prospect, website }: { prospect: ProspectView; website: NonNullable<ProspectView["website"]> }) {
+  const timeZone = useContext(DisplayTimeZone);
   const pages = `${website.pages.length} page${website.pages.length === 1 ? "" : "s"}`;
   return (
     <div className="mt-1 border-t border-stroke-soft-200 pt-1">
-      <p className="text-text-soft-400">Their website, read {new Date(website.checkedAt).toLocaleDateString()} ({pages}): a possible fit for your offer, not a sign they want to buy.</p>
+      <p className="text-text-soft-400">Their website, read {formatChatDate(website.checkedAt, timeZone)} ({pages}): a possible fit for your offer, not a sign they want to buy.</p>
       {prospect.observations.map((signal, index) => (
         <p key={`observation-${index}`} className="mt-0.5 break-words text-text-sub-600">
           {signal.text}{" "}
@@ -310,6 +317,7 @@ const PROSPECT_COLOR: Record<ProspectView["status"], "gray" | "green" | "blue" |
  * website showed (a possible fit, never interest). Loaded when opened.
  */
 function ProspectsList({ audienceId }: { audienceId: string }) {
+  const timeZone = useContext(DisplayTimeZone);
   const [data, setData] = useState<ProspectsPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -345,7 +353,7 @@ function ProspectsList({ audienceId }: { audienceId: string }) {
               </div>
               <p className="mt-0.5 text-text-sub-600">
                 {prospect.source.url ? <a href={prospect.source.url} target="_blank" rel="noopener noreferrer" className="text-primary-base hover:underline">{prospect.source.label} ({hostOf(prospect.source.url)})</a> : prospect.source.label}
-                {" · "}{new Date(prospect.foundAt).toLocaleDateString()}
+                {" · "}{formatChatDate(prospect.foundAt, timeZone)}
               </p>
               <p className="mt-0.5 text-text-sub-600">Why: {prospect.matchReason}</p>
               {prospect.excludedReason && <p className="mt-0.5 text-text-sub-600">Left out: {prospect.excludedReason}</p>}
@@ -356,7 +364,7 @@ function ProspectsList({ audienceId }: { audienceId: string }) {
               )) : <p className="mt-0.5 text-text-sub-600">Contact: Unknown</p>}
               {prospect.needEvidence.map((signal, signalIndex) => (
                 <p key={`need-${signalIndex}`} className="mt-0.5 border-l-2 border-stroke-sub-300 pl-2 text-text-sub-600">
-                  “{signal.text}” <span className="text-text-soft-400">— {signal.sourceUrl ? <a href={signal.sourceUrl} target="_blank" rel="noopener noreferrer" className="hover:underline">{signal.source}</a> : signal.source}{signal.at ? `, ${new Date(signal.at).toLocaleDateString()}` : ""}</span>
+                  “{signal.text}” <span className="text-text-soft-400">— {signal.sourceUrl ? <a href={signal.sourceUrl} target="_blank" rel="noopener noreferrer" className="hover:underline">{signal.source}</a> : signal.source}{signal.at ? `, ${formatChatDate(signal.at, timeZone)}` : ""}</span>
                 </p>
               ))}
               {prospect.engagement.length > 0 && <p className="mt-0.5 text-text-soft-400">{prospect.engagement.length} like{prospect.engagement.length === 1 ? "" : "s"}, follow{prospect.engagement.length === 1 ? "" : "s"} or generic comment{prospect.engagement.length === 1 ? "" : "s"} (not counted as interest)</p>}
@@ -372,6 +380,7 @@ function ProspectsList({ audienceId }: { audienceId: string }) {
 }
 
 function DiscoveryCard({ message, job }: { message: Message; job: Job | undefined }) {
+  const timeZone = useContext(DisplayTimeZone);
   const data = message.toolResult?.data as { phrase?: string; keywords?: string } | undefined;
   const linkedin = message.tool === "find_linkedin_leads";
   const instagram = job?.kind === "apify_instagram";
@@ -387,7 +396,7 @@ function DiscoveryCard({ message, job }: { message: Message; job: Job | undefine
   const waiting = (job.progress as { waiting?: { reason?: string | null; until?: string } } | null)?.waiting;
   const stageText: Record<string, string> = {
     queued: waiting ? `Waiting to start${source ? ` ${source}` : ""}: ${waiting.reason ?? "a provider asked to wait"}.` : progress.note ? `${String(progress.note)}…` : "Starting the search…",
-    searching: waiting ? `Waiting: ${waiting.reason ?? "a provider asked to wait"}${waiting.until ? ` (until ${new Date(waiting.until).toLocaleTimeString()})` : ""}.` : social ? `Searching through Apify (${String(progress.actor ?? "social media")})…` : linkedin ? `Searching LinkedIn (${progress.found ?? 0} profiles so far)…` : web ? "Searching the web for matching businesses and directories…" : instagram ? `Searching Instagram through Apify (${String(progress.actor ?? "")})…` : `Searching ${source ?? `Google Maps${viaApify ? " through Apify" : ""}`}${progress.searches ? ` in ${progress.searches} area${Number(progress.searches) === 1 ? "" : "s"}` : ""} (usually 1–10 minutes)…`,
+    searching: waiting ? `Waiting: ${waiting.reason ?? "a provider asked to wait"}${waiting.until ? ` (until ${formatChatTime(waiting.until, timeZone)})` : ""}.` : social ? `Searching through Apify (${String(progress.actor ?? "social media")})…` : linkedin ? `Searching LinkedIn (${progress.found ?? 0} profiles so far)…` : web ? "Searching the web for matching businesses and directories…" : instagram ? `Searching Instagram through Apify (${String(progress.actor ?? "")})…` : `Searching ${source ?? `Google Maps${viaApify ? " through Apify" : ""}`}${progress.searches ? ` in ${progress.searches} area${Number(progress.searches) === 1 ? "" : "s"}` : ""} (usually 1–10 minutes)…`,
     reading: `Reading the pages the search found for published contact details (${progress.read ?? progress.pagesRead ?? 0} of ${progress.toRead ?? progress.candidates ?? "?"})…`,
     enriching: `Reading business websites for contact details (${progress.websitesChecked ?? 0} of ${progress.websitesToCheck ?? "?"})…`,
     saving: `Checking and saving contacts (${progress.saved ?? 0} of ${progress.found ?? "?"})…`,
@@ -662,16 +671,15 @@ function ProposalCard({ message, run, canManageAutopilot, lastReplyMode, onChang
   );
 }
 
-const dateTime = (iso: string) => new Date(iso).toLocaleString([], { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
-
 /** Who let this plan send, and how; for a plan not started yet, that nothing is sent. */
 function AuthorizationLine({ authorization, autopilot, status }: { authorization: RunAuthorization; autopilot: boolean; status: string }) {
+  const timeZone = useContext(DisplayTimeZone);
   const started = authorization.kind !== "none";
   return (
     <p className="mt-2 text-paragraph-xs text-text-sub-600">
       {authorization.text}
-      {started && authorization.at && <> {dateTime(authorization.at)}.</>}
-      {authorization.until && <> That approval covers this request&apos;s plans until {dateTime(authorization.until)}.</>}
+      {started && authorization.at && <> {formatChatDateTime(authorization.at, timeZone)}.</>}
+      {authorization.until && <> That approval covers this request&apos;s plans until {formatChatDateTime(authorization.until, timeZone)}.</>}
       {started && status !== "cancelled" && <> Replies: <span className="text-text-strong-950">{autopilot ? "Automatic" : "Review"}</span>.</>}
     </p>
   );
@@ -683,6 +691,7 @@ function AuthorizationLine({ authorization, autopilot, status }: { authorization
  * No recorded gate does not prove a worker is running.
  */
 function SendingStatus({ runId }: { runId: string }) {
+  const timeZone = useContext(DisplayTimeZone);
   const [state, setState] = useState<{ at: string; displayTimeZone?: string; senders: SenderStatus[]; notCovered: string[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -711,7 +720,7 @@ function SendingStatus({ runId }: { runId: string }) {
                 <p className="text-text-strong-950">{CHANNEL_LABEL[sender.channel] ?? sender.channel} · {sender.account}{sender.queued !== null && <span className="text-text-soft-400"> · {sender.queued} waiting</span>}</p>
                 <p className="text-text-sub-600">
                   {sender.gates.length ? sender.gates.join("; ") : sender.queued === 0 ? "No leads waiting" : "No recorded gate is holding it"}.
-                  {sender.nextAt && <> Next send allowed {state.displayTimeZone ? displayTime(new Date(sender.nextAt), new Date(state.at), state.displayTimeZone) : dateTime(sender.nextAt)}.</>}
+                  {sender.nextAt && <> Next send allowed {state.displayTimeZone ? displayTime(new Date(sender.nextAt), new Date(state.at), state.displayTimeZone) : formatChatDateTime(sender.nextAt, timeZone)}.</>}
                   {" "}{sender.timezone ? `Sending hours in ${sender.timezone}.` : "No sending hours set: any time."}
                   {sender.note && <> {sender.note}</>}
                 </p>
@@ -721,7 +730,7 @@ function SendingStatus({ runId }: { runId: string }) {
             ))}
           </ul>
           {state.notCovered.length > 0 && <p className="text-text-soft-400">Not covered here: {state.notCovered.map((channel) => CHANNEL_LABEL[channel] ?? channel).join(", ")}.</p>}
-          <p className="text-text-soft-400">Checked {timeOf(state.at)} from the recorded settings and queues.{state.displayTimeZone && <> Times are in {state.displayTimeZone}, the organization&apos;s time zone; sending hours use each sender&apos;s own zone, and where leads are does not change either.</>} It does not prove the sender is running; a send is confirmed only when the provider accepts it. Next times are estimates; every gate is checked again at send time.
+          <p className="text-text-soft-400">Checked {formatChatTime(state.at, timeZone)} from the recorded settings and queues.{state.displayTimeZone && <> Times are in {state.displayTimeZone}, the organization&apos;s time zone; sending hours use each sender&apos;s own zone, and where leads are does not change either.</>} It does not prove the sender is running; a send is confirmed only when the provider accepts it. Next times are estimates; every gate is checked again at send time.
             {" "}<button type="button" className="underline underline-offset-2" onClick={() => void load()}>Check again</button></p>
         </div>
       )}
@@ -878,10 +887,9 @@ function LeadsList({ leads, running }: { leads: RunLead[]; running: boolean }) {
   );
 }
 
-const timeOf = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-
 /** The latest replies to a run and what became of each, so "why no answer?" is answered on the card. */
 function RepliesList({ replies, onChanged }: { replies: RunReply[]; onChanged: () => void }) {
+  const timeZone = useContext(DisplayTimeZone);
   const tone = { done: "text-success-base", waiting: "text-text-sub-600", you: "text-warning-base", failed: "text-error-base" } as const;
   const [busy, setBusy] = useState<string | null>(null);
   async function release(conversationId: string) {
@@ -901,9 +909,9 @@ function RepliesList({ replies, onChanged }: { replies: RunReply[]; onChanged: (
       <ul className="mt-1.5 space-y-2">
         {replies.map((reply) => (
           <li key={reply.id} className="text-paragraph-xs">
-            <p className="text-text-sub-600"><span className="text-label-xs text-text-strong-950">{reply.who}</span> · {CHANNEL_LABEL[reply.channel] ?? reply.channel} · {timeOf(reply.receivedAt)}</p>
+            <p className="text-text-sub-600"><span className="text-label-xs text-text-strong-950">{reply.who}</span> · {CHANNEL_LABEL[reply.channel] ?? reply.channel} · {formatChatTime(reply.receivedAt, timeZone)}</p>
             {reply.preview && <p className="mt-0.5 line-clamp-2 border-l-2 border-stroke-sub-300 pl-2 text-text-sub-600">{reply.preview}</p>}
-            <p className={cn("mt-0.5", tone[reply.state.tone])}>{reply.state.text}{reply.state.at ? ` ${timeOf(reply.state.at)}` : ""}.</p>
+            <p className={cn("mt-0.5", tone[reply.state.tone])}>{reply.state.text}{reply.state.at ? ` ${formatChatTime(reply.state.at, timeZone)}` : ""}.</p>
             {reply.state.release && (
               <Button.Root variant="primary" mode="filled" size="xsmall" className="mt-1.5" disabled={busy === reply.conversationId} onClick={() => void release(reply.conversationId)}>
                 Let the assistant reply
@@ -1252,6 +1260,8 @@ function groupTurns(messages: Message[]): { owner: Message | null; items: Messag
 export default function AssistantClient({ initial }: { initial: AssistantStatePayload }) {
   const [state, setState] = useState(initial);
   const [setup, setSetup] = useState<Setup | null>(initial.setup);
+  // Every time shown is written in the organization's zone, on the server and in the browser alike.
+  const timeZone = state.timeZone ?? "UTC";
   const [text, setText] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [sending, setSending] = useState(false);
@@ -1423,6 +1433,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
   });
 
   return (
+    <DisplayTimeZone.Provider value={timeZone}>
     <div
       className="relative flex h-full min-h-0 flex-col bg-bg-white-0"
       onDragOver={(event) => { if (event.dataTransfer.types.includes("Files")) { event.preventDefault(); setDragging(true); } }}
@@ -1469,7 +1480,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
               <div key={turn.owner?.id ?? `turn-${index}`} className="flex flex-col gap-3">
                 {turn.owner && (
                   <div className="flex flex-col items-end gap-2">
-                    <span className="px-1 text-[11px] text-text-soft-400" suppressHydrationWarning>You · {new Date(turn.owner.createdAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
+                    <span className="px-1 text-[11px] text-text-soft-400">You · {formatChatTime(turn.owner.createdAt, timeZone)}</span>
                     {turn.owner.content && <div className="max-w-[min(36rem,90%)] whitespace-pre-wrap rounded-2xl rounded-br-md bg-bg-weak-50 px-4 py-3 text-paragraph-sm leading-6 text-text-strong-950 [overflow-wrap:anywhere]">{turn.owner.content}</div>}
                     {turn.owner.attachments.map((file) => (
                       <span key={file.name} className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-paragraph-xs text-text-sub-600 ring-1 ring-inset ring-stroke-soft-200">
@@ -1584,5 +1595,6 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
         </div>
       )}
     </div>
+    </DisplayTimeZone.Provider>
   );
 }

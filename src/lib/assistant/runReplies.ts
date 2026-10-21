@@ -43,7 +43,7 @@ function wrongNumberState(record: ReplyRecord): ReplyState {
   const head = "Wrong number — outreach stopped";
   const detail = (record.agentReason ?? "").split("; ").slice(1).join("; ");
   if (record.agentStatus === "replied" || record.draftStatus === "sent") return { tone: "done", text: `${head}; apology sent` };
-  if (record.agentStatus === "drafted") return { tone: "you", text: `${head}; the apology waits for you in Action required` };
+  if (record.agentStatus === "drafted") return { tone: "you", text: `${head}; the apology waits for you in the Inbox (Needs you)` };
   if (/uncertain/.test(detail)) return { tone: "you", text: `${head}; ${detail}` };
   if (/could not be sent/.test(detail)) return { tone: "failed", text: `${head}; ${detail}` };
   return { tone: "done", text: detail ? `${head}; ${detail}` : head };
@@ -58,7 +58,7 @@ function agentState(record: ReplyRecord): ReplyState | null {
     case "replied": return { tone: "done", text: `Answered automatically${seconds(record.agentMs)}${reason.includes("the owner was told") ? "; you were told in Needs you" : ""}` };
     case "drafted":
       if (record.draftStatus === "sent") return { tone: "done", text: "Answered" };
-      return { tone: "you", text: reason.includes("Review mode") ? "Review mode: the answer waits for you in Action required" : `Answer written, not sent: ${reason}` };
+      return { tone: "you", text: reason.includes("Review mode") ? "Review mode: the answer waits for you in the Inbox (Needs you)" : `Answer written, not sent: ${reason}` };
     case "no_reply": return { tone: "done", text: `No answer needed${reason ? `: ${reason}` : ""}` };
     case "told_owner": return { tone: "you", text: `Waiting for you in Needs you${reason ? `: ${reason}` : ""}` };
     case "failed": return { tone: "failed", text: `The automatic answer failed${reason ? `: ${reason}` : ""}` };
@@ -93,10 +93,10 @@ export function replyState(record: ReplyRecord, automatic: boolean, now: Date = 
   if (record.draftStatus === "generating" || (!record.draftStatus && now.getTime() - new Date(record.receivedAt).getTime() < READING_MS)) {
     return { tone: "waiting", text: "Reading the reply and writing an answer…" };
   }
-  if (record.draftStatus === "failed") return { tone: "failed", text: "The answer could not be written; see Action required" };
+  if (record.draftStatus === "failed") return { tone: "failed", text: "The answer could not be written; see the Inbox (Needs you)" };
   if (record.draftStatus === "awaiting_review") {
-    return { tone: "you", text: automatic ? "Waiting for you in Action required" : "Review mode: the answer waits for you in Action required" };
+    return { tone: "you", text: automatic ? "Waiting for you in the Inbox (Needs you)" : "Review mode: the answer waits for you in the Inbox (Needs you)" };
   }
   if (record.draftStatus === "discarded" || record.draftStatus === "stale") return { tone: "done", text: "No answer needed (draft set aside)" };
-  return { tone: "you", text: "No answer was written; see Action required" };
+  return { tone: "you", text: "No answer was written; see the Inbox (Needs you)" };
 }

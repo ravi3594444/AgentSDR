@@ -14,7 +14,9 @@
  * scope (results(all_time), reportRun, the campaign's own leads) and still
  * do after Stop; that the next step follows the plan's state — its sender,
  * then a pause, then an open decision (the Inbox first); that the chat lists
- * its request; and that a second organization gets nothing for any key.
+ * its request; that with every child finished the request reads researching
+ * while its objective runs and, paused, says to resume it (never Done); and
+ * that a second organization gets nothing for any key.
  * Nothing is sent and no provider is called.
  *
  *   bun run --conditions=react-server scripts/e2e/request-workspace.ts
@@ -43,6 +45,7 @@ const { ensureCrmDefaults } = await import("@/lib/crm/defaults");
 const { listRequests, requestSummary, threadRequests } = await import("@/lib/assistant/requests.server");
 const { requestScope, runScope, results } = await import("@/lib/assistant/results.server");
 const { reportRun, setRunPaused, stopRun } = await import("@/lib/assistant/outreach.server");
+const { setObjectiveState } = await import("@/lib/assistant/objective.server");
 
 let failures = 0;
 function check(label: string, ok: boolean, detail = "") {
@@ -68,9 +71,11 @@ const seeded = await runInOrganization(a!.id, async () => {
   // 1. A chat request: objective, one search, one WhatsApp plan.
   const [thread] = await db.insert(assistantThreads).values({ organizationId: org, title: "Chicago dentists", createdBy: owner!.id }).returning();
   const [request] = await db.insert(assistantMessages).values({ organizationId: org, threadId: thread!.id, role: "user", content: "Find 20 dentists in Chicago and message them on WhatsApp" }).returning();
-  await db.insert(assistantObjectives).values({ organizationId: org, threadId: thread!.id, requestMessageId: request!.id, leadTarget: 20, timeLimitMinutes: 240, deadlineAt: new Date(Date.now() + 4 * 3_600_000), spendCapUsd: 5 });
+  const [objective] = await db.insert(assistantObjectives).values({ organizationId: org, threadId: thread!.id, requestMessageId: request!.id, leadTarget: 20, timeLimitMinutes: 240, deadlineAt: new Date(Date.now() + 4 * 3_600_000), spendCapUsd: 5, progress: { waiting: "the assistant is choosing the next source" } }).returning();
   const searchAudience = await createAudience({ name: `Chicago dentists ${stamp}`, source: "discovery" });
   const [search] = await db.insert(assistantJobs).values({ organizationId: org, threadId: thread!.id, kind: "discovery", status: "succeeded", stage: "done", audienceId: searchAudience, payload: { requestMessageId: request!.id, phrase: "dentists in Chicago" }, result: { found: 3, eligible: 3 }, finishedAt: minutesAgo(50) }).returning();
+  // The objective's driver job, as ensureObjective creates it: no request id of its own, the objective's id in its payload.
+  const [driver] = await db.insert(assistantJobs).values({ organizationId: org, threadId: thread!.id, kind: "objective", status: "queued", stage: "watching", payload: { objectiveId: objective!.id }, progress: { stage: "watching", waiting: { kind: "objective", reason: "the assistant is choosing the next source" } }, runAfter: new Date(Date.now() + 15_000) }).returning();
   const [w1] = await db.insert(whatsappCampaigns).values({ organizationId: org, name: "Chicago dentists, WhatsApp", status: "active", steps: [step("Hi {{firstName}}", 0), step("Following up", 48)] }).returning();
   const [plan] = await db.insert(outreachRuns).values({
     organizationId: org, threadId: thread!.id, audienceId: searchAudience, name: "Chicago dentists, WhatsApp", status: "running", channels: ["whatsapp"],
@@ -127,7 +132,7 @@ const seeded = await runInOrganization(a!.id, async () => {
   const r1 = await reply(p1.id, 35);
   await reply(p6.id, 15);
   await db.insert(crmClassifications).values({ crmRecordId: r1.record.id, messageId: r1.message.id, expectedContextVersion: 0, appliedCategoryKey: "interested", confidence: "0.9", status: "accepted" });
-  return { thread: thread!, request: request!, search: search!, plan: plan!, w1: w1!, oldRun: oldRun!, oldSearch: oldSearch!, e0: e0!, w2: w2! };
+  return { thread: thread!, request: request!, objective: objective!, driver: driver!, search: search!, plan: plan!, w1: w1!, oldRun: oldRun!, oldSearch: oldSearch!, e0: e0!, w2: w2! };
 });
 
 const requestKey = `r:${seeded.request.id}`;
@@ -181,8 +186,42 @@ await runInOrganization(a!.id, async () => {
   check("after Stop the chat request's figures hold", JSON.stringify(numbersOf(afterStop)) === JSON.stringify(numbersOf(chat)), JSON.stringify(numbersOf(afterStop)));
   check("…and the older plan's too", JSON.stringify(numbersOf(await requestSummary(runKey))) === JSON.stringify(numbersOf(old)));
 
+  // Pilot L03: the plan is stopped and the search done, but the objective still runs (the gap between one search ending and the next starting).
+  const between = await requestSummary(requestKey);
+  check("with every child finished and the objective active, the request is open and researching, not Done",
+    between?.open === true && between.stateLabel === "Researching (the assistant is choosing the next source)" && between.nextAction.kind !== "done" && !between.children.searches.some((item) => item.id === seeded.driver.id),
+    JSON.stringify({ open: between?.open, stateLabel: between?.stateLabel, next: between?.nextAction.kind }));
   const chatRequests = await threadRequests(seeded.thread.id);
-  check("the chat lists the request it started", chatRequests[0]?.key === requestKey && chatRequests[0].title.startsWith("Find 20 dentists"), JSON.stringify(chatRequests));
+  check("the chat lists the request it started, open, and never its driver job as a search of its own",
+    chatRequests[0]?.key === requestKey && chatRequests[0].open === true && chatRequests[0].title.startsWith("Find 20 dentists") && !chatRequests.some((row) => row.key === `job:${seeded.driver.id}`),
+    JSON.stringify(chatRequests));
+  const listedBetween = await listRequests();
+  const rowBetween = listedBetween.requests.find((row) => row.key === requestKey);
+  check("…and the Requests list shows it open and researching, with no row for the driver",
+    rowBetween?.open === true && rowBetween.stateLabel.startsWith("Researching") && rowBetween.searches === 1 && !listedBetween.requests.some((row) => row.key === `job:${seeded.driver.id}`),
+    JSON.stringify({ open: rowBetween?.open, stateLabel: rowBetween?.stateLabel, searches: rowBetween?.searches, keys: listedBetween.requests.map((row) => row.key) }));
+  // Review of L03: paused with every child finished and nothing waiting in the Inbox, it reads paused everywhere and its next step is to resume it, never Done.
+  await db.update(ownerDecisions).set({ status: "resolved" }).where(eq(ownerDecisions.runId, seeded.plan.id));
+  await setObjectiveState(seeded.objective.id, "pause", { name: null });
+  const pausedResearch = await requestSummary(requestKey);
+  check("paused research: open, \"Research paused\", and the next step is to resume it in the chat, not Done",
+    pausedResearch?.open === true && pausedResearch.stateLabel === "Research paused" && pausedResearch.nextAction.kind === "paused" && /resume/i.test(pausedResearch.nextAction.label) && pausedResearch.nextAction.href === `/assistant?thread=${seeded.thread.id}`,
+    JSON.stringify({ open: pausedResearch?.open, stateLabel: pausedResearch?.stateLabel, next: pausedResearch?.nextAction }));
+  check("…and it shows no reason it waited for before the pause", pausedResearch?.blocker === null && pausedResearch.objective?.waiting === null, JSON.stringify({ blocker: pausedResearch?.blocker, waiting: pausedResearch?.objective?.waiting }));
+  const pausedRow = (await listRequests()).requests.find((row) => row.key === requestKey);
+  check("…and the Requests list and the chat agree: open, Research paused",
+    pausedRow?.open === true && pausedRow.stateLabel === "Research paused" && (await threadRequests(seeded.thread.id))[0]?.open === true,
+    JSON.stringify({ open: pausedRow?.open, stateLabel: pausedRow?.stateLabel }));
+  await setObjectiveState(seeded.objective.id, "resume", { name: null });
+  const resumedResearch = await requestSummary(requestKey);
+  check("resumed: researching again", resumedResearch?.open === true && resumedResearch.stateLabel.startsWith("Researching") && resumedResearch.nextAction.kind === "research",
+    JSON.stringify({ stateLabel: resumedResearch?.stateLabel, next: resumedResearch?.nextAction.kind }));
+  await setObjectiveState(seeded.objective.id, "cancel", { name: null });
+  const stoppedRequest = await requestSummary(requestKey);
+  const stoppedRow = (await listRequests()).requests.find((row) => row.key === requestKey);
+  check("after Stop it reads done everywhere",
+    stoppedRequest?.open === false && !/^Researching|^Working/.test(stoppedRequest.stateLabel) && stoppedRow?.open === false && (await threadRequests(seeded.thread.id))[0]?.open === false,
+    JSON.stringify({ open: stoppedRequest?.open, stateLabel: stoppedRequest?.stateLabel, row: stoppedRow?.open }));
   check("keys that are not keys are refused", (await requestSummary("r:not-a-uuid")) === null && (await requestSummary(`run:${crypto.randomUUID()}`)) === null);
 });
 
@@ -193,6 +232,8 @@ await runInOrganization(b!.id, async () => {
   check("…lists none of its work", !listed.requests.some((row) => [requestKey, runKey].includes(row.key)) && !listed.manualCampaigns.some((row) => row.key === campaignKey));
   check("…and nothing for its chat", (await threadRequests(seeded.thread.id)).length === 0);
 });
+// No worker runs here, and Stop woke the driver: it is finished by hand, as it would end, so no other suite's worker claims it.
+await db.update(assistantJobs).set({ status: "succeeded", stage: "done", finishedAt: new Date() }).where(eq(assistantJobs.id, seeded.driver.id));
 const [runAfter] = await db.select().from(outreachRuns).where(eq(outreachRuns.id, seeded.plan.id));
 check("reading changed nothing the checks did not do themselves", runAfter?.status === "stopped");
 

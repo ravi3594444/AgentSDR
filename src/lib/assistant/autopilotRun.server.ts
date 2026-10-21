@@ -208,7 +208,7 @@ async function reportInterest(state: State): Promise<void> {
     reason: `${state.leadName} is interested (${what}).`,
     decision: state.membership.automatic
       ? "The assistant answers if your information covers their question; otherwise it asks you here."
-      : "This run is in Review mode: their reply waits for you in Action required.",
+      : "This run is in Review mode: their reply waits for you in the Inbox (Needs you).",
     leadMessage: state.leadMessage,
     personId: state.personId,
     crmRecordId: state.recordId,
@@ -367,7 +367,7 @@ export async function runAutopilotForDraft(draftId: string, deps: AutopilotDepen
       : await modelReplyCheck({ ...checkInput, runId: state.membership.runId });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return handOff(state, { kind: "uncertain", reason: `The reply to ${state.leadName} could not be checked (${message.slice(0, 200)}).`, decision: "Read it in Action required and send it yourself if it is right.", holdReason: "the reply could not be checked" }, deps);
+    return handOff(state, { kind: "uncertain", reason: `The reply to ${state.leadName} could not be checked (${message.slice(0, 200)}).`, decision: "Read it in the Inbox (Needs you) and send it yourself if it is right.", holdReason: "the reply could not be checked" }, deps);
   }
   // "Ok, thanks" needs no answer only when it follows our message directly.
   const [previous] = await db.select({ direction: crmConversationMessages.direction }).from(crmConversationMessages)

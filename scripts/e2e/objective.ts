@@ -48,7 +48,7 @@ process.env.DISCOVERY_DNS_CHECK = "off";
 
 // ------------------------------------------------------------ the model, scripted
 const root = join(import.meta.dir, "..", "..");
-type Input = { userPrompt: string; schemaName?: string; accept: (text: string) => void };
+type Input = { userPrompt: string; systemPrompt?: string; schemaName?: string; accept: (text: string) => void };
 type Script = (input: Input) => string | Promise<string>;
 let replies: Script[] = [];
 const prompts: string[] = [];
@@ -56,11 +56,17 @@ const prompts: string[] = [];
 type Verdict = { requestFit: "fits" | "unconfirmed" | "does_not_fit"; reason: string; noWebsite?: boolean };
 let judge: (facts: Record<string, string>) => Verdict = () => ({ requestFit: "fits", reason: "What the owner asked for." });
 const judgedLeads: Record<string, string>[] = [];
+/** The request each sorting call judged against, as the model read it (pilot L02: the subject, not how the research runs). */
+const judgedAgainst: string[] = [];
+/** The rules each sorting call was given (its system prompt). */
+const sortingRules: string[] = [];
 mock.module(join(root, "src/lib/ai/server/structuredCompletion.ts"), () => ({
   completeStructured: async (input: Input) => {
     if (input.schemaName === "lead_sorting") {
       const leads = [...input.userPrompt.matchAll(/^(\d+)(?: \([^)]*\))?: (\{.*\})$/gm)].map((match) => ({ index: Number(match[1]), facts: JSON.parse(match[2]!) as Record<string, string> }));
       judgedLeads.push(...leads.map((lead) => lead.facts));
+      judgedAgainst.push(input.userPrompt.match(/^THE OWNER'S REQUEST: (.*)$/m)?.[1] ?? "");
+      sortingRules.push(input.systemPrompt ?? "");
       const text = JSON.stringify({ leads: leads.map(({ index, facts }) => {
         const verdict = judge(facts);
         return { index, group: "Leads", approach: verdict.requestFit === "does_not_fit" ? "skip" : "standard", reason: verdict.reason, requestFit: verdict.requestFit, noWebsiteRequired: verdict.noWebsite === true };
@@ -181,10 +187,12 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // prepare_outreach writes plans with the model; here a stand-in records each call (the follow-up path is the real one).
 const planCalls: string[] = [];
-TOOLS.prepare_outreach!.run = async (args) => {
+const realPrepareOutreach = TOOLS.prepare_outreach!.run;
+const standInPrepareOutreach: typeof realPrepareOutreach = async (args) => {
   planCalls.push(String(args.audienceId));
   return { ok: true, summary: "The outreach plan is ready (stand-in).", data: { runId: crypto.randomUUID() } };
 };
+TOOLS.prepare_outreach!.run = standInPrepareOutreach;
 
 // ------------------------------------------------------------ organizations
 async function organization(name: string) {
@@ -683,6 +691,92 @@ await runInOrganization(a.org.id, async () => {
     scraper.perPhrase = 6;
     scraper.website = null;
     judge = () => ({ requestFit: "fits", reason: "What the owner asked for." });
+  }
+
+  // ---------------------------------------------------------- 6c. a research-only request never leads to outreach (pilot L01)
+  {
+    const thread = await createThread(a.owner.id);
+    scraper.perPhrase = 2;
+    // Before the fix "Spend $0" read as "send" (outreachRequested was true for these words at 652c84d), so this request is the regression check.
+    const BUDGET_WORDS = "Research only. Spend $0. Do not contact anyone.";
+    const REQUEST = `${BUDGET_WORDS} Find 3 dental clinics in Pune, India, and finish within 5 minutes.`;
+    // Every search is seen with the context its tool got: a research-only request hands no outreach request to any turn, the continuation's included.
+    const seen: { what: unknown; outreachRequest: string | null | undefined; contactAfter: unknown }[] = [];
+    const realFind = TOOLS.find_leads!.run;
+    TOOLS.find_leads!.run = async (args, context) => {
+      seen.push({ what: args.what, outreachRequest: context.outreachRequest, contactAfter: args.contactAfter });
+      return realFind(args, context);
+    };
+    const plansBefore = planCalls.length;
+    const requestId = await ask(thread.id, REQUEST, turn("", [{ tool: "find_leads", args: { what: "dental clinics", where: "Pune, India", maxResults: 3 } }]));
+    const objective = await objectiveOf(requestId);
+    check("the research-only request: a target of 3, its time and $0 named, and no outreach request in the turn",
+      objective.leadTarget === 3 && objective.spendCapUsd === 0 && objective.controls.named?.time === true && seen.length === 1 && seen[0]!.outreachRequest === null && seen[0]!.contactAfter === undefined,
+      JSON.stringify({ target: objective.leadTarget, minutes: objective.timeLimitMinutes, spend: objective.spendCapUsd, named: objective.controls.named, seen }));
+    const context = { threadId: thread.id, userId: a.owner.id, ownerText: REQUEST, requestMessageId: requestId };
+    const refusals = await Promise.all([REQUEST, BUDGET_WORDS].map((ownerText) => runTool("find_leads", { what: "dental clinics", where: "Pune, India", contactAfter: true }, { ...context, ownerText })));
+    check("a search that would contact what it finds is refused under “Research only. Spend $0. Do not contact anyone.”: the owner did not ask",
+      refusals.every((refused) => !refused.ok && refused.refused === true && /not asked to contact/.test(refused.summary)), refusals.map((refused) => refused.summary).join(" | "));
+    const judgedBefore = judgedAgainst.length;
+    await finishSearches(requestId);
+    // Pilot L02: the leads are judged against what to find, not against "$0", "5 minutes" or "do not contact anyone".
+    check("its leads are judged against the request's subject only", judgedAgainst.length > judgedBefore && judgedAgainst.slice(judgedBefore).every((request) => request === "Find 3 dental clinics in Pune, India."), JSON.stringify(judgedAgainst.slice(judgedBefore)));
+    // …by a sorter told so: leadSortingSystemPrompt (leadFit.ts) is what sortLeads sends.
+    check("…under the sorter's rules: how the research runs is no requirement, and the request outranks the saved target customers",
+      sortingRules.length > judgedBefore && sortingRules.slice(judgedBefore).every((rules) => /Instructions about how the research runs[^\n]*are NOT requirements/.test(rules) && /replaces the target customers and locations saved/.test(rules)),
+      sortingRules.at(-1)?.slice(0, 300) ?? "no sorting call");
+    // Short of the target (2 of 3) the driver continues the request, now with the chat in Autonomous mode.
+    await db.update(schema.assistantThreads).set({ autonomous: true, autonomousBy: a.owner.id, autonomousAt: new Date() }).where(eq(schema.assistantThreads.id, thread.id));
+    replies = turn("Trying dentists too.", [{ tool: "find_leads", args: { what: "dentists", where: "Pune, India", maxResults: 3 } }]);
+    await step((await driverOf(objective.id)).id);
+    const continued = await continuationEnded(requestId, 1);
+    check("the continuation carries outreach: false, so its search got no outreach request and asked for no contact-after",
+      continued && seen.length === 4 && seen[3]!.what === "dentists" && seen[3]!.outreachRequest === null && seen[3]!.contactAfter === undefined, JSON.stringify({ continued, seen }));
+    const audienceId = (await children(requestId))[0]!.audienceId!;
+    // The real tool this once: its own check on the owner's words, not the stand-in.
+    TOOLS.prepare_outreach!.run = realPrepareOutreach;
+    const plan = await runTool("prepare_outreach", { audienceId }, { ...context, autonomous: true });
+    TOOLS.prepare_outreach!.run = standInPrepareOutreach;
+    check("…and a plan for its leads is refused even in Autonomous mode", !plan.ok && plan.refused === true && /not asked to contact/.test(plan.summary), plan.summary);
+    await finishSearches(requestId);
+    await step((await driverOf(objective.id)).id);
+    const runs = await db.select({ id: schema.outreachRuns.id }).from(schema.outreachRuns).where(and(eq(schema.outreachRuns.organizationId, a.org.id), eq(schema.outreachRuns.threadId, thread.id)));
+    const starts = await db.select({ id: schema.assistantJobs.id }).from(schema.assistantJobs).where(and(eq(schema.assistantJobs.organizationId, a.org.id), eq(schema.assistantJobs.threadId, thread.id), eq(schema.assistantJobs.kind, "outreach_start")));
+    const searches = await children(requestId);
+    check("nothing was prepared, started or enqueued to send: no plan, no run, no launch, no search marked contact-after",
+      planCalls.length === plansBefore && runs.length === 0 && starts.length === 0 && searches.length === 2 && searches.every((job) => (job.payload as { contactAfter?: unknown }).contactAfter == null),
+      JSON.stringify({ plans: planCalls.length - plansBefore, runs: runs.length, starts: starts.length, searches: searches.map((job) => (job.payload as { contactAfter?: unknown }).contactAfter ?? null) }));
+    const ended = await objectiveOf(requestId);
+    check("…while the research itself reached its target", ended.status === "stopped" && ended.stopReason === "target_reached", `${ended.status} ${ended.stopReason}`);
+    TOOLS.find_leads!.run = realFind;
+    await db.update(schema.assistantThreads).set({ autonomous: false }).where(eq(schema.assistantThreads.id, thread.id));
+    if (ended.status !== "stopped") await objectives.setObjectiveState(objective.id, "cancel", { name: null });
+    scraper.perPhrase = 6;
+  }
+
+  // ---------------------------------------------------------- 6d. a later research-only message cancels an earlier request (pilot L01)
+  {
+    const thread = await createThread(a.owner.id);
+    scraper.perPhrase = 2;
+    const seen: (string | null | undefined)[] = [];
+    const realFind = TOOLS.find_leads!.run;
+    TOOLS.find_leads!.run = async (args, context) => {
+      seen.push(context.outreachRequest);
+      return realFind(args, context);
+    };
+    await ask(thread.id, "Find dentists in Pune and email them", [reply("Which area of Pune?")]);
+    const requestId = await ask(thread.id, "Kothrud. Actually research only, do not contact anyone.", turn("", [{ tool: "find_leads", args: { what: "dentists", where: "Kothrud, Pune", maxResults: 2 } }]));
+    TOOLS.find_leads!.run = realFind;
+    const searches = await children(requestId);
+    check("the earlier “email them” no longer stands: the search after “research only, do not contact anyone” gets no outreach request, and serves the new message",
+      seen.length === 1 && seen[0] === null && searches.length === 1 && (searches[0]!.payload as { contactAfter?: unknown }).contactAfter == null, JSON.stringify({ seen, searches: searches.length }));
+    // Whichever request the search was filed under, its research is cancelled and run out.
+    for (const objective of await objectives.threadObjectives(thread.id)) {
+      await objectives.setObjectiveState(objective.id, "cancel", { name: null });
+      await finishSearches(objective.requestMessageId);
+      await step((await driverOf(objective.id)).id);
+    }
+    scraper.perPhrase = 6;
   }
 
   // ---------------------------------------------------------- nothing left open

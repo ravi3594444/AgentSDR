@@ -5,7 +5,7 @@ import { db } from "@/lib/db";
 import { companies, people } from "@/lib/leads/schema";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { effectiveBusinessProfile } from "./businessContext.server";
-import { applyRequestRules, EMPTY_FUNNEL, websiteStatusFact, type LeadFunnel } from "./leadFit";
+import { applyRequestRules, EMPTY_FUNNEL, requestSubject, websiteStatusFact, type LeadFunnel } from "./leadFit";
 import type { LeadApproach } from "./messages";
 import { displayBusinessName } from "./pitch";
 import { leadAudienceMembers, type LeadFit } from "./schema";
@@ -60,13 +60,23 @@ export function leadFacts(memberFacts: Record<string, string>, row: PersonRow | 
 
 export type JudgedLead = { fit: LeadFit; reason: string; group: string; approach: LeadApproach };
 
-/** Judges leads against the request, a batch per model call, then applies the code's own rules (applyRequestRules). Throws when the model fails. */
+/**
+ * Judges leads against the request, a batch per model call, then applies
+ * the code's own rules (applyRequestRules). The model judges against the
+ * request's subject (requestSubject: what to find, not how the research
+ * runs, so "do not contact anyone" or "$0" is never a requirement a lead
+ * fails); the code's rules read the whole request. With a request, whether a
+ * lead matches comes from requestFit, and a "skip" only keeps it out of the
+ * messages; a no_match is never messaged; a lead that names no business or
+ * person is at most unconfirmed (leadFit.ts). Throws when the model fails.
+ */
 export async function judgeLeads(input: { facts: Record<string, string>[]; request: string | null; context: string; cost: WriterCost; knownGroups?: string[] }): Promise<JudgedLead[]> {
   const known = [...(input.knownGroups ?? [])];
   const out: JudgedLead[] = [];
+  const subject = input.request === null ? null : requestSubject(input.request);
   for (let start = 0; start < input.facts.length; start += JUDGE_BATCH) {
     const batch = input.facts.slice(start, start + JUDGE_BATCH).map((facts, offset) => ({ index: start + offset, facts }));
-    const sorted = await sortLeads({ context: input.context, request: input.request, leads: batch, knownGroups: known, cost: input.cost });
+    const sorted = await sortLeads({ context: input.context, request: subject, leads: batch, knownGroups: known, cost: input.cost });
     for (const { index, facts } of batch) {
       const sort = sorted.get(index)!;
       const { fit, reason } = applyRequestRules(input.request ?? "", facts, sort);

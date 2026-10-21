@@ -14,6 +14,7 @@ import { runReplies } from "./runReplies.server";
 import { listMessages, listThreads, resolveThread, threadBusy } from "./threads.server";
 import { setupSnapshot } from "./tools.server";
 import { autonomyCaps } from "./autonomy.server";
+import { organizationTimeZone } from "@/lib/reporting/metrics.server";
 
 /**
  * Route plumbing for /api/assistant/*: the signed-in member and their
@@ -43,10 +44,12 @@ export function canManageAutopilot(ctx: OrgContext): boolean {
 /** Everything the chat page shows for one thread; `withSetup` adds the (slower) connection status. */
 export async function assistantState(threadId: string | null, ctx: OrgContext, withSetup: boolean) {
   const thread = await resolveThread(threadId, ctx.userId);
-  const [messages, threads, busy, jobs] = await Promise.all([
+  const [messages, threads, busy, timeZone, jobs] = await Promise.all([
     listMessages(thread.id),
     listThreads(20),
     threadBusy(thread.id),
+    // The one zone every time in the chat is written in, on the server and in the browser alike (chatTime.ts).
+    organizationTimeZone(),
     db.select({
       id: assistantJobs.id,
       kind: assistantJobs.kind,
@@ -106,6 +109,7 @@ export async function assistantState(threadId: string | null, ctx: OrgContext, w
     viewer: { firstName: ctx.userName?.trim().split(/\s+/)[0] || null },
     threads,
     busy,
+    timeZone,
     messages: messages.map((message) => ({
       id: message.id,
       role: message.role,

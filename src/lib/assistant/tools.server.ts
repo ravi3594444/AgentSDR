@@ -821,7 +821,7 @@ export const TOOLS: Record<string, Tool> = {
 
   prepare_inquiry_replies: {
     available: (features) => features.instagram && features.inquiry_intake,
-    description: "Propose answering new Instagram inquiries: from when the owner presses Start, people whose first message arrives on an Instagram account that treats new messages as inquiries get replies drafted from the owner's saved information — sent automatically in Automatic mode, or waiting in Action required in Review mode — with every existing check, limit and handoff. It never answers imported history, earlier chats or anyone else, and sends nothing first. Only when the owner asked for their inquiries or Instagram messages to be answered.",
+    description: "Propose answering new Instagram inquiries: from when the owner presses Start, people whose first message arrives on an Instagram account that treats new messages as inquiries get replies drafted from the owner's saved information — sent automatically in Automatic mode, or waiting for the owner in the Inbox (Needs you) in Review mode — with every existing check, limit and handoff. It never answers imported history, earlier chats or anyone else, and sends nothing first. Only when the owner asked for their inquiries or Instagram messages to be answered.",
     arguments: "autopilot (optional true/false: propose Automatic replies)",
     run: async (args, context) => {
       if (!inquiryRepliesRequested(context.ownerText, context.lastAssistantText)) {
@@ -1297,7 +1297,7 @@ export const TOOLS: Record<string, Tool> = {
   },
 
   switch_to_review: {
-    description: "Stop answering replies automatically for a run (or every run): replies then wait for the owner in Action required. Switching a run to Automatic is the owner's button on the run card, not a tool.",
+    description: "Stop answering replies automatically for a run (or every run): replies then wait for the owner in the Inbox (Needs you). Switching a run to Automatic is the owner's button on the run card, not a tool.",
     arguments: "runId (optional; every running or paused run when left out)",
     run: async (args) => {
       const runId = uuid(args, "runId", false);

@@ -40,7 +40,7 @@ export async function POST(request: NextRequest, { params }: Ctx) {
               role: "event",
               content: `${ctx.userName || "The owner"} started answering new Instagram inquiries (“${run.name}”) in ${autopilot ? "Automatic" : "Review"} mode. Only people whose first message arrives from now on, on the accounts that treat new messages as inquiries, are covered; imported history and earlier chats are never answered by it. ${autopilot
                 ? `Ordinary questions are answered from your saved information once the answer is written and checked, at most ${AUTOPILOT_LIMITS.perConversation} per conversation and ${AUTOPILOT_LIMITS.perDay} in 24 hours; anything else comes to you as a decision.`
-                : "Every reply waits for you in Action required."}`,
+                : "Each answer to a reply is drafted and waits for you in the Inbox (Needs you)."}`,
             });
           }
           return Response.json({ ok: true, jobId: null });
@@ -53,7 +53,7 @@ export async function POST(request: NextRequest, { params }: Ctx) {
             role: "event",
             content: `${ctx.userName || "The owner"} approved the outreach plan “${run.name}” in ${autopilot ? "Automatic" : "Review"} mode${applyToRequest ? ", for the rest of this request too: its other plans start on their own as they are ready, with the same mode, channels and limits" : ""}. ${autopilot
               ? `Ordinary replies from these leads are answered from your saved information as soon as the answer is written and checked, at most ${AUTOPILOT_LIMITS.perConversation} per conversation and ${AUTOPILOT_LIMITS.perDay} in 24 hours; anything else comes to you as a decision.`
-              : "Every reply waits for you in Action required."} Writing each lead's opening line, then launching.`,
+              : "Each answer to a reply is drafted and waits for you in the Inbox (Needs you)."} Writing each lead's opening line, then launching.`,
           });
         }
         // The rest of the same request (other cities or searches) under this one approval.

@@ -468,6 +468,15 @@ export function instagramReadiness(facts: ReadinessFacts): ReadinessItem | null 
 }
 
 /**
+ * How replies are answered, as the release works: each outreach plan is
+ * started in Review mode (drafts wait for you) or Automatic mode (ordinary
+ * replies are sent, anything unusual waits for you), and whatever waits is
+ * in the Inbox under Needs you. Getting started describes that and never
+ * promises approval of every reply (pilot finding L05).
+ */
+const REPLY_MODES = "Replies follow each plan's reply mode: in Review mode drafts wait for you; in Automatic mode ordinary replies are sent and anything unusual waits for you. What needs you waits in the Inbox (Needs you).";
+
+/**
  * Mirrors the gate every model call passes (src/lib/ai/runtimePlan.ts), in the
  * order a person fixes it. OpenRouter needs BYOK providers and a routing
  * confirmation; AI/ML API needs only its key, selected models and a default.
@@ -487,10 +496,10 @@ export function aiReadiness(facts: ReadinessFacts): ReadinessItem {
     summary,
     details: [
       aiml
-        ? "Uses your AI/ML API key and the structured-output models you chose. Replies are sorted and drafts written; drafts wait for your review."
+        ? `Uses your AI/ML API key and the structured-output models you chose. ${REPLY_MODES}`
         : ai.connectionSaved
-          ? "Uses your own OpenRouter account with your own provider keys (BYOK). Replies are sorted and drafts written; drafts wait for your review."
-          : "Connect OpenRouter (your own provider keys, BYOK) or AI/ML API (one key, many models). Replies are then sorted and drafts written; drafts wait for your review.",
+          ? `Uses your own OpenRouter account with your own provider keys (BYOK). ${REPLY_MODES}`
+          : `Connect OpenRouter (your own provider keys, BYOK) or AI/ML API (one key, many models). ${REPLY_MODES}`,
     ],
     next: forRole(next, canManage),
   });
@@ -521,7 +530,7 @@ export function aiReadiness(facts: ReadinessFacts): ReadinessItem {
       ? `Ready: ${ai.defaultModel.modelId} through AI/ML API.`
       : `Ready: ${ai.defaultModel.modelId} through ${ai.defaultModel.provider}.`,
     details: [
-      "AI drafts wait in Action required for your review; none is sent without your approval.",
+      REPLY_MODES,
       ai.researchModel
         ? `Web research about companies uses ${ai.researchModel}.`
         : aiml
@@ -592,15 +601,15 @@ export function repliesReadiness(facts: ReadinessFacts): ReadinessItem {
       ...base,
       status: "needs_attention",
       summary: [actionRequired ? `${plural(actionRequired, "conversation")} need${actionRequired === 1 ? "s" : ""} action` : null, draftsAwaitingReview ? `${plural(draftsAwaitingReview, "draft")} awaiting review` : null].filter(Boolean).join(" · ") + ".",
-      details: ["A reply on any channel stops that person's campaign follow-ups on every channel. Review each draft, edit it if needed, then send it."],
-      next: "Open Action required.",
+      details: ["A reply on any channel stops that person's campaign follow-ups on every channel. Review each draft that waits for you, edit it if needed, then send it."],
+      next: "Open the Inbox (Needs you).",
     };
   }
   return {
     ...base,
     status: "clear",
     summary: "Nothing waiting.",
-    details: ["Replies on every channel land in Action required, sorted, with a draft answer for your review."],
+    details: [`Replies on every channel land in the Inbox, sorted. ${REPLY_MODES}`],
     next: null,
   };
 }
@@ -639,7 +648,7 @@ export function replySyncReadiness(facts: ReadinessFacts, channels: Record<Reply
     status: "to_do",
     summary: `Not proven yet on ${unproven.map((channel) => CHANNEL_LABEL[channel]).join(", ")}: no reply has arrived there.`,
     details,
-    next: "Send a test message to an address or number you control, reply to it, and check that it appears in Action required and stops that person's follow-ups.",
+    next: "Send a test message to an address or number you control, reply to it, and check that it appears in the Inbox and stops that person's follow-ups.",
   };
 }
 

@@ -48,7 +48,7 @@ export default async function GettingStartedPage() {
           description={`Connect at least one channel to send. ${connectedChannels} of ${channels.length} connected.`}
           items={channels}
         />
-        <Section className="lg:col-span-12" title="AI" description="Optional for sending; it sorts replies and drafts answers for your review." items={pick("ai")} />
+        <Section className="lg:col-span-12" title="AI" description="Optional for sending. It sorts replies and drafts answers; replies follow each plan's Review or Automatic mode." items={pick("ai")} />
         <Section className="lg:col-span-12" title="Outreach" items={pick("leads", "campaigns", "replySync", "replies")} />
       </div>
       <p className="mt-4 max-w-3xl text-paragraph-xs text-text-sub-600">
