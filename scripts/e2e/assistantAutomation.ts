@@ -358,14 +358,15 @@ export async function runAutomationChecks(input: {
   const search = await runTool("find_leads", { what: "dental clinics", where: "Baner, Pune" }, { threadId: thread.id, userId: input.ownerId, ownerText: "" });
   const jobId = (search.data as { jobId: string }).jobId;
   await db.update(schema.assistantJobs).set({ runAfter: new Date(Date.now() - 1_000) }).where(eq(schema.assistantJobs.id, jobId));
-  await runOneAssistantStep();
+  // This job only: another organization's queued job (an earlier check's) is never picked up in this scope.
+  await runOneAssistantStep({ jobId });
   await db.update(schema.assistantJobs).set({ status: "running", lockedBy: "worker-that-crashed", heartbeatAt: new Date(Date.now() - 10 * 60_000), runAfter: new Date(Date.now() - 1_000) }).where(eq(schema.assistantJobs.id, jobId));
   let recovered = null;
   for (let step = 0; step < 30; step += 1) {
     [recovered] = await db.select().from(schema.assistantJobs).where(eq(schema.assistantJobs.id, jobId));
     if (recovered?.status === "succeeded" || recovered?.status === "failed") break;
     await db.update(schema.assistantJobs).set({ runAfter: new Date(Date.now() - 1_000) }).where(and(eq(schema.assistantJobs.id, jobId), eq(schema.assistantJobs.status, "queued")));
-    await runOneAssistantStep();
+    await runOneAssistantStep({ jobId });
   }
   check("a job left by a crashed worker is taken over and finished after a restart", recovered?.status === "succeeded" && recovered.lockedBy !== "worker-that-crashed", `${recovered?.status} ${recovered?.lockedBy}`);
 

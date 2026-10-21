@@ -164,13 +164,17 @@ function check(label: string, ok: boolean, detail = "") {
   if (!ok) failures++;
 }
 
-/** Runs the assistant worker until the job is finished, skipping its polling waits. */
+/**
+ * Runs the assistant worker on this job until it is finished, skipping its
+ * polling waits. Only this job: another organization's queued job (left by
+ * an earlier check in the same database) is never picked up in this scope.
+ */
 async function finishJob(jobId: string, maxSteps = 40) {
   for (let step = 0; step < maxSteps; step += 1) {
     await db.update(assistantJobs).set({ runAfter: new Date(Date.now() - 1_000) }).where(and(eq(assistantJobs.id, jobId), eq(assistantJobs.status, "queued")));
     const [job] = await db.select().from(assistantJobs).where(eq(assistantJobs.id, jobId));
     if (!job || job.status === "succeeded" || job.status === "failed") return job ?? null;
-    await runOneAssistantStep();
+    await runOneAssistantStep({ jobId });
   }
   const [job] = await db.select().from(assistantJobs).where(eq(assistantJobs.id, jobId));
   return job ?? null;
