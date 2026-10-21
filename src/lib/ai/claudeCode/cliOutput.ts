@@ -216,7 +216,7 @@ export function limitMessage(window: string | null, resetsAt: string | null, tim
     } catch {
       when = `${resetsAt.slice(0, 16).replace("T", " ")} UTC`;
     }
-    return `Your Claude account reached its ${name}, which resets ${when}. Until then AI steps on Claude Code fail with this reason (CRM reply sorting is tried again after the reset); nothing is sent to another provider.`;
+    return `Your Claude account reached its ${name}, which resets ${when}. Until then AI steps on Claude Code fail with this reason; nothing is sent to another provider.`;
   }
   const words = said?.trim().replace(/[.\s]+$/, "");
   return `Your Claude account reached its ${name}${words ? ` (Claude Code says: "${words.slice(0, 200)}")` : ""}. Until it resets AI steps on Claude Code fail with this reason; nothing is sent to another provider.`;

@@ -45,6 +45,8 @@ type Flow = {
   expiryTimer: NodeJS.Timeout;
   completion?: { resolve: () => void; reject: (error: Error) => void };
   stopping?: Promise<void>;
+  /** Signing in again after an expiry: the stored file still reads as signed in, so only the CLI's own exit 0 is success. */
+  again: boolean;
 };
 
 export type LoginTimings = { startupMs: number; lifetimeMs: number; completeMs: number };
@@ -94,6 +96,7 @@ export class ClaudeLoginController {
         output: "",
         resolve: resolveStart,
         reject,
+        again,
         startupTimer: setTimeout(() => this.finish(flow, "failed", "Claude Code did not show a sign-in link in time. Check that it is installed and up to date on this server, then try again."), this.timings.startupMs),
         expiryTimer: setTimeout(() => this.finish(flow, "expired", "The Claude sign-in link expired. Start sign-in again."), this.timings.lifetimeMs),
       };
@@ -171,6 +174,8 @@ export class ClaudeLoginController {
       return;
     }
     flow.child = child;
+    // A CLI that exits before reading the code must fail this sign-in, not the server.
+    child.stdin?.on("error", () => {});
     const receive = (chunk: Buffer) => {
       if (flow.status.phase !== "waiting") return;
       if (flow.output.length + chunk.length > MAX_OUTPUT) {
@@ -200,7 +205,7 @@ export class ClaudeLoginController {
       flow.output = "";
       void accountAuthStatus(this.account).then((auth) => {
         if (flow.status.phase !== "waiting") return;
-        if (auth.state === "in") {
+        if (auth.state === "in" && (!flow.again || code === 0)) {
           this.finish(flow, "succeeded");
           return;
         }

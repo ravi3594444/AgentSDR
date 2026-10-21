@@ -131,7 +131,9 @@ it; a second Sign in while one is being set up is refused. `sign_out` runs
 progress or a generation runs or waits on the login. While the login
 answers the organization's AI steps the page asks first: those steps then
 fail until a sign-in, never moving to the API provider. Signing in again
-after an expiry is the same flow ("Sign in again").
+after an expiry is the same flow ("Sign in again"); because the old login
+file still makes `auth status` say signed in, that sign-in counts only when
+the CLI's login itself exits cleanly (a wrong code leaves it expired).
 
 **Selecting it.** `check_model` sends one short generation on the person's
 account and records the model id the CLI actually ran (or why not), per
@@ -156,7 +158,10 @@ Glob, Grep, Bash, NotebookEdit, WebFetch and WebSearch (which also stops
 `@path` reads); `--strict-mcp-config`, `--setting-sources ""`,
 `--disable-slash-commands`, `--no-session-persistence`, an empty working
 directory, and the system prompt in a file there (`--system-prompt-file`,
-so it is not on the command line). Nothing is resumed between calls. A call
+so it is not on the command line). Nothing is resumed between calls; the CLI
+still writes its own bookkeeping (its settings, the directories it ran in)
+into the account's config directory, and no call reads a conversation back
+from it. A call
 the CLI says was authenticated by a key from the server's own settings
 (`apiKeySource` `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or
 `apiKeyHelper`) is refused and its answer not used.
@@ -176,16 +181,27 @@ overloaded API is retried. Its HTTP-like status serves the reply agent,
 which stops on a 4xx: signed out or not signed in 401, usage limit or extra
 usage 402, model unavailable 404, timeout 504, busy 503, anything else 400.
 A usage limit is held until the reset the CLI reported (15 minutes when it
-reported none): for one model's weekly window only that model is held, for
-the 5-hour or weekly window the whole account. Held calls fail at once
-without starting the CLI; a model check still runs, so the owner can find a
-model that answers. When the CLI reports that a call ran on extra usage
+reported none, and never less than 5 minutes, so a reset already past on a
+clock ahead cannot make every job spin): for one model's weekly window only
+that model is held, for the 5-hour or weekly window the whole account. Held
+calls fail at once without starting the CLI. A model check runs past one
+model's weekly hold, so the owner can find a model that answers, never past
+an account-wide one. A call answered with a credential from the server's own
+settings holds the account for 15 minutes, so the misconfiguration is not
+paid for on every job. A CLI that exits before it starts a session (an older
+version refusing a flag) fails the call as an error, not retried, and its
+unread prompt can no longer take the server down (an unhandled `EPIPE` on its
+stdin did, under Bun). When the CLI reports that a call ran on extra usage
 (billed beyond the plan), that answer is kept and the account is held until
 the window resets, so nothing more is billed that way. A generation refused
 as signed out or expired marks the login expired on the card (whatever the
 stored file says), and Sign in again then runs the CLI's login even though
 `auth status` still says signed in. While held, CRM reply sorting is put
-back for the reset time; the reply agent puts the message in Inbox → Needs
+back, checked again at least every 15 minutes until the reset (so a reset
+the owner speeds up is noticed), for at most 8 days from the message; past
+that it fails like any other classification. An explicit "stop contacting
+me" is still marked Do Not Contact at once while the login is held, before
+the job is put back. The reply agent puts the message in Inbox → Needs
 you with the reason; other steps fail with the reason. Usage shown on the
 card is only what the CLI's `rate_limit_event` reported (window, share used,
 reset), with the time it was reported. The CLI's `total_cost_usd` (an
@@ -199,9 +215,12 @@ short `auth` and `--version` commands are not counted. A call waits at most
 30 s (and never past its own timeout) for a slot, else fails as busy, not
 retried. A generation past its timeout (the caller's plus 20 s for process
 start) or whose caller aborts has its process group stopped; an
-already-aborted call never starts. Generations waiting for a slot count as
-running, so sign-out and switching see them. The engine row and the member
-count are cached per organization for 30 s (a save updates the row at once). Sign-in flows live in
+already-aborted call never starts, and one aborted while it waits for a slot
+never starts the CLI. Generations waiting for a slot count as running, so
+sign-out and switching see them. The engine row is cached per organization
+for 30 s (a save updates it at once) and the member count for 10 s, both in
+one process-wide cache, so a second copy of the module (Next can load one
+per bundle) does not keep its own stale answer. Sign-in flows live in
 memory: a restart ends one in progress (the page says to start again); the
 CLI's login on disk survives, and work interrupted by a restart is picked up
 by the existing job workers like any other interrupted model call.
@@ -240,7 +259,7 @@ OpenMausBot's license and notice under `/app/licenses/third-party`.
 
 ## Tests
 
-- `src/lib/ai/claudeCode/claudeCode.test.ts`, 28 tests (`bun test
+- `src/lib/ai/claudeCode/claudeCode.test.ts`, 33 tests (`bun test
   --conditions=react-server src/lib/ai/claudeCode/`): the readers against the
   real 2.1.306 output above and the generation flags (the Read deny rule, the
   system prompt by file); and against the fake CLI: sign-in success with the
@@ -259,8 +278,14 @@ OpenMausBot's license and notice under `/app/licenses/third-party`.
   billed answer kept, the account then held; cached tokens counted), an
   expired login and an unavailable model (not retried), a crash retried, a
   hung process killed at the timeout and not retried, a busy server not
-  retried, an already-aborted call never started, a scratch directory that
-  cannot be made leaking no slot, and the process bound.
+  retried, an already-aborted call never started, one aborted while waiting
+  for a slot never started, a scratch directory that cannot be made leaking
+  no slot, the process bound, a CLI exiting before reading a 2.4 MB prompt
+  (fails the call, not the test process; without the stdin listener the run
+  reports the unhandled pipe error), a reset already past still held 5
+  minutes, an account-wide limit holding model checks, a server credential
+  holding the next call, and signing in again with a wrong code leaving the
+  login expired.
 - `scripts/e2e/claude-code-engine.ts`, 28 checks on the local database with
   the fake CLI and every API request intercepted: nothing changes before
   selection; the pilot gate (operator owner yes; member, admin, another
@@ -280,9 +305,9 @@ OpenMausBot's license and notice under `/app/licenses/third-party`.
   own-login check (3 unit tests fail), the allowlisted environment (1), a
   non-retried limit (1), the operator gate (2 e2e checks), the API-model rule
   (2 e2e checks), the Read deny rule (the probe).
-- The CRM worker putting a classification back for the reset time on a held
-  login is a two-line mapping in `handleClassificationJob`, checked by
-  reading and by the unit test of `claudeHoldUntil`, not by a CRM run.
+- `scripts/e2e/reply-agent.ts` runs `handleClassificationJob` with a held
+  Claude login on "Please stop contacting me": the person is marked Do Not
+  Contact at once and the job is put back within 15 minutes.
 - The full unit suite, `npx tsc --noEmit`, eslint on the changed files and a
   production build (`next build --webpack`) pass.
 

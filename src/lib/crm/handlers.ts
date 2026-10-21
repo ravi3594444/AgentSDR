@@ -38,6 +38,10 @@ import {
 import { startSequenceRunInTransaction } from "./sequences";
 import { PermanentCrmJobError, registerCrmJobHandlers, RetryCrmJobLaterError, STALE_LOCK_MS } from "./worker";
 import { claudeHoldUntil } from "@/lib/ai/claudeCode/runner.server";
+
+/** A held Claude Code login (usage limit) puts a classification back: looked at again at most this often, and for at most this long. */
+const HELD_CLASSIFICATION_RECHECK_MS = 15 * 60_000;
+const HELD_CLASSIFICATION_MAX_WAIT_MS = 8 * 24 * 60 * 60_000;
 import { detectsOptOutWording, detectsWrongNumber } from "./wrongNumber";
 import { wrongRouteForConversation } from "./wrongRoutes";
 import { inOrg } from "@/lib/tenancy/scope";
@@ -431,7 +435,22 @@ export async function handleClassificationJob(
       await closeWrongNumber({ messageId: job.entityId, source: "classifier", acknowledgement: null, optOut: context.optOutWords, sendAllowed: sending.sendAllowed }, { send: sending.send });
       return;
     }
-    const result = await classifyCrmReply(context.input, dependencies);
+    let result: Awaited<ReturnType<typeof classifyCrmReply>>;
+    try {
+      result = await classifyCrmReply(context.input, dependencies);
+    } catch (error) {
+      // The model is held (Claude Code usage limit): an explicit opt-out is honoured now, not after the reset.
+      if (claudeHoldUntil(error) && context.dncIntent) {
+        await withCrmTransaction((tx) => setPersonDoNotContactInTransaction(tx, {
+          personId: context.personId,
+          reason: "Explicit do-not-contact request in inbound message",
+          source: "inbound_request",
+          actorType: "ai",
+          actorRef: "rules",
+        }));
+      }
+      throw error;
+    }
     const closeAs = await withCrmTransaction(async (tx): Promise<{ optOut: boolean } | null> => {
       // "Wrong number, stop messaging me" is Do Not Contact, filed as a wrong number rather than a buyer's no.
       const dncWrongNumber = context.dncIntent && context.wrongNumberWords;
@@ -550,9 +569,14 @@ export async function handleClassificationJob(
       }, { send: sending.send });
     }
   } catch (error) {
-    // The organization's Claude Code login is held by a usage limit: sort the reply again once it resets.
+    // The organization's Claude Code login is held by a usage limit: sort the reply again later. It is looked at
+    // again every 15 minutes at most (the engine may have been switched to an API provider meanwhile) and given
+    // up as a visible failure once the message has waited longer than any usage window.
     const heldUntil = claudeHoldUntil(error);
-    if (heldUntil) throw new RetryCrmJobLaterError(error instanceof Error ? error.message : String(error), heldUntil);
+    if (heldUntil && Date.now() - job.createdAt.getTime() < HELD_CLASSIFICATION_MAX_WAIT_MS) {
+      const retryAt = new Date(Math.min(heldUntil.getTime(), Date.now() + HELD_CLASSIFICATION_RECHECK_MS));
+      throw new RetryCrmJobLaterError(`${error instanceof Error ? error.message : String(error)} Reply sorting is tried again after it resets.`, retryAt);
+    }
     // Put back to wait for another worker's claim is not a failed classification: the record stays as it is.
     if (!(error instanceof PermanentCrmJobError) && !(error instanceof RetryCrmJobLaterError)) await recordClassificationFailure(job.entityId, error);
     throw error;

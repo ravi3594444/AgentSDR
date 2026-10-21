@@ -73,6 +73,10 @@ type AccountState = {
 };
 /** Held this long when the CLI named no reset: the refusal is then tried again, not assumed over. */
 const UNKNOWN_RESET_HOLD_MS = 15 * 60_000;
+/** A reported reset is never taken as sooner than this, so a reset already past (a clock ahead) cannot spin. */
+const MIN_HOLD_MS = 5 * 60_000;
+/** A credential from the server's settings answered: refuse further calls this long, until the server is fixed. */
+const FOREIGN_KEY_HOLD_MS = 15 * 60_000;
 const SLOT_WAIT_MS = 30_000;
 const ALL = "*";
 
@@ -98,9 +102,19 @@ function liveHolds(state: AccountState, now: number): Map<string, Hold> {
   return state.holds;
 }
 
-function holdFor(state: AccountState, model: ClaudeCodeModel, now = Date.now()): Hold | null {
+/** The hold this call meets. A model check passes one model's weekly hold (to find a model that answers), never an account-wide one. */
+function holdFor(state: AccountState, model: ClaudeCodeModel, checking: boolean, now = Date.now()): Hold | null {
   const holds = liveHolds(state, now);
-  return holds.get(ALL) ?? holds.get(model) ?? null;
+  return holds.get(ALL) ?? (checking ? null : holds.get(model) ?? null);
+}
+
+/** Sets a hold; a hold already standing for longer is kept. */
+function setHold(state: AccountState, key: string, limit: ClaudeCodeLimit, until: number): number {
+  const at = Math.max(until, Date.now() + MIN_HOLD_MS);
+  const standing = state.holds.get(key);
+  if (standing && standing.until >= at) return standing.until;
+  state.holds.set(key, { limit, until: at });
+  return at;
 }
 
 /** What the page shows about this login: generations running or waiting, unexpired holds, the last reported windows, a reported sign-out. */
@@ -174,7 +188,7 @@ export type GenerationInput = {
   timeoutMs: number;
   signal?: AbortSignal;
   timeZone?: string;
-  /** A model check runs even while a hold stands, so the owner can find a model that still answers. */
+  /** A model check runs past one model's weekly hold, so the owner can find a model that still answers; never past an account-wide hold. */
   ignoreHolds?: boolean;
 };
 
@@ -183,9 +197,9 @@ export type GenerationResult = { text: string; modelId: string | null; usage: { 
 const MAX_STDOUT = 4 * 1024 * 1024;
 
 function hold(state: AccountState, limit: ClaudeCodeLimit, model: ClaudeCodeModel): ClaudeCodeError {
-  const until = limit.resetsAt ? Date.parse(limit.resetsAt) : Date.now() + UNKNOWN_RESET_HOLD_MS;
+  const reported = limit.resetsAt ? Date.parse(limit.resetsAt) : Date.now() + UNKNOWN_RESET_HOLD_MS;
   const scoped = limit.modelSpecific ? { ...limit, model } : limit;
-  state.holds.set(limit.modelSpecific ? model : ALL, { limit: scoped, until });
+  const until = setHold(state, limit.modelSpecific ? model : ALL, scoped, reported);
   return new ClaudeCodeError("limit", scoped.message, new Date(until));
 }
 
@@ -195,7 +209,7 @@ export async function runGeneration(input: GenerationInput): Promise<GenerationR
   const paths = accountPaths(input.account);
   if (!hasOwnLogin(paths)) throw new ClaudeCodeError("not_signed_in", "Claude Code is not signed in for this account. Sign in again in Settings → AI provider.");
   const state = accountState(input.account);
-  const held = input.ignoreHolds ? null : holdFor(state, input.model);
+  const held = holdFor(state, input.model, input.ignoreHolds === true);
   if (held) throw new ClaudeCodeError(held.limit.window === "overage" ? "overage" : "limit", held.limit.message, new Date(held.until));
 
   const deadline = Date.now() + input.timeoutMs;
@@ -218,12 +232,16 @@ export async function runGeneration(input: GenerationInput): Promise<GenerationR
         return;
       }
       const running = proc.child;
+      // A CLI that exits before reading its prompt (an unknown flag, a crash) must fail this call, not the server.
+      running.stdin?.on("error", () => {});
+      let sawInit = false;
       let stdout = "";
       let overflow = false;
       let timedOut = false;
       running.stdout?.on("data", (chunk: Buffer) => {
         if (stdout.length + chunk.length > MAX_STDOUT) { overflow = true; return; }
         stdout += chunk.toString("utf8");
+        sawInit ||= stdout.includes('"subtype":"init"');
       });
       // Not logged: it can echo the prompt.
       running.stderr?.on("data", () => {});
@@ -231,16 +249,19 @@ export async function runGeneration(input: GenerationInput): Promise<GenerationR
       timer.unref();
       const abort = () => { void stopCli(running); };
       input.signal?.addEventListener("abort", abort, { once: true });
+      if (input.signal?.aborted) abort();
       running.once("error", (error: NodeJS.ErrnoException) => {
         clearTimeout(timer);
         rejectRun(new ClaudeCodeError("error", error.code === "ENOENT" ? "Claude Code is not installed on this server." : "Claude Code could not start on this server."));
       });
-      running.once("close", () => {
+      running.once("close", (code) => {
         clearTimeout(timer);
         input.signal?.removeEventListener("abort", abort);
         if (input.signal?.aborted) return rejectRun(input.signal.reason);
         if (timedOut) return rejectRun(new ClaudeCodeError("timeout", `Claude Code did not answer within ${Math.round(input.timeoutMs / 1000)} s.`));
         if (overflow) return rejectRun(new ClaudeCodeError("error", "Claude Code returned more output than an answer can be."));
+        // Exited before it even started a session: the installed CLI refused how it was run; another attempt fails the same way.
+        if (!sawInit && code !== 0) return rejectRun(new ClaudeCodeError("error", `Claude Code on this server exited (code ${code ?? "unknown"}) before answering. Check that the installed version supports the flags this app uses (docs/plans/CLAUDE_CODE_LOGIN.md).`));
         resolveRun(stdout.split("\n"));
       });
       running.stdin?.end(input.userPrompt);
@@ -251,20 +272,19 @@ export async function runGeneration(input: GenerationInput): Promise<GenerationR
       state.windowsAt = new Date().toISOString();
     }
     if (foreignKeySource(outcome.apiKeySource)) {
-      throw new ClaudeCodeError("error", `Claude Code answered with a credential from this server's settings (${outcome.apiKeySource}), not this account's own login. Remove it from the server; the answer was not used.`);
+      const message = `Claude Code answered with a credential from this server's settings (${outcome.apiKeySource}), not this account's own login. Remove it from the server; the answer was not used.`;
+      setHold(state, ALL, { window: null, resetsAt: null, modelSpecific: false, message }, Date.now() + FOREIGN_KEY_HOLD_MS);
+      throw new ClaudeCodeError("error", message);
     }
     if (outcome.overage) {
       // This call already ran on extra usage; hold the account so nothing more is billed that way.
-      const until = outcome.overage.resetsAt ?? new Date(Date.now() + UNKNOWN_RESET_HOLD_MS).toISOString();
-      state.holds.set(ALL, {
-        limit: {
-          window: "overage",
-          resetsAt: outcome.overage.resetsAt,
-          modelSpecific: false,
-          message: `Your Claude plan's ${windowName(outcome.overage.window)} is used up, and Anthropic billed the last AI step as extra usage. AI steps on Claude Code stay held until it resets so nothing more is billed that way; nothing moves to another provider.`,
-        },
-        until: Date.parse(until),
-      });
+      const until = outcome.overage.resetsAt ? Date.parse(outcome.overage.resetsAt) : Date.now() + UNKNOWN_RESET_HOLD_MS;
+      setHold(state, ALL, {
+        window: "overage",
+        resetsAt: outcome.overage.resetsAt,
+        modelSpecific: false,
+        message: `Your Claude plan's ${windowName(outcome.overage.window)} is used up, and Anthropic billed the last AI step as extra usage. AI steps on Claude Code stay held until it resets so nothing more is billed that way; nothing moves to another provider.`,
+      }, until);
     }
     if (outcome.failure) {
       if (outcome.failure.kind === "limit") throw hold(state, outcome.failure.limit, input.model);

@@ -70,7 +70,14 @@ export function normalizeClaudeEngine(value: unknown): ClaudeEngine {
 
 /** Read on every structured call, so cached per organization for 30 s like other settings; a save here updates it at once. */
 const ENGINE_CACHE_MS = 30_000;
-const engineCache = new Map<string, { engine: ClaudeEngine; at: number }>();
+/** Membership changes reach the gate within this. */
+const MEMBERS_CACHE_MS = 10_000;
+// On globalThis: route handlers and the workers started from instrumentation.ts can load separate copies of this module.
+type EngineCaches = { engines: Map<string, { engine: ClaudeEngine; at: number }>; members: Map<string, { count: number; at: number }>; operator: { id: string | null; at: number } | null };
+const cacheHolder = globalThis as typeof globalThis & { __agentsdrClaudeEngineCaches?: EngineCaches };
+const caches = (cacheHolder.__agentsdrClaudeEngineCaches ??= { engines: new Map(), members: new Map(), operator: null });
+const engineCache = caches.engines;
+const membersCache = caches.members;
 
 export async function getClaudeEngine(): Promise<ClaudeEngine> {
   const organizationId = currentOrganizationId();
@@ -92,7 +99,6 @@ export async function saveClaudeEngine(engine: ClaudeEngine): Promise<ClaudeEngi
   return value;
 }
 
-let operatorCache: { id: string | null; at: number } | null = null;
 let operatorOverride: string | null = null;
 /** e2e: a disposable database already has an operator organization; the check runs in its own. */
 export function setOperatorOrganizationForTests(id: string | null): void {
@@ -105,9 +111,9 @@ export function resetClaudeEngineCachesForTests(): void {
 }
 async function operatorOrganization(): Promise<string | null> {
   if (operatorOverride) return operatorOverride;
-  if (operatorCache && Date.now() - operatorCache.at < 60_000) return operatorCache.id;
+  if (caches.operator && Date.now() - caches.operator.at < 60_000) return caches.operator.id;
   const id = await operatorOrganizationId();
-  operatorCache = { id, at: Date.now() };
+  caches.operator = { id, at: Date.now() };
   return id;
 }
 
@@ -131,11 +137,10 @@ export async function claudeCodeBlocked(organizationId: string, ownerUserId: str
   return `This organization has ${others} other ${others === 1 ? "member" : "members"}. Their chats and the work they start would run on one person's Claude account, so Claude Code is only for an organization whose only member is the owner who signs in. Use an API provider, or remove the other members first.`;
 }
 
-const membersCache = new Map<string, { count: number; at: number }>();
 async function otherMembers(organizationId: string, userId: string): Promise<number> {
   const key = `${organizationId}:${userId}`;
   const cached = membersCache.get(key);
-  if (cached && Date.now() - cached.at < ENGINE_CACHE_MS) return cached.count;
+  if (cached && Date.now() - cached.at < MEMBERS_CACHE_MS) return cached.count;
   const [row] = await db.select({ count: sql<number>`count(*)::int` }).from(members)
     .where(and(eq(members.organizationId, organizationId), ne(members.userId, userId)));
   const count = row?.count ?? 0;

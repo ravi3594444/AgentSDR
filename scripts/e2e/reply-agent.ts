@@ -74,6 +74,7 @@ const { contactChannels } = await import("@/lib/assistant/audiences");
 const { findWrongRoutes, wrongRouteSendRefusal } = await import("@/lib/crm/wrongRoutes");
 const { candidateRoutes, wrongRouteAckLabel } = await import("@/lib/crm/wrongNumber");
 const { RetryCrmJobLaterError, STALE_LOCK_MS } = await import("@/lib/crm/worker");
+const { ClaudeCodeError } = await import("@/lib/ai/claudeCode/runner.server");
 const { failCrmJob } = await import("@/lib/crm/queue");
 const { getCrmRecordWorkspace, listCrmActions } = await import("@/lib/crm/queries");
 const { applyHumanClassification, moveRecordStage } = await import("@/lib/crm/operations");
@@ -351,7 +352,7 @@ await runInOrganization(org!.id, async () => {
   // ============================================================ wrong number (WhatsApp)
   const waAccount = `wa-agent-check-${stamp}`;
   const phoneOf = (index: number) => `+9198${String(stamp).slice(-6)}${String(index).padStart(2, "0")}`;
-  const waPersons = await db.insert(people).values(Array.from({ length: 40 }, (_, index) => ({
+  const waPersons = await db.insert(people).values(Array.from({ length: 41 }, (_, index) => ({
     organizationId: orgId,
     phone: phoneOf(index),
     fullName: `Dr Wrong ${index + 1}`,
@@ -559,6 +560,17 @@ await runInOrganization(org!.id, async () => {
   const optOutAgent = await waInbound(12, "I'm not Dr Wrong 13, don't text me again");
   await waClassify(optOutAgent.message.id);
   check("…as is a wrong number the agent reads beside \"don't text me\"", waSends.length === waBefore && await isPersonDoNotContact(db, W[12]!) && (await routeOf(12))?.ackStatus === "blocked", (await routeOf(12))?.ackStatus ?? "no route");
+
+  // ------------------------------------------------------------ a held Claude Code login (usage limit)
+  // W[40] is in no run: the classifier path. Its model is held; an explicit opt-out is still honoured now,
+  // and the classification waits (put back for at most 15 minutes, its attempt given back).
+  const heldUntil = new Date(Date.now() + 3 * 60 * 60_000);
+  const heldClassifier: ClassificationCompletion = async () => { throw new ClaudeCodeError("limit", "Your Claude account reached its 5-hour limit.", heldUntil); };
+  const heldOptOut = await waInbound(40, "Please stop contacting me");
+  const heldJob = (await db.select().from(crm.crmJobs).where(and(eq(crm.crmJobs.kind, "classification"), eq(crm.crmJobs.entityId, heldOptOut.message.id))).limit(1))[0]!;
+  const heldError = await handleClassificationJob(heldJob as unknown as CrmJob, { replyAgent: false, complete: heldClassifier }).then(() => null, (error: unknown) => error);
+  check("a held Claude login still marks an explicit opt-out Do Not Contact at once", await isPersonDoNotContact(db, W[40]!));
+  check("…and puts the classification back for at most 15 minutes, not a failure", heldError instanceof RetryCrmJobLaterError && heldError.retryAt.getTime() <= Date.now() + 15 * 60_000 + 5_000 && heldError.retryAt.getTime() > Date.now(), heldError instanceof Error ? heldError.message : String(heldError));
 
   const takenWrong = await waInbound(14, "Wrong number");
   await takeOverConversation(takenWrong.conversation.id, null);

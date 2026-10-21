@@ -23,7 +23,7 @@ const VALID_CODE = "GOOD-CODE-1234#state";
 
 type Scenario = {
   /** Generation outcome. */
-  generation?: "valid" | "prose" | "limit" | "opus_limit" | "overage" | "env_key" | "signed_out" | "crash" | "crash_once" | "slow" | "model_unavailable" | "overloaded";
+  generation?: "valid" | "prose" | "limit" | "past_limit" | "bad_flag" | "opus_limit" | "overage" | "env_key" | "signed_out" | "crash" | "crash_once" | "slow" | "model_unavailable" | "overloaded";
   /** The structured answer to return; generated from the schema when absent. */
   answer?: Record<string, unknown>;
   /** auth status says logged in without a credential in this directory (an inherited login). */
@@ -80,8 +80,14 @@ function example(schema: unknown): unknown {
 const emit = (frame: Record<string, unknown>) => process.stdout.write(`${JSON.stringify(frame)}\n`);
 
 async function generate() {
-  const prompt = await readStdin();
   const current = scenario();
+  if (current.generation === "bad_flag") {
+    // An older CLI refusing a flag: it exits before reading the prompt on stdin.
+    record({ badFlag: true });
+    process.stderr.write("error: unknown option '--json-schema'\n");
+    process.exit(1);
+  }
+  const prompt = await readStdin();
   const modelArg = args.indexOf("--model");
   const alias = modelArg >= 0 ? args[modelArg + 1] : "default";
   const model = alias === "default" ? "claude-sonnet-5-5" : `claude-${alias}-5-5`;
@@ -121,8 +127,9 @@ async function generate() {
     done();
     return;
   }
-  if (outcome === "limit") {
-    emit({ type: "rate_limit_event", rate_limit_info: { status: "rejected", resetsAt, rateLimitType: "five_hour", isUsingOverage: false, unifiedWindows: { five_hour: { utilization: 1, resetsAt }, seven_day: { utilization: 0.4, resetsAt: resetsAt + 86_400 } } } });
+  if (outcome === "limit" || outcome === "past_limit") {
+    const reset = outcome === "past_limit" ? resetsAt - 4 * 3_600 : resetsAt;
+    emit({ type: "rate_limit_event", rate_limit_info: { status: "rejected", resetsAt: reset, rateLimitType: "five_hour", isUsingOverage: false, unifiedWindows: { five_hour: { utilization: 1, resetsAt }, seven_day: { utilization: 0.4, resetsAt: resetsAt + 86_400 } } } });
     emit({ type: "assistant", error: "rate_limit", is_api_error_message: true, message: { model: "<synthetic>", content: [{ type: "text", text: "You've hit your 5-hour limit · resets 6pm" }] } });
     emit({ type: "result", subtype: "success", is_error: true, api_error: "usage_limit_reached", result: "You've hit your 5-hour limit · resets 6pm" });
     done();

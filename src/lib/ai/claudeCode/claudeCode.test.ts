@@ -370,9 +370,58 @@ describe("structured answers through completeStructured (fake CLI)", () => {
     expect(generations(target)).toHaveLength(1);
   });
 
-  test("a credential from the server's own settings is refused and its answer not used", async () => {
-    const { runtime } = await bound({ generation: "env_key" });
+  test("a credential from the server's own settings is refused, its answer not used, and later calls held", async () => {
+    const { target, runtime } = await bound({ generation: "env_key" });
     await expect(ask(runtime)).rejects.toThrow("not this account's own login");
+    setScenario(target, {});
+    await expect(generation(target)).rejects.toThrow("not this account's own login");
+    expect(generations(target)).toHaveLength(1);
+  });
+
+  test("an account-wide limit holds model checks too", async () => {
+    const { target } = await bound({ generation: "limit" });
+    await expect(generation(target)).rejects.toMatchObject({ kind: "limit" });
+    setScenario(target, {});
+    await expect(runGeneration({ account: target, model: "opus", systemPrompt: "S", userPrompt: "U", jsonSchema: SCHEMA, timeoutMs: 20_000, ignoreHolds: true })).rejects.toMatchObject({ kind: "limit" });
+    expect(generations(target)).toHaveLength(1);
+  });
+
+  test("a reported reset already past still holds for a few minutes, so a clock ahead cannot spin", async () => {
+    const { target } = await bound({ generation: "past_limit" });
+    const failure = await generation(target).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ kind: "limit" });
+    expect((failure as ClaudeCodeError).retryAt!.getTime()).toBeGreaterThan(Date.now() + 4 * 60_000);
+    await expect(generation(target)).rejects.toMatchObject({ kind: "limit" });
+    expect(generations(target)).toHaveLength(1);
+  });
+
+  test("a CLI that exits before reading its prompt fails the call, not the server, and is not retried", async () => {
+    const { target, runtime } = await bound({ generation: "bad_flag" });
+    const big = "Lead notes. ".repeat(200_000);
+    await expect(runGeneration({ account: target, model: "sonnet", systemPrompt: "S", userPrompt: big, jsonSchema: SCHEMA, timeoutMs: 20_000 })).rejects.toMatchObject({ kind: "error", retryable: false });
+    await expect(ask(runtime)).rejects.toThrow("before answering");
+    expect(generations(target)).toHaveLength(2);
+    expect(runningOn(target)).toBe(0);
+  });
+
+  test("a call aborted while it waits for a slot never starts the CLI", async () => {
+    const saved = process.env.AGENTSDR_CLAUDE_CODE_MAX_PROCESSES;
+    process.env.AGENTSDR_CLAUDE_CODE_MAX_PROCESSES = "1";
+    try {
+      const { target } = await bound({ generation: "slow", slowMs: 1_500 });
+      const holder = generation(target);
+      await Bun.sleep(300);
+      const aborted = new AbortController();
+      const waiting = runGeneration({ account: target, model: "sonnet", systemPrompt: "S", userPrompt: "U", jsonSchema: SCHEMA, timeoutMs: 20_000, signal: aborted.signal });
+      aborted.abort(new Error("cancelled"));
+      await expect(waiting).rejects.toThrow("cancelled");
+      await holder;
+      expect(generations(target)).toHaveLength(1);
+      expect(runningOn(target)).toBe(0);
+    } finally {
+      if (saved === undefined) delete process.env.AGENTSDR_CLAUDE_CODE_MAX_PROCESSES;
+      else process.env.AGENTSDR_CLAUDE_CODE_MAX_PROCESSES = saved;
+    }
   });
 
   test("a login the CLI refused as signed out shows as expired, and Sign in runs the CLI login again", async () => {
@@ -387,6 +436,18 @@ describe("structured answers through completeStructured (fake CLI)", () => {
     expect(started.phase).toBe("waiting");
     expect((await login.complete(started.flowId, VALID_CODE)).phase).toBe("succeeded");
     expect(accountUsage(target).signedOutAt).toBeNull();
+  });
+
+  test("signing in again with a wrong code fails, though the old login file is still there", async () => {
+    const target = account();
+    await signIn(target);
+    setScenario(target, { generation: "signed_out" });
+    await expect(generation(target)).rejects.toMatchObject({ kind: "signed_out" });
+    const login = controller(target);
+    const started = await login.start("claudeai", true);
+    const failed = await login.complete(started.flowId, "WRONG-CODE-999");
+    expect(failed.phase).toBe("failed");
+    expect(accountUsage(target).signedOutAt).not.toBeNull();
   });
 
   test("the model id the CLI ran is what the result records; the system prompt reached the CLI from its file", async () => {

@@ -141,6 +141,7 @@ export function runCliCommand(args: string[], options: { env: CliEnvironment; cw
       return;
     }
     let stdout = "";
+    child.stdin?.on("error", () => {});
     child.stdin?.end();
     child.stdout?.on("data", (chunk: Buffer) => { if (stdout.length < MAX_OUTPUT) stdout += chunk.toString("utf8"); });
     child.stderr?.on("data", () => {});
