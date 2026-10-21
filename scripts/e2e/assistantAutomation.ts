@@ -278,7 +278,7 @@ export async function runAutomationChecks(input: {
   const secondPass = await sendHandoffAlerts({ organizationId: orgId, send: record });
   const readyMail = mails.find((mail) => mail.subject === "Ready to buy: Dr Handoff 1");
   check("the owners are emailed once when a lead needs them, with what the lead wants and a link to Needs you",
-    Boolean(readyMail) && readyMail!.to === `handoff-owner-${stamp}@example.test` && /wants a call to set up 3 chairs/.test(readyMail!.text) && /\/assistant\/results#needs-you/.test(readyMail!.text) && firstPass.alerted >= 1 && secondPass.emails === 0,
+    Boolean(readyMail) && readyMail!.to === `handoff-owner-${stamp}@example.test` && /wants a call to set up 3 chairs/.test(readyMail!.text) && /\/inbox\?view=needs_you/.test(readyMail!.text) && firstPass.alerted >= 1 && secondPass.emails === 0,
     JSON.stringify({ subjects: mails.map((mail) => mail.subject), second: secondPass }));
   await db.update(schema.ownerDecisions).set({ alertedAt: new Date(Date.now() - 4 * 3_600_000) }).where(eq(schema.ownerDecisions.id, readyDecision!.id));
   const remindPass = await sendHandoffAlerts({ organizationId: orgId, send: record });
