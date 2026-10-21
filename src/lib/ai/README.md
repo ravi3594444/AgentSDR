@@ -73,6 +73,18 @@ Not available through AI/ML API, and refused with a message that says so:
   parent lookup;
 - image AI columns.
 
+## Claude Code (owner-only pilot)
+
+`claudeCode/` lets an owner of the operator organization sign Anthropic's
+unmodified `claude` CLI in with their own Claude account and choose that the
+organization's AI steps run on it (docs/plans/CLAUDE_CODE_LOGIN.md). It is
+not a connection: it is selected apart from the API provider, which stays
+configured. While it is selected, `completeStructured` calls that name no
+model run as one CLI generation each (`claudeCode/runtime.server.ts`), with
+the same schema, `accept` validation and retries; calls that name an API
+model, web-plugin calls (refused), transcription and AI web search keep the
+API provider. A failure never falls back to the API.
+
 ## Columns
 
 The column config (`AiConfig`) lives in `src/lib/grid/types.ts`. Live model

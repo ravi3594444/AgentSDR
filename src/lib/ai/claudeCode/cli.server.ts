@@ -9,7 +9,7 @@ import { parseAuthStatus, type AuthStatus } from "./cliOutput";
  * Running the installed, unmodified `claude` CLI for one account.
  *
  * Each (organization, person) pair has its own directory under
- * CLAUDE_CODE_DATA_DIR: `config/` is the CLI's CLAUDE_CONFIG_DIR (where it
+ * AGENTSDR_CLAUDE_CODE_DATA_DIR: `config/` is the CLI's CLAUDE_CONFIG_DIR (where it
  * keeps its own login, `.credentials.json`), `home/` its HOME (where a
  * keyless Console sign-in keeps its Anthropic profile, which a config
  * directory alone does not separate). The CLI manages both; this app never
@@ -25,13 +25,13 @@ export type CliCommand = { command: string; args: string[] };
 /** The whole environment a CLI process gets (never this server's own). */
 export type CliEnvironment = Record<string, string>;
 
-/** `CLAUDE_CODE_CLI` names the binary (default: `claude` on PATH). Tests point it at a fake. */
+/** `AGENTSDR_CLAUDE_CODE_CLI` names the binary (default: `claude` on PATH). Tests point it at a fake. */
 let cliOverride: CliCommand | null = null;
 export function setClaudeCliForTests(cli: CliCommand | null): void {
   cliOverride = cli;
 }
 export function configuredCli(): CliCommand {
-  return cliOverride ?? { command: process.env.CLAUDE_CODE_CLI?.trim() || "claude", args: [] };
+  return cliOverride ?? { command: process.env.AGENTSDR_CLAUDE_CODE_CLI?.trim() || "claude", args: [] };
 }
 
 let dataDirOverride: string | null = null;
@@ -39,7 +39,7 @@ export function setClaudeDataDirForTests(dir: string | null): void {
   dataDirOverride = dir;
 }
 export function claudeDataDir(): string {
-  return resolve(dataDirOverride ?? (process.env.CLAUDE_CODE_DATA_DIR?.trim() || join(process.cwd(), ".data", "claude-code")));
+  return resolve(dataDirOverride ?? (process.env.AGENTSDR_CLAUDE_CODE_DATA_DIR?.trim() || join(process.cwd(), ".data", "claude-code")));
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

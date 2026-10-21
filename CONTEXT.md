@@ -105,6 +105,11 @@ word means here and, where it matters, what it does not mean.
   records against the owner's monthly limit, reserved at a collection's
   most before it starts; the count is "estimated" because the API does not
   report the account's balance. It never tops up or upgrades the account.
+- **Claude Code engine**: the AI steps of the operator organization running
+  on one owner's own Claude account, through Anthropic's unmodified `claude`
+  CLI signed in from Settings. Its **usage limit** is the account's own
+  window (5-hour, weekly), as the CLI reports it; reaching it makes AI steps
+  wait or fail with the reset, never switch to an API.
 
 ## Background work
 

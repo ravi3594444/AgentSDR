@@ -351,9 +351,9 @@ describe("structured answers through completeStructured (fake CLI)", () => {
     expect(runningOn(hung.target)).toBe(0);
   });
 
-  test("at most CLAUDE_CODE_MAX_PROCESSES generations run at once", async () => {
-    const saved = process.env.CLAUDE_CODE_MAX_PROCESSES;
-    process.env.CLAUDE_CODE_MAX_PROCESSES = "1";
+  test("at most AGENTSDR_CLAUDE_CODE_MAX_PROCESSES generations run at once", async () => {
+    const saved = process.env.AGENTSDR_CLAUDE_CODE_MAX_PROCESSES;
+    process.env.AGENTSDR_CLAUDE_CODE_MAX_PROCESSES = "1";
     try {
       const { target } = await bound({ generation: "slow", slowMs: 800 });
       await Promise.all([generation(target), generation(target), generation(target)]);
@@ -361,8 +361,8 @@ describe("structured answers through completeStructured (fake CLI)", () => {
       expect(spans).toHaveLength(3);
       for (let index = 1; index < spans.length; index += 1) expect(spans[index][0]).toBeGreaterThanOrEqual(spans[index - 1][1] - 50);
     } finally {
-      if (saved === undefined) delete process.env.CLAUDE_CODE_MAX_PROCESSES;
-      else process.env.CLAUDE_CODE_MAX_PROCESSES = saved;
+      if (saved === undefined) delete process.env.AGENTSDR_CLAUDE_CODE_MAX_PROCESSES;
+      else process.env.AGENTSDR_CLAUDE_CODE_MAX_PROCESSES = saved;
     }
   });
 });

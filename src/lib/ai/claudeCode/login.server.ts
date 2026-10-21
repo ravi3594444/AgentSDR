@@ -30,6 +30,7 @@ import type { ClaudeCodeLoginMethod, ClaudeCodeSignIn } from "./contract";
 
 const MAX_OUTPUT = 32_768;
 const NOT_AVAILABLE = "This sign-in is no longer available. Start sign-in again.";
+const UNREADABLE = "Claude Code's sign-in state could not be read on this server (its data directory may not be writable). Check the server, then start sign-in again.";
 
 type Flow = {
   status: ClaudeCodeSignIn;
@@ -90,7 +91,7 @@ export class ClaudeLoginController {
         if (flow.status.phase !== "waiting") return;
         if (auth.state === "in") this.finish(flow, "succeeded");
         else this.login(flow, method);
-      });
+      }, () => this.finish(flow, "failed", UNREADABLE));
     });
   }
 
@@ -194,7 +195,7 @@ export class ClaudeLoginController {
           : code === 0
             ? "Claude Code finished but this account is not signed in. Start sign-in again."
             : "Claude Code stopped before the sign-in finished. Check this server's connection and try again.");
-      });
+      }, () => this.finish(flow, "failed", UNREADABLE));
     });
   }
 

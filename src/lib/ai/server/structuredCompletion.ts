@@ -14,6 +14,13 @@ import { structuredRuntime } from "@/lib/ai/claudeCode/runtime.server";
  * Every structured answer in the app comes through here. How it is asked for
  * depends on the provider the organization selected (runtimePlan.ts):
  *
+ * Claude Code — when an owner selected it and the call names no model, the
+ * json_schema request below becomes one CLI generation on that owner's own
+ * Claude login (claudeCode/runtime.server.ts), its answer judged here like
+ * any other. Its failures carry HTTP-like statuses for the rules below: a
+ * usage limit, a sign-out or a missing model is never retried, and nothing
+ * falls back to an API provider.
+ *
  * AI/ML API — strict JSON schema (`response_format: json_schema`) for the
  * models AI/ML marks `structured_output`, the answer being the message
  * content; models it marks only `tools` (every Claude model, Grok) answer

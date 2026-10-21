@@ -95,3 +95,6 @@ service-account*.json
 /graphify-out/*
 !/graphify-out/graph.json
 !/graphify-out/GRAPH_REPORT.md
+
+# Claude Code engine: each account's own CLI login (never commit)
+/.data/

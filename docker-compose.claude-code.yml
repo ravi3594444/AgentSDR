@@ -1,0 +1,31 @@
+# Optional: the Claude Code engine — an owner signs Anthropic's Claude Code CLI
+# in with their own Claude account from Settings → AI provider
+# (docs/plans/CLAUDE_CODE_LOGIN.md). Add this file after the build file:
+#
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.build.yml:docker-compose.discovery.yml:docker-compose.claude-code.yml
+#
+# It builds the image with the CLI installed (the version and its tarball's
+# SHA-512 below are Claude Code 2.1.306 for x86-64; on arm64 set both, see
+# the doc), keeps each account's login in the `claude-code-data` volume so it
+# survives deployments, and bounds how many CLI processes run at once.
+# Overrides go in .env as AGENTSDR_CLAUDE_CODE_VERSION, AGENTSDR_CLAUDE_CODE_SHA512
+# and AGENTSDR_CLAUDE_CODE_MAX_PROCESSES (prefixed: Claude Code itself sets
+# CLAUDE_CODE_* variables in shells it runs).
+# An image built this way contains Anthropic's binary under Anthropic's
+# terms: keep it on your own server, do not publish it to a registry.
+
+services:
+  app:
+    build:
+      context: .
+      args:
+        CLAUDE_CODE_VERSION: ${AGENTSDR_CLAUDE_CODE_VERSION:-2.1.306}
+        CLAUDE_CODE_SHA512: ${AGENTSDR_CLAUDE_CODE_SHA512:-e3732a9a8e980556977b7662f2442a5970ec310591c6e0f86166d4c269598fafda6f4088b13a6d6fc1fbdc0716b2681682bd50b160029c5a69f160110597bb6c}
+    environment:
+      AGENTSDR_CLAUDE_CODE_DATA_DIR: /var/lib/agentsdr/claude-code
+      AGENTSDR_CLAUDE_CODE_MAX_PROCESSES: ${AGENTSDR_CLAUDE_CODE_MAX_PROCESSES:-2}
+    volumes:
+      - claude-code-data:/var/lib/agentsdr/claude-code
+
+volumes:
+  claude-code-data:

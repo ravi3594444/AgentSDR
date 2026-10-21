@@ -11,7 +11,7 @@ import type { ClaudeCodeLimit, ClaudeCodeModel, ClaudeCodeWindow } from "./contr
  * Nothing is resumed or kept between calls, so no conversation can carry
  * from one organization, person or task to another.
  *
- * Bounded: at most CLAUDE_CODE_MAX_PROCESSES CLI processes run at once on
+ * Bounded: at most AGENTSDR_CLAUDE_CODE_MAX_PROCESSES CLI processes run at once on
  * this server (default 2; each is a few hundred MB), and a call that cannot
  * get a slot within its timeout fails as busy. A call past its timeout, or
  * whose caller aborts, has its process group stopped.
@@ -70,7 +70,7 @@ export function runningOn(account: ClaudeAccount): number {
 }
 
 export function maxProcesses(): number {
-  const configured = Number.parseInt(process.env.CLAUDE_CODE_MAX_PROCESSES ?? "", 10);
+  const configured = Number.parseInt(process.env.AGENTSDR_CLAUDE_CODE_MAX_PROCESSES ?? "", 10);
   return Number.isFinite(configured) ? Math.min(8, Math.max(1, configured)) : 2;
 }
 
