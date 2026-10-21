@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { formatRequestKey, nextActionFor, parseRequestKey, type NextStepFacts } from "./requests";
+import { formatRequestKey, nextActionFor, parseRequestKey, requestState, type NextStepFacts } from "./requests";
 
 const id = "0b5e6c1e-6c55-4d1a-9b8f-3f7e3c1a2b4d";
 
@@ -52,5 +52,34 @@ describe("the next step: the first that applies", () => {
   test("done says how it ended; nothing open and no outcome is nothing to do", () => {
     expect(nextActionFor({ ...quiet, outcome: "the target of 20 was reached" })).toMatchObject({ kind: "done", detail: "the target of 20 was reached" });
     expect(nextActionFor(quiet).kind).toBe("nothing");
+  });
+});
+
+// Pilot finding L03: between one search ending and the continuation
+// starting the next, a request has no open child but its objective still
+// runs; it must read as working, not as its finished child.
+describe("requestState: what a request shows while its research runs", () => {
+  const item = (type: "job" | "plan", state: string, stateLabel: string, open: boolean) => ({ type, state, stateLabel, open });
+  const done = [item("job", "completed", "Done", false)];
+
+  test("an open plan leads, then an open search", () => {
+    expect(requestState({ items: [item("job", "executing", "Working", true), item("plan", "waiting_send", "Waiting to send", true)], objective: { status: "active", waiting: null } })).toEqual({ state: "waiting_send", stateLabel: "Waiting to send", open: true });
+    expect(requestState({ items: [item("job", "queued", "Queued", true), ...done], objective: null })).toEqual({ state: "queued", stateLabel: "Queued", open: true });
+  });
+
+  test("every child finished while the objective is active: open and researching, with its waiting reason", () => {
+    expect(requestState({ items: done, objective: { status: "active", waiting: null } })).toEqual({ state: "researching", stateLabel: "Researching", open: true });
+    expect(requestState({ items: done, objective: { status: "active", waiting: "the assistant is choosing the next source" } })).toEqual({ state: "researching", stateLabel: "Researching (the assistant is choosing the next source)", open: true });
+    expect(requestState({ items: [], objective: { status: "active", waiting: null } }).open).toBe(true);
+  });
+
+  test("a paused objective keeps it open too", () => {
+    expect(requestState({ items: done, objective: { status: "paused", waiting: null } })).toEqual({ state: "paused", stateLabel: "Research paused", open: true });
+  });
+
+  test("once the objective stopped, the newest child says how it ended; nothing at all is finished", () => {
+    expect(requestState({ items: done, objective: { status: "stopped", waiting: null } })).toEqual({ state: "completed", stateLabel: "Done", open: false });
+    expect(requestState({ items: [item("plan", "failed", "Failed", false), ...done], objective: null })).toEqual({ state: "failed", stateLabel: "Failed", open: false });
+    expect(requestState({ items: [], objective: { status: "stopped", waiting: null } })).toEqual({ state: "completed", stateLabel: "Finished", open: false });
   });
 });

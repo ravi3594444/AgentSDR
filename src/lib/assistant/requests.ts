@@ -100,3 +100,26 @@ export function nextActionFor(facts: NextStepFacts, chatHref: (threadId: string)
   if (facts.outcome) return { kind: "done", label: "Done", href: null, detail: facts.outcome };
   return { kind: "nothing", label: "Nothing to do", href: null, detail: null };
 }
+
+/** What a request's state is read from: its work items (newest first) and its objective, when it has one. */
+export type RequestStateFacts = {
+  items: readonly { type: "job" | "plan"; state: string; stateLabel: string; open: boolean }[];
+  objective: { status: "active" | "paused" | "stopped"; waiting: string | null } | null;
+};
+
+/**
+ * The state a request shows: its first open plan's, else its first open
+ * search's; else, while its objective still runs (between one search
+ * ending and the continuation starting the next, or paused), researching
+ * with the objective's waiting reason; else its newest item's. Open while
+ * any of those holds, so a request never reads Done from a finished child
+ * while its research goes on (pilot finding L03).
+ */
+export function requestState(facts: RequestStateFacts): { state: string; stateLabel: string; open: boolean } {
+  const lead = facts.items.find((item) => item.open && item.type === "plan") ?? facts.items.find((item) => item.open);
+  if (lead) return { state: lead.state, stateLabel: lead.stateLabel, open: true };
+  if (facts.objective?.status === "active") return { state: "researching", stateLabel: facts.objective.waiting ? `Researching (${facts.objective.waiting})` : "Researching", open: true };
+  if (facts.objective?.status === "paused") return { state: "paused", stateLabel: "Research paused", open: true };
+  const newest = facts.items[0];
+  return newest ? { state: newest.state, stateLabel: newest.stateLabel, open: false } : { state: "completed", stateLabel: "Finished", open: false };
+}
