@@ -1,17 +1,17 @@
 # Graph Report - AgentSDR  (2026-10-21)
 
 ## Corpus Check
-- 1827 files · ~2,156,871 words
+- 1827 files · ~2,157,102 words
 - Verdict: corpus is large enough that graph structure adds value.
 - Unclassified: 18 file(s) not represented in the graph (top: (none) 10, .css 3, .example 1)
 
 ## Summary
-- 12951 nodes · 43812 edges · 331 communities (310 shown, 21 thin omitted)
-- Extraction: 99% EXTRACTED · 1% INFERRED · 0% AMBIGUOUS · INFERRED: 478 edges (avg confidence: 0.89)
+- 12951 nodes · 43813 edges · 331 communities (310 shown, 21 thin omitted)
+- Extraction: 99% EXTRACTED · 1% INFERRED · 0% AMBIGUOUS · INFERRED: 479 edges (avg confidence: 0.89)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `361ec076`
+- Built from commit: `d3cfffb6`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -356,16 +356,16 @@
 10. `react` - 222 edges
 
 ## Surprising Connections (you probably didn't know these)
+- `Checks` --references--> `needSignal()`  [INFERRED]
+  docs/plans/BRIGHTDATA_RESEARCH_2026-10-21.md → src/lib/discovery/webDiscovery.ts
 - ``.server.ts` siblings exist for a reason` --references--> `db`  [INFERRED]
   CLAUDE.md → src/lib/db.ts
-- `WhatsApp calling and the recorder extension` --references--> `authorizeRecorder()`  [INFERRED]
-  CLAUDE.md → src/lib/calls/sessions.ts
-- `The reply agent` --references--> `handleClassificationJob()`  [INFERRED]
-  CLAUDE.md → src/lib/crm/handlers.ts
-- `Autonomous mode and the outreach writer` --references--> `startOutreachRun()`  [INFERRED]
-  CLAUDE.md → src/lib/assistant/outreach.server.ts
 - `5. Afterwards` --references--> `MissingOrganizationScopeError`  [INFERRED]
   docs/multi-tenancy/cutover.md → src/lib/tenancy/scope.ts
+- `Background work` --references--> `runInOrganization()`  [INFERRED]
+  docs/architecture.md → src/lib/tenancy/scope.ts
+- `1. Entry points open the scope — exactly once` --references--> `isPlatformConnected()`  [INFERRED]
+  docs/multi-tenancy/conventions.md → src/lib/platform/credentials.ts
 
 ## Import Cycles
 - None detected.
@@ -1613,24 +1613,24 @@ Cohesion: 0.10
 Nodes (28): Client, Docs, Fixes, Gates, N4: Compact chat reports, labels, onboarding, gates (M), Structured events, CHANNEL, CHANNEL_NAMES (+20 more)
 
 ## Knowledge Gaps
-- **39 isolated node(s):** `RFC-8058`, `RFC-7505`, `@formulajs/formulajs`, `lodash`, `moment` (+34 more)
-  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 4034 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
+- **39 isolated node(s):** `RFC-8058`, `RFC-8058`, `RFC-5322`, `RFC-4180`, `RFC-7505` (+34 more)
+  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 4033 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
 - **21 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `next` connect `withOrgContext` to `grid/schema.ts`, `runInOrganization`, `analytics/route.ts`, `CrmActionsClient.tsx`, `assistant/schema.ts`, `Frame`, `brightdata.server.ts`, `useDialogs`, `campaigns.server.ts`, `leads/LeadsClient.tsx`, `ByokSettingsClient.tsx`, `MessagesLayout.tsx`, `objective.server.ts`, `AiDialog.tsx`, `calls/campaigns.ts`, `research.server.ts`, `currentOrganizationId`, `webSearch.server.ts`, `quota.server.ts`, `grid/types.ts`, `CampaignCsvMappingDialog.tsx`, `activity.server.ts`, `InquiriesSettings.tsx`, `DialogProvider.tsx`, `connectionList.server.ts`, `grid/worker.ts`, `leads/columns.ts`, `assistant/http.server.ts`, `Sidebar.tsx`, `assistant/outreach.server.ts`, `@remixicon/react`, `CampaignClient.tsx`, `connectionList.server.ts`, `autonomy.server.ts`, `dailyRollover.ts`, `SignInForm.tsx`, `ChannelRulesForm.tsx`, `runners/types.ts`, `form/route.ts`, `mode.ts`, `auth/server.ts`, `readiness.ts`, `grid/columns.ts`, `integrations/catalog.ts`, `overview.ts`, `4. Execution phases`, `analytics/contract.ts`, `LandingPage.tsx`, `jobRunner.ts`, `results.server.ts`, `AssistantClient.tsx`, `instagram.ts`, `manifest.json`, `unsubscribeToken.ts`, `flags.server.ts`, `app/layout.tsx`, `legacyRoutes.ts`, `tinyfish.server.ts`, `SettingsShell.tsx`, `profile.ts`, `CrmKnowledgeClient.tsx`, `message-received/route.ts`, `drizzle-orm`, `qualification/campaigns.ts`, `SearchBatchDetailClient.tsx`, `intake.ts`, `campaigns/export/route.ts`, `actions/route.ts`, `requirePageOrgContext`, `settings/inquiries/page.tsx`, `Filters.tsx`, `treg.server.ts`, `runSearchQueue.ts`, `campaigns/CampaignDetailClient.tsx`, `react`, `platform/credentials.ts`, `webhooks/route.ts`, `xlsx`, `package.json`, `add-category-columns.js`, `apple-icon.tsx`, `rows.ts`, `crm/send.ts`, `send.server.ts`, `CampaignLeadsTab.tsx`, `brand.ts`, `endpoints.server.ts`, `settings/whatsapp-calling/page.tsx`, `instrumentation.ts`?**
-  _High betweenness centrality (0.091) - this node is a cross-community bridge._
+- **Why does `inOrg()` connect `inOrg` to `grid/schema.ts`, `runInOrganization`, `analytics/route.ts`, `assistant/schema.ts`, `brightdata.server.ts`, `campaigns.server.ts`, `inquiries.server.ts`, `objective.server.ts`, `ref_node_assert`, `assistant/agent.server.ts`, `AiDialog.tsx`, `calls/campaigns.ts`, `research.server.ts`, `currentOrganizationId`, `webSearch.server.ts`, `quota.server.ts`, `activity.server.ts`, `discovery.server.ts`, `tools.server.ts`, `connectionList.server.ts`, `fields.ts`, `grid/worker.ts`, `qualify.server.ts`, `leads/columns.ts`, `assistant/http.server.ts`, `assistant/outreach.server.ts`, `socialResearch.server.ts`, `connectionList.server.ts`, `autonomy.server.ts`, `outreachHistory.ts`, `crm.ts`, `handoff.ts`, `apify.server.ts`, `runners/types.ts`, `form/route.ts`, `unipileMail.ts`, `send.server.ts`, `grid/columns.ts`, `assistant/worker.ts`, `importLeads.ts`, `drafts.ts`, `integrations/catalog.ts`, `qualify.ts`, `4. Execution phases`, `instagram/accounts.ts`, `jobRunner.ts`, `leadStage.ts`, `whatsapp/messages.ts`, `results.server.ts`, `peopleImport.server.ts`, `results.server.ts`, `flags.server.ts`, `tinyfish.server.ts`, `metrics.server.ts`, `drizzle-orm`, `message-received/route.ts`, `withOrgContext`, `leads/identity.ts`, `drizzle-orm`, `currentOrganizationId`, `qualification/campaigns.ts`, `coverage.server.ts`, `campaigns/export/route.ts`, `app/campaigns/page.tsx`, `treg.server.ts`, `runSearchQueue.ts`, `platform/credentials.ts`, `rows.ts`, `crm/send.ts`, `mailboxProviders.ts`, `webDiscovery.server.ts`, `send.server.ts`, `inboxContext.server.ts`, `brand.ts`, `endpoints.server.ts`, `runEvidence.ts`, `updateKnowledgeDocument`?**
+  _High betweenness centrality (0.084) - this node is a cross-community bridge._
 - **Are the 3 inferred relationships involving `currentOrganizationId()` (e.g. with `Multi-tenancy: everything belongs to an organization` and `Request flow`) actually correct?**
   _`currentOrganizationId()` has 3 INFERRED edges - model-reasoned connections that need verification._
-- **What connects `RFC-8058`, `RFC-7505`, `@formulajs/formulajs` to the rest of the system?**
+- **What connects `RFC-8058`, `RFC-8058`, `RFC-5322` to the rest of the system?**
   _39 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `grid/schema.ts` be split into smaller, more focused modules?**
   _Cohesion score 0.06554019457245264 - nodes in this community are weakly interconnected._
-- **Why does `inOrg()` connect `inOrg` to `grid/schema.ts`, `runInOrganization`, `analytics/route.ts`, `assistant/schema.ts`, `brightdata.server.ts`, `campaigns.server.ts`, `inquiries.server.ts`, `objective.server.ts`, `ref_node_assert`, `assistant/agent.server.ts`, `AiDialog.tsx`, `calls/campaigns.ts`, `research.server.ts`, `currentOrganizationId`, `webSearch.server.ts`, `quota.server.ts`, `activity.server.ts`, `discovery.server.ts`, `tools.server.ts`, `connectionList.server.ts`, `fields.ts`, `grid/worker.ts`, `qualify.server.ts`, `leads/columns.ts`, `assistant/http.server.ts`, `assistant/outreach.server.ts`, `socialResearch.server.ts`, `connectionList.server.ts`, `autonomy.server.ts`, `outreachHistory.ts`, `crm.ts`, `handoff.ts`, `apify.server.ts`, `runners/types.ts`, `form/route.ts`, `unipileMail.ts`, `send.server.ts`, `grid/columns.ts`, `assistant/worker.ts`, `importLeads.ts`, `drafts.ts`, `integrations/catalog.ts`, `qualify.ts`, `4. Execution phases`, `instagram/accounts.ts`, `jobRunner.ts`, `leadStage.ts`, `whatsapp/messages.ts`, `results.server.ts`, `peopleImport.server.ts`, `results.server.ts`, `flags.server.ts`, `tinyfish.server.ts`, `metrics.server.ts`, `drizzle-orm`, `message-received/route.ts`, `withOrgContext`, `leads/identity.ts`, `drizzle-orm`, `currentOrganizationId`, `qualification/campaigns.ts`, `coverage.server.ts`, `campaigns/export/route.ts`, `app/campaigns/page.tsx`, `treg.server.ts`, `runSearchQueue.ts`, `platform/credentials.ts`, `rows.ts`, `crm/send.ts`, `mailboxProviders.ts`, `webDiscovery.server.ts`, `send.server.ts`, `inboxContext.server.ts`, `brand.ts`, `endpoints.server.ts`, `runEvidence.ts`, `updateKnowledgeDocument`?**
-  _High betweenness centrality (0.088) - this node is a cross-community bridge._
+- **Why does `next` connect `withOrgContext` to `grid/schema.ts`, `runInOrganization`, `analytics/route.ts`, `CrmActionsClient.tsx`, `assistant/schema.ts`, `Frame`, `brightdata.server.ts`, `useDialogs`, `campaigns.server.ts`, `leads/LeadsClient.tsx`, `ByokSettingsClient.tsx`, `MessagesLayout.tsx`, `objective.server.ts`, `AiDialog.tsx`, `calls/campaigns.ts`, `research.server.ts`, `currentOrganizationId`, `webSearch.server.ts`, `quota.server.ts`, `grid/types.ts`, `CampaignCsvMappingDialog.tsx`, `activity.server.ts`, `InquiriesSettings.tsx`, `DialogProvider.tsx`, `connectionList.server.ts`, `grid/worker.ts`, `leads/columns.ts`, `assistant/http.server.ts`, `Sidebar.tsx`, `assistant/outreach.server.ts`, `@remixicon/react`, `CampaignClient.tsx`, `connectionList.server.ts`, `autonomy.server.ts`, `dailyRollover.ts`, `SignInForm.tsx`, `ChannelRulesForm.tsx`, `runners/types.ts`, `form/route.ts`, `mode.ts`, `auth/server.ts`, `readiness.ts`, `grid/columns.ts`, `integrations/catalog.ts`, `overview.ts`, `4. Execution phases`, `analytics/contract.ts`, `LandingPage.tsx`, `jobRunner.ts`, `results.server.ts`, `AssistantClient.tsx`, `instagram.ts`, `manifest.json`, `unsubscribeToken.ts`, `flags.server.ts`, `app/layout.tsx`, `legacyRoutes.ts`, `tinyfish.server.ts`, `SettingsShell.tsx`, `profile.ts`, `CrmKnowledgeClient.tsx`, `message-received/route.ts`, `drizzle-orm`, `qualification/campaigns.ts`, `SearchBatchDetailClient.tsx`, `intake.ts`, `campaigns/export/route.ts`, `actions/route.ts`, `requirePageOrgContext`, `settings/inquiries/page.tsx`, `Filters.tsx`, `treg.server.ts`, `runSearchQueue.ts`, `campaigns/CampaignDetailClient.tsx`, `react`, `platform/credentials.ts`, `webhooks/route.ts`, `xlsx`, `package.json`, `add-category-columns.js`, `apple-icon.tsx`, `rows.ts`, `crm/send.ts`, `send.server.ts`, `CampaignLeadsTab.tsx`, `brand.ts`, `endpoints.server.ts`, `settings/whatsapp-calling/page.tsx`, `instrumentation.ts`?**
+  _High betweenness centrality (0.084) - this node is a cross-community bridge._
 - **Should `runInOrganization` be split into smaller, more focused modules?**
   _Cohesion score 0.05441558441558442 - nodes in this community are weakly interconnected._
 - **Why does `drizzle-orm` connect `drizzle-orm` to `grid/schema.ts`, `runInOrganization`, `inOrg`, `analytics/route.ts`, `assistant/schema.ts`, `brightdata.server.ts`, `campaigns.server.ts`, `inquiries.server.ts`, `whatsapp.ts`, `objective.server.ts`, `GridClient.tsx`, `ref_node_assert`, `assistant/agent.server.ts`, `AiDialog.tsx`, `calls/campaigns.ts`, `research.server.ts`, `currentOrganizationId`, `webSearch.server.ts`, `quota.server.ts`, `activity.server.ts`, `workspace.ts`, `discovery.server.ts`, `tools.server.ts`, `connectionList.server.ts`, `fields.ts`, `grid/worker.ts`, `qualify.server.ts`, `leads/columns.ts`, `assistant/http.server.ts`, `assistant/outreach.server.ts`, `e2e/brightdata.ts`, `socialResearch.server.ts`, `connectionList.server.ts`, `autonomy.server.ts`, `outreachHistory.ts`, `dailyRollover.ts`, `crm.ts`, `apify.server.ts`, `runners/types.ts`, `mode.ts`, `auth/server.ts`, `send.server.ts`, `grid/columns.ts`, `assistant/worker.ts`, `importLeads.ts`, `integrations/catalog.ts`, `qualify.ts`, `overview.ts`, `count`, `instagram/accounts.ts`, `analytics/contract.ts`, `jobRunner.ts`, `leadStage.ts`, `whatsapp/messages.ts`, `peopleImport.server.ts`, `instagram.ts`, `results.server.ts`, `web-discovery.ts`, `e2e/objective.ts`, `backfill-campaign-people.ts`, `flags.server.ts`, `tinyfish.server.ts`, `profile.ts`, `knowledge.ts`, `metrics.server.ts`, `message-received/route.ts`, `withOrgContext`, `leads/identity.ts`, `drizzle-orm`, `currentOrganizationId`, `qualification/campaigns.ts`, `coverage.server.ts`, `intake.ts`, `full-flow.ts`, `decisions.server.ts`, `metrics-parity.ts`, `treg.server.ts`, `runSearchQueue.ts`, `replyAgent/agent.ts`, `autonomous.ts`, `platform/credentials.ts`, `package.json`, `e2e/tinyfish.ts`, `add-category-columns.js`, `rows.ts`, `crm/send.ts`, `mailboxProviders.ts`, `webDiscovery.server.ts`, `send.server.ts`, `inboxContext.server.ts`, `auth/server.ts`, `endpoints.server.ts`?**
-  _High betweenness centrality (0.064) - this node is a cross-community bridge._
+  _High betweenness centrality (0.067) - this node is a cross-community bridge._
