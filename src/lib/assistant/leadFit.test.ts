@@ -1,5 +1,47 @@
 import { describe, expect, test } from "bun:test";
-import { applyRequestRules, funnelLine, linkedinProfileFacts, personFit, requiresNoWebsite, typedByOwner, verdictOf, websiteState, websiteStatusFact, type SortVerdict } from "./leadFit";
+import { applyRequestRules, funnelLine, leadSortingSystemPrompt, linkedinProfileFacts, personFit, requestSubject, requiresNoWebsite, typedByOwner, verdictOf, websiteState, websiteStatusFact, type SortVerdict } from "./leadFit";
+
+// Pilot finding L02: how the research runs (budget, time, sources, no
+// outreach, where to save) is not a requirement a lead can fail.
+describe("requestSubject: what the leads are judged against", () => {
+  const PILOT = "Research only. Find 3 dental clinics in Pune, India. Use free sources only with a $0 source budget, and finish within 5 minutes. Save a lead list. Do not contact anyone. No outreach. No messages. No campaigns.";
+
+  test("the pilot prompt keeps its kind, place and count and nothing about how to run", () => {
+    expect(requestSubject(PILOT)).toBe("Find 3 dental clinics in Pune, India.");
+  });
+
+  test("budgets, time limits, source choice and delivery go; a plain request is unchanged", () => {
+    expect(requestSubject("Find 20 gyms in Mumbai, spend up to $2 and finish within 2 hours")).toBe("Find 20 gyms in Mumbai");
+    expect(requestSubject("find gyms in Mumbai on Facebook, spend up to $1")).toBe("find gyms in Mumbai on Facebook");
+    expect(requestSubject("Find 50 real estate agents in Austin and send me their emails. Free sources only.")).toBe("Find 50 real estate agents in Austin.");
+    expect(requestSubject("Find 25 real estate agencies in Pune without a website")).toBe("Find 25 real estate agencies in Pune without a website");
+    expect(requestSubject("find 10 dentists in Pune")).toBe("find 10 dentists in Pune");
+    expect(requestSubject("Find real estate agents in Chicago and do outreach on whatsapp")).toBe("Find real estate agents in Chicago");
+  });
+
+  test("factual requirements stay: no website, a channel they have, a condition in its own sentence", () => {
+    expect(requestSubject("Find cafes in Pune that have Instagram. Do not contact anyone.")).toBe("Find cafes in Pune that have Instagram.");
+    expect(requestSubject("Find dentists in Pune. They must have no website. Message them on WhatsApp.")).toBe("Find dentists in Pune. They must have no website.");
+    expect(requestSubject("Find clinics in Pune open 24 hours with a low-cost plan")).toBe("Find clinics in Pune open 24 hours with a low-cost plan");
+    expect(requiresNoWebsite(requestSubject("Find 25 real estate agencies in Pune without a website, research only"))).toBe(true);
+  });
+
+  test("when every clause is about how to run, the request is left as it is", () => {
+    expect(requestSubject("Research only. Spend $0.")).toBe("Research only. Spend $0.");
+    expect(requestSubject("")).toBe("");
+  });
+});
+
+describe("the sorter's rules (what sortLeads tells the model)", () => {
+  test("say that how the research runs is not a requirement, and that approach is about the message, not permission", () => {
+    const prompt = leadSortingSystemPrompt([]);
+    expect(prompt).toContain("requestFit: whether the lead is what the OWNER'S REQUEST asks for");
+    expect(prompt).toMatch(/Instructions about how the research runs[^\n]*are NOT requirements[^\n]*never (?:change|affect) requestFit or approach/i);
+    expect(prompt).toMatch(/approach[^\n]*the message[^\n]*if (?:it|the lead) (?:were|was) contacted/i);
+    expect(prompt).toMatch(/asks for no contact[^\n]*changes nothing about (?:its )?fit/i);
+    expect(leadSortingSystemPrompt(["Dental clinics"])).toContain("Reuse these names when they fit: 'Dental clinics'.");
+  });
+});
 
 const sort = (over: Partial<SortVerdict> = {}): SortVerdict => ({ approach: "standard", reason: "A real estate agency in Pune.", requestFit: "fits", noWebsiteRequired: false, ...over });
 

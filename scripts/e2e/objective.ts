@@ -56,11 +56,14 @@ const prompts: string[] = [];
 type Verdict = { requestFit: "fits" | "unconfirmed" | "does_not_fit"; reason: string; noWebsite?: boolean };
 let judge: (facts: Record<string, string>) => Verdict = () => ({ requestFit: "fits", reason: "What the owner asked for." });
 const judgedLeads: Record<string, string>[] = [];
+/** The request each sorting call judged against, as the model read it (pilot L02: the subject, not how the research runs). */
+const judgedAgainst: string[] = [];
 mock.module(join(root, "src/lib/ai/server/structuredCompletion.ts"), () => ({
   completeStructured: async (input: Input) => {
     if (input.schemaName === "lead_sorting") {
       const leads = [...input.userPrompt.matchAll(/^(\d+)(?: \([^)]*\))?: (\{.*\})$/gm)].map((match) => ({ index: Number(match[1]), facts: JSON.parse(match[2]!) as Record<string, string> }));
       judgedLeads.push(...leads.map((lead) => lead.facts));
+      judgedAgainst.push(input.userPrompt.match(/^THE OWNER'S REQUEST: (.*)$/m)?.[1] ?? "");
       const text = JSON.stringify({ leads: leads.map(({ index, facts }) => {
         const verdict = judge(facts);
         return { index, group: "Leads", approach: verdict.requestFit === "does_not_fit" ? "skip" : "standard", reason: verdict.reason, requestFit: verdict.requestFit, noWebsiteRequired: verdict.noWebsite === true };
@@ -708,7 +711,10 @@ await runInOrganization(a.org.id, async () => {
     const context = { threadId: thread.id, userId: a.owner.id, ownerText: PILOT, requestMessageId: requestId };
     const refused = await runTool("find_leads", { what: "dental clinics", where: "Pune, India", contactAfter: true }, context);
     check("a search that would contact what it finds is refused: the owner did not ask", !refused.ok && refused.refused === true && /not asked to contact/.test(refused.summary), refused.summary);
+    const judgedBefore = judgedAgainst.length;
     await finishSearches(requestId);
+    // Pilot L02: the leads are judged against what to find, not against "$0", "5 minutes" or "do not contact anyone".
+    check("its leads are judged against the request's subject only", judgedAgainst.length > judgedBefore && judgedAgainst.slice(judgedBefore).every((request) => request === "Find 3 dental clinics in Pune, India."), JSON.stringify(judgedAgainst.slice(judgedBefore)));
     // Short of the target (2 of 3) the driver continues the request, now with the chat in Autonomous mode.
     await db.update(schema.assistantThreads).set({ autonomous: true, autonomousBy: a.owner.id, autonomousAt: new Date() }).where(eq(schema.assistantThreads.id, thread.id));
     replies = turn("Trying dentists too.", [{ tool: "find_leads", args: { what: "dentists", where: "Pune, India", maxResults: 3 } }]);

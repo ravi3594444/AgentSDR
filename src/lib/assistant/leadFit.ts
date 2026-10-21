@@ -76,6 +76,76 @@ export function applyRequestRules(request: string, facts: Record<string, string>
   return { fit, reason: /website/i.test(sort.reason) ? sort.reason : `${sort.reason} No website is listed for it; that was not checked further.`.trim() };
 }
 
+// ── The request the leads are judged against ─────────────────────────────────
+
+/**
+ * The owner's request with the clauses about how the research runs taken
+ * out (pilot finding L02): budgets and spend, time limits, which sources to
+ * use, research-only and no-outreach statements, where to save or send the
+ * results, and how to contact the leads. What is left — the kind of business
+ * or person, the place, how many, and conditions such as having no website
+ * or an Instagram account — is what a lead can fit or fail. A clause that
+ * names what to find is kept whatever else it says; when every clause is
+ * about how to run, the text is returned as it is.
+ */
+const CONTROL_CLAUSE = [
+  // budgets and spend
+  /(?:\$|₹|€|£)\s?\d|\b\d+\s?(?:usd|dollars?|rupees|rs|inr|credits?)\b|\b(?:budget|spend|spending|spent|cost\s+cap|no\s+cost|free\s+of\s+charge)\b/i,
+  // time limits
+  /\b(?:within|in|under|max(?:imum)?|up\s+to|no\s+more\s+than|at\s+most|time\s+limit(?:\s+of)?|deadline(?:\s+of)?|finish(?:\s+it)?\s+(?:within|in|by)|done\s+(?:within|in|by)|wrap\s+up\s+(?:within|in|by))\s+(?:the\s+next\s+)?(?:\d+(?:\.\d+)?|an?|one|half\s+an?|two|three|five|ten)\s*(?:minutes?|mins?|hours?|hrs?|days?|h|m|d)\b/i,
+  // which sources to use
+  /\b(?:free|paid|cheap|cheapest)\s+sources?\b|\bsources?\s+only\b|\b(?:use|using|prefer|stick\s+to|try)\s+(?:only\s+)?(?:free|google\s+maps|apify|tavily|bright\s?data|tinyfish|treg|the\s+web|web\s+search|reddit|hacker\s+news)\b|\bno\s+paid\b|\b(?:via|through)\s+(?:apify|google\s+maps|bright\s?data|tavily)\b/i,
+  // research only, no outreach
+  /\bresearch[\s-]+only\b|\b(?:only|just|purely|strictly)\s+research\b|\bno\s+(?:cold\s+)?(?:outreach|contact|contacting|messages?|messaging|campaigns?|emails?|emailing|dms?|calls?|pitching|pitches|sending)\b|\b(?:do\s+not|don'?t|dont|never)\s+(?:contact|message|email|whatsapp|dm|call|pitch|reach\s+out|approach)\b|\bwithout\s+(?:contacting|messaging|emailing|reaching\s+out)\b/i,
+  // where to save or send the results
+  /\b(?:save|export|download|share|keep|put)\b[^]*?\b(?:lead\s+)?(?:lists?|csv|sheet|spreadsheet|file|results?|leads?|them)\b|\b(?:send|email|mail|message|whatsapp|share|give|show)\s+(?:it\s+|them\s+|the\s+\w+\s+)?(?:to\s+)?(?:me|us)\b/i,
+  // how to contact the leads
+  /\b(?:contact|message|email|mail|whatsapp|dm|pitch|reach|call|approach|follow\s+up\s+with)\s+(?:them|each|every|all|everyone|the\s+(?:leads|clinics|businesses|people|owners|list|results|rest|ones))\b|\b(?:do\s+)?outreach\b|\bcampaigns?\b|\b(?:on|via|through|by|over)\s+(?:whatsapp|email|linkedin|instagram|sms|phone)\b/i,
+];
+/** A clause that names what to find ("find 3 dental clinics", "list every gym") is the subject, whatever else it says. */
+const NAMES_SUBJECT = /\b(?:find|look(?:ing)?\s+for|search(?:\s+for)?|get|collect|gather|list|identify|research|discover|need|want|target)\s+(?:me\s+|us\s+)?(?:(?:at\s+least|about|around|up\s+to|some|all|every|the|a|an|new|more)\s+)?(?:\d[\d,]*\s+)?(?!(?:only|them|it|me|us|out|no|nothing|back)\b)[a-z]/i;
+/** Clause boundaries, kept so the clauses left are joined as they were; a comma inside a number ("$1,000") is not one. */
+const CLAUSE_SPLIT = /([.;!?\n]+\s*|,\s*(?!\d)|\s+(?:and|then|but|also|plus)\s+)/i;
+
+export function requestSubject(text: string): string {
+  const parts = text.trim().split(CLAUSE_SPLIT);
+  let out = "";
+  let kept = 0;
+  for (let index = 0; index < parts.length; index += 2) {
+    const clause = parts[index]!.trim();
+    if (!clause) continue;
+    if (CONTROL_CLAUSE.some((pattern) => pattern.test(clause)) && !NAMES_SUBJECT.test(clause)) continue;
+    const separator = index > 0 ? parts[index - 1]! : "";
+    out += out ? `${separator.includes("\n") ? separator : separator.replace(/\s+/g, " ")}${clause}` : clause;
+    kept += 1;
+  }
+  if (!kept) return text.trim();
+  const ending = text.trim().match(/[.!?]$/)?.[0];
+  return ending && !/[.;!?]$/.test(out) ? `${out}${ending}` : out;
+}
+
+/**
+ * What the sorter is told (writer.server.ts sortLeads): the groups, the
+ * approaches, and how to judge a lead against the owner's request. How the
+ * research runs is never a requirement, and approach concerns the message a
+ * lead would get if contacted, not whether the owner wants anyone contacted.
+ */
+export function leadSortingSystemPrompt(knownGroups: readonly string[]): string {
+  return [
+    "You sort a business owner's leads before outreach, so each gets the right message. You do not write the messages.",
+    "group: name the kind of lead in 2 to 4 words ('Real estate agents', 'Cleaning companies', 'Dental clinics'), the same words for leads of the same kind." + (knownGroups.length ? ` Reuse these names when they fit: ${knownGroups.map((group) => `'${group}'`).join(", ")}.` : ""),
+    "approach 'standard': the group's message fits this lead. This is the default.",
+    "approach 'personal': rare. Every standard message already opens with a line from the lead's address, rating and category, so choose 'personal' only when the facts show something particular to this lead that the group's message would miss (a specialty, a stated need, a detail from its website or title) and it fits the owner's offer well.",
+    "approach 'skip': clearly not a fit for the owner's offer (a different kind of business, a competitor of the owner, closed, or obviously out of reach). Never skip only because little is known.",
+    "approach is about the message the lead would get if it were contacted. Whether the owner wants anyone contacted now, or how, is decided elsewhere and never makes a lead 'skip'.",
+    "reason: one short sentence the owner reads, based only on the facts given. Never invent facts about a lead. A finding from their own website (hiring, booking, websiteSays, websiteNeed, decisionMakers) is a reason they may fit, never a sign they want to buy: say 'may', never 'wants' or 'needs'.",
+    "requestFit: whether the lead is what the OWNER'S REQUEST asks for. What the owner stated of the lead itself (the kind of business or person, the place, a condition such as having no website) is a requirement wherever it applies to this lead; words in a title or name ('agent', 'founder', 'realty') are hints, not proof. 'fits': the facts show it is what they asked for. 'does_not_fit': a fact contradicts what they asked (another kind of business or role, another place, a website found when they asked for ones without), or it is a skip. 'unconfirmed': nothing contradicts it, but the facts cannot show a requirement (the place is not shown, whether it has a website is not known). Never call a lead does_not_fit only because little is known. With no request given, judge against the owner's business and offer.",
+    "Instructions about how the research runs (research only, no outreach, do not contact anyone, a budget or spend cap, a time limit, which sources to use, how many leads, where to save or send the list, which channel to use) are NOT requirements and never change requestFit or approach. A request that asks for no contact changes nothing about fit: judge the lead as if it would be contacted.",
+    "noWebsiteRequired: true only when the owner's request asks for leads like this one to have no website (a request can list several kinds of lead and say it of only one). websiteStatus says what is known of its website: 'none listed' is not proof it has none, and 'could not be checked' is not proof either.",
+    "reason, when requestFit is not 'fits': say which requirement is unmet or unconfirmed.",
+  ].join("\n");
+}
+
 /**
  * Whether a contact is one the owner typed into the chat themselves (its
  * email, LinkedIn link or phone number is in their message). Those are the
