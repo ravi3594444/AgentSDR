@@ -60,6 +60,8 @@ describe("the harness keeps only what protects", () => {
     expect(prompt).toContain("finish_request");
     expect(prompt).not.toContain("contactAfter");
     expect(prompt).not.toContain("AUTONOMOUS MODE");
+    // The owner's place holds outside Autonomous mode too.
+    expect(prompt).toContain("a neighbouring city, a suburb or the wider area is another place");
     const autonomous = systemPromptV2({ features: defaultFeatureState(), catalog: "", autonomy: { runsPerDay: 2, leadsPerDay: 50, searchesPerDay: 10 } });
     expect(autonomous).toContain("AUTONOMOUS MODE IS ON");
     expect(autonomous).toContain("Widen nothing the owner named");

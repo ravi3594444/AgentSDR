@@ -39,6 +39,9 @@ const RUN = process.env.EVAL_RUN ?? "1";
 const AGENT = (process.env.EVAL_AGENT ?? "v1") as "v1" | "v2";
 const CONT_CAP = Number(process.env.EVAL_CONT_CAP ?? 3);
 const MODEL_CAP = Number(process.env.EVAL_MODEL_CAP ?? 24);
+/** v2: calls left for the last turn once the harness has ended the request's time at its model budget. */
+const FINAL_TURN_CALLS = 6;
+let modelLimit = MODEL_CAP;
 const MAX_MS = Number(process.env.EVAL_MAX_MS ?? 10 * 60_000);
 const MODEL = process.env.EVAL_MODEL ?? "deepseek/deepseek-chat";
 /** The rules each case's scripted judge uses (wiring only, never the ground truth). */
@@ -362,9 +365,9 @@ mock.module(scPath, () => ({
       return { text: stub, model: "stub", provider: "stub", request: {}, response: {}, usage: {}, attempts: 1 };
     }
     if (MODE === "real") {
-      if (model.real >= MODEL_CAP) {
+      if (model.real >= modelLimit) {
         model.capHit = true;
-        throw new Error(`eval model budget of ${MODEL_CAP} calls used (Connect an AI provider stand-in)`);
+        throw new Error(`eval model budget of ${modelLimit} calls used (Connect an AI provider stand-in)`);
       }
       model.real += 1;
       prompts.push({ schema, chars: (input.systemPrompt?.length ?? 0) + input.userPrompt.length, userPromptTail: input.userPrompt.slice(-2500) });
@@ -525,10 +528,12 @@ try {
         const dryStop = cont ? facts.leads === cont.leadsAtStart && (progress.dry ?? 0) + 1 >= MAX_DRY_CONTINUATIONS : false;
         if (model.capHit || (facts.openChildren === 0 && facts.followUpsPending === 0 && !busy && facts.leads < objective.leadTarget && !dryStop)) {
           harnessCap = model.capHit ? `model budget of ${MODEL_CAP} calls` : `continuation cap of ${CONT_CAP}`;
-          if (AGENT === "v2" && !model.capHit) {
+          if (AGENT === "v2") {
             // v2 meets a real limit the way the product does: its time runs out, and the driver gives the
-            // assistant one last turn to plan from what matched and finish.
+            // assistant one last turn to plan from what matched and finish (the product has no model budget;
+            // at the harness's, that turn gets a few more calls).
             mark(`harness ends the request's time (${harnessCap})`);
+            if (model.capHit) { modelLimit = model.real + FINAL_TURN_CALLS; model.capHit = false; }
             await db.update(schema.assistantObjectives).set({ deadlineAt: new Date(Date.now() - 1_000) }).where(eq(schema.assistantObjectives.id, objective.id));
             continue;
           }
