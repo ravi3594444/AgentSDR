@@ -202,10 +202,12 @@ export function presetWindow(preset: SharedPreset, timeZone: string, now = new D
  * organization.
  */
 export type ReportScope = {
-  kind: "run" | "request" | "thread" | "organization";
+  kind: "run" | "request" | "thread" | "campaign" | "organization";
   runIds: readonly string[];
   audienceIds: readonly string[];
   jobIds: readonly string[];
+  /** Campaigns counted directly (a manual campaign no run owns): their sends, and their leads as the scope's people. */
+  campaigns?: { email?: readonly string[]; whatsapp?: readonly string[]; linkedin?: readonly string[] };
 };
 
 export const WHOLE_ORGANIZATION: ReportScope = { kind: "organization", runIds: [], audienceIds: [], jobIds: [] };

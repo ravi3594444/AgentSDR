@@ -47,7 +47,21 @@ export type WorkItem = {
   /** Plans: their people, those contacted (accepted for sending at least), those who replied and those whose send failed. */
   counts: { leads: number; contacted: number; replied: number; failed: number } | null;
   canCancel: boolean;
+  /** The owner request (its message id) this search or plan was started for; null for older work. */
+  requestId: string | null;
+  /** Plans: the channels they send on. */
+  channels: string[] | null;
 };
+
+/** Which work to list: the open work and the last `days` days (7 by default), or exactly these jobs and plans. */
+export type WorkFilter = { days?: number; jobIds?: readonly string[]; runIds?: readonly string[] };
+
+/** The owner request a search was started for: its own id, or the outreach request it was to contact leads for. */
+export function jobRequestId(payload: unknown): string | null {
+  const value = (payload ?? {}) as { requestMessageId?: unknown; contactAfter?: { requestId?: unknown } | null };
+  return typeof value.requestMessageId === "string" ? value.requestMessageId
+    : typeof value.contactAfter?.requestId === "string" ? value.contactAfter.requestId : null;
+}
 
 /** Running plans whose senders Activity looks at (the newest), so the list stays a quick read. */
 const SENDER_CHECKS = 5;
@@ -70,17 +84,20 @@ function iso(value: Date | null | undefined): string | null {
   return value ? value.toISOString() : null;
 }
 
-/** Open work first, then the last week's finished work, newest first. */
-export async function listWork(now = new Date()): Promise<WorkItem[]> {
-  const since = new Date(now.getTime() - WINDOW_DAYS * 86_400_000);
-  const jobs = await db.select({ job: assistantJobs, threadTitle: assistantThreads.title }).from(assistantJobs)
+/** Open work first, then the window's finished work (or exactly the listed jobs and plans), newest first. */
+export async function listWork(now = new Date(), filter: WorkFilter = {}): Promise<WorkItem[]> {
+  const since = new Date(now.getTime() - (filter.days ?? WINDOW_DAYS) * 86_400_000);
+  const exact = Boolean(filter.jobIds || filter.runIds);
+  const jobIds = [...(filter.jobIds ?? [])];
+  const runIds = [...(filter.runIds ?? [])];
+  const jobs = exact && !jobIds.length ? [] : await db.select({ job: assistantJobs, threadTitle: assistantThreads.title }).from(assistantJobs)
     .leftJoin(assistantThreads, and(eq(assistantThreads.id, assistantJobs.threadId), eq(assistantThreads.organizationId, assistantJobs.organizationId)))
-    .where(and(inOrg(assistantJobs), or(inArray(assistantJobs.status, ["queued", "running"]), gte(assistantJobs.createdAt, since))))
-    .orderBy(desc(assistantJobs.createdAt)).limit(80);
-  const runs = await db.select({ run: outreachRuns, threadTitle: assistantThreads.title }).from(outreachRuns)
+    .where(and(inOrg(assistantJobs), exact ? inArray(assistantJobs.id, jobIds) : or(inArray(assistantJobs.status, ["queued", "running"]), gte(assistantJobs.createdAt, since))))
+    .orderBy(desc(assistantJobs.createdAt)).limit(exact ? 200 : 80);
+  const runs = exact && !runIds.length ? [] : await db.select({ run: outreachRuns, threadTitle: assistantThreads.title }).from(outreachRuns)
     .leftJoin(assistantThreads, and(eq(assistantThreads.id, outreachRuns.threadId), eq(assistantThreads.organizationId, outreachRuns.organizationId)))
-    .where(and(inOrg(outreachRuns), or(inArray(outreachRuns.status, ["proposed", "starting", "running", "paused"]), gte(outreachRuns.createdAt, since))))
-    .orderBy(desc(outreachRuns.createdAt)).limit(40);
+    .where(and(inOrg(outreachRuns), exact ? inArray(outreachRuns.id, runIds) : or(inArray(outreachRuns.status, ["proposed", "starting", "running", "paused"]), gte(outreachRuns.createdAt, since))))
+    .orderBy(desc(outreachRuns.createdAt)).limit(exact ? 100 : 40);
   const items: WorkItem[] = [];
   for (const { job, threadTitle } of jobs) {
     const { state, reason: stateReason } = jobState(job, now);
@@ -113,6 +130,8 @@ export async function listWork(now = new Date()): Promise<WorkItem[]> {
       nextAt: null,
       counts: null,
       canCancel: canCancelJob(job),
+      requestId: jobRequestId(job.payload),
+      channels: null,
     });
   }
   const started = runs.filter(({ run }) => run.status !== "proposed" && run.status !== "cancelled").map(({ run }) => run.id);
@@ -147,6 +166,8 @@ export async function listWork(now = new Date()): Promise<WorkItem[]> {
       nextAt,
       counts: started.includes(run.id) ? planCounts(leads[run.id] ?? []) : null,
       canCancel: false,
+      requestId: typeof run.plan?.requestId === "string" ? run.plan.requestId : null,
+      channels: [...run.channels],
     });
   }
   return items.sort((a, b) => Number(b.open) - Number(a.open) || b.startedAt.localeCompare(a.startedAt));

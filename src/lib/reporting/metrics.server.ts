@@ -87,18 +87,29 @@ export async function reportFilter(scope: ReportScope = WHOLE_ORGANIZATION): Pro
   const runs = scoped && runIds.length
     ? await db.select({ id: outreachRuns.id, campaigns: outreachRuns.campaigns }).from(outreachRuns).where(and(inOrg(outreachRuns), inArray(outreachRuns.id, runIds)))
     : [];
-  const campaignsOf = (channel: "email" | "whatsapp" | "linkedin") => runs.flatMap((run) => (run.campaigns[channel] ? [run.campaigns[channel]!] : []));
+  const direct = scope.campaigns ?? {};
+  const campaignsOf = (channel: "email" | "whatsapp" | "linkedin") => [...runs.flatMap((run) => (run.campaigns[channel] ? [run.campaigns[channel]!] : [])), ...(direct[channel] ?? [])];
   const R = uuidArray(scope.runIds);
+  const E = uuidArray(campaignsOf("email"));
+  const W = uuidArray(campaignsOf("whatsapp"));
+  const L = textArray(campaignsOf("linkedin"));
+  const runPeople = sql`SELECT rl.person_id FROM outreach_run_leads rl WHERE rl.organization_id = ${org} AND rl.run_id = ANY(${R})`;
+  // A campaign counted directly brings its own leads; a run's campaigns are already its leads.
+  const campaignPeople = Object.values(direct).some((ids) => ids?.length)
+    ? sql` UNION SELECT l.person_id FROM outreach_leads l JOIN outreach_campaigns c ON c.id = l.campaign_id WHERE c.organization_id = ${org} AND c.id = ANY(${uuidArray(direct.email ?? [])}) AND l.person_id IS NOT NULL
+      UNION SELECT l.person_id FROM whatsapp_campaign_leads l JOIN whatsapp_campaigns c ON c.id = l.campaign_id WHERE c.organization_id = ${org} AND c.id = ANY(${uuidArray(direct.whatsapp ?? [])}) AND l.person_id IS NOT NULL
+      UNION SELECT l."personId" FROM "Lead" l WHERE l."organizationId" = ${org} AND l."campaignId" = ANY(${textArray(direct.linkedin ?? [])}) AND l."personId" IS NOT NULL`
+    : sql``;
   return {
     org,
     scoped,
     runs: R,
     audiences: uuidArray(scope.audienceIds),
     jobs: uuidArray(scope.jobIds),
-    emailCampaigns: uuidArray(campaignsOf("email")),
-    whatsappCampaigns: uuidArray(campaignsOf("whatsapp")),
-    linkedinCampaigns: textArray(campaignsOf("linkedin")),
-    runPeople: sql`(SELECT rl.person_id FROM outreach_run_leads rl WHERE rl.organization_id = ${org} AND rl.run_id = ANY(${R}))`,
+    emailCampaigns: E,
+    whatsappCampaigns: W,
+    linkedinCampaigns: L,
+    runPeople: sql`(${runPeople}${campaignPeople})`,
     only: (condition: SQL) => (scoped ? sql` AND ${condition}` : sql``),
   };
 }
