@@ -348,6 +348,16 @@ export async function completeStructured(
           `The model ran out of output tokens (${spent}) before calling ${input.schemaName}`,
         );
       }
+      // A model can call names it read in the prompt (DeepSeek Chat called the
+      // assistant's action names) instead of the one function offered; asked
+      // again unchanged, it does the same, so the retry is told what it called.
+      const others = (message?.tool_calls ?? []).flatMap((candidate) => candidate.function?.name ? [candidate.function] : []);
+      if (others.length) {
+        const names = [...new Set(others.map((other) => other.name))];
+        const reason = `you called ${names.join(" and ")}, which ${names.length > 1 ? "are not functions" : "is not a function"} here; the only function is ${input.schemaName}: call it once, with what you meant inside its arguments`;
+        rejected = { text: JSON.stringify(others.map((other) => ({ name: other.name, arguments: other.arguments }))), reason };
+        throw new RejectedAttemptError(`The model called ${names.join(", ")} instead of ${input.schemaName}`);
+      }
       throw new RejectedAttemptError(
         message?.content?.trim()
           ? `The model answered in prose instead of calling ${input.schemaName}`

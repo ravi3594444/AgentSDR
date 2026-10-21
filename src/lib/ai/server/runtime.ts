@@ -70,7 +70,11 @@ export async function runtimeFor(
  * AI/ML's catalog (cached 10 minutes), and whether a refused json_schema
  * request may fall back to a function call. When the catalog cannot be read
  * in a few seconds, or no longer lists the model, the plan's default is kept
- * and there is no fallback: the model's `tools` tag is unknown.
+ * and a refused json_schema request may still be asked once as a function
+ * call: the `tools` tag is unknown, and a second refusal costs one request
+ * while no retry cost the whole turn (DeepSeek Chat 400s every json_schema
+ * request, so a slow catalog read used to stop the assistant on the owner's
+ * first message).
  */
 async function aimlModeFor(
   modelId: string,
@@ -86,5 +90,5 @@ async function aimlModeFor(
   const model = models?.find((entry) => entry.id === modelId);
   return model
     ? { structuredOutput: aimlStructuredMode(model.capabilities), functionCallFallback: aimlFunctionCallFallback(model.capabilities) }
-    : { structuredOutput: fallback, functionCallFallback: false };
+    : { structuredOutput: fallback, functionCallFallback: true };
 }
