@@ -7,7 +7,7 @@ import { Callout } from "@/components/settings/SettingsKit";
 import { TAVILY_LIMITS, type TavilySettingsView } from "@/lib/tavily/catalog";
 
 /**
- * Settings → Organization → Tavily, shown once "Website and directory
+ * Settings → Providers & features → Tavily, shown once "Website and directory
  * search" is on: the key (write-only) and the searches a day. While a key is
  * saved, website searches use Tavily instead of the AI provider's web search.
  */

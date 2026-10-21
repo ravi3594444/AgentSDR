@@ -262,7 +262,7 @@ export function InstagramAccountsClient({ inquiryIntakeOn }: { inquiryIntakeOn: 
                 label="Taking inquiries"
                 value={String(takingInquiries)}
                 context={inquiryIntakeOn ? "New people become inquiries" : "Inquiry intake is off"}
-                hint="On these accounts, the first message of a new chat from someone not yet in your leads becomes an inquiry. Needs Inquiry intake on in Settings → Organization."
+                hint="On these accounts, the first message of a new chat from someone not yet in your leads becomes an inquiry. Needs Inquiry intake on in Settings → Providers & features."
               />
             </KpiStrip>
 
@@ -355,8 +355,8 @@ export function InstagramAccountsClient({ inquiryIntakeOn }: { inquiryIntakeOn: 
                                   {!inquiryIntakeOn && !account.inquiryIntake ? (
                                     <>
                                       Needs Inquiry intake, in{" "}
-                                      <Link href="/settings/organization" className="underline underline-offset-2 hover:text-text-strong-950">
-                                        Settings → Organization
+                                      <Link href="/settings/advanced" className="underline underline-offset-2 hover:text-text-strong-950">
+                                        Settings → Providers & features
                                       </Link>
                                     </>
                                   ) : !canManage ? (

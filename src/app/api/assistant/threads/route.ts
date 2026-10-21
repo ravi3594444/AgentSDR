@@ -32,7 +32,7 @@ export async function PATCH(request: NextRequest) {
     const who = ctx.userName?.trim() || "Someone";
     if (body.autonomous) {
       const caps = await autonomyCaps();
-      await addMessage({ threadId, role: "event", content: `${who} turned on Autonomous mode: the assistant works without asking, and plans it prepares start on their own in Automatic mode, up to ${caps.runsPerDay} plans, ${caps.leadsPerDay} leads and ${caps.searchesPerDay} searches a day (Settings → Organization). Turn it off at any time.` });
+      await addMessage({ threadId, role: "event", content: `${who} turned on Autonomous mode: the assistant works without asking, and plans it prepares start on their own in Automatic mode, up to ${caps.runsPerDay} plans, ${caps.leadsPerDay} leads and ${caps.searchesPerDay} searches a day (Settings → Sending defaults). Turn it off at any time.` });
     } else {
       await addMessage({ threadId, role: "event", content: `${who} turned off Autonomous mode: plans wait for your Start again.` });
     }

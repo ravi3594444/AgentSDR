@@ -59,7 +59,7 @@ function refusedByUnipile(status: number | null): boolean {
 
 export async function performInstagramReply(input: DeliverInstagramInput): Promise<DeliverInstagramResult> {
   if (!(await featureEnabled("instagram"))) {
-    throw new InstagramSendRefusedError("feature_off", "Instagram messages are off for this organization. An owner or admin can turn them on in Settings → Organization.");
+    throw new InstagramSendRefusedError("feature_off", "Instagram messages are off for this organization. An owner or admin can turn them on in Settings → Providers & features.");
   }
   const text = input.text;
   if (!text.trim()) throw new InstagramSendRefusedError("empty", "The message is empty");

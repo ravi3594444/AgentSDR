@@ -10,7 +10,7 @@ import * as Select from "@/components/alignui/select";
 import { Frame, FramePanel } from "@/components/analytics/kit/Frame";
 import { Callout, FieldRow } from "@/components/settings/SettingsKit";
 import { timeInputClass } from "@/components/outreach/WorkingHoursModal";
-import { ruleError, rulesOf, ruleWarning, type Channel, type Rule, type WeeklyHours } from "@/lib/channels/rules";
+import { ruleError, ruleSubmission, rulesSubset, ruleWarning, type Channel, type Rule, type WeeklyHours } from "@/lib/channels/rules";
 import { cn } from "@/utils/cn";
 
 /**
@@ -178,13 +178,16 @@ export function ChannelRulesForm({
   channel,
   initialValues,
   canEdit,
+  keys,
 }: {
   channel: Channel;
   initialValues: Values;
   canEdit: boolean;
+  /** Show and save only these rules (the "general" ones are split across two pages); the others keep what is stored. */
+  keys?: readonly string[];
 }) {
   const router = useRouter();
-  const rules = rulesOf(channel);
+  const rules = useMemo(() => rulesSubset(channel, keys), [channel, keys]);
   const [saved, setSaved] = useState<Values>(initialValues);
   const [values, setValues] = useState<Values>(initialValues);
   const [status, setStatus] = useState<{ tone: "success" | "error"; text: string } | null>(null);
@@ -206,7 +209,7 @@ export function ChannelRulesForm({
       const res = await fetch(`/api/settings/channel-rules/${channel}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(values),
+        body: JSON.stringify(ruleSubmission(rules, values)),
       });
       const body = (await res.json().catch(() => null)) as { values?: Values; error?: string } | null;
       if (!res.ok || !body?.values) throw new Error(body?.error || "Could not save the sending rules.");

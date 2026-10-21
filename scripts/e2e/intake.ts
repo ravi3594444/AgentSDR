@@ -7,7 +7,7 @@
  *   bun run --conditions=react-server scripts/e2e/intake.ts
  *
  * It creates its own organizations ("Intake check A/B/C/M …"), turns Inquiry
- * intake on for A and B (setFeature, as Settings → Organization does),
+ * intake on for A and B (setFeature, as Settings → Providers & features does),
  * leaves C off, and uses M (off, then on) for the management routes, called
  * with real Better Auth sessions of an owner and a member it signs up. It
  * leaves them behind. Nothing leaves the machine: global fetch is replaced

@@ -20,7 +20,7 @@ import {
 import { redditClientHint } from "./reddit";
 
 /**
- * Settings → Organization → Research sources: Hacker News and Stack
+ * Settings → Lead research → Research sources: Hacker News and Stack
  * Exchange use (nothing to configure), and the organization's record of
  * Reddit's approval. Recording approval enables nothing: there is no Reddit
  * reader.

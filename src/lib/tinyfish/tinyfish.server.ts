@@ -39,7 +39,7 @@ export class TinyfishSettingsError extends Error {}
 
 /** No usable key: the caller falls back to another source or reports the gap. */
 export class TinyfishUnavailableError extends Error {
-  constructor(message = "TinyFish is not connected: an owner or admin saves its key in Settings → Organization → TinyFish.") {
+  constructor(message = "TinyFish is not connected: an owner or admin saves its key in Settings → Lead research → TinyFish.") {
     super(message);
     this.name = "TinyfishUnavailableError";
   }

@@ -145,7 +145,7 @@ export function describeEndpoint(endpoint: TregEndpoint): string {
   return `${endpoint.id} [${endpoint.method}] — ${endpoint.summary} — ${price}${params ? ` — parameters: ${params}` : ""}`;
 }
 
-/** What an owner sees and edits in Settings → Organization → Treg (never the key). */
+/** What an owner sees and edits in Settings → Providers & features → Treg (never the key). */
 export type TregSettingsView = {
   connected: boolean;
   keyHint: string | null;

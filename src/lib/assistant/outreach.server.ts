@@ -112,7 +112,7 @@ export async function channelAvailability(): Promise<Record<AudienceChannel, Cha
     },
     signatureAppended: sendable.some((mailbox) => Boolean(mailbox.signature?.trim())),
     instagram: { available: instagram.length > 0, senders: instagram.length, perSenderPerDay: instagram.length ? Number(instagramRules.newChatsPerDay) : null,
-      reason: !instagramEnabled ? "Instagram is off in Settings → Organization" : !instagramReady ? "Apply the Instagram outbound migration" : !unipile ? "Unipile is not connected" : instagram.length ? null : "no Instagram account is connected (Settings → Instagram accounts)" },
+      reason: !instagramEnabled ? "Instagram is off in Settings → Providers & features" : !instagramReady ? "Apply the Instagram outbound migration" : !unipile ? "Unipile is not connected" : instagram.length ? null : "no Instagram account is connected (Settings → Instagram accounts)" },
     whatsappAccountIds: whatsapp.map((row) => row.id),
     linkedinAccountIds: linkedin.map((row) => row.id),
     instagramAccountIds: instagram.map((row) => row.id),

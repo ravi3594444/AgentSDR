@@ -60,7 +60,7 @@ export async function createInitialAdmin(input: SetupInput): Promise<{ userId: s
       .returning({ id: organizations.id });
     await tx.insert(members).values({ organizationId: organization.id, userId: user.id, role: "owner" });
     // The browser's time zone (validated in setupInput.ts) starts the
-    // organization's day (Settings → Organization). UTC is the default, not stored.
+    // organization's day (Settings → Sending defaults). UTC is the default, not stored.
     if (input.timeZone && input.timeZone !== "UTC") {
       await tx.insert(channelSettings).values({
         organizationId: organization.id,

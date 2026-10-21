@@ -16,8 +16,8 @@ function isActive(pathname: string, href: string) {
 /**
  * The organization's optional features, for rail rows that show only while
  * theirs is on. Read again on each section change, so turning one on in
- * Organization shows its row as soon as the person moves on. Null until
- * known (or if the read fails): those rows stay hidden.
+ * Providers & features shows its row as soon as the person moves on. Null
+ * until known (or if the read fails): those rows stay hidden.
  */
 function useFeatureState(pathname: string): FeatureState | null {
   const [features, setFeatures] = useState<FeatureState | null>(null);
@@ -130,7 +130,7 @@ function SettingsFrame({ children, modal }: { children: React.ReactNode; modal: 
           </span>
           <div className="min-w-0">
             <Title className="text-label-md text-text-strong-950">Settings</Title>
-            <Description className="sr-only">Connected accounts, AI, CRM and your preferences.</Description>
+            <Description className="sr-only">Your business, connected accounts, sending, research and advanced settings.</Description>
           </div>
         </div>
         <nav aria-label="Settings sections" className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">

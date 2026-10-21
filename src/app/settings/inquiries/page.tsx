@@ -46,7 +46,7 @@ export default async function InquiriesSettingsPage() {
   const off = (
     <Callout tone="info" title={`${FEATURES.inquiry_intake.label} is off`}>
       An owner or admin can turn it on in{" "}
-      <Link href="/settings/organization" className="underline underline-offset-2">Settings → Organization</Link>
+      <Link href="/settings/advanced" className="underline underline-offset-2">Settings → Providers & features</Link>
       {" "}(Optional features). Nothing is received until then.
     </Callout>
   );

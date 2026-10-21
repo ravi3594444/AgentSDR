@@ -7,7 +7,7 @@ import { Callout } from "@/components/settings/SettingsKit";
 import { FEATURE_KEYS, FEATURES, type FeatureKey, type FeatureState } from "@/lib/features/catalog";
 
 /**
- * Settings → Organization → Optional features. Each is off until an owner or
+ * Settings → Providers & features. Each is off until an owner or
  * admin turns it on here; turning one off stops it again (nothing already
  * stored is deleted).
  */

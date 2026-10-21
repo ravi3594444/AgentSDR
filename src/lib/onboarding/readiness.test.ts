@@ -66,7 +66,7 @@ describe("a fresh workspace", () => {
   test("every step links only to pages that already exist", () => {
     const hrefs = buildReadiness(fresh()).flatMap((item) => item.links.map((link) => link.href));
     expect(new Set(hrefs)).toEqual(new Set([
-      "/settings/organization",
+      "/settings/business",
       "/settings/members",
       "/settings/email-connection",
       "/settings/email-accounts",

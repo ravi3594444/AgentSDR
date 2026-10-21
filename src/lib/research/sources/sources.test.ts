@@ -63,7 +63,7 @@ describe("Reddit", () => {
   });
 
   test("the refusal says nothing was read, and approval does not enable reading", () => {
-    expect(redditRefusal(false)).toBe("Reddit is unavailable to research: its API needs Reddit's approval for this use, and that approval is not recorded (Settings → Organization → Research sources). Nothing was read from Reddit.");
+    expect(redditRefusal(false)).toBe("Reddit is unavailable to research: its API needs Reddit's approval for this use, and that approval is not recorded (Settings → Lead research → Research sources). Nothing was read from Reddit.");
     expect(redditRefusal(true)).toContain("approval recorded; a Reddit reader is not built yet");
     expect(redditRefusal(true)).toContain("Nothing was read from Reddit.");
   });

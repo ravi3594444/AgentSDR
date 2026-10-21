@@ -7,7 +7,7 @@ import { Callout } from "@/components/settings/SettingsKit";
 import { TREG_LIMITS, type TregSettingsView } from "@/lib/treg/catalog";
 
 /**
- * Settings → Organization → Treg, shown once "Treg tools" is on: the key
+ * Settings → Providers & features → Treg, shown once "Treg tools" is on: the key
  * (write-only) and the daily spend cap. Treg bills each call to the team's
  * prepaid balance; AgentSDR never tops it up.
  */

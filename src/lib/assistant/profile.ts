@@ -41,8 +41,19 @@ export const PROFILE_LABELS: Record<(typeof PROFILE_TEXT_FIELDS)[number] | "pref
   preferredChannels: "Preferred channels",
 };
 
-const MAX_FIELD = 4_000;
-const CHANNELS = new Set(["email", "whatsapp", "linkedin", "instagram"]);
+export const PROFILE_FIELD_MAX = 4_000;
+const MAX_FIELD = PROFILE_FIELD_MAX;
+export const PROFILE_CHANNELS = ["email", "whatsapp", "linkedin", "instagram"] as const;
+const CHANNELS = new Set<string>(PROFILE_CHANNELS);
+
+/** Where the profile is edited outside the chat (Settings → Your business). */
+export const BUSINESS_PROFILE_HREF = "/settings/business";
+
+/** The Knowledge copy once every field is cleared, so it never keeps text the profile no longer has. */
+export const EMPTY_PROFILE_KNOWLEDGE_TEXT = "No business details are saved. Add them in Settings → Your business, or tell the assistant about the business in Outreach.";
+
+/** Why the profile's Knowledge copy cannot be edited on the Knowledge page: it is rewritten from the profile. */
+export const PROFILE_DOCUMENT_READ_ONLY = "This document is a copy of your business profile, rewritten whenever the profile changes. Edit it in Settings → Your business.";
 
 /**
  * `current` with `patch` applied: a text field replaces the old one, an
@@ -81,6 +92,37 @@ export function mergeProfile(current: BusinessProfile, patch: Record<string, unk
     }
   }
   return { profile, problems };
+}
+
+/**
+ * Problems with a profile edit from Settings → Your business, in plain words,
+ * checked before anything is saved; none means mergeProfile stores it as
+ * sent. Text fields take a string (an empty one clears the field) up to
+ * PROFILE_FIELD_MAX characters, which is refused rather than cut; language
+ * takes a two-letter code; preferredChannels a list of known channels.
+ */
+export function profilePatchProblems(patch: unknown): string[] {
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) return ["Send the business profile as an object of fields"];
+  const entries = Object.entries(patch);
+  if (!entries.length) return ["Nothing to save"];
+  const problems: string[] = [];
+  for (const [key, value] of entries) {
+    if (key === "preferredChannels") {
+      if (!Array.isArray(value) || value.some((channel) => typeof channel !== "string" || !CHANNELS.has(channel))) {
+        problems.push(`${PROFILE_LABELS.preferredChannels} must be a list of ${PROFILE_CHANNELS.join(", ")}`);
+      }
+      continue;
+    }
+    if (!(PROFILE_TEXT_FIELDS as readonly string[]).includes(key)) {
+      problems.push(`${key} is not part of the business profile`);
+      continue;
+    }
+    const label = PROFILE_LABELS[key as (typeof PROFILE_TEXT_FIELDS)[number]];
+    if (typeof value !== "string") problems.push(`${label} must be text`);
+    else if (value.trim().length > MAX_FIELD) problems.push(`${label} is too long: keep it under ${MAX_FIELD.toLocaleString("en")} characters`);
+    else if (key === "language" && value.trim() && !/^[a-z]{2}$/i.test(value.trim())) problems.push(`${label} must be a two-letter code such as en`);
+  }
+  return problems;
 }
 
 /** What outreach cannot be written without; asked for before proposing a run. */

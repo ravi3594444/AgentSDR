@@ -23,10 +23,10 @@ export default async function InstagramMessagesPage({ searchParams }: { searchPa
           <EmptyState
             icon={RiInstagramLine}
             title="Instagram messages are off"
-            description="An owner or admin can turn them on under Optional features in Settings → Organization."
+            description="An owner or admin can turn them on under Optional features in Settings → Providers & features."
             action={
               <Button.Root asChild variant="neutral" mode="stroke" size="small">
-                <Link href="/settings/organization">Settings → Organization</Link>
+                <Link href="/settings/advanced">Settings → Providers & features</Link>
               </Button.Root>
             }
           />

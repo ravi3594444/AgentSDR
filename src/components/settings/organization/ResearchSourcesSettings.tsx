@@ -7,7 +7,7 @@ import { Callout } from "@/components/settings/SettingsKit";
 import { REDDIT_NOTE_MAX, type ResearchSourceUsage, type ResearchSourcesView } from "@/lib/research/sources/catalog";
 
 /**
- * Settings → Organization → Research sources: Hacker News and Stack
+ * Settings → Lead research → Research sources: Hacker News and Stack
  * Exchange are free public sources the assistant reads as evidence of a
  * stated need (nothing to set up); Reddit is unavailable, with a place to
  * record Reddit's approval. Recording it enables nothing.

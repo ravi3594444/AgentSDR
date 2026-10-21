@@ -9,13 +9,30 @@ import {
   parseRequiredText,
   parseUuid,
 } from "./categories";
-import { CrmNotFoundError, withCrmTransaction } from "./repository";
+import { CrmConflictError, CrmNotFoundError, withCrmTransaction, type CrmExecutor } from "./repository";
 import {
   crmKnowledgeDocuments,
   crmKnowledgeDocumentVersions,
   type CrmKnowledgeKind,
 } from "./schema";
+import { PROFILE_DOCUMENT_READ_ONLY } from "@/lib/assistant/profile";
+import { assistantProfiles } from "@/lib/assistant/schema";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
+
+/**
+ * The organization's business-profile copy: the document the profile is
+ * mirrored into (assistant_profiles.knowledge_document_id), or null. Only
+ * the profile's own sync (profile.server.ts) may change it, so the copy
+ * cannot drift from Settings → Your business.
+ */
+export async function businessProfileDocumentId(executor: Pick<CrmExecutor, "select"> = db): Promise<string | null> {
+  const [row] = await executor
+    .select({ id: assistantProfiles.knowledgeDocumentId })
+    .from(assistantProfiles)
+    .where(inOrg(assistantProfiles))
+    .limit(1);
+  return row?.id ?? null;
+}
 
 const KNOWLEDGE_KINDS = new Set<CrmKnowledgeKind>([
   "company",
@@ -126,6 +143,7 @@ export async function listKnowledgeDocuments(input: {
   includeArchived?: boolean;
 }) {
   const kind = input.kind === undefined ? undefined : parseKnowledgeKind(input.kind);
+  const profileDocumentId = await businessProfileDocumentId();
   const documents = await db
     .select()
     .from(crmKnowledgeDocuments)
@@ -145,7 +163,8 @@ export async function listKnowledgeDocuments(input: {
         eq(crmKnowledgeDocumentVersions.version, document.latestVersion),
       ))
       .limit(1);
-    results.push({ ...document, latest });
+    // businessProfile: the profile's copy, shown read-only (edited in Settings → Your business).
+    results.push({ ...document, latest, businessProfile: document.id === profileDocumentId });
   }
   return results;
 }
@@ -166,7 +185,12 @@ export async function getKnowledgeDocument(id: string) {
   return { ...document, versions };
 }
 
-export async function updateKnowledgeDocument(id: string, value: unknown) {
+/**
+ * Edit a document; every content change is a new version. The business
+ * profile's copy is refused (CrmConflictError, a 409 on the route) unless
+ * the call is the profile's own sync (`businessProfileSync`).
+ */
+export async function updateKnowledgeDocument(id: string, value: unknown, options: { businessProfileSync?: boolean } = {}) {
   parseUuid(id, "Knowledge document id");
   const input = parseUpdateKnowledgeDocumentInput(value);
   return withCrmTransaction(async (tx) => {
@@ -177,6 +201,9 @@ export async function updateKnowledgeDocument(id: string, value: unknown) {
       .limit(1)
       .for("update");
     if (!document) throw new CrmNotFoundError("Knowledge document", id);
+    if (!options.businessProfileSync && (await businessProfileDocumentId(tx)) === id) {
+      throw new CrmConflictError(PROFILE_DOCUMENT_READ_ONLY);
+    }
     const { content, ...metadata } = input;
     let nextVersion = document.latestVersion;
     let version: typeof crmKnowledgeDocumentVersions.$inferSelect | undefined;

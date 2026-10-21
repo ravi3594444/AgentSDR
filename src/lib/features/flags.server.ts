@@ -21,7 +21,7 @@ const cache = new Map<string, { state: FeatureState; expires: number }>();
 export class FeatureDisabledError extends Error {
   readonly status = 409;
   constructor(readonly feature: FeatureKey) {
-    super(`${FEATURES[feature].label} is off for this organization. An owner or admin can turn it on in Settings → Organization.`);
+    super(`${FEATURES[feature].label} is off for this organization. An owner or admin can turn it on in Settings → Providers & features.`);
     this.name = "FeatureDisabledError";
   }
 }

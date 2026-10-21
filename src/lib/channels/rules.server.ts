@@ -3,7 +3,7 @@ import "server-only";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
-import { resolveValues, rulesOf, validateValues, type Channel, type ChannelRuleValues } from "./rules";
+import { mergeStoredRules, resolveValues, rulesOf, validateValues, type Channel, type ChannelRuleValues } from "./rules";
 import { channelSettings } from "./schema";
 
 /**
@@ -56,14 +56,8 @@ export async function saveChannelRules(channel: Channel, input: Record<string, u
   const result = validateValues(channel, input);
   if (!result.ok) throw new Error(result.error);
 
-  const current = await stored(channel);
-  const next: Record<string, unknown> = { ...current };
-  for (const rule of rulesOf(channel)) {
-    if (!(rule.key in result.values)) continue;
-    const value = result.values[rule.key];
-    if (JSON.stringify(value) === JSON.stringify(rule.default)) delete next[rule.key];
-    else next[rule.key] = value;
-  }
+  // Only the submitted rules change: a page showing part of a channel's rules leaves the rest as stored.
+  const next = mergeStoredRules(channel, await stored(channel), result.values);
 
   await db
     .insert(channelSettings)

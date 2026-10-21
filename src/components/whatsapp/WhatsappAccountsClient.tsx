@@ -216,7 +216,7 @@ export function WhatsappAccountsClient({ rules }: { rules: WhatsappNumberRules }
                 label="New chats per 24 hours"
                 value={String((accounts ?? []).filter(healthy).reduce((sum, a) => sum + newChatsOf(a), 0))}
                 context={`${rules.newChatsPerDay} per number · ${rules.secondsBetweenSends} s between sends`}
-                hint="Each connected number starts at most this many new chats in any rolling 24 hours (no reset at midnight), shared by every campaign on it, and messages from one number are spaced apart. Replies in open chats are not limited. Change it in WhatsApp → Sending rules, or per number."
+                hint="Each connected number starts at most this many new chats in any rolling 24 hours (no reset at midnight), shared by every campaign on it, and messages from one number are spaced apart. Replies in open chats are not limited. Change it in Settings → WhatsApp sending rules, or per number."
               />
             </KpiStrip>
 

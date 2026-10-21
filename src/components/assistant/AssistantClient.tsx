@@ -461,7 +461,7 @@ function AutonomousSwitch({ thread, canManage, onChanged }: { thread: AssistantS
   const [busy, setBusy] = useState(false);
   const on = Boolean(thread.autonomous);
   async function toggle() {
-    if (!on && !window.confirm("Turn on Autonomous mode for this chat?\n\nThe assistant will work without asking you. Plans it prepares start on their own in Automatic mode, so it messages leads you have not reviewed, within your daily caps (Settings → Organization) and each channel's sending limits.\n\nYou can turn it off at any time.")) return;
+    if (!on && !window.confirm("Turn on Autonomous mode for this chat?\n\nThe assistant will work without asking you. Plans it prepares start on their own in Automatic mode, so it messages leads you have not reviewed, within your daily caps (Settings → Sending defaults) and each channel's sending limits.\n\nYou can turn it off at any time.")) return;
     setBusy(true);
     try {
       const response = await fetch("/api/assistant/threads", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ threadId: thread.id, autonomous: !on }) });

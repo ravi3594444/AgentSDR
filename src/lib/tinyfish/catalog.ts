@@ -5,7 +5,7 @@ import type { ResearchSource } from "@/lib/research/schema";
  * TinyFish (tinyfish.ai) as the organization's general web access: one API
  * key for Search (result pages), Fetch (a page's clean text and links) and
  * Browser (a remote Chromium driven over CDP). The owner saves the key in
- * Settings → Organization → TinyFish; nothing reads it from the environment.
+ * Settings → Lead research → TinyFish; nothing reads it from the environment.
  *
  * Protocol (docs.tinyfish.ai reference pages, read 2026-10-18):
  * - Search: `GET https://api.search.tinyfish.ai?query=…` with `X-API-Key`;
@@ -60,7 +60,7 @@ export const TINYFISH_LIMITS = {
   maxPageLinks: 80,
 } as const;
 
-/** What Settings → Organization → TinyFish shows and edits (never the key). */
+/** What Settings → Lead research → TinyFish shows and edits (never the key). */
 export type TinyfishSettingsView = {
   connected: boolean;
   keyHint: string | null;

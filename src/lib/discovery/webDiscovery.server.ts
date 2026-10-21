@@ -253,7 +253,7 @@ export function normalizeWebCriteria(
 /** Whether Instagram can be read for discovery in the organization in scope, with its linked account. */
 export async function instagramReadiness(): Promise<{ usable: boolean; reason: string | null; accountId: string | null; username: string | null }> {
   const off = (reason: string) => ({ usable: false, reason, accountId: null, username: null });
-  if (!(await featureEnabled("instagram"))) return off("Instagram is off for this organization (Settings → Organization → Optional features)");
+  if (!(await featureEnabled("instagram"))) return off("Instagram is off for this organization (Settings → Providers & features)");
   if (!(await isPlatformConnected("unipile"))) return off("Unipile is not connected, so Instagram cannot be read");
   const [account] = await db.select({ unipileAccountId: instagramAccounts.unipileAccountId, username: instagramAccounts.username })
     .from(instagramAccounts)
@@ -315,7 +315,7 @@ export async function startWebDiscovery(
   if (closed) throw new WebDiscoveryUnavailableError(`Not started: ${closed}.`);
   // A free-only request ($0 cap) pays for no search: here website search is free only through TinyFish.
   if (availability.provider !== "tinyfish" && (await requestSpendCap(requestId)) === 0) {
-    throw new WebDiscoveryUnavailableError(`Not started: this request is limited to free sources (its spend cap is $0), and website search here runs on ${webSearchProviderName(availability.provider)}, which is paid. TinyFish Search is free: an owner or admin connects it in Settings → Organization → TinyFish. Or name a budget in the request.`);
+    throw new WebDiscoveryUnavailableError(`Not started: this request is limited to free sources (its spend cap is $0), and website search here runs on ${webSearchProviderName(availability.provider)}, which is paid. TinyFish Search is free: an owner or admin connects it in Settings → Lead research → TinyFish. Or name a budget in the request.`);
   }
   const readiness = await instagramReadiness();
   const instagram = { usable: readiness.usable, reason: readiness.reason };
@@ -336,7 +336,7 @@ export async function startWebDiscovery(
       throw new WebDiscoveryLimitError(`${open} website search${open === 1 ? " is" : "es are"} already running for this organization (at most ${MAX_OPEN_WEB_DISCOVERIES} at a time). Ask again when one has finished; lead_search_status shows their progress.`, { slotsFull: true });
     }
     if (availability.provider === "tavily") {
-      // Tavily: the owner's own daily cap of searches (Settings → Organization → Tavily) replaces the fixed one.
+      // Tavily: the owner's own daily cap of searches (Settings → Providers & features → Tavily) replaces the fixed one.
       const tavily = await tavilyConnection();
       const problem = tavily ? tavilyCapProblem(await tavilySearchesToday(tx), queries.length, tavily.dailySearches) : "no Tavily key is saved";
       if (problem) throw new WebDiscoveryLimitError(`Not started: ${problem}. It frees up as the last 24 hours pass; owners and admins can raise it.`);

@@ -2,7 +2,7 @@
  * Reddit is not a research source. Its API needs Reddit's approval for this
  * use, and the owner decided: no reader and no workaround (no anonymous
  * JSON, scraping, RSS, browser automation or Apify). An organization can
- * record that approval (Settings → Organization → Research sources), but
+ * record that approval (Settings → Lead research → Research sources), but
  * even then nothing reads Reddit until a reader is built. Reddit's rules
  * also forbid automated unsolicited messages: no Reddit sender exists.
  */
@@ -18,7 +18,7 @@ export function isRedditHost(hostname: string): boolean {
 export function redditRefusal(approvalRecorded: boolean): string {
   return approvalRecorded
     ? "Reddit is unavailable to research: approval recorded; a Reddit reader is not built yet. Nothing was read from Reddit."
-    : "Reddit is unavailable to research: its API needs Reddit's approval for this use, and that approval is not recorded (Settings → Organization → Research sources). Nothing was read from Reddit.";
+    : "Reddit is unavailable to research: its API needs Reddit's approval for this use, and that approval is not recorded (Settings → Lead research → Research sources). Nothing was read from Reddit.";
 }
 
 /** A short hint of a Reddit app's client id: its last four characters, like an API key's hint. */

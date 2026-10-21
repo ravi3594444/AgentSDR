@@ -1,6 +1,6 @@
 /**
  * Sending rules: the numbers that used to be hardcoded in the sending
- * engines, now set per organization in Settings → <channel> → Sending rules.
+ * engines, now set per organization in Settings → Sending & automation (a page per channel, plus Sending defaults and Lead research for the "general" ones).
  *
  * Every rule is declared once here — label, help, default, unit and the
  * bounds it may take — and the settings page is generated from it, the API
@@ -399,6 +399,53 @@ export function isChannel(value: string): value is Channel {
 
 export function rulesOf(channel: Channel): readonly Rule[] {
   return CHANNEL_RULES[channel] as readonly Rule[];
+}
+
+/**
+ * The "general" rules are shown on two settings pages: the organization's
+ * day, phone numbers and Autonomous caps on Sending defaults
+ * (/settings/sending), and a request's research defaults on Lead research
+ * (/settings/research). Storage stays one row per organization and channel.
+ * Every general rule is on exactly one of them (rules.test.ts).
+ */
+export const GENERAL_RULE_PAGES = {
+  sending: ["timeZone", "dayStartsAt", "defaultPhoneCountry", "autonomousRunsPerDay", "autonomousLeadsPerDay", "autonomousSearchesPerDay"],
+  research: ["objectiveLeadTarget", "objectiveHours", "objectiveSpendUsd"],
+} as const satisfies Record<string, readonly (keyof ChannelRuleValues<"general">)[]>;
+
+/** The rules a form shows: all of the channel's, or only `keys`, in registry order. An unknown key throws. */
+export function rulesSubset(channel: Channel, keys?: readonly string[]): readonly Rule[] {
+  const rules = rulesOf(channel);
+  if (!keys) return rules;
+  const unknown = keys.filter((key) => !rules.some((rule) => rule.key === key));
+  if (unknown.length) throw new Error(`No ${channel} rule ${unknown.join(", ")}`);
+  return rules.filter((rule) => keys.includes(rule.key));
+}
+
+/**
+ * What a form showing `rules` sends when saved: their values only. A page
+ * that shows part of a channel's rules never sends the others, so it cannot
+ * overwrite what another page saved meanwhile (mergeStoredRules keeps them).
+ */
+export function ruleSubmission(rules: readonly Rule[], values: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(rules.filter((rule) => rule.key in values).map((rule) => [rule.key, values[rule.key]]));
+}
+
+/**
+ * The stored row after saving `values` (already validated): each submitted
+ * rule replaces its stored value, or is dropped when it equals the default
+ * (so an improved default reaches everyone who never changed it); rules not
+ * submitted keep what is stored.
+ */
+export function mergeStoredRules(channel: Channel, stored: Record<string, unknown>, values: Record<string, unknown>): Record<string, unknown> {
+  const next: Record<string, unknown> = { ...stored };
+  for (const rule of rulesOf(channel)) {
+    if (!(rule.key in values)) continue;
+    const value = values[rule.key];
+    if (JSON.stringify(value) === JSON.stringify(rule.default)) delete next[rule.key];
+    else next[rule.key] = value;
+  }
+  return next;
 }
 
 /** A number rule by key — what a per-account override is validated against. */

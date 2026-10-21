@@ -1,6 +1,6 @@
 /**
  * Optional features an organization turns on for itself. Every one is off
- * until an owner or admin switches it on in Settings → Organization, so an
+ * until an owner or admin switches it on in Settings → Providers & features, so an
  * existing organization keeps exactly what it had: no new channel, intake
  * endpoint or search runs for it until someone chooses it. Pure and
  * client-safe; the switches are stored in organization_features

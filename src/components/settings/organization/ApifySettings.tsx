@@ -7,7 +7,7 @@ import { Callout } from "@/components/settings/SettingsKit";
 import { APIFY_ACTOR_KEYS, APIFY_ACTORS, APIFY_LIMITS, type ApifyActorKey, type ApifySettingsView } from "@/lib/apify/catalog";
 
 /**
- * Settings → Organization → Apify, shown once "Apify discovery" is on:
+ * Settings → Providers & features → Apify, shown once "Apify discovery" is on:
  * the token (write-only), which Actors may run, and the spending limits.
  * The budget is the owner's own ceiling on top of the Apify account's;
  * AgentSDR never tops up, upgrades or raises either.
