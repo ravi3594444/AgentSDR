@@ -10,8 +10,15 @@ describe("old links open the page that replaced them, ids and filters kept", () 
     expect(resolveLegacyRoute("/crm/actions?record=1b2c&view=replies")).toBe("/inbox?record=1b2c&view=all");
   });
 
-  test("Activity's Replies tab opens All conversations with its channel", () => {
+  test("Activity's Replies tab opens All conversations with its channel; its work list opens Requests", () => {
     expect(resolveLegacyRoute("/activity?view=replies&channel=linkedin")).toBe("/inbox?view=all&channel=linkedin");
+    expect(resolveLegacyRoute("/activity")).toBe("/assistant/requests");
+    expect(resolveLegacyRoute("/activity?view=work")).toBe("/assistant/requests?view=work");
+  });
+
+  test("Analytics opens Reports with its view, range and time zone", () => {
+    expect(resolveLegacyRoute("/analytics")).toBe("/assistant/reports");
+    expect(resolveLegacyRoute("/analytics?view=whatsapp&range=30d&tz=Asia%2FKolkata")).toBe("/assistant/reports?view=whatsapp&range=30d&tz=Asia%2FKolkata");
   });
 
   test("the pipeline board opens inside Leads", () => {
@@ -20,15 +27,15 @@ describe("old links open the page that replaced them, ids and filters kept", () 
   });
 
   test("section overviews and single-page sections keep their query too", () => {
-    expect(resolveLegacyRoute("/crm?range=7d")).toBe("/analytics?range=7d");
-    expect(resolveLegacyRoute("/calling?range=30d")).toBe("/analytics?range=30d&view=whatsapp");
-    expect(resolveLegacyRoute("/linkedin")).toBe("/analytics?view=linkedin");
+    expect(resolveLegacyRoute("/crm?range=7d")).toBe("/assistant/reports?range=7d");
+    expect(resolveLegacyRoute("/calling?range=30d")).toBe("/assistant/reports?range=30d&view=whatsapp");
+    expect(resolveLegacyRoute("/linkedin")).toBe("/assistant/reports?view=linkedin");
     expect(resolveLegacyRoute("/instagram?chat=abc123")).toBe("/instagram/messages?chat=abc123");
     expect(resolveLegacyRoute("/linkedin/leads?q=ana")).toBe("/leads?q=ana");
   });
 
   test("pages that kept their address are not redirected", () => {
-    for (const path of ["/inbox", "/leads", "/assistant", "/crm/records/abc", "/crm/sequences", "/calling/campaigns", "/linkedin/campaigns", "/instagram/messages"]) {
+    for (const path of ["/inbox", "/leads", "/assistant", "/assistant/requests", "/assistant/reports", "/assistant/results", "/crm/records/abc", "/crm/sequences", "/calling/campaigns", "/linkedin/campaigns", "/instagram/messages"]) {
       expect(resolveLegacyRoute(path)).toBeNull();
     }
   });

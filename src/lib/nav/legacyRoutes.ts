@@ -28,15 +28,19 @@ export const LEGACY_REDIRECTS: LegacyRedirect[] = [
   // Action required and its Needs you / All replies views are the Inbox's two views.
   to("/crm/actions", "/inbox?view=all", [{ type: "query", key: "view", value: "replies" }]),
   to("/crm/actions", "/inbox?view=needs_you"),
-  // Activity's Replies tab is the Inbox's All conversations.
+  // Activity's Replies tab is the Inbox's All conversations; its work list is Outreach's Requests.
   to("/activity", "/inbox?view=all", [{ type: "query", key: "view", value: "replies" }]),
+  to("/activity", "/assistant/requests"),
   // The pipeline board lives inside Leads.
   to("/crm/pipeline", "/leads?view=board"),
+  // Analytics is Reports' By channel section, with the same ?view, ?range and ?tz.
+  // (Overview, /assistant/results, is a page that reads its #needs-you fragment.)
+  to("/analytics", "/assistant/reports"),
 
   // Section overviews retired earlier; once page redirects, which dropped the query.
-  to("/crm", "/analytics"),
-  to("/calling", "/analytics?view=whatsapp"),
-  to("/linkedin", "/analytics?view=linkedin"),
+  to("/crm", "/assistant/reports"),
+  to("/calling", "/assistant/reports?view=whatsapp"),
+  to("/linkedin", "/assistant/reports?view=linkedin"),
   // Instagram's one page; ?chat= opens that conversation.
   to("/instagram", "/instagram/messages"),
   // The retired LinkedIn-only lead directory.

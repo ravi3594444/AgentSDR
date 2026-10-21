@@ -1,16 +1,13 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
-import {
-  RiArrowLeftLine,
-  RiMailSendLine,
-} from "@remixicon/react";
+import { RiArrowRightLine, RiMailSendLine } from "@remixicon/react";
 
 import { EmptyState } from "@/components/page/EmptyState";
 import { WorkspaceNavigation, WorkspaceStats } from "@/components/page/WorkspaceNavigation";
 import { useRecordChanged } from "@/components/crm/recordEvents";
-import NeedsYouList, { type NeedsYouPayload } from "@/components/assistant/NeedsYouList";
+import type { NeedsYouPayload } from "@/components/assistant/NeedsYouList";
 import { LeadSourcesTable } from "@/components/reporting/LeadSourcesTable";
 import { MetricDefinitions, SHARED_METRIC_KEYS } from "@/components/reporting/MetricDefinitions";
 import { describeChannelSending, figure, money, percent, PERIOD_KINDS, type PeriodKind } from "@/lib/assistant/results";
@@ -18,9 +15,10 @@ import type { Results } from "@/lib/assistant/results.server";
 import { cn } from "@/utils/cn";
 
 /**
- * The owner's results: leads, outreach, replies, what waits for them,
- * failures, spending and limits, for a period in the business's time zone,
- * plus the daily summaries. Every figure comes from recorded events; one
+ * Reports: the owner's results — leads, outreach, replies, what waits for
+ * them, failures, spending and limits, for a period in the business's time
+ * zone — as summary numbers with the details folded below, plus the daily
+ * summaries. `children` (Reports' per-channel section) sits under the numbers. Every figure comes from recorded events; one
  * the app does not measure says so. The figures Analytics shows too come
  * from the shared definitions (src/lib/reporting/metrics.ts), and what waits
  * right now is labelled apart from the period's totals. Loading or
@@ -41,7 +39,7 @@ const PERIOD_LABEL: Record<PeriodKind, string> = {
 };
 
 /** The Analytics preset that covers the same days (src/lib/analytics/range.ts); all time has none. */
-const ANALYTICS_RANGE: Partial<Record<PeriodKind, string>> = {
+export const ANALYTICS_RANGE: Partial<Record<PeriodKind, string>> = {
   today: "today",
   yesterday: "yesterday",
   last_7_days: "7d",
@@ -60,7 +58,7 @@ function List({ items, empty }: { items: string[]; empty: string }) {
   return <ul className="space-y-1 text-paragraph-xs">{items.map((item, index) => <li key={index}>{item}</li>)}</ul>;
 }
 
-export default function ResultsClient({ initial }: { initial: ResultsPayload }) {
+export default function ResultsClient({ initial, onPeriodChange, children }: { initial: ResultsPayload; onPeriodChange?: (period: PeriodKind) => void; children?: ReactNode }) {
   const [payload, setPayload] = useState(initial);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -70,6 +68,7 @@ export default function ResultsClient({ initial }: { initial: ResultsPayload }) 
   const o = r.outreach;
 
   async function load(period: PeriodKind) {
+    if (period !== selectedPeriod.current) onPeriodChange?.(period);
     selectedPeriod.current = period;
     const mine = ++request.current;
     setLoading(true);
@@ -92,12 +91,8 @@ export default function ResultsClient({ initial }: { initial: ResultsPayload }) 
   return (
     <div aria-busy={loading} className="mx-auto flex w-full max-w-[1440px] flex-col gap-5 px-4 py-6 sm:px-6 lg:px-8">
       <header className="flex flex-wrap items-center gap-3">
-        <Link href="/assistant" className="inline-flex items-center gap-1 text-label-xs text-text-sub-600 hover:text-text-strong-950"><RiArrowLeftLine className="size-4" /> Assistant</Link>
-        <h1 className="text-[26px] font-semibold tracking-[-0.035em] text-text-strong-950">Overview</h1>
+        <h1 className="text-[26px] font-semibold tracking-[-0.035em] text-text-strong-950">Reports</h1>
         <p className="text-paragraph-xs text-text-soft-400">{r.period.label} · {r.period.timeZone} (business time zone)</p>
-        {ANALYTICS_RANGE[r.period.kind] && (
-          <Link href={`/analytics?range=${ANALYTICS_RANGE[r.period.kind]}`} className="text-label-xs text-text-sub-600 underline underline-offset-4 hover:text-text-strong-950">Same period in Analytics</Link>
-        )}
         <div role="group" aria-label="Filter results by period" className="ml-auto flex flex-wrap gap-1 rounded-lg bg-bg-weak-50 p-1">
           {PERIOD_KINDS.map((kind) => (
             <button key={kind} type="button" aria-pressed={r.period.kind === kind} disabled={loading} onClick={() => void load(kind)}
@@ -107,10 +102,15 @@ export default function ResultsClient({ initial }: { initial: ResultsPayload }) 
           ))}
         </div>
       </header>
-      <WorkspaceNavigation area="reporting" active="/assistant/results" />
+      <WorkspaceNavigation area="outreach" active="/assistant/reports" />
       {error && <p role="alert" className="text-paragraph-sm text-error-base">{error}</p>}
 
-      <NeedsYouList initial={initial.needsYou ?? null} />
+      {r.now.needsYou + r.now.actionRequired > 0 && (
+        <Link href="/inbox?view=needs_you" className="flex items-center gap-2 rounded-xl bg-bg-weak-50 px-3.5 py-3 text-label-xs text-text-strong-950 hover:bg-bg-soft-200">
+          <span className="min-w-0 flex-1">{r.now.needsYou} {r.now.needsYou === 1 ? "decision" : "decisions"} and {r.now.actionRequired} {r.now.actionRequired === 1 ? "conversation" : "conversations"} wait for you in the Inbox</span>
+          <RiArrowRightLine className="size-4 shrink-0" aria-hidden="true" />
+        </Link>
+      )}
 
       <section aria-labelledby="results-now" className="border-b border-stroke-soft-200 pb-1">
         <h2 id="results-now" className="text-label-sm text-text-strong-950">Right now <span className="ml-1 text-paragraph-xs font-normal text-text-soft-400">current counts, not limited to the period</span></h2>
@@ -141,16 +141,18 @@ export default function ResultsClient({ initial }: { initial: ResultsPayload }) 
         <span>Answered <strong className="ml-1 text-text-strong-950">{o.automaticReplies} by AI · {o.repliesByYou} by you</strong></span>
       </div>
 
+      {children}
+
       <div className="grid gap-4 lg:grid-cols-2">
-        <Section title="Interested people">
-          <p className="mb-3 text-paragraph-xs text-text-soft-400">Replies the AI classified as Interested in this period (applied or accepted). A record moved by hand is not counted here; Analytics&apos; Positive counts every move into Interested or Customer, and Pipeline shows who is Interested now. Open Leads to read the full conversations.</p>
+        <Section title="Interested people" collapsible>
+          <p className="mb-3 text-paragraph-xs text-text-soft-400">Replies the AI classified as Interested in this period (applied or accepted). A record moved by hand is not counted here; the By channel section&apos;s Positive counts every move into Interested or Customer, and Pipeline shows who is Interested now. Open Leads to read the full conversations.</p>
           <List items={r.interestedPeople.map((p) => `${p.name}${p.what ? ` — ${p.what}` : ""} (${new Date(p.at).toLocaleString()})`)} empty="No interested replies in this period." />
           <Link href="/leads?view=board" className="mt-4 inline-block text-label-xs text-text-strong-950 underline underline-offset-4">Open the Leads board</Link>
         </Section>
-        <Section title="Where leads came from">
+        <Section title="Where leads came from" collapsible>
           <LeadSourcesTable sources={r.leads.sources} empty="No leads were found or imported in this period." />
         </Section>
-        <Section title="Still to send (now)">
+        <Section title="Still to send (now)" collapsible>
           <p className="text-paragraph-xs">{r.pending.emailFollowUps} email leads, {r.pending.whatsappFollowUps} WhatsApp leads and {r.pending.linkedinSteps} LinkedIn leads are still in their sequences (active campaigns, now). {r.pending.instagramDms} initial Instagram DMs are queued or being submitted.</p>
           <p className="mt-1 text-paragraph-xs text-text-soft-400">Email {describeChannelSending(r.sending.email)}.</p>
           <p className="text-paragraph-xs text-text-soft-400">WhatsApp {describeChannelSending(r.sending.whatsapp)}.</p>
@@ -183,11 +185,11 @@ export default function ResultsClient({ initial }: { initial: ResultsPayload }) 
         </Section>
       </div>
 
-      <Section title="Outreach runs">
+      <Section title="Outreach runs" collapsible>
         {r.attention.plansAwaitingStart > 0 && (
           <p className="mb-2 text-paragraph-xs text-text-sub-600">
             {r.attention.plansAwaitingStart} {r.attention.plansAwaitingStart === 1 ? "plan waits" : "plans wait"} for your Start
-            {r.attention.plansAwaiting.length ? ` (${r.attention.plansAwaiting.map((plan) => `“${plan.name}”`).join(", ")}${r.attention.plansAwaitingStart > r.attention.plansAwaiting.length ? ", …" : ""})` : ""}. Nothing is sent for {r.attention.plansAwaitingStart === 1 ? "it" : "them"} until then; open the assistant to review.
+            {r.attention.plansAwaiting.length ? ` (${r.attention.plansAwaiting.map((plan) => `“${plan.name}”`).join(", ")}${r.attention.plansAwaitingStart > r.attention.plansAwaiting.length ? ", …" : ""})` : ""}. Nothing is sent for {r.attention.plansAwaitingStart === 1 ? "it" : "them"} until then; open the chat to review.
           </p>
         )}
         {r.runs.length ? (
@@ -206,12 +208,12 @@ export default function ResultsClient({ initial }: { initial: ResultsPayload }) 
               </tbody>
             </table>
           </div>
-        ) : <EmptyState compact icon={RiMailSendLine} title="No outreach runs in this period" description="Try another date range, or open the assistant to plan your next outreach." action={<Link href="/assistant" className="rounded-lg bg-bg-strong-950 px-4 py-2 text-label-xs text-text-white-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-base">Open assistant</Link>} />}
+        ) : <EmptyState compact icon={RiMailSendLine} title="No outreach runs in this period" description="Try another date range, or open the assistant to plan your next outreach." action={<Link href="/assistant" className="rounded-lg bg-bg-strong-950 px-4 py-2 text-label-xs text-text-white-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-base">Open the chat</Link>} />}
       </Section>
 
       <Section title="How these figures are counted" collapsible>
         <p className="mb-3 text-paragraph-xs text-text-soft-400">
-          The same definitions as Analytics, for whole local days in {r.period.timeZone}. A send counts once its provider accepted it; queued, failed and uncertain sends never do.
+          The same definitions as the By channel section, for whole local days in {r.period.timeZone}. A send counts once its provider accepted it; queued, failed and uncertain sends never do.
         </p>
         <MetricDefinitions keys={SHARED_METRIC_KEYS} />
       </Section>

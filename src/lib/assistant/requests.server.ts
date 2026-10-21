@@ -116,8 +116,11 @@ export async function listRequests(input: { channel?: string | null; state?: "op
   const now = input.now ?? new Date();
   const days = input.days ?? LIST_DAYS;
   const work = (await listWork(now, { days })).filter(isOwnWork);
+  // An older search with no request id belongs with the older plan that used its lead list (runScope reads it so too).
+  const planOfList = new Map(work.filter((item) => item.type === "plan" && !item.requestId && item.audienceId).map((item) => [item.audienceId!, keyOf(item)]));
+  const groupOf = (item: WorkItem) => (item.type === "job" && !item.requestId && item.audienceId && planOfList.get(item.audienceId)) || keyOf(item);
   const groups = new Map<string, WorkItem[]>();
-  for (const item of work) groups.set(keyOf(item), [...(groups.get(keyOf(item)) ?? []), item]);
+  for (const item of work) groups.set(groupOf(item), [...(groups.get(groupOf(item)) ?? []), item]);
 
   const requestIds = [...groups.keys()].flatMap((key) => {
     const parsed = parseRequestKey(key);

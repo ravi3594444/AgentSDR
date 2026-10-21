@@ -6,15 +6,14 @@ import * as Popover from "@/components/alignui/popover";
 import { ANALYTICS_CHANNELS, dayCount, MAX_ANALYTICS_RANGE_DAYS, type AnalyticsResponse, type AnalyticsView } from "@/lib/analytics/contract";
 import { localDate } from "@/lib/reporting/metrics";
 import { cn } from "@/utils/cn";
-import { WorkspaceNavigation } from "@/components/page/WorkspaceNavigation";
 import { ErrorState } from "./kit/ErrorState";
 import { parseRange, RANGE_PRESETS, resolveRange, serializeRange, type RangeSelection } from "./range";
 import { CHANNEL_META, formatDay } from "./theme";
 import { views, type ViewProps } from "./views";
 
 /**
- * The Analytics shell: title, view tabs, one date-range control, and the
- * active view. Fetches /api/analytics/{view} client-side, keeps the previous
+ * Reports' By channel section (it was the Analytics page): view tabs, one
+ * date-range control, and the active view. Fetches /api/analytics/{view} client-side, keeps the previous
  * data on screen (dimmed) while refetching, and mirrors ?view= and ?range=
  * into the URL with history.replaceState. Ranges are whole local days in the
  * organization's business time zone, resolved by the server exactly as
@@ -119,12 +118,11 @@ export default function AnalyticsClient({
     <div className="space-y-5">
       <header className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
-          <h1 className="text-title-h5 text-text-strong-950">Analytics</h1>
-          <p className="mt-1 max-w-2xl text-paragraph-sm text-text-sub-600">How conversations turn into meetings and customers, and which channels bring them in.</p>
+          <p className="max-w-2xl text-paragraph-sm text-text-sub-600">How conversations turn into meetings and customers, and which channels bring them in.</p>
           <p className="mt-1 text-paragraph-xs text-text-soft-400">
             {timeZoneOverride
-              ? <>Days in <span className="text-text-strong-950">{timeZoneOverride}</span>, an override from the link (?tz=); the business time zone, which Overview uses, is {organizationTimeZone}.</>
-              : <>Days in {organizationTimeZone}, the business time zone Overview uses too.</>}
+              ? <>Days in <span className="text-text-strong-950">{timeZoneOverride}</span>, an override from the link (?tz=); the business time zone, which the numbers above use, is {organizationTimeZone}.</>
+              : <>Days in {organizationTimeZone}, the business time zone the numbers above use too.</>}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2 self-start">
@@ -134,7 +132,6 @@ export default function AnalyticsClient({
           </button>
         </div>
       </header>
-      <WorkspaceNavigation area="reporting" active="/analytics" />
 
       <div className="mt-6 flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-stroke-soft-200">
         <div role="tablist" aria-label="Analytics views" className="-mb-px flex gap-5 overflow-x-auto">

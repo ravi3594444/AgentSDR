@@ -97,6 +97,8 @@ const seeded = await runInOrganization(a!.id, async () => {
     plan: { assignments: [p4, p5].map((p) => ({ personId: p.id, channel: "email" })) } as never, autopilot: false, createdBy: owner!.id,
   }).returning();
   await db.insert(outreachRunLeads).values([p4, p5].map((p) => ({ organizationId: org, runId: oldRun!.id, personId: p.id, channel: "email" as const })));
+  // The older search that filled its list, from before searches carried a request id.
+  const [oldSearch] = await db.insert(assistantJobs).values({ organizationId: org, kind: "discovery", status: "succeeded", stage: "done", audienceId: listAudience, payload: { phrase: "old list search" }, result: { found: 2, eligible: 2 }, finishedAt: minutesAgo(35) }).returning();
   const [e4] = await db.insert(outreachLeads).values({ campaignId: e0!.id, personId: p4.id, sequenceStatus: "initial_sent" }).returning();
   const [e5] = await db.insert(outreachLeads).values({ campaignId: e0!.id, personId: p5.id, sequenceStatus: "bounced" }).returning();
   await db.insert(outreachEmails).values([
@@ -125,7 +127,7 @@ const seeded = await runInOrganization(a!.id, async () => {
   const r1 = await reply(p1.id, 35);
   await reply(p6.id, 15);
   await db.insert(crmClassifications).values({ crmRecordId: r1.record.id, messageId: r1.message.id, expectedContextVersion: 0, appliedCategoryKey: "interested", confidence: "0.9", status: "accepted" });
-  return { thread: thread!, request: request!, search: search!, plan: plan!, w1: w1!, oldRun: oldRun!, e0: e0!, w2: w2! };
+  return { thread: thread!, request: request!, search: search!, plan: plan!, w1: w1!, oldRun: oldRun!, oldSearch: oldSearch!, e0: e0!, w2: w2! };
 });
 
 const requestKey = `r:${seeded.request.id}`;
@@ -140,6 +142,7 @@ await runInOrganization(a!.id, async () => {
   const chatRow = listed.requests.find((row) => row.key === requestKey);
   check("the chat request is listed under its message, with its search and plan", Boolean(chatRow) && chatRow!.title.startsWith("Find 20 dentists") && chatRow!.plans === 1 && chatRow!.searches === 1 && chatRow!.channels.includes("whatsapp"), JSON.stringify(chatRow));
   check("the older plan with no request id is listed on its own", keys.includes(runKey));
+  check("…with the older search that filled its list under it, not listed twice", !keys.includes(`job:${seeded.oldSearch.id}`) && listed.requests.find((row) => row.key === runKey)?.searches === 1);
   const manual = listed.manualCampaigns.map((row) => row.key);
   check("the hand-made campaign is listed apart; the runs' own campaigns are not", manual.includes(campaignKey) && !manual.some((key) => key.endsWith(seeded.w1.id) || key.endsWith(seeded.e0.id)), manual.join(","));
   check("the channel filter keeps the WhatsApp work only", (await listRequests({ channel: "email" })).requests.every((row) => row.channels.includes("email")) && (await listRequests({ channel: "email" })).requests.some((row) => row.key === runKey) && !(await listRequests({ channel: "email" })).requests.some((row) => row.key === requestKey));
@@ -157,6 +160,7 @@ await runInOrganization(a!.id, async () => {
   check("…with its objective's target and research, and its search and plan underneath", chat?.target === 20 && chat.objective?.requestMessageId === seeded.request.id && chat.children.searches.some((item) => item.id === seeded.search.id) && chat.children.plans.some((item) => item.runId === seeded.plan.id) && chat.children.campaigns.some((c) => c.id === seeded.w1.id && c.href === `/whatsapp/campaigns/${seeded.w1.id}`), JSON.stringify(chat?.children.campaigns));
   const old = await requestSummary(runKey);
   const oldExpected = await expected((await runScope(seeded.oldRun.id))!, [seeded.oldRun.id]);
+  check("…and its summary lists that search", Boolean(old?.children.searches.some((item) => item.id === seeded.oldSearch.id)));
   check("the older plan's figures equal the reports for it", JSON.stringify(numbersOf(old)) === JSON.stringify(oldExpected) && old!.numbers.contacted === 1 && old!.numbers.failed === 1, `${JSON.stringify(numbersOf(old))} vs ${JSON.stringify(oldExpected)}`);
   const hand = await requestSummary(campaignKey);
   check("the hand-made campaign: 1 contacted, 1 replied, 1 failed (its own leads)", JSON.stringify(numbersOf(hand)) === JSON.stringify({ contacted: 1, replied: 1, interested: 0, failed: 1 }) && hand!.numbers.matching === null && hand!.children.campaigns[0]?.href === `/whatsapp/campaigns/${seeded.w2.id}`, JSON.stringify(numbersOf(hand)));

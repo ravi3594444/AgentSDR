@@ -51,6 +51,8 @@ export type WorkItem = {
   requestId: string | null;
   /** Plans: the channels they send on. */
   channels: string[] | null;
+  /** The lead list it searched into or sends to: an older search and the plan that used its list share it. */
+  audienceId: string | null;
 };
 
 /** Which work to list: the open work and the last `days` days (7 by default), or exactly these jobs and plans. */
@@ -132,6 +134,7 @@ export async function listWork(now = new Date(), filter: WorkFilter = {}): Promi
       canCancel: canCancelJob(job),
       requestId: jobRequestId(job.payload),
       channels: null,
+      audienceId: job.audienceId,
     });
   }
   const started = runs.filter(({ run }) => run.status !== "proposed" && run.status !== "cancelled").map(({ run }) => run.id);
@@ -168,6 +171,7 @@ export async function listWork(now = new Date(), filter: WorkFilter = {}): Promi
       canCancel: false,
       requestId: typeof run.plan?.requestId === "string" ? run.plan.requestId : null,
       channels: [...run.channels],
+      audienceId: run.audienceId,
     });
   }
   return items.sort((a, b) => Number(b.open) - Number(a.open) || b.startedAt.localeCompare(a.startedAt));

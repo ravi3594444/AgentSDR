@@ -1,11 +1,12 @@
 import Link from "next/link";
 import { cn } from "@/utils/cn";
 
-export function WorkspaceNavigation({ area, active }: { area: "reporting" | "leads"; active: string }) {
-  const links = area === "reporting"
-    ? [{ href: "/assistant/results", label: "Overview" }, { href: "/analytics", label: "Analytics" }]
+/** The tabs inside a destination: Outreach's chat, requests and reports, or Leads' list and board. */
+export function WorkspaceNavigation({ area, active }: { area: "outreach" | "leads"; active: string }) {
+  const links = area === "outreach"
+    ? [{ href: "/assistant", label: "Chat" }, { href: "/assistant/requests", label: "Requests" }, { href: "/assistant/reports", label: "Reports" }]
     : [{ href: "/leads", label: "List" }, { href: "/leads?view=board", label: "Board" }];
-  return <nav aria-label={area === "reporting" ? "Reporting" : "Lead views"} className="flex flex-wrap gap-5 border-b border-stroke-soft-200">
+  return <nav aria-label={area === "outreach" ? "Outreach views" : "Lead views"} className="flex flex-wrap gap-5 border-b border-stroke-soft-200">
     {links.map((link) => <Link key={link.href} href={link.href} aria-current={active === link.href ? "page" : undefined}
       className={cn("-mb-px border-b-2 px-0.5 py-3 text-label-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary-base", active === link.href ? "border-text-strong-950 text-text-strong-950" : "border-transparent text-text-sub-600 hover:text-text-strong-950")}>
       {link.label}

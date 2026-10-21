@@ -9,6 +9,7 @@ import {
   RiArrowUpLine,
   RiAttachment2,
   RiBarChartBoxLine,
+  RiListCheck3,
   RiCheckboxCircleFill,
   RiCloseLine,
   RiErrorWarningFill,
@@ -39,6 +40,7 @@ import { planCounts, planOutcome } from "@/lib/activity/status";
 import { displayTime } from "@/lib/assistant/displayTime";
 import * as Button from "@/components/alignui/button";
 import NeedsYouList from "@/components/assistant/NeedsYouList";
+import { RequestBar, RequestPanel, useThreadRequest } from "@/components/assistant/RequestPanel";
 import { useChatScroll } from "./useChatScroll";
 import { cn } from "@/utils/cn";
 
@@ -922,7 +924,7 @@ function ReportCard({ message }: { message: Message }) {
     return (
       <Card title={`Results: ${data.results.period.label}`} status={message.status}>
         <p className="whitespace-pre-wrap text-paragraph-xs">{message.content.split("\n").slice(1).join("\n")}</p>
-        <Link href="/assistant/results" className="mt-2 inline-flex items-center gap-1 text-label-xs text-primary-base hover:underline">Open the results page <RiExternalLinkLine className="size-3.5" /></Link>
+        <Link href="/assistant/reports" className="mt-2 inline-flex items-center gap-1 text-label-xs text-primary-base hover:underline">Open Reports <RiExternalLinkLine className="size-3.5" /></Link>
       </Card>
     );
   }
@@ -1289,6 +1291,10 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
     return () => clearInterval(timer);
   }, [working, live, refresh]);
 
+  // The panel beside the chat follows what the chat sees: a new message, a search or plan changing state.
+  const activityKey = `${state.messages.length}|${state.jobs.map((job) => `${job.id}:${job.status}`).join(",")}|${Object.entries(state.runs).map(([id, run]) => `${id}:${run.status}`).join(",")}`;
+  const request = useThreadRequest(threadId, activityKey);
+
   const showPending = pending !== null && !state.messages.slice(pending.baseline).some((message) => message.role === "user");
   const count = state.messages.length + (showPending ? 1 : 0);
   const { scroller, content, showLatest, updatePosition, jumpToLatest } = useChatScroll(threadId, count);
@@ -1443,14 +1449,17 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
       <header className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-3 border-b border-stroke-soft-200 px-4 py-3 sm:px-6">
         <div className="flex min-w-0 flex-1 items-center gap-3">
           <AssistantAvatar />
-          <div className="min-w-0"><h1 className="text-label-md text-text-strong-950">Assistant</h1><p className="mt-0.5 truncate text-paragraph-xs text-text-soft-400">{displayThreadTitle(state.thread.title)}</p></div>
+          <div className="min-w-0"><h1 className="text-label-md text-text-strong-950">Outreach</h1><p className="mt-0.5 truncate text-paragraph-xs text-text-soft-400">{displayThreadTitle(state.thread.title)}</p></div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5 sm:order-last">
           <Button.Root variant="neutral" mode="stroke" size="xsmall" onClick={() => void newThread()} disabled={sending} aria-label="New conversation" className="h-9">
             <Button.Icon as={RiAddLine} />New chat
           </Button.Root>
-          <Link href="/assistant/results" aria-label="Outreach results" title="Outreach results" className="inline-flex h-9 items-center gap-1.5 rounded-lg px-2.5 text-label-xs text-text-sub-600 hover:bg-bg-weak-50">
-            <RiBarChartBoxLine className="size-4" aria-hidden="true" /><span className="hidden sm:inline">Results</span>
+          <Link href="/assistant/requests" aria-label="All requests" title="Every request and its progress" className="inline-flex h-9 items-center gap-1.5 rounded-lg px-2.5 text-label-xs text-text-sub-600 hover:bg-bg-weak-50">
+            <RiListCheck3 className="size-4" aria-hidden="true" /><span className="hidden sm:inline">Requests</span>
+          </Link>
+          <Link href="/assistant/reports" aria-label="Reports" title="Outreach reports" className="inline-flex h-9 items-center gap-1.5 rounded-lg px-2.5 text-label-xs text-text-sub-600 hover:bg-bg-weak-50">
+            <RiBarChartBoxLine className="size-4" aria-hidden="true" /><span className="hidden sm:inline">Reports</span>
           </Link>
         </div>
         <div className="flex w-full flex-wrap items-center gap-1.5 border-t border-stroke-soft-200 pt-2 sm:ml-auto sm:w-auto sm:border-0 sm:pt-0">
@@ -1462,6 +1471,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
 
       <div className="flex min-h-0 flex-1">
       <div className="relative flex min-w-0 flex-1 flex-col">
+      <RequestBar state={request} />
       <div className="shrink-0 px-4 pt-3 empty:hidden sm:px-6">
         <NeedsYouList initial={null} compact />
       </div>
@@ -1582,6 +1592,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
       </div>
 
       </div>
+      <RequestPanel state={request} />
       </div>
 
       {dragging && (

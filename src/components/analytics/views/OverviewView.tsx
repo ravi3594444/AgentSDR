@@ -185,7 +185,7 @@ type AttentionKey = "needsYou" | "actionRequired" | "overdue" | "draftsAwaitingR
 type AttentionItem = { key: AttentionKey; label: string; hint: string; href: string; icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>; tone: ProgressTone };
 
 const ATTENTION: AttentionItem[] = [
-  { key: "needsYou", label: METRICS.needsYouNow.label, hint: "Open decisions waiting for you", href: "/assistant/results", icon: RiFlagLine, tone: "serious" },
+  { key: "needsYou", label: METRICS.needsYouNow.label, hint: "Open decisions waiting for you", href: "/inbox?view=needs_you", icon: RiFlagLine, tone: "serious" },
   { key: "actionRequired", label: METRICS.actionRequiredNow.label, hint: "Conversations in the queue", href: "/inbox?view=needs_you", icon: RiInboxLine, tone: "serious" },
   { key: "overdue", label: METRICS.followUpsDueNow.label, hint: "Follow-ups drafted or past their time", href: "/inbox?view=needs_you&group=follow_up", icon: RiAlarmWarningLine, tone: "critical" },
   { key: "draftsAwaitingReview", label: METRICS.draftsAwaitingReviewNow.label, hint: "AI replies waiting for approval", href: "/inbox?view=needs_you", icon: RiDraftLine, tone: "warning" },

@@ -5,7 +5,7 @@ import { assistantState } from "@/lib/assistant/http.server";
 import { brandTitle } from "@/lib/brand";
 import { runInOrganization } from "@/lib/tenancy/scope";
 
-export const metadata: Metadata = { title: { absolute: brandTitle("Assistant") } };
+export const metadata: Metadata = { title: { absolute: brandTitle("Outreach") } };
 
 // Reads this organization's conversation and connections on every visit.
 export const dynamic = "force-dynamic";
