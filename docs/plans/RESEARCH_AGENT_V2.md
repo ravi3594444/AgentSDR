@@ -157,16 +157,21 @@ Read with care:
 - The last prompt line ("never ask what the brief already settles", added
   after r22's c6 waited on "should I search another source?") is
   **unmeasured**: the AI/ML key ran out of quota for every model (403
-  `ALL_TIME_LIMIT_EXCEEDED`, 21 Oct 22:31 UTC) before it could be run.
+  `ALL_TIME_LIMIT_EXCEEDED`, DeepSeek from about 22:06 UTC on 21 Oct)
+  before it could be run.
 
 ## Not done, and why
 
 - **Claude Sonnet 5.5 comparison.** The AI/ML key answered 403
   `ALL_TIME_LIMIT_EXCEEDED` for Sonnet (also after the owner raised the
   usage, 21 Oct 21:14 UTC) while DeepSeek still worked, and then for
-  DeepSeek too (22:31 UTC). The v1 Sonnet runs from before are invalid
-  for the same reason. The numbers above are DeepSeek only; whether a
-  stronger model needs less of the harness is untested.
+  DeepSeek too (about 22:06 UTC). GLM 5.3 was refused the same way; Claude
+  Haiku 5.5 answered a probe and the first one or two calls of two runs,
+  then was refused too (about 22:20 UTC), so those runs are not counted.
+  The pattern fits a dollar cap on the key that cheaper requests passed
+  for longer. The v1 Sonnet runs from before are invalid for the same
+  reason. The numbers above are DeepSeek only; whether a stronger model
+  needs less of the harness is untested.
 - **The guard rails suite and the e2e suites** ran without a model:
   `research-agent-v2` (17 checks), and with v2 off `assistant`,
   `assistant-intake`, `assistant-recovery`, `assistantAutomation`,
