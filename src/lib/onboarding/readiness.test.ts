@@ -270,6 +270,32 @@ describe("Gmail watch and incoming replies", () => {
     expect(partial.summary).toContain("1 of 2");
   });
 
+  // Pilot finding L05: replies follow each plan's Review or Automatic mode, and what waits is in the Inbox.
+  test("Getting started describes the reply modes and sends people to the Inbox, never promising approval of every reply", () => {
+    const facts = fresh({ ...emailReady, unipile: unipileOn, linkedinAccounts: { connected: 1, disconnected: 0 } });
+    const channels = { email: emailReadiness(facts), linkedin: linkedinReadiness(facts), whatsapp: whatsappReadiness(facts) };
+    const texts = [
+      ...aiReadiness(fresh()).details,
+      ...aiReadiness(fresh({ ai: { ...fresh().ai, provider: "aimlapi", connectionSaved: true, connectionVerified: true, providers: 1, defaultModel: { provider: "aimlapi", modelId: "gpt-4o" }, defaultModelEnabled: true } })).details,
+      ...repliesReadiness(fresh()).details,
+      ...repliesReadiness(fresh({ replies: { actionRequired: 1, draftsAwaitingReview: 0 } })).details,
+      repliesReadiness(fresh({ replies: { actionRequired: 1, draftsAwaitingReview: 0 } })).next ?? "",
+      replySyncReadiness(facts, channels).next ?? "",
+    ];
+    for (const text of texts) {
+      expect(text).not.toContain("Action required");
+      expect(text).not.toMatch(/wait(?:s)? for your review|without your approval|for your approval/);
+    }
+    const modes = aiReadiness(fresh()).details[0] ?? "";
+    expect(modes).toContain("Review mode drafts wait for you");
+    expect(modes).toContain("Automatic mode ordinary replies are sent and anything unusual waits for you");
+    expect(modes).toContain("Inbox (Needs you)");
+    expect(repliesReadiness(fresh({ replies: { actionRequired: 1, draftsAwaitingReview: 0 } })).next).toBe("Open the Inbox (Needs you).");
+    expect(repliesReadiness(fresh()).details[0]).toContain("land in the Inbox");
+    expect(replySyncReadiness(facts, channels).next).toContain("appears in the Inbox");
+    expect(repliesReadiness(fresh()).links).toEqual([{ href: "/inbox", label: "Inbox" }]);
+  });
+
   test("a connected channel is proven only by a reply that actually arrived", () => {
     const facts = fresh({ ...emailReady, unipile: unipileOn, linkedinAccounts: { connected: 1, disconnected: 0 } });
     const channels = { email: emailReadiness(facts), linkedin: linkedinReadiness(facts), whatsapp: whatsappReadiness(facts) };
