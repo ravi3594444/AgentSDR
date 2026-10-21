@@ -5,7 +5,8 @@
  * never confused. Pure and client-safe: Intl only.
  */
 
-function zoneOrUtc(timeZone: string): string {
+/** `timeZone` when Intl knows it, else UTC: never the process's own zone. */
+export function zoneOrUtc(timeZone: string): string {
   try {
     new Intl.DateTimeFormat("en-GB", { timeZone });
     return timeZone;
