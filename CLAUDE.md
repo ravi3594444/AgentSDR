@@ -413,6 +413,31 @@ key. Activity reads it through `objectiveView(requestMessageId)`.
   `callTregEndpoint`, `reserveQuota`'s `guard`. Its spend is read from the
   ledgers by the request's jobs and id, never kept as a second counter.
 
+## Research agent v2: the model plans, the code guards
+
+Behind the per-organization `research_agent_v2` feature (off by default;
+`scripts/add-research-agent-v2.ts` widens the two CHECKs it needs), the
+chat model runs a lead request itself: it writes the request's **brief**
+(`brief.ts`, stored in the objective's controls) before the first search,
+chooses sources, reviews leads with their evidence (`review_leads`),
+corrects verdicts only with a quote it actually read (`set_lead_fit`),
+prepares one plan of matching leads (`prepare_outreach` with
+`forRequest`) and ends the request with `finish_request` (stop reason
+`finished`). The prompt (`agentV2.ts`) teaches a method, not scenarios;
+every step pins the owner's words, the brief and the server's counts above
+a trimmed conversation. Keep v2 to that: add a tool or a fact the model can
+read, not a branch for one kind of request. What stays code is only what
+protects people and money: spend caps and limits above the default only
+when the owner wrote them, Do Not Contact, sending limits and readiness,
+Start (or Autonomous mode's caps), no double sends, tenancy, and claims
+checked against the record.
+
+Judge changes with the eval, not one transcript:
+`scripts/eval/research-agent/` runs a case end to end on a local
+`agentsdr_eval…` database with fake providers and a real model, and
+`score.ts` grades what landed in the database. `scripts/e2e/research-agent-v2.ts`
+checks the guard rails through `runTool`.
+
 ## Bright Data social research
 
 Bright Data is the research provider behind `research_social_sources`
