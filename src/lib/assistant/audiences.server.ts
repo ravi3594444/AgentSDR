@@ -7,6 +7,7 @@ import { normalizeRoute } from "@/lib/crm/wrongNumber";
 import { companies, people } from "@/lib/leads/schema";
 import { suppressionList } from "@/lib/outreach/schema";
 import { instagramUsername } from "@/lib/instagram/parse";
+import { memberName } from "@/lib/leads/displayName";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { contactChannels, countReasons } from "./audiences";
 import { randomUUID } from "node:crypto";
@@ -117,14 +118,8 @@ export async function loadPersonFacts(personIds: readonly string[]): Promise<Map
     : []);
   const wrong = await wrongChannelsOf(rows);
   for (const row of rows) {
-    const name = row.fullName?.trim()
-      || [row.firstName, row.lastName].filter(Boolean).join(" ").trim()
-      || row.companyName?.trim()
-      || row.email
-      || row.phone
-      || (typeof row.raw.businessName === "string" ? row.raw.businessName : null)
-      || instagramUsername((row.raw.instagram as { username?: unknown } | undefined)?.username)
-      || "Unnamed lead";
+    // Their own name, else the business they were saved under (ahead of their email or phone), never an invented person.
+    const name = memberName(row, { name: row.companyName }, instagramUsername((row.raw.instagram as { username?: unknown } | undefined)?.username));
     facts.set(row.id, {
       id: row.id,
       email: row.email,
