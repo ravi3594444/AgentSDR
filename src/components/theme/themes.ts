@@ -21,3 +21,8 @@ export function resolveTheme(preference: ThemePreference, systemDark: boolean): 
   const palette = THEMES[preference].palette;
   return palette === "dark" || (palette === "system" && systemDark) ? "dark" : "light";
 }
+
+/** What the sidebar's theme button does now, for its accessible name and tooltip: flip a plain palette, or open Appearance for a picture. */
+export function themeToggleLabel(preference: ThemePreference, resolved: ResolvedTheme): string {
+  return THEMES[preference].thumbnail ? `${THEMES[preference].label} is on. Change the appearance` : `Switch to ${resolved === "dark" ? "light" : "dark"} mode`;
+}

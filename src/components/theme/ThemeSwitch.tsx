@@ -5,7 +5,9 @@ import { useId } from "react";
 import { RiCheckLine, RiCloudLine, RiComputerLine, RiMoonLine, RiPaletteLine, RiPlanetLine, RiSunLine, RiTreeLine, RiWaterFlashLine } from "@remixicon/react";
 import { cn } from "@/utils/cn";
 import { useTheme, type ThemePreference } from "./ThemeProvider";
-import { THEMES } from "./themes";
+import { themeToggleLabel, THEMES } from "./themes";
+
+export { themeToggleLabel } from "./themes";
 
 const OPTIONS: Array<{ value: ThemePreference; label: string; description: string; icon: typeof RiSunLine }> = [
   { value: "golden", ...THEMES.golden, icon: RiCloudLine },
@@ -77,10 +79,10 @@ const TOGGLE_CLASS = "flex size-8 items-center justify-center rounded-lg text-te
  */
 export function ThemeToggleButton({ className }: { className?: string }) {
   const { preference, resolved, setPreference } = useTheme();
+  const label = themeToggleLabel(preference, resolved);
   if (THEMES[preference].thumbnail) {
-    const label = `${THEMES[preference].label} is on. Change the appearance`;
     return (
-      <Link href="/settings/appearance" aria-label={label} title={label} className={cn(TOGGLE_CLASS, className)}>
+      <Link href="/settings/appearance" aria-label={label} className={cn(TOGGLE_CLASS, className)}>
         <RiPaletteLine className="size-[18px]" aria-hidden="true" />
       </Link>
     );
@@ -88,7 +90,7 @@ export function ThemeToggleButton({ className }: { className?: string }) {
   const next = resolved === "dark" ? "light" : "dark";
   const Icon = resolved === "dark" ? RiSunLine : RiMoonLine;
   return (
-    <button type="button" onClick={() => setPreference(next)} aria-label={`Switch to ${next} mode`} title={`Switch to ${next} mode`} className={cn(TOGGLE_CLASS, className)}>
+    <button type="button" onClick={() => setPreference(next)} aria-label={label} className={cn(TOGGLE_CLASS, className)}>
       <Icon className="size-[18px]" aria-hidden="true" />
     </button>
   );

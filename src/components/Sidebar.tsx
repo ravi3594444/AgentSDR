@@ -29,6 +29,8 @@ import * as Tooltip from "@/components/alignui/tooltip";
 import { SETTINGS_HOME } from "@/components/settings/settingsNav";
 import { CommandPalette } from "@/components/nav/CommandPalette";
 import { ThemeToggleButton } from "@/components/theme/ThemeSwitch";
+import { themeToggleLabel } from "@/components/theme/themes";
+import { useTheme } from "@/components/theme/ThemeProvider";
 import { activeHref, NAV_FOOTER, visibleNavSections, type NavBadges, type NavData, type NavEntry, type NavGroup, type NavLink, type NavSection } from "@/components/nav/navConfig";
 import type { FeatureState } from "@/lib/features/catalog";
 import { APP_VERSION, bugReportUrl, SUPPORT_LINKS } from "@/lib/support";
@@ -260,6 +262,7 @@ function GroupRow({ group, current, open, onToggle, badges, collapsed, compact }
 export default function Sidebar({ mobile = false, onClose }: { mobile?: boolean; onClose?: () => void } = {}) {
   const pathname = usePathname();
   const current = activeHref(pathname);
+  const theme = useTheme();
   const { badges, features } = useBadges(pathname);
   const sections = useMemo(() => visibleNavSections(features), [features]);
   const [storedCollapsed, setCollapsed] = useState(false);
@@ -360,7 +363,7 @@ export default function Sidebar({ mobile = false, onClose }: { mobile?: boolean;
             </Link>
           )}
           <div className={cn("flex items-center", collapsed && "hidden")}>
-          <RailTip label="Appearance">
+          <RailTip label={themeToggleLabel(theme.preference, theme.resolved)}>
             <span><ThemeToggleButton /></span>
           </RailTip>
           {mobile ? (

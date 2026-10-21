@@ -36,6 +36,13 @@
 
 @theme {
   --font-sans: var(--font-landing-display), Manrope, Arial, Helvetica, sans-serif;
+  /* Tailwind's own sizes, on the same bigger scale as the AlignUI tokens below (12 → 14, 14 → 16, 16 → 17 px). */
+  --text-xs: .875rem;
+  --text-xs--line-height: 1.25rem;
+  --text-sm: 1rem;
+  --text-sm--line-height: 1.5rem;
+  --text-base: 1.0625rem;
+  --text-base--line-height: 1.625rem;
   --font-instrument-serif: var(--font-instrument-serif-next), Georgia, "Times New Roman", serif;
 
   /* AlignUI Raw Colors */
@@ -909,9 +916,13 @@ body {
    The colours are set on <html>, so menus, popovers, dialogs and the phone
    navigation drawer (portals outside the app shell) match the workspace.
    Each tint was chosen against the artwork's own pixels so the secondary and
-   hint text that sits directly on the picture keeps about 4.5:1 or better. */
+   hint text that sits directly on the picture keeps about 4.5:1 or better.
+   The dark themes repeat :not([data-theme="light"]):not(.light) so they outrank
+   the device dark-mode block below (prefers-color-scheme), which would otherwise
+   replace their colours for everyone whose device is in dark mode. */
 html[data-appearance="golden-clouds"] {
   --workspace-art: url("/themes/golden-clouds.webp");
+  --workspace-surface: rgb(255 253 249 / 88%);
   --workspace-art-tint: rgb(255 249 237 / 55%);
   --workspace-art-base: #e8cda2;
   --color-bg-white-0: #fffdf9;
@@ -923,8 +934,9 @@ html[data-appearance="golden-clouds"] {
   --color-text-soft-400: #4a3f35;
 }
 
-html[data-appearance="dark-forest"] {
+html[data-appearance="dark-forest"]:not([data-theme="light"]):not(.light) {
   --workspace-art: url("/themes/dark-forest.webp");
+  --workspace-surface: rgb(12 21 18 / 88%);
   --workspace-art-tint: rgb(0 10 6 / 62%);
   --workspace-art-base: #101e1b;
   --color-bg-white-0: #0c1512;
@@ -936,8 +948,9 @@ html[data-appearance="dark-forest"] {
   --color-text-soft-400: #b3c4b8;
 }
 
-html[data-appearance="deep-space"] {
+html[data-appearance="deep-space"]:not([data-theme="light"]):not(.light) {
   --workspace-art: url("/themes/deep-space.webp");
+  --workspace-surface: rgb(11 14 27 / 88%);
   --workspace-art-tint: rgb(3 5 17 / 62%);
   --workspace-art-base: #0b1020;
   --color-bg-white-0: #0b0e1b;
@@ -949,8 +962,9 @@ html[data-appearance="deep-space"] {
   --color-text-soft-400: #b9c2dc;
 }
 
-html[data-appearance="moonlit-ocean"] {
+html[data-appearance="moonlit-ocean"]:not([data-theme="light"]):not(.light) {
   --workspace-art: url("/themes/moonlit-ocean.webp");
+  --workspace-surface: rgb(11 20 31 / 88%);
   --workspace-art-tint: rgb(1 8 18 / 62%);
   --workspace-art-base: #0d1b2b;
   --color-bg-white-0: #0b141f;
@@ -978,7 +992,7 @@ html:is([data-appearance="golden-clouds"], [data-appearance="dark-forest"], [dat
    Instagram, tables, the Leads list) keep a mostly opaque surface over the
    picture, so it shows faintly behind them without costing readability. */
 html:is([data-appearance="golden-clouds"], [data-appearance="dark-forest"], [data-appearance="deep-space"], [data-appearance="moonlit-ocean"]) .workspace-surface {
-  background-color: color-mix(in srgb, var(--color-bg-white-0) 88%, transparent);
+  background-color: var(--workspace-surface);
 }
 
 html:is([data-appearance="golden-clouds"], [data-appearance="dark-forest"], [data-appearance="deep-space"], [data-appearance="moonlit-ocean"]) .assistant-message {
