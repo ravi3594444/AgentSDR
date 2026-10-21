@@ -123,11 +123,42 @@ one; reverting each fix turns its unit tests red.
   from the words, and the parent request, sampled every two seconds, never
   read Done while its objective was active and stayed the default pick.
   Unidentified directory emails stayed unconfirmed and were not counted.
-- **Production build and L04 in a browser**: see the section below.
+- **Production build and L04 in a browser**: see the next section.
 
 ## Production build and L04 in a browser
 
-Running at the time of this commit; the next commit records the result.
+Code `a80fb45` (the docs commit after it changes no code), in this
+container: no Docker daemon, so the image itself was not built.
+
+- **Build as the Dockerfile builder**: the recorder package, then `next
+  build --webpack` under Node 22 with a 4,096 MB heap: exit 0 in 358 s;
+  the build's processes peaked at 5.9 GB together.
+- **Served as the image's CMD**: `bun server.js` from the standalone output
+  with `TZ=UTC`, every sender paused, the local isolation database:
+  `/sign-in` 200, the assistant worker's start line present.
+- **Tenancy isolation** (`scripts/e2e/tenancy-isolation.ts`, every page):
+  no isolation failures. **Smoke**: 14 pages answer 200 (Outreach, Requests,
+  Reports, both Inbox views, Leads list and board, Getting started, five
+  settings pages).
+- **L04 in Chromium**: server in UTC, browser in Asia/Kolkata (Chromium
+  names it Asia/Calcutta), organization in America/New_York, an owner
+  message stored at 11:18:10 UTC (the pilot's instant: 4:48 PM in India).
+
+  | Where | Shown |
+  | --- | --- |
+  | Server-rendered HTML | 7:18 AM |
+  | After hydration | 7:18 AM |
+  | After a full reload | 7:18 AM |
+  | After leaving and reopening the chat | 7:18 AM |
+  | Hydration warnings | none |
+
+  A first attempt opened the chat seconds after the zone was changed and
+  showed 11:18 AM (UTC) in the HTML and the page alike: Sending rules are
+  cached 30 s per process, so a zone change reaches pages within 30 s. The
+  browser's own zone never appeared, which was the pilot's defect.
+- Built inside a nested worktree, Next puts `server.js` under the
+  worktree's path in the standalone output; the Docker builder works at
+  `/app` and is unaffected.
 
 ## Not fixed here (follow-ups)
 
