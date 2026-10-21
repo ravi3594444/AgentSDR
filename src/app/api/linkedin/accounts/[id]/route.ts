@@ -4,22 +4,13 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { inOrg } from "@/lib/tenancy/scope";
 import { linkedInAccounts } from "@/lib/linkedin/schema";
-import { numberRule, ruleError } from "@/lib/channels/rules";
-import {
-  DEFAULT_WORK_DAYS,
-  DEFAULT_WORK_END,
-  DEFAULT_WORK_START,
-  DEFAULT_WORK_TIMEZONE,
-} from "@/lib/linkedin/workingHours";
+import { numberRule, RETIRED_RULE_ERROR, ruleError } from "@/lib/channels/rules";
 
-const HHMM_RE = /^([01]?\d|2[0-3]):([0-5]\d)$/;
+/** The old per-account working hours: sending is always on, so none of them may be set any more. */
+const RETIRED_HOURS_FIELDS = ["workHoursEnabled", "workTimezone", "workStartTime", "workEndTime", "workDays"];
 
 type AccountUpdate = {
   dailyInviteLimit?: number | null;
-  workTimezone?: string | null;
-  workStartTime?: string | null;
-  workEndTime?: string | null;
-  workDays?: string | null;
 };
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -30,41 +21,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       const body = await req.json();
       const data: AccountUpdate = {};
 
-      if ("workHoursEnabled" in body) {
-        const enabled = Boolean(body.workHoursEnabled);
-        if (!enabled) {
-          data.workTimezone = null;
-          data.workStartTime = null;
-          data.workEndTime = null;
-          data.workDays = null;
-        } else {
-          data.workTimezone =
-            typeof body.workTimezone === "string" ? body.workTimezone : DEFAULT_WORK_TIMEZONE;
-          data.workStartTime =
-            typeof body.workStartTime === "string" ? body.workStartTime : DEFAULT_WORK_START;
-          data.workEndTime = typeof body.workEndTime === "string" ? body.workEndTime : DEFAULT_WORK_END;
-          data.workDays = typeof body.workDays === "string" ? body.workDays : DEFAULT_WORK_DAYS;
-        }
-      } else {
-        if ("workTimezone" in body) {
-          data.workTimezone = body.workTimezone === null || body.workTimezone === "" ? null : String(body.workTimezone);
-        }
-        if ("workStartTime" in body) {
-          data.workStartTime = body.workStartTime == null ? null : String(body.workStartTime);
-        }
-        if ("workEndTime" in body) {
-          data.workEndTime = body.workEndTime == null ? null : String(body.workEndTime);
-        }
-        if ("workDays" in body) {
-          data.workDays = body.workDays == null ? null : String(body.workDays);
-        }
-      }
-
-      if (data.workStartTime && !HHMM_RE.test(data.workStartTime)) {
-        return NextResponse.json({ ok: false, error: "workStartTime must be HH:mm" }, { status: 400 });
-      }
-      if (data.workEndTime && !HHMM_RE.test(data.workEndTime)) {
-        return NextResponse.json({ ok: false, error: "workEndTime must be HH:mm" }, { status: 400 });
+      if (body && typeof body === "object" && RETIRED_HOURS_FIELDS.some((field) => field in body)) {
+        return NextResponse.json({ ok: false, error: RETIRED_RULE_ERROR }, { status: 400 });
       }
 
       // The account's own invitations a day (null = the organization's rule),

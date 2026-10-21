@@ -3,8 +3,8 @@
  * asking. Plans it prepares start on their own (Automatic replies), it does
  * not stop to ask permission, and it keeps working across many steps and
  * background searches. What still bounds it lives in code, not in the
- * prompt: the organization's daily caps (Settings → Sending defaults, the
- * "general" Sending rules), every channel's own sending limits, Do Not
+ * prompt: the organization's daily caps (the "general" rules, kept but
+ * shown on no settings page), the daily lead limit, every channel's own sending limits, Do Not
  * Contact, opt-outs and the reply agent's checks. A plan whose leads are
  * partly in other running plans starts with the rest (overlap.ts).
  *

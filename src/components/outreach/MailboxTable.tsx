@@ -10,7 +10,6 @@ import {
   RiMailSendLine,
   RiMoreLine,
   RiPenNibLine,
-  RiTimeLine,
 } from "@remixicon/react";
 
 import * as Avatar from "@/components/alignui/avatar";
@@ -23,7 +22,6 @@ import { AccountIdentity, PresenceDot } from "@/components/settings/AccountsOver
 import { Meter } from "@/components/settings/SettingsKit";
 import type { mailboxes } from "@/lib/outreach/schema";
 import { cn } from "@/utils/cn";
-import WorkingHoursModal from "./WorkingHoursModal";
 import SignatureModal from "./SignatureModal";
 import { useDialogs } from "@/components/DialogProvider";
 
@@ -51,39 +49,11 @@ function initialsFor(mailbox: Mailbox) {
   return letters.toUpperCase() || "?";
 }
 
-/** Summarizes the enabled days into a compact string, e.g. "Mon–Fri, 9:00–18:00". */
-function hoursSummary(mailbox: Mailbox) {
-  const days = mailbox.workingHours.days;
-  const order: (keyof typeof days)[] = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
-  const labels: Record<keyof typeof days, string> = {
-    monday: "Mon",
-    tuesday: "Tue",
-    wednesday: "Wed",
-    thursday: "Thu",
-    friday: "Fri",
-    saturday: "Sat",
-    sunday: "Sun",
-  };
-  const enabled = order.filter((k) => days[k].enabled);
-  if (enabled.length === 0) return "No days enabled";
-
-  const dayLabel =
-    enabled.length === 7
-      ? "Every day"
-      : enabled.length === 5 && enabled.every((k) => k !== "saturday" && k !== "sunday")
-        ? "Mon–Fri"
-        : enabled.map((k) => labels[k]).join(", ");
-
-  const first = days[enabled[0]];
-  return `${dayLabel}, ${first.from}–${first.to}`;
-}
-
 function MailboxTableRow({ mailbox }: { mailbox: Mailbox }) {
   const dialogs = useDialogs();
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [testSendResult, setTestSendResult] = useState<{ ok: boolean; text: string } | null>(null);
-  const [showHours, setShowHours] = useState(false);
   const [showSignature, setShowSignature] = useState(false);
 
   async function handleRetest() {
@@ -210,14 +180,6 @@ function MailboxTableRow({ mailbox }: { mailbox: Mailbox }) {
         <Meter value={mailbox.todayEmailsSent} max={mailbox.dailySendLimit} color={EMAIL} label={`Emails sent today from ${mailbox.emailAddress}`} />
       </Table.Cell>
 
-      <Table.Cell className="px-4">
-        <p className="flex items-center gap-1.5 whitespace-nowrap text-paragraph-sm text-text-strong-950">
-          <RiTimeLine className="size-4 shrink-0 text-text-soft-400" aria-hidden="true" />
-          {hoursSummary(mailbox)}
-        </p>
-        <p className="mt-0.5 truncate pl-5.5 text-paragraph-xs text-text-sub-600">{mailbox.workingHours.timezone}</p>
-      </Table.Cell>
-
       <Table.Cell className="px-4" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-end">
           <Dropdown.Root>
@@ -244,10 +206,6 @@ function MailboxTableRow({ mailbox }: { mailbox: Mailbox }) {
                   Send test email
                 </Dropdown.Item>
               )}
-              <Dropdown.Item onSelect={() => setShowHours(true)}>
-                <Dropdown.ItemIcon as={RiTimeLine} />
-                Sending hours
-              </Dropdown.Item>
               <Dropdown.Item onSelect={() => setShowSignature(true)}>
                 <Dropdown.ItemIcon as={RiPenNibLine} />
                 Signature
@@ -263,15 +221,6 @@ function MailboxTableRow({ mailbox }: { mailbox: Mailbox }) {
           </Dropdown.Root>
         </div>
 
-        {showHours && (
-          <WorkingHoursModal
-            mailboxId={mailbox.id}
-            mailboxAddress={mailbox.emailAddress}
-            initial={mailbox.workingHours}
-            onClose={() => setShowHours(false)}
-            onSaved={() => router.refresh()}
-          />
-        )}
         {showSignature && (
           <SignatureModal
             mailboxId={mailbox.id}
@@ -288,13 +237,12 @@ function MailboxTableRow({ mailbox }: { mailbox: Mailbox }) {
 
 export default function MailboxTable({ mailboxes }: { mailboxes: Mailbox[] }) {
   return (
-    <Table.Root className="min-w-190 [&>table]:table-fixed">
+    <Table.Root className="min-w-150 [&>table]:table-fixed">
       <Table.Header>
         <Table.Row>
           <Table.Head scope="col" className="px-4">Mailbox</Table.Head>
           <Table.Head scope="col" className="w-32 px-4">Status</Table.Head>
           <Table.Head scope="col" className="w-40 px-4">Sent today</Table.Head>
-          <Table.Head scope="col" className="w-52 px-4">Sending hours</Table.Head>
           <Table.Head scope="col" className="w-14 px-4"><span className="sr-only">Actions</span></Table.Head>
         </Table.Row>
       </Table.Header>

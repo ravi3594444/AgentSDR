@@ -4,7 +4,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   RiChat1Line,
-  RiDashboard3Line,
   RiDownloadLine,
   RiErrorWarningLine,
   RiFireLine,
@@ -38,12 +37,9 @@ import {
   backfillWhatsappAccount,
   listWhatsappAccounts,
   setDefaultWhatsappAccount,
-  setWhatsappNewChatsPerDay,
   syncWhatsappAccounts,
 } from "@/lib/whatsapp/client";
 import { type WhatsappAccountStatus, type WhatsappAccountSummary } from "@/lib/whatsapp/contract";
-import { AccountLimitDialog } from "@/components/settings/AccountLimitDialog";
-import { numberRule } from "@/lib/channels/rules";
 import { cn } from "@/utils/cn";
 import { BRAND } from "@/lib/brand";
 
@@ -66,7 +62,7 @@ function isFuture(iso: string | null): boolean {
 
 const healthy = (a: WhatsappAccountSummary) => a.status === "connected";
 
-/** The organization's rules (Settings → WhatsApp → Sending rules) the numbers follow. */
+/** The organization's WhatsApp pacing rules the numbers follow, applied automatically. */
 export type WhatsappNumberRules = { warmupHours: number; newChatsPerDay: number; secondsBetweenSends: number };
 
 export function WhatsappAccountsClient({ rules }: { rules: WhatsappNumberRules }) {
@@ -77,7 +73,6 @@ export function WhatsappAccountsClient({ rules }: { rules: WhatsappNumberRules }
   const [busyId, setBusyId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<AccountFilter>("all");
-  const [limitAccount, setLimitAccount] = useState<WhatsappAccountSummary | null>(null);
   const newChatsOf = (a: WhatsappAccountSummary) => a.newChatsPerDay ?? rules.newChatsPerDay;
 
   const load = useCallback(async () => {
@@ -216,7 +211,7 @@ export function WhatsappAccountsClient({ rules }: { rules: WhatsappNumberRules }
                 label="New chats per 24 hours"
                 value={String((accounts ?? []).filter(healthy).reduce((sum, a) => sum + newChatsOf(a), 0))}
                 context={`${rules.newChatsPerDay} per number · ${rules.secondsBetweenSends} s between sends`}
-                hint="Each connected number starts at most this many new chats in any rolling 24 hours (no reset at midnight), shared by every campaign on it, and messages from one number are spaced apart. Replies in open chats are not limited. Change it in Settings → WhatsApp sending rules, or per number."
+                hint="Each connected number starts at most this many new chats in any rolling 24 hours (no reset at midnight), shared by every campaign on it, and messages from one number are spaced apart. Replies in open chats are not limited. AgentSDR paces each number automatically to protect it; new people also count toward your daily lead limit."
               />
             </KpiStrip>
 
@@ -311,10 +306,6 @@ export function WhatsappAccountsClient({ rules }: { rules: WhatsappNumberRules }
                                     <Dropdown.ItemIcon as={RiDownloadLine} />
                                     Import recent chats
                                   </Dropdown.Item>
-                                  <Dropdown.Item onSelect={() => setLimitAccount(account)}>
-                                    <Dropdown.ItemIcon as={RiDashboard3Line} />
-                                    New chats per 24 hours
-                                  </Dropdown.Item>
                                 </Dropdown.Content>
                               </Dropdown.Root>
                             </div>
@@ -329,21 +320,6 @@ export function WhatsappAccountsClient({ rules }: { rules: WhatsappNumberRules }
           </div>
         )}
       </div>
-      {limitAccount && (
-        <AccountLimitDialog
-          key={limitAccount.id}
-          title="New chats per 24 hours"
-          accountLabel={limitAccount.name || limitAccount.phone || "this number"}
-          rule={numberRule("whatsapp", "newChatsPerDay")}
-          organizationValue={rules.newChatsPerDay}
-          value={limitAccount.newChatsPerDay}
-          onClose={() => setLimitAccount(null)}
-          onSave={async (newChatsPerDay) => {
-            const updated = await setWhatsappNewChatsPerDay(limitAccount.id, newChatsPerDay);
-            setAccounts((prev) => prev?.map((a) => (a.id === updated.id ? updated : a)) ?? prev);
-          }}
-        />
-      )}
     </SettingsPage>
   );
 }

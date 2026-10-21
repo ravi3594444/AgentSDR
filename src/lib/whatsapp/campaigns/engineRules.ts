@@ -3,8 +3,6 @@
  * tested without a database or a send. See docs/whatsapp-campaigns/plan.md.
  */
 import { WHATSAPP_RECIPIENT_REFUSAL } from "../refusal";
-import type { WeeklyHours } from "@/lib/channels/rules";
-import { isWithinWorkingHours, mailboxHoursFromWeekly } from "@/lib/outreach/workingHours";
 import { isPlatformNotConnectedError } from "@/lib/platform/credentials";
 import { WhatsappSendRefusedError } from "../errors";
 import type { WhatsappCampaignStep } from "./contract";
@@ -15,12 +13,6 @@ export const MAX_TRANSIENT_ATTEMPTS = 3;
 export const IN_FLIGHT_CLAIM_MS = 5 * 60 * 1000;
 /** Back-off after a transient failure. */
 export const TRANSIENT_RETRY_MS = 10 * 60 * 1000;
-
-/** True when campaigns may send at `now`: no hours set means any time. */
-export function withinCampaignSendingHours(hours: WeeklyHours | null, now: Date): boolean {
-  if (!hours) return true;
-  return isWithinWorkingHours(mailboxHoursFromWeekly(hours), now);
-}
 
 export type NextStepPlan =
   | { status: "in_sequence"; nextSendAt: Date }

@@ -40,11 +40,8 @@ export async function seedCore(ctx: DemoContext, ownerId: string): Promise<void>
   await seedTeam(ctx, ownerId);
   await seedLeadDatabase(ctx);
   await seedPlatformIntegrations(ctx);
-  await saveChannelRules(
-    "email",
-    { sendingHours: { timezone: "America/New_York", days: [1, 2, 3, 4, 5], start: "08:30", end: "17:30" } },
-    ownerId,
-  );
+  // Sending is always on; the one sending setting is the daily lead limit.
+  await saveChannelRules("general", { newLeadsPerDay: 80 }, ownerId);
   const { pipelineId } = await ensureCrmDefaults();
   ctx.pipelineId = pipelineId;
 }

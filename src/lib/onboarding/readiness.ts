@@ -133,6 +133,9 @@ export type ReadinessFacts = {
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString("en-US")} ${n === 1 ? one : many}`;
 
+/** Every channel's one sending setting: the workspace-wide daily lead limit (its pacing is automatic). */
+const DAILY_LEAD_LIMIT_LINK = { href: "/settings/sending", label: "Daily lead limit" };
+
 const day = (iso: string) => iso.slice(0, 10);
 
 const verifiedLine = (verifiedAt: string | null) => {
@@ -178,7 +181,7 @@ export function emailReadiness(facts: ReadinessFacts): ReadinessItem {
   const links = [
     { href: "/settings/email-connection", label: "Email connection" },
     { href: "/settings/email-accounts", label: "Mailboxes" },
-    { href: "/settings/email-rules", label: "Sending rules" },
+    DAILY_LEAD_LIMIT_LINK,
   ];
   const base = { key: "email" as const, title: "Email", links };
   const unipileMailboxes = unipile.connected ? (mailboxes.unipileConnected ?? 0) : 0;
@@ -362,7 +365,7 @@ export function linkedinReadiness(facts: ReadinessFacts): ReadinessItem {
   const links = [
     { href: "/settings/linkedin-connection", label: "LinkedIn connection" },
     { href: "/settings/linkedin-accounts", label: "LinkedIn accounts" },
-    { href: "/settings/linkedin-rules", label: "Sending rules" },
+    DAILY_LEAD_LIMIT_LINK,
   ];
   const base = { key: "linkedin" as const, title: "LinkedIn", links };
   const blocker = unipileBlocker(facts, "LinkedIn", "LinkedIn connection");
@@ -402,7 +405,7 @@ export function whatsappReadiness(facts: ReadinessFacts): ReadinessItem {
   const links = [
     { href: "/settings/whatsapp-connection", label: "WhatsApp integrations" },
     { href: "/settings/whatsapp-accounts", label: "WhatsApp numbers" },
-    { href: "/settings/whatsapp-rules", label: "Sending rules" },
+    DAILY_LEAD_LIMIT_LINK,
   ];
   const base = { key: "whatsapp" as const, title: "WhatsApp", links };
   const blocker = unipileBlocker(facts, "WhatsApp", "WhatsApp integrations");
@@ -445,7 +448,7 @@ export function instagramReadiness(facts: ReadinessFacts): ReadinessItem | null 
   if (!instagram) return null;
   const links = [
     { href: "/settings/instagram-accounts", label: "Instagram accounts" },
-    { href: "/settings/instagram-rules", label: "Sending rules" },
+    DAILY_LEAD_LIMIT_LINK,
   ];
   const base = { key: "instagram" as const, title: "Instagram", links };
   const blocker = unipileBlocker(facts, "Instagram", "Instagram accounts");

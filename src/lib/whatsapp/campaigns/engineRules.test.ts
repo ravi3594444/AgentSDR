@@ -8,7 +8,6 @@ import {
   planTransientRetry,
   sequenceExhausted,
   uncertainDeliveryMessage,
-  withinCampaignSendingHours,
 } from "./engineRules";
 
 const steps = [
@@ -89,18 +88,6 @@ describe("planTransientRetry", () => {
 
 test("uncertainDeliveryMessage numbers the message from 1", () => {
   expect(uncertainDeliveryMessage(0)).toContain("message 1 is uncertain");
-});
-
-describe("withinCampaignSendingHours", () => {
-  const hours = { timezone: "UTC", days: [1, 2, 3, 4, 5], start: "09:00", end: "17:00" };
-  test("no hours means any time", () => {
-    expect(withinCampaignSendingHours(null, new Date("2026-01-04T03:00:00Z"))).toBe(true);
-  });
-  test("inside and outside the window", () => {
-    expect(withinCampaignSendingHours(hours, new Date("2026-01-05T10:00:00Z"))).toBe(true); // Monday
-    expect(withinCampaignSendingHours(hours, new Date("2026-01-05T18:00:00Z"))).toBe(false);
-    expect(withinCampaignSendingHours(hours, new Date("2026-01-04T10:00:00Z"))).toBe(false); // Sunday
-  });
 });
 
 describe("heldBackReason: why the number was held back, kept on it for the Sending status", () => {

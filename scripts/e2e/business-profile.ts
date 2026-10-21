@@ -140,13 +140,13 @@ const ids = await runInOrganization(a!.id, async () => {
   const refilledCopy = await copyOf(documentId);
   check("filling it again brings the same copy back into drafts", refilled.knowledgeDocumentId === documentId && refilledCopy?.active === true && refilledCopy.alwaysInclude === true && refilledCopy.text === "Business: Bright Path");
 
-  // ------------------------------------------------------------ the two general-rules pages
-  await saveChannelRules("general", { objectiveLeadTarget: 80 }, owner.userId);
-  const sendingPage = rulesSubset("general", GENERAL_RULE_PAGES.sending);
+  // ------------------------------------------------------------ the general rules across pages
+  await saveChannelRules("general", { objectiveLeadTarget: 80, newLeadsPerDay: 20 }, owner.userId);
+  const businessPage = rulesSubset("general", GENERAL_RULE_PAGES.business);
   const shown = (await channelRulesForSettings("general")).values;
-  await saveChannelRules("general", ruleSubmission(sendingPage, { ...shown, timeZone: "Asia/Kolkata", objectiveLeadTarget: 25 }), owner.userId);
+  await saveChannelRules("general", ruleSubmission(businessPage, { ...shown, timeZone: "Asia/Kolkata", objectiveLeadTarget: 25, newLeadsPerDay: 50 }), owner.userId);
   const after = (await channelRulesForSettings("general")).values;
-  check("saving Sending defaults keeps the research target Lead research stored", after.timeZone === "Asia/Kolkata" && after.objectiveLeadTarget === 80, JSON.stringify({ timeZone: after.timeZone, objectiveLeadTarget: after.objectiveLeadTarget }));
+  check("saving the day on Your business keeps the research target and the daily lead limit the other pages stored", after.timeZone === "Asia/Kolkata" && after.objectiveLeadTarget === 80 && after.newLeadsPerDay === 20, JSON.stringify({ timeZone: after.timeZone, objectiveLeadTarget: after.objectiveLeadTarget, newLeadsPerDay: after.newLeadsPerDay }));
 
   return { documentId: documentId! };
 });

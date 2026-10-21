@@ -55,7 +55,6 @@ const stamp = Date.now();
 const [org] = await db.insert(organizations).values({ name: `Engine check ${stamp}`, slug: `engine-check-${stamp}` }).returning();
 console.log(`Organization ${org!.name} (${org!.id})`);
 
-const ALL_DAY = { enabled: true, from: "00:00", to: "23:59" };
 const past = () => new Date(Date.now() - 60_000);
 
 await runInOrganization(org!.id, async () => {
@@ -91,7 +90,7 @@ await runInOrganization(org!.id, async () => {
     displayName: "Engine Check",
     status: "connected",
     dailySendLimit: 2,
-    workingHours: { timezone: "UTC", days: { monday: ALL_DAY, tuesday: ALL_DAY, wednesday: ALL_DAY, thursday: ALL_DAY, friday: ALL_DAY, saturday: ALL_DAY, sunday: ALL_DAY } },
+    // Hours left to the column default: always open (sending is always on).
   }).returning();
   const after = emailLaunchProblems(await emailLaunchFacts({ id: campaign.id, sequence: parsed.sequence }));
   check("with a mailbox, only Google Workspace is missing", after.length === 1 && after[0]!.includes("Google"), JSON.stringify(after));

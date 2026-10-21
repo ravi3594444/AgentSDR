@@ -1,43 +1,27 @@
 import { describe, expect, test } from "bun:test";
 
-import type { WeeklyHours } from "./rules";
-import { describeOpening, describeWeeklyHours, sendingWindow, workingWindow } from "./sendingWindow";
+import { describeOpening, describeWorkingHours, workingWindow } from "./sendingWindow";
 import type { WorkingHours } from "@/lib/outreach/schema";
+import { alwaysOpenHours, mailboxHoursFromWeekly } from "@/lib/outreach/workingHours";
 
-const monToFri: WeeklyHours = { timezone: "Asia/Kolkata", days: [1, 2, 3, 4, 5], start: "09:00", end: "18:00" };
+// A mailbox that still has restricted hours from before sending was always on.
+const monToFri = mailboxHoursFromWeekly({ timezone: "Asia/Kolkata", days: [1, 2, 3, 4, 5], start: "09:00", end: "18:00" });
 
-describe("sendingWindow", () => {
-  test("no hours means any time", () => {
-    expect(sendingWindow(null, new Date("2026-10-17T13:46:00Z"))).toEqual({ open: true, opensAt: null });
+describe("workingWindow", () => {
+  test("an always-open mailbox is open, even on a Saturday evening", () => {
+    expect(workingWindow(alwaysOpenHours("Asia/Kolkata"), new Date("2026-10-17T13:46:00Z"))).toEqual({ open: true, opensAt: null });
   });
 
-  test("inside the window on a weekday", () => {
+  test("inside a legacy window on a weekday", () => {
     // Monday 10:00 in Asia/Kolkata.
-    expect(sendingWindow(monToFri, new Date("2026-10-19T04:30:00Z"))).toEqual({ open: true, opensAt: null });
+    expect(workingWindow(monToFri, new Date("2026-10-19T04:30:00Z"))).toEqual({ open: true, opensAt: null });
   });
 
   test("Saturday afternoon in IST is closed until Monday 09:00 IST", () => {
     // 2026-10-17T13:46Z is Saturday 19:16 IST — the day the owner asked why nothing sent.
-    const window = sendingWindow(monToFri, new Date("2026-10-17T13:46:00Z"));
+    const window = workingWindow(monToFri, new Date("2026-10-17T13:46:00Z"));
     expect(window.open).toBe(false);
     expect(window.opensAt?.toISOString()).toBe("2026-10-19T03:30:00.000Z");
-  });
-
-  test("after hours on a weekday opens the next weekday morning", () => {
-    // Thursday 19:00 IST → Friday 09:00 IST.
-    expect(sendingWindow(monToFri, new Date("2026-10-15T13:30:00Z")).opensAt?.toISOString()).toBe("2026-10-16T03:30:00.000Z");
-  });
-
-  test("an overnight window is open after midnight", () => {
-    const overnight: WeeklyHours = { timezone: "UTC", days: [2], start: "21:00", end: "06:00" };
-    // Tuesday 23:00 UTC.
-    expect(sendingWindow(overnight, new Date("2026-10-13T23:00:00Z"))).toEqual({ open: true, opensAt: null });
-  });
-
-  test("an overnight window that has closed reopens that evening", () => {
-    const overnight: WeeklyHours = { timezone: "UTC", days: [2, 3], start: "21:00", end: "06:00" };
-    // Tuesday 07:00 UTC: Tuesday's window ended at 06:00 and starts again at 21:00.
-    expect(sendingWindow(overnight, new Date("2026-10-13T07:00:00Z")).opensAt?.toISOString()).toBe("2026-10-13T21:00:00.000Z");
   });
 
   test("hours set per day still find the next enabled day", () => {
@@ -61,20 +45,16 @@ describe("sendingWindow", () => {
 });
 
 describe("describing hours", () => {
-  test("weekday hours read as a range", () => {
-    expect(describeWeeklyHours(monToFri)).toBe("Mon–Fri 09:00–18:00 (Asia/Kolkata)");
+  test("an always-open mailbox sends any time", () => {
+    expect(describeWorkingHours(alwaysOpenHours("Asia/Kolkata"))).toBe("any time, every day (Asia/Kolkata)");
+  });
+
+  test("legacy weekday hours read as a range", () => {
+    expect(describeWorkingHours(monToFri)).toBe("Mon–Fri 09:00–18:00 (Asia/Kolkata)");
   });
 
   test("scattered days are listed", () => {
-    expect(describeWeeklyHours({ ...monToFri, days: [1, 3, 5] })).toBe("Mon, Wed, Fri 09:00–18:00 (Asia/Kolkata)");
-  });
-
-  test("every day", () => {
-    expect(describeWeeklyHours({ ...monToFri, days: [0, 1, 2, 3, 4, 5, 6] })).toBe("every day 09:00–18:00 (Asia/Kolkata)");
-  });
-
-  test("no hours set means any time", () => {
-    expect(describeWeeklyHours(null)).toBeNull();
+    expect(describeWorkingHours(mailboxHoursFromWeekly({ timezone: "Asia/Kolkata", days: [1, 3, 5], start: "09:00", end: "18:00" }))).toBe("Mon, Wed, Fri 09:00–18:00 (Asia/Kolkata)");
   });
 
   test("the next opening is said in the window's own time zone", () => {

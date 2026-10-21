@@ -77,5 +77,5 @@ export function checkPhone(input: string | null | undefined, defaultCountry: str
   }
   return country
     ? { ok: false, reason: `“${raw}” is not a valid ${country} number; check it, or write it with its country code (+…)` }
-    : { ok: false, reason: `“${raw}” has no country code and no Default phone country is set (Settings → Sending defaults); write it as +<country code>…` };
+    : { ok: false, reason: `“${raw}” has no country code and no Default phone country is set (Settings → Your business); write it as +<country code>…` };
 }

@@ -274,7 +274,7 @@ export function InstagramAccountsClient({ inquiryIntakeOn }: { inquiryIntakeOn: 
 
             <p className="mt-3 text-paragraph-xs text-text-sub-600">
               Start an Instagram outreach plan in the <Link href="/assistant" className="underline">Assistant</Link>.
-              Each approved recipient gets one initial DM. Set daily limits and hours in <Link href="/settings/instagram-rules" className="underline">Sending rules</Link>.
+              Each approved recipient gets one initial DM, at any time of day; each account is paced automatically, and new people count toward your <Link href="/settings/sending" className="underline">daily lead limit</Link>.
               The inquiry checkbox below applies to new people who write first; outbound replies follow their run.
             </p>
 

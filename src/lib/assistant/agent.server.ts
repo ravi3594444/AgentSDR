@@ -93,7 +93,7 @@ async function contextBlock(): Promise<{ text: string; outreachStarted: boolean;
   const channels = Object.entries(setup.channels)
     .map(([name, status]) => `${name} ${status.available ? `ready (${status.senders})` : `not ready: ${status.reason}`}`).join("; ");
   const text = [
-    // The business's own day (Settings → Sending defaults time zone), the one report's "today" counts.
+    // The business's own day (Settings → Your business time zone), the one report's "today" counts.
     `TODAY: ${localDate(timeZone)} (${timeZone})`,
     `BUSINESS PROFILE: ${JSON.stringify(setup.profile)}`,
     `SETUP: channels — ${channels}. Lead search — ${setup.leadDiscovery.available ? "ready (Google Maps)" : setup.leadDiscovery.reason}. AI — ${setup.ai.connected ? "connected" : "not set up on this server"}. Runs answering replies automatically — ${setup.automaticRuns}.`,
@@ -363,7 +363,7 @@ export async function runAgentTurn(input: {
       // and the next step explains what happened instead.
       let allOk = true;
       for (const action of actions) {
-        // Autonomous mode: searches it starts are capped per day (Settings → Sending defaults).
+        // Autonomous mode: searches it starts are capped per day (general.autonomousSearchesPerDay, no settings page).
         const capped = autonomy.on && caps && SEARCH_TOOLS.has(action.tool) ? searchCapProblem(await autonomousSearchesToday(), caps) : null;
         if (capped) {
           await addMessage({ threadId: input.threadId, role: "tool", tool: action.tool, toolInput: action.args, status: "error", content: `Not run: ${capped}.`, toolResult: { summary: `Not run: ${capped}.` } });

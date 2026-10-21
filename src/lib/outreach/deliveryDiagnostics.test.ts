@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { DEFAULT_WORKING_HOURS } from "./schema";
 import { emailDeliveryGates } from "./deliveryDiagnostics";
+import { mailboxHoursFromWeekly } from "./workingHours";
 
 const mailbox = {
   status: "connected",
@@ -18,9 +19,14 @@ const input = {
   activeQueue: 4,
   now: new Date("2026-10-19T06:00:00Z"),
 };
-test("reports actual sender hours, including the Saturday from the reported incident", () => {
+test("a mailbox with the default (always-open) hours is never outside its hours, not even on the Saturday from the reported incident", () => {
   expect(emailDeliveryGates(mailbox, input)).toEqual([]);
-  const gates = emailDeliveryGates(mailbox, {
+  expect(emailDeliveryGates(mailbox, { ...input, now: new Date("2026-10-17T11:00:00Z") })).toEqual([]);
+});
+test("reports a legacy mailbox's restricted hours, as long as the send tick still reads them", () => {
+  const legacy = { ...mailbox, workingHours: mailboxHoursFromWeekly({ timezone: "Asia/Kolkata", days: [1, 2, 3, 4, 5], start: "09:00", end: "18:00" }) };
+  expect(emailDeliveryGates(legacy, input)).toEqual([]);
+  const gates = emailDeliveryGates(legacy, {
     ...input,
     now: new Date("2026-10-17T11:00:00Z"),
   });

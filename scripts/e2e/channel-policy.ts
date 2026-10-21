@@ -100,7 +100,6 @@ function check(label: string, ok: boolean, detail = "") {
 const [org] = await db.insert(organizations).values({ name: `Channel policy check ${stamp}`, slug: `channel-policy-check-${stamp}` }).returning();
 const [owner] = await db.insert(users).values({ name: "Owner Check", email: `owner-${stamp}@channel-policy-check.test`, emailVerified: true }).returning();
 await db.insert(members).values({ organizationId: org!.id, userId: owner!.id, role: "owner" });
-const ALL_DAY = { enabled: true, from: "00:00", to: "23:59" };
 
 async function launch(runId: string): Promise<AssistantJob | null> {
   for (let round = 0; round < 30; round += 1) {
@@ -124,10 +123,9 @@ await runInOrganization(org!.id, async () => {
   }
   const [mailbox] = await db.insert(mailboxes).values({
     organizationId: org!.id, emailAddress: `sales-${stamp}@channel-policy-check.test`, displayName: "Ravi", status: "connected", dailySendLimit: 5,
-    workingHours: { timezone: "UTC", days: { monday: ALL_DAY, tuesday: ALL_DAY, wednesday: ALL_DAY, thursday: ALL_DAY, friday: ALL_DAY, saturday: ALL_DAY, sunday: ALL_DAY } },
   }).returning();
   await db.insert(whatsappAccounts).values({ organizationId: org!.id, unipileAccountId: `channel-policy-${stamp}`, name: "Sales", phone: "+919800000088", status: "connected", connectedAt: new Date(Date.now() - 5 * 86_400_000) });
-  await db.insert(linkedInAccounts).values({ organizationId: org!.id, linkedinId: `channel-policy-li-${stamp}`, username: `channel-policy-li-${stamp}`, name: "Ravi", status: "CONNECTED", workTimezone: "UTC", workStartTime: "00:00", workEndTime: "23:59", workDays: "0,1,2,3,4,5,6", updatedAt: new Date() });
+  await db.insert(linkedInAccounts).values({ organizationId: org!.id, linkedinId: `channel-policy-li-${stamp}`, username: `channel-policy-li-${stamp}`, name: "Ravi", status: "CONNECTED", updatedAt: new Date() });
   await updateBusinessProfile({ businessName: "LeadDesk", offer: "an assistant that answers every buyer enquiry for property firms within the hour", senderName: "Ravi" }, owner!.id);
 
   const person = async (values: Partial<typeof people.$inferInsert> & { fullName: string }) =>

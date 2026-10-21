@@ -45,6 +45,13 @@ export const LEGACY_REDIRECTS: LegacyRedirect[] = [
   to("/instagram", "/instagram/messages"),
   // The retired LinkedIn-only lead directory.
   to("/linkedin/leads", "/leads"),
+
+  // Each channel's sending rules page: sending is always on and per-channel
+  // pacing is automatic, so they open the one sending setting, the daily lead limit.
+  to("/settings/email-rules", "/settings/sending"),
+  to("/settings/linkedin-rules", "/settings/sending"),
+  to("/settings/whatsapp-rules", "/settings/sending"),
+  to("/settings/instagram-rules", "/settings/sending"),
 ];
 
 /**

@@ -10,7 +10,18 @@ import { unipileErrorStatus } from "@/services/unipile.whatsapp";
 import { sendEmail, type SendEmailParams, type SendEmailResult } from "./gmail";
 import { mailboxes, type MailboxProvider } from "./schema";
 import { plainTextHtml, unipileReplyId, unipileStoredMessageId, type UnipileEmailAccount } from "./unipileMail";
-import { mailboxHoursFromWeekly } from "./workingHours";
+import { alwaysOpenHours } from "./workingHours";
+
+/**
+ * What a newly connected mailbox starts with: the organization's emails a
+ * day, and hours that are always open in the organization's time zone (the
+ * day its daily counter resets on). Sending hours are no setting: no mailbox
+ * is ever given restricted hours.
+ */
+export async function newMailboxSending(): Promise<Pick<Mailbox, "dailySendLimit" | "workingHours">> {
+  const [email, general] = await Promise.all([channelRules("email"), channelRules("general")]);
+  return { dailySendLimit: email.dailySendLimit, workingHours: alwaysOpenHours(general.timeZone) };
+}
 
 /**
  * What sends for a mailbox. A mailbox is either a Google Workspace address
@@ -117,7 +128,7 @@ export async function syncUnipileMailboxes(): Promise<UnipileMailboxSync> {
   const accounts = await listUnipileEmailAccounts();
   const now = new Date();
   const result: UnipileMailboxSync = { synced: [], skipped: [], unlinked: [] };
-  let rules: Awaited<ReturnType<typeof channelRules<"email">>> | null = null;
+  let sending: Awaited<ReturnType<typeof newMailboxSending>> | null = null;
 
   for (const account of accounts) {
     const label = account.emailAddress ?? `${account.typeLabel} account ${account.unipileAccountId}`;
@@ -165,16 +176,15 @@ export async function syncUnipileMailboxes(): Promise<UnipileMailboxSync> {
       continue;
     }
 
-    // A new mailbox starts from the organization's sending rules, like one added by hand.
-    rules ??= await channelRules("email");
+    // A new mailbox starts like one added by hand (newMailboxSending); an existing one keeps its own.
+    sending ??= await newMailboxSending();
     await db.insert(mailboxes).values({
       organizationId: currentOrganizationId(),
       emailAddress: account.emailAddress,
       provider: "unipile",
       unipileAccountId: account.unipileAccountId,
       displayName: account.name,
-      dailySendLimit: rules.dailySendLimit,
-      workingHours: mailboxHoursFromWeekly(rules.sendingHours),
+      ...sending,
       ...mailboxState(account, now),
     });
     result.synced.push({ emailAddress: account.emailAddress, status: account.status, added: true });

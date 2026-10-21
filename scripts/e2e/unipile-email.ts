@@ -88,6 +88,7 @@ const { syncUnipileMailboxes } = await import("@/lib/outreach/mailboxProviders")
 const { retestMailbox } = await import("@/lib/outreach/mailboxes");
 const { ingestUnipileEmail } = await import("@/lib/outreach/unipileInbound");
 const { unipileReplyTarget } = await import("@/lib/outreach/unipileMail");
+const { isAlwaysOpen } = await import("@/lib/outreach/workingHours");
 const { sendThroughCrmProvider } = await import("@/lib/crm/send");
 const { crmConversationMessages, crmConversations } = await import("@/lib/crm/schema");
 const { inboundEvents } = await import("@/lib/inbox/schema");
@@ -110,8 +111,6 @@ console.log(`Organization ${org!.name} (${org!.id})`);
 const gmailAddress = `owner-${stamp}@gmail.example.test`;
 const outlookAddress = `sales-${stamp}@outlook.example.test`;
 const leadAddress = `ada-${stamp}@example.test`;
-const ALL_DAY = { enabled: true, from: "00:00", to: "23:59" };
-const week = { monday: ALL_DAY, tuesday: ALL_DAY, wednesday: ALL_DAY, thursday: ALL_DAY, friday: ALL_DAY, saturday: ALL_DAY, sunday: ALL_DAY };
 const gmailAccount = {
   object: "Account", type: "GOOGLE_OAUTH", id: `gmail-${stamp}`, name: "Ravi (check)",
   connection_params: { mail: { id: "1", username: gmailAddress } }, sources: [{ id: "s1", status: "OK" }],
@@ -188,7 +187,10 @@ await runInOrganization(org!.id, async () => {
     const problems = emailLaunchProblems(await emailLaunchFacts({ id: campaign.id, sequence: parsed.sequence }));
     check("a Unipile mailbox satisfies the launch rules without Google Workspace", problems.length === 0, JSON.stringify(problems));
 
-    await db.update(mailboxes).set({ workingHours: { timezone: "UTC", days: week }, nextEmailTime: null }).where(eq(mailboxes.id, gmail!.id));
+    // Imported from Unipile, it sends at any time with no schedule to edit.
+    const [imported] = await db.select({ workingHours: mailboxes.workingHours }).from(mailboxes).where(eq(mailboxes.id, gmail!.id));
+    check("an imported mailbox is always open, in the organization's time zone", Boolean(imported) && isAlwaysOpen(imported!.workingHours) && imported!.workingHours.timezone === "UTC", JSON.stringify(imported?.workingHours));
+    await db.update(mailboxes).set({ nextEmailTime: null }).where(eq(mailboxes.id, gmail!.id));
     await setCampaignStatus(campaign.id, "active");
     const otherQueues = await db.select({ n: sql<number>`count(*)::int` }).from(outreachMailboxQueue)
       .innerJoin(mailboxes, eq(outreachMailboxQueue.mailboxId, mailboxes.id))

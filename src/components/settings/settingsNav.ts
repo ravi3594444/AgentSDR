@@ -49,10 +49,10 @@ export function visibleSettingsNav(features: FeatureState | null): typeof SETTIN
 /**
  * Every settings screen in the app, in five groups: what the assistant knows
  * about the business and who works in it; the accounts and services it is
- * connected to; how fast and when it sends; how far one request researches
- * and spends; and the optional extras. Each screen is its own route under
- * /settings and is listed once; the pages they replaced redirect here
- * (next.config.ts, and /settings/organization → /settings/business).
+ * connected to; how many new people it may contact a day; how far one
+ * request researches and spends; and the optional extras. Each screen is its
+ * own route under /settings and is listed once; the pages they replaced
+ * redirect here (next.config.ts, and /settings/organization → /settings/business).
  */
 export const SETTINGS_NAV: { label: string; items: SettingsNavItem[] }[] = [
   {
@@ -66,8 +66,7 @@ export const SETTINGS_NAV: { label: string; items: SettingsNavItem[] }[] = [
     ],
   },
   // A channel's accounts and the integration it runs on are tabs across the
-  // top of its section (SettingsShell); its sending rules are a row under
-  // "Sending & automation".
+  // top of its section (SettingsShell).
   {
     label: "Connected accounts",
     items: [
@@ -103,18 +102,13 @@ export const SETTINGS_NAV: { label: string; items: SettingsNavItem[] }[] = [
       { href: "/settings/ai", label: "AI provider", icon: RiCpuLine },
     ],
   },
-  // The Sending rules registry (src/lib/channels/rules.ts): a page per
-  // channel, and the "general" rules split between Sending defaults and
-  // Lead research (GENERAL_RULE_PAGES).
+  // The one sending input: the daily lead limit (src/lib/channels/rules.ts,
+  // GENERAL_RULE_PAGES.sending). Sending is always on, and each channel's
+  // pacing is automatic, so there are no per-channel rules pages; their old
+  // addresses redirect here (src/lib/nav/legacyRoutes.ts).
   {
     label: "Sending & automation",
-    items: [
-      { href: "/settings/sending", label: "Sending defaults", icon: RiTimeLine },
-      { href: "/settings/email-rules", label: "Email sending rules", icon: RiMailLine },
-      { href: "/settings/linkedin-rules", label: "LinkedIn sending rules", icon: RiLinkedinBoxLine },
-      { href: "/settings/whatsapp-rules", label: "WhatsApp sending rules", icon: RiWhatsappLine },
-      { href: "/settings/instagram-rules", label: "Instagram sending rules", icon: RiInstagramLine, feature: "instagram" },
-    ],
+    items: [{ href: "/settings/sending", label: "Daily lead limit", icon: RiTimeLine }],
   },
   {
     label: "Research & budget",

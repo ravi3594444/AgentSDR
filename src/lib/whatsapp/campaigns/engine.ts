@@ -2,18 +2,20 @@ import "server-only";
 
 /**
  * The WhatsApp campaign sender. Each tick, per organization with Unipile
- * connected and inside its campaign sending hours, every connected number
- * assigned to an active campaign sends at most one message: the next due
- * lead's next step. Spec: docs/whatsapp-campaigns/plan.md ("Sender loop").
+ * connected (at any time of day: sending is always on), every connected
+ * number assigned to an active campaign sends at most one message: the next
+ * due lead's next step. Spec: docs/whatsapp-campaigns/plan.md ("Sender loop").
  *
  * Safety: each (lead, step) is claimed by a row in whatsapp_campaign_sends
  * before anything is sent, so a crash can never cause a second send. A claim
  * left in `sending` means delivery is uncertain and the lead is failed for a
- * person to check, never retried.
+ * person to check, never retried. A first message's claim also takes one of
+ * the workspace's daily new-lead places (dailyLeadLimit.server.ts) in the
+ * same transaction; past the limit, first messages wait and follow-ups go on.
  */
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { channelRules } from "@/lib/channels/rules.server";
+import { contactedByAutomation, newLeadAllowance } from "@/lib/channels/dailyLeadLimit.server";
 import { companies, people } from "@/lib/leads/schema";
 import { unipileOrganizationIds } from "@/lib/linkedin/organizations.server";
 import { isMigrationControlPaused } from "@/lib/migration/controls";
@@ -29,7 +31,6 @@ import {
   planTransientRetry,
   sequenceExhausted,
   uncertainDeliveryMessage,
-  withinCampaignSendingHours,
   type SendFailureAction,
 } from "./engineRules";
 import { campaignLeadVariables, renderCampaignStep } from "./render";
@@ -85,8 +86,6 @@ export async function runWhatsappCampaignTick(
 /** Returns false when the organization was skipped. */
 async function tickOrganization(result: WhatsappCampaignTickResult, now: Date, send: SendFunction): Promise<boolean> {
   if (!(await isPlatformConnected("unipile"))) return false;
-  const rules = await channelRules("whatsapp");
-  if (!withinCampaignSendingHours(rules.sendingHours, now)) return false;
 
   const activeCampaigns = db
     .select({ id: whatsappCampaigns.id })
@@ -113,7 +112,20 @@ async function tickOrganization(result: WhatsappCampaignTickResult, now: Date, s
   return true;
 }
 
-async function pickDueLead(accountId: string, now: Date, includeFirstMessages: boolean): Promise<(LeadRow & { steps: Steps }) | null> {
+/**
+ * Which first messages a pick may return: all of them; only to people
+ * automated outreach already reached on some channel (the daily lead limit
+ * is used, and they take no new place); or none (the number itself may
+ * start no new chat).
+ */
+type FirstMessages = "all" | "contacted_only" | "none";
+
+async function pickDueLead(accountId: string, now: Date, firstMessages: FirstMessages): Promise<(LeadRow & { steps: Steps }) | null> {
+  const firstMessageFilter = firstMessages === "all"
+    ? undefined
+    : firstMessages === "none"
+      ? sql`${whatsappCampaignLeads.currentStep} > 0`
+      : sql`(${whatsappCampaignLeads.currentStep} > 0 or ${await contactedByAutomation(sql`${whatsappCampaignLeads.personId}`)})`;
   const [row] = await db
     .select({ lead: whatsappCampaignLeads, steps: whatsappCampaigns.steps })
     .from(whatsappCampaignLeads)
@@ -124,7 +136,7 @@ async function pickDueLead(accountId: string, now: Date, includeFirstMessages: b
       isNull(whatsappCampaigns.archivedAt),
       inArray(whatsappCampaignLeads.status, [...WHATSAPP_CAMPAIGN_OPEN_LEAD_STATUSES]),
       lte(whatsappCampaignLeads.nextSendAt, now),
-      includeFirstMessages ? undefined : sql`${whatsappCampaignLeads.currentStep} > 0`,
+      firstMessageFilter,
       sql`(${whatsappCampaignLeads.accountId} = ${accountId} or (${whatsappCampaignLeads.accountId} is null and exists (
         select 1 from ${whatsappCampaignAccounts} ca
         where ca.campaign_id = ${whatsappCampaignLeads.campaignId} and ca.account_id = ${accountId}
@@ -147,9 +159,9 @@ async function tickAccount(
   send: SendFunction,
   result: WhatsappCampaignTickResult,
 ): Promise<AccountOutcome> {
-  let includeFirstMessages = true;
+  let firstMessages: FirstMessages = "all";
   for (let picks = 0; picks < MAX_PICKS_PER_ACCOUNT; picks += 1) {
-    const lead = await pickDueLead(account.id, now, includeFirstMessages);
+    const lead = await pickDueLead(account.id, now, firstMessages);
     if (!lead) return "done";
     let step: StepOutcome;
     try {
@@ -167,8 +179,14 @@ async function tickAccount(
         return "stop_organization";
       case "block_first_messages":
         // Only a first message can hit these refusals; retry once for a follow-up.
-        if (!includeFirstMessages) return "done";
-        includeFirstMessages = false;
+        if (firstMessages === "none") return "done";
+        firstMessages = "none";
+        break;
+      case "daily_lead_limit":
+        // Today's new-lead places are used: follow-ups, and first messages to
+        // people already reached on another channel, still go out.
+        if (firstMessages !== "all") return "done";
+        firstMessages = "contacted_only";
         break;
       case "continue":
         break;
@@ -177,7 +195,7 @@ async function tickAccount(
   return "done";
 }
 
-type StepOutcome = "sent" | "continue" | "stop_account" | "block_first_messages" | "stop_organization";
+type StepOutcome = "sent" | "continue" | "stop_account" | "block_first_messages" | "daily_lead_limit" | "stop_organization";
 
 const openLead = (leadId: string) =>
   and(eq(whatsappCampaignLeads.id, leadId), inArray(whatsappCampaignLeads.status, [...WHATSAPP_CAMPAIGN_OPEN_LEAD_STATUSES]));
@@ -258,7 +276,8 @@ async function processLead(
   }
   const text = renderCampaignStep(step.body, campaignLeadVariables(person.person, person.company, picked.customFields ?? {}));
 
-  // Claim: lock the lead, then insert the (lead, step) send row.
+  // Claim: lock the lead, then (a first message) take a daily new-lead place
+  // under the organization's lock, then insert the (lead, step) send row.
   const claim = await db.transaction(async (tx) => {
     const [locked] = await tx
       .select()
@@ -277,6 +296,10 @@ async function processLead(
       ))
       .for("update", { skipLocked: true });
     if (!locked) return { kind: "lost" as const };
+    if (stepIndex === 0) {
+      const allowance = await newLeadAllowance(tx, { personId: picked.personId, now });
+      if (!allowance.ok) return { kind: "daily_lead_limit" as const, reason: allowance.reason };
+    }
     const [inserted] = await tx
       .insert(whatsappCampaignSends)
       .values({ leadId: picked.id, step: stepIndex, stepId: step.id, status: "sending", accountId: account.id, body: text })
@@ -294,6 +317,12 @@ async function processLead(
   if (claim.kind === "lost") {
     result.skipped += 1;
     return "continue";
+  }
+  if (claim.kind === "daily_lead_limit") {
+    // Nothing was claimed: the lead keeps its place and goes out once a place frees or the day resets.
+    await recordHeldBack(account.id, claim.reason);
+    result.skipped += 1;
+    return "daily_lead_limit";
   }
   if (claim.kind === "existing") {
     if (claim.row.status === "sent") {

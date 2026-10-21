@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { CHANNEL_RULES, CHANNELS, defaultValues, GENERAL_RULE_PAGES, mergeStoredRules, pickInRange, resolveValues, ruleError, ruleSubmission, rulesSubset, ruleWarning, rulesOf, validateValues } from "./rules";
+import { CHANNEL_RULES, CHANNELS, defaultValues, GENERAL_RULE_PAGES, mergeStoredRules, pickInRange, resolveValues, RETIRED_RULE_KEYS, ruleError, ruleSubmission, rulesSubset, ruleWarning, rulesOf, validateValues } from "./rules";
 
 describe("registry", () => {
   test("every default is valid and inside its own bounds", () => {
@@ -17,21 +17,49 @@ describe("registry", () => {
     }
   });
   test("defaults reproduce today's hardcoded behaviour", () => {
-    expect(defaultValues("email")).toMatchObject({ dailySendLimit: 30, sendGapMinutes: [18, 24] });
-    expect(defaultValues("linkedin")).toMatchObject({
+    expect(defaultValues("email")).toEqual({ dailySendLimit: 30, sendGapMinutes: [18, 24] });
+    expect(defaultValues("linkedin")).toEqual({
       invitesPerDayPremium: 30, invitesPerDayFree: 5, invitesPerRun: [3, 4], inviteDelaySeconds: [30, 60],
       runGapMinutes: [30, 60], followUpsPerRun: [3, 6], profileLookupsPerRun: [4, 8], searchLeadsPerDay: 400,
     });
-    expect(defaultValues("whatsapp")).toEqual({ sendingHours: null, warmupHours: 24, newChatsPerDay: 25, secondsBetweenSends: 10 });
-    // Accounts without their own hours send at any time today.
-    expect(defaultValues("linkedin").workingHours).toBeNull();
+    expect(defaultValues("whatsapp")).toEqual({ warmupHours: 24, newChatsPerDay: 25, secondsBetweenSends: 10 });
+    expect(defaultValues("instagram")).toEqual({ newChatsPerDay: 10, sendGapMinutes: [5, 10] });
+  });
+});
+
+describe("sending is always on: no channel has sending hours", () => {
+  const hours = { timezone: "Asia/Kolkata", days: [1, 2, 3, 4, 5], start: "09:00", end: "18:00" };
+
+  test("no rule is a time window, on any channel", () => {
+    for (const channel of CHANNELS) {
+      expect(rulesOf(channel).map((rule) => rule.kind as string)).not.toContain("hours");
+      for (const key of ["sendingHours", "workingHours"]) expect(rulesOf(channel).map((rule) => rule.key)).not.toContain(key);
+    }
+  });
+
+  test("a save that still names sending hours is refused, saying why", () => {
+    for (const [channel, key] of [["email", "sendingHours"], ["linkedin", "workingHours"], ["whatsapp", "sendingHours"], ["instagram", "sendingHours"]] as const) {
+      for (const value of [hours, null]) {
+        const result = validateValues(channel, { [key]: value });
+        expect(result.ok).toBe(false);
+        expect(result.ok ? "" : result.error).toContain("always on");
+      }
+    }
+    expect(RETIRED_RULE_KEYS).toEqual({ email: ["sendingHours"], linkedin: ["workingHours"], whatsapp: ["sendingHours"], instagram: ["sendingHours"], general: [] });
+  });
+
+  test("stored hours are ignored when read and dropped by the next save", () => {
+    expect(resolveValues("email", { sendingHours: hours, dailySendLimit: 40 })).toEqual({ dailySendLimit: 40, sendGapMinutes: [18, 24] });
+    expect(mergeStoredRules("email", { sendingHours: hours, dailySendLimit: 40 }, { sendGapMinutes: [20, 30] })).toEqual({ dailySendLimit: 40, sendGapMinutes: [20, 30] });
+    expect(mergeStoredRules("linkedin", { workingHours: hours }, {})).toEqual({});
+    // A key this version does not know (a later release's) is kept, so a rolling deploy cannot erase it.
+    expect(mergeStoredRules("whatsapp", { sendingHours: hours, fromTheFuture: 1 }, {})).toEqual({ fromTheFuture: 1 });
   });
 });
 
 describe("validation", () => {
   const limit = CHANNEL_RULES.linkedin.find((r) => r.key === "invitesPerDayPremium")!;
   const gap = CHANNEL_RULES.email.find((r) => r.key === "sendGapMinutes")!;
-  const hours = CHANNEL_RULES.email.find((r) => r.key === "sendingHours")!;
   const country = CHANNEL_RULES.general.find((rule) => rule.key === "defaultPhoneCountry")!;
 
   test("hard ceilings refuse a typo", () => {
@@ -52,19 +80,6 @@ describe("validation", () => {
     expect(ruleError(limit, 45)).toBeNull();
     expect(ruleWarning(gap, [5, 8])).toContain("10 minutes");
   });
-  test("hours: time zone, days and times", () => {
-    expect(ruleError(hours, { timezone: "Europe/London", days: [1], start: "08:30", end: "17:00" })).toBeNull();
-    expect(ruleError(hours, { timezone: "Mars/Base", days: [1], start: "08:30", end: "17:00" })).toContain("time zone");
-    expect(ruleError(hours, { timezone: "UTC", days: [], start: "08:30", end: "17:00" })).toContain("at least one day");
-    expect(ruleError(hours, { timezone: "UTC", days: [1], start: "9", end: "17:00" })).toContain("09:00");
-    expect(ruleError(hours, { timezone: "UTC", days: [1], start: "18:00", end: "09:00" })).toContain("after the start");
-  });
-  test("optional hours accept null (any time); required hours do not", () => {
-    const linkedinHours = CHANNEL_RULES.linkedin.find((r) => r.key === "workingHours")!;
-    expect(ruleError(linkedinHours, null)).toBeNull();
-    expect(ruleError(hours, null)).not.toBeNull();
-    expect(validateValues("linkedin", { workingHours: null })).toEqual({ ok: true, values: { workingHours: null } });
-  });
   test("country: empty or two capital letters", () => {
     expect(ruleError(country, "")).toBeNull();
     expect(ruleError(country, "IN")).toBeNull();
@@ -74,15 +89,14 @@ describe("validation", () => {
   test("validateValues refuses unknown keys and returns clean values", () => {
     expect(validateValues("email", { nope: 1 })).toEqual({ ok: false, error: "Unknown setting: nope" });
     expect(validateValues("email", { dailySendLimit: 500 }).ok).toBe(false);
-    const ok = validateValues("email", { sendingHours: { timezone: "UTC", days: [5, 1, 1, 3], start: "09:00", end: "17:00" } });
-    expect(ok).toEqual({ ok: true, values: { sendingHours: { timezone: "UTC", days: [1, 3, 5], start: "09:00", end: "17:00" } } });
+    expect(validateValues("email", { dailySendLimit: 40, sendGapMinutes: [20, 30] })).toEqual({ ok: true, values: { dailySendLimit: 40, sendGapMinutes: [20, 30] } });
   });
 });
 
 describe("resolveValues", () => {
   test("stored values override defaults; invalid or unknown ones fall back", () => {
     const resolved = resolveValues("whatsapp", { newChatsPerDay: 40, secondsBetweenSends: 1, legacy: true });
-    expect(resolved).toEqual({ sendingHours: null, warmupHours: 24, newChatsPerDay: 40, secondsBetweenSends: 10 });
+    expect(resolved).toEqual({ warmupHours: 24, newChatsPerDay: 40, secondsBetweenSends: 10 });
   });
   test("nothing stored means today's defaults", () => {
     expect(resolveValues("email", null)).toEqual(defaultValues("email"));
@@ -100,7 +114,6 @@ test("pickInRange stays inside the range", () => {
 test("WhatsApp's contract constants (shown by the recorder and the website, kept import-free) match the rule defaults", async () => {
   const contract = await import("@/lib/whatsapp/contract");
   expect(defaultValues("whatsapp")).toEqual({
-    sendingHours: null,
     warmupHours: contract.WHATSAPP_NEW_CHAT_WARMUP_HOURS,
     newChatsPerDay: contract.WHATSAPP_NEW_CHATS_PER_DAY,
     secondsBetweenSends: contract.WHATSAPP_MIN_SECONDS_BETWEEN_SENDS,
@@ -109,7 +122,7 @@ test("WhatsApp's contract constants (shown by the recorder and the website, kept
 
 describe("organization day (general.timeZone, general.dayStartsAt)", () => {
   test("defaults to UTC midnight", () => {
-    expect(defaultValues("general")).toEqual({ timeZone: "UTC", dayStartsAt: "00:00", defaultPhoneCountry: "", autonomousRunsPerDay: 10, autonomousLeadsPerDay: 300, autonomousSearchesPerDay: 20, objectiveLeadTarget: 25, objectiveHours: 4, objectiveSpendUsd: 5 });
+    expect(defaultValues("general")).toEqual({ timeZone: "UTC", dayStartsAt: "00:00", defaultPhoneCountry: "", newLeadsPerDay: 50, autonomousRunsPerDay: 10, autonomousLeadsPerDay: 300, autonomousSearchesPerDay: 20, objectiveLeadTarget: 25, objectiveHours: 4, objectiveSpendUsd: 5 });
   });
 
   test("validates the zone and the time", () => {
@@ -124,6 +137,24 @@ describe("organization day (general.timeZone, general.dayStartsAt)", () => {
     expect(validateValues("general", { timeZone: "Asia/Calcutta" })).toEqual({ ok: true, values: { timeZone: "Asia/Kolkata" } });
     expect(resolveValues("general", { timeZone: "Europe/Kiev" }).timeZone).toBe("Europe/Kyiv");
     expect(resolveValues("general", { timeZone: "Nowhere/Land", dayStartsAt: "nope" })).toMatchObject({ timeZone: "UTC", dayStartsAt: "00:00" });
+  });
+});
+
+describe("the daily lead limit (general.newLeadsPerDay)", () => {
+  const rule = CHANNEL_RULES.general.find((r) => r.key === "newLeadsPerDay")!;
+
+  test("one workspace-wide number: 50 by default, 1 to 1,000, a warning above 200", () => {
+    expect(rule).toMatchObject({ kind: "number", label: "Maximum new leads to contact per day", default: 50, min: 1, max: 1000, safe: { above: 200 } });
+    expect(ruleError(rule, 0)).toContain("between 1 and 1000");
+    expect(ruleError(rule, 1001)).not.toBeNull();
+    expect(ruleWarning(rule, 200)).toBeNull();
+    expect(ruleWarning(rule, 201)).not.toBeNull();
+  });
+
+  test("its help says who counts, once, and what does not count", () => {
+    expect(rule.help).toContain("email, LinkedIn, WhatsApp and Instagram together");
+    expect(rule.help).toContain("counts once");
+    expect(rule.help).toContain("Follow-ups, replies and messages you send yourself do not count");
   });
 });
 
@@ -144,28 +175,34 @@ describe("a request's research defaults (general)", () => {
   });
 });
 
-describe("the general rules split across two settings pages", () => {
-  test("every general rule is on exactly one page, in registry order", () => {
-    const shown: string[] = [...GENERAL_RULE_PAGES.sending, ...GENERAL_RULE_PAGES.research];
-    expect([...shown].sort()).toEqual(rulesOf("general").map((rule) => rule.key).sort());
-    expect(new Set(shown).size).toBe(shown.length);
-    expect(rulesSubset("general", GENERAL_RULE_PAGES.research).map((rule) => rule.key)).toEqual(["objectiveLeadTarget", "objectiveHours", "objectiveSpendUsd"]);
+describe("the general rules across settings pages", () => {
+  test("Sending shows only the daily lead limit; the day and phone country are on Your business; the Autonomous caps are hidden", () => {
+    expect(GENERAL_RULE_PAGES.sending).toEqual(["newLeadsPerDay"]);
+    expect(GENERAL_RULE_PAGES.business).toEqual(["timeZone", "dayStartsAt", "defaultPhoneCountry"]);
+    expect(GENERAL_RULE_PAGES.research).toEqual(["objectiveLeadTarget", "objectiveHours", "objectiveSpendUsd"]);
+    expect(GENERAL_RULE_PAGES.hidden).toEqual(["autonomousRunsPerDay", "autonomousLeadsPerDay", "autonomousSearchesPerDay"]);
+  });
+
+  test("every general rule is on exactly one page or hidden, in registry order", () => {
+    const placed: string[] = [...GENERAL_RULE_PAGES.sending, ...GENERAL_RULE_PAGES.business, ...GENERAL_RULE_PAGES.research, ...GENERAL_RULE_PAGES.hidden];
+    expect([...placed].sort()).toEqual(rulesOf("general").map((rule) => rule.key).sort());
+    expect(new Set(placed).size).toBe(placed.length);
+    expect(rulesSubset("general", GENERAL_RULE_PAGES.business).map((rule) => rule.key)).toEqual(["timeZone", "dayStartsAt", "defaultPhoneCountry"]);
     expect(rulesSubset("email")).toBe(rulesOf("email"));
     expect(() => rulesSubset("general", ["dailySendLimit"])).toThrow("No general rule dailySendLimit");
   });
 
   test("a page sends only the rules it shows", () => {
-    const all = { ...defaultValues("general"), objectiveLeadTarget: 80, timeZone: "Asia/Kolkata" };
-    expect(ruleSubmission(rulesSubset("general", GENERAL_RULE_PAGES.sending), all)).toEqual({
-      timeZone: "Asia/Kolkata", dayStartsAt: "00:00", defaultPhoneCountry: "", autonomousRunsPerDay: 10, autonomousLeadsPerDay: 300, autonomousSearchesPerDay: 20,
-    });
+    const all = { ...defaultValues("general"), objectiveLeadTarget: 80, timeZone: "Asia/Kolkata", newLeadsPerDay: 20 };
+    expect(ruleSubmission(rulesSubset("general", GENERAL_RULE_PAGES.sending), all)).toEqual({ newLeadsPerDay: 20 });
+    expect(ruleSubmission(rulesSubset("general", GENERAL_RULE_PAGES.business), all)).toEqual({ timeZone: "Asia/Kolkata", dayStartsAt: "00:00", defaultPhoneCountry: "" });
   });
 
-  test("saving one page's rules keeps what the other page stored", () => {
-    const stored = { objectiveLeadTarget: 80, timeZone: "Asia/Kolkata" };
-    // Sending defaults saved with the time zone back at its default: dropped from the row; the research target untouched.
-    expect(mergeStoredRules("general", stored, { timeZone: "UTC", autonomousRunsPerDay: 12 })).toEqual({ objectiveLeadTarget: 80, autonomousRunsPerDay: 12 });
-    expect(mergeStoredRules("general", stored, { objectiveHours: 6 })).toEqual({ ...stored, objectiveHours: 6 });
+  test("saving one page's rules keeps what the other pages stored, the hidden caps included", () => {
+    const stored = { objectiveLeadTarget: 80, timeZone: "Asia/Kolkata", autonomousRunsPerDay: 4 };
+    // Your business saved with the time zone back at its default: dropped from the row; the research target and the hidden cap untouched.
+    expect(mergeStoredRules("general", stored, { timeZone: "UTC" })).toEqual({ objectiveLeadTarget: 80, autonomousRunsPerDay: 4 });
+    expect(mergeStoredRules("general", stored, { newLeadsPerDay: 20 })).toEqual({ ...stored, newLeadsPerDay: 20 });
     expect(mergeStoredRules("general", stored, {})).toEqual(stored);
   });
 });

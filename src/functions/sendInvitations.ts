@@ -22,9 +22,12 @@ import { linkedinRouteIsWrong } from "@/lib/crm/wrongRoutes";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { channelRules } from "@/lib/channels/rules.server";
 import { pickInRange } from "@/lib/channels/rules";
+import { newLeadAllowance } from "@/lib/channels/dailyLeadLimit.server";
 
-// Daily limits, run sizes and delays come from Settings → LinkedIn → Sending
-// rules (src/lib/channels/rules.ts); an account's own dailyInviteLimit wins.
+// Daily limits, run sizes and delays come from the LinkedIn sending rules
+// (src/lib/channels/rules.ts), applied automatically; an account's own
+// dailyInviteLimit wins. An invitation is a first touch, so its claim also
+// takes one of the workspace's daily new-lead places (dailyLeadLimit.server.ts).
 
 const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
 
@@ -132,6 +135,10 @@ export const sendInvitations = async (account: LinkedInAccount): Promise<void> =
         ne(leads.status, "PENDING"),
       )).limit(1);
       if (contacted.length) return null;
+      // Last lock taken: the organization's daily new-lead places. The
+      // INVITATION row inserted below holds this person's place.
+      const allowance = await newLeadAllowance(tx, { personId });
+      if (!allowance.ok) return { limited: allowance.reason };
       const leadClaim = await tx
         .update(leads)
         .set({ status: "REQUEST_SENT", linkedinAccountId: account.id, requestSentAt: new Date() })
@@ -152,10 +159,16 @@ export const sendInvitations = async (account: LinkedInAccount): Promise<void> =
         text: invitationMessage,
         leadId: lead.id,
         seen: true,
+        // UTC, as the LinkedIn tables store it, whatever the session's time zone (the daily lead limit reads it).
+        createdAt: new Date(),
       }).onConflictDoNothing().returning({ id: messages.id });
       return { messageId: messageClaim?.id ?? null };
     });
 
+    if (claimed && "limited" in claimed) {
+      console.log(`[sendInvitations] ${claimed.limited}; ${lead.linkedinUrl} waits for a place`);
+      continue;
+    }
     if (!claimed?.messageId) {
       console.log(`[sendInvitations] Lead ${lead.linkedinUrl} already claimed or requires provider reconciliation, skipping`);
       continue;

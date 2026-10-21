@@ -4,23 +4,24 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getCountries } from "libphonenumber-js";
 import * as Button from "@/components/alignui/button";
-import * as Checkbox from "@/components/alignui/checkbox";
 import * as Input from "@/components/alignui/input";
 import * as Select from "@/components/alignui/select";
-import { Frame, FramePanel } from "@/components/analytics/kit/Frame";
+import { Frame, FrameHeader, FramePanel } from "@/components/analytics/kit/Frame";
 import { Callout, FieldRow } from "@/components/settings/SettingsKit";
-import { timeInputClass } from "@/components/outreach/WorkingHoursModal";
-import { ruleError, ruleSubmission, rulesSubset, ruleWarning, type Channel, type Rule, type WeeklyHours } from "@/lib/channels/rules";
+import { ruleError, ruleSubmission, rulesSubset, ruleWarning, type Channel, type Rule } from "@/lib/channels/rules";
 import { cn } from "@/utils/cn";
 
 /**
- * The Sending rules form for one channel, generated from the registry in
+ * A settings form generated from the rules registry in
  * src/lib/channels/rules.ts: one row per rule, its bounds enforced, its
  * warning shown past the safe edge, and a way back to the default.
  */
 
-const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const COMMON_TIMEZONES = ["Asia/Kolkata", "Asia/Singapore", "Asia/Dubai", "Europe/London", "Europe/Berlin", "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles", "Australia/Sydney", "UTC"];
+
+/** A native time input in the AlignUI field style. */
+const timeInputClass =
+  "h-9 w-full min-w-0 rounded-lg bg-bg-white-0 px-2.5 text-paragraph-sm tabular-nums text-text-strong-950 shadow-regular-xs outline-none ring-1 ring-inset ring-stroke-soft-200 transition hover:bg-bg-weak-50 focus:shadow-button-important-focus focus:ring-stroke-strong-950 disabled:bg-bg-weak-50 disabled:text-text-disabled-300 disabled:shadow-none disabled:ring-transparent";
 
 type Values = Record<string, unknown>;
 
@@ -32,18 +33,12 @@ function describeDefault(rule: Rule): string {
       return `${rule.default} ${rule.unit}`;
     case "range":
       return `${rule.default[0]}–${rule.default[1]} ${rule.unit}`;
-    case "hours":
-      return rule.default ? hoursSummary(rule.default) : "any time";
     case "country":
       return rule.default ? countryName(rule.default) : "none";
     case "timezone":
     case "time":
       return rule.default;
   }
-}
-
-function hoursSummary(h: WeeklyHours): string {
-  return `${h.days.map((d) => DAY_LABELS[d]).join(", ")} ${h.start}–${h.end} (${h.timezone})`;
 }
 
 function countryName(code: string): string {
@@ -97,63 +92,6 @@ function TimeZoneInput({ id, value, onChange, disabled }: { id: string; value: s
   );
 }
 
-function HoursInput({ id, rule, value, onChange, disabled }: { id: string; rule: Rule & { kind: "hours" }; value: WeeklyHours | null; onChange: (v: WeeklyHours | null) => void; disabled: boolean }) {
-  const fallback: WeeklyHours = { timezone: "Asia/Kolkata", days: [1, 2, 3, 4, 5], start: "09:00", end: "18:00" };
-  const zones = useTimeZones(value?.timezone);
-
-  if (rule.optional && value === null) {
-    return (
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-paragraph-sm text-text-sub-600">Any time</span>
-        <Button.Root type="button" size="xxsmall" variant="neutral" mode="stroke" disabled={disabled} onClick={() => onChange(rule.default ?? fallback)}>
-          Set hours
-        </Button.Root>
-      </div>
-    );
-  }
-  const h = value ?? fallback;
-  const set = (patch: Partial<WeeklyHours>) => onChange({ ...h, ...patch });
-  return (
-    <div className="flex flex-col gap-2.5">
-      <Select.Root size="small" value={h.timezone} onValueChange={(timezone) => set({ timezone })} disabled={disabled}>
-        <Select.Trigger id={id} aria-label="Time zone">
-          <Select.Value />
-        </Select.Trigger>
-        <Select.Content>
-          {zones.map((zone) => (
-            <Select.Item key={zone} value={zone}>{zone}</Select.Item>
-          ))}
-        </Select.Content>
-      </Select.Root>
-      <div className="flex flex-wrap gap-1.5" role="group" aria-label="Days">
-        {DAY_LABELS.map((label, day) => {
-          const on = h.days.includes(day);
-          return (
-            <label key={label} className={cn("flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 text-label-xs ring-1 ring-inset", on ? "bg-primary-alpha-10 text-primary-base ring-primary-alpha-16" : "text-text-sub-600 ring-stroke-soft-200")}>
-              <Checkbox.Root
-                checked={on}
-                disabled={disabled}
-                onCheckedChange={(checked) => set({ days: checked === true ? [...h.days, day].sort((a, b) => a - b) : h.days.filter((d) => d !== day) })}
-              />
-              {label}
-            </label>
-          );
-        })}
-      </div>
-      <div className="flex items-center gap-2">
-        <input type="time" aria-label="Start" value={h.start} disabled={disabled} onChange={(e) => set({ start: e.target.value })} className={cn(timeInputClass, h.start >= h.end && "ring-error-base")} />
-        <span className="shrink-0 text-paragraph-xs text-text-soft-400">to</span>
-        <input type="time" aria-label="End" value={h.end} disabled={disabled} onChange={(e) => set({ end: e.target.value })} className={cn(timeInputClass, h.start >= h.end && "ring-error-base")} />
-      </div>
-      {rule.optional && (
-        <button type="button" disabled={disabled} onClick={() => onChange(null)} className="self-start text-paragraph-xs text-text-sub-600 underline-offset-2 hover:underline disabled:opacity-50">
-          Clear: send at any time
-        </button>
-      )}
-    </div>
-  );
-}
-
 function CountryInput({ id, value, onChange, disabled }: { id: string; value: string; onChange: (v: string) => void; disabled: boolean }) {
   const countries = useMemo(
     () => getCountries().map((code) => ({ code, name: countryName(code) })).sort((a, b) => a.name.localeCompare(b.name)),
@@ -179,11 +117,16 @@ export function ChannelRulesForm({
   initialValues,
   canEdit,
   keys,
+  title,
+  description,
 }: {
   channel: Channel;
   initialValues: Values;
   canEdit: boolean;
-  /** Show and save only these rules (the "general" ones are split across two pages); the others keep what is stored. */
+  /** A heading over the rules, when they share a page with other settings. */
+  title?: string;
+  description?: string;
+  /** Show and save only these rules (the "general" ones are split across pages: GENERAL_RULE_PAGES); the others keep what is stored. */
   keys?: readonly string[];
 }) {
   const router = useRouter();
@@ -212,13 +155,13 @@ export function ChannelRulesForm({
         body: JSON.stringify(ruleSubmission(rules, values)),
       });
       const body = (await res.json().catch(() => null)) as { values?: Values; error?: string } | null;
-      if (!res.ok || !body?.values) throw new Error(body?.error || "Could not save the sending rules.");
+      if (!res.ok || !body?.values) throw new Error(body?.error || "Could not save these settings.");
       setSaved(body.values);
       setValues(body.values);
-      setStatus({ tone: "success", text: "Saved. Sending follows these rules within a minute." });
+      setStatus({ tone: "success", text: "Saved. It applies within a minute." });
       router.refresh();
     } catch (error) {
-      setStatus({ tone: "error", text: error instanceof Error ? error.message : "Could not save the sending rules." });
+      setStatus({ tone: "error", text: error instanceof Error ? error.message : "Could not save these settings." });
     } finally {
       setSaving(false);
     }
@@ -228,6 +171,7 @@ export function ChannelRulesForm({
     <div className="flex flex-col gap-4">
       {!canEdit && <Callout tone="info">Only owners and admins can change these.</Callout>}
       <Frame>
+        {title && <FrameHeader title={title} description={description} />}
         <FramePanel className="divide-y divide-stroke-soft-200">
           {rules.map((rule) => {
             const id = `rule-${channel}-${rule.key}`;
@@ -260,11 +204,6 @@ export function ChannelRulesForm({
                       <span className="text-paragraph-xs text-text-soft-400">to</span>
                       <NumberInput id={`${id}-hi`} label="Highest" value={(value as [number, number])[1]} onChange={(n) => set(rule.key, [(value as [number, number])[0], n])} disabled={!canEdit} />
                       <span className="text-paragraph-xs text-text-sub-600">{rule.unit}</span>
-                    </div>
-                  )}
-                  {rule.kind === "hours" && (
-                    <div className="w-full text-left">
-                      <HoursInput id={id} rule={rule} value={value as WeeklyHours | null} onChange={(v) => set(rule.key, v)} disabled={!canEdit} />
                     </div>
                   )}
                   {rule.kind === "timezone" && (
