@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import { RiArrowDownSLine, RiListCheck3 } from "@remixicon/react";
+import { RiArrowDownSLine, RiArrowLeftSLine, RiArrowRightSLine, RiListCheck3 } from "@remixicon/react";
 import type { RequestSummary } from "@/lib/assistant/requests.server";
 import { useVisiblePolling } from "@/components/whatsapp/usePolling";
 import { cn } from "@/utils/cn";
@@ -73,15 +73,55 @@ function Picker({ requests, value, onPick }: { requests: ThreadRequest[]; value:
   );
 }
 
+const COLLAPSED_KEY = "agentsdr-request-panel-collapsed";
+
+function readCollapsed(): boolean {
+  try { return window.localStorage.getItem(COLLAPSED_KEY) === "true"; } catch { return false; }
+}
+
+function writeCollapsed(value: boolean) {
+  try { window.localStorage.setItem(COLLAPSED_KEY, String(value)); } catch { /* blocked storage: the choice lasts this visit */ }
+}
+
+const railButton = "flex size-8 items-center justify-center rounded-lg text-text-soft-400 outline-none transition hover:bg-bg-weak-50 hover:text-text-strong-950 focus-visible:ring-2 focus-visible:ring-primary-base";
+
+/**
+ * The request column beside the chat, collapsible to a narrow rail (like the
+ * left sidebar) so the conversation can take the full width. The choice is
+ * remembered on this browser; it loads after mount, so the server and the
+ * first client render agree.
+ */
 export function RequestPanel({ state }: { state: ReturnType<typeof useThreadRequest> }) {
   const { requests, key, pick, summary, error, reload } = state;
+  const [collapsed, setCollapsed] = useState(false);
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => setCollapsed(readCollapsed()));
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+  const toggle = () => setCollapsed((value) => { writeCollapsed(!value); return !value; });
   if (!requests.length) return null;
+  if (collapsed) {
+    return (
+      <aside aria-label="This request (collapsed)" data-testid="request-panel" data-collapsed="true" className="hidden w-12 shrink-0 flex-col items-center gap-2 border-l border-stroke-soft-200 bg-bg-white-0 py-3 lg:flex">
+        <button type="button" onClick={toggle} aria-label="Show this request" aria-expanded={false} title="Show this request" className={railButton}>
+          <RiArrowLeftSLine className="size-5" aria-hidden="true" />
+        </button>
+        <span className={railButton} aria-hidden="true"><RiListCheck3 className="size-4" /></span>
+        {summary?.open && <span className="size-2 rounded-full bg-primary-base" title={summary.stateLabel} />}
+      </aside>
+    );
+  }
   return (
-    <aside aria-label="This request" data-testid="request-panel" className="hidden w-[340px] shrink-0 flex-col overflow-y-auto border-l border-stroke-soft-200 bg-bg-white-0 lg:flex xl:w-[380px]">
+    <aside aria-label="This request" data-testid="request-panel" data-collapsed="false" className="hidden w-[360px] shrink-0 flex-col overflow-y-auto border-l border-stroke-soft-200 bg-bg-white-0 lg:flex xl:w-[400px]">
       <div className="border-b border-stroke-soft-200 px-4 py-3">
         <div className="flex items-center justify-between gap-2">
           <h2 className="text-label-sm text-text-strong-950">This request</h2>
-          <Link href="/assistant/requests" className="text-label-xs text-text-sub-600 hover:text-text-strong-950">All requests</Link>
+          <div className="flex items-center gap-1">
+            <Link href="/assistant/requests" className="rounded-md px-1.5 py-1 text-label-xs text-text-sub-600 hover:text-text-strong-950">All requests</Link>
+            <button type="button" onClick={toggle} aria-label="Hide this request" aria-expanded title="Hide this request" className={railButton}>
+              <RiArrowRightSLine className="size-5" aria-hidden="true" />
+            </button>
+          </div>
         </div>
         <p className="mt-1 line-clamp-2 text-paragraph-xs text-text-sub-600">{summary?.title ?? requests.find((request) => request.key === key)?.title}</p>
         {summary && <p className="mt-1 text-paragraph-xs text-text-soft-400">{summary.stateLabel}</p>}

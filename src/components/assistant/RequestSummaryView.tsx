@@ -97,7 +97,7 @@ export function RequestSummaryView({ summary, compact = false, onChanged }: { su
         <section>
           <h3 className="mb-2 text-label-xs text-text-sub-600">Searches and plans</h3>
           <ul className="divide-y divide-stroke-soft-200 overflow-hidden rounded-xl bg-bg-white-0 ring-1 ring-inset ring-stroke-soft-200">
-            {children.map((item) => <WorkRow key={`${item.type}:${item.id}`} item={item} busy={busyId === item.id} timeZone={summary.timeZone} onCancel={cancelJob} onRun={runAction} />)}
+            {children.map((item) => <WorkRow key={`${item.type}:${item.id}`} item={item} busy={busyId === item.id} timeZone={summary.timeZone} onCancel={cancelJob} onRun={runAction} compact={compact} />)}
           </ul>
         </section>
       )}

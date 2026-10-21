@@ -41,7 +41,12 @@ export function chatHref(threadId: string): string {
   return `/assistant?thread=${encodeURIComponent(threadId)}`;
 }
 
-export function WorkRow({ item, busy, timeZone, onCancel, onRun }: { item: WorkItem; busy: boolean; timeZone: string; onCancel: (item: WorkItem) => void; onRun: (item: WorkItem, action: "pause" | "resume" | "stop") => void }) {
+/**
+ * `compact` is the request column beside the chat: always stacked (the column
+ * is narrow even on a wide screen), and without the link back to the chat
+ * the column already sits in.
+ */
+export function WorkRow({ item, busy, timeZone, onCancel, onRun, compact = false }: { item: WorkItem; busy: boolean; timeZone: string; onCancel: (item: WorkItem) => void; onRun: (item: WorkItem, action: "pause" | "resume" | "stop") => void; compact?: boolean }) {
   const counts = [
     item.found !== null ? `${item.found} found` : null,
     item.eligible !== null ? `${item.eligible} new` : null,
@@ -51,18 +56,18 @@ export function WorkRow({ item, busy, timeZone, onCancel, onRun }: { item: WorkI
   const running = item.runStatus === "running";
   const small = "h-8 px-2.5";
   return (
-    <li className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-start sm:justify-between">
+    <li className={cn("flex flex-col gap-3 px-4 py-3", !compact && "sm:flex-row sm:items-start sm:justify-between")}>
       <div className="min-w-0 space-y-1">
         <div className="flex flex-wrap items-center gap-2">
-          <p className="min-w-0 break-words text-label-sm text-text-strong-950">{item.title}</p>
+          <p className={cn("min-w-0 break-words text-label-sm text-text-strong-950", compact && "line-clamp-2")}>{item.title}</p>
           <Badge tone={WORK_TONE[item.state]}>{item.stateLabel}</Badge>
         </div>
-        {item.reason && <p className="text-paragraph-sm text-text-sub-600">{item.reason}{item.nextAt && <>; the next send is allowed <time dateTime={item.nextAt}>{nextAt}</time></>}</p>}
+        {item.reason && <p className={cn("text-text-sub-600", compact ? "text-paragraph-xs" : "text-paragraph-sm")}>{item.reason}{item.nextAt && <>; the next send is allowed <time dateTime={item.nextAt}>{nextAt}</time></>}</p>}
         <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-paragraph-xs text-text-soft-400">
           {item.source && <span>{item.source}</span>}
           {counts && <span>{counts}</span>}
           <span title={formatChatDateTime(item.startedAt, timeZone)}>Started {timeAgo(item.startedAt)}</span>
-          {item.threadId && (
+          {item.threadId && !compact && (
             <Link href={chatHref(item.threadId)} className="inline-flex items-center gap-1 text-text-sub-600 underline-offset-2 hover:text-text-strong-950 hover:underline">
               <RiChat3Line className="size-3.5" aria-hidden="true" />{item.threadTitle ?? "Open chat"}
             </Link>
