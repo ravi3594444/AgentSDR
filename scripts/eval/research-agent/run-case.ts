@@ -55,7 +55,8 @@ const aimlKey = (process.env.AIML_API_KEY ?? "").trim();
 if (MODE === "real" && !aimlKey) throw new Error("AIML_API_KEY is not set");
 const redact = (text: string) => (aimlKey ? text.split(aimlKey).join("[key]") : text);
 
-const stamp = Date.now();
+// Unique per run even when several start in the same millisecond.
+const stamp = Date.now() * 1000 + (process.pid % 1000);
 const SCRAPER = `http://scraper-${stamp}.audit.invalid`;
 const APIFY = `https://apify-${stamp}.audit.invalid/v2`;
 const UNIPILE = `https://unipile-${stamp}.audit.invalid`;
@@ -488,7 +489,10 @@ try {
     await runAgentTurn({ threadId: thread.id, userId: owner!.id, text: fixture.prompt });
     let followUpSent = false;
     let objective = (await objectives.threadObjectives(thread.id, 5))[0] ?? null;
-    if (!objective && fixture.followUp) {
+    // The assistant asked instead of searching (v2 may already have written the brief): the owner answers once.
+    const searchesStarted = await db.select({ id: schema.assistantJobs.id }).from(schema.assistantJobs)
+      .where(and(eq(schema.assistantJobs.organizationId, org!.id), inArray(schema.assistantJobs.kind, ["discovery", "web_discovery", "linkedin_search", "apify_instagram", "social_research"]))).limit(1);
+    if (!searchesStarted.length && fixture.followUp) {
       const last = [...(await listMessages(thread.id, 200))].reverse().find((row) => row.role === "assistant");
       mark(`no search after turn 1; assistant said: ${String(last?.content ?? "").slice(0, 200)}`);
       if (last && /\?/.test(last.content)) {

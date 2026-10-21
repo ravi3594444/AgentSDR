@@ -1,6 +1,7 @@
 /**
- * Research agent v2: assistant_objectives.stop_reason accepts 'finished' (a
- * request the assistant finished as the owner asked). Applies
+ * Research agent v2: organization_features accepts the key
+ * 'research_agent_v2' (its switch), and assistant_objectives.stop_reason
+ * accepts 'finished' (a request the assistant finished as the owner asked). Applies
  * db/migrations/20261021-research-agent-v2.sql in one transaction; safe to
  * re-run. Run it before deploying the code that writes it.
  *
@@ -20,7 +21,7 @@ try {
     await tx.unsafe("SET LOCAL lock_timeout = '10s'; SET LOCAL statement_timeout = '60s'").simple();
     await tx.unsafe(ddl).simple();
   });
-  console.log("Research agent v2 ready: assistant_objectives.stop_reason accepts 'finished'.");
+  console.log("Research agent v2 ready: the research_agent_v2 switch, and assistant_objectives.stop_reason accepts 'finished'.");
 } finally {
   await db.close();
 }

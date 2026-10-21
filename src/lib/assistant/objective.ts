@@ -357,6 +357,10 @@ export type DriverFacts = LimitFacts & {
   pendingMembers: number;
   /** The driver's failed attempts at judging them. */
   qualifyFailures: number;
+  /** Research agent v2: reaching the target wakes the assistant once (to prepare the plan and finish) before the request stops. */
+  wakeAtTarget?: boolean;
+  /** Research agent v2: the chat's last word is the assistant's question to the owner; the request waits for the answer. */
+  waitingForOwner?: boolean;
 };
 
 export type DriverStep =
@@ -385,10 +389,20 @@ const SLOT_RETRY_MS = 5 * 60_000;
  */
 export function nextDriverStep(facts: DriverFacts): DriverStep {
   const limit = limitReached(facts);
-  if (limit) return { kind: "stop", ...limit };
   const untilDeadline = Math.max(1_000, facts.deadline.getTime() - facts.now.getTime() + 1_000);
   const wait = (delayMs: number, reason: string): DriverStep => ({ kind: "wait", delayMs: Math.min(delayMs, untilDeadline), reason });
+  if (limit && limit.reason === "target_reached" && facts.wakeAtTarget) {
+    // v2: one turn that starts at the target (it prepares the plan and finishes); once it has ended, the request stops there.
+    const turn = facts.continuation;
+    if (!turn || turn.leadsAtStart < facts.leadTarget) return facts.threadBusy ? wait(TURN_POLL_MS, "the chat is busy") : { kind: "continue", n: (turn?.n ?? 0) + 1, attempt: 1, dry: facts.dry };
+    if (turn.endedAt || turn.attempt >= MAX_CONTINUATION_ATTEMPTS) return { kind: "stop", ...limit };
+    if (facts.threadBusy) return wait(TURN_POLL_MS, "the assistant is preparing what follows the target");
+    return { kind: "continue", n: turn.n, attempt: turn.attempt + 1, dry: facts.dry };
+  }
+  if (limit) return { kind: "stop", ...limit };
   if (facts.status === "paused") return wait(PAUSED_POLL_MS, "paused by the owner");
+  // A question to the owner is not a source exhausted: the request waits for the answer (the time limit still ends it).
+  if (facts.waitingForOwner && facts.openChildren === 0) return wait(PAUSED_POLL_MS, "waiting for the owner's answer");
   // Leads found but not yet judged against the request (a list added by hand, an earlier failure): judged before
   // anything is decided on the count. Searches still running judge their own.
   if (facts.openChildren === 0 && facts.pendingMembers > 0 && facts.qualifyFailures < MAX_QUALIFY_ATTEMPTS) return { kind: "qualify" };
@@ -528,7 +542,9 @@ export function continuationNote(input: {
   v2?: boolean;
 }): string {
   if (input.v2) {
-    return `The searches for your request have finished for now (step ${input.n}); the counts are in PROGRESS. Next: review the leads, correct verdicts the evidence contradicts, prepare outreach when the brief says contact and enough leads match, search another source if the brief still needs leads, or finish_request when its done condition is met.`;
+    return input.leads >= input.leadTarget
+      ? `Your request has its ${input.leadTarget} matching leads (step ${input.n}); the counts are in PROGRESS. Next: review them, prepare outreach if the brief says contact, then finish_request. No more searches start for it.`
+      : `The searches for your request have finished for now (step ${input.n}); the counts are in PROGRESS. Next: review the leads, correct verdicts the evidence contradicts, prepare outreach when the brief says contact and enough leads match, search another source if the brief still needs leads, or finish_request when its done condition is met.`;
   }
   const request = input.request.replace(/\s+/g, " ").trim().slice(0, 200);
   return [

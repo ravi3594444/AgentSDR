@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, eq, gte, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { inOrg } from "@/lib/tenancy/scope";
 import { outreachRequested } from "./agent";
@@ -69,6 +69,12 @@ async function driverFacts(objective: Objective, facts: ObjectiveFacts): Promise
     ))
     : [];
   const waiting = (row: { toolResult: Record<string, unknown> | null }) => (row.toolResult?.data as { waiting?: unknown } | undefined)?.waiting === true;
+  const v2 = Boolean(objective.controls.brief);
+  const [lastWord] = v2
+    ? await db.select({ role: assistantMessages.role, content: assistantMessages.content }).from(assistantMessages)
+      .where(and(inOrg(assistantMessages), eq(assistantMessages.threadId, objective.threadId), inArray(assistantMessages.role, ["user", "assistant"])))
+      .orderBy(desc(assistantMessages.createdAt)).limit(1)
+    : [];
   return {
     status: objective.status === "paused" ? "paused" : "active",
     now: new Date(),
@@ -89,6 +95,8 @@ async function driverFacts(objective: Objective, facts: ObjectiveFacts): Promise
     pausedAt: progress.pausedAt ?? null,
     pendingMembers: facts.funnel.pendingMembers,
     qualifyFailures: progress.qualifyFailures ?? 0,
+    wakeAtTarget: v2,
+    waitingForOwner: lastWord?.role === "assistant" && lastWord.content.trim().endsWith("?"),
   };
 }
 

@@ -65,3 +65,11 @@ describe("the harness keeps only what protects", () => {
     expect(autonomous).toContain("Widen nothing the owner named");
   });
 });
+
+describe("a quote is matched as read", () => {
+  test("HTML entities, curly quotes and spacing do not hide it", async () => {
+    const { quoteText } = await import("./agentV2.server");
+    expect(quoteText("<h3>Priya Raman</h3><p>Co-founder &amp; CTO</p>")).toContain(quoteText("Co-founder & CTO"));
+    expect(quoteText("We’re   in  Brickell")).toBe(quoteText("We're in Brickell"));
+  });
+});

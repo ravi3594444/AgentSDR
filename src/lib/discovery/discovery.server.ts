@@ -97,6 +97,8 @@ type InstagramOrigin = {
   /** The account's own profile was read (its identity); absent on searches saved before this was recorded, which read it. */
   profileRead?: boolean;
   biography: string | null;
+  /** The place the matched post was tagged with, as Instagram names it; absent on searches saved before it was kept. */
+  postLocation?: string | null;
   /** Contacts the profile itself publishes. */
   profileEmail: string | null;
   profilePhone: string | null;
@@ -786,6 +788,7 @@ function instagramPlaces(job: AssistantJob, posts: InstagramPost[], profiles: Ma
         placeNamed,
         profileRead: Boolean(profile),
         biography: profile?.biography ?? null,
+        postLocation: post.locationName ?? null,
         profileEmail: profile?.email ?? null,
         profilePhone: profile?.phone ?? null,
       },
@@ -941,6 +944,10 @@ function factsOf(place: EnrichedPlace): Record<string, string> {
     if (place.origin.hashtag) facts.hashtag = `#${place.origin.hashtag}`;
     if (place.origin.postedAt) facts.postedAt = place.origin.postedAt;
     if (!place.origin.placeNamed) facts.location = "Unknown (the post and profile do not name the place)";
+    // What the place check read, kept so the judge (and the owner) can see it: a neighbourhood or tagged place it does not know.
+    if (place.origin.biography) facts.bio = place.origin.biography.replace(/\s+/g, " ").trim().slice(0, 300);
+    if (place.origin.postLocation) facts.postLocation = place.origin.postLocation.slice(0, 120);
+    if (place.origin.caption) facts.postCaption = place.origin.caption.replace(/\s+/g, " ").trim().slice(0, 200);
     facts.contactRoute = place.origin.profileEmail || place.origin.profilePhone || place.website ? "what the profile or its website publishes" : "Instagram DM after plan approval";
   }
   if (place.displayName !== place.name) facts.listingName = place.name;

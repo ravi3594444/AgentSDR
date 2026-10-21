@@ -3,6 +3,7 @@ import {
   AI_SEARCH_ESTIMATE_USD,
   continuationNote,
   limitReached,
+  MAX_CONTINUATION_ATTEMPTS,
   MAX_QUALIFY_ATTEMPTS,
   nextDriverStep,
   objectiveReportKey,
@@ -253,6 +254,28 @@ describe("the driver: wait, continue or stop", () => {
     expect(nextDriverStep(facts({ leads: 25, openChildren: 1 }))).toMatchObject({ kind: "stop", reason: "target_reached" });
     expect(nextDriverStep(facts({ spentUsd: 5 }))).toMatchObject({ kind: "stop", reason: "budget_spent" });
     expect(nextDriverStep(facts({ deadline: minutes(-1) }))).toMatchObject({ kind: "stop", reason: "time_limit" });
+  });
+
+  test("research agent v2: the target wakes the assistant once (to plan and finish), then the request stops; spend and time still stop at once", () => {
+    const v2 = { wakeAtTarget: true, leadTarget: 5, leads: 5 };
+    expect(nextDriverStep(facts(v2))).toEqual({ kind: "continue", n: 1, attempt: 1, dry: 0 });
+    expect(nextDriverStep(facts({ ...v2, threadBusy: true })).kind).toBe("wait");
+    // That turn running, then ended: it stops at the target.
+    expect(nextDriverStep(facts({ ...v2, threadBusy: true, continuation: turn({ leadsAtStart: 5, endedAt: null, end: null }) })).kind).toBe("wait");
+    expect(nextDriverStep(facts({ ...v2, continuation: turn({ leadsAtStart: 5 }) }))).toMatchObject({ kind: "stop", reason: "target_reached" });
+    // An earlier turn below the target does not count as that turn.
+    expect(nextDriverStep(facts({ ...v2, continuation: turn({ n: 2, leadsAtStart: 3 }) }))).toEqual({ kind: "continue", n: 3, attempt: 1, dry: 0 });
+    // Interrupted: taken again, a bounded number of times.
+    expect(nextDriverStep(facts({ ...v2, continuation: turn({ leadsAtStart: 5, endedAt: null, end: null }) }))).toEqual({ kind: "continue", n: 1, attempt: 2, dry: 0 });
+    expect(nextDriverStep(facts({ ...v2, continuation: turn({ leadsAtStart: 5, endedAt: null, end: null, attempt: MAX_CONTINUATION_ATTEMPTS }) }))).toMatchObject({ kind: "stop", reason: "target_reached" });
+    expect(nextDriverStep(facts({ ...v2, spentUsd: 5, leads: 2 }))).toMatchObject({ kind: "stop", reason: "budget_spent" });
+  });
+
+  test("research agent v2: a question to the owner waits for the answer instead of ending the request", () => {
+    expect(nextDriverStep(facts({ waitingForOwner: true, continuation: turn({ leadsAtStart: 0 }), leads: 0 })).kind).toBe("wait");
+    expect(nextDriverStep(facts({ waitingForOwner: true, leads: 0 })).kind).toBe("wait");
+    // The time limit still ends it.
+    expect(nextDriverStep(facts({ waitingForOwner: true, deadline: minutes(-1) }))).toMatchObject({ kind: "stop", reason: "time_limit" });
   });
 
   test("paused: nothing new starts, but the time limit still ends it", () => {

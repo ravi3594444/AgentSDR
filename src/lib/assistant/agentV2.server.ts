@@ -130,7 +130,14 @@ export async function reviewLeadsText(input: { objective: Objective; audienceId:
   };
 }
 
-const norm = (text: string) => text.toLowerCase().replace(/[“”"’‘']/g, "'").replace(/\s+/g, " ").trim();
+/** Text compared for a quote: HTML entities decoded (a page's "&amp;" is the "&" the model read), quotes and spaces made alike. */
+export function quoteText(text: string): string {
+  return text
+    .replace(/&amp;/gi, "&").replace(/&nbsp;/gi, " ").replace(/&quot;/gi, "\"").replace(/&#0*39;|&apos;/gi, "'").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">")
+    .replace(/\\u0026/gi, "&")
+    .toLowerCase().replace(/[“”"’‘']/g, "'").replace(/\s+/g, " ").trim();
+}
+const norm = quoteText;
 
 /**
  * Whether the quote is really in what the server read: a page or search
