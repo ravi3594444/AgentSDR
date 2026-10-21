@@ -352,6 +352,144 @@ describe("outreachRequested", () => {
     expect(outreachRequested("follow up with the ones who did not reply")).toBe(true);
   });
 
+  // Pilot finding L01, second round: outreachRequested is an authorization
+  // gate. The owner's research-only words are a veto with wide recall, and
+  // nothing else may silence a genuine request.
+  const chat = (...turns: [string, string][]) => turns.map(([role, content]) => ({ role: role as "user" | "assistant", content, tool: null, toolInput: null, status: null }));
+
+  test("a research-only message cancels an earlier request that nothing has acted on", () => {
+    expect(pendingOutreachRequest(chat(["user", "find dentists in Pune and email them"], ["assistant", "Which area of Pune?"], ["user", "Kothrud. Actually research only, do not contact anyone."]))).toBeNull();
+    expect(pendingOutreachRequest(chat(["user", "find dentists in Pune and email them"], ["assistant", "Got it. Starting."], ["user", "wait, research only. no outreach."]))).toBeNull();
+    expect(pendingOutreachRequest(chat(["user", "find dentists in Pune and email them"], ["assistant", "Which area?"], ["user", "Kothrud"], ["assistant", "Any budget?"], ["user", "kisi ko contact mat karo"]))).toBeNull();
+    // A plain answer to a clarifying question keeps the request.
+    expect(pendingOutreachRequest(chat(["user", "find dentists in Pune and email them"], ["assistant", "Which area of Pune?"], ["user", "Kothrud"]))).toBe("find dentists in Pune and email them");
+  });
+
+  test("a negation over a list of channels is a veto, whatever the commas", () => {
+    for (const text of [
+      "Do not email, whatsapp or call anyone.", "No emails, messages or calls to anyone.", "Do not contact anyone via email or whatsapp.",
+      "Do not contact anyone by email, whatsapp or linkedin.", "Do not contact anyone through email.", "Don't send any messages.",
+      "Do not send them any messages.", "Don't message or email anyone", "No need to contact or email them",
+    ]) {
+      expect(outreachRequested(text)).toBe(false);
+      expect(outreachRevoked(text)).toBe(true);
+    }
+    expect(researchOnlyStated("Do not email, whatsapp or call anyone.")).toBe(true);
+    expect(researchOnlyStated("No emails, messages or calls to anyone.")).toBe(true);
+    expect(outreachRequested("Do not email, whatsapp or call anyone. Find clinics with an email address.")).toBe(false);
+    // One channel negated, another asked for: still a request.
+    expect(outreachRequested("no emails, whatsapp only")).toBe(true);
+    expect(outreachRequested("don't email them, WhatsApp them")).toBe(true);
+  });
+
+  test("common real words inside the typo radius are not outreach words; short outreach words take no typos", () => {
+    for (const text of [
+      "Find clinics like the following: Smile Dental, Pune. Spend $0.", "Use the following list of areas: Baner, Kothrud. Budget zero.",
+      "I followed your advice and found 3 more. Spend $0.", "She follows the same plan.", "Find clinics with constant foot traffic. Spend $0.",
+      "Find clinics that use gmail. Spend $0.", "whatsup, find 3 clinics", "How many are contactable?", "Is the site reachable?",
+      "Find dentists in the Champaign area", "Connect my LinkedIn account", "connect the whatsapp number", "Follow these steps and find 3 clinics",
+      "Find camping sites near Pune", "Find startups with a spark of growth", "Read my pitch deck and find investors", "What does this error message mean?",
+      "Find clinics within reach of Baner",
+    ]) expect(outreachRequested(text)).toBe(false);
+    // "send", "mail" (four letters or fewer) match only as written.
+    expect(outreachIntent("sned them the offer")).toBe(false);
+    expect(outreachIntent("send them the offer")).toBe(true);
+    // Typos of the longer words still count, and so does following up.
+    for (const text of ["campagion them", "contcat the clinics", "emial them", "whatsap them", "mesage them", "pitchh them", "Keep following up with them", "follow-up with the clinics", "connect with them", "connect with the CTOs"]) {
+      expect(outreachIntent(text)).toBe(true);
+    }
+  });
+
+  test("Hinglish refusals: the negation after the word counts", () => {
+    for (const text of [
+      "kisi ko contact mat karo", "koi message mat bhejo", "unhe email mat karo", "whatsapp mat karo", "abhi message mat karna",
+      "sirf research karo, kisi ko sampark mat karo", "kisi ko bhi contact nahi karna hai", "sirf list banao, kisi ko contact mat karo",
+    ]) expect(outreachRequested(text)).toBe(false);
+    expect(researchOnlyStated("sirf research karo")).toBe(true);
+    expect(researchOnlyStated("kisi ko contact mat karo")).toBe(true);
+    // One channel refused, another asked for; "na" after a verb is a softener, not a refusal.
+    expect(outreachRequested("email mat karo, whatsapp karo")).toBe(true);
+    expect(outreachRequested("unhe whatsapp pe message bhejo na")).toBe(true);
+  });
+
+  test("a curly apostrophe is an apostrophe", () => {
+    expect(researchOnlyStated("Don\u2019t contact anyone")).toBe(true);
+    expect(outreachRequested("Don\u2019t contact anyone; I\u2019ll do the outreach myself later.")).toBe(false);
+    expect(outreachRequested("Don\u2019t contact anyone. Find clinics like the following: Smile Dental.")).toBe(false);
+    expect(outreachRequested("Don\u2018t message anybody")).toBe(false);
+  });
+
+  test("the owner keeping the contact for themselves, or zero outreach, is research only", () => {
+    for (const text of ["Find 20 gyms. I'll contact them myself.", "We'll reach out ourselves.", "I'll do the outreach myself later.", "I will message them on my own.", "find 20 gyms. Zero outreach.", "find 20 gyms. Outreach: none."]) {
+      expect(researchOnlyStated(text)).toBe(true);
+      expect(outreachRequested(text)).toBe(false);
+    }
+  });
+
+  test("an outreach verb done for the owner is still outreach", () => {
+    for (const text of [
+      "do the outreach for me", "can you do outreach for me?", "contact the clinics for me", "contact them for me", "pitch them for us",
+      "reach out to them for us", "run the campaign for us", "message the gym owners for me", "handle the outreach for us", "whatsapp them for me",
+      "Email them for me", "whatsapp the clinics for me please", "Find dentists in Pune and pitch them for me",
+    ]) expect(outreachRequested(text)).toBe(true);
+    // Aimed at the owner it is data.
+    expect(outreachRequested("send me their emails")).toBe(false);
+    expect(outreachRequested("send the list to me")).toBe(false);
+  });
+
+  test("a channel word after an article is an action unless a detail noun follows it", () => {
+    for (const text of [
+      "run the email sequence", "kick off the email sequence for the dentists", "start the whatsapp sequence", "launch the email blast",
+      "go ahead with email", "proceed with whatsapp", "go with whatsapp", "do the emails now", "start the emails",
+      "write an email to each clinic", "write an email to the clinics", "draft an email for each clinic", "compose an email to every dentist",
+      "Compose an email to every dentist on the list", "Start the email sequence for the clinics",
+    ]) expect(outreachRequested(text)).toBe(true);
+    expect(outreachRequested("ok go ahead with email", "Shall I email or WhatsApp them?")).toBe(true);
+    for (const text of [
+      "Find clinics with an email address", "the email addresses of the owners", "their whatsapp numbers", "an email id for each clinic", "collect the contact details",
+      "Find clinics with email and phone", "Export the contacts to CSV", "verify the emails", "mujhe list bhejo", "mujhe unke emails bhejo",
+    ]) expect(outreachRequested(text)).toBe(false);
+    // A negation stays with what it negates: "no website" does not negate the pitch after it.
+    expect(outreachRequested("Find salons in Pune with no website and pitch them a website")).toBe(true);
+  });
+
+  test("words that only look like a research-only statement do not cancel a request", () => {
+    expect(outreachRequested("We are a research-only consultancy. Email the clinics.")).toBe(true);
+    expect(outreachRequested("No outreach yet? Start the campaign now.")).toBe(true);
+    expect(outreachRequested("Find dentists in Pune, whatsapp them, do not contact anyone twice")).toBe(true);
+    expect(outreachRequested("No outreach on email, whatsapp them instead")).toBe(true);
+    expect(researchOnlyStated("No outreach yet? Start the campaign now.")).toBe(false);
+  });
+
+  test("short confirmations answer an offer", () => {
+    for (const text of ["Do it", "go for it", "sure, go ahead with it", "yes do it", "please do"]) expect(outreachRequested(text, "Shall I contact them?")).toBe(true);
+    expect(outreachRequested("go for it", "Is your business in Pune?")).toBe(false);
+  });
+
+  test("a yes to the assistant offering the owner data is not a yes to outreach", () => {
+    expect(outreachRequested("yes", "I found 12 clinics. Shall I send you their contact details?")).toBe(false);
+    expect(outreachRequested("yes", "Shall I email you the list?")).toBe(false);
+    expect(outreachRequested("yes", "Shall I contact them for you?")).toBe(true);
+  });
+
+  test("research only in other words: a wish, a hold, a pause, a condition that means not now", () => {
+    for (const text of [
+      "Find dentists. Don't reach out.", "No contact with leads please", "Find dentists. I don't want any outreach.", "I don't want you to contact anyone",
+      "I do not want you to email them", "Hold off on contacting anyone", "Outreach is not needed. Find 10 gyms.", "This is just for research",
+      "Find dentists and email them. Do not contact anyone until I approve.", "Do not contact anyone at all", "Do not contact them under any circumstances",
+      "Find 10 gyms. I'll handle the outreach.", "Pause the campaign", "Find gyms, skip the emails",
+      "You can't contact anyone yet", "We won't email them", "You shouldn't message them", "You cannot pitch them",
+    ]) expect(outreachRequested(text)).toBe(false);
+  });
+
+  test("a negation stays with what it negates, so a request beside it still counts", () => {
+    for (const text of [
+      "Find clinics that have no outreach team and email them", "Do not contact anyone before 9am; email the clinics tomorrow", "Don't wait, just email them",
+      "Do not contact anyone in Baner, email the rest", "Skip the clinics without websites and email the rest", "I want you to contact them",
+      "We'll handle the outreach through AgentSDR, start with email", "Email them, but don't WhatsApp them", "Don't WhatsApp them, email them instead",
+    ]) expect(outreachRequested(text)).toBe(true);
+  });
+
   test("sameMessage spots a repeated message, not a different one", () => {
     expect(sameMessage("Search started for real estate agents in the USA. I'll let you know.", "Search started for real estate agents in the USA, I'll let you know.")).toBe(true);
     expect(sameMessage("Search started for real estate agents.", "I found 12 agents; 9 can be contacted.")).toBe(false);

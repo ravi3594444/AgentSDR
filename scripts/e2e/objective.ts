@@ -694,7 +694,9 @@ await runInOrganization(a.org.id, async () => {
   {
     const thread = await createThread(a.owner.id);
     scraper.perPhrase = 2;
-    const PILOT = "Research only. Find 3 dental clinics in Pune, India. Use free sources only with a $0 source budget, and finish within 5 minutes. Save a lead list. Do not contact anyone. No outreach. No messages. No campaigns.";
+    // Before the fix "Spend $0" read as "send" (outreachRequested was true for these words at 652c84d), so this request is the regression check.
+    const BUDGET_WORDS = "Research only. Spend $0. Do not contact anyone.";
+    const REQUEST = `${BUDGET_WORDS} Find 3 dental clinics in Pune, India, and finish within 5 minutes.`;
     // Every search is seen with the context its tool got: a research-only request hands no outreach request to any turn, the continuation's included.
     const seen: { what: unknown; outreachRequest: string | null | undefined; contactAfter: unknown }[] = [];
     const realFind = TOOLS.find_leads!.run;
@@ -703,14 +705,15 @@ await runInOrganization(a.org.id, async () => {
       return realFind(args, context);
     };
     const plansBefore = planCalls.length;
-    const requestId = await ask(thread.id, PILOT, turn("", [{ tool: "find_leads", args: { what: "dental clinics", where: "Pune, India", maxResults: 3 } }]));
+    const requestId = await ask(thread.id, REQUEST, turn("", [{ tool: "find_leads", args: { what: "dental clinics", where: "Pune, India", maxResults: 3 } }]));
     const objective = await objectiveOf(requestId);
-    check("the pilot prompt: a target of 3, its time and $0 named, and no outreach request in the turn",
+    check("the research-only request: a target of 3, its time and $0 named, and no outreach request in the turn",
       objective.leadTarget === 3 && objective.spendCapUsd === 0 && objective.controls.named?.time === true && seen.length === 1 && seen[0]!.outreachRequest === null && seen[0]!.contactAfter === undefined,
       JSON.stringify({ target: objective.leadTarget, minutes: objective.timeLimitMinutes, spend: objective.spendCapUsd, named: objective.controls.named, seen }));
-    const context = { threadId: thread.id, userId: a.owner.id, ownerText: PILOT, requestMessageId: requestId };
-    const refused = await runTool("find_leads", { what: "dental clinics", where: "Pune, India", contactAfter: true }, context);
-    check("a search that would contact what it finds is refused: the owner did not ask", !refused.ok && refused.refused === true && /not asked to contact/.test(refused.summary), refused.summary);
+    const context = { threadId: thread.id, userId: a.owner.id, ownerText: REQUEST, requestMessageId: requestId };
+    const refusals = await Promise.all([REQUEST, BUDGET_WORDS].map((ownerText) => runTool("find_leads", { what: "dental clinics", where: "Pune, India", contactAfter: true }, { ...context, ownerText })));
+    check("a search that would contact what it finds is refused under “Research only. Spend $0. Do not contact anyone.”: the owner did not ask",
+      refusals.every((refused) => !refused.ok && refused.refused === true && /not asked to contact/.test(refused.summary)), refusals.map((refused) => refused.summary).join(" | "));
     const judgedBefore = judgedAgainst.length;
     await finishSearches(requestId);
     // Pilot L02: the leads are judged against what to find, not against "$0", "5 minutes" or "do not contact anyone".
@@ -721,7 +724,7 @@ await runInOrganization(a.org.id, async () => {
     await step((await driverOf(objective.id)).id);
     const continued = await continuationEnded(requestId, 1);
     check("the continuation carries outreach: false, so its search got no outreach request and asked for no contact-after",
-      continued && seen.length === 3 && seen[2]!.what === "dentists" && seen[2]!.outreachRequest === null && seen[2]!.contactAfter === undefined, JSON.stringify({ continued, seen }));
+      continued && seen.length === 4 && seen[3]!.what === "dentists" && seen[3]!.outreachRequest === null && seen[3]!.contactAfter === undefined, JSON.stringify({ continued, seen }));
     const audienceId = (await children(requestId))[0]!.audienceId!;
     // The real tool this once: its own check on the owner's words, not the stand-in.
     TOOLS.prepare_outreach!.run = realPrepareOutreach;
@@ -741,6 +744,31 @@ await runInOrganization(a.org.id, async () => {
     TOOLS.find_leads!.run = realFind;
     await db.update(schema.assistantThreads).set({ autonomous: false }).where(eq(schema.assistantThreads.id, thread.id));
     if (ended.status !== "stopped") await objectives.setObjectiveState(objective.id, "cancel", { name: null });
+    scraper.perPhrase = 6;
+  }
+
+  // ---------------------------------------------------------- 6d. a later research-only message cancels an earlier request (pilot L01)
+  {
+    const thread = await createThread(a.owner.id);
+    scraper.perPhrase = 2;
+    const seen: (string | null | undefined)[] = [];
+    const realFind = TOOLS.find_leads!.run;
+    TOOLS.find_leads!.run = async (args, context) => {
+      seen.push(context.outreachRequest);
+      return realFind(args, context);
+    };
+    await ask(thread.id, "Find dentists in Pune and email them", [reply("Which area of Pune?")]);
+    const requestId = await ask(thread.id, "Kothrud. Actually research only, do not contact anyone.", turn("", [{ tool: "find_leads", args: { what: "dentists", where: "Kothrud, Pune", maxResults: 2 } }]));
+    TOOLS.find_leads!.run = realFind;
+    const searches = await children(requestId);
+    check("the earlier “email them” no longer stands: the search after “research only, do not contact anyone” gets no outreach request, and serves the new message",
+      seen.length === 1 && seen[0] === null && searches.length === 1 && (searches[0]!.payload as { contactAfter?: unknown }).contactAfter == null, JSON.stringify({ seen, searches: searches.length }));
+    // Whichever request the search was filed under, its research is cancelled and run out.
+    for (const objective of await objectives.threadObjectives(thread.id)) {
+      await objectives.setObjectiveState(objective.id, "cancel", { name: null });
+      await finishSearches(objective.requestMessageId);
+      await step((await driverOf(objective.id)).id);
+    }
     scraper.perPhrase = 6;
   }
 

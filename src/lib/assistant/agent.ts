@@ -241,45 +241,60 @@ export function transcriptText(messages: readonly TranscriptMessage[], maxChars 
   return text;
 }
 
-/** Words that ask for outreach, in English and common Hinglish; matched with typo tolerance. Words a business uses to describe itself ("we sell", "we connect") are left out. */
+/**
+ * Words that ask for outreach, in English and common Hinglish. One of five
+ * letters or more also matches a slip of the keyboard ("campagion",
+ * "contcat", "emial"); a shorter one ("send", "mail", "dm") only as written
+ * or inflected, since too many real words sit a letter away from it. Words a
+ * business uses to describe itself ("we sell", "we connect") are left out.
+ */
 const OUTREACH_WORDS = [
   "contact", "email", "emails", "mail", "message", "messages", "msg", "reach", "outreach", "campaign", "campaigns",
   "pitch", "send", "dm", "dms", "whatsapp", "linkedin",
   "followup", "follow", "bhejo", "bhej", "sampark",
 ];
 const OUTREACH_WORD_SET = new Set(OUTREACH_WORDS);
+/** The shortest outreach word a typo of which still counts. */
+const TYPO_MIN_LENGTH = 5;
 
 /**
  * Real words within a typo of an outreach word (pilot finding L01): "spend"
- * is not "send", "contract" is not "contact", "each" is not "reach". They
- * and their plain inflections are ruled out before the typo tolerance, so
- * budget wording ("Spend $0") or ordinary prose never reads as a request to
- * contact people. "connect" is here too: alone it is as often about an
- * account as about people, and an offer the owner says yes to still works.
+ * is not "send", "contract" is not "contact", "each" is not "reach",
+ * "gmail" is not "email". They and their plain inflections are ruled out
+ * before the typo tolerance, so budget wording ("Spend $0") or ordinary
+ * prose never reads as a request to contact people. "follow" and "connect"
+ * count only where they stand for outreach ("follow up", "connect with
+ * them"), so "the following" and "connect my account" do not.
  */
 const NEAR_MISSES = new Set([
   // contact
   "contract", "content", "context", "contest", "contain", "contend", "conduct", "convict", "contort", "compact", "contrast", "connect", "concoct", "intact",
-  // message
-  "massage", "passage",
+  "constant", "concat",
+  // email, emails
+  "gmail", "ymail", "emil",
+  // message, messages
+  "massage", "passage", "menage", "dressage",
   // reach
-  "each", "beach", "teach", "peach", "leach", "roach", "ranch", "retch", "react", "bleach", "breach", "preach",
+  "each", "beach", "teach", "peach", "leach", "roach", "retch", "react", "breach", "preach", "reich",
   // pitch
-  "patch", "witch", "ditch", "hitch", "bitch", "fitch", "mitch", "pinch", "stitch", "itch", "pith", "pitcher",
-  // mail
-  "mall", "main", "maid", "maim", "maul", "marl", "mali", "moil", "nail", "rail", "sail", "tail", "jail", "hail", "bail", "fail", "pail", "wail", "male", "mild", "mile",
-  // send
-  "spend", "spent", "sent", "seed", "sand", "bend", "lend", "tend", "mend", "fend", "vend", "wend", "rend", "pend",
-  // follow
-  "fellow", "hollow", "fallow", "follower",
-  // linkedin
-  "linked",
+  "patch", "witch", "ditch", "hitch", "bitch", "fitch", "mitch", "pinch", "itch", "pith", "pitchy",
+  // follow, followup ("follow" also counts only as "follow up")
+  "fellow", "hollow", "fallow", "allow", "follower",
+  // campaign, campaigns
+  "champaign", "camping", "campion", "campaigner",
+  // whatsapp, linkedin
+  "whatsup", "linked",
+  // sampark, bhejo ("bheja", "bheje": was sent, not send)
+  "spark", "bheja", "bheje",
+  // send and mail take no typos (four letters); listed so that never changes unnoticed
+  "spend", "spent", "sent", "seed", "sand", "bend", "lend", "tend", "mend", "fend", "vend",
+  "mall", "main", "maid", "nail", "rail", "sail", "tail", "jail", "hail", "male", "mild", "mile",
 ]);
 
-/** The word and its plain inflections ("spending" → "spend", "contracts" → "contract"), for the near-miss check. */
+/** The word and its plain inflections ("spending" → "spend", "messaging" → "message", "followed" → "follow"). */
 function stems(token: string): string[] {
   const out = [token];
-  for (const [suffix, replacement] of [["ies", "y"], ["ing", ""], ["ed", ""], ["es", ""], ["s", ""]] as const) {
+  for (const [suffix, replacement] of [["ies", "y"], ["ing", ""], ["ing", "e"], ["ed", ""], ["d", ""], ["es", ""], ["s", ""]] as const) {
     if (token.length > suffix.length + 2 && token.endsWith(suffix)) out.push(token.slice(0, -suffix.length) + replacement);
   }
   return out;
@@ -298,69 +313,175 @@ function editDistance(a: string, b: string): number {
   return d[a.length]![b.length]!;
 }
 
-const NEGATIONS = new Set(["don", "dont", "not", "never", "no", "stop", "without", "nahi", "mat", "na"]);
-
-function isOutreachWord(token: string): boolean {
-  if (OUTREACH_WORD_SET.has(token)) return true;
-  if (stems(token).some((stem) => NEAR_MISSES.has(stem))) return false;
-  return OUTREACH_WORDS.some((word) => {
-    if (token.length < 4 || word.length < 4) return false;
-    if (token.startsWith(word) && word.length >= 5) return true;
+/** The outreach word `token` is (as written, inflected, or a typo of a word of five letters or more), or null. */
+function outreachWordOf(token: string): string | null {
+  const forms = stems(token);
+  const exact = forms.find((form) => OUTREACH_WORD_SET.has(form));
+  if (exact) return exact;
+  if (token.length < 4 || forms.some((form) => NEAR_MISSES.has(form))) return null;
+  return OUTREACH_WORDS.find((word) => {
+    if (word.length < TYPO_MIN_LENGTH) return false;
     const allowed = word.length >= 7 ? 2 : 1;
     return Math.abs(token.length - word.length) <= allowed && editDistance(token, word) <= allowed;
-  });
+  }) ?? null;
 }
 
+/** The owner's own things: "connect my account" is about AgentSDR, not about people. */
+const OWN_THINGS = new Set(["my", "our", "your", "its"]);
+
+/** Whether the word at `index` asks for outreach where it stands: "follow" only as "follow up", "connect" only as "connect with" someone. */
+function outreachWordAt(tokens: readonly string[], index: number): boolean {
+  const token = tokens[index]!;
+  if (stems(token).includes("connect")) return tokens[index + 1] === "with" && !OWN_THINGS.has(tokens[index + 2] ?? "");
+  const word = outreachWordOf(token);
+  if (word === "follow") return tokens[index + 1] === "up";
+  return word !== null;
+}
+
+const NEGATIONS = new Set(["don", "dont", "not", "never", "no", "cannot", "stop", "without", "avoid", "refrain", "hold", "skip", "pause", "cancel", "halt", "nahi", "mat", "na"]);
+/** "can't", "won't", "shouldn't": the word before the "t" of a negative contraction. */
+const CONTRACTED = new Set(["can", "won", "shouldn", "mustn", "wouldn", "couldn", "didn", "doesn", "isn", "aren", "wasn", "shan"]);
+/** Words a negation reaches across without using up its three-word look-back: "I don't want you to contact anyone". */
+const NEGATION_BRIDGE = new Set(["want", "wanna", "need", "wish", "like", "you", "to", "ever", "yet", "please", "even", "really", "actually", "try", "be", "going", "gonna", "should", "will", "would", "can", "could", "i", "we", "any", "off", "on", "from"]);
+/** Hinglish puts the negation after the word: "contact mat karo", "email nahi karna". */
+const AFTER_NEGATIONS = new Set(["nahi", "nahin", "nhi"]);
+const HINDI_VERBS = new Set(["karo", "karna", "karni", "karne", "kare", "karein", "karen", "karenge", "karunga", "kijiye", "kijie", "kar", "bhejo", "bhejna", "bhejiye", "bhej", "hai", "chahiye"]);
+/** Words that end a negation's reach over the channels that follow it ("don't email them, just WhatsApp them"). */
+const CONTRAST = new Set(["but", "instead", "only", "just", "rather", "except", "then", "so", "also", "however", "though", "although", "sirf", "bas"]);
+const LIST_JOINERS = new Set(["or", "and", "nor", ","]);
+/** Words that start a new part of a sentence, past which a negation's three-word look-back does not reach (a list still carries it). */
+const NEW_PART = new Set(["and", "but", "then", "so"]);
+
 /**
- * Contact details asked for as data are not outreach (pilot finding L01).
- * A channel word is a thing, not an action, when a possessive, determiner or
- * quality comes before it ("their email", "an email address", "the contact
- * page", "high reach"), when a detail noun follows it ("whatsapp number",
- * "contact details", "linkedin profiles"), or when it continues such a list
- * ("their email and whatsapp"). Aimed at people ("email them", "whatsapp the
- * clinics") it is outreach.
+ * Contact details asked for as data are not outreach (pilot finding L01). A
+ * channel word is a thing, not an action, when a detail noun follows it
+ * ("email address", "whatsapp number", "contact details", "emails of the
+ * owners"), when a possessive or a quality comes before it ("their email",
+ * "a valid email", "high reach"), after "with" that follows a noun ("clinics
+ * with email and phone"), or when it continues such a list. An article alone
+ * makes nothing data: "write an email to each clinic", "run the email
+ * sequence" and "go ahead with email" ask for outreach.
  */
-const CONTACT_DATA_WORDS = new Set(["contact", "email", "emails", "mail", "whatsapp", "linkedin", "dm", "dms", "reach"]);
+const CONTACT_DATA_WORDS = new Set(["contact", "email", "mail", "message", "whatsapp", "linkedin", "dm", "reach", "pitch"]);
 const DATA_BEFORE = new Set([
-  "their", "his", "her", "its", "my", "our", "your", "whose", "the", "a", "an", "all", "any", "each", "every", "some", "these", "those", "this", "that",
-  "of", "with", "including", "incl", "plus", "valid", "verified", "working", "correct", "public", "official", "business", "personal", "direct", "generic",
-  "high", "low", "good", "wide", "wider", "large", "more", "less", "big", "bigger", "huge", "organic", "total",
+  "their", "his", "her", "its", "my", "our", "your", "whose", "any",
+  "of", "including", "incl", "plus", "valid", "verified", "working", "correct", "public", "official", "generic", "listed", "published", "business", "primary",
+  "error", "warning", "status", "system", "welcome", "voice",
 ]);
+const REACH_QUALITIES = new Set(["high", "low", "good", "wide", "wider", "large", "more", "less", "big", "bigger", "huge", "organic", "total", "social", "local", "global", "broad", "limited", "within", "easy"]);
 const DATA_AFTER = new Set([
   "detail", "details", "info", "information", "number", "numbers", "address", "addresses", "id", "ids", "handle", "handles", "profile", "profiles",
   "url", "urls", "link", "links", "account", "accounts", "page", "pages", "person", "persons", "form", "forms", "data", "list", "lists", "point", "points",
-  "channel", "channels", "route", "routes", "method", "methods", "option", "options", "column", "columns", "field", "fields",
+  "route", "routes", "method", "methods", "option", "options", "column", "columns", "field", "fields", "domain", "domains", "deck", "decks", "of",
 ]);
-/** A verb aimed at the owner ("send me", "email us", "send the list to me") asks for data, not outreach. */
-const OWNER_OBJECT = new Set(["me", "us"]);
-const TO_OWNER = new Set(["to", "for"]);
-/** "write them an email", "send each a message": the people before the article make the channel word an action. */
-const PEOPLE_OBJECT = new Set(["them", "him", "her", "each", "everyone", "everybody", "all"]);
-const ARTICLES = new Set(["a", "an", "the"]);
+/** "go ahead with email", "proceed with whatsapp": after these, "with" chooses a channel to contact people on. */
+const CHOOSE_WITH = new Set(["ahead", "proceed", "go", "start", "continue", "begin", "launch", "off", "on", "carry", "ok", "okay", "yes", "yeah", "sure", "fine", "haan", ",", "then", "only", "just"]);
+/** "export the contacts", "verify the emails", "find the email ids": the channel is what the verb handles. */
+const DATA_VERBS = new Set([
+  "export", "import", "download", "upload", "save", "sync", "delete", "remove", "merge", "dedupe", "list", "show", "count", "collect", "gather",
+  "scrape", "extract", "fetch", "pull", "enrich", "verify", "validate", "check", "clean", "find", "get", "copy", "read", "view",
+]);
+const DETERMINERS = new Set(["the", "all", "these", "those", "every", "a", "an"]);
+/** Who "me" is: the owner, in the owner's words; "you", in the assistant's. A verb aimed at them ("send me their emails", "email me the list") asks for data. */
+const OWNER_OBJECT: ReadonlySet<string> = new Set(["me", "us"]);
+const ASSISTANT_TO_OWNER: ReadonlySet<string> = new Set(["you"]);
+/** Hinglish names the owner before the verb: "mujhe list bhejo". */
+const HINDI_OWNER = new Set(["mujhe", "mujhko", "muje", "hume", "humein", "hamein", "humko", "hamko"]);
 
 const CLAUSE_BREAK = /^[,.;!?\n]$/;
+const SENTENCE_BREAK = /^[.;!?\n]$/;
 
-/** The outreach words of `words` that ask to contact people, each with whether a negation stands before it in the same clause ("no emails, whatsapp only" asks for WhatsApp). */
-function outreachMentions(words: string): { negated: boolean }[] {
-  const tokens = words.toLowerCase().match(/[a-z]+|[,.;!?\n]/g) ?? [];
+function isContactData(tokens: readonly string[], index: number, data: readonly boolean[]): boolean {
+  const token = tokens[index]!;
+  const forms = stems(token);
+  if (!forms.some((form) => CONTACT_DATA_WORDS.has(form))) return false;
+  const before = tokens[index - 1];
+  const after = tokens[index + 1];
+  if (after !== undefined && DATA_AFTER.has(after)) return true;
+  if (before === undefined) return false;
+  if (DATA_BEFORE.has(before)) return true;
+  if (forms.includes("reach") && REACH_QUALITIES.has(before)) return true;
+  if (before === "with" && index >= 2 && !CHOOSE_WITH.has(tokens[index - 2]!)) return true;
+  let verb = index - 1;
+  while (verb > 0 && DETERMINERS.has(tokens[verb]!)) verb -= 1;
+  if (DATA_VERBS.has(tokens[verb]!)) return true;
+  return (before === "and" || before === "or" || before === ",") && data[index - 2] === true;
+}
+
+/** Whether the outreach word at `index` is aimed at the owner: "send me", "email us", "send the list to me", "mujhe list bhejo". */
+function aimedAtOwner(tokens: readonly string[], index: number, owner: ReadonlySet<string>): boolean {
+  if (owner.has(tokens[index + 1] ?? "")) return true;
+  if (owner === OWNER_OBJECT) {
+    for (let back = index - 1; back >= Math.max(0, index - 3) && !CLAUSE_BREAK.test(tokens[back]!); back -= 1) {
+      if (HINDI_OWNER.has(tokens[back]!)) return true;
+    }
+  }
+  for (let at = index + 1; at < Math.min(tokens.length, index + 6); at += 1) {
+    if (CLAUSE_BREAK.test(tokens[at]!) || outreachWordAt(tokens, at)) return false;
+    if (tokens[at] === "to" && owner.has(tokens[at + 1] ?? "")) return true;
+  }
+  return false;
+}
+
+/** How a mention is negated: as an action ("do not email"), as a thing ("no emails"), or not. */
+type Negation = "action" | "thing" | null;
+type Mention = { index: number; negated: boolean; negation: Negation };
+
+/** "no emails", "without contact": a negation of the thing, which reaches only along a list of things. */
+const THING_NEGATIONS = new Set(["no", "without"]);
+/** What a list of things negated together is made of: "no emails, messages or calls to anyone". */
+const LIST_OF_THINGS = new Set(["or", "and", "nor", ",", "a", "an", "the", "any", "single", "of", "to", "by", "via", "on", "through", "over", "using", "in", "anyone", "anybody", "them", "people", "everyone", "everybody", "at", "all", "please", "cold"]);
+
+/**
+ * How the outreach word at `index` is negated: by a negation in the three
+ * words before it in the same clause ("don't contact them"), a Hinglish one
+ * after it ("contact mat karo"), or the negation of the list it continues
+ * ("do not email, whatsapp or call anyone", "do not contact anyone by email
+ * or whatsapp", "no emails, messages or calls"). A contrast ("but", "just",
+ * "instead") or a comma that does not continue a list ends that reach: "no
+ * emails, whatsapp only" asks for WhatsApp; and a negated thing reaches no
+ * further than its list: "clinics with no outreach team and email them"
+ * asks to email them.
+ */
+function negationAt(tokens: readonly string[], index: number, previous: readonly Mention[]): Negation {
+  // "with no website and pitch them": a negation before "and" negates what it stood with, not this word;
+  // "don't wait, just email them": a contrast ends it too.
+  for (let back = index - 1, budget = 3; back >= Math.max(0, index - 8) && budget > 0; back -= 1) {
+    const word = tokens[back]!;
+    if (CLAUSE_BREAK.test(word) || NEW_PART.has(word) || CONTRAST.has(word)) break;
+    if (NEGATIONS.has(word)) return THING_NEGATIONS.has(word) ? "thing" : "action";
+    if (word === "t" && CONTRACTED.has(tokens[back - 1] ?? "")) return "action";
+    if (!NEGATION_BRIDGE.has(word)) budget -= 1;
+  }
+  for (let at = index + 1; at <= Math.min(tokens.length - 1, index + 3) && !CLAUSE_BREAK.test(tokens[at]!); at += 1) {
+    if (tokens[at] === "mat" || tokens[at] === "mt") return "action";
+    if (AFTER_NEGATIONS.has(tokens[at]!) && HINDI_VERBS.has(tokens[at + 1] ?? "")) return "action";
+  }
+  const last = previous.at(-1);
+  if (!last?.negation || index - last.index > 7) return null;
+  const between = tokens.slice(last.index + 1, index);
+  if (between.some((word) => SENTENCE_BREAK.test(word) || CONTRAST.has(word))) return null;
+  if (last.negation === "thing" && !between.every((word) => LIST_OF_THINGS.has(word))) return null;
+  const comma = between.lastIndexOf(",");
+  if (comma < 0) return last.negation;
+  return between.slice(comma + 1).some((word) => LIST_JOINERS.has(word)) || LIST_JOINERS.has(tokens[index + 1] ?? "") ? last.negation : null;
+}
+
+/** Curly and other apostrophes as the plain one, so "Don’t" from a phone keyboard reads as "Don't". */
+function plainApostrophes(text: string): string {
+  return text.replace(/[\u2018\u2019\u02BC\u0060\u00B4]/g, "'");
+}
+
+/** The outreach words of `words` that ask to contact people, each with whether it is negated. */
+function outreachMentions(words: string, owner: ReadonlySet<string> = OWNER_OBJECT): Mention[] {
+  const tokens = plainApostrophes(words).toLowerCase().match(/[a-z]+|[,.;!?\n]/g) ?? [];
   const data: boolean[] = [];
-  const out: { negated: boolean }[] = [];
-  tokens.forEach((token, index) => {
-    const before = tokens[index - 1];
-    const after = tokens[index + 1];
-    const actionOnPeople = before !== undefined && ARTICLES.has(before) && PEOPLE_OBJECT.has(tokens[index - 2] ?? "");
-    data[index] = CONTACT_DATA_WORDS.has(token) && !actionOnPeople && (
-      (before !== undefined && DATA_BEFORE.has(before))
-      || ((before === "and" || before === "or" || before === ",") && data[index - 2] === true)
-      || (after !== undefined && DATA_AFTER.has(after))
-    );
-    if (data[index] || !isOutreachWord(token)) return;
-    if (after !== undefined && OWNER_OBJECT.has(after)) return;
-    const next = tokens.slice(index + 1, index + 6);
-    if (next.some((word, offset) => TO_OWNER.has(word) && OWNER_OBJECT.has(next[offset + 1] ?? "") && !next.slice(0, offset).some(isOutreachWord))) return;
-    let negated = false;
-    for (let back = index - 1; back >= Math.max(0, index - 3) && !CLAUSE_BREAK.test(tokens[back]!); back -= 1) negated ||= NEGATIONS.has(tokens[back]!);
-    out.push({ negated });
+  const out: Mention[] = [];
+  tokens.forEach((_, index) => {
+    data[index] = isContactData(tokens, index, data);
+    if (data[index] || !outreachWordAt(tokens, index) || aimedAtOwner(tokens, index, owner)) return;
+    const negation = negationAt(tokens, index, out);
+    out.push({ index, negated: negation !== null, negation });
   });
   return out;
 }
@@ -371,24 +492,60 @@ export function outreachIntent(words: string): boolean {
 }
 
 /**
- * The owner says in so many words that this is research without outreach:
- * "research only", "no outreach", "do not contact anyone", "without
- * contacting", or "no messages" / "no campaigns" standing as a clause of
- * their own. A negation of one channel ("don't email them, WhatsApp them",
- * "do not contact them by email") is not that: it still asks for outreach.
+ * The owner says in so many words that this is research without outreach
+ * (pilot finding L01). Matched with wide recall, because a missed one
+ * contacts people who were not to be contacted while a false one only makes
+ * the assistant ask: "research only", "sirf research", "no outreach", "zero
+ * outreach", "outreach: none", "do not contact anyone", "don't send any
+ * messages", a negated list of channels ("do not email, whatsapp or call
+ * anyone", "no emails, messages or calls"), "without contacting", "I'll
+ * contact them myself", Hinglish "kisi ko contact mat karo", or "no
+ * messages" / "no campaigns" as a clause of their own. Not: a negation of
+ * one channel ("don't email them, WhatsApp them", "do not contact them by
+ * email"), a rule about how ("do not contact anyone twice"), a business
+ * described as research-only, or the question "No outreach yet?".
  */
-const RESEARCH_ONLY = [
-  /\bresearch[\s-]+only\b/i,
-  /\b(?:only|just|purely|strictly)\s+research\b/i,
-  /\bno\s+(?:cold\s+)?outreach\b/i,
-  /\b(?:do\s+not|don'?t|dont|never)\s+(?:contact|approach|reach\s+out\s+to|get\s+in\s+touch\s+with)\s+(?:anyone|anybody|people|them|these|those|any\s+of\s+(?:them|these|those)|any\s+(?:business|businesses|clinic|clinics|lead|leads|person|one))\b(?!\s*(?:on|via|by|through|over|using|with|from|in|who|that|which|except|unless|until|before|outside)\b)/i,
-  /\bwithout\s+(?:contacting|messaging|reaching\s+out)\b/i,
+const NOT = String.raw`(?:do\s+not|don'?t|do\s+n't|never|not\s+to|no\s+need\s+to|you\s+(?:must|should)\s+not|must\s+not|mustn'?t|should\s+not|shouldn'?t|can'?t|cannot|can\s+not|won'?t|will\s+not)`;
+const ANYONE = String.raw`(?:anyone|anybody|any\s*one|no\s*one|people|them|these|those|everyone|everybody|any\s+of\s+(?:them|these|those|the\s+\w+)|any\s+(?:business|businesses|clinic|clinics|lead|leads|person|people|prospects?|company|companies|owner|owners)|the\s+(?:leads|clinics|businesses|people|owners|prospects|companies|results|list))`;
+/** What makes "do not contact anyone …" a rule about how or whom, not a stop: "by email", "twice", "who replied". */
+const QUALIFIED = String.raw`(?!\s*(?:(?:on|via|by|through|over|using|with|from|in|at)\s+(?!any\b|all\b)|(?:until|before|after)\s+(?!(?:i|we|you\s+hear|approval|my|our)\b)|(?:who|whom|whose|that|which|except|unless|outside|twice|more|during|without|if|when|other|than)\b))`;
+const CONTACT_ANYONE = String.raw`(?:contact|message|msg|reach\s+out\s+to|approach|get\s+in\s+touch\s+with|pitch(?:\s+to)?|ping)`;
+const CHANNEL = String.raw`(?:contact|e-?mail|mail|message|msg|text|sms|call|phone|ping|dm|whatsapp|linkedin|pitch|reach\s+out(?:\s+to)?)`;
+const CHANNEL_NOUN = String.raw`(?:outreach|contact|messages?|e-?mails?|calls?|dms?|texts?|sms|whatsapps?|(?:whatsapp|linkedin)\s+messages?|campaigns?|pitches|pitching|messaging|emailing|calling)`;
+const LIST_SEPARATOR = String.raw`(?:\s*,\s*(?:or\s+|and\s+|nor\s+)?|\s+or\s+|\s+and\s+|\s+nor\s+)`;
+const RESEARCH_ONLY: readonly RegExp[] = [
+  new RegExp(String.raw`\bresearch[\s-]+only\b(?!\s+(?:consultancy|consultants?|firm|company|agency|business|team|startup|shop|labs?|services?|outfit|house|studio|practice|clients?|projects?|tool|platform|product|plan|tier|package|account|work)\b)`, "i"),
+  /\b(?:only|just|purely|strictly|sirf|bas|keval|kewal)\s+(?:do\s+(?:the\s+)?|for\s+)?research\b/i,
+  new RegExp(String.raw`\b(?:don'?t|do\s+not|never)\s+(?:want|wish|need|like)\s+(?:you\s+to\s+|to\s+|any\s+)?(?:(?:${CONTACT_ANYONE})\s+${ANYONE}\b${QUALIFIED}|(?:do\s+)?(?:any\s+)?(?:outreach|contacting|messaging|campaigns?|messages|pitching|pitches)\b)`, "i"),
+  /\b(?:outreach|contacting|messaging|campaigns?)\s+(?:is|are)\s+(?:not|n't)\s+(?:needed|required|necessary|wanted|allowed|permitted)\b|\b(?:outreach|contacting|messaging)\s+(?:is|are)\s+(?:off|forbidden|not\s+allowed)\b/i,
+  /\b(?:i|we)(?:'ll|\s+will|\s+shall)\s+(?:handle|do|take\s+care\s+of|manage)\s+(?:the\s+|all\s+(?:the\s+)?)?(?:outreach|contacting|messaging|follow[\s-]?ups?)\b(?!\s+(?:with|through|using|via|for|in)\b)/i,
+  /\b(?:sirf|bas|keval|kewal)\s+(?:list|leads?)\b/i,
+  new RegExp(String.raw`\b${NOT}\s+(?:ever\s+)?${CONTACT_ANYONE}\s+${ANYONE}\b${QUALIFIED}`, "i"),
+  new RegExp(String.raw`\b${NOT}\s+send\s+(?:(?:them|anyone|anybody)\s+)?(?:any\s+|a\s+single\s+)?(?:messages?|anything|outreach|pitch(?:es)?|dms?)\b${QUALIFIED}`, "i"),
+  new RegExp(String.raw`\b${NOT}\s+${CHANNEL}(?:${LIST_SEPARATOR}${CHANNEL})+(?:\s+${ANYONE})?\s*(?:$|,)`, "i"),
+  new RegExp(String.raw`\b(?:no|zero)\s+${CHANNEL_NOUN}(?:${LIST_SEPARATOR}${CHANNEL_NOUN})+(?:\s+(?:to\s+any(?:one|body)|at\s+all|please|whatsoever|of\s+any\s+kind|for\s+now|yet))?\s*(?:$|,)`, "i"),
+  /\bwithout\s+(?:any\s+)?(?:contacting|messaging|emailing|pitching|reaching\s+out|outreach)\b(?!\s+(?:on|via|through|by|over|using)\b)/i,
+  /\boutreach\s*(?:[:=\u2013\u2014-]\s*(?:none|no|off|nil|zero|0)|\s+(?:none|off))\b/i,
+  /\b(?:i|we)(?:'ll|'d|'m\s+going\s+to|'re\s+going\s+to|\s+(?:will|would|shall|can|am\s+going\s+to|are\s+going\s+to|plan\s+to|prefer\s+to|want\s+to))\s+(?:\w+\s+){0,3}?(?:contact|reach|message|e-?mail|call|whatsapp|pitch|dm|text|outreach|follow)\w*\b[^.;!?\n]*?\b(?:myself|ourselves|on\s+(?:my|our)\s+own|personally)\b/i,
+  /\b(?:main|mai|hum|ham)\s+(?:khud|apne\s+aap)\b[^.;!?\n]*\b(?:contact|sampark|message|e-?mail|call|whatsapp|outreach)/i,
+  /\b(?:kisi|kisiko|koi)\b(?:\s+\w+){0,3}?\s+(?:contact|sampark|message|msg|e-?mail|mail|whatsapp|call|dm|pitch|outreach)\w*(?:\s+\w+){0,2}?\s+(?:mat|mt|nahi|nahin|nhi)\b/i,
+  /\b(?:contact|sampark|outreach|message|msg)\s+(?:\w+\s+)?(?:mat|mt)\b/i,
+  /\b(?:contact|sampark|outreach|message|msg)\s+(?:\w+\s+)?(?:nahi|nahin|nhi)\s+(?:karo|karna|karni|karne|kare|karein|karen|karenge|kijiye|kijie|bhejo|bhejna)\b/i,
 ];
-const NO_OUTREACH_CLAUSE = /^(?:and\s+|also\s+|please\s+)?no\s+(?:cold\s+)?(?:outreach|contact|contacting|messages?|messaging|campaigns?|pitching|pitches|sending)(?:\s+(?:please|at\s+all|yet|for\s+now|to\s+anyone|to\s+anybody|now|today))?$/i;
+/** Statements only: the question "No outreach yet?" asks how things stand. */
+const NO_OUTREACH = /\b(?:no|zero|nil)\s+(?:cold\s+)?outreach\b(?!\s+(?:on|via|through|by|over|using|to|team|teams|agency|agencies|tool|tools|software|staff|person|people|budget|plan|strategy|department|manager|experience|history)\b)/i;
+const NO_OUTREACH_CLAUSE = /^(?:and\s+|also\s+|please\s+)?(?:no|zero)\s+(?:cold\s+)?(?:outreach|contact|contacting|messages?|messaging|campaigns?|pitching|pitches|sending)(?:\s+(?:please|at\s+all|yet|for\s+now|to\s+anyone|to\s+anybody|now|today|whatsoever))?$/i;
 
 export function researchOnlyStated(text: string): boolean {
-  if (RESEARCH_ONLY.some((pattern) => pattern.test(text))) return true;
-  return text.split(/[.;!?,\n]|\s+(?:and|but|also)\s+/i).some((clause) => NO_OUTREACH_CLAUSE.test(clause.trim()));
+  for (const sentence of plainApostrophes(text).match(/[^.;!?\n]+[.;!?\n]*/g) ?? []) {
+    const question = sentence.includes("?");
+    const body = sentence.replace(/[.;!?\n]+$/, "").trim();
+    if (RESEARCH_ONLY.some((pattern) => pattern.test(body))) return true;
+    if (question) continue;
+    if (NO_OUTREACH.test(body)) return true;
+    if (body.split(/,|\s+(?:and|but|also)\s+/i).some((clause) => NO_OUTREACH_CLAUSE.test(clause.trim()))) return true;
+  }
+  return false;
 }
 
 /** The owner tells the assistant not to contact people ("stop contacting them", "don't message anyone yet", "research only"). */
@@ -399,11 +556,11 @@ export function outreachRevoked(words: string): boolean {
 const CONFIRMATIONS = new Set([
   "yes", "yeah", "yep", "yup", "ya", "sure", "ok", "okay", "go", "ahead", "do", "it", "please", "proceed", "confirm", "confirmed",
   "start", "right", "correct", "fine", "great", "perfect", "lets", "let", "s", "that", "haan", "han", "ha", "ji", "theek", "thik",
-  "hai", "kar", "karo", "chalo", "done", "absolutely", "definitely", "now", "sounds", "good",
+  "hai", "kar", "karo", "chalo", "done", "absolutely", "definitely", "now", "sounds", "good", "for", "with",
 ]);
-const CONFIRMATION_CORE = new Set(["yes", "yeah", "yep", "yup", "ya", "sure", "ok", "okay", "go", "proceed", "confirm", "confirmed", "haan", "han", "ha", "theek", "thik", "karo", "kar", "chalo", "absolutely", "definitely", "perfect"]);
+const CONFIRMATION_CORE = new Set(["yes", "yeah", "yep", "yup", "ya", "sure", "ok", "okay", "go", "do", "proceed", "confirm", "confirmed", "haan", "han", "ha", "theek", "thik", "karo", "kar", "chalo", "absolutely", "definitely", "perfect"]);
 
-/** A short "yes" (or "go ahead", "haan karo") with nothing else in it. */
+/** A short "yes" (or "go ahead", "do it", "go for it", "haan karo") with nothing else in it. */
 export function isConfirmation(text: string): boolean {
   const tokens = text.toLowerCase().match(/[a-z]+/g) ?? [];
   return tokens.length > 0 && tokens.length <= 6 && tokens.every((token) => CONFIRMATIONS.has(token)) && tokens.some((token) => CONFIRMATION_CORE.has(token));
@@ -412,13 +569,14 @@ export function isConfirmation(text: string): boolean {
 /**
  * Whether the owner has asked for outreach: their latest message asks to
  * contact, message or pitch people, or says yes to the assistant's last
- * message offering exactly that. The model's own wording never counts, and
- * a message that says research only asks for none, whatever else is in it.
+ * message offering exactly that ("Shall I send you their details?" offers
+ * data, not outreach). The model's own wording never counts, and a message
+ * that says research only asks for none, whatever else is in it.
  */
 export function outreachRequested(ownerText: string, lastAssistantText?: string | null): boolean {
   if (researchOnlyStated(ownerText)) return false;
   if (outreachIntent(ownerText)) return true;
-  return Boolean(lastAssistantText && isConfirmation(ownerText) && outreachIntent(lastAssistantText));
+  return Boolean(lastAssistantText && isConfirmation(ownerText) && outreachMentions(lastAssistantText, ASSISTANT_TO_OWNER).some((mention) => !mention.negated));
 }
 
 const ANSWER_WORDS = /\b(?:answer|answers|answering|reply|replies|replying|respond|responding|handle|handling|jawab)\b/i;
@@ -448,6 +606,8 @@ const actsOnOutreach = (message: HistoryMessage) => message.role === "tool" && m
  * message (or its "yes" to an offer) counts; so does a request in one of
  * their two messages before it that nothing has acted on yet, so answering
  * a clarifying question ("which cities?" → "Austin") keeps the request.
+ * A newer message that says research only, or not to contact people,
+ * cancels it (pilot finding L01): the latest word wins.
  */
 export function pendingOutreachRequest(history: readonly HistoryMessage[]): string | null {
   const index = pendingOutreachRequestIndex(history);
@@ -460,8 +620,8 @@ export function pendingOutreachRequestIndex(history: readonly HistoryMessage[]):
   for (const index of owners.slice(-3).reverse()) {
     const message = history[index]!;
     const before = [...history.slice(0, index)].reverse().find((item) => item.role === "assistant")?.content ?? null;
-    if (!outreachRequested(message.content, before)) continue;
-    return history.slice(index + 1).some(actsOnOutreach) ? null : index;
+    if (outreachRequested(message.content, before)) return history.slice(index + 1).some(actsOnOutreach) ? null : index;
+    if (outreachRevoked(message.content)) return null;
   }
   return null;
 }
