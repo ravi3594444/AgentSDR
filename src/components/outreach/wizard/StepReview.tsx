@@ -13,6 +13,7 @@ import {
 import Link from "next/link";
 
 import * as Button from "@/components/alignui/button";
+import { useDialogs } from "@/components/DialogProvider";
 import { DocsLink } from "@/components/page/DocsLink";
 import type { SequenceStep } from "@/lib/outreach/schema";
 
@@ -33,6 +34,7 @@ export default function StepReview({
   onBack: () => void;
   onDone: (campaignId: string) => void;
 }) {
+  const dialogs = useDialogs();
   const [connectedMailboxes, setConnectedMailboxes] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState<"draft" | "launch" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -61,11 +63,13 @@ export default function StepReview({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status }),
       });
+      const data = (await res.json().catch(() => ({}))) as { error?: string; warning?: string };
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
         setError(data.error ?? "Failed to save");
         return;
       }
+      // Launched; its emails may not be prepared for sending yet (they are again automatically).
+      if (data.warning) await dialogs.alert({ title: "Campaign launched", description: data.warning, variant: "info" });
       onDone(campaignId);
     } catch {
       setError("Could not update the campaign. Check your connection and try again.");

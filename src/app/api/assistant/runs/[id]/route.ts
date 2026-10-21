@@ -69,7 +69,7 @@ export async function POST(request: NextRequest, { params }: Ctx) {
       if (body.action === "pause" || body.action === "resume") {
         const result = await setRunPaused(id, body.action === "pause");
         if (run.threadId && result.changed.length) {
-          await addMessage({ threadId: run.threadId, role: "event", content: `${ctx.userName || "The owner"} ${body.action === "pause" ? "paused" : "resumed"} “${run.name}” (${result.changed.join(", ")}).${result.problems.length ? ` Problems: ${result.problems.join("; ")}` : ""}` });
+          await addMessage({ threadId: run.threadId, role: "event", content: `${ctx.userName || "The owner"} ${body.action === "pause" ? "paused" : "resumed"} “${run.name}” (${result.changed.join(", ")}).${result.notes.length ? ` Note: ${result.notes.join("; ")}` : ""}${result.problems.length ? ` Problems: ${result.problems.join("; ")}` : ""}` });
         }
         return Response.json({ ok: result.changed.length > 0, ...result });
       }

@@ -135,7 +135,7 @@ function discoveryMessage(job: AssistantJob): string {
 
 /** The same report as data, for the chat's compact line (chatEvents.ts); the text above stays the full version. */
 function reportEvent(job: AssistantJob, search: boolean): ChatEvent {
-  const result = (job.result ?? {}) as Record<string, unknown> & { fit?: LeadFunnel; launches?: { channel: string; added: number; skipped: number; problem: string | null }[]; autopilot?: boolean };
+  const result = (job.result ?? {}) as Record<string, unknown> & { fit?: LeadFunnel; launches?: { channel: string; added: number; skipped: number; problem: string | null; note?: string | null }[]; autopilot?: boolean };
   if (!search) {
     return { kind: "outreach_started", runId: job.runId ?? null, ok: job.status === "succeeded", launches: result.launches ?? [], automatic: Boolean(result.autopilot) };
   }
@@ -162,15 +162,15 @@ function reportEvent(job: AssistantJob, search: boolean): ChatEvent {
 
 function outreachMessage(job: AssistantJob): string {
   if (job.status === "failed") return `Starting the outreach failed: ${job.error ?? "unknown error"}`;
-  const result = (job.result ?? {}) as { launches?: { channel: string; added: number; skipped: number; problem: string | null }[]; started?: string[]; problems?: string | null; autopilot?: boolean };
+  const result = (job.result ?? {}) as { launches?: { channel: string; added: number; skipped: number; problem: string | null; note?: string | null }[]; started?: string[]; problems?: string | null; autopilot?: boolean };
   const lines = result.launches
     ? result.launches.map((launch) => launch.problem
       ? `${launch.channel}: not started — ${launch.problem}`
-      : `${launch.channel}: started with ${launch.added} leads${launch.skipped ? ` (${launch.skipped} skipped)` : ""}`)
+      : `${launch.channel}: started with ${launch.added} leads${launch.skipped ? ` (${launch.skipped} skipped)` : ""}${launch.note ? ` (${launch.note})` : ""}`)
     // A launch whose own summary was lost (see runOutreachStartStep): what the run recorded, without per-channel counts.
     : [`started on ${(result.started ?? []).join(", ") || "no channel"} (the lead counts are on the plan)`, ...(result.problems ? [`not started — ${result.problems}`] : [])];
-  // Started means the campaigns are active, not that anything was sent: each sender still waits for its hours, limits and gaps.
-  return `Outreach started: campaigns activated. ${lines.join("; ")}.${result.autopilot ? " Ordinary replies will be answered automatically; anything unusual waits for you in the Inbox." : " Replies wait for you in the Inbox."} Nothing is sent until each channel's sender is allowed to send (its sending hours, daily limits and gaps); sends appear on the plan card as they are recorded.`;
+  // Started means the campaigns are active, not that anything was sent: each sender still waits for its limits and gaps.
+  return `Outreach started: campaigns activated. ${lines.join("; ")}.${result.autopilot ? " Ordinary replies will be answered automatically; anything unusual waits for you in the Inbox." : " Replies wait for you in the Inbox."} Messages go out at any time of day, within the daily lead limit and each sender's own limits and gaps; sends appear on the plan card as they are recorded.`;
 }
 
 let registered = false;

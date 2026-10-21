@@ -9,7 +9,7 @@ import { people } from "@/lib/leads/schema";
 import { personVariables } from "@/lib/leads/variables";
 import { campaignAccounts, campaigns as linkedinCampaigns, leads as linkedinLeads, linkedInAccounts } from "@/lib/linkedin/schema";
 import { normalizeLinkedinSequence, linkedinSequenceError } from "@/lib/linkedin/campaignSequence";
-import { buildMailboxQueues } from "@/lib/outreach/buildQueue";
+import { rebuildEmailQueue } from "@/lib/outreach/buildQueue";
 import { createCampaign, emailLaunchFacts, setCampaignStatus, updateCampaignSequence } from "@/lib/outreach/campaigns";
 import { parseSequence, emailLaunchProblems } from "@/lib/outreach/launch";
 import { mailboxProviderConnected } from "@/lib/outreach/mailboxProviders";
@@ -674,7 +674,12 @@ function emailSequence(steps: PlannedStep[]) {
   return parsed.sequence;
 }
 
-type ChannelLaunch = { channel: AudienceChannel; campaignId: string | null; added: number; skipped: number; problem: string | null };
+/**
+ * `problem`: the channel did not start. `note`: it started, and something
+ * the owner should know about it (its emails are not prepared for sending
+ * yet; they are prepared again automatically).
+ */
+type ChannelLaunch = { channel: AudienceChannel; campaignId: string | null; added: number; skipped: number; problem: string | null; note?: string | null };
 
 /**
  * Records a campaign the launch just created on its run, before anything
@@ -729,8 +734,9 @@ async function launchEmail(name: string, steps: PlannedStep[], personIds: string
   if (problems.length) return { channel: "email", campaignId: campaign.id, added, skipped: personIds.length - added, problem: problems.join(" ") };
   await setCampaignStatus(campaign.id, "active");
   if (!(await record.activated(campaign.id))) return haltedLaunch("email", campaign.id, personIds);
-  await buildMailboxQueues({ organizationIds: [currentOrganizationId()] }).catch((error) => console.error("[assistant/outreach] queue build failed:", error));
-  return { channel: "email", campaignId: campaign.id, added, skipped: personIds.length - added, problem: null };
+  // The campaign is active whatever happens to the queue: a failed build is the launch's note, not its problem.
+  const note = await rebuildEmailQueue();
+  return { channel: "email", campaignId: campaign.id, added, skipped: personIds.length - added, problem: null, note };
 }
 
 async function launchWhatsapp(name: string, steps: PlannedStep[], personIds: string[], accountIds: string[], existing: string | undefined, record: LaunchRecorder): Promise<ChannelLaunch> {
@@ -905,7 +911,7 @@ async function haltLaunch(runId: string, launches: readonly ChannelLaunch[]): Pr
 }
 
 /** Pauses or resumes every campaign of a run. */
-export async function setRunPaused(runId: string, paused: boolean): Promise<{ status: string; changed: RunLeadChannel[]; problems: string[] }> {
+export async function setRunPaused(runId: string, paused: boolean): Promise<{ status: string; changed: RunLeadChannel[]; problems: string[]; notes: string[] }> {
   const run = await getRun(runId);
   if (!run) throw new OutreachError("That outreach run does not exist.");
   if (paused ? run.status !== "running" : run.status !== "paused") throw new OutreachError(`This run is ${run.status}; only a ${paused ? "running" : "paused"} run can be ${paused ? "paused" : "resumed"}.`);
@@ -917,10 +923,12 @@ export async function setRunPaused(runId: string, paused: boolean): Promise<{ st
       .where(and(inOrg(outreachRuns), eq(outreachRuns.id, runId)));
     const problems: string[] = [];
     if (!paused && run.autopilot) await requeueRunAutopilot(runId).catch((error) => problems.push(`automatic replies: ${error instanceof Error ? error.message : String(error)}`));
-    return { status, changed: run.plan.inquiry?.channels ?? ["instagram"], problems };
+    return { status, changed: run.plan.inquiry?.channels ?? ["instagram"], problems, notes: [] };
   }
   const changed: RunLeadChannel[] = [];
   const problems: string[] = [];
+  /** What resumed but needs saying: emails not prepared for sending yet. */
+  const notes: string[] = [];
   for (const [channel, campaignId] of Object.entries(run.campaigns) as [AudienceChannel, string][]) {
     try {
       if (channel === "email") {
@@ -934,7 +942,9 @@ export async function setRunPaused(runId: string, paused: boolean): Promise<{ st
           }
         }
         await setCampaignStatus(campaignId, paused ? "paused" : "active");
-        if (!paused) await buildMailboxQueues({ organizationIds: [currentOrganizationId()] }).catch(() => undefined);
+        // Resumed either way; a queue that could not be prepared is said, not swallowed.
+        const note = paused ? null : await rebuildEmailQueue();
+        if (note) notes.push(`email: ${note}`);
       } else if (channel === "whatsapp") {
         await updateWhatsappCampaign(campaignId, { status: paused ? "paused" : "active" });
       } else if (channel === "linkedin") {
@@ -951,7 +961,7 @@ export async function setRunPaused(runId: string, paused: boolean): Promise<{ st
     .where(and(inOrg(outreachRuns), eq(outreachRuns.id, runId)));
   // Replies the autopilot held while paused are looked at again, with every check.
   if (!paused && changed.length && run.autopilot) await requeueRunAutopilot(runId).catch((error) => problems.push(`automatic replies: ${error instanceof Error ? error.message : String(error)}`));
-  return { status, changed, problems };
+  return { status, changed, problems, notes };
 }
 
 /**

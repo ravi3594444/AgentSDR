@@ -17,11 +17,19 @@
  * mailbox disabled. A real Google or Unipile delivery is NOT proven here; see
  * docs/product/OWNER_SETUP.md for the live checks.
  *
- * Refuses a non-local DATABASE_URL, and refuses to tick while any other
- * organization has a queued email (the tick is global).
+ * The email part also checks the queue's reliability: a failed claim is never
+ * queued again, a stale row never sends a follow-up early, a follow-up that
+ * falls due after the day's build is topped up by the tick and sent once
+ * (today's count kept, a stale counter day left to the build), a rebuild
+ * interrupted after its delete keeps the old queue and reports the failure,
+ * two rebuilds at once are serialized, and the daily lead limit refuses a
+ * first email at its claim and lets it go the next day.
+ *
+ * Refuses a non-local DATABASE_URL. Its email ticks and repairs run for its
+ * own organization only, so another organization's queue is never sent.
  */
 import { randomUUID } from "node:crypto";
-import { and, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 
 if (!/@(localhost|127\.0\.0\.1)[:/]/.test(process.env.DATABASE_URL ?? "")) {
   console.error("Refusing to run: DATABASE_URL must point at a local, disposable database.");
@@ -34,8 +42,10 @@ const { people } = await import("@/lib/leads/schema");
 const { mailboxes, outreachCampaigns, outreachEmails, outreachLeads, outreachMailboxQueue } = await import("@/lib/outreach/schema");
 const { createCampaign, emailLaunchFacts, setCampaignStatus, updateCampaignSequence } = await import("@/lib/outreach/campaigns");
 const { emailLaunchProblems, parseSequence } = await import("@/lib/outreach/launch");
-const { buildMailboxQueues } = await import("@/lib/outreach/buildQueue");
+const { buildMailboxQueues, rebuildEmailQueue } = await import("@/lib/outreach/buildQueue");
 const { runSchedulerTick } = await import("@/lib/outreach/scheduler");
+const { saveChannelRules } = await import("@/lib/channels/rules.server");
+const { newLeadsToday } = await import("@/lib/channels/dailyLeadLimit.server");
 const { ingestInboundReply } = await import("@/lib/crm/conversations");
 const { gridProviderCredentials, gridProviders } = await import("@/lib/grid/schema");
 const { encryptIntegrationCredentials } = await import("@/lib/integrations/credentials");
@@ -107,16 +117,9 @@ await runInOrganization(org!.id, async () => {
     return { id: `fake-${randomUUID()}`, messageId: `<${randomUUID()}@example.test>`, threadId: `thread-${randomUUID()}` };
   }) as unknown as Parameters<typeof runSchedulerTick>[0] extends { send?: infer S } ? S : never;
 
-  const otherQueues = await db
-    .select({ n: sql<number>`count(*)::int` })
-    .from(outreachMailboxQueue)
-    .innerJoin(mailboxes, eq(outreachMailboxQueue.mailboxId, mailboxes.id))
-    .where(ne(mailboxes.organizationId, currentOrganizationId()));
-  if (Number(otherQueues[0]?.n ?? 0) > 0) {
-    console.error("Another organization has queued emails; the send tick is global, so this check stops here.");
-    process.exit(2);
-  }
-  const tick = () => runSchedulerTick({ send: fakeSend });
+  // The tick and its repair, for this organization only: another's queue (an earlier, interrupted run) is never sent.
+  const organizationId = currentOrganizationId();
+  const tick = (now?: Date) => runSchedulerTick({ send: fakeSend, now, organizationIds: [organizationId] });
   const readyMailbox = () => db.update(mailboxes).set({ nextEmailTime: null }).where(eq(mailboxes.id, mailbox!.id));
 
   const built = await buildMailboxQueues({ organizationIds: [currentOrganizationId()] });
@@ -191,21 +194,119 @@ await runInOrganization(org!.id, async () => {
   const resumed = await tick();
   check("after resuming, the waiting lead is sent", resumed.sent === 1 && sent.at(-1) === recipients[2]!.email, JSON.stringify(resumed));
 
-  // A step already claimed (an earlier attempt) is never sent again.
+  const queueOf = () => db.select({ id: outreachMailboxQueue.id, leadId: outreachMailboxQueue.leadId, position: outreachMailboxQueue.position })
+    .from(outreachMailboxQueue).where(eq(outreachMailboxQueue.mailboxId, mailbox!.id)).orderBy(outreachMailboxQueue.position);
+  const mailboxNow = async () => (await db.select().from(mailboxes).where(eq(mailboxes.id, mailbox!.id)))[0]!;
+  const leadNow = async (id: string) => (await db.select().from(outreachLeads).where(eq(outreachLeads.id, id)))[0]!;
+  const sentTo = (email: string) => sent.filter((to) => to === email).length;
+  const repairTick = () => runSchedulerTick({ send: fakeSend, repair: "now", organizationIds: [organizationId] });
+
+  // A step already claimed by an earlier attempt that failed: never queued again, never re-sent.
   const linus = leadOf("linus");
-  await db.insert(outreachEmails).values({ leadId: linus.id, mailboxId: mailbox!.id, stepNumber: 2, subject: "", body: "Follow-up", status: "scheduled" });
+  await db.insert(outreachEmails).values({ leadId: linus.id, mailboxId: mailbox!.id, stepNumber: 2, subject: "", body: "Follow-up", status: "failed", error: "Gmail answered 500" });
   await db.update(outreachLeads).set({ nextSendAt: past() }).where(eq(outreachLeads.id, linus.id));
   await db.update(mailboxes).set({ todayEmailsSent: 0 }).where(eq(mailboxes.id, mailbox!.id));
-  await buildMailboxQueues({ organizationIds: [currentOrganizationId()] });
+  const afterFailure = await buildMailboxQueues({ organizationIds: [organizationId] });
+  check("a lead whose current step's claim failed is not queued again, so it takes no real lead's place", !(await queueOf()).some((q) => q.leadId === linus.id) && afterFailure.followUpsQueued === 0, JSON.stringify(afterFailure));
+  await db.insert(outreachMailboxQueue).values({ mailboxId: mailbox!.id, leadId: linus.id, position: 0 });
   await readyMailbox();
   const sendsBefore = sent.length;
   const claimed = await tick();
-  check("a step with an existing claim is skipped, not re-sent", claimed.skippedAlreadyClaimed === 1 && sent.length === sendsBefore, JSON.stringify(claimed));
+  check("…and a stale queue row for that step is skipped at its claim, not re-sent", claimed.skippedAlreadyClaimed === 1 && sent.length === sendsBefore, JSON.stringify(claimed));
 
   const perRecipient = recipients.map((r) => sent.filter((to) => to === r.email).length);
   check("each recipient got each step at most once (ada 2, grace 1, linus 1)", JSON.stringify(perRecipient) === "[2,1,1]", JSON.stringify(perRecipient));
   const stored = await db.select({ n: sql<number>`count(*)::int` }).from(outreachEmails).where(and(inArray(outreachEmails.leadId, leads.map((l) => l.id)), eq(outreachEmails.status, "sent")));
   check("every send is recorded as sent in outreach_emails", Number(stored[0]?.n) === 4, String(stored[0]?.n));
+
+  // -------------------------------------------------------- queue reliability
+  const extraLead = async (name: string, values: Partial<typeof outreachLeads.$inferInsert> = {}) => {
+    const [person] = await db.insert(people).values({ organizationId, email: `engine-check+${name}-${stamp}@example.test`, firstName: name, source: "engine-check" }).returning();
+    const [lead] = await db.insert(outreachLeads).values({ personId: person!.id, campaignId: campaign.id, ...values }).returning();
+    return { email: person!.email!, lead: lead! };
+  };
+  await db.delete(outreachMailboxQueue).where(eq(outreachMailboxQueue.mailboxId, mailbox!.id));
+  await db.update(mailboxes).set({ dailySendLimit: 10, todayEmailsSent: 3, sendCounterResetAt: new Date(), nextEmailTime: null }).where(eq(mailboxes.id, mailbox!.id));
+
+  // A stale row for a lead that advanced since it was queued: its follow-up is days away.
+  const ahead = await extraLead("pia", { sequenceStatus: "initial_sent", currentStep: 1, mailboxId: mailbox!.id, nextSendAt: new Date(Date.now() + 3 * 86_400_000) });
+  await db.insert(outreachMailboxQueue).values({ mailboxId: mailbox!.id, leadId: ahead.lead.id, position: 0 });
+  const early = await tick();
+  const [aheadClaim] = await db.select().from(outreachEmails).where(eq(outreachEmails.leadId, ahead.lead.id));
+  check("a stale queue row for a lead whose follow-up is not due sends nothing early", early.sent === 0 && early.skippedNotDue === 1 && !aheadClaim && sentTo(ahead.email) === 0 && (await leadNow(ahead.lead.id)).currentStep === 1, JSON.stringify(early));
+  check("…and leaves the mailbox's pacing and count alone", (await mailboxNow()).nextEmailTime === null && (await mailboxNow()).todayEmailsSent === 3);
+
+  // A follow-up that falls due after the day's build: the tick's repair tops it up, once, without touching today's count.
+  const late = await extraLead("omar", { sequenceStatus: "initial_sent", currentStep: 1, mailboxId: mailbox!.id, nextSendAt: new Date(Date.now() + 3_600_000) });
+  await db.insert(outreachEmails).values({ leadId: late.lead.id, mailboxId: mailbox!.id, stepNumber: 1, subject: "Hello omar", body: "First email", status: "sent", sentAt: new Date(Date.now() - 86_400_000), messageId: `<omar-${stamp}@example.test>` });
+  const morning = await buildMailboxQueues({ organizationIds: [organizationId] });
+  check("the day's build leaves out a follow-up that is not due yet", morning.failedOrganizations.length === 0 && !(await queueOf()).some((q) => q.leadId === late.lead.id), JSON.stringify(morning));
+  const idle = await repairTick();
+  check("an empty queue whose only work is a follow-up not due yet is not rebuilt: nothing queued or sent, the count untouched",
+    idle.sent === 0 && (await queueOf()).length === 0 && (await mailboxNow()).todayEmailsSent === 3, JSON.stringify(idle));
+  await db.update(outreachLeads).set({ nextSendAt: past() }).where(eq(outreachLeads.id, late.lead.id));
+  const counterDay = (await mailboxNow()).sendCounterResetAt;
+  await db.update(mailboxes).set({ sendCounterResetAt: new Date(Date.now() - 2 * 86_400_000) }).where(eq(mailboxes.id, mailbox!.id));
+  const stale = await repairTick();
+  check("a mailbox whose daily counter is from an earlier day is not topped up (only the daily build resets a counter)",
+    stale.sent === 0 && (await queueOf()).length === 0 && (await mailboxNow()).todayEmailsSent === 3, JSON.stringify(stale));
+  await db.update(mailboxes).set({ sendCounterResetAt: counterDay }).where(eq(mailboxes.id, mailbox!.id));
+  const repaired = await repairTick();
+  const afterRepair = await mailboxNow();
+  check("the follow-up that fell due after the build is topped up by the tick and sent once", repaired.sent === 1 && sentTo(late.email) === 1 && (await leadNow(late.lead.id)).sequenceStatus === "sequence_completed", JSON.stringify(repaired));
+  check("…today's count goes on from 3 to 4, never reset", afterRepair.todayEmailsSent === 4 && afterRepair.sendCounterResetAt?.getTime() === counterDay?.getTime(), `${afterRepair.todayEmailsSent} reset ${afterRepair.sendCounterResetAt?.toISOString()}`);
+  await readyMailbox();
+  await repairTick();
+  check("…and the next repair sends that lead nothing more", sentTo(late.email) === 1);
+
+  // Two new leads, queued by a build; then a rebuild that fails after deleting the old rows.
+  const mira = await extraLead("mira");
+  const noor = await extraLead("noor");
+  const built2 = await buildMailboxQueues({ organizationIds: [organizationId] });
+  const queuedBefore = await queueOf();
+  check("a build queues both new leads", built2.failedOrganizations.length === 0 && queuedBefore.map((q) => q.leadId).join() === [mira.lead.id, noor.lead.id].join(), JSON.stringify(built2));
+  const trigger = `engine_check_refuse_${stamp}`;
+  await db.execute(sql.raw(`create function ${trigger}() returns trigger language plpgsql as $$ begin raise exception 'engine check: queue insert refused'; end $$`));
+  await db.execute(sql.raw(`create trigger ${trigger} before insert on outreach_mailbox_queue for each row when (new.mailbox_id = '${mailbox!.id}') execute function ${trigger}()`));
+  try {
+    const interrupted = await buildMailboxQueues({ organizationIds: [organizationId] });
+    const queuedAfter = await queueOf();
+    check("a rebuild interrupted after deleting the old queue keeps the old queue: all or nothing", JSON.stringify(queuedAfter) === JSON.stringify(queuedBefore), `${JSON.stringify(queuedBefore)} → ${JSON.stringify(queuedAfter)}`);
+    check("…and reports the organization as failed, with its error", interrupted.failedOrganizations.length === 1 && interrupted.failedOrganizations[0]!.organizationId === organizationId && /queue insert refused/.test(interrupted.failedOrganizations[0]!.error), JSON.stringify(interrupted.failedOrganizations));
+    const note = await rebuildEmailQueue();
+    check("…which a launch, a resume or an activation reports as a note, not as a failed campaign", Boolean(note && /not prepared for sending yet/.test(note) && /prepared again automatically/.test(note)), note ?? "no note");
+  } finally {
+    await db.execute(sql.raw(`drop trigger if exists ${trigger} on outreach_mailbox_queue`));
+    await db.execute(sql.raw(`drop function if exists ${trigger}()`));
+  }
+  const [concurrentA, concurrentB] = await Promise.all([buildMailboxQueues({ organizationIds: [organizationId] }), buildMailboxQueues({ organizationIds: [organizationId] })]);
+  const afterConcurrent = await queueOf();
+  check("two rebuilds at once are serialized: both succeed and the queue holds each lead once, in order",
+    concurrentA.failedOrganizations.length === 0 && concurrentB.failedOrganizations.length === 0 && afterConcurrent.map((q) => `${q.leadId}@${q.position}`).join() === `${mira.lead.id}@0,${noor.lead.id}@1`, JSON.stringify(afterConcurrent));
+
+  // The daily lead limit: one place left today, two new leads queued.
+  const usedSoFar = (await newLeadsToday()).used;
+  await saveChannelRules("general", { newLeadsPerDay: usedSoFar + 1 }, null);
+  await readyMailbox();
+  const firstNew = await tick();
+  await readyMailbox();
+  const refusedTick = await tick();
+  const noorClaims = await db.select().from(outreachEmails).where(eq(outreachEmails.leadId, noor.lead.id));
+  const afterRefusal = await mailboxNow();
+  check("with one place left the first new lead is emailed; the next is refused at its claim and nothing is sent to her",
+    firstNew.sent === 1 && sentTo(mira.email) === 1 && refusedTick.sent === 0 && refusedTick.skippedDailyLeadLimit === 1 && sentTo(noor.email) === 0, `${JSON.stringify(firstNew)} ${JSON.stringify(refusedTick)}`);
+  check("…no claim is written, the mailbox's next send time is untouched, and she stays pending for the next build",
+    noorClaims.length === 0 && afterRefusal.nextEmailTime === null && afterRefusal.todayEmailsSent === 5 && (await leadNow(noor.lead.id)).sequenceStatus === "pending", `${noorClaims.length} claims, next ${afterRefusal.nextEmailTime?.toISOString()}, ${afterRefusal.todayEmailsSent} sent`);
+  const day = await newLeadsToday();
+  check("…today's count stops at the limit", day.used === day.limit, `${day.used} of ${day.limit}`);
+  const sameDay = await buildMailboxQueues({ organizationIds: [organizationId] });
+  check("…a rebuild the same day does not queue her again (no place is left)", sameDay.failedOrganizations.length === 0 && !(await queueOf()).some((q) => q.leadId === noor.lead.id), JSON.stringify(await queueOf()));
+  const nextDay = new Date(day.resetsAt.getTime() + 60_000);
+  const nextBuild = await buildMailboxQueues({ organizationIds: [organizationId], now: nextDay });
+  await readyMailbox();
+  const resumedNextDay = await tick(nextDay);
+  check("the next workspace day she is queued again and emailed once", nextBuild.newLeadsQueued === 1 && resumedNextDay.sent === 1 && sentTo(noor.email) === 1 && (await leadNow(noor.lead.id)).sequenceStatus === "initial_sent", `${JSON.stringify(nextBuild)} ${JSON.stringify(resumedNextDay)}`);
+  await saveChannelRules("general", { newLeadsPerDay: 50 }, null);
 
   await setCampaignStatus(campaign.id, "paused");
   await db.delete(outreachMailboxQueue).where(eq(outreachMailboxQueue.mailboxId, mailbox!.id));

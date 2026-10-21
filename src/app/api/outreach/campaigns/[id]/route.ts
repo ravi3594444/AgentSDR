@@ -11,8 +11,7 @@ import {
 import type { CampaignStatus } from "@/lib/outreach/schema";
 import { withOrgContext, authContextErrorResponse } from "@/lib/auth/context";
 import { emailLaunchProblems, parseSequence } from "@/lib/outreach/launch";
-import { buildMailboxQueues } from "@/lib/outreach/buildQueue";
-import { currentOrganizationId } from "@/lib/tenancy/scope";
+import { rebuildEmailQueue } from "@/lib/outreach/buildQueue";
 
 const CAMPAIGN_STATUSES: readonly CampaignStatus[] = ["draft", "active", "paused", "completed"];
 
@@ -78,16 +77,14 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       if (body.status) await setCampaignStatus(id, body.status);
       // The daily queue was built at the start of the organization's day; rebuild
       // it now so a campaign launched or resumed mid-day starts today, within
-      // each mailbox's remaining daily allowance and sending hours. Safe to
-      // re-run: it never re-grants a mailbox's daily allowance.
-      if (activating) {
-        await buildMailboxQueues({ organizationIds: [currentOrganizationId()] }).catch((error) => {
-          console.error(`[outreach] queue rebuild after activating campaign ${id} failed:`, error);
-        });
-      }
+      // each mailbox's remaining daily allowance. Safe to re-run: it never
+      // re-grants a mailbox's daily allowance. The campaign is active either
+      // way; a queue that could not be prepared is the response's warning.
+      const warning = activating ? await rebuildEmailQueue() : null;
+      if (warning) console.error(`[outreach] queue rebuild after activating campaign ${id}: ${warning}`);
 
       const updated = await getCampaign(id);
-      return NextResponse.json({ campaign: updated });
+      return NextResponse.json({ campaign: updated, ...(warning ? { warning } : {}) });
     });
   } catch (error) {
     const response = authContextErrorResponse(error);

@@ -12,7 +12,8 @@
 export type ChatEvent =
   | { kind: "search_report"; jobId: string; ok: boolean; source: string | null; found: number; contactable: number; matching: number | null; judged: number | null; error?: string | null }
   | { kind: "plan_ready"; runId: string | null; leads: number; channels: Record<string, number>; waitingReason: string | null }
-  | { kind: "outreach_started"; runId: string | null; ok: boolean; launches: { channel: string; added: number; skipped: number; problem: string | null }[]; automatic: boolean }
+  /** A launch's `note`: it started, and its messages are not prepared for sending yet (they are again automatically). */
+  | { kind: "outreach_started"; runId: string | null; ok: boolean; launches: { channel: string; added: number; skipped: number; problem: string | null; note?: string | null }[]; automatic: boolean }
   | { kind: "continuation"; n: number; leads: number; target: number; spentUsd: number; capUsd: number; minutesLeft: number };
 
 export type CompactFigure = { label: string; value: string };
@@ -65,12 +66,17 @@ export function compactEvent(message: { toolResult?: unknown }): CompactEvent | 
       if (!event.ok) return { title: "Starting the outreach failed", figures: [], tone: "bad", note: null };
       const started = event.launches.filter((launch) => !launch.problem);
       const failed = event.launches.filter((launch) => launch.problem);
+      const noted = started.filter((launch) => launch.note);
       const figures = started.map((launch) => ({ label: channelName(launch.channel), value: String(num(launch.added)) }));
+      const notes = [
+        ...noted.map((launch) => `${channelName(launch.channel)}: ${launch.note}`),
+        ...failed.map((launch) => `${channelName(launch.channel)} not started: ${launch.problem}`),
+      ];
       return {
         title: `Outreach started · ${event.automatic ? "Automatic replies" : "replies wait in the Inbox"}`,
         figures,
-        tone: failed.length ? "warning" : "good",
-        note: failed.length ? failed.map((launch) => `${channelName(launch.channel)} not started: ${launch.problem}`).join("; ") : "Messages go out within each channel's hours and limits.",
+        tone: notes.length ? "warning" : "good",
+        note: notes.length ? notes.join("; ") : "Messages go out as each sender's limits and gaps allow.",
       };
     }
     case "continuation":

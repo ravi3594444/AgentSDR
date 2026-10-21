@@ -7,7 +7,8 @@
  * per-instance or add a DB-based "only one instance runs this" claim.
  *
  * Started once from instrumentation.ts at process boot. This is only the send
- * tick (every TICK_INTERVAL_MS, default 1 min). The daily queue rebuild is
+ * tick (every TICK_INTERVAL_MS, default 1 min), with its repair (due work
+ * missing from the queue topped up every few minutes). The daily queue rebuild is
  * each organization's daily rollover in src/lib/scheduler/ — at a fixed
  * wall-clock time claimed in scheduled_job_runs, not an "every 24h since
  * boot" timer (that was tried and rejected: a restart resets the clock, so
@@ -31,7 +32,8 @@ async function safeTick() {
   }
   tickRunning = true;
   try {
-    const result = await runSchedulerTick();
+    // With its repair: due work missing from the queue is topped up every few minutes.
+    const result = await runSchedulerTick({ repair: "auto" });
     tickCount += 1;
     // One-line heartbeat every 10 ticks (~10 min at the default interval)
     // instead of every tick, so logs stay readable but liveness is still visible.

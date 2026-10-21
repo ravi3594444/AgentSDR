@@ -17,6 +17,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  const result = await runSchedulerTick();
+  const result = await runSchedulerTick({ repair: "auto" });
   return NextResponse.json(result);
 }

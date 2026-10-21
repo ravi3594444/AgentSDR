@@ -349,16 +349,10 @@ export async function runAutomationChecks(input: {
   const extra = await db.insert(people).values([1, 2].map((index) => ({ organizationId: orgId, email: `fresh${index}-${stamp}@clinic-auto.test`, fullName: `Dr Fresh ${index}`, source: "assistant-automation-check" }))).returning({ id: people.id });
   await db.insert(schema.outreachRunLeads).values(extra.map((person) => ({ organizationId: orgId, runId: autoRun!.id, personId: person.id, channel: "email" as const })));
   await addPeopleToEmailCampaign(campaign.id, extra.map((person) => person.id));
-  const otherQueues = await db.select({ n: sql<number>`count(*)::int` }).from(outreachSchema.outreachMailboxQueue)
-    .innerJoin(outreachSchema.mailboxes, eq(outreachSchema.outreachMailboxQueue.mailboxId, outreachSchema.mailboxes.id))
-    .where(sql`${outreachSchema.mailboxes.organizationId} <> ${orgId}`);
-  if (Number(otherQueues[0]?.n ?? 0) === 0) {
-    await db.update(outreachSchema.mailboxes).set({ nextEmailTime: null }).where(eq(outreachSchema.mailboxes.organizationId, orgId));
-    await buildMailboxQueues({ organizationIds: [orgId] });
-    await runSchedulerTick();
-  } else {
-    console.log("NOTE  another organization has queued emails; the campaign send tick is skipped");
-  }
+  // The tick for this organization only: another's queue (an earlier, interrupted run) is never sent.
+  await db.update(outreachSchema.mailboxes).set({ nextEmailTime: null }).where(eq(outreachSchema.mailboxes.organizationId, orgId));
+  await buildMailboxQueues({ organizationIds: [orgId] });
+  await runSchedulerTick({ organizationIds: [orgId] });
 
   // ------------------------------------------------------------ restart recovery
   const search = await runTool("find_leads", { what: "dental clinics", where: "Baner, Pune" }, { threadId: thread.id, userId: input.ownerId, ownerText: "" });

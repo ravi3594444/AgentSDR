@@ -119,6 +119,9 @@ function RowActions({ campaign }: { campaign: Campaign }) {
       });
       return;
     }
+    // Resumed; its emails may not be prepared for sending yet (they are again automatically).
+    const { warning } = (await res.json().catch(() => ({}))) as { warning?: string };
+    if (warning) await dialogs.alert({ title: "Campaign resumed", description: warning, variant: "info" });
     startTransition(() => router.refresh());
   }
 

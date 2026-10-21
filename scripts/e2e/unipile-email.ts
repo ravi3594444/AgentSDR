@@ -16,11 +16,10 @@
  *
  * It creates its own organization ("Unipile email check …") and leaves it
  * behind with its campaign paused, its mailboxes disabled and its fake
- * Unipile connection removed. Refuses a non-local DATABASE_URL, and refuses
- * to tick while any other organization has a queued email (the tick is
- * global).
+ * Unipile connection removed. Refuses a non-local DATABASE_URL. Its ticks run
+ * for its own organization only, so another organization's queue is never sent.
  */
-import { and, eq, ne, sql } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { NextRequest } from "next/server";
 
 if (!/@(localhost|127\.0\.0\.1)[:/]/.test(process.env.DATABASE_URL ?? "")) {
@@ -79,7 +78,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 const { db } = await import("@/lib/db");
 const { organizations } = await import("@/lib/auth/schema");
 const { people } = await import("@/lib/leads/schema");
-const { mailboxes, outreachEmails, outreachLeads, outreachMailboxQueue } = await import("@/lib/outreach/schema");
+const { mailboxes, outreachEmails, outreachLeads } = await import("@/lib/outreach/schema");
 const { createCampaign, emailLaunchFacts, setCampaignStatus, updateCampaignSequence } = await import("@/lib/outreach/campaigns");
 const { emailLaunchProblems, parseSequence } = await import("@/lib/outreach/launch");
 const { buildMailboxQueues } = await import("@/lib/outreach/buildQueue");
@@ -192,13 +191,10 @@ await runInOrganization(org!.id, async () => {
     check("an imported mailbox is always open, in the organization's time zone", Boolean(imported) && isAlwaysOpen(imported!.workingHours) && imported!.workingHours.timezone === "UTC", JSON.stringify(imported?.workingHours));
     await db.update(mailboxes).set({ nextEmailTime: null }).where(eq(mailboxes.id, gmail!.id));
     await setCampaignStatus(campaign.id, "active");
-    const otherQueues = await db.select({ n: sql<number>`count(*)::int` }).from(outreachMailboxQueue)
-      .innerJoin(mailboxes, eq(outreachMailboxQueue.mailboxId, mailboxes.id))
-      .where(ne(mailboxes.organizationId, currentOrganizationId()));
-    if (Number(otherQueues[0]?.n ?? 0) > 0) throw new Error("Another organization has queued emails; the send tick is global, so this check stops here.");
-
+    // The tick for this organization only: another's queue (an earlier, interrupted run) is never sent.
+    const ownTick = () => runSchedulerTick({ organizationIds: [currentOrganizationId()] });
     await buildMailboxQueues({ organizationIds: [currentOrganizationId()] });
-    const first = await runSchedulerTick();
+    const first = await ownTick();
     const firstSend = requests.filter((r) => r.method === "POST" && r.path === "/api/v1/emails").at(-1);
     check("the tick sends the first email through Unipile with the real dispatcher", first.sent === 1 && Boolean(firstSend), JSON.stringify(first));
     check(
@@ -220,7 +216,7 @@ await runInOrganization(org!.id, async () => {
     await db.update(outreachLeads).set({ nextSendAt: new Date(Date.now() - 60_000) }).where(eq(outreachLeads.id, lead!.id));
     await buildMailboxQueues({ organizationIds: [currentOrganizationId()] });
     await db.update(mailboxes).set({ nextEmailTime: null }).where(eq(mailboxes.id, gmail!.id));
-    const second = await runSchedulerTick();
+    const second = await ownTick();
     const followUp = requests.filter((r) => r.method === "POST" && r.path === "/api/v1/emails").at(-1);
     check(
       "the follow-up with a blank subject is sent as a reply to the first (reply_to = its provider id)",

@@ -1274,7 +1274,7 @@ export const TOOLS: Record<string, Tool> = {
     run: async (args) => {
       try {
         const result = await setRunPaused(uuid(args, "runId")!, false);
-        return { ok: result.changed.length > 0, summary: `Resumed ${result.changed.join(", ") || "nothing"}.${result.problems.length ? ` Problems: ${result.problems.join("; ")}` : ""}`, data: result };
+        return { ok: result.changed.length > 0, summary: `Resumed ${result.changed.join(", ") || "nothing"}.${result.notes.length ? ` Note: ${result.notes.join("; ")}` : ""}${result.problems.length ? ` Problems: ${result.problems.join("; ")}` : ""}`, data: result };
       } catch (error) {
         if (error instanceof OutreachError) return { ok: false, summary: error.message };
         throw error;

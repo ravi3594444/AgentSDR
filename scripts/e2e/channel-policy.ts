@@ -11,7 +11,9 @@
  * - an owner who names WhatsApp gets a WhatsApp-only plan, and the leads it
  *   cannot reach are counted with that reason;
  * - a sender that cannot send yet is named as the reason, not the owner;
- * - Start on the general plan enrolls the email lead, and one scheduler tick
+ * - Start on the general plan enrolls the email lead, even when the launch's
+ *   queue build fails (the launch says so in a note, never as a failure), and
+ *   one scheduler tick, whose repair prepares what that build left out,
  *   records an accepted send to that lead only;
  * - the chat line and the plan card read the plan's own channels.
  *
@@ -175,27 +177,38 @@ await runInOrganization(org!.id, async () => {
   await db.update(schema.outreachRuns).set({ status: "cancelled" }).where(and(eq(schema.outreachRuns.organizationId, currentOrganizationId()), ne(schema.outreachRuns.id, general.runId)));
 
   // ---------------------------------------------------------- 4. Start: the email lead is enrolled and one tick sends to it
-  const started = await startOutreachRun(general.runId, owner!.id, { autopilot: false });
-  const launched = await launch(general.runId);
+  // The launch's queue build fails (a trigger refuses this mailbox's queue rows): the launch still starts, with a note.
+  const trigger = `channel_policy_refuse_${stamp}`;
+  await db.execute(sql.raw(`create function ${trigger}() returns trigger language plpgsql as $$ begin raise exception 'channel policy check: queue insert refused'; end $$`));
+  await db.execute(sql.raw(`create trigger ${trigger} before insert on outreach_mailbox_queue for each row when (new.mailbox_id = '${mailbox!.id}') execute function ${trigger}()`));
+  let started: Awaited<ReturnType<typeof startOutreachRun>>;
+  let launched: AssistantJob | null;
+  try {
+    started = await startOutreachRun(general.runId, owner!.id, { autopilot: false });
+    launched = await launch(general.runId);
+  } finally {
+    await db.execute(sql.raw(`drop trigger if exists ${trigger} on outreach_mailbox_queue`));
+    await db.execute(sql.raw(`drop function if exists ${trigger}()`));
+  }
   const run = await getRun(general.runId);
   check("Start launches the general plan on all three channels", launched?.status === "succeeded" && run?.status === "running" && Boolean(run.campaigns.email && run.campaigns.whatsapp && run.campaigns.linkedin),
     JSON.stringify({ job: started.jobId, status: launched?.status, error: launched?.error, run: run?.status, campaigns: run?.campaigns }));
+  const emailLaunch = ((launched?.result ?? {}) as { launches?: { channel: string; problem: string | null; note?: string | null }[] }).launches?.find((entry) => entry.channel === "email");
+  check("…a launch whose email queue could not be prepared is still started, and says so in a note, not as a failure",
+    Boolean(emailLaunch && emailLaunch.problem === null && /not prepared for sending yet/.test(emailLaunch.note ?? "") && /queue insert refused/.test(emailLaunch.note ?? "")) && !run?.error,
+    JSON.stringify({ emailLaunch, error: run?.error }));
   const enrolled = await db.select({ personId: outreachLeads.personId }).from(outreachLeads).where(eq(outreachLeads.campaignId, run!.campaigns.email!));
   check("…the email campaign holds the email lead only", enrolled.length === 1 && enrolled[0]!.personId === asha.id, JSON.stringify(enrolled));
 
-  const otherQueues = await db.select({ n: sql<number>`count(*)::int` }).from(outreachMailboxQueue)
-    .innerJoin(mailboxes, eq(outreachMailboxQueue.mailboxId, mailboxes.id)).where(ne(mailboxes.organizationId, currentOrganizationId()));
-  if (Number(otherQueues[0]?.n ?? 0) > 0) {
-    console.error("Another organization has queued emails; the send tick is global, so this check stops here.");
-    process.exit(2);
-  }
   const sent: string[] = [];
   const fakeSend = (async (input: { to: string[] }) => {
     sent.push(input.to[0]!);
     return { id: `fake-${randomUUID()}`, messageId: `<${randomUUID()}@channel-policy-check.test>`, threadId: `thread-${randomUUID()}` };
   }) as unknown as Parameters<typeof runSchedulerTick>[0] extends { send?: infer S } ? S : never;
-  await buildMailboxQueues({ organizationIds: [currentOrganizationId()] });
-  const tick = await runSchedulerTick({ send: fakeSend });
+  // The next build (the daily rollover's, here at once) prepares what the failed one left out; the tick runs for this organization only.
+  const rebuilt = await buildMailboxQueues({ organizationIds: [currentOrganizationId()] });
+  const tick = await runSchedulerTick({ send: fakeSend, organizationIds: [currentOrganizationId()] });
+  check("…and the next build prepares it", rebuilt.failedOrganizations.length === 0 && rebuilt.newLeadsQueued === 1, JSON.stringify(rebuilt));
   const emails = await db.select({ status: outreachEmails.status, subject: outreachEmails.subject }).from(outreachEmails).where(eq(outreachEmails.mailboxId, mailbox!.id));
   check("…one scheduler tick records an accepted email to that lead, and to nobody else",
     tick.sent === 1 && sent.length === 1 && sent[0] === asha.email && emails.length === 1 && emails[0]!.status === "sent" && emails[0]!.subject === "Faster replies to buyer enquiries",

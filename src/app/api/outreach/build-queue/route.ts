@@ -24,5 +24,6 @@ export async function POST(req: NextRequest) {
 
   const { organizationIds, alreadyRolledOver } = await cronOrganizationFilter(req);
   const result = await buildMailboxQueues({ organizationIds });
-  return NextResponse.json(alreadyRolledOver ? { ...result, alreadyRolledOver } : result);
+  // An organization whose build failed keeps its previous queue; a cron sees the failure as a 500.
+  return NextResponse.json(alreadyRolledOver ? { ...result, alreadyRolledOver } : result, { status: result.failedOrganizations.length ? 500 : 200 });
 }

@@ -63,9 +63,12 @@ export async function runDailyRollover(organizationId: string): Promise<{ summar
   const errors: string[] = [];
 
   // a. Email queue. Pauses itself under PAUSE_EMAIL_OUTBOUND / PEOPLE_MIGRATION_MODE.
+  // A failed build keeps yesterday's queue and is this rollover's error; the send tick's repair prepares the due work later.
   try {
     const queue = await buildMailboxQueues({ organizationIds: [organizationId] });
-    notes.push(`email queue: ${queue.followUpsQueued} follow-ups, ${queue.newLeadsQueued} new`);
+    const failed = queue.failedOrganizations.find((entry) => entry.organizationId === organizationId);
+    if (failed) errors.push(`email queue: ${failed.error}`);
+    else notes.push(`email queue: ${queue.followUpsQueued} follow-ups, ${queue.newLeadsQueued} new`);
   } catch (error) {
     errors.push(`email queue: ${serializeError(error)}`);
   }

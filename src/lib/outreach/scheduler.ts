@@ -1,14 +1,21 @@
 /**
  * Send scheduler — Phase 2 of AgentSDR-app's two-phase send model, ported
- * from send-mails.ts's processAllMailBoxQueue() line-for-line. Each tick
- * drains at most one queued lead per connected mailbox with spare capacity
- * from outreach_mailbox_queue (the Postgres equivalent of AgentSDR-app's
- * per-mailbox Redis list), gated by the same throttle (mailbox.nextEmailTime)
- * and working-hours checks. The queue itself is built once a day by
- * buildMailboxQueues() (see buildQueue.ts) — this function does NOT pick
- * leads on its own; if the queue is empty for a mailbox, nothing sends from
- * it until the next daily build. Meant to be invoked repeatedly by an
- * external cron via /api/outreach/tick.
+ * from send-mails.ts's processAllMailBoxQueue(). Each tick drains at most one
+ * queued lead per connected mailbox with spare capacity from
+ * outreach_mailbox_queue (the Postgres equivalent of AgentSDR-app's
+ * per-mailbox Redis list), gated by the gap between sends
+ * (mailbox.nextEmailTime) and the mailbox's daily limit. Sending is always
+ * on: there are no sending hours; a mailbox's time zone only sets the day its
+ * daily counter belongs to.
+ *
+ * The queue is built once a day by buildMailboxQueues() (see buildQueue.ts)
+ * and again after a launch or resume. The tick does not pick leads itself,
+ * except through its repair: every REPAIR_EVERY_MS it looks for organizations
+ * with due work missing from the queue (a follow-up that fell due after the
+ * day's build, the leads of a build that failed) and tops their queues up
+ * (topUpMailboxQueues). An empty queue with nothing due is left alone.
+ * Invoked every minute by the in-process scheduler (internalScheduler.ts), or
+ * by hand through /api/outreach/tick.
  */
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
@@ -20,8 +27,9 @@ import type { SendEmailParams, SendEmailResult } from "./gmail";
 import { mailboxProviderConnected, sendFromMailbox, type SendingMailbox } from "./mailboxProviders";
 import type { MailboxProvider } from "./schema";
 import { isSuppressed } from "./suppression";
-import { isWithinWorkingHours } from "./workingHours";
-import { leadAfterSend, mailboxAtDailyLimit } from "./sendRules";
+import { leadAfterSend, leadDueNow, mailboxAtDailyLimit } from "./sendRules";
+import { topUpMailboxQueues } from "./buildQueue";
+import { newLeadAllowance } from "@/lib/channels/dailyLeadLimit.server";
 import { channelRules } from "@/lib/channels/rules.server";
 import { pickInRange } from "@/lib/channels/rules";
 import { fillTemplate, renderEmail, unsubscribePostUrl } from "./render";
@@ -38,38 +46,57 @@ async function randomNextSendDelay(): Promise<Date> {
   return new Date(Date.now() + pickInRange(sendGapMinutes) * 60 * 1000);
 }
 
-type TickResult = {
+export type TickResult = {
   mailboxesWithQueue: number;
   sent: number;
   skippedSuppressed: number;
   skippedThrottle: number;
-  skippedOutsideHours: number;
   skippedAlreadyClaimed: number;
   skippedDailyLimit: number;
+  /** A claimed row whose lead is not due (left from before the lead advanced): dropped, nothing sent early. */
+  skippedNotDue: number;
+  /** A first email the daily lead limit refused at its claim: nothing claimed or sent; the lead stays pending for the next build. */
+  skippedDailyLeadLimit: number;
+  /** Rows the repair added for due work that was missing from the queue. */
+  toppedUp: number;
   failed: number;
 };
 
-/**
- * Drains one queued lead per connected mailbox that currently has a
- * non-empty queue — mirrors processAllMailBoxQueue()'s per-mailbox loop
- * exactly: for each mailbox with a queued send, check the throttle gate
- * (mailbox.nextEmailTime), check working hours, pop the front of that
- * mailbox's queue (lowest `position`), send, and set the next throttle time.
- * Does NOT pick leads itself — that's buildMailboxQueues()'s job, run once
- * daily. If a mailbox's queue is empty, this is a no-op for it until the
- * next daily build.
- */
 type SendFunction = (params: SendEmailParams, mailbox: SendingMailbox) => Promise<SendEmailResult>;
 
-export async function runSchedulerTick(options: { send?: SendFunction; now?: Date } = {}): Promise<TickResult> {
+/** How often the tick looks for due work missing from the queue, and for at most how many organizations at once. */
+const REPAIR_EVERY_MS = 10 * 60_000;
+const REPAIR_ORGANIZATIONS = 25;
+let lastRepairAt = 0;
+
+/**
+ * The repair before the sends: "auto" every REPAIR_EVERY_MS (the in-process
+ * scheduler and the tick route), "now" on this tick (checks), "off" (the
+ * default: a call that did not ask for it never prepares anything).
+ */
+type Repair = "auto" | "now" | "off";
+
+/**
+ * Drains one queued lead per connected mailbox that currently has a
+ * non-empty queue — mirrors processAllMailBoxQueue()'s per-mailbox loop: for
+ * each mailbox with a queued send, check the gap between sends
+ * (mailbox.nextEmailTime) and the daily limit, pop the front of that
+ * mailbox's queue (lowest `position`), check the lead is due, send, and set
+ * the next gap. The repair before it tops up due work missing from the
+ * queue; nothing else here picks leads. `organizationIds` limits the tick and
+ * its repair to those organizations (a check's own); every one otherwise.
+ */
+export async function runSchedulerTick(options: { send?: SendFunction; now?: Date; repair?: Repair; organizationIds?: string[] } = {}): Promise<TickResult> {
   const result: TickResult = {
     mailboxesWithQueue: 0,
     sent: 0,
     skippedSuppressed: 0,
     skippedThrottle: 0,
-    skippedOutsideHours: 0,
     skippedAlreadyClaimed: 0,
     skippedDailyLimit: 0,
+    skippedNotDue: 0,
+    skippedDailyLeadLimit: 0,
+    toppedUp: 0,
     failed: 0,
   };
   if (isMigrationControlPaused("emailOutbound")) {
@@ -79,14 +106,24 @@ export async function runSchedulerTick(options: { send?: SendFunction; now?: Dat
   const now = options.now ?? new Date();
   const send: SendFunction = options.send ?? ((params, mailbox) => sendFromMailbox(mailbox, params));
 
+  const only = options.organizationIds ?? null;
+
+  // The repair first, so what it prepares goes out in this same tick.
+  const repair = options.repair ?? "off";
+  if (repair === "now" || (repair === "auto" && Date.now() - lastRepairAt >= REPAIR_EVERY_MS)) {
+    if (repair === "auto") lastRepairAt = Date.now();
+    await repairQueues(result, now, only);
+  }
+
   // One global loop, one scope per organization: the queue rows are grouped by
   // the organization their mailbox belongs to, and each organization's portion
   // runs in its own scope so the provider checks and every query below act
   // for that organization only.
-  const queuedOrganizations = await db
+  const queuedOrganizations = only && !only.length ? [] : await db
     .selectDistinct({ organizationId: mailboxes.organizationId })
     .from(outreachMailboxQueue)
-    .innerJoin(mailboxes, eq(outreachMailboxQueue.mailboxId, mailboxes.id));
+    .innerJoin(mailboxes, eq(outreachMailboxQueue.mailboxId, mailboxes.id))
+    .where(only ? inArray(mailboxes.organizationId, only) : undefined);
   for (const { organizationId } of queuedOrganizations) {
     try {
       await runInOrganization(organizationId, () => tickOrganization(result, now, send, Boolean(options.send)));
@@ -96,6 +133,53 @@ export async function runSchedulerTick(options: { send?: SendFunction; now?: Dat
     }
   }
   return result;
+}
+
+const IN_SEQUENCE: OutreachLeadStatus[] = ["pending", "initial_sent", "in_follow_up"];
+
+/**
+ * The organizations with due email work nobody prepared: a lead of an active
+ * campaign whose step is due, that is not queued, whose step nobody claimed,
+ * with an address and a connected mailbox to send it. One platform-level
+ * enumeration, like the tick's own below; each top-up then runs in its
+ * organization's scope. A queue that is empty because nothing is due yet
+ * matches nothing.
+ */
+async function organizationsMissingWork(now: Date, only: string[] | null): Promise<string[]> {
+  if (only && !only.length) return [];
+  const at = now.toISOString();
+  const rows = await db.execute<{ organization_id: string }>(sql`
+    select distinct c.organization_id
+      from outreach_leads l
+      join outreach_campaigns c on c.id = l.campaign_id and c.status = 'active'
+     where (
+             (l.sequence_status = 'pending' and l.mailbox_id is null and (l.next_send_at is null or l.next_send_at <= ${at}::timestamptz))
+          or (l.sequence_status in ('initial_sent', 'in_follow_up') and l.next_send_at <= ${at}::timestamptz
+              and exists (select 1 from outreach_mailboxes m where m.id = l.mailbox_id and m.status = 'connected'))
+           )
+       and exists (select 1 from outreach_mailboxes m where m.organization_id = c.organization_id and m.status = 'connected')
+       and exists (select 1 from people p where p.id = l.person_id and coalesce(p.email, '') <> '')
+       and not exists (select 1 from outreach_mailbox_queue q where q.lead_id = l.id)
+       and not exists (select 1 from outreach_emails e where e.lead_id = l.id and e.step_number = l.current_step + 1)
+       ${only ? sql`and c.organization_id in (${sql.join(only.map((id) => sql`${id}::uuid`), sql`, `)})` : sql``}
+     limit ${REPAIR_ORGANIZATIONS}`);
+  return Array.from(rows).map((row) => row.organization_id);
+}
+
+/** Tops up the queues of organizations with due work missing from them (buildQueue.ts topUpMailboxQueues). */
+async function repairQueues(result: TickResult, now: Date, only: string[] | null) {
+  let organizations: string[];
+  try {
+    organizations = await organizationsMissingWork(now, only);
+  } catch (err) {
+    console.error("[outreach/scheduler] looking for due work missing from the queue failed:", err);
+    return;
+  }
+  for (const organizationId of organizations) {
+    const part = await topUpMailboxQueues({ organizationIds: [organizationId], now });
+    result.toppedUp += part.followUpsQueued + part.newLeadsQueued;
+    for (const failure of part.failedOrganizations) console.error(`[outreach/scheduler] topping up organization ${failure.organizationId} failed: ${failure.error}`);
+  }
 }
 
 async function tickOrganization(result: TickResult, now: Date, send: SendFunction, injectedSender: boolean) {
@@ -133,10 +217,6 @@ async function tickOrganization(result: TickResult, now: Date, send: SendFunctio
 
     if (mailbox.nextEmailTime && mailbox.nextEmailTime > now) {
       result.skippedThrottle += 1;
-      continue;
-    }
-    if (!isWithinWorkingHours(mailbox.workingHours, now)) {
-      result.skippedOutsideHours += 1;
       continue;
     }
     // The queue is sized to the daily allowance when it is built, but a
@@ -177,15 +257,19 @@ async function tickOrganization(result: TickResult, now: Date, send: SendFunctio
       .limit(1);
     if (!row?.person.email) continue;
     const lead = { ...row.lead, email: row.person.email, variables: personVariables(row.person, row.company) };
-    if (!["pending", "initial_sent", "in_follow_up"].includes(lead.sequenceStatus)) continue;
+    if (!IN_SEQUENCE.includes(lead.sequenceStatus)) continue;
+    // A row left from before the lead advanced (a rebuild overlapping its
+    // send) must not send the next follow-up early: only what is due goes out.
+    if (!leadDueNow(lead, now)) {
+      result.skippedNotDue += 1;
+      continue;
+    }
     const campaign = campaignById.get(lead.campaignId);
     if (!campaign || campaign.status !== "active") continue;
 
     await sendNextStep(lead, campaign, mailbox, now, result, send);
   }
 }
-
-const IN_SEQUENCE: OutreachLeadStatus[] = ["pending", "initial_sent", "in_follow_up"];
 
 async function sendNextStep(
   lead: typeof outreachLeads.$inferSelect & { email: string; variables: Record<string, string> },
@@ -266,20 +350,38 @@ async function sendNextStep(
   // The unique (lead, step) index is the durable provider-call claim. If a
   // worker crashes after Gmail accepts the message but before local state is
   // advanced, a later queue rebuild must not call Gmail for the same step.
-  const [emailRow] = await db
-    .insert(outreachEmails)
-    .values({
-      leadId: lead.id,
-      mailboxId: mailbox.id,
-      stepNumber: step.stepNumber,
-      subject,
-      body,
-      status: "scheduled",
-      inReplyTo,
-      references,
+  // Its time is the tick's: the clock the daily lead limit judged it by.
+  const claimRow = {
+    leadId: lead.id,
+    mailboxId: mailbox.id,
+    stepNumber: step.stepNumber,
+    subject,
+    body,
+    status: "scheduled" as const,
+    inReplyTo,
+    references,
+    createdAt: now,
+  };
+  const claimTarget = { target: [outreachEmails.leadId, outreachEmails.stepNumber] };
+  // A first email also takes one of the day's new-lead places, in one
+  // transaction with its claim, under the organization's new-leads lock: the
+  // only lock taken here, after the queue row this tick already holds.
+  // Refused: nothing is claimed or sent, the mailbox's gap is untouched, and
+  // the lead stays pending for the next build.
+  const claim = lead.currentStep === 0
+    ? await db.transaction(async (tx) => {
+      const allowance = await newLeadAllowance(tx, { personId: lead.personId, now });
+      if (!allowance.ok) return { refused: allowance.reason };
+      const [row] = await tx.insert(outreachEmails).values(claimRow).onConflictDoNothing(claimTarget).returning();
+      return { row };
     })
-    .onConflictDoNothing({ target: [outreachEmails.leadId, outreachEmails.stepNumber] })
-    .returning();
+    : { row: (await db.insert(outreachEmails).values(claimRow).onConflictDoNothing(claimTarget).returning())[0] };
+  if ("refused" in claim) {
+    console.log(`[outreach/scheduler] the first email to lead ${lead.id} waits: ${claim.refused}`);
+    result.skippedDailyLeadLimit += 1;
+    return;
+  }
+  const emailRow = claim.row;
   if (!emailRow) {
     result.skippedAlreadyClaimed += 1;
     return;

@@ -40,6 +40,17 @@ describe("the compact line for each report", () => {
     expect(line?.note).toBe("WhatsApp not started: no number connected");
   });
 
+  test("outreach started whose emails are not prepared yet: still started, in warning tone, with the launch note", () => {
+    const note = "Its emails are not prepared for sending yet (lock timeout); they are prepared again automatically.";
+    const line = compactEvent({ toolResult: { data: { event: { kind: "outreach_started", runId: "r", ok: true, automatic: true, launches: [{ channel: "email", added: 4, skipped: 0, problem: null, note }] } } } });
+    expect(line).toMatchObject({ title: "Outreach started · Automatic replies", tone: "warning", figures: [{ label: "Email", value: "4" }] });
+    expect(line?.note).toBe(`Email: ${note}`);
+    const both = compactEvent({ toolResult: { data: { event: { kind: "outreach_started", runId: "r", ok: true, automatic: false, launches: [{ channel: "email", added: 4, skipped: 0, problem: null, note }, { channel: "whatsapp", added: 0, skipped: 2, problem: "no number connected" }] } } } });
+    expect(both?.note).toBe(`Email: ${note}; WhatsApp not started: no number connected`);
+    // Without a note or a problem it says when messages go out, without sending hours.
+    expect(compactEvent({ toolResult: { data: { event: { kind: "outreach_started", runId: "r", ok: true, automatic: false, launches: [{ channel: "email", added: 4, skipped: 0, problem: null }] } } } })).toMatchObject({ tone: "good", note: "Messages go out as each sender's limits and gaps allow." });
+  });
+
   test("the research continuing: leads of target, spend of cap, time left", () => {
     expect(compactEvent({ toolResult: { data: { event: { kind: "continuation", n: 2, leads: 7, target: 20, spentUsd: 1.234, capUsd: 5, minutesLeft: 95.4 } } } })?.figures).toEqual([
       { label: "leads", value: "7 of 20" },
