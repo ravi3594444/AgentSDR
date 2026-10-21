@@ -1,7 +1,11 @@
 /**
- * Read the recorded reply failure. --probe makes ONE AI request with the
- * worker's decision schema and a synthetic greeting; it never sends a chat
- * message or writes to the database. Keys stay inside this process.
+ * Read the recorded reply failure. --probe asks the selected AI/ML model for
+ * a decision on a synthetic greeting the way the worker does: json_schema
+ * for a model tagged structured_output, and when that request is refused
+ * with HTTP 400 and the model is tagged tools, the one function-call
+ * fallback (structuredCompletion.ts). That is at most TWO AI requests. It
+ * never sends a chat message or writes to the database. Keys stay inside
+ * this process.
  *
  * bun scripts/diagnose-reply-agent.ts --record-id <CRM-record-UUID> [--probe]
  * Works in the production container with these four source files copied
@@ -11,7 +15,7 @@
 import { SQL } from "bun";
 import { decryptCredentialText } from "../src/lib/integrations/credential-crypto";
 import { DECISION_SCHEMA } from "../src/lib/assistant/replyAgent/decisionSchema";
-import { aimlStructuredMode } from "../src/lib/ai/aimlapi-types";
+import { aimlFunctionCallFallback, aimlStructuredMode } from "../src/lib/ai/aimlapi-types";
 
 type Body = Record<string, unknown>;
 const object = (value: unknown): Body | null => value && typeof value === "object" && !Array.isArray(value) ? value as Body : null;
@@ -45,25 +49,41 @@ export function replyProbeRequest(model: string, mode: "json_schema" | "tool_cal
   };
 }
 
-export async function probeReplyProvider(model: string, apiKey: string, capabilities: string[], fetcher: typeof fetch = fetch) {
-  const mode = aimlStructuredMode(capabilities);
-  const request = replyProbeRequest(model, mode);
+async function probeOnce(model: string, apiKey: string, mode: "json_schema" | "tool_call", fetcher: typeof fetch) {
   const response = await fetcher("https://api.aimlapi.com/v1/chat/completions", {
     method: "POST", redirect: "error",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify(request), signal: AbortSignal.timeout(30_000),
+    body: JSON.stringify(replyProbeRequest(model, mode)), signal: AbortSignal.timeout(30_000),
   });
   const body: unknown = await response.json().catch(() => ({ message: "Non-JSON provider response" }));
   const json = object(body);
   return {
-    currentModel: model, mode, capabilities, httpStatus: response.status,
+    mode, httpStatus: response.status,
     requestId: response.headers.get("x-request-id") ?? response.headers.get("request-id"),
-    request: { model, mode, schema: DECISION_SCHEMA, outputTokenLimit: 1_500 },
     // This request contains no real lead data. Preserve the complete validation
     // response rather than losing field paths behind the SDK's .message.
     validation: response.ok ? null : body,
     answer: response.ok ? json?.choices ?? null : null,
     usage: response.ok ? json?.usage ?? null : null,
+  };
+}
+
+export async function probeReplyProvider(model: string, apiKey: string, capabilities: string[], fetcher: typeof fetch = fetch) {
+  const mode = aimlStructuredMode(capabilities);
+  const functionCallFallback = aimlFunctionCallFallback(capabilities);
+  const attempts = [await probeOnce(model, apiKey, mode, fetcher)];
+  // Only a 400 on json_schema falls back, once; 401, 403, 404, 422, 429 and 5xx do not.
+  if (mode === "json_schema" && functionCallFallback && attempts[0]!.httpStatus === 400) {
+    attempts.push(await probeOnce(model, apiKey, "tool_call", fetcher));
+  }
+  const last = attempts.at(-1)!;
+  return {
+    currentModel: model, mode, functionCallFallback, capabilities,
+    request: { model, schema: DECISION_SCHEMA, outputTokenLimit: 1_500 },
+    // The last request's outcome: what the worker would go on with.
+    answeredAs: last.mode, httpStatus: last.httpStatus, requestId: last.requestId,
+    validation: last.validation, answer: last.answer, usage: last.usage,
+    attempts,
   };
 }
 
@@ -119,7 +139,7 @@ async function main() {
     if (!entry || !Array.isArray(entry.capabilities)) throw new Error("The selected model is missing from the live catalog");
     probe = await probeReplyProvider(model, apiKey, entry.capabilities);
   }
-  console.log(redactReplyDiagnostic({ recorded, probe, note: "No database changes or outreach sends. --probe makes one synthetic AI request; AI token usage may be billed." }, [apiKey, process.env.DATABASE_URL, process.env.INTEGRATION_CREDENTIALS_KEY, process.env.POSTGRES_PASSWORD]));
+  console.log(redactReplyDiagnostic({ recorded, probe, note: "No database changes or outreach sends. --probe makes at most two synthetic AI requests (json_schema, then the function-call fallback if that is refused with HTTP 400); AI token usage may be billed." }, [apiKey, process.env.DATABASE_URL, process.env.INTEGRATION_CREDENTIALS_KEY, process.env.POSTGRES_PASSWORD]));
 }
 
 if (import.meta.main) main().catch(() => {

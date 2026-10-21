@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { aimlStructuredMode, selectableAimlModels } from "./aimlapi-types";
+import { aimlFunctionCallFallback, aimlStructuredMode, selectableAimlModels } from "./aimlapi-types";
 import type { ByokSettings } from "./openrouter-types";
 import { planAiRuntime } from "./runtimePlan";
 
@@ -106,13 +106,18 @@ describe("selectableAimlModels", () => {
     });
   });
 
-  test("function calling wins over an ambiguous structured_output tag", () => {
-    // DeepSeek Chat advertises both, but its live request schema only accepts
-    // text/json_object response formats. Its function-call API is supported.
-    expect(aimlStructuredMode(["tools", "structured_output"])).toBe("tool_call");
-    expect(aimlStructuredMode(["structured_output"])).toBe("json_schema");
+  test("a model tagged structured_output is asked for strict JSON, one tagged only tools for a function call", () => {
+    expect(aimlStructuredMode(["tools", "structured_output"])).toBe("json_schema");
     // AI/ML lists every Claude model like this (17 Oct 2026).
     expect(aimlStructuredMode(["reasoning", "streaming", "tools", "vision", "web_search"])).toBe("tool_call");
+  });
+
+  test("only a json_schema model that also lists tools may fall back to a function call", () => {
+    // DeepSeek Chat's tags (21 Oct 2026): json_schema first, a function call if that is refused.
+    expect(aimlFunctionCallFallback(["file_input", "parallel_tool_calls", "streaming", "structured_output", "tools"])).toBe(true);
+    expect(aimlFunctionCallFallback(["structured_output"])).toBe(false);
+    // Already asked for a function call: nothing to fall back to.
+    expect(aimlFunctionCallFallback(["reasoning", "streaming", "tools", "vision", "web_search"])).toBe(false);
   });
 
   test("an unexpected body is an empty list, not a crash", () => {

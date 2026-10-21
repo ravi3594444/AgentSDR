@@ -34,15 +34,29 @@ export type AimlModelSummary = {
 };
 
 /**
- * Prefer the explicitly advertised function-call API. `structured_output`
- * does not distinguish JSON-object mode from strict JSON-schema mode:
- * DeepSeek Chat advertises it while its request schema rejects json_schema
- * (AI/ML docs-json, checked 21 Oct 2026). A model advertising both must use
- * tools; otherwise an ordinary greeting fails before inference with HTTP 400.
- * Schema-only models retain the existing JSON-schema path.
+ * How a model is asked for a structured answer: a strict JSON schema when
+ * AI/ML marks it `structured_output`, else one function call (`tools`).
+ * AI/ML's tags are incomplete: every Claude model lacks `structured_output`
+ * although Claude Haiku 5.5 answered strict JSON correctly on 17 Oct 2026;
+ * the function call worked for it too and is what OpenRouter uses for every
+ * model, so it is the safe way for a model only tagged `tools`.
  */
 export function aimlStructuredMode(capabilities: readonly string[]): "json_schema" | "tool_call" {
-  return capabilities.includes("structured_output") && !capabilities.includes("tools") ? "json_schema" : "tool_call";
+  return capabilities.includes("structured_output") ? "json_schema" : "tool_call";
+}
+
+/**
+ * Whether a json_schema request the model refuses with HTTP 400 may be sent
+ * once more as a function call (structuredCompletion.ts): only for a model
+ * asked for json_schema that AI/ML also tags `tools`. `structured_output`
+ * does not promise json_schema itself: DeepSeek Chat carries the tag while
+ * its published request schema allows only text and json_object response
+ * formats (AI/ML docs-json, 21 Oct 2026), so every request 400ed. Every
+ * model that accepts json_schema keeps that format; nothing is switched up
+ * front.
+ */
+export function aimlFunctionCallFallback(capabilities: readonly string[]): boolean {
+  return aimlStructuredMode(capabilities) === "json_schema" && capabilities.includes("tools");
 }
 
 /**

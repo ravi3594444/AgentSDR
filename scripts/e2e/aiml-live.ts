@@ -17,7 +17,7 @@
 import { agentReplySchema, parseAgentReply } from "@/lib/assistant/agent";
 import { assistantSystemPrompt } from "@/lib/assistant/agent.server";
 import { TOOL_NAMES } from "@/lib/assistant/tools.server";
-import { aimlStructuredMode } from "@/lib/ai/aimlapi-types";
+import { aimlFunctionCallFallback, aimlStructuredMode } from "@/lib/ai/aimlapi-types";
 import { createAimlClient, listAimlModels } from "@/lib/ai/server/aimlapi";
 import { completeStructured, type StructuredCompletionRuntime } from "@/lib/ai/server/structuredCompletion";
 
@@ -50,6 +50,7 @@ for (const modelId of models) {
     selection: { provider: modelId.split("/")[0]!, modelId },
     routing: {},
     structuredOutput: mode,
+    functionCallFallback: entry ? aimlFunctionCallFallback(entry.capabilities) : false,
     supportsPlugins: false,
     client: createAimlClient(key, 120_000) as never,
   });
@@ -68,7 +69,9 @@ for (const modelId of models) {
     const reply = parseAgentReply(result.text, TOOL_NAMES);
     const ok = reply.actions.length > 0;
     if (!ok) failures++;
-    console.log(`${ok ? "PASS" : "FAIL"}  ${modelId} (${mode}): ${reply.actions.length} actions in ${result.attempts} attempt(s), ${Math.round(performance.now() - started)} ms — ${reply.actions.map((action) => action.tool).join(", ")}`);
+    // A json_schema request refused with 400 is answered by the one function-call fallback.
+    const answeredAs = result.request.response_format ? "json_schema" : "tool_call";
+    console.log(`${ok ? "PASS" : "FAIL"}  ${modelId} (${mode}${answeredAs === mode ? "" : `, answered as ${answeredAs}`}): ${reply.actions.length} actions in ${result.attempts} attempt(s), ${Math.round(performance.now() - started)} ms — ${reply.actions.map((action) => action.tool).join(", ")}`);
   } catch (error) {
     failures++;
     console.log(`FAIL  ${modelId} (${mode}): ${error instanceof Error ? error.message.slice(0, 300) : String(error)}`);

@@ -3,7 +3,7 @@ import { describe, test } from "node:test";
 import { completeStructured, isStrictJsonSchema, type StructuredCompletionRuntime } from "./structuredCompletion";
 import { actionsProblem, agentReplySchema, nextAgentBatch, outreachRequested, parseAgentReply, type AgentReply } from "@/lib/assistant/agent";
 import { parseWriterReply, writerReplyInstructions, WRITER_REPLY_SCHEMAS } from "@/lib/assistant/writerReply";
-import { aimlStructuredMode } from "../aimlapi-types";
+import { aimlFunctionCallFallback, aimlStructuredMode } from "../aimlapi-types";
 import { DECISION_SCHEMA } from "@/lib/assistant/replyAgent/decisionSchema";
 import { parseAgentDecision } from "@/lib/assistant/replyAgent/agent";
 
@@ -47,29 +47,6 @@ const input = {
   schemaName: "submit",
 };
 const noSleep = async () => {};
-
-test("DeepSeek's catalog tags do not cause an unsupported json_schema reply request", async () => {
-  const answer = JSON.stringify({ action: "reply", reply: "Hi! How do you currently handle incoming calls?", ownerNote: null, category: "other", confidence: 0.5, reasoning: "A greeting, not buying interest." });
-  let calls = 0;
-  const runtime: StructuredCompletionRuntime = async () => ({
-    providerKey: "aimlapi", selection: { provider: "aimlapi", modelId: "deepseek/deepseek-chat" }, routing: {},
-    structuredOutput: aimlStructuredMode(["file_input", "parallel_tool_calls", "streaming", "structured_output", "tools"]),
-    supportsPlugins: false,
-    client: { chat: { completions: { create: async (payload: never) => {
-      calls++;
-      const request = payload as Record<string, unknown>;
-      // AI/ML's published model-specific request schema permits text and
-      // json_object response formats, not json_schema, despite the tag.
-      if (request.response_format) throw Object.assign(new Error("400 Validation failed: response_format.type"), { status: 400 });
-      assert.deepEqual(request.tool_choice, { type: "function", function: { name: "reply_decision" } });
-      assert.deepEqual((request.tools as Array<{ function: { parameters: unknown } }>)[0].function.parameters, DECISION_SCHEMA);
-      return { choices: [{ finish_reason: "tool_calls", message: { tool_calls: [{ type: "function", function: { name: "reply_decision", arguments: answer } }] } }] };
-    } } } },
-  });
-  const result = await completeStructured({ ...input, maxOutputTokens: 1_500, schemaName: "reply_decision", jsonSchema: DECISION_SCHEMA, accept: (text) => { parseAgentDecision(text); } }, { runtime, sleep: noSleep });
-  assert.equal(calls, 1);
-  assert.equal(parseAgentDecision(result.text).reply, "Hi! How do you currently handle incoming calls?");
-});
 
 describe("completeStructured", () => {
   test("asks for the answer as a tool call, never as a response_format", async () => {
@@ -250,6 +227,193 @@ describe("completeStructured with AI/ML API (JSON schema)", () => {
       /Web search runs through OpenRouter/,
     );
     assert.equal(requests.length, 0);
+  });
+});
+
+/**
+ * An AI/ML API model asked for json_schema. Each reply answers in the shape
+ * of the request it gets (message content for json_schema, a function call
+ * otherwise), so a test can tell which format reached the provider.
+ */
+function fallbackRuntime(replies: Array<{ status?: number; message?: string; answer?: string }>, options: {
+  functionCallFallback?: boolean;
+  providerKey?: "aimlapi" | "openrouter";
+  schemaName?: string;
+  modelId?: string;
+} = {}) {
+  const requests: Array<Record<string, unknown>> = [];
+  const runtime: StructuredCompletionRuntime = async () => ({
+    providerKey: options.providerKey ?? "aimlapi",
+    selection: { provider: options.providerKey ?? "aimlapi", modelId: options.modelId ?? "google/gemini-3.5-flash-lite" },
+    routing: {},
+    structuredOutput: "json_schema",
+    ...(options.functionCallFallback === undefined ? {} : { functionCallFallback: options.functionCallFallback }),
+    supportsPlugins: false,
+    client: { chat: { completions: { create: async (payload: never) => {
+      const request = payload as Record<string, unknown>;
+      requests.push(request);
+      const reply = replies.shift();
+      if (!reply) throw new Error("scripted client ran out of replies");
+      if (reply.status) throw Object.assign(new Error(reply.message ?? `${reply.status} status code`), { status: reply.status });
+      if (request.response_format) return { choices: [{ finish_reason: "stop", message: { content: reply.answer ?? null } }] };
+      return { choices: [{ finish_reason: "tool_calls", message: { content: null, tool_calls: [{ type: "function", function: { name: options.schemaName ?? "submit", arguments: reply.answer ?? "" } }] } }] };
+    } } } },
+  });
+  return { runtime, requests };
+}
+
+describe("AI/ML API: one function-call retry when a json_schema request is refused with HTTP 400", () => {
+  const strictInput = {
+    ...input,
+    jsonSchema: { type: "object", additionalProperties: false, required: ["category"], properties: { category: { type: "string" } } },
+  };
+  const format = (request: Record<string, unknown>) => (request.response_format ? "json_schema" : request.tools ? "tool_call" : "none");
+  const status = (expected: number) => (error: unknown) => (error as { status?: unknown }).status === expected;
+
+  test("a model that accepts json_schema is asked exactly as before, tools or not", async () => {
+    const { runtime, requests } = fallbackRuntime([{ answer: '{"category":"a"}' }], { functionCallFallback: true });
+    const result = await completeStructured(strictInput, { runtime, sleep: noSleep });
+    assert.equal(requests.length, 1);
+    assert.deepEqual(requests[0].response_format, { type: "json_schema", json_schema: { name: "submit", strict: true, schema: strictInput.jsonSchema } });
+    assert.equal(requests[0].tools, undefined);
+    assert.equal(requests[0].tool_choice, undefined);
+    assert.equal(result.text, '{"category":"a"}');
+  });
+
+  test("a 400 on json_schema is retried once as a forced function call with the same model, input and schema", async () => {
+    const { runtime, requests } = fallbackRuntime([
+      { status: 400, message: "400 Validation failed: response_format.type" },
+      { answer: '{"category":"a"}' },
+    ], { functionCallFallback: true });
+    const accepted: string[] = [];
+    let retries = 0;
+    const result = await completeStructured({ ...strictInput, accept: (text) => { accepted.push(text); }, onRetry: () => { retries++; } }, { runtime, sleep: noSleep });
+    assert.equal(requests.length, 2);
+    const [first, second] = requests;
+    assert.equal(format(first), "json_schema");
+    assert.equal(second.model, first.model);
+    assert.equal(second.response_format, undefined);
+    assert.deepEqual((second.tools as Array<{ function: { name: string; parameters: unknown } }>)[0].function.parameters, strictInput.jsonSchema);
+    assert.deepEqual(second.tool_choice, { type: "function", function: { name: "submit" } });
+    const messages = second.messages as Array<{ role: string; content: string }>;
+    assert.ok(messages.find((message) => message.role === "system")!.content.startsWith(strictInput.systemPrompt));
+    assert.equal(messages.find((message) => message.role === "user")!.content, strictInput.userPrompt);
+    assert.deepEqual(accepted, ['{"category":"a"}']);
+    assert.equal(result.text, '{"category":"a"}');
+    assert.equal(result.request, second);
+    // The refused request never produced an answer: no "asking again" note, no backoff.
+    assert.equal(retries, 0);
+  });
+
+  test("a model that does not list tools keeps the 400", async () => {
+    for (const functionCallFallback of [false, undefined]) {
+      const { runtime, requests } = fallbackRuntime([{ status: 400 }, { answer: '{"category":"a"}' }], { functionCallFallback });
+      await assert.rejects(completeStructured(strictInput, { runtime, sleep: noSleep }), status(400));
+      assert.equal(requests.length, 1);
+    }
+  });
+
+  test("authentication, permission, missing-model and unprocessable errors never fall back", async () => {
+    for (const code of [401, 403, 404, 422]) {
+      const { runtime, requests } = fallbackRuntime([{ status: code, message: `${code} refused` }, { answer: '{"category":"a"}' }], { functionCallFallback: true });
+      await assert.rejects(completeStructured(strictInput, { runtime, sleep: noSleep }), { message: `${code} refused`, status: code });
+      assert.equal(requests.length, 1);
+    }
+  });
+
+  test("429 and 5xx keep their retries, every one of them in json_schema", async () => {
+    for (const code of [429, 500, 503]) {
+      const recovered = fallbackRuntime([{ status: code }, { answer: '{"category":"a"}' }], { functionCallFallback: true });
+      assert.equal((await completeStructured(strictInput, { runtime: recovered.runtime, sleep: noSleep })).attempts, 2);
+      assert.deepEqual(recovered.requests.map(format), ["json_schema", "json_schema"]);
+
+      const exhausted = fallbackRuntime([{ status: code }, { status: code }, { status: code }], { functionCallFallback: true });
+      await assert.rejects(completeStructured(strictInput, { runtime: exhausted.runtime, sleep: noSleep }), /submit failed after 3 attempts/);
+      assert.deepEqual(exhausted.requests.map(format), ["json_schema", "json_schema", "json_schema"]);
+    }
+  });
+
+  test("a function-call retry that is refused too ends it, with both reasons and the HTTP status", async () => {
+    const { runtime, requests } = fallbackRuntime([
+      { status: 400, message: "400 Validation failed: response_format.type" },
+      { status: 400, message: "400 Validation failed: tools" },
+      { answer: '{"category":"a"}' },
+    ], { functionCallFallback: true });
+    const error = await completeStructured(strictInput, { runtime, sleep: noSleep }).then(() => null, (thrown: unknown) => thrown);
+    assert.ok(error instanceof Error);
+    assert.equal((error as { status?: unknown }).status, 400);
+    assert.equal(((error as { cause?: { status?: unknown } }).cause)?.status, 400);
+    assert.match(error.message, /json_schema request was rejected \(400 Validation failed: response_format\.type\)/);
+    assert.match(error.message, /function-call retry also failed: 400 Validation failed: tools/);
+    assert.deepEqual(requests.map(format), ["json_schema", "tool_call"]);
+  });
+
+  test("a rejected function-call answer is retried as a function call within the usual bound, never json_schema again", async () => {
+    const accept = (text: string) => { if (JSON.parse(text).category !== "a") throw new Error("category must be a"); };
+    const recovered = fallbackRuntime([{ status: 400 }, { answer: '{"category":"z"}' }, { answer: '{"category":"a"}' }], { functionCallFallback: true });
+    const result = await completeStructured({ ...strictInput, accept }, { runtime: recovered.runtime, sleep: noSleep });
+    assert.equal(result.text, '{"category":"a"}');
+    assert.deepEqual(recovered.requests.map(format), ["json_schema", "tool_call", "tool_call"]);
+    const repair = (recovered.requests[2].messages as Array<{ role: string; content: string }>).find((message) => message.role === "user")!.content;
+    assert.match(repair, /Your previous answer was rejected: category must be a/);
+
+    // maxAttempts answers at most, plus the one refused json_schema request.
+    const exhausted = fallbackRuntime([{ status: 400 }, { answer: '{"category":"z"}' }, { answer: '{"category":"z"}' }, { status: 400 }, { answer: '{"category":"a"}' }], { functionCallFallback: true });
+    await assert.rejects(
+      completeStructured({ ...strictInput, accept, maxAttempts: 2 }, { runtime: exhausted.runtime, sleep: noSleep }),
+      /submit failed after 2 attempts.*category must be a/,
+    );
+    assert.deepEqual(exhausted.requests.map(format), ["json_schema", "tool_call", "tool_call"]);
+  });
+
+  test("a later 400 after the switch is final: there is no switching back", async () => {
+    const accept = (text: string) => { if (JSON.parse(text).category !== "a") throw new Error("category must be a"); };
+    const { runtime, requests } = fallbackRuntime([{ status: 400 }, { answer: '{"category":"z"}' }, { status: 400, message: "400 context too long" }, { answer: '{"category":"a"}' }], { functionCallFallback: true });
+    await assert.rejects(completeStructured({ ...strictInput, accept }, { runtime, sleep: noSleep }), status(400));
+    assert.deepEqual(requests.map(format), ["json_schema", "tool_call", "tool_call"]);
+  });
+
+  test("OpenRouter never falls back: its 400 ends the call as before", async () => {
+    const { runtime, requests } = scripted([{ throws: Object.assign(new Error("400 Provider rejected"), { status: 400 }) }, { toolArgs: '{"category":"a"}' }]);
+    await assert.rejects(completeStructured(input, { runtime, sleep: noSleep }), { message: "400 Provider rejected", status: 400 });
+    assert.equal(requests.length, 1);
+    assert.equal((requests[0] as { tool_choice: unknown }).tool_choice, "auto");
+
+    // Even a runtime that claimed the fallback is ignored outside AI/ML API.
+    const claimed = fallbackRuntime([{ status: 400 }, { answer: '{"category":"a"}' }], { functionCallFallback: true, providerKey: "openrouter" });
+    await assert.rejects(completeStructured(strictInput, { runtime: claimed.runtime, sleep: noSleep }), status(400));
+    assert.equal(claimed.requests.length, 1);
+  });
+
+  test("DeepSeek Chat: the reply worker's decision comes back through the function call", async () => {
+    // AI/ML catalog tags for deepseek/deepseek-chat on 21 Oct 2026. Its
+    // published request schema allows text and json_object response formats
+    // only, so the json_schema request is refused before inference.
+    const capabilities = ["file_input", "parallel_tool_calls", "streaming", "structured_output", "tools"];
+    const answer = JSON.stringify({ action: "reply", reply: "Hi! How do you currently handle incoming calls?", ownerNote: null, category: "other", confidence: 0.5, reasoning: "A greeting, not buying interest." });
+    const requests: Array<Record<string, unknown>> = [];
+    const runtime: StructuredCompletionRuntime = async () => ({
+      providerKey: "aimlapi", selection: { provider: "aimlapi", modelId: "deepseek/deepseek-chat" }, routing: {},
+      structuredOutput: aimlStructuredMode(capabilities),
+      functionCallFallback: aimlFunctionCallFallback(capabilities),
+      supportsPlugins: false,
+      client: { chat: { completions: { create: async (payload: never) => {
+        const request = payload as Record<string, unknown>;
+        requests.push(request);
+        if (request.response_format) throw Object.assign(new Error("400 Validation failed"), { status: 400 });
+        assert.deepEqual(request.tool_choice, { type: "function", function: { name: "reply_decision" } });
+        assert.deepEqual((request.tools as Array<{ function: { parameters: unknown } }>)[0].function.parameters, DECISION_SCHEMA);
+        return { choices: [{ finish_reason: "tool_calls", message: { tool_calls: [{ type: "function", function: { name: "reply_decision", arguments: answer } }] } }] };
+      } } } },
+    });
+    const result = await completeStructured({
+      ...input, maxOutputTokens: 1_500, maxAttempts: 2, schemaName: "reply_decision", jsonSchema: DECISION_SCHEMA,
+      accept: (text) => { parseAgentDecision(text); },
+    }, { runtime, sleep: noSleep });
+    assert.deepEqual(requests.map(format), ["json_schema", "tool_call"]);
+    assert.equal(requests[1].model, "deepseek/deepseek-chat");
+    assert.equal(result.model, "deepseek/deepseek-chat");
+    assert.equal(parseAgentDecision(result.text).reply, "Hi! How do you currently handle incoming calls?");
   });
 });
 
