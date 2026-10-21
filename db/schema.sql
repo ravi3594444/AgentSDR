@@ -2798,7 +2798,7 @@ CREATE TABLE public.outreach_mailboxes (
     signature_html text,
     created_at timestamp with time zone DEFAULT now(),
     updated_at timestamp with time zone DEFAULT now(),
-    working_hours jsonb DEFAULT '{"days": {"friday": {"to": "18:00", "from": "09:00", "enabled": true}, "monday": {"to": "18:00", "from": "09:00", "enabled": true}, "sunday": {"to": "18:00", "from": "09:00", "enabled": false}, "tuesday": {"to": "18:00", "from": "09:00", "enabled": true}, "saturday": {"to": "18:00", "from": "09:00", "enabled": false}, "thursday": {"to": "18:00", "from": "09:00", "enabled": true}, "wednesday": {"to": "18:00", "from": "09:00", "enabled": true}}, "timezone": "America/New_York"}'::jsonb NOT NULL,
+    working_hours jsonb DEFAULT '{"days": {"friday": {"to": "00:00", "from": "00:00", "enabled": true}, "monday": {"to": "00:00", "from": "00:00", "enabled": true}, "sunday": {"to": "00:00", "from": "00:00", "enabled": true}, "tuesday": {"to": "00:00", "from": "00:00", "enabled": true}, "saturday": {"to": "00:00", "from": "00:00", "enabled": true}, "thursday": {"to": "00:00", "from": "00:00", "enabled": true}, "wednesday": {"to": "00:00", "from": "00:00", "enabled": true}}, "timezone": "UTC"}'::jsonb NOT NULL,
     organization_id uuid NOT NULL,
     provider text DEFAULT 'google'::text NOT NULL,
     unipile_account_id text,
