@@ -8,6 +8,7 @@ import * as Dropdown from "@/components/alignui/dropdown";
 import * as Table from "@/components/alignui/table";
 import * as Tooltip from "@/components/alignui/tooltip";
 import { ContactAvatar } from "@/components/crm/ContactAvatar";
+import { companyName as savedCompanyName, leadLabel } from "@/lib/leads/displayName";
 import { cn } from "@/utils/cn";
 import { Bar, Blob, CampaignSummary, CompanyFavicon, CrmSummary, Empty, ReachIcons, stop, TwoLine } from "./LeadCells";
 import { cellClass, fixedTableStyle, SortableHead } from "./SortableHead";
@@ -35,8 +36,13 @@ function PersonTableRow({ row }: { row: PersonRow }) {
   const router = useRouter();
   const { person, company, campaigns, crm } = row;
   const href = crm ? `/crm/records/${crm.recordId}` : null;
-  const name = person.fullName || "Unnamed person";
+  // Their own name; else the business they were saved under, never an invented person (displayName.ts).
+  const label = leadLabel(person, company);
+  const name = label.name;
+  const secondary = label.kind === "person" ? person.title : label.secondary;
   const companyName = company ? company.name || company.domain : null;
+  // No companies row (a business without its own website): the name the save path kept.
+  const keptCompany = company ? null : savedCompanyName(person, null);
   return (
     <Table.Row
       tabIndex={href ? 0 : undefined}
@@ -47,11 +53,11 @@ function PersonTableRow({ row }: { row: PersonRow }) {
     >
       <Table.Cell className={rowCell}>
         <div className="flex min-w-0 items-center gap-3">
-          <ContactAvatar src={person.profilePictureUrl} fallback={initials(person.fullName)} className="size-8 bg-bg-weak-50 text-label-xs text-text-sub-600 ring-1 ring-inset ring-stroke-soft-200" />
+          <ContactAvatar src={person.profilePictureUrl} fallback={initials(label.kind === "unknown" ? null : name)} className="size-8 bg-bg-weak-50 text-label-xs text-text-sub-600 ring-1 ring-inset ring-stroke-soft-200" />
           <TwoLine
             primaryTitle={name}
             primary={href ? <Link href={href} onClick={stop} tabIndex={-1} className="hover:underline hover:decoration-stroke-sub-300 hover:underline-offset-2">{name}</Link> : name}
-            secondary={person.title}
+            secondary={secondary}
           />
         </div>
       </Table.Cell>
@@ -61,7 +67,7 @@ function PersonTableRow({ row }: { row: PersonRow }) {
             <CompanyFavicon domain={company.domain} className="size-7" />
             <TwoLine primary={companyName} primaryTitle={companyName ?? undefined} secondary={company.name && company.name !== company.domain ? company.domain : null} />
           </div>
-        ) : <Empty label="No company" />}
+        ) : keptCompany ? <TwoLine primary={keptCompany} primaryTitle={keptCompany} /> : <Empty label="No company" />}
       </Table.Cell>
       <Table.Cell className={rowCell}><ReachIcons person={person} /></Table.Cell>
       <Table.Cell className={rowCell}><CampaignSummary campaigns={campaigns} /></Table.Cell>

@@ -1,12 +1,12 @@
 import "server-only";
 
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, notInArray, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { authContextErrorResponse, can, requireOrgContext, type OrgContext } from "@/lib/auth/context";
 import { crmRequestErrorResponse, requireCrmMutationContext } from "@/lib/crm/http";
 import { inOrg, runInOrganization } from "@/lib/tenancy/scope";
 import { users } from "@/lib/auth/schema";
-import { assistantJobs, outreachRuns, ownerDecisions, type OutreachPlan } from "./schema";
+import { assistantJobs, outreachRuns, ownerDecisions, type AssistantJobKind, type OutreachPlan } from "./schema";
 import type { RequestApproval } from "./requestApproval";
 import { coveringApproval, runAuthorization, type RunAuthorization } from "./runEvidence";
 import { runLeads } from "./runLeads.server";
@@ -41,30 +41,67 @@ export function canManageAutopilot(ctx: OrgContext): boolean {
   return can(ctx, { aiSettings: ["manage"] });
 }
 
+const JOB_COLUMNS = {
+  id: assistantJobs.id,
+  kind: assistantJobs.kind,
+  status: assistantJobs.status,
+  stage: assistantJobs.stage,
+  progress: assistantJobs.progress,
+  result: assistantJobs.result,
+  error: assistantJobs.error,
+  audienceId: assistantJobs.audienceId,
+  runId: assistantJobs.runId,
+  createdAt: assistantJobs.createdAt,
+};
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** Jobs that share a list without being its search: a request's driver and the job that starts a plan. */
+const NOT_SEARCHES: AssistantJobKind[] = ["objective", "outreach_start"];
+
+/** Ids in a message's data: its job (a search's card) and the lists a final report covers. */
+function referencedIds(messages: readonly { toolResult: unknown }[]): { jobIds: string[]; audienceIds: string[] } {
+  const jobIds = new Set<string>();
+  const audienceIds = new Set<string>();
+  for (const message of messages) {
+    const data = (message.toolResult as { data?: { jobId?: unknown; audienceIds?: unknown } } | null)?.data;
+    if (typeof data?.jobId === "string" && UUID.test(data.jobId)) jobIds.add(data.jobId);
+    if (Array.isArray(data?.audienceIds)) for (const id of data.audienceIds) if (typeof id === "string" && UUID.test(id)) audienceIds.add(id);
+  }
+  return { jobIds: [...jobIds], audienceIds: [...audienceIds] };
+}
+
 /** Everything the chat page shows for one thread; `withSetup` adds the (slower) connection status. */
 export async function assistantState(threadId: string | null, ctx: OrgContext, withSetup: boolean) {
   const thread = await resolveThread(threadId, ctx.userId);
-  const [messages, threads, busy, timeZone, jobs] = await Promise.all([
+  const [messages, threads, busy, timeZone, newest] = await Promise.all([
     listMessages(thread.id),
     listThreads(20),
     threadBusy(thread.id),
     // The one zone every time in the chat is written in, on the server and in the browser alike (chatTime.ts).
     organizationTimeZone(),
-    db.select({
-      id: assistantJobs.id,
-      kind: assistantJobs.kind,
-      status: assistantJobs.status,
-      stage: assistantJobs.stage,
-      progress: assistantJobs.progress,
-      result: assistantJobs.result,
-      error: assistantJobs.error,
-      audienceId: assistantJobs.audienceId,
-      runId: assistantJobs.runId,
-      createdAt: assistantJobs.createdAt,
-    }).from(assistantJobs)
+    db.select(JOB_COLUMNS).from(assistantJobs)
       .where(and(inOrg(assistantJobs), eq(assistantJobs.threadId, thread.id)))
       .orderBy(desc(assistantJobs.createdAt)).limit(20),
   ]);
+  // Older jobs the messages still name, so a long chat keeps every search's card and its list after a reload,
+  // and a final report's lists their counts: this thread's own, by id or by the list they saved into.
+  const referenced = referencedIds(messages);
+  const missingJobs = referenced.jobIds.filter((id) => !newest.some((job) => job.id === id));
+  const missingLists = referenced.audienceIds.filter((id) => !newest.some((job) => job.audienceId === id && !NOT_SEARCHES.includes(job.kind)));
+  const older = missingJobs.length || missingLists.length
+    ? await db.select(JOB_COLUMNS).from(assistantJobs)
+      .where(and(
+        inOrg(assistantJobs),
+        eq(assistantJobs.threadId, thread.id),
+        newest.length ? notInArray(assistantJobs.id, newest.map((job) => job.id)) : undefined,
+        or(
+          missingJobs.length ? inArray(assistantJobs.id, missingJobs) : undefined,
+          missingLists.length ? and(inArray(assistantJobs.audienceId, missingLists), notInArray(assistantJobs.kind, NOT_SEARCHES)) : undefined,
+        ),
+      ))
+      .orderBy(desc(assistantJobs.createdAt)).limit(300)
+    : [];
+  const jobs = [...newest, ...older];
   const runIds = messages.flatMap((message) => {
     const data = (message.toolResult as { data?: { runId?: unknown } } | null)?.data;
     return typeof data?.runId === "string" ? [data.runId] : [];

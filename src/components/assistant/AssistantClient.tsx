@@ -37,11 +37,13 @@ import type { RunAuthorization, SenderStatus } from "@/lib/assistant/runEvidence
 import { AUTOPILOT_LIMITS } from "@/lib/crm/autopilot";
 import { planCounts, planOutcome } from "@/lib/activity/status";
 import { displayTime } from "@/lib/assistant/displayTime";
-import { formatChatDate, formatChatDateTime, formatChatTime } from "@/lib/assistant/chatTime";
+import { formatChatDateTime, formatChatTime } from "@/lib/assistant/chatTime";
 import * as Button from "@/components/alignui/button";
 import NeedsYouList from "@/components/assistant/NeedsYouList";
 import { RequestBar, RequestPanel, useThreadRequest } from "@/components/assistant/RequestPanel";
 import { EventRow } from "@/components/assistant/EventRow";
+import { hostOf, ProspectsList } from "@/components/assistant/ProspectsList";
+import { reportAudiences, reportLinks } from "@/lib/assistant/leadLists";
 import { useChatScroll } from "./useChatScroll";
 import { cn } from "@/utils/cn";
 
@@ -191,14 +193,6 @@ function Card({ title, status, children }: { title: string; status: Message["sta
   );
 }
 
-function hostOf(url: string) {
-  try {
-    return new URL(url).hostname.replace(/^www\./, "");
-  } catch {
-    return url;
-  }
-}
-
 type AudienceData = {
   name?: string;
   total?: number;
@@ -243,145 +237,19 @@ function AudienceSummary({ audience }: { audience: AudienceData }) {
   );
 }
 
-type ProspectSignal = {
-  kind: "need" | "engagement" | "observation";
-  text: string;
-  sourceUrl: string | null;
-  source: string;
-  at: string | null;
-  topic?: string;
-  observedAt?: string;
-  uncertainty?: string;
-  relevance?: string | null;
-  person?: { name: string; role: string; email: string | null; linkedin: string | null };
-};
-type ProspectView = {
-  personId: string | null;
-  name: string;
-  status: "potential_match" | "inquired" | "replied" | "interested" | "excluded";
-  statusLabel: string;
-  excludedReason: string | null;
-  source: { label: string; url: string | null };
-  foundAt: string;
-  matchReason: string;
-  routes: { channel: string; value: string; sourceUrl: string | null; note: string }[];
-  needEvidence: ProspectSignal[];
-  engagement: ProspectSignal[];
-  observations: ProspectSignal[];
-  people: ProspectSignal[];
-  website: { checkedAt: string; pages: string[]; notFound: string[] } | null;
-  location: string;
-  budget: string;
-};
-type ProspectsPayload = { counts: Record<string, number>; prospects: ProspectView[] };
-
-/** What the lead's own website showed, kept apart from need: each line with its page, and what the pages read did not show. */
-function WebsiteFindings({ prospect, website }: { prospect: ProspectView; website: NonNullable<ProspectView["website"]> }) {
-  const timeZone = useContext(DisplayTimeZone);
-  const pages = `${website.pages.length} page${website.pages.length === 1 ? "" : "s"}`;
+/** The lead lists a request's final report covers, one per search, with that search's contactable count when it is loaded. */
+function ReportLeadLists({ lists, timeZone }: { lists: ReturnType<typeof reportAudiences>; timeZone: string }) {
   return (
-    <div className="mt-1 border-t border-stroke-soft-200 pt-1">
-      <p className="text-text-soft-400">Their website, read {formatChatDate(website.checkedAt, timeZone)} ({pages}): a possible fit for your offer, not a sign they want to buy.</p>
-      {prospect.observations.map((signal, index) => (
-        <p key={`observation-${index}`} className="mt-0.5 break-words text-text-sub-600">
-          {signal.text}{" "}
-          <span className="text-text-soft-400">
-            — {signal.sourceUrl ? <a href={signal.sourceUrl} target="_blank" rel="noopener noreferrer" className="hover:underline">{hostOf(signal.sourceUrl)}</a> : signal.source}
-            {signal.relevance ? ` · ${signal.relevance}` : ""}{signal.uncertainty ? ` · ${signal.uncertainty}` : ""}
-          </span>
-        </p>
-      ))}
-      {prospect.people.length > 0 && (
-        <p className="mt-0.5 break-words text-text-sub-600">
-          Named on their website:{" "}
-          {prospect.people.map((signal, index) => (
-            <span key={`person-${index}`}>
-              {index > 0 ? "; " : ""}
-              {signal.sourceUrl ? <a href={signal.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-primary-base hover:underline">{signal.person?.name ?? signal.text}</a> : signal.person?.name ?? signal.text}
-              {signal.person ? ` (${signal.person.role}${signal.person.email ? `, ${signal.person.email}` : ""})` : ""}
-            </span>
-          ))}
-        </p>
-      )}
-      {website.notFound.length > 0 && <p className="mt-0.5 text-text-soft-400">Not found on the {pages} read (which does not mean it does not exist): {website.notFound.join(", ")}.</p>}
-    </div>
-  );
-}
-
-const PROSPECT_COLOR: Record<ProspectView["status"], "gray" | "green" | "blue" | "orange"> = { potential_match: "gray", inquired: "blue", replied: "orange", interested: "green", excluded: "gray" };
-
-/**
- * Every lead of a list before outreach: where and when it was found, why it
- * matched, how it can be reached (each detail with its page), only the
- * lead's own words as evidence of a need, and apart from them what its own
- * website showed (a possible fit, never interest). Loaded when opened.
- */
-function ProspectsList({ audienceId }: { audienceId: string }) {
-  const timeZone = useContext(DisplayTimeZone);
-  const [data, setData] = useState<ProspectsPayload | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  async function load() {
-    if (data || loading) return;
-    setLoading(true);
-    try {
-      setData(await readJson<ProspectsPayload>(await fetch(`/api/assistant/audiences/${audienceId}/prospects`, { cache: "no-store" })));
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setLoading(false);
-    }
-  }
-  const counts = data?.counts;
-  return (
-    <details className="text-paragraph-xs" onToggle={(event) => { if ((event.target as HTMLDetailsElement).open) void load(); }}>
-      <summary className="cursor-pointer text-text-strong-950">Review the leads: source, why they match, evidence</summary>
-      {loading && <p className="mt-1.5 text-text-soft-400">Loading…</p>}
-      {error && <p role="alert" className="mt-1.5 text-error-base">{error}</p>}
-      {counts && (
-        <p className="mt-1.5 text-text-sub-600">
-          {counts.potential_match ?? 0} potential match{counts.potential_match === 1 ? "" : "es"} · {counts.inquired ?? 0} inquired · {counts.replied ?? 0} replied · {counts.interested ?? 0} interested · {counts.withNeedEvidence ?? 0} with their own words showing a need. A potential match is not an interested customer.
-        </p>
-      )}
-      {data && (
-        <ul className="mt-1.5 max-h-96 space-y-1.5 overflow-y-auto">
-          {data.prospects.map((prospect, index) => (
-            <li key={`${prospect.personId ?? prospect.name}-${index}`} className="rounded-lg bg-bg-weak-50 px-2.5 py-2">
-              <div className="flex flex-wrap items-center gap-2">
-                <p className="min-w-0 flex-1 truncate text-label-xs text-text-strong-950">{prospect.name}</p>
-                <Badge.Root variant="lighter" size="small" color={PROSPECT_COLOR[prospect.status]}>{prospect.statusLabel}</Badge.Root>
-              </div>
-              <p className="mt-0.5 text-text-sub-600">
-                {prospect.source.url ? <a href={prospect.source.url} target="_blank" rel="noopener noreferrer" className="text-primary-base hover:underline">{prospect.source.label} ({hostOf(prospect.source.url)})</a> : prospect.source.label}
-                {" · "}{formatChatDate(prospect.foundAt, timeZone)}
-              </p>
-              <p className="mt-0.5 text-text-sub-600">Why: {prospect.matchReason}</p>
-              {prospect.excludedReason && <p className="mt-0.5 text-text-sub-600">Left out: {prospect.excludedReason}</p>}
-              {prospect.routes.length > 0 ? prospect.routes.map((route) => (
-                <p key={`${route.channel}:${route.value}`} className="mt-0.5 truncate text-text-sub-600">
-                  {route.channel}: {route.value} · {route.sourceUrl ? <a href={route.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-primary-base hover:underline">{route.note} ({hostOf(route.sourceUrl)})</a> : route.note}
-                </p>
-              )) : <p className="mt-0.5 text-text-sub-600">Contact: Unknown</p>}
-              {prospect.needEvidence.map((signal, signalIndex) => (
-                <p key={`need-${signalIndex}`} className="mt-0.5 border-l-2 border-stroke-sub-300 pl-2 text-text-sub-600">
-                  “{signal.text}” <span className="text-text-soft-400">— {signal.sourceUrl ? <a href={signal.sourceUrl} target="_blank" rel="noopener noreferrer" className="hover:underline">{signal.source}</a> : signal.source}{signal.at ? `, ${formatChatDate(signal.at, timeZone)}` : ""}</span>
-                </p>
-              ))}
-              {prospect.engagement.length > 0 && <p className="mt-0.5 text-text-soft-400">{prospect.engagement.length} like{prospect.engagement.length === 1 ? "" : "s"}, follow{prospect.engagement.length === 1 ? "" : "s"} or generic comment{prospect.engagement.length === 1 ? "" : "s"} (not counted as interest)</p>}
-              {!prospect.needEvidence.length && prospect.status === "potential_match" && <p className="mt-0.5 text-text-soft-400">No evidence of a need found.</p>}
-              {prospect.website && <WebsiteFindings prospect={prospect} website={prospect.website} />}
-              <p className="mt-0.5 text-text-soft-400">Location: {prospect.location} · Budget: {prospect.budget}</p>
-            </li>
-          ))}
-        </ul>
-      )}
-    </details>
+    <section aria-label="Lead lists of this request" className="w-full max-w-2xl space-y-2 rounded-lg px-3 py-2.5 ring-1 ring-inset ring-stroke-soft-200">
+      <p className="text-label-xs text-text-sub-600">{lists.length === 1 ? "The lead list of this request" : `The ${lists.length} lead lists of this request`}</p>
+      {lists.map((list) => <ProspectsList key={list.audienceId} audienceId={list.audienceId} count={list.count} title={list.title} timeZone={timeZone} />)}
+    </section>
   );
 }
 
 function DiscoveryCard({ message, job }: { message: Message; job: Job | undefined }) {
   const timeZone = useContext(DisplayTimeZone);
-  const data = message.toolResult?.data as { phrase?: string; keywords?: string } | undefined;
+  const data = message.toolResult?.data as { phrase?: string; keywords?: string; audienceId?: unknown } | undefined;
   const linkedin = message.tool === "find_linkedin_leads";
   const instagram = job?.kind === "apify_instagram";
   // Facebook, LinkedIn or Instagram search through Apify (find_social_leads).
@@ -389,7 +257,16 @@ function DiscoveryCard({ message, job }: { message: Message; job: Job | undefine
   // A search handed to website search (no Google Maps or Apify available) shows as one.
   const web = message.tool === "find_customers_on_web" || job?.kind === "web_discovery";
   const viaApify = (job?.progress as Record<string, unknown> | undefined)?.provider === "Apify" || (job?.result as Record<string, unknown> | null | undefined)?.provider === "apify";
-  if (message.status !== "ok" || !job) return <Card title={TOOL_TITLE[message.tool ?? "find_leads"] ?? "Lead search"} status={message.status}><p>{message.toolResult?.display ?? message.content}</p></Card>;
+  if (message.status !== "ok" || !job) {
+    // A search whose job is gone still opens the list it saved into, without a count.
+    const audienceId = message.status === "ok" && typeof data?.audienceId === "string" ? data.audienceId : null;
+    return (
+      <Card title={TOOL_TITLE[message.tool ?? "find_leads"] ?? "Lead search"} status={message.status}>
+        <p>{message.toolResult?.display ?? message.content}</p>
+        {audienceId && <ProspectsList audienceId={audienceId} timeZone={timeZone} />}
+      </Card>
+    );
+  }
   const progress = job.progress as Record<string, number | string>;
   // The source and provider the server recorded, e.g. "Google Maps through the built-in scraper".
   const source = typeof progress.source === "string" ? progress.source : null;
@@ -426,7 +303,7 @@ function DiscoveryCard({ message, job }: { message: Message; job: Job | undefine
       ) : (
         <p className="text-error-base">{job.error ?? "The search failed."}</p>
       )}
-      {job.status === "succeeded" && job.audienceId && <ProspectsList audienceId={job.audienceId} />}
+      {job.status === "succeeded" && job.audienceId && <ProspectsList audienceId={job.audienceId} count={typeof result?.eligible === "number" ? result.eligible : null} excluded={typeof result?.excluded === "number" ? result.excluded : null} timeZone={timeZone} />}
     </Card>
   );
 }
@@ -1046,6 +923,7 @@ function ActivityRow({ message }: { message: Message }) {
 }
 
 function ToolMessage({ message, jobs, runs, decisions, canManageAutopilot, lastReplyMode, onChanged }: { message: Message; jobs: Job[]; runs: Record<string, Run>; decisions: Record<string, DecisionState>; canManageAutopilot: boolean; lastReplyMode: "automatic" | "review" | null; onChanged: () => void }) {
+  const timeZone = useContext(DisplayTimeZone);
   const data = message.toolResult?.data as Record<string, unknown> | undefined;
   if (message.tool === "owner_decision") return <DecisionCard message={message} state={decisions[String(data?.decisionId ?? "")]} onChanged={onChanged} />;
   if (message.tool === "daily_summary") {
@@ -1068,7 +946,7 @@ function ToolMessage({ message, jobs, runs, decisions, canManageAutopilot, lastR
           {message.tool === "import_contacts" && <p className="text-paragraph-xs">{message.content.split(". Lead list")[0]}.</p>}
           {(message.tool === "add_contacts" || message.tool === "add_instagram_contacts" || message.tool === "use_existing_leads") && message.toolResult?.display && <p className="text-paragraph-xs">{message.toolResult.display}</p>}
           <AudienceSummary audience={audience} />
-          {audienceId && <ProspectsList audienceId={audienceId} />}
+          {audienceId && <ProspectsList audienceId={audienceId} count={audience.eligible ?? null} excluded={audience.excluded?.reduce((sum, item) => sum + item.count, 0) ?? null} timeZone={timeZone} />}
         </>
       ) : (
         <p className={cn("whitespace-pre-wrap text-paragraph-xs", message.status === "error" && "text-error-base")}>{message.toolResult?.display ?? message.content}</p>
@@ -1427,7 +1305,16 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
     if (message.role === "event") {
       // Only the newest event can offer Retry: an older failure was already followed by more work.
       const retry = message.toolResult?.data?.retry === true && message.id === shown.at(-1)?.id;
-      return <EventRow key={message.id} content={message.content} toolResult={message.toolResult} links={eventLinks(message)} retry={retry} retryDisabled={sending || state.busy} onRetry={() => void retryTurn()} />;
+      const row = <EventRow key={message.id} content={message.content} toolResult={message.toolResult} links={reportLinks(eventLinks(message), state.thread.id)} retry={retry} retryDisabled={sending || state.busy} onRetry={() => void retryTurn()} />;
+      // A request's final report: the lists of its searches, each opening here as under its card.
+      const lists = reportAudiences(message.toolResult?.data, state.jobs);
+      if (!lists.length) return row;
+      return (
+        <div key={message.id} className="space-y-2">
+          {row}
+          <ReportLeadLists lists={lists} timeZone={timeZone} />
+        </div>
+      );
     }
     return <ToolMessage key={message.id} message={message} jobs={state.jobs} runs={state.runs} decisions={state.decisions ?? {}} canManageAutopilot={Boolean(setup?.canManageAutopilot)} lastReplyMode={state.lastReplyMode ?? null} onChanged={() => void refresh(true)} />;
   });

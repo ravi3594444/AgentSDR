@@ -18,7 +18,8 @@ import {
   RiSearchLine,
   RiSettings3Line,
   RiShieldCheckLine,
-  RiSideBarLine,
+  RiSidebarFoldLine,
+  RiSidebarUnfoldLine,
   RiChat3Line,
 } from "@remixicon/react";
 
@@ -32,6 +33,7 @@ import { ThemeToggleButton } from "@/components/theme/ThemeSwitch";
 import { themeToggleLabel } from "@/components/theme/themes";
 import { useTheme } from "@/components/theme/ThemeProvider";
 import { activeHref, NAV_FOOTER, visibleNavSections, type NavBadges, type NavData, type NavEntry, type NavGroup, type NavLink, type NavSection } from "@/components/nav/navConfig";
+import { attentionText, railLabel } from "@/components/nav/sidebarRail";
 import type { FeatureState } from "@/lib/features/catalog";
 import { APP_VERSION, bugReportUrl, SUPPORT_LINKS } from "@/lib/support";
 import { useDemoMode } from "@/components/demo/DemoProvider";
@@ -104,7 +106,13 @@ function Badge({ link, badges, collapsed }: { link: NavLink; badges: NavBadges |
   const value = link.badge && badges ? badges[link.badge] : 0;
   if (!value) return null;
   if (collapsed || link.badgeStyle === "dot") {
-    return <span aria-label={`${value} need attention`} className={cn("size-2 shrink-0 rounded-full bg-warning-base", collapsed && "absolute right-1.5 top-1.5 ring-2 ring-bg-white-0")} />;
+    // A dot has no visible number: collapsed, the link's own name says it (railLabel); expanded, this hidden text does.
+    return (
+      <>
+        <span aria-hidden="true" className={cn("size-2 shrink-0 rounded-full bg-warning-base", collapsed && "absolute right-1.5 top-1.5 ring-2 ring-bg-white-0")} />
+        {!collapsed && <span className="sr-only">, {attentionText(value)}</span>}
+      </>
+    );
   }
   return (
     <span className="ml-auto shrink-0 rounded-md bg-bg-weak-50 px-1.5 py-0.5 text-label-xs tabular-nums text-text-sub-600 ring-1 ring-inset ring-stroke-soft-200">
@@ -128,9 +136,10 @@ function RailTip({ label, children }: { label: string; children: React.ReactNode
 function LinkRow({ link, active, badges, collapsed, compact }: { link: NavLink; active: boolean; badges: NavBadges | null; collapsed: boolean; compact?: boolean }) {
   const Icon = link.icon;
   if (collapsed) {
+    const label = railLabel(link.label, link.badge && badges ? badges[link.badge] : 0);
     return (
-      <RailTip label={link.label}>
-        <Link href={link.href} aria-label={link.label} aria-current={active ? "page" : undefined} className={cn(rowBase, rowState(active), "relative h-9 justify-center")}>
+      <RailTip label={label}>
+        <Link href={link.href} aria-label={label} aria-current={active ? "page" : undefined} className={cn(rowBase, rowState(active), "relative h-9 justify-center")}>
           <Icon className={cn("size-[18px] shrink-0", active ? "text-text-white-0" : "text-text-soft-400")} />
           <Badge link={link} badges={badges} collapsed />
         </Link>
@@ -204,13 +213,14 @@ function GroupRow({ group, current, open, onToggle, badges, collapsed, compact }
   const childBadge = group.children.reduce((sum, c) => sum + (c.badge && badges ? badges[c.badge] : 0), 0);
 
   if (collapsed) {
+    const label = railLabel(group.label, childBadge);
     return (
       <Dropdown.Root>
-        <RailTip label={group.label}>
+        <RailTip label={label}>
           <Dropdown.Trigger asChild>
-            <button type="button" aria-label={group.label} className={cn(rowBase, rowState(holdsActive), "relative h-9 justify-center")}>
+            <button type="button" aria-label={label} className={cn(rowBase, rowState(holdsActive), "relative h-9 justify-center")}>
               <GroupIcon group={group} className="size-[18px]" />
-              {childBadge > 0 && <span className="absolute right-1.5 top-1.5 size-2 rounded-full bg-warning-base ring-2 ring-bg-white-0" />}
+              {childBadge > 0 && <span aria-hidden="true" className="absolute right-1.5 top-1.5 size-2 rounded-full bg-warning-base ring-2 ring-bg-white-0" />}
             </button>
           </Dropdown.Trigger>
         </RailTip>
@@ -235,7 +245,7 @@ function GroupRow({ group, current, open, onToggle, badges, collapsed, compact }
       <button type="button" onClick={onToggle} aria-expanded={open} className={cn(rowBase, rowState(false), compact ? "h-8 px-2 text-paragraph-sm" : "h-9 px-2", holdsActive && !open && "text-text-strong-950")}>
         <GroupIcon group={group} className={compact ? "size-4" : "size-[18px]"} />
         <span className="min-w-0 flex-1 truncate text-left">{group.label}</span>
-        {!open && childBadge > 0 && <span className="size-2 shrink-0 rounded-full bg-warning-base" aria-label="Needs attention" />}
+        {!open && childBadge > 0 && <><span aria-hidden="true" className="size-2 shrink-0 rounded-full bg-warning-base" /><span className="sr-only">, {attentionText(childBadge)}</span></>}
         <RiArrowDownSLine className={cn("size-4 shrink-0 text-text-soft-400 transition-transform duration-200", !open && "-rotate-90")} aria-hidden="true" />
       </button>
       {open && (
@@ -266,6 +276,9 @@ export default function Sidebar({ mobile = false, onClose }: { mobile?: boolean;
   const { badges, features } = useBadges(pathname);
   const sections = useMemo(() => visibleNavSections(features), [features]);
   const [storedCollapsed, setCollapsed] = useState(false);
+  // Set once the stored choice is applied; the width animates only after that, so a collapsed sidebar does not slide shut on every load.
+  const [storedRead, setStoredRead] = useState(false);
+  const [animateWidth, setAnimateWidth] = useState(false);
   // The phone drawer is always the full sidebar.
   const collapsed = !mobile && storedCollapsed;
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
@@ -276,9 +289,17 @@ export default function Sidebar({ mobile = false, onClose }: { mobile?: boolean;
     const frame = window.requestAnimationFrame(() => {
       setCollapsed(readStorage(COLLAPSED_KEY, false));
       setOpenGroups(readStorage(OPEN_KEY, {}));
+      setStoredRead(true);
     });
     return () => window.cancelAnimationFrame(frame);
   }, []);
+
+  // A frame after the stored width is on screen, so only a click on Collapse or Expand animates.
+  useEffect(() => {
+    if (!storedRead) return;
+    const frame = window.requestAnimationFrame(() => setAnimateWidth(true));
+    return () => window.cancelAnimationFrame(frame);
+  }, [storedRead]);
 
   useEffect(() => {
     // The desktop sidebar (always mounted) owns the shortcut; a drawer copy would double-toggle it.
@@ -354,7 +375,7 @@ export default function Sidebar({ mobile = false, onClose }: { mobile?: boolean;
 
   return (
     <Tooltip.Provider delayDuration={200}>
-      <aside className={cn("workspace-sidebar flex h-full shrink-0 flex-col bg-bg-white-0", mobile ? "w-full" : "border-r border-stroke-soft-200 transition-[width] duration-200 ease-out", !mobile && (collapsed ? "w-[68px]" : "w-64"))}>
+      <aside className={cn("workspace-sidebar flex h-full shrink-0 flex-col bg-bg-white-0", mobile ? "w-full" : ["border-r border-stroke-soft-200", animateWidth && "transition-[width] duration-200 ease-out"], !mobile && (collapsed ? "w-[68px]" : "w-64"))}>
         {/* Brand + collapse */}
         <div className={cn("flex h-18 shrink-0 items-center", collapsed ? "justify-center" : "justify-between pl-4 pr-2.5")}>
           {!collapsed && (
@@ -373,7 +394,7 @@ export default function Sidebar({ mobile = false, onClose }: { mobile?: boolean;
           ) : (
           <RailTip label={collapsed ? "Expand sidebar" : "Collapse sidebar"}>
             <button type="button" onClick={toggleCollapsed} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} aria-expanded={!collapsed} className="flex size-8 items-center justify-center rounded-lg text-text-soft-400 outline-none transition hover:bg-bg-weak-50 hover:text-text-strong-950 focus-visible:ring-2 focus-visible:ring-primary-base">
-              <RiSideBarLine className="size-[18px]" />
+              {collapsed ? <RiSidebarUnfoldLine className="size-[18px]" /> : <RiSidebarFoldLine className="size-[18px]" />}
             </button>
           </RailTip>
           )}
@@ -391,7 +412,7 @@ export default function Sidebar({ mobile = false, onClose }: { mobile?: boolean;
           <div className="shrink-0 px-3 pb-2">
             <RailTip label="Expand sidebar">
               <button type="button" onClick={toggleCollapsed} aria-label="Expand sidebar" aria-expanded={false} className={cn(rowBase, rowState(false), "h-9 justify-center")}>
-                <RiSideBarLine className="size-[18px] text-text-soft-400" />
+                <RiSidebarUnfoldLine className="size-[18px] text-text-soft-400" />
               </button>
             </RailTip>
           </div>
@@ -428,7 +449,7 @@ export default function Sidebar({ mobile = false, onClose }: { mobile?: boolean;
                   ? (
                     <button type="button" onClick={() => toggleSection(section)} aria-expanded={open} className="mb-1 flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-[12px] font-semibold uppercase tracking-[0.12em] text-text-soft-400 outline-none transition-colors hover:text-text-sub-600 focus-visible:ring-2 focus-visible:ring-primary-base">
                       <span className="flex-1 text-left">{section.label}</span>
-                      {waiting && <span className="size-2 shrink-0 rounded-full bg-warning-base" aria-label="Needs attention" />}
+                      {waiting && <><span aria-hidden="true" className="size-2 shrink-0 rounded-full bg-warning-base" /><span className="sr-only">, needs attention</span></>}
                       <RiArrowDownSLine className={cn("size-4 shrink-0 transition-transform duration-200", !open && "-rotate-90")} aria-hidden="true" />
                     </button>
                   )
