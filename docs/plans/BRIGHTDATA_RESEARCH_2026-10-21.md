@@ -83,8 +83,20 @@ only what this organization's collections returned.
   downloaded again for free; a trigger whose answer was lost stays
   `uncertain` (counted) and is never sent again; a collection nothing
   polled for 35 minutes is swept as uncertain.
-- Rate limits: a 429 is a wait with Bright Data's `Retry-After`, never a
-  quick retry (25 within 5 minutes blacklist the IP).
+- Rate limits: a 429 on the trigger costs nothing (nothing was sent) and
+  the same collection is sent again once Bright Data's `Retry-After` has
+  passed (default 60 s, at most 15 minutes; the job honours it, never a
+  quick retry: 25 within 5 minutes blacklist the IP), at most 3 times per
+  job and collection; a provider that keeps asking to wait is given up
+  after the time a collection may take (20 minutes), the source failed with
+  that reason and the job going on.
+- Given up, never released: a collection whose progress cannot be read
+  (429, 5xx, no answer) is polled again until the job's 20-minute deadline,
+  then cancelled when it can be and settled `uncertain` with its reserved
+  credits counted; one whose answer will not improve (the snapshot unknown,
+  the key rejected) stops at once the same way; removing the key while a
+  collection is open also keeps its credits counted. Bright Data may still
+  deliver and bill any of these.
 - Spend: `brightdataUsd` / `brightdataCredits` in the request's
   `SpendBreakdown`, at the list price, so the request's cap and the
   continuation note count it.
@@ -109,7 +121,7 @@ Offline (every outside call stood in):
 - Unit: `src/lib/brightdata/mapping.test.ts` (records → findings with the
   live field shapes, URL rules, credits, errors), plus the existing suites
   (1,914 pass).
-- `scripts/e2e/brightdata.ts` (51 checks): the gates (feature, key, Reddit
+- `scripts/e2e/brightdata.ts` (64 checks): the gates (feature, key, Reddit
   switch, URL finder), a full four-platform run with evidence and reasons,
   what was sent (canonical URLs only), the ledger, the settings card, the
   same research reused for free, a retried step, a lost answer, a rate
@@ -162,6 +174,24 @@ allowed):
 2. Deploy the code. Nothing changes for an organization until an owner
    turns the feature on and saves a key; Reddit stays off until switched on.
 3. Rotate the key the owner pasted in chat during the pilot.
+
+## Review of 21 Oct (B01–B03)
+
+Three defects the branch review reproduced against the exported
+functions, all real and fixed in the commit after `6bb71cd`: a
+rate-limited trigger was settled `failed` and then refused for good by the
+"not paid for again" rule (B01); removing the key released an open
+collection's credits to zero (B02); a progress read that kept failing
+returned "running" past the deadline (B03). Each case is in the
+database-backed suite (the 13 "B01/B02/B03" checks: a rate-limited trigger
+resumed after its wait and sent once, bounded at 3 refusals, a lost answer
+still never resent; the key removed with a collection open keeps its
+credits counted; a progress read that fails with 429, 5xx, no answer or an
+unknown snapshot stops at the deadline with the credits counted and a
+cancel attempted; and the same three through the job: the wait honoured
+past a minute, a provider that keeps refusing given up after 20 minutes,
+a stuck collection ending the source as failed, not the job as stuck) and
+each failed before the fix.
 
 ## Not done
 

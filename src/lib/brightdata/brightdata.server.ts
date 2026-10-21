@@ -36,9 +36,14 @@ import type { SpendGuard } from "@/lib/assistant/objective.server";
  * is called, under the organization's lock and the request's spend guard, so
  * two jobs cannot both take the last of the monthly limit; settled from the
  * records Bright Data reports once it is ready. A trigger whose answer was
- * lost stays counted ("uncertain") and is never sent again. A collection a
- * retried step finds already started is polled, not paid for twice; one
- * with the same inputs settled recently is downloaded again for free.
+ * lost stays counted ("uncertain") and is never sent again; one Bright
+ * Data refused outright (a rate limit: nothing was sent) costs nothing and
+ * is sent again after the wait it asked for, a bounded number of times. A
+ * collection a retried step finds already started is polled, not paid for
+ * twice; one with the same inputs settled recently is downloaded again for
+ * free. A collection whose progress cannot be read past the time a job
+ * waits, or whose key was removed meanwhile, is given up with its reserved
+ * credits kept counted: Bright Data may still deliver and bill it.
  *
  * Bright Data's API does not say how many credits are left, so the limit
  * here is AgentSDR's own count of delivered records, and the card says so.
@@ -49,6 +54,9 @@ export const BRIGHTDATA_PROVIDER = "brightdata";
 /** Ledger products: one credit per delivered record, one per SERP request. */
 export const RECORDS_PRODUCT = "records";
 export const SERP_PRODUCT = "serp";
+/** The wait after a rate limit that names none, and the most one is honoured for. */
+const DEFAULT_RETRY_MS = 60_000;
+const MAX_RETRY_MS = 15 * 60_000;
 
 export class BrightdataSettingsError extends Error {}
 
@@ -83,7 +91,11 @@ async function monthUsage(executor: Pick<typeof db, "select"> = db): Promise<{ u
 async function datasetStates(): Promise<BrightdataSettingsView["datasets"]> {
   const rows = await db.select({ status: providerUsage.status, usedUnits: providerUsage.usedUnits, detail: providerUsage.detail, error: providerUsage.error, createdAt: providerUsage.createdAt })
     .from(providerUsage)
-    .where(and(inOrg(providerUsage), eq(providerUsage.provider, BRIGHTDATA_PROVIDER), eq(providerUsage.product, RECORDS_PRODUCT), inArray(providerUsage.status, ["settled", "failed"])))
+    .where(and(
+      inOrg(providerUsage), eq(providerUsage.provider, BRIGHTDATA_PROVIDER), eq(providerUsage.product, RECORDS_PRODUCT), inArray(providerUsage.status, ["settled", "failed"]),
+      // A trigger Bright Data refused outright (a rate limit) says nothing about the dataset.
+      sql`coalesce((${providerUsage.detail} ->> 'retryable')::boolean, false) = false`,
+    ))
     .orderBy(desc(providerUsage.createdAt)).limit(200);
   const latest = new Map<string, (typeof rows)[number]>();
   for (const row of rows) {
@@ -219,10 +231,15 @@ export type CollectionSpec = {
   limitPerInput: number | null;
 };
 
-/** `budget`: the request's own spend cap refused it; `wait`: ask again later (a rate limit, a paused request). */
+/**
+ * `wait`: ask again later. `rateLimited` (with `retryAfterMs`, the time
+ * Bright Data asked for): it refused the trigger outright; `slotsFull`: the
+ * organization's open collections are in the way; neither: the request's
+ * spend guard holds it (paused). `budget`: the request's own cap refused it.
+ */
 export type StartedCollection =
   | { started: true; usageId: string; snapshotId: string; reused: boolean; reservedCredits: number }
-  | { started: false; wait: boolean; exhausted: boolean; budget?: boolean; reason: string };
+  | { started: false; wait: boolean; exhausted: boolean; budget?: boolean; slotsFull?: boolean; rateLimited?: boolean; retryAfterMs?: number; reason: string };
 
 async function usageRow(usageId: string): Promise<UsageRow | null> {
   const [row] = await db.select().from(providerUsage).where(and(inOrg(providerUsage), eq(providerUsage.id, usageId))).limit(1);
@@ -273,6 +290,7 @@ export async function startCollection(input: {
   const key = collectionKey(spec.dataset, spec.discoverBy, spec.inputs, spec.limitPerInput);
   const units = reservedCredits(spec.discoverBy, spec.inputs, spec.limitPerInput);
   // A retried step finds the collection its first attempt started rather than paying for a second.
+  let attempt = 1;
   const own = await jobCollection(input.jobId, key);
   if (own) {
     const snapshotId = typeof own.detail?.snapshotId === "string" ? own.detail.snapshotId : null;
@@ -282,7 +300,16 @@ export async function startCollection(input: {
     if (own.status === "reserved" || own.status === "uncertain") {
       return { started: false, wait: false, exhausted: false, reason: "an earlier attempt to start this Bright Data collection lost its answer, so it may have run; it is not sent again, and its reserved credits stay counted" };
     }
-    return { started: false, wait: false, exhausted: false, reason: `an earlier attempt's collection failed (${own.error ?? "no reason given"}); it is not paid for again` };
+    if (own.detail?.retryable !== true) return { started: false, wait: false, exhausted: false, reason: `an earlier attempt's collection failed (${own.error ?? "no reason given"}); it is not paid for again` };
+    // Refused outright (a rate limit): nothing was sent, so it is sent again once the wait Bright Data asked for has passed, a bounded number of times.
+    attempt = Number(own.detail?.attempt ?? 1) + 1;
+    if (attempt > BRIGHTDATA_LIMITS.triggerRetries) {
+      return { started: false, wait: false, exhausted: false, reason: `Bright Data refused to start this collection ${BRIGHTDATA_LIMITS.triggerRetries} times (${own.error ?? "rate limit"}); it is not tried again` };
+    }
+    const retryAt = typeof own.detail?.retryAt === "string" ? Date.parse(own.detail.retryAt) : Number.NaN;
+    if (Number.isFinite(retryAt) && retryAt > Date.now()) {
+      return { started: false, wait: true, exhausted: false, rateLimited: true, retryAfterMs: retryAt - Date.now(), reason: `Bright Data asked to wait ${Math.ceil((retryAt - Date.now()) / 1_000)} s before this collection is sent again (rate limit)` };
+    }
   }
   const readiness = await brightdataReadiness();
   if (!readiness.usable) return { started: false, wait: false, exhausted: readiness.exhausted, reason: readiness.reason };
@@ -297,37 +324,37 @@ export async function startCollection(input: {
     }).returning({ id: providerUsage.id });
     return { started: true, usageId: row!.id, snapshotId, reused: true, reservedCredits: 0 };
   }
-  let hold: { wait: boolean; budget: boolean; exhausted: boolean } = { wait: false, budget: false, exhausted: false };
+  let hold: { wait: boolean; budget: boolean; exhausted: boolean; slotsFull: boolean } = { wait: false, budget: false, exhausted: false, slotsFull: false };
   const reservation = await reserveQuota({
     provider: BRIGHTDATA_PROVIDER, product: RECORDS_PRODUCT, scopeKey: null, units, limits: {}, label: "Bright Data",
     jobId: input.jobId, threadId: input.threadId ?? null,
-    detail: { dataset: spec.dataset, method: spec.discoverBy, inputs: spec.inputs.slice(0, 20), limitPerInput: spec.limitPerInput, collectionKey: key, ...(input.requestId ? { requestId: input.requestId } : {}) },
+    detail: { dataset: spec.dataset, method: spec.discoverBy, inputs: spec.inputs.slice(0, 20), limitPerInput: spec.limitPerInput, collectionKey: key, attempt, ...(input.requestId ? { requestId: input.requestId } : {}) },
     guard: async (tx) => {
       // The owner's monthly limit, checked again under the organization's lock with every open reservation…
       await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`brightdata-start:${currentOrganizationId()}`}, 0))`);
       const usage = await monthUsage(tx);
       const left = readiness.settings.monthlyCredits - usage.used - usage.reserved;
       if (left < units) {
-        hold = { wait: false, budget: false, exhausted: left < 1 };
+        hold = { wait: false, budget: false, exhausted: left < 1, slotsFull: false };
         return left < 1
           ? `this month's Bright Data limit (${readiness.settings.monthlyCredits.toLocaleString("en-US")} credits) is used up`
           : `this collection could take ${units} credits and only ${left} of this month's Bright Data limit are left`;
       }
       if (usage.open >= BRIGHTDATA_LIMITS.openCollections) {
-        hold = { wait: true, budget: false, exhausted: false };
+        hold = { wait: true, budget: false, exhausted: false, slotsFull: true };
         return `${usage.open} Bright Data collections are still open for this organization (at most ${BRIGHTDATA_LIMITS.openCollections} at a time)`;
       }
       // …then the request's cap, after the organization's lock (it serializes the request's paid work).
       if (!input.spendGuard) return null;
       const room = await input.spendGuard(tx as Parameters<SpendGuard>[0], units * BRIGHTDATA_USD_PER_CREDIT);
       if (!room.ok) {
-        hold = { wait: room.wait, budget: !room.wait, exhausted: false };
+        hold = { wait: room.wait, budget: !room.wait, exhausted: false, slotsFull: false };
         return room.reason;
       }
       return null;
     },
   });
-  if (!reservation.ok) return { started: false, wait: hold.wait, exhausted: hold.exhausted, budget: hold.budget, reason: reservation.reason };
+  if (!reservation.ok) return { started: false, wait: hold.wait, exhausted: hold.exhausted, budget: hold.budget, slotsFull: hold.slotsFull, reason: reservation.reason };
   try {
     const { snapshotId } = await triggerCollection(readiness.key, {
       datasetId: BRIGHTDATA_DATASETS[spec.dataset].datasetId,
@@ -346,11 +373,13 @@ export async function startCollection(input: {
       await settleQuota(reservation.usageId, { status: "uncertain", usedUnits: units, error: `The answer to starting it was lost: ${message}` });
       return { started: false, wait: false, exhausted: false, reason: `starting this Bright Data collection lost its answer (${message}), so it may have run; it is not sent again, and its reserved credits stay counted` };
     }
-    await settleQuota(reservation.usageId, { status: "failed", usedUnits: 0, error: message });
     if (kind === "wait") {
-      const retryAfterMs = error instanceof BrightdataError ? error.retryAfterMs : null;
-      return { started: false, wait: true, exhausted: false, reason: `Bright Data asked to wait${retryAfterMs ? ` ${Math.ceil(retryAfterMs / 1_000)} s` : ""} (rate limit)` };
+      // Refused before anything was sent: nothing is billed, and it is sent again once the wait has passed (the row remembers when).
+      const retryAfterMs = Math.min(MAX_RETRY_MS, Math.max(0, (error instanceof BrightdataError ? error.retryAfterMs : null) ?? DEFAULT_RETRY_MS));
+      await settleQuota(reservation.usageId, { status: "failed", usedUnits: 0, error: message, detail: { retryable: true, retryAt: new Date(Date.now() + retryAfterMs).toISOString() } });
+      return { started: false, wait: true, exhausted: false, rateLimited: true, retryAfterMs, reason: `Bright Data asked to wait ${Math.ceil(retryAfterMs / 1_000)} s (rate limit)` };
     }
+    await settleQuota(reservation.usageId, { status: "failed", usedUnits: 0, error: message });
     return { started: false, wait: false, exhausted: kind === "exhausted", reason: `Bright Data did not start the collection: ${message}` };
   }
 }
@@ -360,37 +389,49 @@ export type PolledCollection =
   | { state: "finished"; ok: boolean; records: unknown[]; creditsUsed: number; note: string | null };
 
 /**
+ * A collection that cannot be finished (it took longer than the job waits,
+ * its progress cannot be read, the key is gone): cancelled when it can be,
+ * and its reserved credits kept counted — Bright Data may have delivered
+ * and billed it. Giving up a row already settled counts nothing more.
+ */
+async function giveUp(row: UsageRow, snapshotId: string, key: string | null, reason: string): Promise<PolledCollection> {
+  if (key) await cancelSnapshot(key, snapshotId).catch(() => undefined);
+  const used = row.status === "reserved" ? row.units : row.usedUnits ?? 0;
+  await settleQuota(row.id, { status: "uncertain", usedUnits: used, error: reason, detail: { records: 0, status: "given_up" } });
+  return { state: "finished", ok: false, records: [], creditsUsed: row.status === "reserved" ? used : 0, note: `The Bright Data collection was given up: ${reason}; its reserved credits stay counted because it may have been billed.` };
+}
+
+/**
  * Polls a collection. While Bright Data works: "running". Once ready, the
  * snapshot is downloaded (free, also for a settled row a retried step reads
  * again) and the row settled at the records plus failed inputs Bright Data
  * reported; a failed snapshot still settles what it reported, since Bright
- * Data bills records for inputs that failed. `stopWaiting` cancels one that
- * took too long: it may have been partly billed, so it stays counted.
+ * Data bills records for inputs that failed. `stopWaiting` (the job's
+ * deadline) gives up one still running — or one whose progress cannot be
+ * read, which otherwise would be polled for ever — with its credits counted.
  */
 export async function pollCollection(usageId: string, options: { stopWaiting?: boolean } = {}): Promise<PolledCollection> {
   const row = await usageRow(usageId);
   const snapshotId = typeof row?.detail?.snapshotId === "string" ? row.detail.snapshotId : null;
   if (!row || !snapshotId) throw new BrightdataError(null, "The Bright Data collection was not recorded");
   const key = await savedKey();
-  if (!key) {
-    await settleQuota(usageId, { status: "failed", usedUnits: 0, error: "The Bright Data key was removed while the collection was open" });
-    return { state: "finished", ok: false, records: [], creditsUsed: 0, note: "The Bright Data key was removed while the collection was open." };
-  }
+  // Without the key nothing can be read or cancelled; Bright Data may still deliver it.
+  if (!key) return giveUp(row, snapshotId, null, "the Bright Data key was removed while the collection was open");
   let progress;
   try {
     progress = await snapshotProgress(key, snapshotId);
   } catch (error) {
-    const kind = error instanceof BrightdataError ? errorKind(error.status, error.message) : "lost";
-    if (kind === "lost" || kind === "wait") return { state: "running", records: null };
-    throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    const kind = error instanceof BrightdataError ? errorKind(error.status, message) : "lost";
+    const transient = kind === "lost" || kind === "wait";
+    if (transient && !options.stopWaiting) return { state: "running", records: null };
+    // Past the deadline, or an answer that will not improve (the key rejected, the snapshot unknown).
+    return giveUp(row, snapshotId, key, transient ? `its progress could not be read (${message}) for longer than the job waits` : `its progress could not be read (${message})`);
   }
   const outcome = progressOutcome(progress.status);
   if (outcome === "running") {
     if (!options.stopWaiting) return { state: "running", records: progress.records };
-    await cancelSnapshot(key, snapshotId).catch(() => undefined);
-    const used = row.status === "reserved" ? row.units : row.usedUnits ?? 0;
-    await settleQuota(usageId, { status: "uncertain", usedUnits: used, error: "Cancelled: it took longer than the job waits", detail: { records: 0, status: "cancelled" } });
-    return { state: "finished", ok: false, records: [], creditsUsed: used, note: `The Bright Data collection was cancelled after ${BRIGHTDATA_LIMITS.collectionTimeoutMinutes} minutes; its reserved credits stay counted because it may have been partly billed.` };
+    return giveUp(row, snapshotId, key, `it took longer than the job waits (${BRIGHTDATA_LIMITS.collectionTimeoutMinutes} minutes)`);
   }
   if (outcome === "failed") {
     const used = creditsUsed(progress, 0);
@@ -406,7 +447,8 @@ export async function pollCollection(usageId: string, options: { stopWaiting?: b
 
 // ── SERP ─────────────────────────────────────────────────────────────────────
 
-export type SerpOutcome = { ok: true; results: SerpResult[]; usageId: string } | { ok: false; wait: boolean; reason: string };
+/** `rateLimited`: Bright Data refused the request outright (ask again after a while); `wait` without it: the request's spend guard holds it. */
+export type SerpOutcome = { ok: true; results: SerpResult[]; usageId: string } | { ok: false; wait: boolean; rateLimited?: boolean; reason: string };
 
 /**
  * One Google search through the owner's SERP zone (one credit), for finding
@@ -444,6 +486,6 @@ export async function serpSearchThroughBrightdata(query: string, input: { jobId:
     const message = error instanceof Error ? error.message : String(error);
     const kind = error instanceof BrightdataError ? errorKind(error.status, message) : "lost";
     await settleQuota(reservation.usageId, { status: kind === "lost" ? "uncertain" : "failed", usedUnits: kind === "lost" ? 1 : 0, error: message });
-    return { ok: false, wait: kind === "wait", reason: `Bright Data SERP failed: ${message}` };
+    return { ok: false, wait: kind === "wait", rateLimited: kind === "wait", reason: `Bright Data SERP failed: ${message}` };
   }
 }

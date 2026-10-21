@@ -92,6 +92,8 @@ export const BRIGHTDATA_LIMITS = {
   maxRecordsPerSearch: { default: 60, min: 5, max: 300 },
   /** Collections one organization may have open at once. */
   openCollections: 3,
+  /** Times one collection is sent after Bright Data refused it outright (a rate limit); a lost answer is never sent again. */
+  triggerRetries: 3,
   /** How long AgentSDR waits for a collection before it stops waiting and keeps what it has. */
   collectionTimeoutMinutes: 20,
   /** A settled collection with the same inputs is downloaded again (free) rather than paid for, within this many days (Bright Data keeps snapshots 30). */

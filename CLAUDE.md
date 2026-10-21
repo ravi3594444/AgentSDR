@@ -431,12 +431,15 @@ Every collection is a `provider_usage` row (provider `brightdata`, product
 `records` or `serp`), reserved at its most credits under the organization's
 lock and the request's spend guard before Bright Data is called, settled
 from the records it reported (failed inputs are billed too). A lost trigger
-answer stays `uncertain` and is never sent again; a retried step polls its
-own collection; the same inputs settled within 7 days are downloaded again
-for free. Bright Data's API does not report the balance, so the monthly
-limit is AgentSDR's own count and every figure says "estimated". A 429 is
-never retried quickly (25 of them blacklist the IP). Nothing tops up or
-changes a plan. Findings keep their link, quote, author and read time;
+answer stays `uncertain` and is never sent again; a trigger refused
+outright (a 429) costs nothing and is sent again after its `Retry-After`,
+at most 3 times, never quickly (25 of them blacklist the IP); a retried
+step polls its own collection; the same inputs settled within 7 days are
+downloaded again for free; a collection that cannot be finished (its
+progress unreadable past the job's deadline, the key removed) is given up
+with its reserved credits kept counted. Bright Data's API does not report
+the balance, so the monthly limit is AgentSDR's own count and every figure
+says "estimated". Nothing tops up or changes a plan. Findings keep their link, quote, author and read time;
 someone is contactable only through what their own profile, page or
 website publishes — AgentSDR never messages anyone on Reddit, X or Facebook.
 

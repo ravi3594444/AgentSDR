@@ -80,6 +80,9 @@ const MAX_FINDINGS_KEPT = 300;
 const MAX_FAILURES_KEPT = 30;
 const FINDING_TEXT_CHARS = 1_200;
 const POLL_DELAY_MS = 20_000;
+/** How long a step waits when Bright Data asks it to: at least a minute, at most this, whatever Retry-After says. */
+const MIN_WAIT_MS = 60_000;
+const MAX_WAIT_MS = 15 * 60_000;
 /** Collections one job keeps open before it polls them: the organization's cap (BRIGHTDATA_LIMITS.openCollections) is never filled by one job's starts alone. */
 const JOB_OPEN_COLLECTIONS = 2;
 const MAX_EMAILS_PER_LEAD = 5;
@@ -205,6 +208,8 @@ type Payload = {
   memberIds?: string[];
   /** Why no source could be searched at all. */
   notSearched?: string;
+  /** When each plan task first had to wait for Bright Data (by index): a task that waits longer than a collection may take is given up. */
+  waits?: Record<string, string>;
 };
 
 export class SocialResearchUnavailableError extends Error {
@@ -450,14 +455,36 @@ function collectTasksFor(payload: Payload): SearchTask[] {
   return tasks;
 }
 
-async function startPlannedCollection(job: AssistantJob, payload: Payload, task: Extract<SearchTask, { kind: "collect" }>): Promise<StepOutcome | null> {
+/**
+ * A wait Bright Data imposed on the plan task at `index` (a rate limit, the
+ * organization's open collections): the step sleeps for the time asked,
+ * within bounds, and the first wait is remembered so a provider that keeps
+ * asking is given up after the time a collection may take (null then). A
+ * paused request is not bounded here: it waits as long as the owner pauses.
+ */
+function waitFor(payload: Payload, index: number, retryAfterMs: number | null): { next: "wait"; delayMs: number; payload: Partial<Payload> } | null {
+  const waits = payload.waits ?? (payload.waits = {});
+  const since = waits[String(index)] ?? (waits[String(index)] = new Date().toISOString());
+  if (Date.now() - Date.parse(since) > BRIGHTDATA_LIMITS.collectionTimeoutMinutes * 60_000) return null;
+  return { next: "wait", delayMs: Math.min(MAX_WAIT_MS, Math.max(MIN_WAIT_MS, retryAfterMs ?? MIN_WAIT_MS)), payload: { waits, sources: payload.sources } };
+}
+
+async function startPlannedCollection(job: AssistantJob, payload: Payload, task: Extract<SearchTask, { kind: "collect" }>, index: number): Promise<StepOutcome | null> {
   const state = source(payload, task.platform);
   const started = await startCollection({ spec: task.spec, jobId: job.id, requestId: jobRequestId(job), threadId: job.threadId, spendGuard: await objectiveSpendGuard(jobRequestId(job)) });
   if (!started.started) {
     if (started.wait) {
       // Open collections in the way (this job's, or another's): poll this job's own first, else wait.
-      if (/collections are still open/.test(started.reason) && (payload.collections ?? []).some((item) => item.state === "open")) return pollFirst(payload);
-      return { next: "wait", delayMs: 60_000, progress: progressOf(payload, "searching", { waiting: { kind: started.budget === undefined && /rate limit/.test(started.reason) ? "quota" : "paused", provider: "brightdata", reason: `${task.label} waits: ${started.reason}` } }) };
+      if (started.slotsFull && (payload.collections ?? []).some((item) => item.state === "open")) return pollFirst(payload);
+      const waiting = { kind: started.rateLimited ? "quota" : "paused", provider: "brightdata", reason: `${task.label} waits: ${started.reason}` };
+      const hold = started.rateLimited || started.slotsFull ? waitFor(payload, index, started.retryAfterMs ?? null) : { next: "wait" as const, delayMs: MIN_WAIT_MS, payload: {} };
+      if (hold) return { ...hold, progress: progressOf(payload, "searching", { waiting }) };
+      // Waited as long as a collection may take: this collection is given up, the source goes on with what it has.
+      const reason = `Bright Data kept asking to wait for ${BRIGHTDATA_LIMITS.collectionTimeoutMinutes} minutes (${started.reason})`;
+      state.state = task.hop ? state.state : "failed";
+      note(state, `${task.label}: not collected — ${reason}`);
+      if (!task.hop) state.reason = reason;
+      return null;
     }
     state.state = task.hop ? state.state : "failed";
     note(state, `${task.label}: not collected — ${started.reason}`);
@@ -503,7 +530,7 @@ async function stageSearching(job: AssistantJob, heartbeat: () => Promise<void>)
   };
   if (!task) return finish();
   if (task.kind === "collect") {
-    const outcome = await startPlannedCollection(job, payload, task);
+    const outcome = await startPlannedCollection(job, payload, task, index);
     if (outcome) return outcome;
     await savePayload(job, { sources: payload.sources, collections: payload.collections ?? [], reservedRecords: payload.reservedRecords ?? 0, searchIndex: index + 1 });
     // A few open at a time: they are polled before more are started, so one job never fills the organization's cap.
@@ -518,8 +545,11 @@ async function stageSearching(job: AssistantJob, heartbeat: () => Promise<void>)
     note(state, `the search “${task.query}” was interrupted and not repeated`);
   } else if (payload.urlFinder === "brightdata_serp") {
     const result = await serpSearchThroughBrightdata(task.query, { jobId: job.id, requestId: jobRequestId(job), threadId: job.threadId, spendGuard: await objectiveSpendGuard(jobRequestId(job)) });
-    if (!result.ok && result.wait) return { next: "wait", delayMs: 60_000, progress: progressOf(payload, "searching", { waiting: { kind: "paused", reason: `the next search waits: ${result.reason}` } }) };
-    if (!result.ok) note(state, `the search “${task.query}” failed: ${result.reason}`);
+    if (!result.ok && result.wait) {
+      const hold = result.rateLimited ? waitFor(payload, index, null) : { next: "wait" as const, delayMs: MIN_WAIT_MS, payload: {} };
+      if (hold) return { ...hold, progress: progressOf(payload, "searching", { waiting: { kind: result.rateLimited ? "quota" : "paused", provider: "brightdata", reason: `the next search waits: ${result.reason}` } }) };
+      note(state, `the search “${task.query}” was not made: Bright Data kept asking to wait for ${BRIGHTDATA_LIMITS.collectionTimeoutMinutes} minutes (${result.reason})`);
+    } else if (!result.ok) note(state, `the search “${task.query}” failed: ${result.reason}`);
     else {
       let kept = 0;
       for (const hit of result.results) {

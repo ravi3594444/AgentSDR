@@ -78,9 +78,14 @@ const bd = {
   serp: [] as Record<string, unknown>[],
   /** The next trigger: "ok", "drop" (no answer at all), or an HTTP refusal. */
   mode: "ok" as "ok" | "drop" | { status: number; body: unknown; retryAfter?: string },
+  /** With `once`, the trigger mode goes back to "ok" after one use (the provider recovered). */
+  once: false,
+  /** Every progress read: "ok", "drop" (no answer), or an HTTP refusal. */
+  progressMode: "ok" as "ok" | "drop" | { status: number; body: unknown; retryAfter?: string },
   pollsUntilReady: 1,
   failNext: false,
 };
+const triggerCalls = () => bd.calls.filter((call) => call === "POST /datasets/v3/trigger").length;
 const json = (status: number, body: unknown, headers: Record<string, string> = {}) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
 const NOW = new Date().toISOString();
 
@@ -136,8 +141,13 @@ function brightdataAnswer(method: string, url: URL, init?: RequestInit): Respons
   if (auth !== `Bearer ${KEY}` && auth !== `Bearer ${KEY_B}`) return new Response("Unauthorized", { status: 401 });
   if (method === "GET" && path === "/datasets/v3/scrapers") return json(200, [{ id: "gd_lvz8ah06191smkebj4", name: "Reddit - Posts", domain: "reddit.com" }, { id: "gd_mgnh0p8w16o65lmhp", name: "Reddit - Profiles", domain: "reddit.com" }]);
   if (method === "POST" && path === "/datasets/v3/trigger") {
-    if (bd.mode === "drop") throw new TypeError("fetch failed: connection reset");
-    if (bd.mode !== "ok") return json(bd.mode.status, bd.mode.body, bd.mode.retryAfter ? { "retry-after": bd.mode.retryAfter } : {});
+    const mode = bd.mode;
+    if (bd.once) {
+      bd.mode = "ok";
+      bd.once = false;
+    }
+    if (mode === "drop") throw new TypeError("fetch failed: connection reset");
+    if (mode !== "ok") return json(mode.status, mode.body, mode.retryAfter ? { "retry-after": mode.retryAfter } : {});
     const id = `sd_check${bd.triggers.length + 1}${tag}`;
     bd.triggers.push({ id, dataset: url.searchParams.get("dataset_id") ?? "", type: url.searchParams.get("type"), discoverBy: url.searchParams.get("discover_by"), body: JSON.parse(String(init?.body ?? "{}")), auth, polls: 0, pollsUntilReady: bd.pollsUntilReady, fail: bd.failNext });
     bd.failNext = false;
@@ -145,6 +155,8 @@ function brightdataAnswer(method: string, url: URL, init?: RequestInit): Respons
   }
   const progress = path.match(/^\/datasets\/v3\/progress\/(.+)$/);
   if (method === "GET" && progress) {
+    if (bd.progressMode === "drop") throw new TypeError("fetch failed: connection reset");
+    if (bd.progressMode !== "ok") return json(bd.progressMode.status, bd.progressMode.body, bd.progressMode.retryAfter ? { "retry-after": bd.progressMode.retryAfter } : {});
     const trigger = bd.triggers.find((item) => item.id === progress[1]);
     if (!trigger) return json(404, { error: "snapshot not found" });
     trigger.polls += 1;
@@ -292,6 +304,10 @@ async function reports(threadId: string, jobId: string) {
   const [job] = await db.select().from(assistantJobs).where(eq(assistantJobs.id, jobId));
   await reportFinishedJob(job!);
   return (await listMessages(threadId, 100)).filter((row) => row.role === "event").map((row) => row.content ?? "");
+}
+async function usageDetail(usageId: string): Promise<Record<string, unknown>> {
+  const [row] = await db.select({ detail: providerUsage.detail }).from(providerUsage).where(and(inOrg(providerUsage), eq(providerUsage.id, usageId)));
+  return row?.detail ?? {};
 }
 async function ledger(jobId?: string) {
   return db.select().from(providerUsage).where(and(inOrg(providerUsage), eq(providerUsage.provider, "brightdata"), jobId ? eq(providerUsage.jobId, jobId) : undefined)).orderBy(providerUsage.createdAt);
@@ -460,6 +476,114 @@ try {
     const running = slow.started ? await pollCollection(slow.usageId) : null;
     const cancelled = slow.started ? await pollCollection(slow.usageId, { stopWaiting: true }) : null;
     check("a collection still running is polled; one that took too long is cancelled and stays counted as uncertain", running?.state === "running" && cancelled?.state === "finished" && !cancelled.ok && bd.cancels.length === 1 && (await ledger()).find((row) => slow.started && row.id === slow.usageId)?.status === "uncertain", JSON.stringify({ running, cancelled, cancels: bd.cancels }));
+
+    // ---------------------------------------------------------- review B01: a rate-limited trigger is tried again after the wait, a bounded number of times
+    const post = (slug: string) => ({ dataset: "reddit_posts" as const, discoverBy: null, inputs: [{ url: `https://www.reddit.com/r/Dentists/comments/${slug}${tag}/${slug}/` }], limitPerInput: null });
+    const reasonOf = (outcome: Awaited<ReturnType<typeof startCollection>>) => (outcome.started ? "" : outcome.reason);
+    bd.mode = { status: 429, body: { error: "Too many requests" }, retryAfter: "120" };
+    bd.once = true;
+    let calls = triggerCalls();
+    const firstTry = await startCollection({ spec: post("k1"), jobId: data!.jobId, requestId });
+    const tooEarly = await startCollection({ spec: post("k1"), jobId: data!.jobId, requestId });
+    check("B01: a rate-limited trigger waits for the time Bright Data asked; asked again before it passes, nothing is sent", !firstTry.started && firstTry.wait && firstTry.rateLimited === true && (firstTry.retryAfterMs ?? 0) > 100_000 && !tooEarly.started && tooEarly.wait && tooEarly.rateLimited === true && triggerCalls() === calls + 1, JSON.stringify({ firstTry, tooEarly, calls: triggerCalls() - calls }));
+    bd.mode = { status: 429, body: { error: "Too many requests" }, retryAfter: "1" };
+    bd.once = true;
+    calls = triggerCalls();
+    const limitedOnce = await startCollection({ spec: post("k2"), jobId: data!.jobId, requestId });
+    await new Promise((resolve) => setTimeout(resolve, 1_200));
+    const resumed = await startCollection({ spec: post("k2"), jobId: data!.jobId, requestId });
+    const polledResumed = resumed.started ? await pollCollection(resumed.usageId) : null;
+    const resumedKey = resumed.started ? (await usageDetail(resumed.usageId)).collectionKey : "";
+    const resumedRows = (await ledger(data!.jobId)).filter((row) => row.detail?.collectionKey === resumedKey);
+    check("B01: once the wait has passed and the provider recovered, the same collection is sent once and accepted; the refusal cost nothing", !limitedOnce.started && limitedOnce.wait && resumed.started && !resumed.reused && triggerCalls() === calls + 2 && resumedRows.length === 2 && resumedRows[0]!.status === "failed" && resumedRows[0]!.usedUnits === 0 && resumedRows[0]!.detail?.retryable === true && resumedRows[1]!.status === "settled" && polledResumed?.state === "finished" && polledResumed.ok, JSON.stringify({ limitedOnce, resumed, rows: resumedRows.map((row) => [row.status, row.usedUnits, row.detail?.attempt]) }));
+    bd.mode = { status: 429, body: { error: "Too many requests" }, retryAfter: "0" };
+    calls = triggerCalls();
+    const tries = [];
+    for (let attempt = 0; attempt < 4; attempt += 1) tries.push(await startCollection({ spec: post("k3"), jobId: data!.jobId, requestId }));
+    bd.mode = "ok";
+    check("B01: a provider that keeps refusing is asked at most 3 times; the 4th asks nothing and says so", tries.slice(0, 3).every((item) => !item.started && item.wait) && !tries[3]!.started && !tries[3]!.wait && /3 times/.test(reasonOf(tries[3]!)) && triggerCalls() === calls + 3, JSON.stringify({ tries, calls: triggerCalls() - calls }));
+    const lostStill = await startCollection({ spec: lostSpec, jobId: data!.jobId, requestId });
+    check("B01: a trigger whose answer was lost is still never sent again", !lostStill.started && !lostStill.wait && /may have run/.test(lostStill.reason) && triggerCalls() === calls + 3, reasonOf(lostStill));
+
+    // ---------------------------------------------------------- review B02: removing the key keeps an open collection's credits counted
+    const usedBefore = (await brightdataSettingsView()).usedThisMonth;
+    const keyed = await startCollection({ spec: post("k4"), jobId: data!.jobId, requestId });
+    await saveBrightdataSettings({ key: "" }, null);
+    const keyGone = keyed.started ? await pollCollection(keyed.usageId) : null;
+    const noKeyRow = keyed.started ? (await ledger()).find((row) => row.id === keyed.usageId) : null;
+    await saveBrightdataSettings({ key: KEY }, null);
+    check("B02: polling with the key removed keeps the reserved credits counted as uncertain, never released; the month's use shows them once the key is back", keyed.started && keyGone?.state === "finished" && !keyGone.ok && keyGone.creditsUsed === 1 && noKeyRow?.status === "uncertain" && noKeyRow.usedUnits === 1 && /key was removed/.test(keyGone.note ?? "") && (await brightdataSettingsView()).usedThisMonth === usedBefore + 1, JSON.stringify({ keyGone, row: noKeyRow && [noKeyRow.status, noKeyRow.usedUnits], used: [usedBefore, (await brightdataSettingsView()).usedThisMonth] }));
+
+    // ---------------------------------------------------------- review B03: the deadline holds when the progress read itself fails
+    for (const [label, mode] of [["a rate limit", { status: 429, body: { error: "Too many requests" } }], ["a server error", { status: 503, body: "unavailable" }], ["no answer", "drop"]] as const) {
+      bd.pollsUntilReady = 99;
+      const stuck = await startCollection({ spec: post(`k5${label.length}`), jobId: data!.jobId, requestId });
+      bd.pollsUntilReady = 1;
+      bd.progressMode = mode;
+      const stillWaiting = stuck.started ? await pollCollection(stuck.usageId) : null;
+      const cancelsBefore = bd.cancels.length;
+      const gaveUp = stuck.started ? await pollCollection(stuck.usageId, { stopWaiting: true }) : null;
+      bd.progressMode = "ok";
+      const stuckRow = stuck.started ? (await ledger()).find((row) => row.id === stuck.usageId) : null;
+      check(`B03: ${label} on the progress read keeps waiting before the deadline, and past it stops with the credits counted and a cancel attempted`, stuck.started && stillWaiting?.state === "running" && gaveUp?.state === "finished" && !gaveUp.ok && gaveUp.creditsUsed === 1 && stuckRow?.status === "uncertain" && stuckRow.usedUnits === 1 && bd.cancels.length === cancelsBefore + 1, JSON.stringify({ stillWaiting, gaveUp, row: stuckRow && [stuckRow.status, stuckRow.usedUnits] }));
+    }
+    bd.pollsUntilReady = 99;
+    const unknown = await startCollection({ spec: post("k6"), jobId: data!.jobId, requestId });
+    bd.pollsUntilReady = 1;
+    bd.progressMode = { status: 404, body: { error: "snapshot not found" } };
+    const gone = unknown.started ? await pollCollection(unknown.usageId) : null;
+    bd.progressMode = "ok";
+    check("B03: a progress answer that will not improve (the snapshot unknown) stops at once, counted as uncertain", unknown.started && gone?.state === "finished" && !gone.ok && gone.creditsUsed === 1 && (await ledger()).find((row) => row.id === unknown.usageId)?.status === "uncertain", JSON.stringify(gone));
+
+    // ---------------------------------------------------------- the same three through the job
+    bd.mode = { status: 429, body: { error: "Too many requests" }, retryAfter: "120" };
+    bd.once = true;
+    calls = triggerCalls();
+    const limitedJob = await runTool("research_social_sources", { ...ARGS, platforms: ["reddit"], need: "no-shows and cancellations" }, ctx(thread.id));
+    const limitedData = limitedJob.data as { jobId: string; audienceId: string };
+    let waitingJob: AssistantJob | null = null;
+    for (let round = 0; round < 6 && !waitingJob; round += 1) {
+      const job = await step(limitedData.jobId);
+      if ((job.progress as { waiting?: unknown }).waiting) waitingJob = job;
+    }
+    const waitingFor = (waitingJob?.progress as { waiting?: { kind?: string; reason?: string } } | undefined)?.waiting;
+    check("B01 job: the rate-limited search waits for the time Bright Data asked (not a fixed minute), saying so", waitingJob?.status === "queued" && waitingJob.stage === "searching" && waitingFor?.kind === "quota" && /rate limit/.test(waitingFor.reason ?? "") && waitingJob.runAfter.getTime() - Date.now() > 90_000 && triggerCalls() === calls + 1, JSON.stringify({ status: waitingJob?.status, stage: waitingJob?.stage, waiting: waitingFor, inMs: waitingJob ? waitingJob.runAfter.getTime() - Date.now() : null }));
+    // The wait passes (the ledger row's retry time is moved into the past) and the provider is healthy.
+    await db.update(providerUsage).set({ detail: sql`${providerUsage.detail} || '{"retryAt": "2000-01-01T00:00:00.000Z"}'::jsonb` }).where(and(inOrg(providerUsage), eq(providerUsage.jobId, limitedData.jobId), eq(providerUsage.status, "failed")));
+    const limitedRun = await runJob(limitedData.jobId);
+    const limitedResult = (limitedRun.job.result ?? {}) as Record<string, unknown> & { sources?: { platform: string; state: string; credits: number }[] };
+    check("B01 job: after the wait the collection is sent once, accepted, and the research finishes with Reddit searched", limitedRun.job.status === "succeeded" && triggerCalls() === calls + 2 && limitedResult.sources?.[0]?.state === "searched" && limitedResult.found === 3 && limitedResult.eligible === 1 && limitedResult.creditsUsed === 2, JSON.stringify({ status: limitedRun.job.status, error: limitedRun.job.error, calls: triggerCalls() - calls, sources: limitedResult.sources, found: limitedResult.found, eligible: limitedResult.eligible, credits: limitedResult.creditsUsed }));
+
+    bd.mode = { status: 429, body: { error: "Too many requests" }, retryAfter: "120" };
+    const foreverJob = await runTool("research_social_sources", { ...ARGS, platforms: ["reddit"], need: "after-hours calls nobody answers" }, ctx(thread.id));
+    const foreverData = foreverJob.data as { jobId: string };
+    let foreverWaiting: AssistantJob | null = null;
+    for (let round = 0; round < 6 && !foreverWaiting; round += 1) {
+      const job = await step(foreverData.jobId);
+      if ((job.progress as { waiting?: unknown }).waiting) foreverWaiting = job;
+    }
+    // Half an hour of waiting has passed.
+    await db.update(assistantJobs).set({ payload: sql`${assistantJobs.payload} || jsonb_build_object('waits', jsonb_build_object('0', ${new Date(Date.now() - 30 * 60_000).toISOString()}::text))` }).where(eq(assistantJobs.id, foreverData.jobId));
+    const foreverRun = await runJob(foreverData.jobId);
+    bd.mode = "ok";
+    const foreverResult = (foreverRun.job.result ?? {}) as Record<string, unknown> & { sources?: { platform: string; state: string; reason: string | null }[] };
+    check("B01 job: a provider that keeps asking to wait is given up after the time a collection may take, the source failed with the reason, the job finished", Boolean(foreverWaiting) && foreverRun.job.status === "succeeded" && foreverResult.sources?.[0]?.state === "failed" && /kept asking to wait/.test(foreverResult.sources[0].reason ?? "") && foreverResult.found === 0, JSON.stringify({ status: foreverRun.job.status, error: foreverRun.job.error, sources: foreverResult.sources }));
+
+    bd.pollsUntilReady = 99;
+    const stuckJob = await runTool("research_social_sources", { ...ARGS, platforms: ["reddit"], need: "voicemail that never gets returned" }, ctx(thread.id));
+    const stuckData = stuckJob.data as { jobId: string };
+    const toCollecting = await runJob(stuckData.jobId, { stopAtStage: "collecting" });
+    bd.pollsUntilReady = 1;
+    const stuckPayload = toCollecting.job.payload as { collections?: { startedAt: string; usageId: string; snapshotId: string }[] };
+    // Its collection started half an hour ago, and every progress read since fails.
+    for (const item of stuckPayload.collections ?? []) item.startedAt = new Date(Date.now() - 30 * 60_000).toISOString();
+    await db.update(assistantJobs).set({ payload: stuckPayload as Record<string, unknown> }).where(eq(assistantJobs.id, stuckData.jobId));
+    bd.progressMode = { status: 503, body: "unavailable" };
+    const stuckRun = await runJob(stuckData.jobId);
+    bd.progressMode = "ok";
+    const stuckResult = (stuckRun.job.result ?? {}) as Record<string, unknown> & { sources?: { platform: string; state: string; reason: string | null; credits: number }[] };
+    const stuckLedger = stuckPayload.collections?.[0] ? (await ledger()).find((row) => row.id === stuckPayload.collections![0]!.usageId) : null;
+    check("B03 job: past the deadline with the progress read failing, the job ends (not stuck), the source failed with the reason, the credits counted as uncertain, a cancel attempted", toCollecting.job.stage === "collecting" && stuckRun.job.status === "succeeded" && stuckResult.sources?.[0]?.state === "failed" && /could not be read/.test(stuckResult.sources[0].reason ?? "") && stuckLedger?.status === "uncertain" && stuckLedger.usedUnits === stuckLedger.units && stuckLedger.units > 0 && stuckResult.creditsUsed === stuckLedger.units && bd.cancels.includes(stuckPayload.collections![0]!.snapshotId), JSON.stringify({ stage: toCollecting.job.stage, status: stuckRun.job.status, error: stuckRun.job.error, sources: stuckResult.sources, credits: stuckResult.creditsUsed, row: stuckLedger && [stuckLedger.status, stuckLedger.usedUnits] }));
 
     // ---------------------------------------------------------- the request's controls: paused holds, stopped ends unsearched
     const chat = await createThread(null);
