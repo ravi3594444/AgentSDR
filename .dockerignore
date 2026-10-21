@@ -46,6 +46,7 @@ scripts
 !scripts/add-activity.ts
 !scripts/add-objectives.ts
 !scripts/add-pilot-fixes.ts
+!scripts/add-brightdata.ts
 
 README.md
 

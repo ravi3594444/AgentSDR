@@ -258,7 +258,7 @@ export const leadAudienceMemberInsights = pgTable(
 );
 
 /** "objective": the driver of one owner request (objective.server.ts), which continues it while its searches fall short of the target. */
-export type AssistantJobKind = "discovery" | "outreach_start" | "linkedin_search" | "web_discovery" | "apify_instagram" | "objective";
+export type AssistantJobKind = "discovery" | "outreach_start" | "linkedin_search" | "web_discovery" | "apify_instagram" | "objective" | "social_research";
 export type AssistantJobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 
 /**
@@ -305,7 +305,7 @@ export const assistantJobs = pgTable(
     index("assistant_jobs_organization_idx").on(t.organizationId, t.createdAt),
     index("assistant_jobs_claim_idx").on(t.status, t.runAfter),
     index("assistant_jobs_unreported_idx").on(t.finishedAt).where(sql`${t.reportKey} IS NOT NULL AND ${t.reportedAt} IS NULL`),
-    check("assistant_jobs_kind_chk", sql`${t.kind} IN ('discovery', 'outreach_start', 'linkedin_search', 'web_discovery', 'apify_instagram', 'objective')`),
+    check("assistant_jobs_kind_chk", sql`${t.kind} IN ('discovery', 'outreach_start', 'linkedin_search', 'web_discovery', 'apify_instagram', 'objective', 'social_research')`),
     check("assistant_jobs_status_chk", sql`${t.status} IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')`),
   ],
 );

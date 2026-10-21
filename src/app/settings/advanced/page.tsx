@@ -1,4 +1,5 @@
 import { ApifySettings } from "@/components/settings/organization/ApifySettings";
+import { BrightdataSettings } from "@/components/settings/organization/BrightdataSettings";
 import { OrgFeatures } from "@/components/settings/organization/OrgFeatures";
 import { TavilySettings } from "@/components/settings/organization/TavilySettings";
 import { TregSettings } from "@/components/settings/organization/TregSettings";
@@ -12,7 +13,7 @@ export default function Page() {
   return (
     <SettingsPage
       title="Providers & features"
-      description="Features that stay off until you turn them on, and the paid providers some of them use: Tavily, Apify and Treg."
+      description="Features that stay off until you turn them on, and the paid providers some of them use: Tavily, Apify, Treg and Bright Data."
       width="narrow"
     >
       <div className="flex flex-col gap-8">
@@ -20,6 +21,7 @@ export default function Page() {
         <TavilySettings />
         <ApifySettings />
         <TregSettings />
+        <BrightdataSettings />
       </div>
     </SettingsPage>
   );

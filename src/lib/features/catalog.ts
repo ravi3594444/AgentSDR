@@ -7,7 +7,7 @@
  * (flags.server.ts).
  */
 
-export const FEATURE_KEYS = ["instagram", "web_discovery", "inquiry_intake", "apify_discovery", "treg"] as const;
+export const FEATURE_KEYS = ["instagram", "web_discovery", "inquiry_intake", "apify_discovery", "treg", "brightdata"] as const;
 export type FeatureKey = (typeof FEATURE_KEYS)[number];
 
 export type FeatureInfo = {
@@ -47,6 +47,12 @@ export const FEATURES: Record<FeatureKey, FeatureInfo> = {
     description:
       "The assistant can use Treg's catalog of paid data tools with your Treg key — find and verify work emails, enrich people and companies, Google Maps and web search, public social profiles — within a daily spend cap you set. Each call is billed by Treg to your prepaid Treg balance; AgentSDR never tops it up.",
     requires: "A Treg account (treg.to) and its API key, and a daily spend cap (set on this page once the feature is on).",
+  },
+  brightdata: {
+    label: "Bright Data research (metered)",
+    description:
+      "The assistant can research social sources through Bright Data with your key: Reddit discussions found by keyword (once you turn Reddit on), and X, Instagram and Facebook posts, profiles and pages a web search finds. Each finding keeps its link, the words quoted and when it was read; someone becomes a lead only when their own profile, page or website publishes a contact route. Usage is counted against a monthly credit limit you set; AgentSDR never tops up or upgrades your Bright Data account, and never messages anyone on Reddit, X or Facebook.",
+    requires: "A Bright Data account and API key, and a monthly credit limit (set on this page once the feature is on). X, Instagram and Facebook also need a web search, or a SERP API zone in Bright Data.",
   },
 };
 

@@ -94,6 +94,7 @@ export const SCOPED_TABLES: readonly ScopedTable[] = [
   snake("treg_settings"),
   snake("treg_calls"),
   snake("tavily_settings"),
+  snake("brightdata_settings"),
   snake("tinyfish_settings"),
   snake("provider_usage"),
   snake("browser_sessions"),

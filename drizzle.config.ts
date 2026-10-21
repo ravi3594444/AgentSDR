@@ -141,6 +141,7 @@ const OWNED_TABLES = [
   "treg_settings",
   "treg_calls",
   "tavily_settings",
+  "brightdata_settings",
   "tinyfish_settings",
   "provider_quota_state",
   "provider_usage",

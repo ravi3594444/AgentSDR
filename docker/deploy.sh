@@ -58,7 +58,7 @@ set -euo pipefail
 
 readonly IMAGE=agentsdr:local
 readonly WORKER_READY='[assistant/worker] starting'
-readonly DEFAULT_MIGRATIONS="add-tinyfish add-research-sources add-browser-sessions add-wrong-number add-activity add-assistant-job-reports add-objectives add-pilot-fixes"
+readonly DEFAULT_MIGRATIONS="add-tinyfish add-research-sources add-browser-sessions add-wrong-number add-activity add-assistant-job-reports add-objectives add-pilot-fixes add-brightdata"
 
 SCRIPT_PATH=$(realpath "${BASH_SOURCE[0]}")
 ORIGINAL_ARGS=("$@")
@@ -580,7 +580,7 @@ Check the running image:
 EOF
   if ((HAS_BUNDLED_DB)); then
     cat <<EOF
-  $COMPOSE_CMD exec db psql -U agentsdr agentsdr -Atc "select to_regclass('tinyfish_settings'), to_regclass('research_settings'), to_regclass('browser_sessions'), to_regclass('crm_wrong_routes'), to_regclass('activity_seen'), to_regclass('assistant_objectives')"
+  $COMPOSE_CMD exec db psql -U agentsdr agentsdr -Atc "select to_regclass('tinyfish_settings'), to_regclass('research_settings'), to_regclass('browser_sessions'), to_regclass('crm_wrong_routes'), to_regclass('activity_seen'), to_regclass('assistant_objectives'), to_regclass('brightdata_settings')"
   $COMPOSE_CMD exec db psql -U agentsdr agentsdr -Atc "select count(*) from information_schema.columns where (table_name, column_name) in (('lead_audience_members','fit'), ('lead_audience_members','fit_claimed_at'), ('whatsapp_accounts','last_refusal'))"
 EOF
   fi

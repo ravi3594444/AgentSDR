@@ -60,6 +60,8 @@ export const providerUsage = pgTable(
   },
   (table) => [
     index("provider_usage_org_product_idx").on(table.organizationId, table.provider, table.product, table.createdAt),
+    // scripts/add-brightdata.ts: a job's collections, found again by a retried step.
+    index("provider_usage_job_idx").on(table.jobId).where(sql`${table.jobId} IS NOT NULL`),
     check("provider_usage_status_chk", sql`${table.status} IN ('reserved', 'settled', 'failed', 'uncertain')`),
   ],
 );

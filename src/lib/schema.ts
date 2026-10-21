@@ -32,6 +32,7 @@ export * from "./features/schema";
 export * from "./apify/schema";
 export * from "./treg/schema";
 export * from "./tavily/schema";
+export * from "./brightdata/schema";
 export * from "./tinyfish/schema";
 export * from "./quota/schema";
 export * from "./browser/schema";

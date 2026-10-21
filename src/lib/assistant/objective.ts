@@ -1,5 +1,6 @@
 import { numberRule } from "@/lib/channels/rules";
 import { TINYFISH_LIMITS } from "@/lib/tinyfish/catalog";
+import { BRIGHTDATA_USD_PER_CREDIT } from "@/lib/brightdata/catalog";
 import type { LeadFunnel } from "./leadFit";
 
 /**
@@ -202,6 +203,9 @@ export type SpendBreakdown = {
   uncertainUsd: number;
   /** Tavily is priced by the owner's Tavily plan, so it is counted in credits, not dollars. */
   tavilyCredits: number;
+  /** Bright Data records and SERP requests, at its list price per credit (its free tier makes the first 5,000 a month cost nothing). */
+  brightdataUsd: number;
+  brightdataCredits: number;
   totalUsd: number;
   settledUsd: number;
 };
@@ -209,12 +213,14 @@ export type SpendBreakdown = {
 /** Dollars per unit of metered provider_usage products; anything not here is free (TinyFish Search and Fetch, HN, Stack Exchange). */
 const UNIT_PRICES: Record<string, number> = {
   "tinyfish:browser": TINYFISH_LIMITS.browserUsdPerMinute,
+  "brightdata:records": BRIGHTDATA_USD_PER_CREDIT,
+  "brightdata:serp": BRIGHTDATA_USD_PER_CREDIT,
 };
 
 const round6 = (value: number) => Math.round(value * 1_000_000) / 1_000_000;
 
 export function spendFromLedgers(rows: readonly LedgerRow[]): SpendBreakdown {
-  const spend = { apifyUsd: 0, tregUsd: 0, browserUsd: 0, aiSearchUsd: 0, reservedUsd: 0, uncertainUsd: 0, tavilyCredits: 0 };
+  const spend = { apifyUsd: 0, tregUsd: 0, browserUsd: 0, aiSearchUsd: 0, reservedUsd: 0, uncertainUsd: 0, tavilyCredits: 0, brightdataUsd: 0, brightdataCredits: 0 };
   for (const row of rows) {
     if (row.ledger === "apify") {
       const open = row.status === "starting" || row.status === "running";
@@ -237,7 +243,12 @@ export function spendFromLedgers(rows: readonly LedgerRow[]): SpendBreakdown {
       const price = UNIT_PRICES[key] ?? 0;
       if (!price) continue;
       const amount = units * price;
-      spend.browserUsd += amount;
+      if (row.provider === "brightdata") {
+        spend.brightdataUsd += amount;
+        spend.brightdataCredits += units;
+      } else {
+        spend.browserUsd += amount;
+      }
       if (row.status === "reserved") spend.reservedUsd += amount;
       if (row.status === "uncertain") spend.uncertainUsd += amount;
     } else if (row.ledger === "ai_search") {
@@ -248,7 +259,7 @@ export function spendFromLedgers(rows: readonly LedgerRow[]): SpendBreakdown {
       spend.tavilyCredits += row.credits;
     }
   }
-  const totalUsd = spend.apifyUsd + spend.tregUsd + spend.browserUsd + spend.aiSearchUsd;
+  const totalUsd = spend.apifyUsd + spend.tregUsd + spend.browserUsd + spend.aiSearchUsd + spend.brightdataUsd;
   return {
     apifyUsd: round6(spend.apifyUsd),
     tregUsd: round6(spend.tregUsd),
@@ -257,6 +268,8 @@ export function spendFromLedgers(rows: readonly LedgerRow[]): SpendBreakdown {
     reservedUsd: round6(spend.reservedUsd),
     uncertainUsd: round6(spend.uncertainUsd),
     tavilyCredits: spend.tavilyCredits,
+    brightdataUsd: round6(spend.brightdataUsd),
+    brightdataCredits: spend.brightdataCredits,
     totalUsd: round6(totalUsd),
     settledUsd: round6(totalUsd - spend.reservedUsd),
   };
@@ -472,6 +485,7 @@ function spendText(spend: SpendBreakdown, capUsd: number): string {
     spend.tregUsd ? `Treg ${usd(spend.tregUsd)}` : null,
     spend.browserUsd ? `browser ${usd(spend.browserUsd)}` : null,
     spend.aiSearchUsd ? `AI web research ${usd(spend.aiSearchUsd)}` : null,
+    spend.brightdataCredits ? `Bright Data ${usd(spend.brightdataUsd)} (${plural(spend.brightdataCredits, "credit")}, estimated from delivered records)` : null,
   ].filter(Boolean);
   const held = spend.reservedUsd ? `, ${usd(spend.reservedUsd)} of it held by paid work still open` : "";
   const uncertain = spend.uncertainUsd ? `, ${usd(spend.uncertainUsd)} counted at an estimate because the provider did not report the cost` : "";
@@ -485,7 +499,7 @@ function spendText(spend: SpendBreakdown, capUsd: number): string {
  * sources counted in dollars, Tavily shown in credits, and the AI model's
  * own use, which is not counted.
  */
-export const SPEND_CAP_COVERS = "It counts Apify runs, Treg calls, browser minutes and AI web research (held at an estimate until the provider reports its cost); Tavily searches are shown in credits and limited by your daily Tavily cap; the AI model's own use for chat, judging the leads found against your request, and writing is not counted (your AI provider bills it).";
+export const SPEND_CAP_COVERS = "It counts Apify runs, Treg calls, browser minutes, Bright Data records (at its list price per credit, estimated from the records delivered) and AI web research (held at an estimate until the provider reports its cost); Tavily searches are shown in credits and limited by your daily Tavily cap; the AI model's own use for chat, judging the leads found against your request, and writing is not counted (your AI provider bills it).";
 
 /** A request's spend for Activity and the chat: "$1.20 of $5.00 spent", or free sources only. */
 export function requestSpendLine(spentUsd: number, capUsd: number): string {
@@ -514,7 +528,7 @@ export function continuationNote(input: {
   return [
     `Continuing your request “${request}” on its own (step ${input.n}): ${input.leads} of ${input.leadTarget} qualified leads so far (contactable and matching the request), ${Math.max(0, input.leadTarget - input.leads)} to go.`,
     input.funnel && input.funnel.found ? `${funnelText(input.funnel)}.` : null,
-    `Spent ${input.spendCapUsd > 0 ? `${usd(input.spend.totalUsd)} of ${usd(input.spendCapUsd)} on paid sources` : `${input.spend.totalUsd > 0 ? usd(input.spend.totalUsd) : "nothing"} (free sources only: no Apify, Treg, browser, Tavily or AI web research)`}${input.spend.tavilyCredits ? ` and ${plural(input.spend.tavilyCredits, "Tavily credit")}` : ""}; ${formatDuration(input.msLeft)} left.`,
+    `Spent ${input.spendCapUsd > 0 ? `${usd(input.spend.totalUsd)} of ${usd(input.spendCapUsd)} on paid sources` : `${input.spend.totalUsd > 0 ? usd(input.spend.totalUsd) : "nothing"} (free sources only: no Apify, Treg, browser, Bright Data, Tavily or AI web research)`}${input.spend.tavilyCredits ? ` and ${plural(input.spend.tavilyCredits, "Tavily credit")}` : ""}; ${formatDuration(input.msLeft)} left.`,
     `Searched so far — ${sourcesText(input.sources, input.web)}.`,
     "Next: another source or a different query, chosen by these yields and by why leads did not match (a place or kind of business to name in the query); a search that already ran is not repeated, and when nothing else fits the request the research stops here.",
   ].filter(Boolean).join(" ");
