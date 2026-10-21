@@ -1413,7 +1413,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
   const profile = (setup as (Setup & { profile?: BusinessProfileSummary }) | null)?.profile;
 
   const assistantItems = (items: Message[]) => items.map((message) => {
-    if (message.role === "assistant") return <div key={message.id} className="text-paragraph-sm text-text-strong-950"><RichText text={message.content} /></div>;
+    if (message.role === "assistant") return <div key={message.id} className="assistant-message text-paragraph-sm text-text-strong-950"><RichText text={message.content} /></div>;
     if (message.role === "event") {
       // Only the newest event can offer Retry: an older failure was already followed by more work.
       const retry = message.toolResult?.data?.retry === true && message.id === shown.at(-1)?.id;

@@ -903,10 +903,13 @@ body {
   padding: 0;
 }
 
-/* Optional workspace appearance. The clouds are static CSS: no downloaded
-   image, canvas, animation, filter or extra request. Native controls stay in
-   light mode; the normal light and pure-black palettes remain separate. */
+/* Optional illustrated workspace backgrounds. Only the selected full-size
+   artwork is used; the picker uses small thumbnails. White stays the default.
+   Cards, tables and the composer retain solid surfaces for readability. */
 html[data-appearance="golden-clouds"] .app-workspace {
+  --workspace-art: url("/themes/golden-clouds.webp");
+  --workspace-art-tint: rgb(255 249 237 / 45%);
+  --workspace-art-base: #e8cda2;
   --color-bg-white-0: #fffdf9;
   --color-bg-weak-50: #f7f2e8;
   --color-bg-weak-25: #fbf7ef;
@@ -916,20 +919,62 @@ html[data-appearance="golden-clouds"] .app-workspace {
   --color-text-soft-400: #6b5b49;
 }
 
-html[data-appearance="golden-clouds"] .workspace-canvas,
-.golden-clouds-preview {
-  background-color: #fbf4e6;
-  background-image:
-    radial-gradient(ellipse 38% 16% at 6% 22%, #fffdf8 10%, transparent 76%),
-    radial-gradient(ellipse 40% 22% at 29% 14%, rgb(255 255 255 / 94%) 10%, transparent 78%),
-    radial-gradient(ellipse 44% 22% at 95% 34%, #fffaf0 14%, transparent 78%),
-    radial-gradient(ellipse 45% 20% at 74% 42%, rgb(255 255 255 / 85%) 10%, transparent 80%),
-    radial-gradient(ellipse 55% 26% at 14% 86%, rgb(255 255 255 / 88%) 18%, transparent 80%),
-    linear-gradient(145deg, #fdf7eb 5%, #f2dfba 42%, #fcf7ed 72%, #e9d5ad);
+html[data-appearance="dark-forest"] .app-workspace {
+  --workspace-art: url("/themes/dark-forest.webp");
+  --workspace-art-tint: rgb(0 10 6 / 35%);
+  --workspace-art-base: #101e1b;
+  --color-bg-white-0: #0c1512;
+  --color-bg-weak-50: #17231e;
+  --color-bg-weak-25: #111c17;
+  --color-stroke-soft-200: #293a31;
+  --color-stroke-sub-300: #52675b;
+  --color-text-sub-600: #c2d0c7;
+  --color-text-soft-400: #a4b7aa;
 }
 
-html[data-appearance="golden-clouds"] .assistant-workspace {
+html[data-appearance="deep-space"] .app-workspace {
+  --workspace-art: url("/themes/deep-space.webp");
+  --workspace-art-tint: rgb(3 5 17 / 30%);
+  --workspace-art-base: #0b1020;
+  --color-bg-white-0: #0b0e1b;
+  --color-bg-weak-50: #191e32;
+  --color-bg-weak-25: #111628;
+  --color-stroke-soft-200: #303852;
+  --color-stroke-sub-300: #5b6688;
+  --color-text-sub-600: #c7cce0;
+  --color-text-soft-400: #adb7d4;
+}
+
+html[data-appearance="moonlit-ocean"] .app-workspace {
+  --workspace-art: url("/themes/moonlit-ocean.webp");
+  --workspace-art-tint: rgb(1 8 18 / 35%);
+  --workspace-art-base: #0d1b2b;
+  --color-bg-white-0: #0b141f;
+  --color-bg-weak-50: #162638;
+  --color-bg-weak-25: #101d2c;
+  --color-stroke-soft-200: #2c4158;
+  --color-stroke-sub-300: #576f8a;
+  --color-text-sub-600: #c5d2e0;
+  --color-text-soft-400: #a9bed4;
+}
+
+html:is([data-appearance="golden-clouds"], [data-appearance="dark-forest"], [data-appearance="deep-space"], [data-appearance="moonlit-ocean"]) .workspace-canvas {
+  background-color: var(--workspace-art-base);
+  background-image: linear-gradient(var(--workspace-art-tint), var(--workspace-art-tint)), var(--workspace-art);
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: cover;
+}
+
+html:is([data-appearance="golden-clouds"], [data-appearance="dark-forest"], [data-appearance="deep-space"], [data-appearance="moonlit-ocean"]) .assistant-workspace {
   background-color: transparent;
+}
+
+html:is([data-appearance="golden-clouds"], [data-appearance="dark-forest"], [data-appearance="deep-space"], [data-appearance="moonlit-ocean"]) .assistant-message {
+  border: 1px solid var(--color-stroke-soft-200);
+  border-radius: 1rem;
+  background-color: var(--color-bg-white-0);
+  padding: 1rem;
 }
 
 /* ---------------------------------------------------------------------------
