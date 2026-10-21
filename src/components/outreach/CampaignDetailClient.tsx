@@ -188,7 +188,8 @@ export default function CampaignDetailClient({
           { label: "Follow-ups today", value: pulse.followUpsToday.toLocaleString("en-US"), icon: RiMailSendLine, hint: "Later steps due to send today" },
           { label: "New leads reached today", value: pulse.newLeadsReachedToday.toLocaleString("en-US"), icon: RiUserAddLine, hint: "First emails sent today" },
           { label: "Sequence steps", value: String(pulse.activeSequences), icon: RiStackLine },
-          { label: "Next email", value: untilNext(pulse.nextSendAt), icon: RiTimeLine, hint: campaign.status === "active" ? "The next queued send" : "Sends run while the campaign is active" },
+          // A paused or finished campaign sends nothing, whatever is still queued: never "Due now" there.
+          { label: "Next email", value: campaign.status === "active" ? untilNext(pulse.nextSendAt) : "Not sending", icon: RiTimeLine, hint: campaign.status === "active" ? "The next queued send" : "Sends run while the campaign is active" },
         ]}
       />
 
