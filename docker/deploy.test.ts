@@ -431,3 +431,13 @@ describe("docker/deploy.sh", () => {
     }
   });
 });
+
+// The image runs each default migration from scripts/, so .dockerignore must
+// let every one of them into the build context; a missed allow line only
+// shows up as a failed deploy on the server (add-pilot-fixes did).
+test("every default migration reaches the image: deploy.sh's list is the tested one, each allowed by .dockerignore", () => {
+  const defaults = readFileSync(SCRIPT, "utf8").match(/^readonly DEFAULT_MIGRATIONS="([^"]*)"/m)?.[1]?.split(/\s+/).filter(Boolean) ?? [];
+  expect(defaults).toEqual(MIGRATIONS);
+  const allowed = new Set(readFileSync(join(import.meta.dir, "..", ".dockerignore"), "utf8").split("\n").map((line) => line.trim()));
+  expect(defaults.filter((name) => !allowed.has(`!scripts/${name}.ts`))).toEqual([]);
+});
