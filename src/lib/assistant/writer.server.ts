@@ -316,9 +316,10 @@ export async function writePersonalLines(input: {
  * the owner's offer, with the reason). Unsure means standard. It also judges
  * each lead against the owner's request (requestFit, leadFit.ts): what they
  * stated of the lead is a requirement, an unknown fact is never a
- * contradiction, a keyword is a hint, and how the research runs (budget,
- * time, sources, no outreach) is no requirement at all. The caller passes
- * the request's subject (requestSubject) for that reason.
+ * contradiction, a keyword is a hint, how the research runs (budget, time,
+ * sources, no outreach) is no requirement at all, and the kind and place the
+ * request names outrank the target customers saved with the business. The
+ * caller passes the request's subject (requestSubject) for that reason.
  */
 export async function sortLeads(input: {
   context: string;

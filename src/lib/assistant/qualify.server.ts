@@ -65,7 +65,10 @@ export type JudgedLead = { fit: LeadFit; reason: string; group: string; approach
  * the code's own rules (applyRequestRules). The model judges against the
  * request's subject (requestSubject: what to find, not how the research
  * runs, so "do not contact anyone" or "$0" is never a requirement a lead
- * fails); the code's rules read the whole request. Throws when the model fails.
+ * fails); the code's rules read the whole request. With a request, whether a
+ * lead matches comes from requestFit, and a "skip" only keeps it out of the
+ * messages; a no_match is never messaged; a lead that names no business or
+ * person is at most unconfirmed (leadFit.ts). Throws when the model fails.
  */
 export async function judgeLeads(input: { facts: Record<string, string>[]; request: string | null; context: string; cost: WriterCost; knownGroups?: string[] }): Promise<JudgedLead[]> {
   const known = [...(input.knownGroups ?? [])];

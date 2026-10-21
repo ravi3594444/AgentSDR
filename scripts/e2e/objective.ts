@@ -48,7 +48,7 @@ process.env.DISCOVERY_DNS_CHECK = "off";
 
 // ------------------------------------------------------------ the model, scripted
 const root = join(import.meta.dir, "..", "..");
-type Input = { userPrompt: string; schemaName?: string; accept: (text: string) => void };
+type Input = { userPrompt: string; systemPrompt?: string; schemaName?: string; accept: (text: string) => void };
 type Script = (input: Input) => string | Promise<string>;
 let replies: Script[] = [];
 const prompts: string[] = [];
@@ -58,12 +58,15 @@ let judge: (facts: Record<string, string>) => Verdict = () => ({ requestFit: "fi
 const judgedLeads: Record<string, string>[] = [];
 /** The request each sorting call judged against, as the model read it (pilot L02: the subject, not how the research runs). */
 const judgedAgainst: string[] = [];
+/** The rules each sorting call was given (its system prompt). */
+const sortingRules: string[] = [];
 mock.module(join(root, "src/lib/ai/server/structuredCompletion.ts"), () => ({
   completeStructured: async (input: Input) => {
     if (input.schemaName === "lead_sorting") {
       const leads = [...input.userPrompt.matchAll(/^(\d+)(?: \([^)]*\))?: (\{.*\})$/gm)].map((match) => ({ index: Number(match[1]), facts: JSON.parse(match[2]!) as Record<string, string> }));
       judgedLeads.push(...leads.map((lead) => lead.facts));
       judgedAgainst.push(input.userPrompt.match(/^THE OWNER'S REQUEST: (.*)$/m)?.[1] ?? "");
+      sortingRules.push(input.systemPrompt ?? "");
       const text = JSON.stringify({ leads: leads.map(({ index, facts }) => {
         const verdict = judge(facts);
         return { index, group: "Leads", approach: verdict.requestFit === "does_not_fit" ? "skip" : "standard", reason: verdict.reason, requestFit: verdict.requestFit, noWebsiteRequired: verdict.noWebsite === true };
@@ -718,6 +721,10 @@ await runInOrganization(a.org.id, async () => {
     await finishSearches(requestId);
     // Pilot L02: the leads are judged against what to find, not against "$0", "5 minutes" or "do not contact anyone".
     check("its leads are judged against the request's subject only", judgedAgainst.length > judgedBefore && judgedAgainst.slice(judgedBefore).every((request) => request === "Find 3 dental clinics in Pune, India."), JSON.stringify(judgedAgainst.slice(judgedBefore)));
+    // …by a sorter told so: leadSortingSystemPrompt (leadFit.ts) is what sortLeads sends.
+    check("…under the sorter's rules: how the research runs is no requirement, and the request outranks the saved target customers",
+      sortingRules.length > judgedBefore && sortingRules.slice(judgedBefore).every((rules) => /Instructions about how the research runs[^\n]*are NOT requirements/.test(rules) && /replaces the target customers and locations saved/.test(rules)),
+      sortingRules.at(-1)?.slice(0, 300) ?? "no sorting call");
     // Short of the target (2 of 3) the driver continues the request, now with the chat in Autonomous mode.
     await db.update(schema.assistantThreads).set({ autonomous: true, autonomousBy: a.owner.id, autonomousAt: new Date() }).where(eq(schema.assistantThreads.id, thread.id));
     replies = turn("Trying dentists too.", [{ tool: "find_leads", args: { what: "dentists", where: "Pune, India", maxResults: 3 } }]);

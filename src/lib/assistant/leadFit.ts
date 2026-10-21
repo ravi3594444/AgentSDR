@@ -14,10 +14,37 @@ export type RequestFit = "fits" | "unconfirmed" | "does_not_fit";
 
 export type SortVerdict = { approach: LeadApproach; reason: string; requestFit: RequestFit; noWebsiteRequired: boolean };
 
-/** A stored verdict: left out or contradicting the request is no_match; unknown is unconfirmed; otherwise a match. */
-export function verdictOf(sort: Pick<SortVerdict, "approach" | "requestFit">): LeadFit {
-  if (sort.approach === "skip" || sort.requestFit === "does_not_fit") return "no_match";
+/**
+ * A stored verdict: contradicting the request is no_match; unknown is
+ * unconfirmed; otherwise a match. With a request given, relevance comes from
+ * requestFit alone (pilot finding L02): a lead the owner asked for is a
+ * match even when the sorter would not message it ("skip", say because the
+ * saved target customers differ), and plan preparation leaves a skipped lead
+ * out with its reason, so who gets contacted does not widen. With no
+ * request, the owner's business decides and a skip is no match.
+ */
+export function verdictOf(sort: Pick<SortVerdict, "approach" | "requestFit">, options: { requestGiven?: boolean } = {}): LeadFit {
+  if (sort.requestFit === "does_not_fit" || (!options.requestGiven && sort.approach === "skip")) return "no_match";
   return sort.requestFit === "unconfirmed" ? "unconfirmed" : "match";
+}
+
+/** The facts that say who a lead is, as the sources write them: a business or person's name, or a profile of theirs. */
+const IDENTITY_FACTS = ["name", "fullName", "businessName", "listingName", "company", "username", "instagram", "instagramUsername", "linkedinUrl", "profileUrl", "profile"] as const;
+
+/**
+ * Whether a lead's facts name a business or person. A contact read off a
+ * directory page names nobody: its "business name" is the contact itself
+ * ("hi@star.in (listed on pune-guide.example)"), so an email, a phone number
+ * or the listed value does not count.
+ */
+export function namesLead(facts: Record<string, string>): boolean {
+  const listed = facts.listedAs?.trim().toLowerCase() || null;
+  return IDENTITY_FACTS.some((key) => {
+    const value = facts[key]?.replace(/\s*\(listed on [^)]*\)\s*$/i, "").trim();
+    if (!value) return false;
+    if (listed && value.toLowerCase() === listed) return false;
+    return !/^[^\s@]+@[^\s@]+$/.test(value) && !/^\+?[\d\s().-]{6,}$/.test(value);
+  });
 }
 
 // ── A lead's website, as far as it was checked ───────────────────────────────
@@ -63,10 +90,18 @@ export function requiresNoWebsite(request: string): boolean {
  * the sorter says that applies to this lead): a website found and read is no
  * match; one listed but unchecked, a domain on record or nothing known leaves
  * the lead unconfirmed. "None listed" stays a match, with that uncertainty in
- * its reason.
+ * its reason. And a lead whose facts name no business or person (namesLead)
+ * is never a match, whatever the model says: at most unconfirmed.
  */
 export function applyRequestRules(request: string, facts: Record<string, string>, sort: SortVerdict): { fit: LeadFit; reason: string } {
-  const fit = verdictOf(sort);
+  const judged = websiteRule(request, facts, sort);
+  if (judged.fit !== "match" || namesLead(facts)) return judged;
+  const only = facts.listedAs?.trim() ? ` (only ${facts.listedAs.trim()}, listed on a directory page)` : "";
+  return { fit: "unconfirmed", reason: `Nothing found names a business or person${only}, so it cannot count as a match.` };
+}
+
+function websiteRule(request: string, facts: Record<string, string>, sort: SortVerdict): { fit: LeadFit; reason: string } {
+  const fit = verdictOf(sort, { requestGiven: request.trim() !== "" });
   if (fit !== "match" || !sort.noWebsiteRequired || !requiresNoWebsite(request)) return { fit, reason: sort.reason };
   const state = websiteState(facts.websiteStatus);
   if (state === "read") return { fit: "no_match", reason: `It has a website (${facts.websiteStatus!.replace(/^website found and read:\s*/, "")}), and you asked for ones without.` };
@@ -79,48 +114,79 @@ export function applyRequestRules(request: string, facts: Record<string, string>
 // ── The request the leads are judged against ─────────────────────────────────
 
 /**
- * The owner's request with the clauses about how the research runs taken
- * out (pilot finding L02): budgets and spend, time limits, which sources to
- * use, research-only and no-outreach statements, where to save or send the
- * results, and how to contact the leads. What is left — the kind of business
- * or person, the place, how many, and conditions such as having no website
- * or an Instagram account — is what a lead can fit or fail. A clause that
- * names what to find is kept whatever else it says; when every clause is
- * about how to run, the text is returned as it is.
+ * The owner's request with the instructions about how the research runs
+ * taken out (pilot finding L02), so "do not contact anyone", "$0" or "within
+ * 5 minutes" is never a requirement a lead fails. A clause is taken out only
+ * when it is nothing but such an instruction: one of its words says so (a
+ * budget, a time limit, a source, research only, a list to save or send, or
+ * contacting the leads) and every other word is one such an instruction is
+ * made of. Any word about the leads themselves keeps the clause ("ones that
+ * spend on ads", "active on Instagram", "within 10 minutes of the beach",
+ * "send me their emails"), so the kind, the place, the count and every
+ * condition stay, and a clause that is unsure stays. A no-website
+ * requirement is never lost; when every clause is an instruction the text is
+ * returned as it is. The clauses kept are joined as they were written.
  */
-const CONTROL_CLAUSE = [
-  // budgets and spend
-  /(?:\$|₹|€|£)\s?\d|\b\d+\s?(?:usd|dollars?|rupees|rs|inr|credits?)\b|\b(?:budget|spend|spending|spent|cost\s+cap|no\s+cost|free\s+of\s+charge)\b/i,
-  // time limits
-  /\b(?:within|in|under|max(?:imum)?|up\s+to|no\s+more\s+than|at\s+most|time\s+limit(?:\s+of)?|deadline(?:\s+of)?|finish(?:\s+it)?\s+(?:within|in|by)|done\s+(?:within|in|by)|wrap\s+up\s+(?:within|in|by))\s+(?:the\s+next\s+)?(?:\d+(?:\.\d+)?|an?|one|half\s+an?|two|three|five|ten)\s*(?:minutes?|mins?|hours?|hrs?|days?|h|m|d)\b/i,
+const INSTRUCTION_SAYS = [
+  // a budget
+  /\b(?:spend|spending|spent|budget|costs?|cap)\b|[$₹€£]\s?\d|\b\d[\d,.]*\s*(?:usd|dollars?|rupees?|rs|inr|credits?)\b|\bfree\s+of\s+charge\b|\bno\s+cost\b/i,
+  // a time limit
+  /\b(?:minutes?|mins?|hours?|hrs?|seconds?|secs?|deadline)\b|\btime\s+limit\b|\b\d+\s*(?:m|h|min|hr)\b/i,
   // which sources to use
-  /\b(?:free|paid|cheap|cheapest)\s+sources?\b|\bsources?\s+only\b|\b(?:use|using|prefer|stick\s+to|try)\s+(?:only\s+)?(?:free|google\s+maps|apify|tavily|bright\s?data|tinyfish|treg|the\s+web|web\s+search|reddit|hacker\s+news)\b|\bno\s+paid\b|\b(?:via|through)\s+(?:apify|google\s+maps|bright\s?data|tavily)\b/i,
+  /\bsources?\b|\b(?:google\s+maps|apify|tavily|bright\s?data|tinyfish|treg|reddit|hacker\s+news|web\s+search)\b/i,
   // research only, no outreach
-  /\bresearch[\s-]+only\b|\b(?:only|just|purely|strictly)\s+research\b|\bno\s+(?:cold\s+)?(?:outreach|contact|contacting|messages?|messaging|campaigns?|emails?|emailing|dms?|calls?|pitching|pitches|sending)\b|\b(?:do\s+not|don'?t|dont|never)\s+(?:contact|message|email|whatsapp|dm|call|pitch|reach\s+out|approach)\b|\bwithout\s+(?:contacting|messaging|emailing|reaching\s+out)\b/i,
-  // where to save or send the results
-  /\b(?:save|export|download|share|keep|put)\b[^]*?\b(?:lead\s+)?(?:lists?|csv|sheet|spreadsheet|file|results?|leads?|them)\b|\b(?:send|email|mail|message|whatsapp|share|give|show)\s+(?:it\s+|them\s+|the\s+\w+\s+)?(?:to\s+)?(?:me|us)\b/i,
-  // how to contact the leads
-  /\b(?:contact|message|email|mail|whatsapp|dm|pitch|reach|call|approach|follow\s+up\s+with)\s+(?:them|each|every|all|everyone|the\s+(?:leads|clinics|businesses|people|owners|list|results|rest|ones))\b|\b(?:do\s+)?outreach\b|\bcampaigns?\b|\b(?:on|via|through|by|over)\s+(?:whatsapp|email|linkedin|instagram|sms|phone)\b/i,
+  /\bresearch[\s-]+only\b|\b(?:only|just|purely|strictly)\s+(?:for\s+)?research\b|\bno\s+(?:cold\s+)?(?:outreach|contact(?:ing)?|messages?|messaging|campaigns?|emails?|emailing|dms?|calls?|pitch(?:es|ing)?|sending)\b|\b(?:do\s+not|don'?t|dont|never)\s+(?:contact|message|email|whatsapp|dm|call|pitch|text|approach|reach|send)\b|\bwithout\s+(?:contacting|messaging|emailing|reaching)\b/i,
+  // where to save or send the list
+  /\b(?:save|export|download|share|put|create|build|make|keep)\b.*\b(?:lists?|csv|sheets?|spreadsheet|file|results?|report|excel|table)\b|\b(?:send|give|show|email)\s+(?:it\s+|them\s+|the\s+\w+\s+)?(?:to\s+)?(?:me|us)\b|\blist\s+them\b/i,
 ];
-/** A clause that names what to find ("find 3 dental clinics", "list every gym") is the subject, whatever else it says. */
-const NAMES_SUBJECT = /\b(?:find|look(?:ing)?\s+for|search(?:\s+for)?|get|collect|gather|list|identify|research|discover|need|want|target)\s+(?:me\s+|us\s+)?(?:(?:at\s+least|about|around|up\s+to|some|all|every|the|a|an|new|more)\s+)?(?:\d[\d,]*\s+)?(?!(?:only|them|it|me|us|out|no|nothing|back)\b)[a-z]/i;
-/** Clause boundaries, kept so the clauses left are joined as they were; a comma inside a number ("$1,000") is not one. */
-const CLAUSE_SPLIT = /([.;!?\n]+\s*|,\s*(?!\d)|\s+(?:and|then|but|also|plus)\s+)/i;
+/** "message them on WhatsApp", "do outreach on email": how to contact the leads, whose words may name a channel. */
+const CONTACT_THEM = /\b(?:message|email|whatsapp|contact|dm|pitch|call|text|reach\s+out\s+to|follow\s+up\s+with)\s+(?:them|each(?:\s+of\s+them)?|everyone|all\s+of\s+them)\b|\b(?:do|start|run)\s+(?:the\s+)?outreach\b/i;
+/** The words such instructions are made of. A word not here is about the leads, and keeps its clause. */
+const INSTRUCTION_WORDS = new Set([
+  // joining words
+  "a", "an", "the", "and", "or", "with", "at", "of", "to", "for", "in", "on", "is", "it", "be", "please", "also", "then", "just", "only", "up", "under", "below",
+  "within", "no", "not", "more", "than", "max", "maximum", "most", "least", "total", "per", "this", "yet", "now", "today", "so", "all", "any", "as", "by", "from",
+  "use", "using", "our", "my", "you", "can", "will", "let", "s", "first", "keep", "stick", "try", "prefer", "request", "search", "searches",
+  // a budget
+  "spend", "spending", "spent", "budget", "budgets", "cost", "costs", "cap", "capped", "limit", "limited", "usd", "dollar", "dollars", "rupee", "rupees", "rs", "inr",
+  "credit", "credits", "zero", "nil", "none", "nothing", "money", "paid", "pay", "free", "cheap", "cheapest", "charge", "charges", "price",
+  // a time limit
+  "finish", "finished", "done", "wrap", "complete", "completed", "stop", "minute", "minutes", "mins", "min", "m", "hour", "hours", "hrs", "hr", "h", "second", "seconds",
+  "secs", "deadline", "time", "half", "one", "two", "three", "four", "five", "ten", "fifteen", "twenty", "thirty", "sixty", "take", "takes", "longer", "quick", "quickly", "fast",
+  // which sources
+  "source", "sources", "google", "maps", "map", "apify", "tavily", "bright", "brightdata", "data", "tinyfish", "treg", "web", "reddit", "hacker", "news",
+  // research only, no outreach
+  "research", "purely", "strictly", "outreach", "contact", "contacting", "message", "messages", "messaging", "campaign", "campaigns", "email", "emails", "emailing",
+  "dm", "dms", "call", "calls", "calling", "pitch", "pitches", "pitching", "sending", "send", "cold", "do", "don", "t", "dont", "never", "anyone", "anybody", "people",
+  "them", "without", "reaching", "reach", "out", "approach", "nobody",
+  // a list to save or send
+  "save", "saved", "export", "download", "share", "put", "make", "create", "build", "give", "show", "me", "us", "lead", "leads", "list", "lists", "csv", "sheet", "sheets",
+  "spreadsheet", "file", "results", "result", "into", "report", "excel", "table",
+]);
+/** How to contact the leads may also name a channel and whom. */
+const CONTACT_WORDS = new Set(["whatsapp", "linkedin", "instagram", "phone", "sms", "text", "via", "through", "over", "each", "every", "everyone", "follow", "after", "afterwards", "later", "run", "start"]);
+/** Clause boundaries, kept so the clauses left are joined as they were. A point or comma inside a number ("4.5", "$1,000") is not one. */
+const CLAUSE_SPLIT = /((?:[;!?\n]|\.(?!\d))+\s*|,(?!\d)\s*|\s+(?:and|then|but|also|plus)\s+)/i;
+
+function isInstruction(clause: string): boolean {
+  const words = clause.toLowerCase().match(/[$₹€£]?\d[\d,.]*|[a-z]+/g) ?? [];
+  const contactThem = CONTACT_THEM.test(clause);
+  if (!words.length || !(contactThem || INSTRUCTION_SAYS.some((pattern) => pattern.test(clause)))) return false;
+  return words.every((word) => /^[$₹€£]?\d/.test(word) || INSTRUCTION_WORDS.has(word) || (contactThem && CONTACT_WORDS.has(word)));
+}
 
 export function requestSubject(text: string): string {
-  const parts = text.trim().split(CLAUSE_SPLIT);
+  const whole = text.trim();
+  const parts = whole.split(CLAUSE_SPLIT);
   let out = "";
-  let kept = 0;
   for (let index = 0; index < parts.length; index += 2) {
     const clause = parts[index]!.trim();
-    if (!clause) continue;
-    if (CONTROL_CLAUSE.some((pattern) => pattern.test(clause)) && !NAMES_SUBJECT.test(clause)) continue;
+    if (!clause || isInstruction(clause)) continue;
     const separator = index > 0 ? parts[index - 1]! : "";
     out += out ? `${separator.includes("\n") ? separator : separator.replace(/\s+/g, " ")}${clause}` : clause;
-    kept += 1;
   }
-  if (!kept) return text.trim();
-  const ending = text.trim().match(/[.!?]$/)?.[0];
+  if (!out || (requiresNoWebsite(whole) && !requiresNoWebsite(out))) return whole;
+  const ending = whole.match(/[.!?]$/)?.[0];
   return ending && !/[.;!?]$/.test(out) ? `${out}${ending}` : out;
 }
 
@@ -136,10 +202,11 @@ export function leadSortingSystemPrompt(knownGroups: readonly string[]): string 
     "group: name the kind of lead in 2 to 4 words ('Real estate agents', 'Cleaning companies', 'Dental clinics'), the same words for leads of the same kind." + (knownGroups.length ? ` Reuse these names when they fit: ${knownGroups.map((group) => `'${group}'`).join(", ")}.` : ""),
     "approach 'standard': the group's message fits this lead. This is the default.",
     "approach 'personal': rare. Every standard message already opens with a line from the lead's address, rating and category, so choose 'personal' only when the facts show something particular to this lead that the group's message would miss (a specialty, a stated need, a detail from its website or title) and it fits the owner's offer well.",
-    "approach 'skip': clearly not a fit for the owner's offer (a different kind of business, a competitor of the owner, closed, or obviously out of reach). Never skip only because little is known.",
+    "approach 'skip': clearly not a fit for the owner's offer (a different kind of business from the one THE OWNER'S REQUEST asks for, or with no request from the owner's customers; a competitor of the owner; closed; or obviously out of reach). Never skip only because little is known.",
+    "When THE OWNER'S REQUEST names a kind of lead or a place, that is whom the owner wants now: it replaces the target customers and locations saved in THE OWNER'S BUSINESS. A lead the request asks for is never 'skip' or 'does_not_fit' because the saved target customers or locations differ.",
     "approach is about the message the lead would get if it were contacted. Whether the owner wants anyone contacted now, or how, is decided elsewhere and never makes a lead 'skip'.",
     "reason: one short sentence the owner reads, based only on the facts given. Never invent facts about a lead. A finding from their own website (hiring, booking, websiteSays, websiteNeed, decisionMakers) is a reason they may fit, never a sign they want to buy: say 'may', never 'wants' or 'needs'.",
-    "requestFit: whether the lead is what the OWNER'S REQUEST asks for. What the owner stated of the lead itself (the kind of business or person, the place, a condition such as having no website) is a requirement wherever it applies to this lead; words in a title or name ('agent', 'founder', 'realty') are hints, not proof. 'fits': the facts show it is what they asked for. 'does_not_fit': a fact contradicts what they asked (another kind of business or role, another place, a website found when they asked for ones without), or it is a skip. 'unconfirmed': nothing contradicts it, but the facts cannot show a requirement (the place is not shown, whether it has a website is not known). Never call a lead does_not_fit only because little is known. With no request given, judge against the owner's business and offer.",
+    "requestFit: whether the lead is what the OWNER'S REQUEST asks for. What the owner stated of the lead itself (the kind of business or person, the place, a condition such as having no website) is a requirement wherever it applies to this lead; words in a title or name ('agent', 'founder', 'realty') are hints, not proof. 'fits': the facts show it is what they asked for. 'does_not_fit': a fact contradicts what they asked (another kind of business or role, another place, closed for good, a website found when they asked for ones without). 'unconfirmed': nothing contradicts it, but the facts cannot show a requirement (the place is not shown, whether it has a website is not known). Never call a lead does_not_fit only because little is known. With no request given, judge against the owner's business and offer.",
     "Instructions about how the research runs (research only, no outreach, do not contact anyone, a budget or spend cap, a time limit, which sources to use, how many leads, where to save or send the list, which channel to use) are NOT requirements and never change requestFit or approach. A request that asks for no contact changes nothing about fit: judge the lead as if it would be contacted.",
     "noWebsiteRequired: true only when the owner's request asks for leads like this one to have no website (a request can list several kinds of lead and say it of only one). websiteStatus says what is known of its website: 'none listed' is not proof it has none, and 'could not be checked' is not proof either.",
     "reason, when requestFit is not 'fits': say which requirement is unmet or unconfirmed.",
