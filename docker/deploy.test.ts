@@ -443,3 +443,28 @@ test("every default migration reaches the image: deploy.sh's list is the tested 
   const allowed = new Set(readFileSync(join(import.meta.dir, "..", ".dockerignore"), "utf8").split("\n").map((line) => line.trim()));
   expect(defaults.filter((name) => !allowed.has(`!scripts/${name}.ts`))).toEqual([]);
 });
+
+test("a CHECK rewritten by several default migrations allows the same values in each, and in db/schema.sql", () => {
+  // deploy.sh runs every default migration on every deploy, in order. One that drops a CHECK and adds it back
+  // with an older, shorter list fails on any row a later value wrote (a social_research job stopped
+  // add-objectives), and the deploy stops there: an earlier migration must carry every later value too.
+  const root = join(import.meta.dir, "..");
+  const rewrites = new Map<string, { file: string; values: string[] }[]>();
+  for (const name of MIGRATIONS) {
+    for (const [file] of readFileSync(join(root, "scripts", `${name}.ts`), "utf8").matchAll(/db\/migrations\/[\w.-]+\.sql/g)) {
+      const sql = readFileSync(join(root, file), "utf8");
+      for (const match of sql.matchAll(/ADD CONSTRAINT (\w+)\s+CHECK \(\s*(?:\w+ IS NULL OR )?\w+ IN \(([^)]*)\)\s*\)/g)) {
+        const values = [...match[2]!.matchAll(/'([^']*)'/g)].map((value) => value[1]!).sort();
+        const seen = rewrites.get(match[1]!) ?? [];
+        if (!seen.some((entry) => entry.file === file)) rewrites.set(match[1]!, [...seen, { file, values }]);
+      }
+    }
+  }
+  expect(rewrites.get("assistant_jobs_kind_chk")?.length).toBeGreaterThan(1);
+  const schema = readFileSync(join(root, "db/schema.sql"), "utf8");
+  for (const [constraint, entries] of rewrites) {
+    const fresh = schema.match(new RegExp(`CONSTRAINT ${constraint} CHECK \\(\\((?:\\(\\w+ IS NULL\\) OR \\()?\\(?\\w+ = ANY \\(ARRAY\\[([^\\]]*)\\]`))?.[1];
+    const expected = fresh ? [...fresh.matchAll(/'([^']*)'::text/g)].map((value) => value[1]!).sort() : entries.at(-1)!.values;
+    for (const entry of entries) expect({ constraint, file: entry.file, values: entry.values }).toEqual({ constraint, file: entry.file, values: expected });
+  }
+});
