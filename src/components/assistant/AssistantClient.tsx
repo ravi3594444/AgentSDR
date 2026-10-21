@@ -16,7 +16,6 @@ import {
   RiExternalLinkLine,
   RiFileList3Line,
   RiFileTextLine,
-  RiInformationLine,
   RiHistoryLine,
   RiLoader4Line,
   RiPauseLine,
@@ -41,6 +40,7 @@ import { displayTime } from "@/lib/assistant/displayTime";
 import * as Button from "@/components/alignui/button";
 import NeedsYouList from "@/components/assistant/NeedsYouList";
 import { RequestBar, RequestPanel, useThreadRequest } from "@/components/assistant/RequestPanel";
+import { EventRow } from "@/components/assistant/EventRow";
 import { useChatScroll } from "./useChatScroll";
 import { cn } from "@/utils/cn";
 
@@ -1417,24 +1417,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
     if (message.role === "event") {
       // Only the newest event can offer Retry: an older failure was already followed by more work.
       const retry = message.toolResult?.data?.retry === true && message.id === shown.at(-1)?.id;
-      return (
-        <div key={message.id} className="flex items-start gap-2 rounded-lg bg-bg-weak-50 px-3 py-2 text-paragraph-xs text-text-sub-600">
-          <RiInformationLine className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-          <span className="min-w-0 flex-1">
-            {message.content}
-            {eventLinks(message).map((link) => (
-              <Link key={link.href} href={link.href} className="ml-2 whitespace-nowrap font-medium text-primary-base underline-offset-2 hover:underline">
-                {link.label}
-              </Link>
-            ))}
-          </span>
-          {retry && (
-            <Button.Root variant="neutral" mode="stroke" size="xxsmall" className="shrink-0" disabled={sending || state.busy} onClick={() => void retryTurn()}>
-              Retry
-            </Button.Root>
-          )}
-        </div>
-      );
+      return <EventRow key={message.id} content={message.content} toolResult={message.toolResult} links={eventLinks(message)} retry={retry} retryDisabled={sending || state.busy} onRetry={() => void retryTurn()} />;
     }
     return <ToolMessage key={message.id} message={message} jobs={state.jobs} runs={state.runs} decisions={state.decisions ?? {}} canManageAutopilot={Boolean(setup?.canManageAutopilot)} lastReplyMode={state.lastReplyMode ?? null} onChanged={() => void refresh(true)} />;
   });

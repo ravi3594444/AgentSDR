@@ -12,6 +12,7 @@ import { runLinkedinSearchStep } from "./linkedinSearch.server";
 import { failObjective, jobRequestId, nudgeObjective, objectiveForJob, objectiveHold, objectiveRequest, postObjectiveReport } from "./objective.server";
 import { assessMembers, audienceFunnel, unjudgedMembers } from "./qualify.server";
 import { funnelLine, type LeadFunnel } from "./leadFit";
+import type { ChatEvent } from "./chatEvents";
 import { savedErrorText } from "@/lib/grid/sanitize";
 import { runObjectiveStep } from "./objectiveDriver.server";
 import { runOutreachStartStep } from "./outreach.server";
@@ -100,6 +101,32 @@ function discoveryMessage(job: AssistantJob): string {
   return `${parts.filter(Boolean).join(" ")}${extra.length ? `; ${extra.join(", ")}` : ""}.${providerNote}`;
 }
 
+/** The same report as data, for the chat's compact line (chatEvents.ts); the text above stays the full version. */
+function reportEvent(job: AssistantJob, search: boolean): ChatEvent {
+  const result = (job.result ?? {}) as Record<string, unknown> & { fit?: LeadFunnel; launches?: { channel: string; added: number; skipped: number; problem: string | null }[]; autopilot?: boolean };
+  if (!search) {
+    return { kind: "outreach_started", runId: job.runId ?? null, ok: job.status === "succeeded", launches: result.launches ?? [], automatic: Boolean(result.autopilot) };
+  }
+  const payload = (job.payload ?? {}) as { target?: "maps" | "facebook" | "linkedin"; provider?: "apify" | "scraper" };
+  const target = result.target === "facebook" || result.target === "linkedin" ? result.target : payload.target === "facebook" || payload.target === "linkedin" ? payload.target : "maps";
+  const source = job.kind === "linkedin_search" ? "LinkedIn"
+    : job.kind === "web_discovery" ? "websites and directories"
+    : job.kind === "apify_instagram" ? "Instagram"
+    : sourceLabel(target, (result.provider === "apify" || result.provider === "scraper" ? result.provider : payload.provider) ?? null);
+  const fit = result.fit && result.fit.contactable ? result.fit : null;
+  return {
+    kind: "search_report",
+    jobId: job.id,
+    ok: job.status === "succeeded",
+    source,
+    found: Number(result.found ?? 0) || 0,
+    contactable: Number(result.eligible ?? 0) || 0,
+    matching: fit ? fit.qualified : null,
+    judged: fit ? fit.contactable : null,
+    error: job.status === "failed" ? job.error ?? "unknown error" : null,
+  };
+}
+
 function outreachMessage(job: AssistantJob): string {
   if (job.status === "failed") return `Starting the outreach failed: ${job.error ?? "unknown error"}`;
   const result = (job.result ?? {}) as { launches?: { channel: string; added: number; skipped: number; problem: string | null }[]; started?: string[]; problems?: string | null; autopilot?: boolean };
@@ -110,7 +137,7 @@ function outreachMessage(job: AssistantJob): string {
     // A launch whose own summary was lost (see runOutreachStartStep): what the run recorded, without per-channel counts.
     : [`started on ${(result.started ?? []).join(", ") || "no channel"} (the lead counts are on the plan)`, ...(result.problems ? [`not started — ${result.problems}`] : [])];
   // Started means the campaigns are active, not that anything was sent: each sender still waits for its hours, limits and gaps.
-  return `Outreach started: campaigns activated. ${lines.join("; ")}.${result.autopilot ? " Ordinary replies will be answered automatically; anything unusual waits for you in Action required." : " Replies wait for you in Action required."} Nothing is sent until each channel's sender is allowed to send (its sending hours, daily limits and gaps); sends appear on the plan card as they are recorded.`;
+  return `Outreach started: campaigns activated. ${lines.join("; ")}.${result.autopilot ? " Ordinary replies will be answered automatically; anything unusual waits for you in the Inbox." : " Replies wait for you in the Inbox."} Nothing is sent until each channel's sender is allowed to send (its sending hours, daily limits and gaps); sends appear on the plan card as they are recorded.`;
 }
 
 let registered = false;
@@ -244,7 +271,7 @@ export async function reportFinishedJob(job: AssistantJob): Promise<void> {
   const objective = search ? await objectiveForJob(job).catch(() => null) : null;
   const content = `${search ? `${discoveryMessage(job)}${fitText(job)}` : outreachMessage(job)}${coverage ? ` ${coverage}` : ""}`;
   const posted = await claimJobReport(job, async (tx) => {
-    await addMessage({ threadId, role: "event", content, toolResult: { reportKey: job.reportKey } }, tx);
+    await addMessage({ threadId, role: "event", content, toolResult: { reportKey: job.reportKey, data: { event: reportEvent(job, search) } } }, tx);
     if (contactAfter) await tx.update(assistantJobs).set({ progress: followUpPatch("owed") }).where(and(inOrg(assistantJobs), eq(assistantJobs.id, job.id)));
   });
   if (objective) await nudgeObjective(objective.id).catch((error) => console.error("[assistant] waking a request's objective failed:", error));
@@ -320,9 +347,12 @@ async function followUpSearch(job: AssistantJob, threadId: string, contactAfter:
             // A reason from autoStartPlan was already posted; with none (switched off meanwhile) the plan waits as usual.
             // A plan closed for having nobody new to contact was reported as such: it is not offered for Start.
             if (!approval.started && !approval.closed && !(auto && auto.reason)) {
+              const channels: Record<string, number> = {};
+              for (const assignment of plan?.assignments ?? []) channels[assignment.channel] = (channels[assignment.channel] ?? 0) + 1;
               await addMessage({
                 threadId,
                 role: "event",
+                toolResult: { data: { event: { kind: "plan_ready", runId, leads: plan?.assignments.length ?? 0, channels, waitingReason: approval.reason } satisfies ChatEvent } },
                 content: approval.reason
                   ? `The outreach plan for these leads is ready below${planned}. It was not started with the rest of your request because ${approval.reason}: check it and press Start. Nothing is sent before that.`
                   : `The outreach plan for these leads is ready below${planned}. Check the audience, the sample messages and the limits, then press Start. Nothing is sent before that.`,

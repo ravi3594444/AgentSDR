@@ -11,6 +11,7 @@ import { getObjective, nudgeObjective, objectiveFacts, postObjectiveReport, read
 import { assistantMessages, assistantObjectives, type ObjectiveProgress } from "./schema";
 import { addMessage, claimThread, releaseThread, threadBusy } from "./threads.server";
 import type { AssistantJob, StepOutcome } from "./worker";
+import type { ChatEvent } from "./chatEvents";
 import { assessMembers } from "./qualify.server";
 import { savedErrorText } from "@/lib/grid/sanitize";
 
@@ -179,7 +180,11 @@ async function continueRequest(objective: Objective, facts: ObjectiveFacts, step
           web: facts.web,
           funnel: facts.funnel,
         }),
-        toolResult: { objectiveNote: noteKey, objectiveId: objective.id },
+        toolResult: {
+          objectiveNote: noteKey,
+          objectiveId: objective.id,
+          data: { event: { kind: "continuation", n: step.n, leads: facts.leads, target: objective.leadTarget, spentUsd: facts.spend.totalUsd, capUsd: objective.spendCapUsd, minutesLeft: (objective.deadlineAt.getTime() - Date.now()) / 60_000 } satisfies ChatEvent },
+        },
       });
     }
     // A retry keeps when the continuation first started: searches its earlier attempt started still count as its own.

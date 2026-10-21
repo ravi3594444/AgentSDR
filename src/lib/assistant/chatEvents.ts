@@ -1,0 +1,88 @@
+/**
+ * The chat's longer status reports — a search finished, a plan is ready,
+ * outreach started, the research continues — carry their figures as data
+ * (`toolResult.data.event`) beside the unchanged text, so the chat can show
+ * one compact line of counts and keep the full text one click away.
+ *
+ * Older chats stored the text only: compactEvent returns null for them and
+ * they render exactly as before. Pure; shared by the server that writes the
+ * events and the chat that reads them.
+ */
+
+export type ChatEvent =
+  | { kind: "search_report"; jobId: string; ok: boolean; source: string | null; found: number; contactable: number; matching: number | null; judged: number | null; error?: string | null }
+  | { kind: "plan_ready"; runId: string | null; leads: number; channels: Record<string, number>; waitingReason: string | null }
+  | { kind: "outreach_started"; runId: string | null; ok: boolean; launches: { channel: string; added: number; skipped: number; problem: string | null }[]; automatic: boolean }
+  | { kind: "continuation"; n: number; leads: number; target: number; spentUsd: number; capUsd: number; minutesLeft: number };
+
+export type CompactFigure = { label: string; value: string };
+export type CompactEvent = { title: string; figures: CompactFigure[]; tone: "neutral" | "good" | "warning" | "bad"; note: string | null };
+
+const CHANNEL_NAMES: Record<string, string> = { email: "Email", whatsapp: "WhatsApp", linkedin: "LinkedIn", instagram: "Instagram" };
+const channelName = (channel: string) => CHANNEL_NAMES[channel] ?? channel;
+const usd = (value: number) => `$${value.toFixed(2)}`;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+const num = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) ? value : 0);
+
+/** The event's data, when the message carries any we know how to read. */
+export function eventData(toolResult: unknown): ChatEvent | null {
+  const event = isRecord(toolResult) && isRecord(toolResult.data) ? toolResult.data.event : null;
+  if (!isRecord(event)) return null;
+  switch (event.kind) {
+    case "search_report":
+    case "plan_ready":
+    case "outreach_started":
+    case "continuation":
+      return event as ChatEvent;
+    default:
+      return null;
+  }
+}
+
+/** One compact line for a known event, or null (an older text-only event, or one we do not know): render the text as it is. */
+export function compactEvent(message: { toolResult?: unknown }): CompactEvent | null {
+  const event = eventData(message.toolResult);
+  if (!event) return null;
+  switch (event.kind) {
+    case "search_report": {
+      if (!event.ok) return { title: `Search failed${event.source ? ` · ${event.source}` : ""}`, figures: [], tone: "bad", note: event.error ?? null };
+      const figures: CompactFigure[] = [
+        { label: "found", value: String(num(event.found)) },
+        { label: "contactable", value: String(num(event.contactable)) },
+      ];
+      if (event.matching !== null && event.judged) figures.push({ label: "match", value: `${num(event.matching)} of ${num(event.judged)}` });
+      return { title: `Search finished${event.source ? ` · ${event.source}` : ""}`, figures, tone: num(event.contactable) > 0 ? "good" : "warning", note: null };
+    }
+    case "plan_ready": {
+      const figures: CompactFigure[] = [{ label: event.leads === 1 ? "lead" : "leads", value: String(num(event.leads)) }];
+      for (const [channel, count] of Object.entries(event.channels).sort((a, b) => b[1] - a[1])) figures.push({ label: channelName(channel), value: String(num(count)) });
+      return { title: "Plan ready · press Start below", figures, tone: "neutral", note: event.waitingReason ? `Not started with the rest: ${event.waitingReason}` : "Nothing is sent before Start." };
+    }
+    case "outreach_started": {
+      if (!event.ok) return { title: "Starting the outreach failed", figures: [], tone: "bad", note: null };
+      const started = event.launches.filter((launch) => !launch.problem);
+      const failed = event.launches.filter((launch) => launch.problem);
+      const figures = started.map((launch) => ({ label: channelName(launch.channel), value: String(num(launch.added)) }));
+      return {
+        title: `Outreach started · ${event.automatic ? "Automatic replies" : "replies wait in the Inbox"}`,
+        figures,
+        tone: failed.length ? "warning" : "good",
+        note: failed.length ? failed.map((launch) => `${channelName(launch.channel)} not started: ${launch.problem}`).join("; ") : "Messages go out within each channel's hours and limits.",
+      };
+    }
+    case "continuation":
+      return {
+        title: `Research continues · round ${num(event.n)}`,
+        figures: [
+          { label: "leads", value: `${num(event.leads)} of ${num(event.target)}` },
+          { label: "spent", value: `${usd(num(event.spentUsd))} of ${usd(num(event.capUsd))}` },
+          { label: "left", value: `${Math.max(0, Math.round(num(event.minutesLeft)))} min` },
+        ],
+        tone: "neutral",
+        note: null,
+      };
+  }
+}
