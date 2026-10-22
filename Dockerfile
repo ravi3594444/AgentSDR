@@ -42,9 +42,31 @@ RUN apk add --no-cache curl
 
 RUN addgroup -S -g 1001 nodejs && adduser -S -u 1001 -G nodejs nextjs
 
+# Optional: Anthropic's Claude Code CLI, installed exactly as published, for
+# the Claude Code engine (docs/plans/CLAUDE_CODE_LOGIN.md). Empty, the
+# default, installs nothing. Otherwise the official musl build of that version
+# comes from the npm registry and must match CLAUDE_CODE_SHA512 (the tarball's
+# SHA-512 for this machine's architecture). The data directory is where each
+# account's own login lives; mount a volume there (docker-compose.claude-code.yml).
+# Placed before the per-commit layers so the download is cached across deploys.
+ARG CLAUDE_CODE_VERSION=
+ARG CLAUDE_CODE_SHA512=
+ENV AGENTSDR_CLAUDE_CODE_DATA_DIR=/var/lib/agentsdr/claude-code
+RUN mkdir -p /var/lib/agentsdr/claude-code && chown nextjs:nodejs /var/lib/agentsdr/claude-code && chmod 700 /var/lib/agentsdr/claude-code && \
+    if [ -n "$CLAUDE_CODE_VERSION" ]; then \
+      case "$(uname -m)" in x86_64) arch=x64 ;; aarch64) arch=arm64 ;; *) echo "Claude Code: unsupported architecture $(uname -m)" >&2; exit 1 ;; esac && \
+      if [ -z "$CLAUDE_CODE_SHA512" ]; then echo "Set CLAUDE_CODE_SHA512 for Claude Code $CLAUDE_CODE_VERSION (linux-$arch-musl); see docs/plans/CLAUDE_CODE_LOGIN.md" >&2; exit 1; fi && \
+      curl -fsSL -o /tmp/claude-code.tgz "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-$arch-musl/-/claude-code-linux-$arch-musl-$CLAUDE_CODE_VERSION.tgz" && \
+      echo "$CLAUDE_CODE_SHA512  /tmp/claude-code.tgz" | sha512sum -c - && \
+      mkdir -p /opt/claude-code && tar -xzf /tmp/claude-code.tgz -C /opt/claude-code --strip-components=1 package/claude package/LICENSE.md && \
+      ln -s /opt/claude-code/claude /usr/local/bin/claude && rm /tmp/claude-code.tgz && claude --version; \
+    fi
+
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
+# Licenses of third-party code adapted into the app (OpenMausBot, Apache-2.0).
+COPY --from=builder /app/docs/third-party ./licenses/third-party
 # Fresh-install schema and its setup script (`bun scripts/db/setup.ts
 # --if-empty`, run by the entrypoint before the app starts), and the
 # migrations an existing install runs in the container when upgrading (the

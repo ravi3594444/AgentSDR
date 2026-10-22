@@ -7,12 +7,21 @@ import {
   type OpenRouterModelSelection,
 } from "@/lib/ai/openrouter-types";
 import { AIML_PROVIDER_KEY } from "@/lib/ai/aimlapi-types";
-import { RUNTIME_PROVIDERS, type AiRuntimePlan } from "@/lib/ai/runtimePlan";
-import { getAiRuntime } from "./runtime";
+import { ENGINE_NAMES, type AiEngineKey, type AiRuntimePlan } from "@/lib/ai/runtimePlan";
+import { structuredRuntime } from "@/lib/ai/claudeCode/runtime.server";
+import { CLAUDE_CODE_ENGINE_KEY } from "@/lib/ai/claudeCode/contract";
 
 /**
  * Every structured answer in the app comes through here. How it is asked for
  * depends on the provider the organization selected (runtimePlan.ts):
+ *
+ * Claude Code — when an owner selected it and the call names no model, the
+ * json_schema request below becomes one CLI generation on that owner's own
+ * Claude login (claudeCode/runtime.server.ts), its answer judged here like
+ * any other. Its errors say whether another attempt can help (`retryable`:
+ * only a CLI that died mid-answer or an overloaded API), so a usage limit, a
+ * sign-out, a missing model, a timeout or a busy server is never retried, and
+ * nothing falls back to an API provider.
  *
  * AI/ML API — strict JSON schema (`response_format: json_schema`) for the
  * models AI/ML marks `structured_output`, the answer being the message
@@ -168,7 +177,9 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 export type StructuredCompletionRuntime = (
   requested: OpenRouterModelSelection | undefined,
   timeoutMs: number,
-) => Promise<Pick<AiRuntimePlan, "providerKey" | "selection" | "routing" | "structuredOutput" | "functionCallFallback" | "supportsPlugins"> & {
+) => Promise<Pick<AiRuntimePlan, "selection" | "routing" | "structuredOutput" | "functionCallFallback" | "supportsPlugins"> & {
+  /** An API provider (runtime.ts), or Claude Code (claudeCode/runtime.server.ts). */
+  providerKey: AiEngineKey;
   client: { chat: { completions: { create: (request: never, options: { signal?: AbortSignal }) => Promise<StructuredChatResponse> } } };
 }>;
 
@@ -183,6 +194,8 @@ type StructuredChatResponse = {
   }>;
   usage?: { prompt_tokens?: number; completion_tokens?: number };
   error?: unknown;
+  /** Claude Code: the model id the CLI actually ran (the selection holds its alias). */
+  model?: string | null;
 };
 
 /** JSON-schema mode: the instruction that matches toolCallSystemPrompt for a function call. */
@@ -230,7 +243,7 @@ export async function completeStructured(
   input: StructuredCompletionInput,
   dependencies: { runtime?: StructuredCompletionRuntime; sleep?: typeof sleep } = {},
 ): Promise<StructuredCompletionResult> {
-  const { client, selection, routing, structuredOutput, functionCallFallback, supportsPlugins, providerKey } = await (dependencies.runtime ?? getAiRuntime)(
+  const { client, selection, routing, structuredOutput, functionCallFallback, supportsPlugins, providerKey } = await (dependencies.runtime ?? structuredRuntime)(
     input.requestedModel,
     input.timeoutMs,
   );
@@ -241,7 +254,7 @@ export async function completeStructured(
   if (input.plugins?.length && !supportsPlugins) {
     // Answering a web-research question from the model's memory would look
     // like a researched answer; refuse instead.
-    throw new Error(`Web search runs through OpenRouter's web plugin, which ${RUNTIME_PROVIDERS[providerKey]} does not offer. Select an OpenRouter connection in AI Settings for this feature.`);
+    throw new Error(`Web search runs through OpenRouter's web plugin, which ${ENGINE_NAMES[providerKey]} does not offer. Select an OpenRouter connection in AI Settings for this feature.`);
   }
   const maxAttempts = Math.max(1, Math.floor(input.maxAttempts ?? DEFAULT_MAX_ATTEMPTS));
   let outputTokens = input.maxOutputTokens;
@@ -310,7 +323,7 @@ export async function completeStructured(
       const content = typeof message?.content === "string" ? message.content : "";
       if (!content.trim()) {
         const detail = describeResponseError(response);
-        if (detail) throw new Error(`${RUNTIME_PROVIDERS[providerKey]} returned no ${input.schemaName} answer: ${detail}`);
+        if (detail) throw new Error(`${ENGINE_NAMES[providerKey]} returned no ${input.schemaName} answer: ${detail}`);
         if (typeof message?.refusal === "string" && message.refusal.trim()) {
           throw new RejectedAttemptError(`The model refused: ${message.refusal.trim().slice(0, 300)}`);
         }
@@ -340,7 +353,7 @@ export async function completeStructured(
     ))?.function;
     if (!call) {
       const detail = describeResponseError(response);
-      if (detail) throw new Error(`${RUNTIME_PROVIDERS[providerKey]} returned no ${input.schemaName} call: ${detail}`);
+      if (detail) throw new Error(`${ENGINE_NAMES[providerKey]} returned no ${input.schemaName} call: ${detail}`);
       if (choice?.finish_reason === "length") {
         const spent = outputTokens;
         outputTokens *= 2;
@@ -394,7 +407,7 @@ export async function completeStructured(
     return {
       text,
       provider: selection.provider,
-      model: selection.modelId,
+      model: providerKey === CLAUDE_CODE_ENGINE_KEY && typeof response.model === "string" && response.model ? response.model : selection.modelId,
       request,
       response,
       usage: {
@@ -433,7 +446,7 @@ export async function completeStructured(
       return { ...(await attemptOrFallBack()), attempts: index + 1 };
     } catch (error) {
       lastError = error;
-      const retryable = error instanceof RejectedAttemptError || isRetryableOpenRouterError(error);
+      const retryable = error instanceof RejectedAttemptError || (claudeCodeRetryable(error) ?? isRetryableOpenRouterError(error));
       if (!retryable || input.signal?.aborted) {
         if (!schemaRefusal) throw error;
         throw Object.assign(new Error(afterRefusal(messageOf(error)), { cause: error }), providerErrorFields(error));
@@ -441,6 +454,12 @@ export async function completeStructured(
     }
   }
   throw new Error(afterRefusal(`${input.schemaName} failed after ${maxAttempts} attempts: ${messageOf(lastError)}`), { cause: lastError });
+}
+
+/** Claude Code errors say themselves whether another attempt can help (claudeCode/runner.server.ts); null for any other error. */
+function claudeCodeRetryable(error: unknown): boolean | null {
+  const candidate = error as { name?: unknown; retryable?: unknown } | null;
+  return candidate?.name === "ClaudeCodeError" && typeof candidate.retryable === "boolean" ? candidate.retryable : null;
 }
 
 function messageOf(error: unknown): string {

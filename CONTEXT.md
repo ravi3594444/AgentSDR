@@ -130,6 +130,13 @@ word means here and, where it matters, what it does not mean.
 - **Pacing**: each sender's own automatic limits (emails a day per
   mailbox, gaps, LinkedIn invitations and runs, WhatsApp warm-up and new
   chats per number, Instagram DMs per account). No settings page.
+- **Claude Code engine**: the AI steps of the operator organization running
+  on one owner's own Claude account, through Anthropic's unmodified `claude`
+  CLI signed in from Settings. Its **usage limit** is the account's own
+  window (5-hour, weekly), as the CLI reports it; reaching it makes AI steps
+  fail with the reset time (CRM reply sorting is put back until then), never
+  switch to an API. Extra usage (billed beyond the plan) holds it the same
+  way. It runs only while the owner is the organization's only member.
 
 ## Background work
 

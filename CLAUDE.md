@@ -150,6 +150,26 @@ cron secrets and tuning knobs. Two deliberate exceptions:
 `scripts/migrate-env-to-integrations.ts` copied an existing env setup into
 the store once (verifying each); keep it as the record of that move.
 
+## Claude Code engine (owner-only pilot)
+
+An owner of the operator organization can sign Anthropic's unmodified
+`claude` CLI in with their own Claude account (Settings → AI provider →
+Claude Code) and run the organization's `completeStructured` calls on it
+(`src/lib/ai/claudeCode/`, docs/plans/CLAUDE_CODE_LOGIN.md). Rules that
+keep it within Anthropic's conditions:
+
+- Never patch the binary, remove one of its sign-in methods, build an OAuth
+  client, or read its credential files. The code Anthropic's page shows goes
+  once to the waiting CLI process and is never stored or logged.
+- The CLI gets the allowlisted environment from `cli.server.ts`, its own
+  per-account `CLAUDE_CONFIG_DIR` and `HOME`, `--tools ""`, the deny rules in
+  `GENERATION_SETTINGS` (without them a prompt's `@path` makes the CLI read
+  files, credentials included, even with no tools) and an empty working
+  directory. Do not give it tools, MCP servers or the server's env.
+- Selected-but-failing never falls back to an API provider. One person's
+  login answers only their own organization's work, and only while they are
+  its only member.
+
 ## Sending rules, not constants
 
 Operational numbers — emails a day, send gaps, LinkedIn invitations and run
