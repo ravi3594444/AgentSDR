@@ -54,13 +54,24 @@ on the brief's channels only. `finish_request` ends the request (stop
 reason `finished`). Search tools lose `contactAfter` in v2: the model
 prepares the plan after reviewing.
 
-**The driver** (`objective.ts`, `objectiveDriver.server.ts`). A limit (the
-target, the spend cap, the time limit) wakes the model once, with a note
-naming the limit, to prepare the plan from what matched and finish; then
-the request stops. Searches are refused at a limit. A request whose last
-chat word is the assistant's question waits for the answer instead of
-ending as "sources exhausted". The continuation note no longer presses for
-more searches.
+**The driver** (`objective.ts`, `objectiveDriver.server.ts`). A request
+that would end on its own (a limit reached: the target, the spend cap, the
+time limit; or no source left: a continuation that started nothing, or two
+that found nothing) first gets one **last turn**, with a note naming why, to
+prepare the plan from what matched and finish. No search starts in it.
+When it ends the request stops at a limit that still holds, or as "sources
+exhausted"; a last turn begun at the target that ends below it (the model
+corrected verdicts) goes on as an ordinary continuation instead. It waits
+while it runs, holds while the owner has paused, and a failed model answer
+is tried again (at most three times). Only a question from a turn that
+started no search makes the request wait for the owner ("Which city?");
+a side question asked while a search runs does not. The continuation note
+no longer presses for more searches.
+
+**The judge reads the owner's words.** Leads are judged against the brief's
+goal with the owner's own messages for the request beside it (up to the
+next request in the chat, compared in SQL), so a place given in an answer
+counts even when the brief was written before it.
 
 **Claims.** A message sent in the same step as a search it only starts may
 not report that search's results (`startedNotFinishedClaim`).
@@ -159,6 +170,20 @@ Read with care:
   **unmeasured**: the AI/ML key ran out of quota for every model (403
   `ALL_TIME_LIMIT_EXCEEDED`, DeepSeek from about 22:06 UTC on 21 Oct)
   before it could be run.
+
+### After the limit was raised (22 Oct)
+
+| Round | Code | Clean runs | What failed |
+| --- | --- | --- | --- |
+| r30 | `ec1dace` | 7/9 | c6: idle turn ended the request with no plan (fixed: the last turn); c8: recall 2 of 4 |
+| r31 | last turn added | 7/9 | c6: brief written before "Miami." so a Los Angeles salon was judged and planned (fixed: the judge reads the owner's words); c3: a side question held the request (fixed) |
+| r32–r34 | same | c6 3/3 | |
+| r35 | `268ff98` | 7/9 | c2: a non-CTO judged a match (not in the plan); c1: recall 3 of 4 |
+
+The judge-window fix and the review's fixes (`c9e82ed`) are proved by the
+unit and e2e suites (the driver scenario runs the real driver), not yet by
+an eval round: the next one (r36) was refused by the key's quota after one
+call per case.
 
 ## Not done, and why
 

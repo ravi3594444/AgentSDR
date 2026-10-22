@@ -133,7 +133,9 @@ word means here and, where it matters, what it does not mean.
   without an owner message, once its searches have ended short of the
   target, with a note of what each source yielded. The model chooses the
   next source or query; a continuation that starts nothing means the
-  sources are exhausted.
+  sources are exhausted. In research agent v2 a request that would end on
+  its own first gets one **last turn** (no search starts in it) to prepare
+  the plan from what matched and finish.
 - **Stop reason**: why an objective ended, the first of: target reached,
   finished (research agent v2: the assistant called `finish_request` once
   the brief's done condition was met), sources exhausted, spend cap used,
