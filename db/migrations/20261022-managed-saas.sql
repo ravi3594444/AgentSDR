@@ -53,6 +53,20 @@ CREATE TABLE IF NOT EXISTS provider_credential_modes (
   CONSTRAINT provider_credential_modes_mode_chk CHECK (mode IN ('managed', 'own'))
 );
 
+-- Older installs may not have run the optional intake/discovery migration
+-- that introduced Tavily. deploy.sh's predecessors do not create this table,
+-- so initialise it before the credential backfill reads it. This matches
+-- the fresh-install schema and leaves existing keys and settings untouched.
+CREATE TABLE IF NOT EXISTS tavily_settings (
+  organization_id uuid PRIMARY KEY REFERENCES organizations(id),
+  encrypted_key text,
+  key_hint text,
+  daily_searches integer NOT NULL DEFAULT 100,
+  updated_by uuid,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT tavily_settings_daily_chk CHECK (daily_searches BETWEEN 1 AND 2000)
+);
+
 -- Every organization that saved its own credentials keeps them: "My own
 -- provider", explicitly. Never overwrites a choice made since (DO NOTHING),
 -- so a re-run on the next deploy changes nothing.
