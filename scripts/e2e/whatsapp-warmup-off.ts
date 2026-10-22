@@ -4,6 +4,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import postgres from "postgres";
 
 if (!/@(localhost|127\.0\.0\.1)[:/]/.test(process.env.DATABASE_URL ?? "")) throw new Error("Use a local disposable database");
@@ -28,10 +29,11 @@ try {
         ('a','general','{"newLeadsPerDay":5}');
     `);
     await tx.unsafe(migration).simple();
-    check("a stored warm-up is removed, other WhatsApp rules stay", JSON.stringify(await values(tx, "a", "whatsapp")) === JSON.stringify({ newChatsPerDay: 12 }));
-    check("a warm-up-only row becomes empty, so it follows the 0 default", JSON.stringify(await values(tx, "b", "whatsapp")) === "{}");
-    check("a WhatsApp row without a warm-up is unchanged", JSON.stringify(await values(tx, "c", "whatsapp")) === JSON.stringify({ secondsBetweenSends: 60 }));
-    check("other channels are untouched", JSON.stringify(await values(tx, "a", "email")) === JSON.stringify({ dailySendLimit: 40, warmupHours: 24 }) && JSON.stringify(await values(tx, "a", "general")) === JSON.stringify({ newLeadsPerDay: 5 }));
+    check("a stored warm-up is removed, other WhatsApp rules stay", isDeepStrictEqual(await values(tx, "a", "whatsapp"), { newChatsPerDay: 12 }));
+    check("a warm-up-only row becomes empty, so it follows the 0 default", isDeepStrictEqual(await values(tx, "b", "whatsapp"), {}));
+    check("a WhatsApp row without a warm-up is unchanged", isDeepStrictEqual(await values(tx, "c", "whatsapp"), { secondsBetweenSends: 60 }));
+    // jsonb keeps its own key order, so values are compared as objects, never as text.
+    check("other channels are untouched", isDeepStrictEqual(await values(tx, "a", "email"), { dailySendLimit: 40, warmupHours: 24 }) && isDeepStrictEqual(await values(tx, "a", "general"), { newLeadsPerDay: 5 }));
     const marker = await tx`SELECT value FROM platform_settings WHERE key = 'whatsapp-warmup-off-v1'`;
     check("the marker is written once", marker.length === 1);
 
