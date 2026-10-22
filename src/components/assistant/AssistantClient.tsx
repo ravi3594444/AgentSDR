@@ -22,7 +22,6 @@ import {
   RiPlayLine,
   RiRobot2Line,
   RiSearchEyeLine,
-  RiSparkling2Fill,
   RiStore2Line,
   RiTableLine,
 } from "@remixicon/react";
@@ -46,6 +45,9 @@ import { reportAsOf } from "@/lib/assistant/chatEvents";
 import { hostOf, ProspectsList } from "@/components/assistant/ProspectsList";
 import { reportAudiences, reportLinks } from "@/lib/assistant/leadLists";
 import { useChatScroll } from "./useChatScroll";
+import { Mascot, type MascotMood } from "./Mascot";
+import { ResearchGroup } from "./ResearchGroup";
+import { RESEARCH_TOOLS, researchTitle } from "./researchView";
 import { cn } from "@/utils/cn";
 
 /**
@@ -168,6 +170,20 @@ const TOOL_TITLE: Record<string, string> = {
   use_existing_leads: "Lead list from your leads",
   list_inquiries: "Inquiries",
   prepare_inquiry_replies: "Answering new inquiries",
+  research_social_sources: "Social research",
+  set_brief: "Brief",
+  review_leads: "Reviewed the leads",
+  set_lead_fit: "Judged a lead",
+  finish_request: "Finished the request",
+  control_research: "Research control",
+  web_search: "Searched the web",
+  browser_open: "Opened a page",
+  browser_read: "Read the page",
+  browser_click: "Clicked on the page",
+  browser_fill: "Filled in the page",
+  browser_scroll: "Scrolled the page",
+  browser_close: "Closed the browser",
+  diagnose_delivery: "Checked delivery",
 };
 
 async function readJson<T>(response: Response): Promise<T> {
@@ -245,69 +261,6 @@ function ReportLeadLists({ lists, timeZone }: { lists: ReturnType<typeof reportA
       <p className="text-label-xs text-text-sub-600">{lists.length === 1 ? "The lead list of this request" : `The ${lists.length} lead lists of this request`}</p>
       {lists.map((list) => <ProspectsList key={list.audienceId} audienceId={list.audienceId} count={list.count} title={list.title} timeZone={timeZone} />)}
     </section>
-  );
-}
-
-function DiscoveryCard({ message, job }: { message: Message; job: Job | undefined }) {
-  const timeZone = useContext(DisplayTimeZone);
-  const data = message.toolResult?.data as { phrase?: string; keywords?: string; audienceId?: unknown } | undefined;
-  const linkedin = message.tool === "find_linkedin_leads";
-  const instagram = job?.kind === "apify_instagram";
-  // Facebook, LinkedIn or Instagram search through Apify (find_social_leads).
-  const social = message.tool === "find_social_leads";
-  // A search handed to website search (no Google Maps or Apify available) shows as one.
-  const web = message.tool === "find_customers_on_web" || job?.kind === "web_discovery";
-  const viaApify = (job?.progress as Record<string, unknown> | undefined)?.provider === "Apify" || (job?.result as Record<string, unknown> | null | undefined)?.provider === "apify";
-  if (message.status !== "ok" || !job) {
-    // A search whose job is gone still opens the list it saved into, without a count.
-    const audienceId = message.status === "ok" && typeof data?.audienceId === "string" ? data.audienceId : null;
-    return (
-      <Card title={TOOL_TITLE[message.tool ?? "find_leads"] ?? "Lead search"} status={message.status}>
-        <p>{message.toolResult?.display ?? message.content}</p>
-        {audienceId && <ProspectsList audienceId={audienceId} timeZone={timeZone} />}
-      </Card>
-    );
-  }
-  const progress = job.progress as Record<string, number | string>;
-  // The source and provider the server recorded, e.g. "Google Maps through the built-in scraper".
-  const source = typeof progress.source === "string" ? progress.source : null;
-  const waiting = (job.progress as { waiting?: { reason?: string | null; until?: string } } | null)?.waiting;
-  const stageText: Record<string, string> = {
-    queued: waiting ? `Waiting to start${source ? ` ${source}` : ""}: ${waiting.reason ?? "a provider asked to wait"}.` : progress.note ? `${String(progress.note)}…` : "Starting the search…",
-    searching: waiting ? `Waiting: ${waiting.reason ?? "a provider asked to wait"}${waiting.until ? ` (until ${formatChatTime(waiting.until, timeZone)})` : ""}.` : social ? `Searching through Apify (${String(progress.actor ?? "social media")})…` : linkedin ? `Searching LinkedIn (${progress.found ?? 0} profiles so far)…` : web ? "Searching the web for matching businesses and directories…" : instagram ? `Searching Instagram through Apify (${String(progress.actor ?? "")})…` : `Searching ${source ?? `Google Maps${viaApify ? " through Apify" : ""}`}${progress.searches ? ` in ${progress.searches} area${Number(progress.searches) === 1 ? "" : "s"}` : ""} (usually 1–10 minutes)…`,
-    reading: `Reading the pages the search found for published contact details (${progress.read ?? progress.pagesRead ?? 0} of ${progress.toRead ?? progress.candidates ?? "?"})…`,
-    enriching: `Reading business websites for contact details (${progress.websitesChecked ?? 0} of ${progress.websitesToCheck ?? "?"})…`,
-    saving: `Checking and saving contacts (${progress.saved ?? 0} of ${progress.found ?? "?"})…`,
-    qualifying: waiting ? `Waiting: ${waiting.reason ?? "paused"}.` : `Judging the leads found against your request (${progress.judged ?? 0} of ${progress.toJudge ?? "?"})…`,
-  };
-  // An Apify run keeps its own job stages ("apify", "profiles") while its progress says "searching".
-  const stage = job.stage in stageText ? job.stage : String(progress.stage ?? "");
-  const result = job.result as Record<string, number | string | null> | null;
-  // How its contactable leads were judged against the request (only matches count toward it), when they were.
-  const fit = (job.result as { fit?: { contactable: number; qualified: number; notMatching: number; unconfirmed: number; pending: number } } | null)?.fit ?? null;
-  return (
-    <Card title={`${linkedin ? "LinkedIn search" : web ? "Web search" : instagram ? "Instagram prospects" : viaApify ? "Lead search (Apify)" : "Lead search"}: ${data?.phrase ?? data?.keywords ?? (data as { customers?: string } | undefined)?.customers ?? ""}`} status={job.status}>
-      {job.status === "queued" || job.status === "running" ? (
-        <p role="status">{stageText[stage] ?? "Working…"}{typeof progress.found === "number" && stage !== "searching" ?` ${progress.found} businesses found.` : ""}</p>
-      ) : job.status === "succeeded" && result?.notSearched ? (
-        <p>{instagram ? "Instagram was not searched." : `${source ?? "This source"} was not searched.`}{result.note ? <span className="mt-1 block">{String(result.note)}</span> : null}</p>
-      ) : job.status === "succeeded" && result ? (
-        <p>
-          {result.found ?? 0} {linkedin ? "profiles" : instagram ? "Instagram accounts" : "businesses"} found{source && !instagram && !linkedin ? ` on ${source}` : ""}{instagram ? " (potential matches, not interest)" : ""} · <span className="text-label-sm text-text-strong-950">{result.eligible ?? 0} contactable</span>{linkedin ? " on LinkedIn" : ` (${result.withEmail ?? 0} by email, ${result.withPhoneOnly ?? 0} by phone only, ${result.withInstagram ?? 0} with Instagram profiles)`}
-          {instagram && Number(result.instagramOnly ?? 0) > 0 && ` · ${result.instagramOnly} found on Instagram only — approved DM plan and connected sender required`}
-          {fit && fit.contactable > 0 && <> · <span className="text-label-sm text-text-strong-950">{fit.qualified} match your request</span>{fit.notMatching ? `, ${fit.notMatching} do not` : ""}{fit.unconfirmed ? `, ${fit.unconfirmed} unconfirmed` : ""}{fit.pending ? `, ${fit.pending} not judged yet` : ""}</>}
-          {Number(result.excluded ?? 0) > 0 && ` · ${result.excluded} left out with reasons`}
-          {Number(result.duplicates ?? 0) > 0 && ` · ${result.duplicates} duplicates skipped`}
-          {Number(result.alreadyKnown ?? 0) > 0 && ` · ${result.alreadyKnown} already in your leads (not duplicated)`}
-          {result.note ? <span className="mt-1 block">{String(result.note)}</span> : null}
-          {result.fitNote ? <span className="mt-1 block text-text-sub-600">{String(result.fitNote)}</span> : null}
-          {result.providerNote ? <span className="mt-1 block text-text-sub-600">{String(result.providerNote)}</span> : null}
-        </p>
-      ) : (
-        <p className="text-error-base">{job.error ?? "The search failed."}</p>
-      )}
-      {job.status === "succeeded" && job.audienceId && <ProspectsList audienceId={job.audienceId} count={typeof result?.eligible === "number" ? result.eligible : null} excluded={typeof result?.excluded === "number" ? result.excluded : null} timeZone={timeZone} />}
-    </Card>
   );
 }
 
@@ -918,11 +871,15 @@ function DecisionCard({ message, state, onChanged }: { message: Message; state: 
 const COMPACT_TOOLS = new Set([
   "check_setup", "save_business_info", "search_knowledge", "lead_search_status", "list_audiences", "list_runs",
   "list_decisions", "pause_outreach", "resume_outreach", "stop_outreach", "switch_to_review", "answer_decision", "read_webpage", "list_inquiries",
+  "set_brief", "review_leads", "set_lead_fit", "finish_request", "control_research", "web_search", "diagnose_delivery",
+  "browser_open", "browser_read", "browser_click", "browser_fill", "browser_scroll", "browser_close",
 ]);
 
 function ActivityRow({ message }: { message: Message }) {
   const title = TOOL_TITLE[message.tool ?? ""] ?? message.tool ?? "Action";
-  const detail = message.status === "running" ? "" : message.toolResult?.display ?? message.content;
+  const raw = message.status === "running" ? "" : message.toolResult?.display ?? message.content;
+  // "Brief · Brief: …" says it twice: the line already carries the title.
+  const detail = raw.toLowerCase().startsWith(`${title.toLowerCase()}:`) ? raw.slice(title.length + 1).trim() : raw;
   return (
     <details className="group w-full max-w-2xl text-paragraph-xs text-text-sub-600">
       <summary className="flex cursor-pointer list-none items-center gap-2 rounded-lg py-1 hover:text-text-strong-950 [&::-webkit-details-marker]:hidden">
@@ -942,7 +899,7 @@ function ToolMessage({ message, jobs, runs, decisions, canManageAutopilot, lastR
   if (message.tool === "daily_summary") {
     return <Card title={`Daily summary · ${String(data?.day ?? "")}`} status={message.status}><p className="whitespace-pre-wrap text-paragraph-xs">{message.content.split("\n").slice(1).join("\n")}</p><AsOf message={message} /></Card>;
   }
-  if (message.tool === "find_leads" || message.tool === "find_linkedin_leads" || message.tool === "find_customers_on_web" || message.tool === "find_instagram_prospects" || message.tool === "find_social_leads") return <DiscoveryCard message={message} job={jobs.find((job) => job.id === data?.jobId)} />;
+  if (RESEARCH_TOOLS.has(message.tool ?? "")) return <ResearchGroup messages={[message]} jobs={jobs} timeZone={timeZone} />;
   if (message.tool === "prepare_outreach") return <ProposalCard message={message} run={runs[String(data?.runId ?? "")]} canManageAutopilot={canManageAutopilot} lastReplyMode={lastReplyMode} onChanged={onChanged} />;
   if (message.tool === "prepare_inquiry_replies") return <InquiryRunCard message={message} run={runs[String(data?.runId ?? "")]} canManageAutopilot={canManageAutopilot} onChanged={onChanged} />;
   if (message.tool === "report") return <ReportCard message={message} />;
@@ -995,12 +952,24 @@ function RichText({ text }: { text: string }) {
   );
 }
 
-function AssistantAvatar({ size = "sm" }: { size?: "sm" | "lg" }) {
+function AssistantAvatar({ size = "sm", mood = "idle" }: { size?: "sm" | "lg"; mood?: MascotMood }) {
   return (
-    <span className={cn("flex shrink-0 items-center justify-center rounded-full bg-primary-base text-primary-contrast shadow-regular-xs", size === "lg" ? "size-12" : "size-7")} aria-hidden="true">
-      <RiSparkling2Fill className={size === "lg" ? "size-6" : "size-3.5"} />
+    <span className={cn("flex shrink-0 items-center justify-center rounded-full bg-bg-weak-50 ring-1 ring-inset ring-stroke-soft-200", size === "lg" ? "size-14" : "size-8")} aria-hidden="true">
+      <Mascot mood={mood} className={size === "lg" ? "size-11" : "size-6"} />
     </span>
   );
+}
+
+/** A turn's items with each run of consecutive searches gathered into one research card. */
+function researchRuns(items: Message[]): (Message | Message[])[] {
+  const out: (Message | Message[])[] = [];
+  for (const message of items) {
+    const research = message.role === "tool" && RESEARCH_TOOLS.has(message.tool ?? "");
+    const last = out[out.length - 1];
+    if (research && Array.isArray(last)) last.push(message);
+    else out.push(research ? [message] : message);
+  }
+  return out;
 }
 
 function ThinkingIndicator({ label }: { label: string }) {
@@ -1195,6 +1164,11 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
   // The panel beside the chat follows what the chat sees: a new message, a search or plan changing state.
   const activityKey = `${state.messages.length}|${state.jobs.map((job) => `${job.id}:${job.status}`).join(",")}|${Object.entries(state.runs).map(([id, run]) => `${id}:${run.status}`).join(",")}`;
   const request = useThreadRequest(threadId, activityKey);
+  // The panel names each search the way the chat does ("real estate agencies in Houston, TX"), by its job.
+  const searchLabels = useMemo(() => Object.fromEntries(state.messages.flatMap((message) => {
+    const jobId = message.toolResult?.data?.jobId;
+    return message.role === "tool" && RESEARCH_TOOLS.has(message.tool ?? "") && typeof jobId === "string" ? [[jobId, researchTitle(message)]] : [];
+  })), [state.messages]);
 
   const showPending = pending !== null && !state.messages.slice(pending.baseline).some((message) => message.role === "user");
   const count = state.messages.length + (showPending ? 1 : 0);
@@ -1313,7 +1287,9 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
   const empty = state.messages.length === 0 && !showPending;
   const profile = (setup as (Setup & { profile?: BusinessProfileSummary }) | null)?.profile;
 
-  const assistantItems = (items: Message[]) => items.map((message) => {
+  const assistantItems = (items: Message[]) => researchRuns(items).map((item) => {
+    if (Array.isArray(item)) return <ResearchGroup key={item[0]!.id} messages={item} jobs={state.jobs} timeZone={timeZone} />;
+    const message = item;
     if (message.role === "assistant") return <div key={message.id} className="assistant-message text-paragraph-sm text-text-strong-950"><RichText text={message.content} /></div>;
     if (message.role === "event") {
       // Only the newest event can offer Retry: an older failure was already followed by more work.
@@ -1365,7 +1341,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
 
       <div className="flex min-h-0 flex-1">
       <div className="relative flex min-w-0 flex-1 flex-col">
-      <RequestBar state={request} />
+      <RequestBar state={request} labels={searchLabels} />
       <div className="shrink-0 px-4 pt-3 empty:hidden sm:px-6">
         <NeedsYouList initial={null} compact />
       </div>
@@ -1392,8 +1368,8 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
                 )}
                 {(turn.items.length > 0 || (thinking && index === turns.length - 1 && !showPending)) && (
                   <div className="flex gap-3">
-                    <AssistantAvatar />
-                    <div className="flex min-w-0 flex-1 flex-col gap-2.5 pt-0.5">
+                    <AssistantAvatar mood={thinking && index === turns.length - 1 && !showPending ? "thinking" : "idle"} />
+                    <div className="flex min-w-0 flex-1 flex-col gap-2.5 pt-1">
                       <span className="text-label-xs text-text-sub-600">Assistant</span>
                       {assistantItems(turn.items)}
                       {thinking && index === turns.length - 1 && !showPending && <ThinkingIndicator label={thinkingLabel} />}
@@ -1408,7 +1384,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
                   {pending.text && <div className="max-w-[min(36rem,90%)] whitespace-pre-wrap rounded-2xl rounded-br-md bg-bg-weak-50 px-4 py-3 text-paragraph-sm leading-6 text-text-strong-950 [overflow-wrap:anywhere]">{pending.text}</div>}
                   {pending.files.map((name) => <span key={name} className="text-paragraph-xs text-text-sub-600">{name}</span>)}
                 </div>
-                <div className="flex gap-3"><AssistantAvatar /><div className="pt-1.5"><ThinkingIndicator label={pending.files.length ? "Reading your files…" : "Thinking…"} /></div></div>
+                <div className="flex gap-3"><AssistantAvatar mood="thinking" /><div className="pt-2"><ThinkingIndicator label={pending.files.length ? "Reading your files…" : "Thinking…"} /></div></div>
               </div>
             )}
             {suggestions.length > 0 && (
@@ -1486,7 +1462,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
       </div>
 
       </div>
-      <RequestPanel state={request} />
+      <RequestPanel state={request} labels={searchLabels} />
       </div>
 
       {dragging && (

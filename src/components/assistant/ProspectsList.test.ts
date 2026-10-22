@@ -49,13 +49,18 @@ describe("opening a lead list or its evidence is a GET only", () => {
 
 describe("the list is one component, opened from the card, the request rows and the report", () => {
   const client = read("components", "assistant", "AssistantClient.tsx");
+  const research = read("components", "assistant", "ResearchGroup.tsx");
   const row = read("components", "activity", "WorkRow.tsx");
 
-  test("AssistantClient uses the extracted ProspectsList and no longer defines its own", () => {
-    expect(client).toContain('from "@/components/assistant/ProspectsList"');
-    expect(client).not.toMatch(/function ProspectsList\(/);
-    expect(client).not.toMatch(/function WebsiteFindings\(/);
-    expect(client.match(/<ProspectsList /g)?.length ?? 0).toBeGreaterThanOrEqual(3);
+  test("the chat and its research card use the extracted ProspectsList and define none of their own", () => {
+    for (const file of [client, research]) {
+      expect(file).toContain('from "@/components/assistant/ProspectsList"');
+      expect(file).not.toMatch(/function ProspectsList\(/);
+      expect(file).not.toMatch(/function WebsiteFindings\(/);
+    }
+    // Under each search (research card), under added or imported contacts and under the final report (chat).
+    expect(research.match(/<ProspectsList /g)?.length ?? 0).toBeGreaterThanOrEqual(1);
+    expect(client.match(/<ProspectsList /g)?.length ?? 0).toBeGreaterThanOrEqual(2);
   });
 
   test("a finished search row under a request opens its own list", () => {

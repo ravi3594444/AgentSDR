@@ -6,6 +6,7 @@ import { RiArrowDownSLine, RiArrowLeftSLine, RiArrowRightSLine, RiListCheck3 } f
 import type { RequestSummary } from "@/lib/assistant/requests.server";
 import { useVisiblePolling } from "@/components/whatsapp/usePolling";
 import { cn } from "@/utils/cn";
+import { Mascot } from "./Mascot";
 import { fetchRequestSummary, RequestSummaryView } from "./RequestSummaryView";
 
 /**
@@ -83,6 +84,11 @@ function writeCollapsed(value: boolean) {
   try { window.localStorage.setItem(COLLAPSED_KEY, String(value)); } catch { /* blocked storage: the choice lasts this visit */ }
 }
 
+/** The mascot looks around while the request's searches run, and rests otherwise. */
+function moodOf(summary: RequestSummary | null) {
+  return summary?.open && summary.children.searches.some((item) => item.open && item.kind !== "objective") ? "searching" as const : "idle" as const;
+}
+
 const railButton = "flex size-8 items-center justify-center rounded-lg text-text-soft-400 outline-none transition hover:bg-bg-weak-50 hover:text-text-strong-950 focus-visible:ring-2 focus-visible:ring-primary-base";
 
 /**
@@ -91,7 +97,7 @@ const railButton = "flex size-8 items-center justify-center rounded-lg text-text
  * remembered on this browser; it loads after mount, so the server and the
  * first client render agree.
  */
-export function RequestPanel({ state }: { state: ReturnType<typeof useThreadRequest> }) {
+export function RequestPanel({ state, labels }: { state: ReturnType<typeof useThreadRequest>; labels?: Record<string, string> }) {
   const { requests, key, pick, summary, error, reload } = state;
   const [collapsed, setCollapsed] = useState(false);
   useEffect(() => {
@@ -123,20 +129,29 @@ export function RequestPanel({ state }: { state: ReturnType<typeof useThreadRequ
             </button>
           </div>
         </div>
-        <p className="mt-1 line-clamp-2 text-paragraph-xs text-text-sub-600">{summary?.title ?? requests.find((request) => request.key === key)?.title}</p>
-        {summary && <p className="mt-1 text-paragraph-xs text-text-soft-400">{summary.stateLabel}</p>}
+        <div className="mt-2 flex items-start gap-3">
+          <span className="flex size-11 shrink-0 items-center justify-center rounded-2xl bg-bg-weak-50"><Mascot mood={moodOf(summary)} className="size-9" /></span>
+          <div className="min-w-0 flex-1">
+            <p className="line-clamp-2 text-paragraph-sm text-text-strong-950">{summary?.title ?? requests.find((request) => request.key === key)?.title}</p>
+            {summary && (
+              <p className="mt-1 inline-flex items-center gap-1.5 text-paragraph-xs text-text-sub-600">
+                <span className={cn("size-1.5 rounded-full", summary.open ? "bg-success-base" : "bg-text-soft-400")} aria-hidden="true" />{summary.stateLabel}
+              </p>
+            )}
+          </div>
+        </div>
         <Picker requests={requests} value={key} onPick={pick} />
       </div>
       <div className="px-4 py-4">
         {error && !summary && <p role="alert" className="text-paragraph-xs text-error-base">{error}</p>}
-        {summary ? <RequestSummaryView summary={summary} compact onChanged={reload} /> : !error && <p className="text-paragraph-xs text-text-soft-400">Loading…</p>}
+        {summary ? <RequestSummaryView summary={summary} compact onChanged={reload} labels={labels} /> : !error && <p className="text-paragraph-xs text-text-soft-400">Loading…</p>}
       </div>
     </aside>
   );
 }
 
 /** The phone version: one line above the conversation, opening into the summary. */
-export function RequestBar({ state }: { state: ReturnType<typeof useThreadRequest> }) {
+export function RequestBar({ state, labels }: { state: ReturnType<typeof useThreadRequest>; labels?: Record<string, string> }) {
   const { requests, key, pick, summary, reload } = state;
   const [open, setOpen] = useState(false);
   if (!requests.length || !summary) return null;
@@ -144,7 +159,7 @@ export function RequestBar({ state }: { state: ReturnType<typeof useThreadReques
   return (
     <div className="shrink-0 border-b border-stroke-soft-200 bg-bg-white-0 lg:hidden" data-testid="request-bar">
       <button type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)} className="flex w-full items-center gap-2 px-4 py-2.5 text-left">
-        <RiListCheck3 className="size-4 shrink-0 text-text-soft-400" aria-hidden="true" />
+        <Mascot mood={moodOf(summary)} className="size-7" />
         <span className="min-w-0 flex-1">
           <span className="block truncate text-label-xs text-text-strong-950">{summary.nextAction.label}</span>
           <span className="block truncate text-paragraph-xs text-text-sub-600">{n.matching !== null ? `${n.matching} matching · ` : ""}{n.contacted} contacted · {n.replied} replied</span>
@@ -155,7 +170,7 @@ export function RequestBar({ state }: { state: ReturnType<typeof useThreadReques
         <div className="max-h-[60vh] overflow-y-auto border-t border-stroke-soft-200 px-4 py-3">
           <p className="mb-3 line-clamp-2 text-paragraph-xs text-text-sub-600">{summary.title}</p>
           <Picker requests={requests} value={key} onPick={pick} />
-          <div className="mt-3"><RequestSummaryView summary={summary} compact onChanged={reload} /></div>
+          <div className="mt-3"><RequestSummaryView summary={summary} compact onChanged={reload} labels={labels} /></div>
         </div>
       )}
     </div>
