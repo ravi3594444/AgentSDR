@@ -17,9 +17,10 @@ advice; when in doubt, ask a lawyer who knows the countries you sell into.
   invitations a day, random gaps, working hours only, pausing when LinkedIn
   pushes back) reduce that risk; they do not remove it.
 - **WhatsApp.** WhatsApp's terms and Business policies forbid unsolicited bulk
-  messaging, and numbers that people report get banned. AgentSDR's guards (no
-  new chats for 24 hours after linking a number, 25 new chats a day, 10 seconds
-  between sends, never to Do Not Contact) are a floor, not permission.
+  messaging, and numbers that people report get banned. AgentSDR's guards (25
+  new chats a day per number, 30 seconds between sends, never to Do Not
+  Contact; a warm-up after linking a number is off unless you set one) are a
+  floor, not permission.
 - **Unipile and Google Workspace.** Your use also falls under their terms, and
   under your own organization's email policies.
 

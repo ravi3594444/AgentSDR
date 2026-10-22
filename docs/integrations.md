@@ -134,8 +134,8 @@ reach it. Locally, the redirect back to the accounts page syncs anyway.
 
 ### WhatsApp send limits
 
-No new chats for 24 hours after a number is linked, 25 new chats a day per
-number, and 10 seconds between sends are the defaults, enforced server-side. They
+No warm-up after a number is linked (new chats start right away), 25 new chats a
+day per number, and 30 seconds between sends are the defaults, enforced server-side. They
 are per-organization sending rules (Workspace, Sending rules; see
 [Sending rules](workspace/sending-rules.mdx)), not
 environment variables.

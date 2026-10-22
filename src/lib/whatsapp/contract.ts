@@ -56,13 +56,15 @@ export type ListWhatsappAccountsResponse = { accounts: WhatsappAccountSummary[] 
 export type BackfillWhatsappAccountResponse = { importedChats: number; importedMessages: number; skippedGroups: number };
 
 // --- guardrails --------------------------------------------------------------------
-// Unipile's own guidance for WhatsApp (provider limits): wait a day after
-// linking before starting new chats, space sends out, keep new chats per
-// day modest. A banned number also loses its calling, so these are enforced
-// server-side. Env vars of the same names override them.
+// The defaults of the organization's WhatsApp Sending rules (rules.ts), kept
+// here import-free for the recorder extension and the website. Space sends
+// out and keep new chats per day modest: a banned number also loses its
+// calling, so these are enforced server-side. Unipile advises waiting a day
+// after linking before starting new chats; the warm-up is off by default
+// (owner's decision, 23 Oct 2026) and an organization can set one.
 
-/** Hours after a number is linked before AgentSDR starts new chats from it. */
-export const WHATSAPP_NEW_CHAT_WARMUP_HOURS = 24;
+/** Hours after a number is linked before AgentSDR starts new chats from it (0: right away). */
+export const WHATSAPP_NEW_CHAT_WARMUP_HOURS = 0;
 /** New chats (numbers never messaged from this account) per account per day. */
 export const WHATSAPP_NEW_CHATS_PER_DAY = 25;
 /** Minimum seconds between two sends from one account. */

@@ -4,7 +4,7 @@ import { defaultValues } from "@/lib/channels/rules";
 
 const NOW = new Date("2026-09-30T10:00:00.000Z");
 const HOUR = 60 * 60 * 1000;
-const DEFAULTS = { warmUpHours: 24, newChatsPerDay: 25, minSecondsBetweenSends: 30 };
+const DEFAULTS = { warmUpHours: 0, newChatsPerDay: 25, minSecondsBetweenSends: 30 };
 
 describe("whatsappGuardrails", () => {
   const RULES = defaultValues("whatsapp");
@@ -45,13 +45,19 @@ describe("secondsUntilNextSend", () => {
 
 describe("newChatRefusal", () => {
   const linkedLongAgo = new Date(NOW.getTime() - 72 * HOUR);
+  // An organization that set a 24-hour warm-up (the default is none).
+  const WARM_UP = { ...DEFAULTS, warmUpHours: 24 };
+
+  test("by default a number linked a minute ago starts new chats right away", () => {
+    expect(newChatRefusal({ connectedAt: new Date(NOW.getTime() - 60_000), newChatsInWindow: 0, now: NOW, guardrails: whatsappGuardrails(defaultValues("whatsapp")) })).toBeNull();
+  });
 
   test("allows a new chat past the warm-up and under the cap", () => {
     expect(newChatRefusal({ connectedAt: linkedLongAgo, newChatsInWindow: 24, now: NOW, guardrails: DEFAULTS })).toBeNull();
   });
 
   test("refuses during the warm-up, naming when it ends", () => {
-    const refusal = newChatRefusal({ connectedAt: new Date(NOW.getTime() - HOUR), newChatsInWindow: 0, now: NOW, guardrails: DEFAULTS });
+    const refusal = newChatRefusal({ connectedAt: new Date(NOW.getTime() - HOUR), newChatsInWindow: 0, now: NOW, guardrails: WARM_UP });
     expect(refusal).toContain("2026-10-01T09:00:00.000Z");
   });
 
@@ -60,7 +66,7 @@ describe("newChatRefusal", () => {
   });
 
   test("refuses an account never seen connected, unless the warm-up is off", () => {
-    expect(newChatRefusal({ connectedAt: null, newChatsInWindow: 0, now: NOW, guardrails: DEFAULTS })).toContain("not been seen connected");
-    expect(newChatRefusal({ connectedAt: null, newChatsInWindow: 0, now: NOW, guardrails: { ...DEFAULTS, warmUpHours: 0 } })).toBeNull();
+    expect(newChatRefusal({ connectedAt: null, newChatsInWindow: 0, now: NOW, guardrails: WARM_UP })).toContain("not been seen connected");
+    expect(newChatRefusal({ connectedAt: null, newChatsInWindow: 0, now: NOW, guardrails: DEFAULTS })).toBeNull();
   });
 });

@@ -641,9 +641,10 @@ WhatsApp Web). Replies reach the CRM through `src/lib/whatsapp/crmBridge.ts`
 on a `whatsapp` conversation, like LinkedIn; a `phone`/`agentsdr` message
 counts as the lead being answered.
 
-Sends are guarded server-side (`contract.ts`): no new chats for 24 h after a
-number is linked, 25 new chats a day per number, 10 s between sends, never
-to Do Not Contact. A banned number also loses its calling.
+Sends are guarded server-side (`contract.ts`, the Sending rules defaults): 25
+new chats a day per number, 30 s between sends, never to Do Not Contact; the
+warm-up after linking a number (`warmupHours`) defaults to 0 (off, the owner's
+decision of 23 Oct 2026) and an organization may set one. A banned number also loses its calling.
 
 ### Message campaigns
 

@@ -4,7 +4,7 @@ description: "Link WhatsApp numbers through Unipile, sync them into AgentSDR, an
 icon: "message-circle"
 ---
 
-AgentSDR messages over WhatsApp from numbers you link in Unipile. Each number has a status, a warm-up period after linking and its own daily limit for starting new chats. This page covers linking, syncing and the guards that every WhatsApp send passes through.
+AgentSDR messages over WhatsApp from numbers you link in Unipile. Each number has a status, an optional warm-up period after linking (off by default) and its own daily limit for starting new chats. This page covers linking, syncing and the guards that every WhatsApp send passes through.
 
 ## Before you start
 
@@ -26,7 +26,7 @@ WhatsApp messaging and calling run on your organization's Unipile connection, th
 
 Sync reads only WhatsApp accounts, never your LinkedIn ones. A number that Unipile no longer lists is marked **Disconnected** at the next sync.
 
-The first time AgentSDR sees a number connected, it records that moment. The warm-up below counts from it.
+The first time AgentSDR sees a number connected, it records that moment. A warm-up, when your organization sets one, counts from it.
 
 ## What the Numbers page shows
 
@@ -34,7 +34,7 @@ A strip at the top counts your numbers:
 
 - **Connected**, out of all linked numbers.
 - **Needs attention**: numbers that are disconnected, need credentials or report an error. Relink these in Unipile, then sync.
-- **Warming up**: numbers still inside their warm-up.
+- **Warming up**: numbers still inside their warm-up (none while the warm-up is off).
 - **New chats a day**: the total your connected numbers may start per day, with the per-number limit and the gap between sends underneath.
 
 Each number has one of four statuses: **Connected**, **Needs credentials**, **Disconnected** or **Error**. Only a connected number can send. A number still warming up shows "Warming up until" and the date.
@@ -65,9 +65,9 @@ Every WhatsApp send passes through the same checks: replies from the Messages pa
 
 | Guard | Default | What happens |
 | --- | --- | --- |
-| Warm-up after linking | 24 hours | A new number answers existing chats right away but starts no new chats until the warm-up ends. A number AgentSDR has never seen connected cannot start new chats at all. Sync, then try again. |
+| Warm-up after linking | Off (0 hours) | A new number starts new chats right away. With a warm-up set, it answers existing chats right away but starts no new chats until the warm-up ends, and a number AgentSDR has never seen connected cannot start new chats at all (sync, then try again). |
 | New chats per 24 hours | 25 per number | Once a number has started this many new chats in a rolling 24 hours, further new chats are refused. Existing chats can still be answered. |
-| Gap between sends | 10 seconds | A second message from the same number sooner than this is refused with a wait time. |
+| Gap between sends | 30 seconds | A second message from the same number sooner than this is refused with a wait time. |
 | Do Not Contact | Always on | A message to a lead marked Do Not Contact is refused. |
 
 A "new chat" means a number this account has never messaged. Chats the lead started, or that you started from your phone, do not count against the limit. The day is a rolling 24 hours rather than a calendar day, so sending 25 at 23:59 and 25 more at 00:01 is not possible.
@@ -76,12 +76,12 @@ Other refusals you may see: the number is not connected, the message is empty, o
 
 ### Automatic pacing
 
-The numbers above are applied automatically: 24 hours of warm-up, 25 new chats per number in any rolling 24 hours, and 10 seconds between messages from one number. There is no setting for them, and no sending hours: numbers send at any time of day. A number that already had its own **New chats a day** keeps it.
+The numbers above are applied automatically: no warm-up, 25 new chats per number in any rolling 24 hours, and 30 seconds between messages from one number. There is no setting for them, and no sending hours: numbers send at any time of day. A number that already had its own **New chats a day** keeps it.
 
 A first message to someone no channel has contacted before also takes one place under your workspace's [daily lead limit](/workspace/sending-rules). Once today's places are used, first messages to new people wait for the reset; follow-ups and replies go on.
 
 <Tip>
-WhatsApp bans numbers that start many chats with people who do not have them saved, which is why new numbers warm up and every number starts new chats slowly.
+WhatsApp bans numbers that start many chats with people who do not have them saved, which is why every number starts new chats slowly. Unipile also advises a day of warm-up for a newly linked number; AgentSDR leaves it off by default, and an owner or admin can set one through the Sending rules API.
 </Tip>
 
 ## Messages and where they come from

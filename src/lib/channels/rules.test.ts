@@ -22,7 +22,7 @@ describe("registry", () => {
       invitesPerDayPremium: 30, invitesPerDayFree: 5, invitesPerRun: [3, 4], inviteDelaySeconds: [30, 60],
       runGapMinutes: [30, 60], followUpsPerRun: [3, 6], profileLookupsPerRun: [4, 8], searchLeadsPerDay: 400,
     });
-    expect(defaultValues("whatsapp")).toEqual({ warmupHours: 24, newChatsPerDay: 25, secondsBetweenSends: 30 });
+    expect(defaultValues("whatsapp")).toEqual({ warmupHours: 0, newChatsPerDay: 25, secondsBetweenSends: 30 });
     expect(defaultValues("instagram")).toEqual({ newChatsPerDay: 10, secondsBetweenSends: 30 });
   });
 });
@@ -96,7 +96,7 @@ describe("validation", () => {
 describe("resolveValues", () => {
   test("stored values override defaults; invalid or unknown ones fall back", () => {
     const resolved = resolveValues("whatsapp", { newChatsPerDay: 40, secondsBetweenSends: 1, legacy: true });
-    expect(resolved).toEqual({ warmupHours: 24, newChatsPerDay: 40, secondsBetweenSends: 30 });
+    expect(resolved).toEqual({ warmupHours: 0, newChatsPerDay: 40, secondsBetweenSends: 30 });
   });
   test("nothing stored means today's defaults", () => {
     expect(resolveValues("email", null)).toEqual(defaultValues("email"));

@@ -484,7 +484,7 @@ export function WhatsappMessagesClient({ initialChatId = null }: { initialChatId
                   disabled={!thread}
                   placeholder={`Message ${name.split(" ")[0] || "them"}…`}
                   meta={
-                    <span title="Sent through Unipile. New chats wait 24 h after a number is linked, and messages are spaced 10 s apart.">
+                    <span title="Sent through Unipile. Messages from one number are spaced apart, and new chats count toward its new-chat limit.">
                       <ChannelTag channel="whatsapp" label={selectedAccount ? `from ${accountLabel(selectedAccount)}` : "WhatsApp"} />
                     </span>
                   }

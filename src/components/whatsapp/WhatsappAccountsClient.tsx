@@ -208,8 +208,10 @@ export function WhatsappAccountsClient({ rules }: { rules: WhatsappNumberRules }
                 icon={RiFireLine}
                 label="Warming up"
                 value={String(warmingCount)}
-                context={`No new chats for ${rules.warmupHours} h after linking`}
-                hint="A newly linked number can reply to existing chats straight away, but starts new ones only after the warm-up, to protect it from bans."
+                context={rules.warmupHours > 0 ? `No new chats for ${rules.warmupHours} h after linking` : "Off: new numbers start chats right away"}
+                hint={rules.warmupHours > 0
+                  ? "A newly linked number can reply to existing chats straight away, but starts new ones only after the warm-up, to protect it from bans."
+                  : "No warm-up is set, so a newly linked number starts new chats right away, within its new-chat limit and spacing."}
               />
               <KpiCell
                 icon={RiChat1Line}

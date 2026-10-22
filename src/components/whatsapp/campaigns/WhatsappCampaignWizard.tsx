@@ -202,7 +202,7 @@ export function WhatsappCampaignWizard() {
                   <fieldset>
                     <legend className="mb-2 block text-label-sm text-text-strong-950">WhatsApp numbers</legend>
                     <SenderPicker accounts={accounts} selectedIds={accountIds} onChange={setAccountIds} error={accountsError} />
-                    <p className="mt-2 text-paragraph-xs text-text-sub-600">Each lead is messaged from one number and stays on it. A new number waits 24 hours before it can start chats.</p>
+                    <p className="mt-2 text-paragraph-xs text-text-sub-600">Each lead is messaged from one number and stays on it. A number marked warming up starts new chats once its warm-up ends.</p>
                   </fieldset>
                 </div>
                 <WizardFooter error={error} backLabel="Cancel" onBack={() => router.push("/whatsapp/campaigns")} onNext={() => void saveSetup()} busy={busy} nextLabel="Continue to leads" />
