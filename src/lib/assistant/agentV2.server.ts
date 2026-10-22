@@ -8,7 +8,7 @@ import { progressBlock, requestBlock, type ProgressSearch } from "./agentV2";
 import { addAudienceMembers, createAudience, memberInsights } from "./audiences.server";
 import { readBrief, type Brief } from "./brief";
 import { personFit } from "./leadFit";
-import { objectiveFacts, threadObjectives, type Objective } from "./objective.server";
+import { continuedRequestIds, objectiveChildren, objectiveFacts, threadObjectives, type Objective } from "./objective.server";
 import { assistantMessages, leadAudienceMembers, outreachRuns } from "./schema";
 
 /**
@@ -35,15 +35,15 @@ export async function currentRequest(threadId: string): Promise<Objective | null
   return latest ?? null;
 }
 
-/** The owner's messages of this chat from the request's first one on, oldest first. */
+/** The owner's messages of this chat from the request's first one on (the newest 40), oldest first. */
 export async function ownerMessagesSince(threadId: string, requestMessageId: string): Promise<string[]> {
   const [first] = await db.select({ createdAt: assistantMessages.createdAt }).from(assistantMessages)
     .where(and(inOrg(assistantMessages), eq(assistantMessages.id, requestMessageId), eq(assistantMessages.threadId, threadId))).limit(1);
   if (!first) return [];
   const rows = await db.select({ content: assistantMessages.content }).from(assistantMessages)
     .where(and(inOrg(assistantMessages), eq(assistantMessages.threadId, threadId), eq(assistantMessages.role, "user"), gte(assistantMessages.createdAt, first.createdAt)))
-    .orderBy(asc(assistantMessages.createdAt)).limit(40);
-  return rows.map((row) => row.content).filter((text) => text.trim());
+    .orderBy(desc(assistantMessages.createdAt)).limit(40);
+  return rows.reverse().map((row) => row.content).filter((text) => text.trim());
 }
 
 export function objectiveBrief(objective: Pick<Objective, "controls"> | null): Brief | null {
@@ -61,7 +61,9 @@ export async function v2ContextText(input: { threadId: string; requestMessageId:
   const parts = [requestBlock({ ownerMessages, brief, controls: objective, status: objective?.status ?? null })];
   if (objective) {
     const facts = await objectiveFacts(objective);
-    const searches: ProgressSearch[] = facts.children.map((job) => {
+    // A request that continues an ended one lists that one's searches too, so none is run again.
+    const inherited = (await Promise.all((await continuedRequestIds(objective)).map((requestMessageId) => objectiveChildren({ requestMessageId })))).flat();
+    const searches: ProgressSearch[] = [...inherited.map((job) => ({ job, earlier: true })), ...facts.children.map((job) => ({ job, earlier: false }))].map(({ job, earlier }) => {
       const payload = (job.payload ?? {}) as { phrase?: unknown; criteria?: { what?: unknown; where?: unknown; customers?: unknown; platforms?: unknown }; keywords?: unknown };
       const result = (job.result ?? {}) as { found?: unknown; eligible?: unknown };
       const what = typeof payload.phrase === "string" ? payload.phrase
@@ -72,7 +74,7 @@ export async function v2ContextText(input: { threadId: string; requestMessageId:
       // A running search's count so far, as its chat card shows it: without it the model says "nothing found yet".
       const foundSoFar = Number((job.progress as { found?: unknown } | null)?.found);
       const found = done ? Number(result.found ?? 0) : running && Number.isFinite(foundSoFar) && foundSoFar > 0 ? foundSoFar : null;
-      return { tool: job.kind, what, status: running ? "running" : job.status, found, contactable: done ? Number(result.eligible ?? 0) : null };
+      return { tool: job.kind, what: earlier ? `${what} (the earlier request)` : what, status: running ? "running" : job.status, found, contactable: done ? Number(result.eligible ?? 0) : null };
     });
     const runs = await db.select({ name: outreachRuns.name, status: outreachRuns.status, plan: outreachRuns.plan }).from(outreachRuns)
       .where(and(inOrg(outreachRuns), eq(outreachRuns.threadId, input.threadId))).orderBy(desc(outreachRuns.createdAt)).limit(5);
@@ -135,7 +137,7 @@ export async function reviewLeadsText(input: { objective: Objective; audienceId:
   const counts = ["match", "unconfirmed", "no_match", "pending", "not_saved"].map((verdict) => `${lines.filter((line) => line.verdict === verdict).length} ${verdict === "pending" ? "not judged" : verdict.replace("_", " ")}`).join(", ");
   const more = offset + shown.length < wanted.length;
   return {
-    text: `${lines.length} leads in this request (${counts}).${more || offset ? ` Showing ${offset + 1}–${offset + shown.length} of ${wanted.length}${more ? `; pass offset ${offset + shown.length} for the next ones` : ""}.` : ""}\n${shown.map((line) => line.text).join("\n")}`,
+    text: `${lines.length} leads in this request (${counts}).${!shown.length && offset ? ` No more past ${offset} of ${wanted.length}.` : more || offset ? ` Showing ${offset + 1}–${offset + shown.length} of ${wanted.length}${more ? `; pass offset ${offset + shown.length} for the next ones` : ""}.` : ""}\n${shown.map((line) => line.text).join("\n")}`,
     shown: shown.length,
     total: lines.length,
   };

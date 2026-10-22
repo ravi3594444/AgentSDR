@@ -448,9 +448,11 @@ export function nextDriverStep(facts: DriverFacts): DriverStep {
       const retryAt = new Date(last.endedAt).getTime() + RETRY_BACKOFF_MS * last.attempt;
       return facts.now.getTime() < retryAt ? { kind: "wait", delayMs: retryAt - facts.now.getTime(), reason: "the AI model did not answer; trying again shortly" } : again();
     }
-    // A last turn begun because no source seemed left, in which the assistant found one and searched: the request goes on.
+    // A last turn begun because no source seemed left, in which the assistant found one and searched: the request goes on
+    // only if that search brought new leads (a search that found nothing, or a paid one refused at its reservation, ends it).
     if (last.final === "sources_exhausted" && !limit && facts.newSearches > 0) {
-      return facts.openChildren > 0 ? wait(WATCH_MS, "searches still running") : { kind: "continue", n: last.n + 1, attempt: 1, dry: facts.leads > last.leadsAtStart ? 0 : facts.dry + 1 };
+      if (facts.openChildren > 0) return wait(WATCH_MS, "searches still running");
+      if (facts.leads > last.leadsAtStart) return { kind: "continue", n: last.n + 1, attempt: 1, dry: 0 };
     }
     return end();
   }

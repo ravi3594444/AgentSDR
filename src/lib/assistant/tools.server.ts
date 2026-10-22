@@ -49,7 +49,7 @@ import { businessSources } from "./businessContext.server";
 import { getBusinessProfile, updateBusinessProfile } from "./profile.server";
 import { ORGANIZATION_SCOPE, PERIOD_KINDS, RESULTS_SCOPE_KINDS, scopeIsEmpty, type PeriodKind, type ResultsScopeKind } from "./results";
 import { requestScope, results, resultsText, runScope, threadScope } from "./results.server";
-import { assistantJobs, outreachRuns, type AudienceChannel } from "./schema";
+import { assistantJobs, leadAudiences, outreachRuns, type AudienceChannel } from "./schema";
 import { featureState } from "@/lib/features/flags.server";
 import { createExistingLeadsAudience, inquiryOverview, MAX_EXISTING_LEADS } from "./existingLeads.server";
 import { isExistingLeadsFrom } from "./existingLeads";
@@ -61,7 +61,7 @@ import { createInstagramContactsAudience } from "./instagramContacts.server";
 import { withoutContactAfter } from "./agentV2";
 import { activeRequest, matchingLeadsAudience, objectiveBrief, ownerMessagesSince, reviewLeadsText, setLeadFit, type LeadPick, type ReviewFilter } from "./agentV2.server";
 import { briefLine, checkBrief } from "./brief";
-import { controlsSentence, ensureObjective, objectiveDefaults, objectiveForRequest, objectiveRequest, setObjectiveBrief, stopObjective, objectiveLine, objectiveStartProblem, requestHoldReason, requestSpendCap, requestSpendGuard, setObjectiveState, threadObjectives } from "./objective.server";
+import { controlsSentence, ensureObjective, objectiveDefaults, objectiveFacts, objectiveForRequest, objectiveRequest, setObjectiveBrief, stopObjective, objectiveLine, objectiveStartProblem, requestHoldReason, requestSpendCap, requestSpendGuard, setObjectiveState, threadObjectives } from "./objective.server";
 
 /**
  * What the assistant can do, and nothing else. Each tool is a call into an
@@ -93,6 +93,8 @@ export type ToolContext = {
   requestMessageId?: string | null;
   /** The request this turn's searches serve, decided once per turn (agent.ts searchRequestFor). */
   searchRequestId?: string | null;
+  /** v2: the ended request a search of this turn moved on from (searchObjective), so a set_brief after it may still continue it. */
+  endedRequestId?: string | null;
   /** Research agent v2 (agentV2.ts): the model writes the brief and prepares outreach itself; no search prepares a plan. */
   v2?: boolean;
 };
@@ -118,6 +120,7 @@ async function searchObjective(context: ToolContext): Promise<{ problem: string 
     // The turn's request has ended and the owner has written since: this search is their new request (the rest of the turn serves it).
     const served = await objectiveForRequest(requestId);
     if (served?.status === "stopped" && context.requestMessageId && context.requestMessageId !== requestId) {
+      context.endedRequestId = served.requestMessageId;
       context.searchRequestId = context.requestMessageId;
       requestId = context.requestMessageId;
     }
@@ -455,11 +458,13 @@ async function prepareOutreachV2(args: Record<string, unknown>, context: ToolCon
   const brief = objectiveBrief(objective);
   if (context.autonomous) {
     // The owner's latest word on contacting decides ("research only", then "outreach them all"; or a yes to the assistant's offer).
-    const words = await ownerMessagesSince(context.threadId, objective.requestMessageId);
-    let asked = Boolean(context.lastAssistantText && words.length && outreachRequested(words.at(-1)!, context.lastAssistantText));
-    for (const message of [...words].reverse()) {
-      if (asked || outreachRevoked(message)) break;
+    // A "yes" counts only as the answer the owner's latest message gives to the assistant's message just before it.
+    let asked = Boolean(context.lastAssistantText && outreachRequested(context.ownerText, context.lastAssistantText));
+    // Newest first: a message that asks for contact counts ("WhatsApp them, don't email them" asks), one that only stops it ends the search.
+    for (const message of [...await ownerMessagesSince(context.threadId, objective.requestMessageId)].reverse()) {
+      if (asked) break;
       if (outreachRequested(message, null)) asked = true;
+      else if (outreachRevoked(message)) break;
     }
     if (!asked) throw new ToolArgumentError(outreachRequestProblem("", null)!);
   }
@@ -473,9 +478,17 @@ async function prepareOutreachV2(args: Record<string, unknown>, context: ToolCon
   }
   const personIds = Array.isArray(args.personIds) && args.personIds.length ? (args.personIds as string[]) : null;
   const pick: LeadPick = personIds ? { kind: "people", ids: personIds } : { kind: leads };
-  // A number the owner gave ("find 10 and email them") sizes the plan; with none, everyone picked goes in.
-  const cap = Math.min(PLAN_MAX_LEADS, Math.round(maxLeads ?? brief?.leadTarget ?? PLAN_MAX_LEADS));
-  const built = await matchingLeadsAudience({ objective, brief, threadId: context.threadId, userId: context.userId, max: cap, audienceId: uuid(args, "audienceId", false) ?? null, pick });
+  // A number the owner gave ("find 10 and email them") sizes the plan; with none, everyone picked goes in. The people the model named all go in.
+  const cap = Math.min(PLAN_MAX_LEADS, Math.round(maxLeads ?? (pick.kind === "people" ? pick.ids.length : brief?.leadTarget ?? PLAN_MAX_LEADS)));
+  // A list named for the plan is one of this chat's or this request's, not any list of the organization.
+  const audienceArg = uuid(args, "audienceId", false) ?? null;
+  if (audienceArg) {
+    const [list] = await db.select({ threadId: leadAudiences.threadId }).from(leadAudiences).where(and(inOrg(leadAudiences), eq(leadAudiences.id, audienceArg))).limit(1);
+    if (!list || (list.threadId !== context.threadId && !(await objectiveFacts(objective)).audienceIds.includes(audienceArg))) {
+      return { ok: false, summary: "No plan prepared: that list is not one of this chat's or this request's lists." };
+    }
+  }
+  const built = await matchingLeadsAudience({ objective, brief, threadId: context.threadId, userId: context.userId, max: cap, audienceId: audienceArg, pick });
   if ("problem" in built) return { ok: false, summary: `No plan prepared: ${built.problem}.` };
   const audienceId = built.audienceId;
   try {
@@ -1049,7 +1062,7 @@ export const TOOLS: Record<string, Tool> = {
   },
 
   browser_open: {
-    description: `Open a page in a remote browser (TinyFish Browser), when reading a page with read_webpage is not enough: a search form, filters, "load more" buttons, pagination by clicking, or a page that shows content only after interaction. It is paid by the minute (about $0.002) within the owner's daily browser minutes (Settings → Lead research → TinyFish; off unless set), one browser per organization, each session at most ${BROWSER_LIMITS.maxSessionMinutes} minutes; it closes when the turn ends. The URL follows the same rule as read_webpage (a link the owner gave, a web_search result, or a link on a page already read). It never logs in, never types passwords, and cannot use Instagram, Facebook, X, TikTok, LinkedIn or Reddit. Returns the page text and its numbered elements for browser_click and browser_fill.`,
+    description: `Open a page in a remote browser (TinyFish Browser), when reading a page with read_webpage is not enough: a search form, filters, "load more" buttons, pagination by clicking, or a page that shows content only after interaction. It is paid by the minute (about $0.002) within the owner's daily browser minutes (Settings → Lead research → TinyFish; off unless set), one browser per organization, each session at most ${BROWSER_LIMITS.maxSessionMinutes} minutes; it closes when the turn ends. The URL is any public page (private and local addresses are refused). It never logs in, never types passwords, and cannot use Instagram, Facebook, X, TikTok, LinkedIn or Reddit. Returns the page text and its numbered elements for browser_click and browser_fill.`,
     arguments: "url",
     run: async (args, context) => {
       const raw = text(args, "url", true)!.trim();
@@ -1213,7 +1226,7 @@ export const TOOLS: Record<string, Tool> = {
 
   set_brief: {
     available: (features) => features.research_agent_v2,
-    description: "Write down the lead request the owner made, before its first search and whenever they change it: what they want, how many leads, whether to contact them and on which channels, their budget and time, and what finished means. Every later step reads it: the lead judge, the plan, the writer and the final report. Use only what the owner said (their messages and answers); leave a field null when they said nothing. The server checks it: a limit above the organization's default must be one the owner wrote.",
+    description: "Write down the lead request the owner made, before its first search and whenever they change it: what they want, how many leads, whether to contact them and on which channels, their budget and time, and what finished means. Every later step reads it: the lead judge, the plan, the writer and the final report. Use only what the owner said (their messages and answers); leave a field null when they said nothing. The server checks one thing: a spend cap above the organization's default must be an amount the owner wrote.",
     arguments: "goal (the request in one or two sentences, from all of the owner's messages about it, e.g. 'Find 10 hair salons in Miami on Instagram and DM them'), leadTarget (the number of leads the owner asked for, or null), contact (true when the owner asked to contact, email, message or DM them; false for research only), channels (array of email|whatsapp|linkedin|instagram the owner allowed, or null when they named none), spendCapUsd (dollars the owner allows on paid sources; 0 when they said free tools only; null when they said nothing), timeLimitMinutes (minutes the owner allows, or null), done (what finished means, in a sentence), newRequest (true when this is a new, different request from the one in progress)",
     run: async (args, context) => {
       if (args.newRequest !== undefined && typeof args.newRequest !== "boolean") throw new ToolArgumentError("newRequest must be true or false");
@@ -1224,7 +1237,11 @@ export const TOOLS: Record<string, Tool> = {
       const requestId = fresh ? context.requestMessageId ?? null : current!.requestMessageId;
       if (!requestId) throw new ToolArgumentError("there is no owner message to make a request of");
       // A follow-up to a request that has ended ("contact them all") continues it: its leads and their verdicts come along.
-      const continues = fresh && args.newRequest !== true && served?.status === "stopped" && served.requestMessageId !== requestId ? served.requestMessageId : null;
+      // Also when a search of this turn already started the follow-up (search first, brief after): the model's newRequest decides.
+      const continues = args.newRequest === true ? null
+        : fresh && served?.status === "stopped" && served.requestMessageId !== requestId ? served.requestMessageId
+          : !fresh && context.endedRequestId && current!.requestMessageId === context.requestMessageId && !current!.controls.continues ? context.endedRequestId
+            : null;
       const words = (await ownerMessagesSince(context.threadId, requestId)).join("\n");
       const checked = checkBrief(args, words, await objectiveDefaults());
       if (!checked.ok) throw new ToolArgumentError(checked.error);

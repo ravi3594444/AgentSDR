@@ -199,8 +199,11 @@ const OUTREACH_LIVE = /\b(?:outreach|campaign|emails?|messages?)\s+(?:is|are|has
  * record of it starting. Returns the reason, or null. (A message sent with
  * tools is shown only after they ran; agent.server.ts drops it when one failed.)
  */
-export function unbackedClaim(message: string, succeededThisTurn: readonly string[], outreachStartedOnRecord: boolean): string | null {
-  if (!succeededThisTurn.length && CLAIMS_DONE.test(message)) {
+export function unbackedClaim(message: string, succeededThisTurn: readonly string[], outreachStartedOnRecord: boolean, searchedOnRecord = false): string | null {
+  // "I found 30 dentists" may report an earlier search that finished (on record); "I've sent / saved / prepared …" needs this turn's tool.
+  const claims = [...message.matchAll(new RegExp(CLAIMS_DONE.source, "gi"))].map((match) => match[0].toLowerCase());
+  const reportsEarlierSearch = searchedOnRecord && claims.length > 0 && claims.every((claim) => /\b(?:found|searched)$/.test(claim));
+  if (!succeededThisTurn.length && claims.length && !reportsEarlierSearch) {
     return "Your message says something was done, but no tool has succeeded in this turn. Put the tool in actions, or say what you will do instead.";
   }
   if (!outreachStartedOnRecord && OUTREACH_LIVE.test(message)) {

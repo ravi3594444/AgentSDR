@@ -20,7 +20,7 @@ import { listRuns } from "./outreach.server";
 import { localDate } from "./results";
 import { organizationTimeZone } from "./results.server";
 import type { TurnEnd } from "./objective";
-import { objectiveForRequest } from "./objective.server";
+import { continuedRequestIds, objectiveForRequest } from "./objective.server";
 import { assistantJobs, assistantMessages, type AssistantAttachment, type BusinessProfile } from "./schema";
 import { addMessage, claimThread, listMessages, releaseThread, touchThread, updateMessage } from "./threads.server";
 import { recordUsage } from "./usage.server";
@@ -130,6 +130,9 @@ async function ownerDocumentsText(maxChars = 60_000): Promise<string> {
 async function repeatedSearch(context: ToolContext, tool: string, args: Record<string, unknown>): Promise<ToolResult | null> {
   const requestId = searchRequestId(context);
   if (!SEARCH_TOOLS.has(tool) || !requestId || !context.threadId) return null;
+  // A request that continues an ended one also counts that one's searches as already done.
+  const served = await objectiveForRequest(requestId);
+  const requestIds = new Set([requestId, ...(served ? await continuedRequestIds(served) : [])]);
   const key = searchArgsKey(tool, args);
   const earlier = await db.select({ toolInput: assistantMessages.toolInput, toolResult: assistantMessages.toolResult }).from(assistantMessages).where(and(
     inOrg(assistantMessages),
@@ -138,14 +141,14 @@ async function repeatedSearch(context: ToolContext, tool: string, args: Record<s
     eq(assistantMessages.tool, tool),
     eq(assistantMessages.status, "ok"),
   )).orderBy(desc(assistantMessages.createdAt)).limit(20);
-  const same = earlier.find((row) => (row.toolResult as { requestId?: unknown } | null)?.requestId === requestId && searchArgsKey(tool, (row.toolInput ?? {}) as Record<string, unknown>) === key);
+  const same = earlier.find((row) => requestIds.has(String((row.toolResult as { requestId?: unknown } | null)?.requestId ?? "")) && searchArgsKey(tool, (row.toolInput ?? {}) as Record<string, unknown>) === key);
   const data = (same?.toolResult as { data?: Record<string, unknown> } | null)?.data;
   const jobId = typeof data?.jobId === "string" ? data.jobId : null;
   if (!same || !jobId) return null;
   const [job] = await db.select({ status: assistantJobs.status }).from(assistantJobs).where(and(inOrg(assistantJobs), eq(assistantJobs.id, jobId))).limit(1);
   if (!job || job.status === "failed" || job.status === "cancelled") return null;
   const state = job.status === "succeeded" ? "it has finished and its results were announced" : "it is still running; its results are announced when done";
-  return { ok: true, summary: `Already searched for this request with the same words: job ${jobId}, audience ${String(data?.audienceId ?? "")} (${state}). It was not started again.`, display: "This search was already started for this request; it was not started again.", data };
+  return { ok: true, summary: `Already searched for this request with the same words: job ${jobId}, audience ${String(data?.audienceId ?? "")} (${state}). It was not started again.`, display: "This search was already started for this request; it was not started again.", data: { ...data, repeated: true } };
 }
 
 export async function runToolInThread(context: ToolContext, tool: string, args: Record<string, unknown>): Promise<ToolResult> {
@@ -271,15 +274,15 @@ export async function runAgentTurn(input: {
       // What the owner wrote or attached: business information is saved only from it.
       const ownerCorpus = groundingCorpus(messages, documentsText);
       let reply: AgentReply | null = null;
-      // Earlier work on record backs a message that reports it ("the Houston search found 50"), not only this turn's tools.
-      const onRecord = messages.some((row) => row.role === "tool" && row.status === "ok");
+      // A search on record backs "I found …" about it; anything else said done needs this turn's tool.
+      const searchedOnRecord = messages.some((row) => row.role === "tool" && row.status === "ok" && SEARCH_TOOLS.has(row.tool ?? ""));
       const validateBatch = (parsed: AgentReply) => {
         const refused = actionsProblem(parsed.actions, { profile, ownerCorpus, outreachRequested: askedForOutreach, inquiryRepliesRequested: askedForInquiryReplies });
         if (refused) throw new Error(refused);
         // Completion messages stay held until the last batch. Re-check them
         // and every queued batch against the latest results and profile.
         const startsNow = autonomy.on && parsed.actions.some((action) => action.tool === "prepare_outreach");
-        const problem = unbackedClaim(parsed.message, parsed.actions.length || succeeded.length || onRecord ? ["(record)"] : [], outreachStarted || startsNow)
+        const problem = unbackedClaim(parsed.message, parsed.actions.length ? ["(pending)"] : succeeded, outreachStarted || startsNow, searchedOnRecord)
           ?? (v2 ? startedNotFinishedClaim(parsed.message, parsed.actions, (tool) => SEARCH_TOOLS.has(tool)) : null);
         if (problem) throw new Error(problem);
       };
@@ -371,6 +374,8 @@ export async function runAgentTurn(input: {
       // message that says something was done is dropped when a tool failed,
       // and the next step explains what happened instead.
       let allOk = true;
+      // A search this step really started (not one that was already done, which the model should see and move past).
+      let startedSearch = false;
       for (const action of actions) {
         // The older agent's Autonomous mode capped searches per day; in v2 the request's spend cap and time limit bound them.
         const capped = !v2 && autonomy.on && caps && SEARCH_TOOLS.has(action.tool) ? searchCapProblem(await autonomousSearchesToday(), caps) : null;
@@ -386,6 +391,7 @@ export async function runAgentTurn(input: {
         else observations.clear();
         if (result.ok) succeeded.push(action.tool);
         else allOk = false;
+        if (result.ok && SEARCH_TOOLS.has(action.tool) && result.data?.repeated !== true) startedSearch = true;
         // Autonomous: the plan starts now; when a cap stops it the message is held and the next step explains.
         if (action.tool === "prepare_outreach" && result.ok && !(await startedOnItsOwn(input.threadId, autonomy.on, result.data))) allOk = false;
         // Contacts the owner asked to reach get their plan straight away, as a "find and contact" search does.
@@ -422,7 +428,7 @@ export async function runAgentTurn(input: {
       // finish. A step that only started them (and wrote the brief) and told
       // the owner ends the turn, rather than asking the model again for a
       // second "still running" message.
-      if (v2 && allOk && message && !pendingReply && actions.some((action) => SEARCH_TOOLS.has(action.tool))
+      if (v2 && allOk && message && !pendingReply && startedSearch
         && actions.every((action) => SEARCH_TOOLS.has(action.tool) || action.tool === "set_brief")) {
         end = "done";
         return end;

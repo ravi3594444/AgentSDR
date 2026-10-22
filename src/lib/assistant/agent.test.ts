@@ -158,6 +158,14 @@ describe("unbackedClaim", () => {
     expect(unbackedClaim("I've saved your business details.", ["save_business_info"], false)).toBeNull();
   });
 
+  test("an earlier search backs \"I found …\", never \"I've sent / saved / prepared …\"", () => {
+    expect(unbackedClaim("I found 30 dentists in Austin; 12 match.", [], false, true)).toBeNull();
+    expect(unbackedClaim("I've sent emails to all 24 dentists.", [], false, true)).toContain("no tool has succeeded");
+    expect(unbackedClaim("I've saved that you offer free delivery.", [], false, true)).toContain("no tool has succeeded");
+    expect(unbackedClaim("I found 30 dentists and I've prepared the plan.", [], false, true)).toContain("no tool has succeeded");
+    expect(unbackedClaim("I found 30 dentists.", [], false, false)).toContain("no tool has succeeded");
+  });
+
   test("future intentions and questions pass", () => {
     expect(unbackedClaim("I will search for dentists in Pune once you confirm.", [], false)).toBeNull();
     expect(unbackedClaim("Which city should I search?", [], false)).toBeNull();

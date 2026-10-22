@@ -243,7 +243,7 @@ export async function setObjectiveBrief(input: { requestMessageId: string; threa
     timeLimitMinutes: input.controls.timeLimitMinutes,
     deadlineAt: new Date(existing.createdAt.getTime() + input.controls.timeLimitMinutes * 60_000),
     spendCapUsd: input.controls.spendCapUsd,
-    controls: { named: input.controls.named, brief: input.brief, ...(existing.controls.continues ? { continues: existing.controls.continues } : {}) },
+    controls: { named: input.controls.named, brief: input.brief, ...((input.continues ?? existing.controls.continues) ? { continues: input.continues ?? existing.controls.continues } : {}) },
     updatedAt: new Date(),
   }).where(and(inOrg(assistantObjectives), eq(assistantObjectives.id, existing.id), ne(assistantObjectives.status, "stopped"))).returning();
   if (!updated) return { problem: "this request ended while the brief was being saved" };
@@ -298,12 +298,19 @@ const isOpen = (job: Pick<ObjectiveChild, "status">) => job.status === "queued" 
 export async function objectiveLeads(objective: Pick<Objective, "requestMessageId"> & { controls?: Objective["controls"] }, children: readonly ObjectiveChild[]): Promise<{ leads: number; routes: ContactRoutes; audienceIds: string[]; funnel: LeadFunnel }> {
   const earlier = await continuedRequestIds(objective);
   const requestIds = [objective.requestMessageId, ...earlier];
-  const listed = await db.select({ id: leadAudiences.id }).from(leadAudiences)
+  const listed = await db.select({ id: leadAudiences.id, criteria: leadAudiences.criteria }).from(leadAudiences)
     .where(and(inOrg(leadAudiences), inArray(sql`${leadAudiences.criteria} ->> 'requestId'`, requestIds)));
   const inherited = (await Promise.all(earlier.map((requestMessageId) => objectiveChildren({ requestMessageId })))).flat();
   const audienceIds = [...new Set([...children, ...inherited].flatMap((job) => (job.audienceId ? [job.audienceId] : [])).concat(listed.map((row) => row.id)))];
   const { routes, ...funnel } = await audienceFunnel(audienceIds);
-  return { leads: funnel.qualified, routes, audienceIds, funnel };
+  if (!earlier.length) return { leads: funnel.qualified, routes, audienceIds, funnel };
+  // A request that continues another sees its leads (review, plan, PROGRESS), but only its own count toward its target:
+  // "find 10 more" starts at 0. Its plan lists copy inherited leads, so they are not its own either.
+  const own = [...new Set(children.flatMap((job) => (job.audienceId ? [job.audienceId] : [])).concat(listed
+    .filter((row) => (row.criteria as { requestId?: unknown; fromRequest?: unknown } | null)?.requestId === objective.requestMessageId && (row.criteria as { fromRequest?: unknown }).fromRequest !== true)
+    .map((row) => row.id)))];
+  const leads = own.length ? (await audienceFunnel(own)).qualified : 0;
+  return { leads, routes, audienceIds, funnel };
 }
 
 /**
@@ -637,7 +644,9 @@ export async function objectiveLine(requestId: string | null | undefined): Promi
   if (!objective) return null;
   const view = viewOf(await objectiveFacts(objective));
   const state = view.status === "stopped" ? `stopped: ${view.stopDetail ?? view.stopReason}` : view.status === "paused" ? "paused by the owner" : view.waiting ? `working (${view.waiting})` : "working";
-  return `This request: ${view.leads} of ${view.leadTarget} qualified leads, ${usd(view.spentUsd)} of ${usd(view.spendCapUsd)} spent, ${formatDuration(view.msLeft)} left; ${state}.`;
+  // For the model: the target only when the owner gave it, and no money (the spend cap is the server's).
+  const leads = requestLimits(objective).targetNamed ? `${view.leads} of ${view.leadTarget} qualified leads` : `${view.leads} qualified leads`;
+  return `This request: ${leads}, ${formatDuration(view.msLeft)} left; ${state}.`;
 }
 
 // ── Stopping, holding and reporting ──────────────────────────────────────────
@@ -770,6 +779,14 @@ export async function objectiveRequest(objective: Pick<Objective, "requestMessag
 export async function objectiveJudgeRequest(objective: Pick<Objective, "id" | "requestMessageId" | "controls" | "threadId">): Promise<string> {
   const goal = objective.controls.brief?.goal;
   if (!goal) return objectiveRequest(objective);
+  // A request that continues another is judged with the owner's words for that one too (its place, its kind), oldest first.
+  const earlier = (await Promise.all((await continuedRequestIds(objective)).map((id) => objectiveForRequest(id)))).filter((row): row is Objective => row !== null);
+  const words = (await Promise.all([...earlier.reverse(), objective].map(ownerWordsOf))).flat();
+  return judgeRequestText(goal, words);
+}
+
+/** The owner's messages for one request: from its message up to the chat's next request. */
+async function ownerWordsOf(objective: Pick<Objective, "id" | "requestMessageId" | "threadId">): Promise<string[]> {
   // Compared in SQL: the stored times have microseconds, a JS Date only milliseconds.
   const org = currentOrganizationId();
   const requestAt = sql`(select r.created_at from assistant_messages r where r.organization_id = ${org} and r.id = ${objective.requestMessageId})`;
@@ -779,7 +796,7 @@ export async function objectiveJudgeRequest(objective: Pick<Objective, "id" | "r
       and m.created_at < coalesce((select min(n.created_at) from assistant_objectives o join assistant_messages n on n.id = o.request_message_id
         where o.organization_id = ${org} and o.thread_id = ${objective.threadId} and o.id <> ${objective.id} and n.created_at > ${requestAt}), 'infinity'::timestamptz)
     order by m.created_at asc limit 20`);
-  return judgeRequestText(goal, words.map((row) => row.content));
+  return words.map((row) => row.content);
 }
 
 /** Whether the stopped objective may report now: its running searches have finished, or it has waited long enough for them. */

@@ -305,6 +305,39 @@ await runInOrganization(a.org.id, async () => {
   const newSearch = await runTool("find_leads", { what: "florists", where: "Dallas, TX" }, nextContext);
   const nextObjective = await objectiveForRequest(next.id);
   check("a search for a new ask after the request ended starts that new request (not refused by the ended one)", newSearch.ok && Boolean(nextObjective) && !nextObjective!.controls.continues && nextContext.searchRequestId === next.id, newSearch.summary.slice(0, 160));
+
+  // ---------------------------------------------------------- "find 10 more" after a request ended with 4 matches
+  const endedWithMatches = async (label: string) => {
+    const t = await createThread(a.owner.id);
+    const ask = await addMessage({ threadId: t.id, role: "user", content: `Research plumbers in Austin (${label}).`, createdBy: a.owner.id });
+    const ctx: Context = { threadId: t.id, userId: a.owner.id, ownerText: ask.content, requestMessageId: ask.id, searchRequestId: ask.id, v2: true, autonomous: false };
+    await runTool("set_brief", { goal: "Research plumbers in Austin", leadTarget: 4, contact: false, channels: null, spendCapUsd: 0, timeLimitMinutes: null, done: "plumbers found" }, ctx);
+    const list = await createAudience({ name: `plumbers ${label}`, source: "discovery", threadId: t.id, userId: a.owner.id });
+    const rows = await db.insert(people).values([1, 2, 3, 4].map((index) => ({ organizationId: a.org.id, fullName: `Plumber ${label} ${index}`, email: `p${index}-${label}-${stamp}@plumb.research-v2.test`, source: "research-v2-check" }))).returning();
+    await addAudienceMembers(list, rows.map((row) => ({ personId: row.id, source: "discovery", facts: { businessName: row.fullName ?? "", city: "Austin" } })));
+    await db.update(leadAudienceMembers).set({ fit: "match", fitReason: "An Austin plumber.", fitApproach: "standard", fitGroup: "Plumbers", fitRequestId: ask.id, fitAt: new Date() }).where(eq(leadAudienceMembers.audienceId, list));
+    await db.insert(assistantJobs).values({ organizationId: a.org.id, kind: "discovery", stage: "done", status: "succeeded", threadId: t.id, audienceId: list, payload: { requestMessageId: ask.id, phrase: "plumbers in Austin, TX" }, result: { found: 4, eligible: 4 } });
+    await runTool("finish_request", { summary: "Found 4 plumbers." }, ctx);
+    const more = await addMessage({ threadId: t.id, role: "user", content: "Find 10 more in Round Rock and email them all.", createdBy: a.owner.id });
+    return { ask, more, ctx: { ...ctx, ownerText: more.content, requestMessageId: more.id, searchRequestId: ask.id } as Context };
+  };
+  const moreBrief = { goal: "Find 10 more plumbers in Round Rock and email them, with the Austin ones", leadTarget: 10, contact: true, channels: ["email"], spendCapUsd: 0, timeLimitMinutes: null, done: "10 Round Rock plumbers found and an email plan ready" };
+  {
+    const { ask, more, ctx } = await endedWithMatches("brief-first");
+    await runTool("set_brief", moreBrief, ctx);
+    const moreSearch = await runTool("find_leads", { what: "plumbers", where: "Round Rock, TX" }, ctx);
+    const continuing = await objectiveForRequest(more.id);
+    check("\"find 10 more\" continues the ended request but starts at its own count: its search is not refused at the target", continuing?.controls.continues === ask.id && moreSearch.ok, moreSearch.summary.slice(0, 160));
+  }
+  {
+    const { ask, more, ctx } = await endedWithMatches("search-first");
+    const firstSearch = await runTool("find_leads", { what: "plumbers", where: "Round Rock, TX" }, ctx);
+    await runTool("set_brief", moreBrief, ctx);
+    const continuing = await objectiveForRequest(more.id);
+    check("…and a search before the brief still continues it (the earlier leads come along in either order)", firstSearch.ok && continuing?.controls.continues === ask.id, JSON.stringify(continuing?.controls ?? null));
+    const all = await runTool("prepare_outreach", { leads: "all" }, ctx);
+    check("…so \"email them all\" can plan the Austin leads it found earlier", all.ok, all.summary.slice(0, 160));
+  }
   chatAnswers.length = 0;
 
   shared = { threadId: thread.id, requestId: request.id, personIds };

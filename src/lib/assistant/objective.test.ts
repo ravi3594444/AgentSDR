@@ -313,6 +313,8 @@ describe("the driver: wait, continue or stop", () => {
     // A last turn begun because no source seemed left, in which the assistant found one and searched: it goes on.
     expect(nextDriverStep(facts({ ...idle, newSearches: 1, openChildren: 1, continuation: last }))).toMatchObject({ kind: "wait", reason: "searches still running" });
     expect(nextDriverStep(facts({ ...idle, newSearches: 1, leads: 6, continuation: last }))).toEqual({ kind: "continue", n: 4, attempt: 1, dry: 0 });
+    // …but a search that found nothing new (or a paid one refused at its reservation) ends it: no cycle of last turns.
+    expect(nextDriverStep(facts({ ...idle, newSearches: 1, leads: 4, continuation: last }))).toEqual({ kind: "stop", reason: "sources_exhausted", detail: "the assistant found no further source or query worth searching" });
   });
 
   test("the one harness: a target ends the request only when the owner gave it; a used spend cap does not end it", () => {
