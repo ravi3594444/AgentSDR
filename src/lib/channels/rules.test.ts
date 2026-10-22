@@ -137,7 +137,7 @@ test("WhatsApp's contract constants (shown by the recorder and the website, kept
 
 describe("organization day (general.timeZone, general.dayStartsAt)", () => {
   test("defaults to UTC midnight", () => {
-    expect(defaultValues("general")).toEqual({ timeZone: "UTC", dayStartsAt: "00:00", defaultPhoneCountry: "", newLeadsPerDay: 50, autonomousRunsPerDay: 10, autonomousLeadsPerDay: 300, autonomousSearchesPerDay: 20, objectiveLeadTarget: 25, objectiveHours: 4, objectiveSpendUsd: 5 });
+    expect(defaultValues("general")).toEqual({ timeZone: "UTC", dayStartsAt: "00:00", defaultPhoneCountry: "", newLeadsPerDay: 200, autonomousRunsPerDay: 10, autonomousLeadsPerDay: 300, autonomousSearchesPerDay: 20, objectiveLeadTarget: 25, objectiveHours: 4, objectiveSpendUsd: 5 });
   });
 
   test("validates the zone and the time", () => {
@@ -159,7 +159,7 @@ describe("the daily lead limit (general.newLeadsPerDay)", () => {
   const rule = CHANNEL_RULES.general.find((r) => r.key === "newLeadsPerDay")!;
 
   test("one workspace-wide number: 50 by default, 1 to 1,000, a warning above 200", () => {
-    expect(rule).toMatchObject({ kind: "number", label: "Maximum new leads to contact per day", default: 50, min: 1, max: 1000, safe: { above: 200 } });
+    expect(rule).toMatchObject({ kind: "number", label: "Maximum new leads to contact per day", default: 200, min: 1, max: 1000, safe: { above: 200 } });
     expect(ruleError(rule, 0)).toContain("between 1 and 1000");
     expect(ruleError(rule, 1001)).not.toBeNull();
     expect(ruleWarning(rule, 200)).toBeNull();

@@ -20,7 +20,7 @@ export const AUTOPILOT_LIMITS = {
    */
   perConversation: 30,
   /** Automatic messages per organization in any 24 hours. */
-  perDay: 40,
+  perDay: 200,
 } as const;
 
 /** Classifications applied by the AI with confidence or confirmed by a person. */

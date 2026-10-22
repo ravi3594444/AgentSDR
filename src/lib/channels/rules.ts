@@ -291,7 +291,7 @@ export const CHANNEL_RULES = {
       label: "Maximum new leads to contact per day",
       help: "People contacted for the first time, across email, LinkedIn, WhatsApp and Instagram together. A person counts once, when the first automated message to them starts sending; someone already contacted on any channel does not count again. Follow-ups, replies and messages you send yourself do not count. Each sender's own pacing still applies on top.",
       unit: "new leads / day",
-      default: 50,
+      default: 200,
       min: 1,
       max: 1_000,
       safe: { above: 200 },
