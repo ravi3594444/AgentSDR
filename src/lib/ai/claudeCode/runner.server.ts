@@ -5,7 +5,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { accountEnvironment, accountKey, accountPaths, hasOwnLogin, scratchDirectory, spawnCli, stopCli, type ClaudeAccount } from "./cli.server";
 import { foreignKeySource, generationArgs, readGeneration, windowName, type ClaudeFailure } from "./cliOutput";
-import type { ClaudeCodeLimit, ClaudeCodeModel, ClaudeCodeWindow } from "./contract";
+import type { ClaudeCodeEffort, ClaudeCodeLimit, ClaudeCodeModel, ClaudeCodeWindow } from "./contract";
 
 /**
  * One structured generation on an account's own Claude login: the CLI runs
@@ -182,6 +182,7 @@ async function acquireSlot(deadline: number, signal?: AbortSignal): Promise<() =
 export type GenerationInput = {
   account: ClaudeAccount;
   model: ClaudeCodeModel;
+  effort?: ClaudeCodeEffort;
   systemPrompt: string;
   userPrompt: string;
   jsonSchema: Record<string, unknown>;
@@ -226,7 +227,7 @@ export async function runGeneration(input: GenerationInput): Promise<GenerationR
     const cwd = scratch.cwd;
     const lines = await new Promise<string[]>((resolveRun, rejectRun) => {
       try {
-        proc.child = spawnCli(generationArgs({ model: input.model, systemPromptFile, jsonSchema: input.jsonSchema }), { env: accountEnvironment(paths), cwd });
+        proc.child = spawnCli(generationArgs({ model: input.model, effort: input.effort, systemPromptFile, jsonSchema: input.jsonSchema }), { env: accountEnvironment(paths), cwd });
       } catch {
         rejectRun(new ClaudeCodeError("error", "Claude Code could not start on this server. Check that it is installed."));
         return;

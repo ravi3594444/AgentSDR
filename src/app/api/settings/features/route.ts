@@ -3,8 +3,8 @@ import { authContextErrorResponse, can, requirePermission, withOrgContext } from
 import { FEATURE_KEYS, isFeatureKey } from "@/lib/features/catalog";
 import { featureState, FeaturesNotInstalledError, setFeature } from "@/lib/features/flags.server";
 
-// The organization's optional features (src/lib/features/catalog.ts), all off
-// until switched on. Every member can read them; switching one takes the
+// The organization's features (src/lib/features/catalog.ts), resolved from
+// defaults and saved overrides. Every member can read them; switching takes the
 // integrations permission (owners and admins), like connecting a channel.
 
 function failure(error: unknown, fallback: string): Response {

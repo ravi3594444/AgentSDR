@@ -3,14 +3,13 @@ import "server-only";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
-import { defaultFeatureState, FEATURE_KEYS, FEATURES, type FeatureKey, type FeatureState } from "./catalog";
+import { defaultFeatureState, featureStateFromRows, FEATURES, type FeatureKey, type FeatureState } from "./catalog";
 import { organizationFeatures } from "./schema";
 
 /**
- * The organization's optional features (catalog.ts). Off unless a row says
- * on. Before scripts/add-instagram-intake-discovery.ts has run, the table is
- * missing and everything reads as off, so deploying this code ahead of the
- * migration changes nothing for anyone. Reads are cached per organization
+ * The organization's features, with defaults from catalog.ts and saved
+ * overrides from its own rows. Before the features table is installed,
+ * everything reads as off. Reads are cached per organization
  * for CACHE_TTL_MS, like the sending rules; saving clears this process's
  * entry.
  */
@@ -43,16 +42,16 @@ export function isMissingTable(error: unknown): boolean {
 }
 
 async function load(): Promise<FeatureState> {
-  const state = defaultFeatureState();
   try {
     const rows = await db.select({ key: organizationFeatures.key, enabled: organizationFeatures.enabled })
       .from(organizationFeatures)
       .where(inOrg(organizationFeatures));
-    for (const row of rows) if ((FEATURE_KEYS as readonly string[]).includes(row.key)) state[row.key] = row.enabled;
+    return featureStateFromRows(rows);
   } catch (error) {
     if (!isMissingTable(error)) throw error;
+    // The default-on harness must not run before feature tables exist.
+    return { ...defaultFeatureState(), research_agent_v2: false };
   }
-  return state;
 }
 
 /** Every optional feature of the organization in scope, on or off. */

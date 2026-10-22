@@ -41,6 +41,21 @@ export function isClaudeCodeModel(value: unknown): value is ClaudeCodeModel {
   return CLAUDE_CODE_MODELS.some((model) => model.key === value);
 }
 
+/** The CLI's per-generation effort flag; default omits the flag. */
+export const CLAUDE_CODE_EFFORTS = [
+  { key: "default", label: "Model default" },
+  { key: "low", label: "Low" },
+  { key: "medium", label: "Medium" },
+  { key: "high", label: "High" },
+  { key: "xhigh", label: "Extra high" },
+  { key: "max", label: "Max" },
+] as const;
+export type ClaudeCodeEffort = typeof CLAUDE_CODE_EFFORTS[number]["key"];
+
+export function isClaudeCodeEffort(value: unknown): value is ClaudeCodeEffort {
+  return CLAUDE_CODE_EFFORTS.some((effort) => effort.key === value);
+}
+
 /** One sign-in in progress, as the page polls it. The code the owner pastes is never part of it. */
 export type ClaudeCodeSignIn = {
   phase: "waiting" | "succeeded" | "failed" | "cancelled" | "expired";
@@ -53,8 +68,23 @@ export type ClaudeCodeSignIn = {
 
 /** What a model check found: the model id the CLI ran, or why it could not. */
 export type ClaudeCodeModelCheck =
-  | { ok: true; modelId: string; checkedAt: string }
-  | { ok: false; error: string; checkedAt: string };
+  | { ok: true; modelId: string; checkedAt: string; effort?: ClaudeCodeEffort }
+  | { ok: false; error: string; checkedAt: string; effort?: ClaudeCodeEffort };
+
+/** Checks saved before effort selection tested the model's default effort. */
+export function claudeCodeCheckMatches(check: ClaudeCodeModelCheck | undefined, effort: ClaudeCodeEffort): boolean {
+  return check?.ok === true && (check.effort ?? "default") === effort;
+}
+
+/** Display a version only after a check reported that model ID. */
+export function claudeCodeModelLabel(model: ClaudeCodeModel, modelId?: string): string {
+  const label = CLAUDE_CODE_MODELS.find((entry) => entry.key === model)?.label ?? model;
+  const version = modelId?.match(/^claude-(sonnet|opus|haiku)-(\d+)-(\d+)(?:-\d{8})?$/i);
+  if (!version || (model !== "default" && version[1].toLowerCase() !== model)) return label;
+  const family = version[1][0].toUpperCase() + version[1].slice(1).toLowerCase();
+  const resolved = `${family} ${version[2]}.${version[3]}`;
+  return model === "default" ? `${label} (${resolved})` : resolved;
+}
 
 /** One usage window exactly as the CLI's `rate_limit_event` reported it. */
 export type ClaudeCodeWindow = { window: string; utilization: number | null; resetsAt: string | null };
@@ -83,6 +113,7 @@ export type ClaudeCodeStatus = {
     ownerUserId: string | null;
     ownedByYou: boolean;
     model: ClaudeCodeModel;
+    effort: ClaudeCodeEffort;
     checks: Partial<Record<ClaudeCodeModel, ClaudeCodeModelCheck>>;
     /** Why this organization cannot use Claude Code now (for example other members), or null. */
     blocked: string | null;

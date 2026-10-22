@@ -26,7 +26,7 @@
  */
 
 import { stripVTControlCharacters } from "node:util";
-import type { ClaudeCodeLimit, ClaudeCodeLoginMethod, ClaudeCodeModel, ClaudeCodeWindow } from "./contract";
+import type { ClaudeCodeEffort, ClaudeCodeLimit, ClaudeCodeLoginMethod, ClaudeCodeModel, ClaudeCodeWindow } from "./contract";
 
 /** Where Anthropic's sign-in lives. Anything else in the CLI's output is not a link we show. */
 const SIGN_IN_HOSTS = ["claude.com", "claude.ai", "console.anthropic.com", "platform.claude.com", "anthropic.com"];
@@ -91,7 +91,7 @@ export const GENERATION_SETTINGS = JSON.stringify({
  * files, no slash commands, nothing kept on disk. `--bare` is not used: it
  * never reads the OAuth login this engine exists for.
  */
-export function generationArgs(input: { model: ClaudeCodeModel; systemPromptFile: string; jsonSchema: Record<string, unknown> }): string[] {
+export function generationArgs(input: { model: ClaudeCodeModel; effort?: ClaudeCodeEffort; systemPromptFile: string; jsonSchema: Record<string, unknown> }): string[] {
   return [
     "-p",
     "--output-format", "stream-json",
@@ -103,6 +103,7 @@ export function generationArgs(input: { model: ClaudeCodeModel; systemPromptFile
     "--setting-sources", "",
     "--disable-slash-commands",
     ...(input.model === "default" ? [] : ["--model", input.model]),
+    ...(!input.effort || input.effort === "default" ? [] : ["--effort", input.effort]),
     "--system-prompt-file", input.systemPromptFile,
     "--json-schema", JSON.stringify(input.jsonSchema),
   ];

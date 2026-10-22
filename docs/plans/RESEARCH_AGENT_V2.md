@@ -1,9 +1,13 @@
 # Research agent v2: the model plans, the code guards (21 Oct 2026)
 
-Branch `claude/research-agent-fixes`, from `f25af92` (the pilot merge). Not
-merged, not deployed. Off by default: an owner or admin turns on
-**Research agent v2 (beta)** on the Providers & features page. With it off,
-the assistant behaves exactly as before.
+Introduced on `claude/research-agent-fixes`, from `f25af92` (the pilot merge),
+and merged into `codex/pilot-deploy-20261021`.
+
+**On by default.** Existing and new workspaces use the improved harness when
+they have no saved choice. An owner or admin can turn **Research agent v2
+(beta)** off on Providers & features to use the previous research flow.
+Saved Off choices stay off across deployments. No data migration or opt-in
+click is needed; other provider and channel defaults stay as configured.
 
 ## Why
 

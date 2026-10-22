@@ -1,10 +1,8 @@
 /**
- * Optional features an organization turns on for itself. Every one is off
- * until an owner or admin switches it on in Settings → Providers & features, so an
- * existing organization keeps exactly what it had: no new channel, intake
- * endpoint or search runs for it until someone chooses it. Pure and
- * client-safe; the switches are stored in organization_features
- * (flags.server.ts).
+ * Organization feature defaults and saved choices. Research agent v2 is on
+ * by default; owners and admins can turn it off in Providers & features.
+ * Other optional features start off. Saved choices override these defaults.
+ * Pure and client-safe; overrides live in organization_features.
  */
 
 export const FEATURE_KEYS = ["instagram", "web_discovery", "inquiry_intake", "apify_discovery", "treg", "brightdata", "research_agent_v2"] as const;
@@ -68,7 +66,17 @@ export function isFeatureKey(value: unknown): value is FeatureKey {
 
 export type FeatureState = Record<FeatureKey, boolean>;
 
-/** Every feature off: what an organization has until someone turns one on. */
+/** Existing and new organizations use v2 unless they have saved an override. */
 export function defaultFeatureState(): FeatureState {
-  return Object.fromEntries(FEATURE_KEYS.map((key) => [key, false])) as FeatureState;
+  return {
+    ...Object.fromEntries(FEATURE_KEYS.map((key) => [key, false])),
+    research_agent_v2: true,
+  } as FeatureState;
+}
+
+/** Stored On and Off choices both win; unknown feature keys are ignored. */
+export function featureStateFromRows(rows: readonly { key: string; enabled: boolean }[]): FeatureState {
+  const state = defaultFeatureState();
+  for (const row of rows) if (isFeatureKey(row.key)) state[row.key] = row.enabled;
+  return state;
 }

@@ -7,9 +7,8 @@ import { Callout } from "@/components/settings/SettingsKit";
 import { FEATURE_KEYS, FEATURES, type FeatureKey, type FeatureState } from "@/lib/features/catalog";
 
 /**
- * Settings → Providers & features. Each is off until an owner or
- * admin turns it on here; turning one off stops it again (nothing already
- * stored is deleted).
+ * Settings → Providers & features. Research v2 starts on; other optional
+ * features start off. Owners and admins can save either choice here.
  */
 export function OrgFeatures() {
   const [features, setFeatures] = useState<FeatureState | null>(null);
@@ -55,7 +54,7 @@ export function OrgFeatures() {
 
   return (
     <Frame>
-      <FrameHeader title="Optional features" description="Off until you turn them on. Turning one off stops it; nothing already saved is deleted." />
+      <FrameHeader title="Optional features" description="Research agent v2 is on by default. Other features start off. You can turn features on or off here; saved work is kept." />
       <FramePanel className="flex flex-col divide-y divide-stroke-soft-200">
         {!features && !error && <p className="text-paragraph-sm text-text-sub-600">Loading…</p>}
         {features && FEATURE_KEYS.map((key) => (

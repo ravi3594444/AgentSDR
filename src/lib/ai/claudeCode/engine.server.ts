@@ -8,7 +8,7 @@ import { members } from "@/lib/auth/schema";
 import type { OrgRole } from "@/lib/auth/permissions";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { accountAuthStatus, cliVersion, type ClaudeAccount } from "./cli.server";
-import { isClaudeCodeModel, type ClaudeCodeModel, type ClaudeCodeModelCheck, type ClaudeCodeStatus } from "./contract";
+import { isClaudeCodeEffort, isClaudeCodeModel, type ClaudeCodeEffort, type ClaudeCodeModel, type ClaudeCodeModelCheck, type ClaudeCodeStatus } from "./contract";
 import { loginController } from "./login.server";
 import { accountUsage, ClaudeCodeError, runGeneration, runningOn } from "./runner.server";
 
@@ -34,17 +34,20 @@ export type ClaudeEngine = {
   selected: boolean;
   ownerUserId: string | null;
   model: ClaudeCodeModel;
+  effort: ClaudeCodeEffort;
   /** Model checks per person: each login's own results, never shared. */
   checks: Record<string, Partial<Record<ClaudeCodeModel, ClaudeCodeModelCheck>>>;
 };
 
-const EMPTY: ClaudeEngine = { selected: false, ownerUserId: null, model: "default", checks: {} };
+const EMPTY: ClaudeEngine = { selected: false, ownerUserId: null, model: "default", effort: "default", checks: {} };
 
 function normalizeCheck(value: unknown): ClaudeCodeModelCheck | null {
   const record = value && typeof value === "object" ? value as Record<string, unknown> : null;
   if (!record || typeof record.checkedAt !== "string") return null;
-  if (record.ok === true && typeof record.modelId === "string") return { ok: true, modelId: record.modelId, checkedAt: record.checkedAt };
-  if (record.ok === false && typeof record.error === "string") return { ok: false, error: record.error, checkedAt: record.checkedAt };
+  if (record.effort !== undefined && !isClaudeCodeEffort(record.effort)) return null;
+  const effort = record.effort ?? "default";
+  if (record.ok === true && typeof record.modelId === "string") return { ok: true, modelId: record.modelId, checkedAt: record.checkedAt, effort };
+  if (record.ok === false && typeof record.error === "string") return { ok: false, error: record.error, checkedAt: record.checkedAt, effort };
   return null;
 }
 
@@ -64,6 +67,7 @@ export function normalizeClaudeEngine(value: unknown): ClaudeEngine {
     selected: raw.selected === true && ownerUserId !== null,
     ownerUserId,
     model: isClaudeCodeModel(raw.model) ? raw.model : "default",
+    effort: isClaudeCodeEffort(raw.effort) ? raw.effort : "default",
     checks,
   };
 }
@@ -90,7 +94,7 @@ export async function getClaudeEngine(): Promise<ClaudeEngine> {
   return engine;
 }
 
-export async function saveClaudeEngine(engine: ClaudeEngine): Promise<ClaudeEngine> {
+export async function saveClaudeEngine(engine: Omit<ClaudeEngine, "effort"> & { effort?: ClaudeCodeEffort }): Promise<ClaudeEngine> {
   const value = normalizeClaudeEngine(engine);
   await db.insert(gridProviders)
     .values({ organizationId: currentOrganizationId(), key: KEY, name: "Claude Code engine", config: value, enabled: true })
@@ -153,7 +157,7 @@ async function otherMembers(organizationId: string, userId: string): Promise<num
  * Code is not selected (the API provider answers, as before). Selected but
  * unusable is an error, never a quiet switch to a paid API.
  */
-export async function claudeCodeBinding(): Promise<{ account: ClaudeAccount; model: ClaudeCodeModel } | null> {
+export async function claudeCodeBinding(): Promise<{ account: ClaudeAccount; model: ClaudeCodeModel; effort: ClaudeCodeEffort } | null> {
   const engine = await getClaudeEngine();
   if (!engine.selected || !engine.ownerUserId) return null;
   const organizationId = currentOrganizationId();
@@ -165,7 +169,7 @@ export async function claudeCodeBinding(): Promise<{ account: ClaudeAccount; mod
   }
   const blocked = await claudeCodeBlocked(organizationId, engine.ownerUserId);
   if (blocked) throw new ClaudeCodeError("error", `Claude Code is selected, but it cannot run here: ${blocked}`);
-  return { account: { organizationId, userId: engine.ownerUserId }, model: engine.model };
+  return { account: { organizationId, userId: engine.ownerUserId }, model: engine.model, effort: engine.effort };
 }
 
 let versionCache: { version: string | null; at: number } | null = null;
@@ -186,7 +190,7 @@ export async function claudeCodeStatus(ctx: { organizationId: string; userId: st
     cli: null,
     account: { signedIn: null, method: null, expired: false },
     signIn: null,
-    engine: { selected: engine.selected, ownerUserId: engine.ownerUserId, ownedByYou: engine.ownerUserId === ctx.userId, model: engine.model, checks: engine.checks[ctx.userId] ?? {}, blocked: null },
+    engine: { selected: engine.selected, ownerUserId: engine.ownerUserId, ownedByYou: engine.ownerUserId === ctx.userId, model: engine.model, effort: engine.effort, checks: engine.checks[ctx.userId] ?? {}, blocked: null },
     running: 0,
     limits: [],
     windows: [],
@@ -221,12 +225,13 @@ const CHECK_SCHEMA = { type: "object", properties: { ok: { type: "boolean" } }, 
  * own account (it counts toward their usage like any other), recording the
  * model id the CLI actually ran, or why it could not.
  */
-export async function checkClaudeModel(account: ClaudeAccount, model: ClaudeCodeModel): Promise<ClaudeCodeModelCheck> {
+export async function checkClaudeModel(account: ClaudeAccount, model: ClaudeCodeModel, effort: ClaudeCodeEffort = "default"): Promise<ClaudeCodeModelCheck> {
   const checkedAt = new Date().toISOString();
   try {
     const result = await runGeneration({
       account,
       model,
+      effort,
       systemPrompt: "You are answering a connection check. Set ok to true.",
       userPrompt: "Connection check.",
       jsonSchema: CHECK_SCHEMA,
@@ -235,10 +240,10 @@ export async function checkClaudeModel(account: ClaudeAccount, model: ClaudeCode
     });
     const answer: unknown = JSON.parse(result.text || "null");
     if (!answer || typeof answer !== "object" || (answer as { ok?: unknown }).ok !== true) {
-      return { ok: false, error: "The model answered, but not with the check's answer.", checkedAt };
+      return { ok: false, error: "The model answered, but not with the check's answer.", checkedAt, effort };
     }
-    return { ok: true, modelId: result.modelId ?? model, checkedAt };
+    return { ok: true, modelId: result.modelId ?? model, checkedAt, effort };
   } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error), checkedAt };
+    return { ok: false, error: error instanceof Error ? error.message : String(error), checkedAt, effort };
   }
 }

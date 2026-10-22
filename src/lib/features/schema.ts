@@ -4,9 +4,9 @@ import { organizations } from "@/lib/auth/schema";
 import type { FeatureKey } from "./catalog";
 
 /**
- * Which optional features (catalog.ts) an organization turned on. A missing
- * row means off, so every organization that existed before this table keeps
- * its old behaviour. Created by scripts/add-instagram-intake-discovery.ts.
+ * Saved overrides for the defaults in catalog.ts. Missing rows use those
+ * defaults; an explicit false keeps a feature off across deployments.
+ * Created by scripts/add-instagram-intake-discovery.ts.
  */
 export const organizationFeatures = pgTable(
   "organization_features",

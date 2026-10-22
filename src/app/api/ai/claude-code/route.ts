@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authContextErrorResponse, withOrgContext, type OrgContext } from "@/lib/auth/context";
-import { isClaudeCodeLoginMethod, isClaudeCodeModel } from "@/lib/ai/claudeCode/contract";
+import { claudeCodeCheckMatches, isClaudeCodeEffort, isClaudeCodeLoginMethod, isClaudeCodeModel } from "@/lib/ai/claudeCode/contract";
 import { accountAuthStatus, type ClaudeAccount } from "@/lib/ai/claudeCode/cli.server";
 import { checkClaudeModel, claudeCodeAccess, claudeCodeBlocked, claudeCodeStatus, getClaudeEngine, saveClaudeEngine } from "@/lib/ai/claudeCode/engine.server";
 import { loginController } from "@/lib/ai/claudeCode/login.server";
@@ -83,24 +83,28 @@ export async function POST(request: NextRequest) {
         }
         case "check_model": {
           if (!isClaudeCodeModel(body?.model)) return refused("Choose a model");
+          const effort = body?.effort ?? "default";
+          if (!isClaudeCodeEffort(effort)) return refused("Choose an effort level");
           if ((await accountAuthStatus(account)).state !== "in") return refused("Sign in to Claude Code first", 409);
-          const check = await checkClaudeModel(account, body.model);
+          const check = await checkClaudeModel(account, body.model, effort);
           const engine = await getClaudeEngine();
           await saveClaudeEngine({ ...engine, checks: { ...engine.checks, [ctx.userId]: { ...engine.checks[ctx.userId], [body.model]: check } } });
           return NextResponse.json(await claudeCodeStatus(ctx));
         }
         case "use": {
           if (!isClaudeCodeModel(body?.model)) return refused("Choose a model");
+          const effort = body?.effort ?? "default";
+          if (!isClaudeCodeEffort(effort)) return refused("Choose an effort level");
           if ((await accountAuthStatus(account)).state !== "in") return refused("Sign in to Claude Code first", 409);
           const blocked = await claudeCodeBlocked(ctx.organizationId, ctx.userId);
           if (blocked) return refused(blocked, 409);
           const engine = await getClaudeEngine();
-          if (!engine.checks[ctx.userId]?.[body.model]?.ok) return refused("Check this model on your account before using it");
+          if (!claudeCodeCheckMatches(engine.checks[ctx.userId]?.[body.model], effort)) return refused("Check this model and effort level on your account before using them");
           if (engine.selected && engine.ownerUserId && engine.ownerUserId !== ctx.userId) {
             const busy = runningOn({ organizationId: ctx.organizationId, userId: engine.ownerUserId });
             if (busy > 0) return refused(`${busy} AI ${busy === 1 ? "step is" : "steps are"} running on another owner's Claude login. Switch when ${busy === 1 ? "it finishes" : "they finish"}.`, 409);
           }
-          await saveClaudeEngine({ ...engine, selected: true, ownerUserId: ctx.userId, model: body.model });
+          await saveClaudeEngine({ ...engine, selected: true, ownerUserId: ctx.userId, model: body.model, effort });
           return NextResponse.json(await claudeCodeStatus(ctx));
         }
         case "stop_using": {

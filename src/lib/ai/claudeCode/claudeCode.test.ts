@@ -116,6 +116,15 @@ describe("reading the CLI", () => {
     expect(generationArgs({ model: "opus", systemPromptFile: "/w/s", jsonSchema: SCHEMA })).toContain("opus");
   });
 
+  test("the selected reasoning effort reaches Claude Code without changing the model default", () => {
+    const input = { model: "sonnet" as const, systemPromptFile: "/w/s", jsonSchema: SCHEMA };
+    expect(generationArgs(input)).not.toContain("--effort");
+    for (const effort of ["low", "medium", "high", "xhigh", "max"] as const) {
+      const args = generationArgs({ ...input, effort });
+      expect(args[args.indexOf("--effort") + 1]).toBe(effort);
+    }
+  });
+
   test("real 2.1.306 frames: the structured answer, the model, usage and the reported windows", () => {
     const outcome = readGeneration(REAL_GENERATION);
     expect(outcome.failure).toBeNull();
@@ -149,7 +158,7 @@ describe("reading the CLI", () => {
   test("engine settings: selection needs an owner; checks are kept per person", () => {
     expect(normalizeClaudeEngine({ selected: true }).selected).toBe(false);
     const engine = normalizeClaudeEngine({ selected: true, ownerUserId: "u1", model: "opus", checks: { u1: { opus: { ok: true, modelId: "claude-opus-5-5", checkedAt: "t" }, bogus: { ok: true } }, u2: "x" } });
-    expect(engine).toEqual({ selected: true, ownerUserId: "u1", model: "opus", checks: { u1: { opus: { ok: true, modelId: "claude-opus-5-5", checkedAt: "t" } } } });
+    expect(engine).toEqual({ selected: true, ownerUserId: "u1", model: "opus", effort: "default", checks: { u1: { opus: { ok: true, modelId: "claude-opus-5-5", checkedAt: "t", effort: "default" } } } });
     expect(normalizeClaudeEngine({ model: "gpt-5" }).model).toBe("default");
   });
 });
