@@ -5,6 +5,7 @@ import { accountAuthStatus, type ClaudeAccount } from "@/lib/ai/claudeCode/cli.s
 import { checkClaudeModel, claudeCodeAccess, claudeCodeBlocked, claudeCodeStatus, getClaudeEngine, saveClaudeEngine } from "@/lib/ai/claudeCode/engine.server";
 import { loginController } from "@/lib/ai/claudeCode/login.server";
 import { accountUsage, runningOn } from "@/lib/ai/claudeCode/runner.server";
+import { sharedClaudeAccountPublished } from "@/lib/ai/claudeCode/shared.server";
 
 /**
  * Settings → AI provider → Claude Code: the signed-in person's own Claude
@@ -58,6 +59,9 @@ export async function POST(request: NextRequest) {
     const action = body?.action;
     const controller = controllerOf(ctx);
     const account = accountOf(ctx);
+    if ((action === "use" || action === "stop_using") && await sharedClaudeAccountPublished(ctx.organizationId, ctx.userId)) {
+      return refused("This login is the private-test default. Change its model or stop sharing it in the platform panel.", 409);
+    }
     try {
       switch (action) {
         case "sign_in": {

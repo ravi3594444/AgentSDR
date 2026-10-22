@@ -3,9 +3,8 @@ import { PlatformCredentialError, saveManagedAiSettings } from "@/lib/managed/st
 
 /**
  * PUT /api/platform/ai — which engine (OpenRouter, AI/ML API or Anthropic)
- * and default model every Included workspace uses. Refused when it could not
- * run (its key not stored, a model of another engine). The Claude Code
- * subscription login is not an engine here. Platform operators only.
+ * and default model Included workspaces use. Claude Code requires a checked
+ * operator login and an explicit private-test workspace list. Platform operators only.
  */
 export async function PUT(request: Request) {
   return withOperator(request, async (operator) => {

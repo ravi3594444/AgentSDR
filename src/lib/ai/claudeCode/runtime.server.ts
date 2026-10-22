@@ -7,6 +7,10 @@ import { CLAUDE_CODE_ENGINE_KEY, type ClaudeCodeModel } from "./contract";
 import type { ClaudeAccount } from "./cli.server";
 import { claudeCodeBinding } from "./engine.server";
 import { runGeneration, type GenerationInput, type GenerationResult } from "./runner.server";
+import { sharedClaudeBinding } from "./shared.server";
+import { meteredAiClient } from "@/lib/managed/aiMeter.server";
+import { accountKey } from "./cli.server";
+import { ClaudeCodeError } from "./runner.server";
 
 /**
  * Claude Code under completeStructured: a runtime whose client turns the
@@ -37,11 +41,11 @@ function messageText(request: JsonSchemaRequest, role: "system" | "user"): strin
 }
 
 export function claudeCodeRuntime(
-  binding: { account: ClaudeAccount; model: ClaudeCodeModel },
+  binding: { account: ClaudeAccount; model: ClaudeCodeModel; shared?: boolean },
   timeoutMs: number,
   run: (input: GenerationInput) => Promise<GenerationResult> = runGeneration,
 ): Awaited<ReturnType<StructuredCompletionRuntime>> {
-  return {
+  const runtime = {
     providerKey: CLAUDE_CODE_ENGINE_KEY,
     selection: { provider: CLAUDE_CODE_ENGINE_KEY, modelId: binding.model },
     routing: {},
@@ -51,7 +55,7 @@ export function claudeCodeRuntime(
     client: {
       chat: {
         completions: {
-          create: async (raw: never, options: { signal?: AbortSignal }) => {
+          create: async (raw: never, options: { signal?: AbortSignal } = {}) => {
             const request = raw as JsonSchemaRequest;
             const schema = request.response_format?.json_schema?.schema;
             if (!schema || typeof schema !== "object") throw new Error("Claude Code answers structured requests only");
@@ -63,6 +67,12 @@ export function claudeCodeRuntime(
               jsonSchema: schema as Record<string, unknown>,
               timeoutMs: timeoutMs + PROCESS_START_MS,
               signal: options.signal,
+              ...(binding.shared ? { authorize: async () => {
+                const current = await sharedClaudeBinding();
+                if (!current || current.model !== binding.model || accountKey(current.account) !== accountKey(binding.account)) {
+                  throw new ClaudeCodeError("error", "The private-test AI configuration changed. Try the task again. No paid API was used.");
+                }
+              } } : {}),
             });
             return {
               choices: [{ finish_reason: "stop", message: { content: result.text } }],
@@ -73,7 +83,8 @@ export function claudeCodeRuntime(
         },
       },
     },
-  };
+  } satisfies Awaited<ReturnType<StructuredCompletionRuntime>>;
+  return binding.shared ? { ...runtime, client: meteredAiClient(runtime.client, { source: "managed", engine: CLAUDE_CODE_ENGINE_KEY, model: binding.model }) } : runtime;
 }
 
 /**

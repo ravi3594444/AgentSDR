@@ -47,8 +47,18 @@ describe("Included AI settings", () => {
     expect(managedAiProblem({ ...EMPTY_MANAGED_AI_SETTINGS, engine: "anthropic", defaultModel: { provider: "anthropic", modelId: "claude-3-opus" } }, stored)).toContain("listed Claude models");
     expect(managedAiProblem({ ...EMPTY_MANAGED_AI_SETTINGS, engine: "openrouter", defaultModel: { provider: "deepinfra", modelId: "z-ai/glm" } }, stored)).toContain("BYOK-only");
   });
-  test("the Claude Code subscription login is never an Included engine", () => {
+  test("unknown spellings of a Claude Code engine stay invalid", () => {
     expect(normalizeManagedAiSettings({ engine: "claude_code" }).engine).toBeNull();
+  });
+  test("a private subscription default requires a source account and approved workspaces", () => {
+    const organizationId = "00000000-0000-4000-8000-000000000001";
+    const userId = "00000000-0000-4000-8000-000000000002";
+    const settings = normalizeManagedAiSettings({ engine: "claude-code", defaultModel: { provider: "claude-code", modelId: "sonnet" }, sharedClaude: { organizationId, userId, approvedOrganizationIds: [organizationId, organizationId, "../bad"] } });
+    expect(settings.sharedClaude?.approvedOrganizationIds).toEqual([organizationId]);
+    expect(managedAiProblem(settings, new Set())).toBeNull();
+    expect(managedAiProblem({ ...settings, sharedClaude: { ...settings.sharedClaude!, approvedOrganizationIds: [] } }, new Set())).toContain("at least one");
+    expect(managedAiProblem({ ...settings, defaultModel: { provider: "anthropic", modelId: "sonnet" } }, new Set())).toContain("checked Claude Code");
+    expect(normalizeManagedAiSettings({ engine: "claude-code", sharedClaude: { organizationId: "../other", userId, approvedOrganizationIds: [] } }).engine).toBeNull();
   });
 });
 

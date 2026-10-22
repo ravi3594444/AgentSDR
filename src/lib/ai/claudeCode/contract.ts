@@ -86,6 +86,8 @@ export type ClaudeCodeStatus = {
     checks: Partial<Record<ClaudeCodeModel, ClaudeCodeModelCheck>>;
     /** Why this organization cannot use Claude Code now (for example other members), or null. */
     blocked: string | null;
+    /** This person's login is the private test default; its selection is managed in /platform. */
+    sharedTest?: boolean;
   };
   /** Generations running or waiting on this login right now. */
   running: number;

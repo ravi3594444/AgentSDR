@@ -3,6 +3,7 @@ import "server-only";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { getByokSettings, isManagedAiConnectionId } from "@/lib/ai/byok";
+import { claudeCodeBinding } from "@/lib/ai/claudeCode/engine.server";
 import { getAiConnection } from "@/lib/ai/connections";
 import { retrieveKnowledge } from "@/lib/crm/knowledge";
 import { discoveryAvailability, DiscoveryUnavailableError, normalizeCriteria, sourceLabel, startDiscovery, startInstagramProspects, startSocialProspects } from "@/lib/discovery/discovery.server";
@@ -248,6 +249,7 @@ async function setupSnapshot() {
     featureEnabled("web_discovery"),
   ]);
   const connection = byok.connectionId ? await getAiConnection(byok.connectionId) : null;
+  const claude = await claudeCodeBinding().catch(() => null);
   const tinyfish = await tinyfishConnection();
   const discovery = discoveryAvailability();
   const known = businessContext(profile, await businessSources());
@@ -270,7 +272,7 @@ async function setupSnapshot() {
     /** The assistant's own web_search and page reading: TinyFish when connected. */
     webAccess: { tinyfish: Boolean(tinyfish), searchProvider: tinyfish?.useForWebSearch ? "TinyFish" : (await tavilyConnection()) ? "Tavily" : null, browserMinutesPerDay: tinyfish?.browserMinutesPerDay ?? 0 },
     // On the Included AI service the engine and model are the platform's configuration: not named.
-    ai: { connected: Boolean(connection?.verified), defaultModel: isManagedAiConnectionId(byok.connectionId) ? "included AI" : byok.defaultModel?.modelId ?? null },
+    ai: { connected: Boolean(claude || connection?.verified), defaultModel: claude?.shared || isManagedAiConnectionId(byok.connectionId) ? "included AI" : claude?.model ?? byok.defaultModel?.modelId ?? null },
     /** Optional features (Settings → Providers & features), all off by default, and whether new inquiries can be answered. */
     features: await featureState(),
     inquiryReplies: { problem: await inquiryRunReadiness() },

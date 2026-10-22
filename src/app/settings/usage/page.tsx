@@ -23,7 +23,7 @@ function resetDate(iso: string | null): string | null {
  */
 export default async function Page() {
   const ctx = await requirePageOrgContext();
-  const { choices, allowances } = await runInOrganization(ctx.organizationId, () => planUsage());
+  const { choices, allowances, aiNotice } = await runInOrganization(ctx.organizationId, () => planUsage());
   const own = choices.filter((choice) => choice.mode === "own");
   return (
     <SettingsPage
@@ -35,7 +35,8 @@ export default async function Page() {
         <Frame>
           <FrameHeader title="Included this month" description="Used and left of each allowance. Allowances reset on the 1st of the month (UTC); connected accounts are a standing count." />
           <FramePanel>
-            {allowances.length === 0 && <p className="text-paragraph-sm text-text-sub-600">Every provider runs on your own accounts, so no included allowance applies.</p>}
+            {aiNotice && <p className="mb-3 rounded-lg bg-bg-weak-50 p-3 text-paragraph-sm text-text-strong-950">{aiNotice}</p>}
+            {allowances.length === 0 && !aiNotice && <p className="text-paragraph-sm text-text-sub-600">Every provider runs on your own accounts, so no included allowance applies.</p>}
             <ul className="flex flex-col">
               {allowances.map((allowance) => {
                 const share = allowance.limit > 0 ? Math.min(100, Math.round((allowance.used / allowance.limit) * 100)) : 100;

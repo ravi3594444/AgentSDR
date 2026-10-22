@@ -142,7 +142,9 @@ export type AiCallMeta = { source: ServiceMode; engine: ManagedAiEngine | "openr
  */
 export async function reserveAiCall(meta: AiCallMeta): Promise<string> {
   return db.transaction(async (tx) => {
-    const reserve = meta.source === "managed" ? MANAGED_LIMITS.aiReservePerCallUsd : null;
+    // A subscription call has no per-call dollar price. Its actual CLI windows
+    // and shared account queue enforce capacity; still attribute calls/tokens.
+    const reserve = meta.source === "managed" && meta.engine !== "claude-code" ? MANAGED_LIMITS.aiReservePerCallUsd : null;
     if (reserve !== null) {
       const refused = await checkManagedAllowance(tx, "ai_usd", reserve);
       if (refused) throw refused;
@@ -156,7 +158,7 @@ export async function reserveAiCall(meta: AiCallMeta): Promise<string> {
       status: "reserved",
       credentialSource: meta.source,
       costUsd: reserve === null ? null : reserve.toFixed(6),
-      detail: { model: meta.model.slice(0, 200), ...(reserve === null ? {} : { reservedUsd: reserve }) },
+      detail: { model: meta.model.slice(0, 200), ...(meta.engine === "claude-code" ? { billing: "claude_account", sharedLimits: true } : {}), ...(reserve === null ? {} : { reservedUsd: reserve }) },
     }).returning({ id: providerUsage.id });
     return row!.id;
   });

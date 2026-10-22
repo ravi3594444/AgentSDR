@@ -42,7 +42,7 @@ export async function getOwnByokSettings(): Promise<ByokSettings> {
 
 /** The Included engine's settings, shaped like an organization's own so every gate reads them the same way. */
 export function managedByokSettings(managed: ManagedAiSettings): ByokSettings {
-  if (!managed.engine || !managed.defaultModel) return empty;
+  if (!managed.engine || managed.engine === "claude-code" || !managed.defaultModel) return empty;
   const selections = [managed.defaultModel, managed.researchModel, managed.transcriptionModel].filter((selection): selection is NonNullable<typeof selection> => Boolean(selection));
   const modelsByProvider: Record<string, string[]> = {};
   for (const selection of selections) modelsByProvider[selection.provider] = [...new Set([...(modelsByProvider[selection.provider] ?? []), selection.modelId])];

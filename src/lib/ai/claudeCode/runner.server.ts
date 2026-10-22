@@ -80,10 +80,11 @@ const FOREIGN_KEY_HOLD_MS = 15 * 60_000;
 const SLOT_WAIT_MS = 30_000;
 const ALL = "*";
 
-type RunnerState = { active: number; waiting: Array<() => void>; accounts: Map<string, AccountState> };
+type SlotWaiter = { key: string; wake: () => void };
+type RunnerState = { active: number; activeAccounts: Set<string>; waiting: SlotWaiter[]; accounts: Map<string, AccountState> };
 const globalRunner = globalThis as typeof globalThis & { __agentsdrClaudeRunner?: RunnerState };
 function runner(): RunnerState {
-  return (globalRunner.__agentsdrClaudeRunner ??= { active: 0, waiting: [], accounts: new Map() });
+  return (globalRunner.__agentsdrClaudeRunner ??= { active: 0, activeAccounts: new Set(), waiting: [], accounts: new Map() });
 }
 
 function accountState(account: ClaudeAccount): AccountState {
@@ -143,28 +144,36 @@ function busy(): ClaudeCodeError {
   return new ClaudeCodeError("busy", `Claude Code is busy on this server (${max} AI ${max === 1 ? "step" : "steps"} at a time) and this one could not start in time.`);
 }
 
-async function acquireSlot(deadline: number, signal?: AbortSignal): Promise<() => void> {
+async function acquireSlot(account: ClaudeAccount, deadline: number, signal?: AbortSignal): Promise<() => void> {
   const state = runner();
+  const key = accountKey(account);
   let released = false;
   const release = () => {
     if (released) return;
     released = true;
     state.active -= 1;
-    state.waiting.shift()?.();
+    state.activeAccounts.delete(key);
+    while (state.active < maxProcesses()) {
+      const index = state.waiting.findIndex((entry) => !state.activeAccounts.has(entry.key));
+      if (index < 0) break;
+      state.waiting[index].wake();
+    }
   };
-  if (state.active < maxProcesses()) {
+  if (state.active < maxProcesses() && !state.activeAccounts.has(key)) {
     state.active += 1;
+    state.activeAccounts.add(key);
     return release;
   }
   await new Promise<void>((resolveSlot, rejectSlot) => {
     const cleanup = () => {
       clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
-      state.waiting = state.waiting.filter((entry) => entry !== wake);
+      state.waiting = state.waiting.filter((entry) => entry.wake !== wake);
     };
     const wake = () => {
       cleanup();
       state.active += 1;
+      state.activeAccounts.add(key);
       resolveSlot();
     };
     const onAbort = () => {
@@ -174,7 +183,8 @@ async function acquireSlot(deadline: number, signal?: AbortSignal): Promise<() =
     const timer = setTimeout(() => { cleanup(); rejectSlot(busy()); }, Math.max(0, Math.min(deadline, Date.now() + SLOT_WAIT_MS) - Date.now()));
     timer.unref();
     signal?.addEventListener("abort", onAbort, { once: true });
-    state.waiting.push(wake);
+    state.waiting.push({ key, wake });
+    if (signal?.aborted) onAbort();
   });
   return release;
 }
@@ -190,6 +200,8 @@ export type GenerationInput = {
   timeZone?: string;
   /** A model check runs past one model's weekly hold, so the owner can find a model that still answers; never past an account-wide hold. */
   ignoreHolds?: boolean;
+  /** Recheck a shared workspace's approval after waiting and before starting the CLI. */
+  authorize?: () => Promise<void>;
 };
 
 export type GenerationResult = { text: string; modelId: string | null; usage: { inputTokens?: number; outputTokens?: number } };
@@ -219,7 +231,15 @@ export async function runGeneration(input: GenerationInput): Promise<GenerationR
   let scratch: { cwd: string; remove: () => void } | null = null;
   const proc: { child: ChildProcess | null } = { child: null };
   try {
-    release = await acquireSlot(deadline, input.signal);
+    release = await acquireSlot(input.account, deadline, input.signal);
+    if (input.signal?.aborted) throw input.signal.reason;
+    if (Date.now() >= deadline) throw new ClaudeCodeError("timeout", "Claude Code could not start before this AI step timed out.");
+    // A preceding workspace may have hit a limit or signed out while this
+    // request waited. A queued request must not start past that hold.
+    const queuedHold = holdFor(state, input.model, input.ignoreHolds === true);
+    if (queuedHold) throw new ClaudeCodeError(queuedHold.limit.window === "overage" ? "overage" : "limit", queuedHold.limit.message, new Date(queuedHold.until));
+    if (state.signedOutAt || !hasOwnLogin(paths)) throw new ClaudeCodeError("not_signed_in", "Claude Code is signed out. The platform operator must sign in again.");
+    await input.authorize?.();
     scratch = scratchDirectory(paths);
     const systemPromptFile = join(scratch.cwd, "system-prompt.txt");
     writeFileSync(systemPromptFile, input.systemPrompt, { mode: 0o600 });
@@ -304,5 +324,5 @@ export async function runGeneration(input: GenerationInput): Promise<GenerationR
 
 /** Tests: forget per-account state between cases. */
 export function resetRunnerForTests(): void {
-  globalRunner.__agentsdrClaudeRunner = { active: 0, waiting: [], accounts: new Map() };
+  globalRunner.__agentsdrClaudeRunner = { active: 0, activeAccounts: new Set(), waiting: [], accounts: new Map() };
 }

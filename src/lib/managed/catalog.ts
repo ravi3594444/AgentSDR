@@ -183,15 +183,16 @@ export type PlatformCredentialStatus = {
   webhooks?: { status: string; message?: string; at?: string } | null;
 };
 
-/** The AI engines an Included workspace can run on. The Claude Code subscription login is not one: it is an owner-only pilot. */
-export type ManagedAiEngine = "openrouter" | "aimlapi" | "anthropic";
+/** API engines, plus an explicitly approved private Claude Code test. */
+export type ManagedAiEngine = "openrouter" | "aimlapi" | "anthropic" | "claude-code";
 
-export const MANAGED_AI_ENGINES: readonly ManagedAiEngine[] = ["openrouter", "aimlapi", "anthropic"];
+export const MANAGED_AI_ENGINES: readonly ManagedAiEngine[] = ["openrouter", "aimlapi", "anthropic", "claude-code"];
 
 export const MANAGED_AI_ENGINE_LABEL: Record<ManagedAiEngine, string> = {
   openrouter: "OpenRouter",
   aimlapi: "AI/ML API",
   anthropic: "Anthropic (Claude API)",
+  "claude-code": "Claude Code (private test)",
 };
 
 /** Claude models offered for the Anthropic engine; ids are complete as written. */
@@ -217,6 +218,8 @@ export type ManagedAiSettings = {
   transcriptionModel: ModelSelection | null;
   /** OpenRouter only: the operator confirmed BYOK-only routing in OpenRouter's dashboard. */
   byokOnlyConfirmed: boolean;
+  /** An operator's existing CLI login; no credentials, prompts or histories are copied. */
+  sharedClaude?: { organizationId: string; userId: string; approvedOrganizationIds: string[] };
 };
 
 export const EMPTY_MANAGED_AI_SETTINGS: ManagedAiSettings = {
@@ -240,19 +243,31 @@ function selection(value: unknown): ModelSelection | null {
 /** A stored or submitted value made into settings; anything malformed is dropped. */
 export function normalizeManagedAiSettings(value: unknown): ManagedAiSettings {
   const raw = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
-  const engine = MANAGED_AI_ENGINES.includes(raw.engine as ManagedAiEngine) ? (raw.engine as ManagedAiEngine) : null;
+  let engine = MANAGED_AI_ENGINES.includes(raw.engine as ManagedAiEngine) ? (raw.engine as ManagedAiEngine) : null;
+  const shared = raw.sharedClaude && typeof raw.sharedClaude === "object" ? raw.sharedClaude as Record<string, unknown> : null;
+  const uuid = (value: unknown): value is string => typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+  const sharedClaude = shared && uuid(shared.organizationId) && uuid(shared.userId) && Array.isArray(shared.approvedOrganizationIds)
+    ? { organizationId: shared.organizationId.toLowerCase(), userId: shared.userId.toLowerCase(), approvedOrganizationIds: [...new Set(shared.approvedOrganizationIds.filter(uuid).map((id) => id.toLowerCase()))].slice(0, 100) }
+    : undefined;
+  if (engine === "claude-code" && !sharedClaude) engine = null;
   return {
     engine,
     defaultModel: selection(raw.defaultModel),
     researchModel: selection(raw.researchModel),
     transcriptionModel: selection(raw.transcriptionModel),
     byokOnlyConfirmed: raw.byokOnlyConfirmed === true,
+    ...(engine === "claude-code" && sharedClaude ? { sharedClaude } : {}),
   };
 }
 
 /** Why the Included AI settings cannot run yet, or null when they can. Pure; the panel shows it. */
 export function managedAiProblem(settings: ManagedAiSettings, stored: ReadonlySet<PlatformCredentialKey>): string | null {
   if (!settings.engine) return "Choose which engine Included workspaces use.";
+  if (settings.engine === "claude-code") {
+    if (!settings.sharedClaude?.approvedOrganizationIds.length) return "Select at least one private test workspace.";
+    if (settings.defaultModel?.provider !== "claude-code" || !["default", "sonnet", "opus", "haiku"].includes(settings.defaultModel.modelId)) return "Choose a checked Claude Code model.";
+    return null;
+  }
   if (!stored.has(settings.engine)) return `Store the ${MANAGED_AI_ENGINE_LABEL[settings.engine]} key first.`;
   if (!settings.defaultModel) return "Choose the default model.";
   if (settings.engine === "anthropic") {

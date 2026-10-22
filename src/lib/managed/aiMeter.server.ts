@@ -39,7 +39,7 @@ export function meteredAiClient<T extends ChatClient>(client: T, meta: AiCallMet
       }).catch((settleError: unknown) => console.error("[managed/ai] could not settle a failed call:", settleError));
       throw error;
     }
-    const cost = aiCallCost(response, responseCostUsd(response));
+    const cost = meta.engine === "claude-code" ? { costUsd: null, estimated: false } : aiCallCost(response, responseCostUsd(response));
     // Anthropic reports tokens, not dollars: its cost (anthropicRuntime.ts) is always an estimate.
     const { costUsd } = cost;
     const estimated = cost.estimated || meta.engine === "anthropic";

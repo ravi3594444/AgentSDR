@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { RiExternalLinkLine, RiLoader4Line } from "@remixicon/react";
 import { StepFrame } from "@/components/ai/ByokSettingsClient";
 import * as Button from "@/components/alignui/button";
@@ -119,7 +120,7 @@ export default function ClaudeCodeSettingsClient({ onChanged }: { onChanged?: ()
   const usingMine = engine.selected && engine.ownedByYou;
   const switchingModel = usingMine && model !== engine.model;
   const signOut = () => {
-    if (usingMine && !window.confirm("Your Claude login answers this organization's AI steps. After signing out they fail until you sign in again; they do not move to the API provider. Sign out?")) return;
+    if ((usingMine || engine.sharedTest) && !window.confirm(engine.sharedTest ? "Your Claude login answers the approved private-test workspaces. Signing out stops their AI until you sign in again; nothing switches to a paid API. Sign out?" : "Your Claude login answers this organization's AI steps. After signing out they fail until you sign in again; they do not move to the API provider. Sign out?")) return;
     void act("sign_out", { action: "sign_out" });
   };
 
@@ -192,8 +193,8 @@ export default function ClaudeCodeSettingsClient({ onChanged }: { onChanged?: ()
 
       <StepFrame
         step={3}
-        done={usingMine}
-        title="Use it for this organization's AI steps"
+        done={usingMine || Boolean(engine.sharedTest)}
+        title={engine.sharedTest ? "Model for private testing" : "Use it for this organization's AI steps"}
         description="Check a model first: it sends one short request on your account and shows the model Claude Code actually ran."
       >
         <div className="flex max-w-xl flex-col gap-3 sm:flex-row sm:items-end">
@@ -208,7 +209,7 @@ export default function ClaudeCodeSettingsClient({ onChanged }: { onChanged?: ()
           <Button.Root type="button" variant="neutral" mode="stroke" size="small" disabled={busy !== null || !signedIn} onClick={() => void act("check_model", { action: "check_model", model })}>
             {busy === "check_model" && <RiLoader4Line className="size-4 animate-spin" aria-hidden="true" />}Check
           </Button.Root>
-          {usingMine && !switchingModel
+          {engine.sharedTest ? <Link className="text-paragraph-sm underline" href="/platform">Manage private test</Link> : usingMine && !switchingModel
             ? <Button.Root type="button" variant="neutral" mode="stroke" size="small" disabled={busy !== null} onClick={() => void act("stop_using", { action: "stop_using" })}>Stop using</Button.Root>
             : <Button.Root type="button" variant="primary" mode="filled" size="small" disabled={busy !== null || !signedIn || !check?.ok || Boolean(engine.blocked)} onClick={() => void act("use", { action: "use", model })}>{switchingModel ? "Use this model" : "Use Claude Code"}</Button.Root>}
         </div>
@@ -216,7 +217,7 @@ export default function ClaudeCodeSettingsClient({ onChanged }: { onChanged?: ()
           ? <p className="mt-2 text-paragraph-xs text-text-sub-600">Checked {when(check.checkedAt)}: answered as {check.modelId}.</p>
           : <Callout tone="warning" className="mt-3 max-w-xl">Checked {when(check.checkedAt)}: {check.error}</Callout>)}
         {engine.selected && !engine.ownedByYou && <Callout tone="info" className="mt-3 max-w-xl">This organization&apos;s AI steps use another owner&apos;s Claude login. Using yours switches them to your account.</Callout>}
-        {usingMine && <Callout tone="success" className="mt-3 max-w-xl">This organization&apos;s AI steps run on your Claude account ({modelLabel(engine.model)}). Stop using it to return them to the API provider above.</Callout>}
+        {engine.sharedTest ? <Callout tone="info" className="mt-3 max-w-xl">This login is shared with the private-test workspaces you approved. Their default model and access are managed in the platform panel. Checking a model here does not change that default.</Callout> : usingMine && <Callout tone="success" className="mt-3 max-w-xl">This organization&apos;s AI steps run on your Claude account ({modelLabel(engine.model)}). Stop using it to return them to the API provider above.</Callout>}
       </StepFrame>
 
       {(status.running > 0 || status.limits.length > 0 || status.windows.length > 0) && (

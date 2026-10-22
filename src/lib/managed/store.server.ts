@@ -223,6 +223,11 @@ export async function getManagedAiSettings(): Promise<ManagedAiSettings> {
 /** Saves the Included AI settings; refuses settings that could not run, so no workspace is left on a broken engine. */
 export async function saveManagedAiSettings(input: unknown, userId: string | null): Promise<ManagedAiSettings> {
   const settings = normalizeManagedAiSettings(input);
+  if ((input as { engine?: unknown } | null)?.engine === "claude-code") {
+    if (settings.engine !== "claude-code" || !userId) throw new PlatformCredentialError("Choose your signed-in Claude Code account and approved workspaces.");
+    const { validateSharedClaudeSettings } = await import("@/lib/ai/claudeCode/shared.server");
+    await validateSharedClaudeSettings(settings, userId);
+  }
   if (settings.engine) {
     const problem = managedAiProblem(settings, await storedPlatformCredentialKeys());
     if (problem) throw new PlatformCredentialError(problem);

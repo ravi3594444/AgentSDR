@@ -26,7 +26,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 async function managedAiConnection(): Promise<{ connection: AiConnection; credentials: Record<string, string> | null } | null> {
   if ((await serviceMode("ai")) !== "managed") return null;
   const settings = await getManagedAiSettings();
-  if (!settings.engine) return null;
+  // The CLI login is resolved by structuredRuntime, never exposed as an API key connection.
+  if (!settings.engine || settings.engine === "claude-code") return null;
   const credentials = await getPlatformCredential(settings.engine);
   return {
     connection: { id: MANAGED_AI_CONNECTION_ID, providerKey: settings.engine, name: "Included AI", enabled: true, verified: Boolean(credentials?.apiKey) },

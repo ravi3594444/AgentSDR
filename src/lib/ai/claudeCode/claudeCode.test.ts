@@ -289,6 +289,49 @@ describe("accounts stay apart (fake CLI)", () => {
 });
 
 describe("structured answers through completeStructured (fake CLI)", () => {
+  test("one shared account serializes independent tasks and uses fresh working directories", async () => {
+    const target = account();
+    await signIn(target);
+    setScenario(target, { generation: "slow", slowMs: 150 });
+    const first = generation(target);
+    const second = generation(target);
+    await Promise.all([first, second]);
+    const records = generations(target);
+    expect(records).toHaveLength(2);
+    expect(Number(records[1].startedAt)).toBeGreaterThanOrEqual(Number(records[0].endedAt));
+    expect(records[0].cwd).not.toBe(records[1].cwd);
+    for (const record of records) {
+      expect(record.args).toContain("--no-session-persistence");
+      expect(record.args).not.toContain("--resume");
+      expect(record.args).not.toContain("--continue");
+    }
+    expect(readdirSync(accountPaths(target).work)).toHaveLength(0);
+  });
+
+  test("a queued task rechecks an account-wide hold before starting", async () => {
+    const target = account();
+    await signIn(target);
+    setScenario(target, { generation: "limit" });
+    const tasks = await Promise.allSettled([generation(target), generation(target)]);
+    expect(tasks.every((task) => task.status === "rejected" && task.reason instanceof ClaudeCodeError && task.reason.kind === "limit")).toBe(true);
+    expect(generations(target)).toHaveLength(1);
+  });
+
+  test("approval revoked while a task waits prevents its generation", async () => {
+    const target = account();
+    await signIn(target);
+    setScenario(target, { generation: "slow", slowMs: 150 });
+    const first = generation(target);
+    let rechecked = false;
+    const second = runGeneration({ account: target, model: "sonnet", systemPrompt: "Second workspace", userPrompt: "Separate task", jsonSchema: SCHEMA, timeoutMs: 10_000, authorize: async () => { rechecked = true; throw new ClaudeCodeError("error", "Workspace approval revoked"); } });
+    const outcomes = await Promise.allSettled([first, second]);
+    expect(outcomes[0].status).toBe("fulfilled");
+    expect(outcomes[1].status).toBe("rejected");
+    expect(rechecked).toBe(true);
+    expect(generations(target)).toHaveLength(1);
+    expect(runningOn(target)).toBe(0);
+  });
+
   async function bound(scenario: Record<string, unknown> = {}) {
     const target = account();
     await signIn(target);

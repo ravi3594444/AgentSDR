@@ -1,11 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import * as Badge from "@/components/alignui/badge";
 import * as Button from "@/components/alignui/button";
 import { Frame, FrameHeader, FramePanel } from "@/components/analytics/kit/Frame";
 import { Callout } from "@/components/settings/SettingsKit";
 import { formatAllowanceAmount, type AllowanceUnit } from "@/lib/managed/allowances";
+import { CLAUDE_CODE_MODELS, type ClaudeCodeModelCheck } from "@/lib/ai/claudeCode/contract";
 import {
   ANTHROPIC_MODELS,
   MANAGED_AI_ENGINE_LABEL,
@@ -20,6 +22,13 @@ import {
 } from "@/lib/managed/catalog";
 
 type Overview = { credentials: PlatformCredentialStatus[]; ai: ManagedAiSettings; aiProblem: string | null };
+type PrivateClaude = {
+  source: { organizationId: string; userId: string } | null;
+  problem: string | null;
+  checks: Record<string, ClaudeCodeModelCheck>;
+  workspaces: { id: string; name: string }[];
+  limits: { message: string; resetsAt: string | null }[];
+};
 type AdoptSource = { organizationId: string; name: string; available: PlatformCredentialKey[] };
 type UsageRow = { organizationId: string; organizationName: string; provider: string; product: string; source: "managed" | "own"; calls: number; units: number; costUsd: number; estimated: boolean };
 type UsageReport = { from: string; to: string; rows: UsageRow[]; budgets: { key: string; label: string; unit: AllowanceUnit; used: number; budget: number; workspaceAllowance: number; estimated: boolean }[] };
@@ -145,6 +154,17 @@ function AiEngineForm({ overview, onChanged }: { overview: Overview; onChanged: 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [privateClaude, setPrivateClaude] = useState<PrivateClaude | null>(null);
+  const [approved, setApproved] = useState<string[]>(overview.ai.sharedClaude?.approvedOrganizationIds ?? []);
+
+  useEffect(() => {
+    let current = true;
+    void call<PrivateClaude>("/api/platform/claude-code").then(
+      (value) => { if (current) setPrivateClaude(value); },
+      (cause: unknown) => { if (current) setError(cause instanceof Error ? cause.message : String(cause)); },
+    );
+    return () => { current = false; };
+  }, []);
 
   async function save(next: ManagedAiEngine | "") {
     setBusy(true);
@@ -160,6 +180,7 @@ function AiEngineForm({ overview, onChanged }: { overview: Overview; onChanged: 
           researchModel: next === "aimlapi" && research.trim() ? { provider: "aimlapi", modelId: research.trim() } : null,
           transcriptionModel: next === "openrouter" && transcription.trim() ? { provider, modelId: transcription.trim() } : null,
           byokOnlyConfirmed: next === "openrouter" && confirmed,
+          ...(next === "claude-code" ? { sharedClaude: { ...privateClaude?.source, approvedOrganizationIds: approved } } : {}),
         } : { engine: null }),
       });
       setSaved(true);
@@ -178,11 +199,38 @@ function AiEngineForm({ overview, onChanged }: { overview: Overview; onChanged: 
         <select className={field} value={engine} disabled={busy} onChange={(event) => { setEngine(event.target.value as ManagedAiEngine | ""); setSaved(false); }}>
           <option value="">None (Included AI is off)</option>
           {MANAGED_AI_ENGINES.map((key) => (
-            <option key={key} value={key} disabled={!stored.has(key)}>{MANAGED_AI_ENGINE_LABEL[key]}{stored.has(key) ? "" : " (store its key first)"}</option>
+            <option key={key} value={key} disabled={key === "claude-code" ? !privateClaude?.source : !stored.has(key)}>{MANAGED_AI_ENGINE_LABEL[key]}{key === "claude-code" ? "" : stored.has(key) ? "" : " (store its key first)"}</option>
           ))}
-          <option value="claude-code" disabled>Claude Code: owner-only pilot (subscription login), not offered to workspaces</option>
         </select>
       </label>
+      {engine !== "claude-code" && privateClaude?.problem && <p className="text-paragraph-xs text-text-sub-600">Claude Code private test: {privateClaude.problem}</p>}
+      {engine === "claude-code" && (
+        <div className="flex flex-col gap-3 rounded-lg bg-bg-weak-50 p-3">
+          <p className="text-paragraph-sm text-text-strong-950">Private testing on your signed-in Claude Code account. Only the workspaces you select can use it. Chats stay separate; your account&apos;s usage limits are shared.</p>
+          <Link className="text-paragraph-sm underline" href="/settings/ai">Sign in or check a model in AI provider settings</Link>
+          {privateClaude?.problem && <Callout tone="warning">{privateClaude.problem}</Callout>}
+          <label className="flex flex-col gap-1 text-label-xs text-text-strong-950 sm:max-w-sm">Model
+            <select className={field} value={model} disabled={busy} onChange={(event) => setModel(event.target.value)}>
+              <option value="">Choose a checked model</option>
+              {CLAUDE_CODE_MODELS.map((item) => {
+                const check = privateClaude?.checks[item.key];
+                return <option key={item.key} value={item.key} disabled={!check?.ok}>{item.label}{check?.ok ? ` (${check.modelId})` : " — check it first"}</option>;
+              })}
+            </select>
+          </label>
+          <fieldset className="flex flex-col gap-2">
+            <legend className="mb-2 text-label-xs text-text-strong-950">Approved test workspaces</legend>
+            {privateClaude?.workspaces.map((workspace) => (
+              <label key={workspace.id} className="flex items-center gap-2 text-paragraph-sm text-text-strong-950">
+                <input type="checkbox" checked={approved.includes(workspace.id)} disabled={busy} onChange={(event) => setApproved((current) => event.target.checked ? [...current, workspace.id] : current.filter((id) => id !== workspace.id))} />
+                {workspace.name}
+              </label>
+            ))}
+          </fieldset>
+          {privateClaude?.limits.map((limit, index) => <Callout key={index} tone="warning">{limit.message}{limit.resetsAt ? ` Reset: ${new Date(limit.resetsAt).toLocaleString()}.` : ""}</Callout>)}
+          <p className="text-paragraph-xs text-text-sub-600">One AI step at a time per account. No automatic switch to a paid API. Subscription use is recorded as calls and tokens, without inventing an API charge.</p>
+        </div>
+      )}
       {engine === "anthropic" && (
         <label className="flex flex-col gap-1 text-label-xs text-text-strong-950 sm:max-w-sm">
           Default model
@@ -211,7 +259,7 @@ function AiEngineForm({ overview, onChanged }: { overview: Overview; onChanged: 
       {saved && !error && <p className="text-paragraph-xs text-success-base">Saved. Included workspaces use it within 30 seconds.</p>}
       <p className="text-paragraph-xs text-text-sub-600">Workspaces on My own provider keep their own engine and models. Customers never see which engine or model the Included service uses.</p>
       <div className="flex justify-end">
-        <Button.Root variant="primary" mode="filled" size="xsmall" disabled={busy || (Boolean(engine) && !model.trim())} onClick={() => void save(engine)}>{busy ? "Saving…" : "Save AI engine"}</Button.Root>
+        <Button.Root variant="primary" mode="filled" size="xsmall" disabled={busy || (Boolean(engine) && !model.trim()) || (engine === "claude-code" && (Boolean(privateClaude?.problem) || !privateClaude?.source || approved.length === 0 || !privateClaude.checks[model]?.ok))} onClick={() => void save(engine)}>{busy ? "Saving…" : "Save AI engine"}</Button.Root>
       </div>
     </div>
   );
@@ -344,7 +392,7 @@ function UsagePanel() {
                     <td className="py-2 pr-3">{row.source === "managed" ? "Included" : "Own"}</td>
                     <td className="py-2 pr-3">{row.calls.toLocaleString()}</td>
                     <td className="py-2 pr-3">{Math.round(row.units).toLocaleString()}</td>
-                    <td className="py-2">{money(row.costUsd)}{row.estimated ? " est." : ""}</td>
+                    <td className="py-2">{row.provider === "ai" && row.product === "claude-code" ? "Account plan (cost not reported)" : <>{money(row.costUsd)}{row.estimated ? " est." : ""}</>}</td>
                   </tr>
                 ))}
               </tbody>
@@ -402,7 +450,7 @@ export function PlatformAdminClient() {
       </Frame>
       {overview && (
         <Frame>
-          <FrameHeader title="Included AI" description="Which engine and default model every Included workspace's AI runs on. Claude for all workspaces comes from the Anthropic API key above, never from a personal Claude subscription." />
+          <FrameHeader title="Included AI" description="Choose the default AI service, or approve specific workspaces for private testing on your Claude Code login." />
           <FramePanel><AiEngineForm key={JSON.stringify(overview.ai)} overview={overview} onChanged={load} /></FramePanel>
         </Frame>
       )}

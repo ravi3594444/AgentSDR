@@ -11,6 +11,7 @@ import { accountAuthStatus, cliVersion, type ClaudeAccount } from "./cli.server"
 import { isClaudeCodeModel, type ClaudeCodeModel, type ClaudeCodeModelCheck, type ClaudeCodeStatus } from "./contract";
 import { loginController } from "./login.server";
 import { accountUsage, ClaudeCodeError, runGeneration, runningOn } from "./runner.server";
+import { sharedClaudeBinding, sharedClaudeSourceApproved, sharedClaudeAccountPublished } from "./shared.server";
 
 /**
  * Whether an organization's AI steps run on Claude Code, and on whose login.
@@ -25,7 +26,8 @@ import { accountUsage, ClaudeCodeError, runGeneration, runningOn } from "./runne
  * Owner-only pilot: only an owner of the platform operator's organization
  * (the team running this server) can sign in or select it, and only while
  * that owner is the organization's only member, so one person's
- * subscription never answers for anyone else's work.
+ * subscription never answers for anyone else's work unless an explicitly
+ * granted platform operator enables the private test in shared.server.ts.
  */
 
 const KEY = "claude-code-engine";
@@ -134,6 +136,7 @@ export async function claudeCodeAccess(ctx: { organizationId: string; roles: rea
 export async function claudeCodeBlocked(organizationId: string, ownerUserId: string): Promise<string | null> {
   const others = await otherMembers(organizationId, ownerUserId);
   if (!others) return null;
+  if (await sharedClaudeSourceApproved(organizationId, ownerUserId)) return null;
   return `This organization has ${others} other ${others === 1 ? "member" : "members"}. Their chats and the work they start would run on one person's Claude account, so Claude Code is only for an organization whose only member is the owner who signs in. Use an API provider, or remove the other members first.`;
 }
 
@@ -153,7 +156,9 @@ async function otherMembers(organizationId: string, userId: string): Promise<num
  * Code is not selected (the API provider answers, as before). Selected but
  * unusable is an error, never a quiet switch to a paid API.
  */
-export async function claudeCodeBinding(): Promise<{ account: ClaudeAccount; model: ClaudeCodeModel } | null> {
+export async function claudeCodeBinding(): Promise<{ account: ClaudeAccount; model: ClaudeCodeModel; shared?: boolean } | null> {
+  const shared = await sharedClaudeBinding();
+  if (shared) return shared;
   const engine = await getClaudeEngine();
   if (!engine.selected || !engine.ownerUserId) return null;
   const organizationId = currentOrganizationId();
@@ -180,13 +185,14 @@ async function cachedVersion(): Promise<string | null> {
 export async function claudeCodeStatus(ctx: { organizationId: string; userId: string; roles: readonly OrgRole[] }): Promise<ClaudeCodeStatus> {
   const access = await claudeCodeAccess(ctx);
   const engine = await getClaudeEngine();
+  const sharedTest = access.allowed && await sharedClaudeAccountPublished(ctx.organizationId, ctx.userId);
   const base: ClaudeCodeStatus = {
     allowed: access.allowed,
     ...(access.reason ? { reason: access.reason } : {}),
     cli: null,
     account: { signedIn: null, method: null, expired: false },
     signIn: null,
-    engine: { selected: engine.selected, ownerUserId: engine.ownerUserId, ownedByYou: engine.ownerUserId === ctx.userId, model: engine.model, checks: engine.checks[ctx.userId] ?? {}, blocked: null },
+    engine: { selected: engine.selected, ownerUserId: engine.ownerUserId, ownedByYou: engine.ownerUserId === ctx.userId, model: engine.model, checks: engine.checks[ctx.userId] ?? {}, blocked: null, sharedTest },
     running: 0,
     limits: [],
     windows: [],
