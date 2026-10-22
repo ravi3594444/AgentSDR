@@ -349,7 +349,7 @@ export const assistantObjectives = pgTable(
     spendCapUsd: doublePrecision("spend_cap_usd").notNull(),
     /** Which controls the owner named (the rest are the organization's defaults). */
     /** Which limits the owner named, and (research agent v2) the brief the assistant wrote (brief.ts). */
-    controls: jsonb("controls").$type<{ named?: { target: boolean; time: boolean; spend: boolean }; brief?: Brief }>().notNull().default({}),
+    controls: jsonb("controls").$type<{ named?: { target: boolean; time: boolean; spend: boolean }; brief?: Brief; continues?: string }>().notNull().default({}),
     status: text("status").notNull().default("active").$type<ObjectiveStatus>(),
     stopReason: text("stop_reason").$type<StopReason>(),
     /** The exact reason, as the report says it (which limit, who cancelled, what failed). */

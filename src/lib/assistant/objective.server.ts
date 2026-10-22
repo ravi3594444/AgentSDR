@@ -176,7 +176,7 @@ export async function objectiveDefaults(): Promise<ControlDefaults> {
  * when there is no owner request to pursue (no request id, or not an owner
  * message of this chat), or the migration has not run.
  */
-export async function ensureObjective(input: { requestMessageId: string | null | undefined; threadId: string | null; userId: string | null; brief?: { brief: Brief; controls: ObjectiveControls } }): Promise<{ objective: Objective; created: boolean } | null> {
+export async function ensureObjective(input: { requestMessageId: string | null | undefined; threadId: string | null; userId: string | null; brief?: { brief: Brief; controls: ObjectiveControls }; continues?: string | null }): Promise<{ objective: Objective; created: boolean } | null> {
   const requestId = input.requestMessageId;
   const threadId = input.threadId;
   if (!requestId || !threadId || !UUID.test(requestId)) return null;
@@ -196,7 +196,7 @@ export async function ensureObjective(input: { requestMessageId: string | null |
       timeLimitMinutes: controls.timeLimitMinutes,
       deadlineAt: new Date(now + controls.timeLimitMinutes * 60_000),
       spendCapUsd: controls.spendCapUsd,
-      controls: { named: controls.named, ...(input.brief ? { brief: input.brief.brief } : {}) },
+      controls: { named: controls.named, ...(input.brief ? { brief: input.brief.brief } : {}), ...(input.continues ? { continues: input.continues } : {}) },
       status: "active",
       nextEligibleAt: new Date(now + FIRST_LOOK_MS),
       createdBy: input.userId,
@@ -227,9 +227,10 @@ export async function ensureObjective(input: { requestMessageId: string | null |
  * Writes the request's brief (research agent v2, brief.ts): creates its
  * objective with the brief's controls, or updates an active or paused one
  * (the time limit still counts from when it began). A stopped request takes
- * no new brief: a new owner message starts a new request.
+ * no new brief: a new owner message starts a new request, which may continue
+ * the stopped one (`continues`: its leads are the new request's too).
  */
-export async function setObjectiveBrief(input: { requestMessageId: string; threadId: string; userId: string | null; brief: Brief; controls: ObjectiveControls }): Promise<{ objective: Objective; created: boolean } | { problem: string }> {
+export async function setObjectiveBrief(input: { requestMessageId: string; threadId: string; userId: string | null; brief: Brief; controls: ObjectiveControls; continues?: string | null }): Promise<{ objective: Objective; created: boolean } | { problem: string }> {
   const existing = await objectiveForRequest(input.requestMessageId);
   if (!existing) {
     const ensured = await ensureObjective({ ...input, brief: { brief: input.brief, controls: input.controls } });
@@ -241,7 +242,7 @@ export async function setObjectiveBrief(input: { requestMessageId: string; threa
     timeLimitMinutes: input.controls.timeLimitMinutes,
     deadlineAt: new Date(existing.createdAt.getTime() + input.controls.timeLimitMinutes * 60_000),
     spendCapUsd: input.controls.spendCapUsd,
-    controls: { named: input.controls.named, brief: input.brief },
+    controls: { named: input.controls.named, brief: input.brief, ...(existing.controls.continues ? { continues: existing.controls.continues } : {}) },
     updatedAt: new Date(),
   }).where(and(inOrg(assistantObjectives), eq(assistantObjectives.id, existing.id), ne(assistantObjectives.status, "stopped"))).returning();
   if (!updated) return { problem: "this request ended while the brief was being saved" };
@@ -293,12 +294,31 @@ const isOpen = (job: Pick<ObjectiveChild, "status">) => job.status === "queued" 
  * other steps apart (found, contactable, not matching, unconfirmed, not yet
  * judged), and the routes are the qualified people's.
  */
-export async function objectiveLeads(objective: Pick<Objective, "requestMessageId">, children: readonly ObjectiveChild[]): Promise<{ leads: number; routes: ContactRoutes; audienceIds: string[]; funnel: LeadFunnel }> {
+export async function objectiveLeads(objective: Pick<Objective, "requestMessageId"> & { controls?: Objective["controls"] }, children: readonly ObjectiveChild[]): Promise<{ leads: number; routes: ContactRoutes; audienceIds: string[]; funnel: LeadFunnel }> {
+  const earlier = await continuedRequestIds(objective);
+  const requestIds = [objective.requestMessageId, ...earlier];
   const listed = await db.select({ id: leadAudiences.id }).from(leadAudiences)
-    .where(and(inOrg(leadAudiences), sql`${leadAudiences.criteria} ->> 'requestId' = ${objective.requestMessageId}`));
-  const audienceIds = [...new Set([...children.flatMap((job) => (job.audienceId ? [job.audienceId] : [])), ...listed.map((row) => row.id)])];
+    .where(and(inOrg(leadAudiences), inArray(sql`${leadAudiences.criteria} ->> 'requestId'`, requestIds)));
+  const inherited = (await Promise.all(earlier.map((requestMessageId) => objectiveChildren({ requestMessageId })))).flat();
+  const audienceIds = [...new Set([...children, ...inherited].flatMap((job) => (job.audienceId ? [job.audienceId] : [])).concat(listed.map((row) => row.id)))];
   const { routes, ...funnel } = await audienceFunnel(audienceIds);
   return { leads: funnel.qualified, routes, audienceIds, funnel };
+}
+
+/**
+ * The earlier requests this one continues, nearest first (a follow-up such as
+ * "contact them all" after a research request ended): their leads, and the
+ * verdicts on them, are this request's too. Its own searches and spend stay
+ * its own.
+ */
+export async function continuedRequestIds(objective: Pick<Objective, "requestMessageId"> & { controls?: Objective["controls"] }): Promise<string[]> {
+  const ids: string[] = [];
+  let next = objective.controls ? objective.controls.continues : (await objectiveForRequest(objective.requestMessageId))?.controls.continues;
+  while (next && ids.length < 5 && next !== objective.requestMessageId && !ids.includes(next)) {
+    ids.push(next);
+    next = (await objectiveForRequest(next))?.controls.continues;
+  }
+  return ids;
 }
 
 /**

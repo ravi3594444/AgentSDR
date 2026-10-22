@@ -38,6 +38,11 @@ describe("what the model reads", () => {
     expect(text).toContain("discovery “dentists New York” succeeded, 12 found, 9 contactable");
     expect(text).toContain("free sources only");
   });
+
+  test("a running search shows what it found so far", () => {
+    const text = progressBlock({ funnel: EMPTY_FUNNEL, sources: [], searches: [{ tool: "discovery", what: "cleaning companies Houston", status: "running", found: 50, contactable: null }], spentUsd: 0, spendCapUsd: 5, msLeft: 3_600_000, plans: [] });
+    expect(text).toContain("discovery “cleaning companies Houston” running, 50 found");
+  });
 });
 
 describe("the harness keeps only what protects", () => {
@@ -63,6 +68,13 @@ describe("the harness keeps only what protects", () => {
     // The owner's place holds outside Autonomous mode too.
     expect(prompt).toContain("a neighbouring city, a suburb or the wider area is another place");
     expect(prompt).toContain("Never ask what the brief already settles");
+    // Sources are chosen by where the leads are; the spend cap is the server's.
+    expect(prompt).toContain("a source the owner names is one you may use, not one you must");
+    expect(prompt).toContain("never ask to raise it");
+    // An open niche or place is the model's research, not the profile's.
+    expect(prompt).toContain("choosing them is your research");
+    expect(prompt).toContain("When the owner names no place, the place is open");
+    expect(prompt).not.toContain("usually means their target customers");
     const autonomous = systemPromptV2({ features: defaultFeatureState(), catalog: "", autonomy: { runsPerDay: 2, leadsPerDay: 50, searchesPerDay: 10 } });
     expect(autonomous).toContain("AUTONOMOUS MODE IS ON");
     expect(autonomous).toContain("Widen nothing the owner named");

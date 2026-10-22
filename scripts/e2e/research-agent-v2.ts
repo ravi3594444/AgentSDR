@@ -32,15 +32,22 @@ if (!/@(localhost|127\.0\.0\.1)[:/]/.test(process.env.DATABASE_URL ?? "")) {
 }
 const root = join(import.meta.dir, "..", "..");
 const stamp = Date.now();
+// A search can be started (its job is recorded); nothing runs it here, so the scraper is never called.
+process.env.GMAPS_SCRAPER_URL = "http://scraper.research-v2-check.test";
+process.env.GEOCODER_URL = "off";
 
 // ------------------------------------------------------------ stand-ins
 type Input = { userPrompt: string; systemPrompt?: string; schemaName?: string; accept: (text: string) => void };
 const writerCalls: string[] = [];
+// The chat model's answers, in order, for the turn checked below.
+const chatAnswers: string[] = [];
 mock.module(join(root, "src/lib/ai/server/structuredCompletion.ts"), () => ({
   completeStructured: async (input: Input) => {
     writerCalls.push(input.schemaName ?? "?");
     let text: string;
-    if (input.schemaName === "outreach_sequences") {
+    if (input.schemaName === "assistant_reply" && chatAnswers.length) {
+      text = chatAnswers.shift()!;
+    } else if (input.schemaName === "outreach_sequences") {
       const key = `${input.systemPrompt ?? ""}\n${input.userPrompt}`.match(/\{\{(p_[0-9a-f]+)\}\}/)?.[1];
       const line = key ? `{{${key}}}\n` : "";
       text = JSON.stringify({ channels: [{ channel: "email", messages: [{ subject: "Fewer no-shows", body: `Hi there,\n${line}Do missed appointments cost you bookings? We send reminders. Worth a look?\nRavi`, waitDays: 0 }] }] });
@@ -74,6 +81,7 @@ const { addAudienceMembers, createAudience } = await import("@/lib/assistant/aud
 const { runTool } = await import("@/lib/assistant/tools.server");
 const { getObjective, objectiveForRequest, objectiveJudgeRequest, objectiveRequest, saveObjectiveProgress } = await import("@/lib/assistant/objective.server");
 const { runOneAssistantStep } = await import("@/lib/assistant/worker");
+const { runAgentTurn } = await import("@/lib/assistant/agent.server");
 const { registerAssistantJobs } = await import("@/lib/assistant/register.server");
 registerAssistantJobs();
 type Progress = import("@/lib/assistant/schema").ObjectiveProgress;
@@ -212,6 +220,64 @@ await runInOrganization(a.org.id, async () => {
   await drive();
   const stopped = await getObjective(salonObjective.id);
   check("…then the request stops as sources exhausted, with that reason's detail", stopped?.status === "stopped" && stopped.stopReason === "sources_exhausted" && stopped.stopDetail === "the assistant found no further source or query worth searching", `${stopped?.status} ${stopped?.stopReason}: ${stopped?.stopDetail}`);
+
+  // ---------------------------------------------------------- a step that only starts searches ends the turn
+  const thread4 = await createThread(a.owner.id);
+  const florists = "Research 3 florists in Austin. No outreach.";
+  const florBrief = { goal: "Research 3 florists in Austin, no outreach", leadTarget: 3, contact: false, channels: null, spendCapUsd: 0, timeLimitMinutes: null, done: "3 Austin florists found" };
+  chatAnswers.length = 0;
+  chatAnswers.push(
+    JSON.stringify({ message: "I started a free Google Maps search for florists in Austin. I'll tell you what it finds.", actions: [{ tool: "set_brief", arguments: JSON.stringify(florBrief) }, { tool: "find_leads", arguments: JSON.stringify({ what: "florists", where: "Austin, TX" }) }], suggestions: [] }),
+    JSON.stringify({ message: "The search is still running. Nothing has been found yet.", actions: [], suggestions: [] }),
+  );
+  const chatCallsBefore = writerCalls.filter((name) => name === "assistant_reply").length;
+  await runAgentTurn({ threadId: thread4.id, userId: a.owner.id, text: florists });
+  const chatCalls = writerCalls.filter((name) => name === "assistant_reply").length - chatCallsBefore;
+  const said = await db.select({ content: assistantMessages.content }).from(assistantMessages).where(and(eq(assistantMessages.threadId, thread4.id), eq(assistantMessages.role, "assistant")));
+  const [florJob] = await db.select({ id: assistantJobs.id }).from(assistantJobs).where(and(eq(assistantJobs.threadId, thread4.id), eq(assistantJobs.kind, "discovery")));
+  check("a step that only writes the brief and starts searches ends the turn: one model call, one message", chatCalls === 1 && said.length === 1 && Boolean(florJob) && chatAnswers.length === 1, `${chatCalls} call(s); ${said.map((row) => row.content).join(" | ")}`);
+  chatAnswers.length = 0;
+
+  // ---------------------------------------------------------- "outreach them all" after a research-only request ended (live, 22 Oct)
+  const thread5 = await createThread(a.owner.id);
+  const scout = await addMessage({ threadId: thread5.id, role: "user", content: "Find leads for my AI automation offer, any niche, anywhere.", createdBy: a.owner.id });
+  const scoutContext: Context = { threadId: thread5.id, userId: a.owner.id, ownerText: scout.content, requestMessageId: scout.id, searchRequestId: scout.id, v2: true, autonomous: false };
+  await runTool("set_brief", { goal: "Find leads for AI automation: cleaning companies in Houston", leadTarget: null, contact: false, channels: null, spendCapUsd: null, timeLimitMinutes: null, done: "leads found and reported" }, scoutContext);
+  const scoutList = await createAudience({ name: "cleaning companies in Houston", source: "discovery", threadId: thread5.id, userId: a.owner.id });
+  const cleaners = await db.insert(people).values(["Bayou Cleaning", "Spotless Houston", "Heights Maids", "Dallas Janitorial"].map((name, index) => ({
+    organizationId: a.org.id, fullName: name, email: `office${index}-${stamp}@cleaning.research-v2.test`, source: "research-v2-check",
+  }))).returning();
+  await addAudienceMembers(scoutList, cleaners.map((row) => ({ personId: row.id, source: "discovery", facts: { businessName: row.fullName ?? "", city: row.fullName === "Dallas Janitorial" ? "Dallas" : "Houston" } })));
+  for (const row of cleaners) {
+    const fit = row.fullName === "Dallas Janitorial" ? "no_match" : "match";
+    await db.update(leadAudienceMembers).set({ fit, fitReason: fit === "match" ? "A Houston cleaning company." : "In Dallas.", fitApproach: fit === "match" ? "standard" : "skip", fitGroup: "Cleaning", fitRequestId: scout.id, fitAt: new Date() })
+      .where(and(eq(leadAudienceMembers.audienceId, scoutList), eq(leadAudienceMembers.personId, row.id)));
+  }
+  await db.insert(assistantJobs).values({ organizationId: a.org.id, kind: "discovery", stage: "done", status: "succeeded", threadId: thread5.id, audienceId: scoutList, payload: { requestMessageId: scout.id, phrase: "cleaning companies in Houston, TX" }, result: { found: 4, eligible: 4 } });
+  await runTool("finish_request", { summary: "Found Houston cleaning companies." }, scoutContext);
+  check("(setup) the research-only request has ended", (await objectiveForRequest(scout.id))?.status === "stopped");
+  const followBrief = { goal: "Contact the matching leads already found: cleaning companies in Houston", leadTarget: null, contact: true, channels: null, spendCapUsd: null, timeLimitMinutes: null, done: "an outreach plan for the matching leads" };
+  chatAnswers.length = 0;
+  chatAnswers.push(
+    JSON.stringify({ message: "I'm preparing the outreach plan for the matching Houston cleaning companies.", actions: [{ tool: "set_brief", arguments: JSON.stringify(followBrief) }, { tool: "prepare_outreach", arguments: JSON.stringify({ forRequest: true }) }], suggestions: [] }),
+    JSON.stringify({ message: "", actions: [], suggestions: [] }),
+  );
+  await runAgentTurn({ threadId: thread5.id, userId: a.owner.id, text: "outreach them all" });
+  const followTools = await db.select({ tool: assistantMessages.tool, status: assistantMessages.status, content: assistantMessages.content, toolResult: assistantMessages.toolResult }).from(assistantMessages)
+    .where(and(eq(assistantMessages.threadId, thread5.id), eq(assistantMessages.role, "tool"))).orderBy(sql`${assistantMessages.createdAt} asc`);
+  const briefRow = followTools.filter((row) => row.tool === "set_brief").at(-1);
+  const planRow = followTools.filter((row) => row.tool === "prepare_outreach").at(-1);
+  const followRequestId = (briefRow?.toolResult as { data?: { requestId?: string } } | null)?.data?.requestId ?? null;
+  const followObjective = followRequestId ? await objectiveForRequest(followRequestId) : null;
+  check("\"outreach them all\" after a research-only request ended continues it: a new request that carries its leads", Boolean(followObjective) && followObjective!.requestMessageId !== scout.id && followObjective!.controls.continues === scout.id && followObjective!.status === "active", JSON.stringify(followObjective?.controls ?? null));
+  const [followRun] = await db.select().from(outreachRuns).where(eq(outreachRuns.threadId, thread5.id));
+  const followAssigned = ((followRun?.plan ?? {}) as { assignments?: { personId: string }[] }).assignments ?? [];
+  const dallas = cleaners.find((row) => row.fullName === "Dallas Janitorial")!.id;
+  check("…and the plan prepared in the same turn reads that request: the 3 matching leads, not the one that does not match", planRow?.status === "ok" && followAssigned.length === 3 && !followAssigned.some((item) => item.personId === dallas), `${planRow?.status}: ${planRow?.content.slice(0, 200)}`);
+  check("…with the brief written once (no refusal loop)", followTools.filter((row) => row.tool === "set_brief").length === 1 && chatAnswers.length === 0, `${followTools.filter((row) => row.tool === "set_brief").length} briefs`);
+  const reviewFollow = await runTool("review_leads", {}, { ...scoutContext, requestMessageId: followRequestId, searchRequestId: followRequestId });
+  check("…and review_leads on the new request shows the leads it continued", reviewFollow.ok && /3 match/.test(reviewFollow.summary), reviewFollow.summary.split("\n")[0]);
+  chatAnswers.length = 0;
 
   shared = { threadId: thread.id, requestId: request.id, personIds };
 });

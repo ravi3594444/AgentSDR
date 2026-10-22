@@ -152,6 +152,8 @@ async function repeatedSearch(context: ToolContext, tool: string, args: Record<s
 export async function runToolInThread(context: ToolContext, tool: string, args: Record<string, unknown>): Promise<ToolResult> {
   const row = await addMessage({ threadId: context.threadId, role: "tool", tool, toolInput: args, status: "running", content: "" });
   const result = (await repeatedSearch(context, tool, args)) ?? await runTool(tool, args, context);
+  // v2: once set_brief has recorded the request (a new one, or one continuing an ended one), the rest of the turn serves it.
+  if (tool === "set_brief" && result.ok && typeof result.data?.requestId === "string") context.searchRequestId = result.data.requestId;
   // The request the tool served, so what the assistant did for a request is counted by its id (coverage.server.ts webToolUse).
   const requestId = searchRequestId(context);
   await updateMessage(row.id, {
@@ -309,7 +311,7 @@ export async function runAgentTurn(input: {
             schemaDescription: "Your message to the owner and the tools to run now.",
             jsonSchema: agentReplySchema(toolNames),
             systemPrompt: v2 ? systemPromptV2({ features, catalog: toolCatalog(features), autonomy: caps }) : systemPrompt(features, caps),
-            userPrompt: `${setupText}${v2 ? `\n\n${await v2ContextText({ threadId: input.threadId, requestMessageId: searchRequestId })}` : ""}\n\nCONVERSATION (newest last):\n${v2 ? transcriptV2(messages) : transcriptText(messages)}${replanReason ? `\n\nRe-plan the remaining work: ${replanReason.slice(0, 600)}. Use the latest TOOL results and do not repeat successful actions.` : ""}\n\nYour turn.`,
+            userPrompt: `${setupText}${v2 ? `\n\n${await v2ContextText({ threadId: input.threadId, requestMessageId: context.searchRequestId ?? null })}` : ""}\n\nCONVERSATION (newest last):\n${v2 ? transcriptV2(messages) : transcriptText(messages)}${replanReason ? `\n\nRe-plan the remaining work: ${replanReason.slice(0, 600)}. Use the latest TOOL results and do not repeat successful actions.` : ""}\n\nYour turn.`,
             accept: (text) => {
               const parsed = parseAgentReply(text, toolNames, { allowEmpty: step > 0 });
               validateBatch(nextAgentBatch(parsed).batch);
@@ -418,6 +420,15 @@ export async function runAgentTurn(input: {
           end = "done";
           return end;
         }
+      }
+      // v2: searches run in the background and wake the request when they
+      // finish. A step that only started them (and wrote the brief) and told
+      // the owner ends the turn, rather than asking the model again for a
+      // second "still running" message.
+      if (v2 && allOk && message && !pendingReply && actions.some((action) => SEARCH_TOOLS.has(action.tool))
+        && actions.every((action) => SEARCH_TOOLS.has(action.tool) || action.tool === "set_brief")) {
+        end = "done";
+        return end;
       }
     }
     await addMessage({

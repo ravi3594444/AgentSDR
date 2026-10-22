@@ -280,13 +280,15 @@ function DiscoveryCard({ message, job }: { message: Message; job: Job | undefine
     saving: `Checking and saving contacts (${progress.saved ?? 0} of ${progress.found ?? "?"})…`,
     qualifying: waiting ? `Waiting: ${waiting.reason ?? "paused"}.` : `Judging the leads found against your request (${progress.judged ?? 0} of ${progress.toJudge ?? "?"})…`,
   };
+  // An Apify run keeps its own job stages ("apify", "profiles") while its progress says "searching".
+  const stage = job.stage in stageText ? job.stage : String(progress.stage ?? "");
   const result = job.result as Record<string, number | string | null> | null;
   // How its contactable leads were judged against the request (only matches count toward it), when they were.
   const fit = (job.result as { fit?: { contactable: number; qualified: number; notMatching: number; unconfirmed: number; pending: number } } | null)?.fit ?? null;
   return (
     <Card title={`${linkedin ? "LinkedIn search" : web ? "Web search" : instagram ? "Instagram prospects" : viaApify ? "Lead search (Apify)" : "Lead search"}: ${data?.phrase ?? data?.keywords ?? (data as { customers?: string } | undefined)?.customers ?? ""}`} status={job.status}>
       {job.status === "queued" || job.status === "running" ? (
-        <p role="status">{stageText[job.stage] ?? "Working…"}{typeof progress.found === "number" && job.stage !== "searching" ? ` ${progress.found} businesses found.` : ""}</p>
+        <p role="status">{stageText[stage] ?? "Working…"}{typeof progress.found === "number" && stage !== "searching" ?` ${progress.found} businesses found.` : ""}</p>
       ) : job.status === "succeeded" && result?.notSearched ? (
         <p>{instagram ? "Instagram was not searched." : `${source ?? "This source"} was not searched.`}{result.note ? <span className="mt-1 block">{String(result.note)}</span> : null}</p>
       ) : job.status === "succeeded" && result ? (

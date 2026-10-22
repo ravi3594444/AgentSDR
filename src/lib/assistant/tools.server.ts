@@ -567,8 +567,9 @@ export const TOOLS: Record<string, Tool> = {
     run: async (args, context) => {
       if (!(await featureEnabled("apify_discovery"))) return { ok: false, summary: new FeatureDisabledError("apify_discovery").message };
       const profile = await getBusinessProfile();
-      const what = text(args, "what") ?? profile.targetCustomers?.trim() ?? null;
-      const where = text(args, "where") ?? profile.locations?.trim() ?? null;
+      // v2: the model names who and where (an open niche or place is its research); the profile fills them only for the older agent.
+      const what = text(args, "what") ?? (context.v2 ? null : profile.targetCustomers?.trim() ?? null);
+      const where = text(args, "where") ?? (context.v2 ? null : profile.locations?.trim() ?? null);
       if (!what) throw new ToolArgumentError("say what kind of accounts to look for");
       if (!where) throw new ToolArgumentError("say which place (a city or area)");
       if (args.contactAfter !== undefined && typeof args.contactAfter !== "boolean") throw new ToolArgumentError("contactAfter must be true or false");
@@ -607,8 +608,9 @@ export const TOOLS: Record<string, Tool> = {
       const platform = args.platform;
       if (platform !== "facebook" && platform !== "linkedin" && platform !== "instagram") throw new ToolArgumentError("platform must be facebook, linkedin or instagram");
       const profile = await getBusinessProfile();
-      const what = text(args, "what") ?? profile.targetCustomers?.trim() ?? null;
-      const where = text(args, "where") ?? profile.locations?.trim() ?? null;
+      // v2: the model names who and where (an open niche or place is its research); the profile fills them only for the older agent.
+      const what = text(args, "what") ?? (context.v2 ? null : profile.targetCustomers?.trim() ?? null);
+      const where = text(args, "where") ?? (context.v2 ? null : profile.locations?.trim() ?? null);
       if (!what) throw new ToolArgumentError("say what kind of businesses to look for");
       if (!where) throw new ToolArgumentError("say which place (a city or area)");
       if (args.contactAfter !== undefined && typeof args.contactAfter !== "boolean") throw new ToolArgumentError("contactAfter must be true or false");
@@ -643,8 +645,8 @@ export const TOOLS: Record<string, Tool> = {
       if (!availability.available) return { ok: false, summary: `Website and directory search is not available: ${availability.reason}` };
       const profile = await getBusinessProfile();
       const criteria = normalizeWebCriteria({
-        customers: text(args, "customers") ?? profile.targetCustomers,
-        where: text(args, "where") ?? profile.locations,
+        customers: text(args, "customers") ?? (context.v2 ? null : profile.targetCustomers),
+        where: text(args, "where") ?? (context.v2 ? null : profile.locations),
         maxResults: args.maxResults,
         language: profile.language,
         offer: profile.offer,
@@ -685,7 +687,7 @@ export const TOOLS: Record<string, Tool> = {
       if (!settings.connected) return { ok: false, summary: "Bright Data research is not available: no Bright Data key is saved (Settings → Providers & features → Bright Data)." };
       const criteria = normalizeSocialCriteria({
         platforms: args.platforms,
-        customers: text(args, "customers") ?? profile.targetCustomers,
+        customers: text(args, "customers") ?? (context.v2 ? null : profile.targetCustomers),
         need: args.need,
         where: args.where,
         subreddits: args.subreddits,
@@ -1191,23 +1193,28 @@ export const TOOLS: Record<string, Tool> = {
     arguments: "goal (the request in one or two sentences, from all of the owner's messages about it, e.g. 'Find 10 hair salons in Miami on Instagram and DM them'), leadTarget (the number of leads the owner asked for, or null), contact (true when the owner asked to contact, email, message or DM them; false for research only), channels (array of email|whatsapp|linkedin|instagram the owner allowed, or null when they named none), spendCapUsd (dollars the owner allows on paid sources; 0 when they said free tools only; null when they said nothing), timeLimitMinutes (minutes the owner allows, or null), done (what finished means, in a sentence), newRequest (true when this is a new, different request from the one in progress)",
     run: async (args, context) => {
       if (args.newRequest !== undefined && typeof args.newRequest !== "boolean") throw new ToolArgumentError("newRequest must be true or false");
-      const current = await activeRequest(context.threadId);
-      const requestId = args.newRequest === true || !current ? context.requestMessageId ?? null : current.requestMessageId;
+      // The request this turn serves: the one review_leads, prepare_outreach and finish_request read.
+      const served = await objectiveForRequest(searchRequestId(context));
+      const current = served && served.status !== "stopped" ? served : await activeRequest(context.threadId);
+      const fresh = args.newRequest === true || !current;
+      const requestId = fresh ? context.requestMessageId ?? null : current!.requestMessageId;
       if (!requestId) throw new ToolArgumentError("there is no owner message to make a request of");
+      // A follow-up to a request that has ended ("contact them all") continues it: its leads and their verdicts come along.
+      const continues = fresh && args.newRequest !== true && served?.status === "stopped" && served.requestMessageId !== requestId ? served.requestMessageId : null;
       const words = (await ownerMessagesSince(context.threadId, requestId)).join("\n");
       const checked = checkBrief(args, words, await objectiveDefaults());
       if (!checked.ok) throw new ToolArgumentError(checked.error);
       if (args.newRequest === true && current && current.requestMessageId !== requestId) {
         await stopObjective(current, "finished", "the owner moved on to a new request");
       }
-      const saved = await setObjectiveBrief({ requestMessageId: requestId, threadId: context.threadId, userId: context.userId, brief: checked.brief, controls: checked.controls });
+      const saved = await setObjectiveBrief({ requestMessageId: requestId, threadId: context.threadId, userId: context.userId, brief: checked.brief, controls: checked.controls, continues });
       if ("problem" in saved) return { ok: false, summary: `Brief not saved: ${saved.problem}.` };
       const line = briefLine(checked.brief, checked.controls);
       return {
         ok: true,
-        summary: `Brief ${saved.created ? "saved" : "updated"}: ${line}.`,
-        display: `${saved.created ? "Noted" : "Updated"} the request — ${line}`,
-        data: { objectiveId: saved.objective.id, requestId, brief: checked.brief, controls: checked.controls },
+        summary: `Brief ${saved.created ? "saved" : "updated"}: ${line}.${continues ? " This request continues the one that ended: its leads, and the verdicts on them, are this request's (review_leads shows them)." : ""}`,
+        display: `${saved.created ? continues ? "Continued the earlier request, with the leads it found" : "Noted the request" : "Updated the request"} — ${line}`,
+        data: { objectiveId: saved.objective.id, requestId, brief: checked.brief, controls: checked.controls, ...(continues ? { continues } : {}) },
       };
     },
   },
@@ -1249,7 +1256,8 @@ export const TOOLS: Record<string, Tool> = {
     description: "End the current request because what the owner asked is done (its brief's done condition), or nothing more fits within its limits. Searches still running finish and their leads are kept; the owner then gets one final report with the counts. A plan already prepared still waits for the owner's Start.",
     arguments: "summary (one sentence: what was done, e.g. 'Both tests ran: Google Maps found 5 dentists and the web search 5')",
     run: async (args, context) => {
-      const objective = await activeRequest(context.threadId);
+      const served = await objectiveForRequest(searchRequestId(context));
+      const objective = served && served.status !== "stopped" ? served : await activeRequest(context.threadId);
       if (!objective) return { ok: false, summary: "This chat has no request in progress to finish." };
       const summary = text(args, "summary", true)!.replace(/\s+/g, " ").trim().slice(0, 400);
       const stopped = await stopObjective(objective, "finished", summary.replace(/\.$/, ""));

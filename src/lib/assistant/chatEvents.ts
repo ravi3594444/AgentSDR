@@ -33,7 +33,7 @@ export function reportAsOf(message: { role: string; tool?: string | null; create
     ? isRecord(message.toolResult) && typeof message.toolResult.reportKey === "string"
     : message.role === "tool" && REPORT_TOOLS.has(message.tool ?? "");
   const at = report ? formatChatDateTime(message.createdAt, timeZone) : "";
-  return at ? { label: `As of ${at}`, pointer: "Current counts are on the plan card and in This request." } : null;
+  return at ? { label: `As of ${at}`, pointer: "Current counts are in This request, and on the plan card when there is one." } : null;
 }
 
 export type CompactFigure = { label: string; value: string };

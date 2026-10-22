@@ -52,7 +52,9 @@ export function objectiveBrief(objective: Pick<Objective, "controls"> | null): B
 
 /** What the model reads first every step: the request and its brief, what was counted, and this chat's plans. */
 export async function v2ContextText(input: { threadId: string; requestMessageId: string | null }): Promise<string> {
-  const objective = await activeRequest(input.threadId) ?? (input.requestMessageId ? (await threadObjectives(input.threadId, 5)).find((row) => row.requestMessageId === input.requestMessageId) ?? null : null);
+  // The request the turn serves (the one its tools read), else the chat's active one.
+  const served = input.requestMessageId ? (await threadObjectives(input.threadId, 5)).find((row) => row.requestMessageId === input.requestMessageId) ?? null : null;
+  const objective = served ?? await activeRequest(input.threadId);
   const requestId = objective?.requestMessageId ?? input.requestMessageId;
   const ownerMessages = requestId ? await ownerMessagesSince(input.threadId, requestId) : [];
   const brief = objectiveBrief(objective);
@@ -66,7 +68,11 @@ export async function v2ContextText(input: { threadId: string; requestMessageId:
         : typeof payload.keywords === "string" ? payload.keywords
           : [payload.criteria?.what ?? payload.criteria?.customers, payload.criteria?.where].filter((value) => typeof value === "string").join(" in ") || job.kind;
       const done = job.status === "succeeded";
-      return { tool: job.kind, what, status: job.status === "queued" || job.status === "running" ? "running" : job.status, found: done ? Number(result.found ?? 0) : null, contactable: done ? Number(result.eligible ?? 0) : null };
+      const running = job.status === "queued" || job.status === "running";
+      // A running search's count so far, as its chat card shows it: without it the model says "nothing found yet".
+      const foundSoFar = Number((job.progress as { found?: unknown } | null)?.found);
+      const found = done ? Number(result.found ?? 0) : running && Number.isFinite(foundSoFar) && foundSoFar > 0 ? foundSoFar : null;
+      return { tool: job.kind, what, status: running ? "running" : job.status, found, contactable: done ? Number(result.eligible ?? 0) : null };
     });
     const runs = await db.select({ name: outreachRuns.name, status: outreachRuns.status, plan: outreachRuns.plan }).from(outreachRuns)
       .where(and(inOrg(outreachRuns), eq(outreachRuns.threadId, input.threadId))).orderBy(desc(outreachRuns.createdAt)).limit(5);
