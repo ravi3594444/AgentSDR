@@ -213,6 +213,8 @@ export async function matchingLeadsAudience(input: { objective: Objective; brief
   }
   const goal = input.brief?.goal ?? "this request";
   const audienceId = await createAudience({ name: `${pick.kind === "match" ? "Matching leads" : "Leads"}: ${goal.slice(0, 120)}`, source: "list", criteria: { requestId: input.objective.requestMessageId, fromRequest: true }, threadId: input.threadId, userId: input.userId });
+  // What each lead's search saw (its website's observations) comes along, so the plan preview and the writer still have it.
+  const insights = await memberInsights(chosen.map((member) => member.id));
   await addAudienceMembers(audienceId, chosen.map((member) => ({
     // One id per (list, person): a retry adds nothing twice.
     id: undefined,
@@ -221,8 +223,8 @@ export async function matchingLeadsAudience(input: { objective: Objective; brief
     sourceUrl: member.sourceUrl,
     evidence: member.evidence,
     facts: member.facts,
-    matchReason: member.fitReason,
-    signals: [],
+    matchReason: member.fitReason ?? insights.get(member.id)?.matchReason ?? null,
+    signals: insights.get(member.id)?.signals ?? [],
   })));
   // Their verdicts come along, so the plan does not judge them again.
   for (const member of chosen) {

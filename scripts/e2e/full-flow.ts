@@ -8,13 +8,16 @@
  * nothing calls. Nothing leaves the machine and nothing is sent.
  *
  * - the owner asks for 10 dental clinics in Pune contacted on WhatsApp; the
- *   assistant searches and the request becomes an objective with that target;
- * - the search qualifies its leads (a phone, a WhatsApp route) and a plan
- *   is written for them from the owner's words, waiting for Start;
+ *   assistant writes the brief and searches in one step (which ends its
+ *   turn), and the request becomes an objective with that target;
+ * - the search qualifies its leads (a phone, a WhatsApp route) and prepares
+ *   no plan by itself: the assistant decides that;
  * - short of the target, the request continues with no owner message: the
- *   assistant searches again, a second plan is written, the target is
- *   reached and one final report is posted (sources, leads, routes, spend,
- *   stop reason);
+ *   assistant prepares a plan of the 6 matches (on the brief's channel,
+ *   waiting for Start), then searches again; at the target the request gets
+ *   one last turn, in which the assistant prepares the second search's plan,
+ *   and then it stops and one final report is posted (sources, leads,
+ *   routes, spend, stop reason);
  * - the owner presses Start on the first plan and approves the rest of the
  *   request: the second plan starts under that approval;
  * - a launch worker dies after it created and recorded its campaign; the
@@ -106,9 +109,13 @@ mock.module(join(root, "src/lib/ai/server/structuredCompletion.ts"), () => ({
     return { text, model: "fixture", provider: "fixture", request: {}, response: {}, usage: {}, attempts: 1 };
   },
 }));
+/**
+ * One step of a turn. A step that only writes the brief and starts searches
+ * ends the turn; any other step is followed by another model call, and a step
+ * with no actions closes the turn.
+ */
 const reply = (message: string, actions: { tool: string; args: Record<string, unknown> }[] = []): Script => () =>
   JSON.stringify({ message, actions: actions.map((action) => ({ tool: action.tool, arguments: JSON.stringify(action.args) })), suggestions: [] });
-const turn = (message: string, actions: { tool: string; args: Record<string, unknown> }[]) => [reply(message, actions), reply("")];
 
 // ------------------------------------------------------------ the scraper, stood in: 6 clinics per search, each with a mobile number
 const MAPS_HEADER = "input_id,link,title,category,address,website,phone,review_count,review_rating,place_id,cid,status,complete_address,emails";
@@ -204,6 +211,7 @@ const { setDiscoveryPageOptions } = await import("@/lib/discovery/discovery.serv
 const { setBrightdataApiBase } = await import("@/services/brightdata");
 const { saveBrightdataSettings } = await import("@/lib/brightdata/brightdata.server");
 const { setFeature } = await import("@/lib/features/flags.server");
+const { memberInsights } = await import("@/lib/assistant/audiences.server");
 const { providerUsage } = await import("@/lib/quota/schema");
 const { runAgentTurn } = await import("@/lib/assistant/agent.server");
 const { createThread, listMessages } = await import("@/lib/assistant/threads.server");
@@ -314,12 +322,15 @@ await runInOrganization(a.org.id, async () => {
   // ---------------------------------------------------------- 1. the prompt, the search and the objective
   const thread = await createThread(a.owner.id);
   const ask = "Find 10 dental clinics in Pune and message them on WhatsApp";
-  replies = turn("Searching Google Maps for dental clinics in Pune; I will write a WhatsApp plan for the ones with a number.", [{ tool: "find_leads", args: { what: "dental clinics", where: "Pune", contactAfter: true, channels: ["whatsapp"] } }]);
+  // The assistant writes the brief from the owner's words and starts the search: that step ends its turn.
+  const brief = { goal: ask, leadTarget: 10, contact: true, channels: ["whatsapp"], spendCapUsd: null, timeLimitMinutes: null, done: "10 Pune dental clinics found and a WhatsApp plan ready" };
+  replies = [reply("Searching Google Maps for dental clinics in Pune; I will write a WhatsApp plan for the ones with a number.", [{ tool: "set_brief", args: brief }, { tool: "find_leads", args: { what: "dental clinics", where: "Pune" } }])];
   await runAgentTurn({ threadId: thread.id, userId: a.owner.id, text: ask });
   const requestId = [...(await listMessages(thread.id, 500))].reverse().find((row) => row.role === "user")!.id;
   const objective = await objectives.objectiveForRequest(requestId);
   check("the prompt starts a search for the request, pursued with the target the owner named", Boolean(objective) && objective!.leadTarget === 10 && objective!.controls.named?.target === true && (await searches(requestId)).length === 1,
     JSON.stringify({ target: objective?.leadTarget, searches: (await searches(requestId)).length }));
+  check("…in one model call: a step that only writes the brief and starts a search ends the turn", replies.length === 0 && modelCalls.filter((name) => name === "assistant_reply").length === 1, modelCalls.join(","));
   const [driver] = await db.select().from(schema.assistantJobs).where(and(eq(schema.assistantJobs.kind, "objective"), sql`${schema.assistantJobs.payload} ->> 'objectiveId' = ${objective!.id}`));
 
   // ---------------------------------------------------------- 2. research and qualification
@@ -328,38 +339,63 @@ await runInOrganization(a.org.id, async () => {
   const firstResult = (first!.result ?? {}) as { found?: number; eligible?: number };
   check("the search ran on the built-in scraper and qualified each clinic with a WhatsApp route", first!.status === "succeeded" && firstResult.found === 6 && firstResult.eligible === 6 && scraper.posts.length === 1,
     JSON.stringify({ status: first!.status, ...firstResult, scraped: scraper.posts }));
+  check("the finished search prepares no plan by itself (no contactAfter): the assistant decides when to plan", (await plans(thread.id)).length === 0 && !(first!.payload as { contactAfter?: unknown }).contactAfter,
+    JSON.stringify({ plans: (await plans(thread.id)).length, contactAfter: (first!.payload as { contactAfter?: unknown }).contactAfter ?? null }));
 
-  // ---------------------------------------------------------- 3. the plan, written from the owner's words, waiting for Start
+  // ---------------------------------------------------------- 3. short of the target, the request goes on by itself: the plan of its matches, then another search
+  replies = [
+    reply("I'm writing the WhatsApp plan for the Pune clinics that match; it waits for your Start.", [{ tool: "prepare_outreach", args: {} }]),
+    reply("Searching again with other words for the rest.", [{ tool: "find_leads", args: { what: "dentists", where: "Pune" } }]),
+  ];
+  await step(driver!.id);
+  check("6 of 10: the request continues with no owner message", await continuationEnded(requestId, 1));
   let runs = await plans(thread.id);
   const plan1 = runs[0];
-  check("a plan was written for those 6 leads on WhatsApp and waits for the owner's Start", runs.length === 1 && plan1?.status === "proposed" && plan1.channels.join() === "whatsapp" && plan1.plan.assignments.length === 6 && plan1.plan.requestId === requestId,
-    JSON.stringify(runs.map((run) => ({ status: run.status, channels: run.channels, leads: run.plan.assignments.length }))));
+  check("in that continuation the assistant prepared a plan of those 6 matches on WhatsApp (the brief's channel), waiting for the owner's Start, and searched again", runs.length === 1 && plan1?.status === "proposed" && plan1.channels.join() === "whatsapp" && plan1.plan.assignments.length === 6 && plan1.plan.requestId === requestId && replies.length === 0 && (await searches(requestId)).length === 2,
+    JSON.stringify({ runs: runs.map((run) => ({ status: run.status, channels: run.channels, leads: run.plan.assignments.length })), unused: replies.length, searches: (await searches(requestId)).length }));
   check("…with its messages and a sample from the writer", plan1!.plan.samples.length > 0 && (plan1!.plan.groups?.[0]?.sequences.whatsapp?.length ?? 0) === 2 && /chair hours/.test(JSON.stringify(plan1!.plan.samples)),
     JSON.stringify(plan1!.plan.samples).slice(0, 300));
   check("…the sample names the clinic, not its phone number", /^[A-Z][a-z]+ Dental Clinic$/.test(plan1!.plan.samples[0]?.name ?? ""), plan1!.plan.samples[0]?.name);
 
   // ---------------------------------------------------------- 3a. what one clinic's own website showed, through to the plan
   check("its website: each page read once, outside links never", JSON.stringify([...pageReads].sort()) === JSON.stringify([SMILE_SITE, `${SMILE_SITE}careers`, `${SMILE_SITE}team`].sort()), pageReads.join(", "));
-  const smileSample = plan1!.plan.samples.find((sample) => sample.observed?.some((item) => item.text.startsWith("Front Desk Coordinator")));
-  check("the plan preview shows why that lead and what its website showed (its page, never as interest)", Boolean(smileSample) && /^May fit/.test(smileSample!.why ?? "") && smileSample!.observed!.some((item) => item.sourceUrl === `${SMILE_SITE}careers` && !item.need && /inferred/.test(item.relevance ?? "")),
-    JSON.stringify(plan1!.plan.samples.map((sample) => ({ name: sample.name, why: sample.why, observed: sample.observed }))));
+  // The clinic's lead as its search saved it (the plan's own list copies it), and its sample in the plan: by that person.
+  const [smileMember] = await db.select().from(schema.leadAudienceMembers)
+    .where(and(eq(schema.leadAudienceMembers.organizationId, a.org.id), eq(schema.leadAudienceMembers.audienceId, first!.audienceId!), sql`${schema.leadAudienceMembers.facts} ->> 'website' = ${SMILE_SITE}`));
+  const smileSample = plan1!.plan.samples.find((sample) => sample.personId === smileMember?.personId);
+  const searchSaw = smileMember ? ((await memberInsights([smileMember.id])).get(smileMember.id)?.signals ?? []).map((signal) => signal.text) : [];
+  check("the plan preview shows why that lead and what its website showed (its page, never as interest)", Boolean(smileSample) && /^May fit/.test(smileSample!.why ?? "") && (smileSample!.observed ?? []).some((item) => item.sourceUrl === `${SMILE_SITE}careers` && !item.need && /inferred/.test(item.relevance ?? "")),
+    JSON.stringify({ samples: plan1!.plan.samples.map((sample) => ({ name: sample.name, why: sample.why, observed: sample.observed })), searchListSaw: searchSaw }));
   check("a line its facts back is kept in that sample", smileSample?.messages[0]?.body.includes(BACKED_LINE) === true, smileSample?.messages[0]?.body);
   check("a line its facts do not back (hiring, missing booking, a price) never reaches a plan", !UNBACKED.test(JSON.stringify(plan1!.plan)), JSON.stringify(plan1!.plan.samples.map((sample) => sample.messages[0]?.body)));
-  const [smileMember] = await db.select().from(schema.leadAudienceMembers)
-    .where(and(eq(schema.leadAudienceMembers.organizationId, a.org.id), sql`${schema.leadAudienceMembers.facts} ->> 'website' = ${SMILE_SITE}`));
   const [kavyaNow] = await db.select().from(people).where(eq(people.id, kavya!.id));
   check("the founder's own address is a contact the owner already has: that person is the lead, and keeps the owner's name and title", smileMember?.personId === kavya!.id && kavyaNow?.fullName === "Kavya Joshi-Rao" && kavyaNow.firstName === "Kavya" && kavyaNow.lastName === "Joshi-Rao" && kavyaNow.title === "Clinic Director" && smileMember.facts.decisionMakers === undefined && smileMember.facts.booking === "Online booking link (Calendly)",
     JSON.stringify({ member: smileMember?.personId === kavya!.id, person: [kavyaNow?.fullName, kavyaNow?.firstName, kavyaNow?.lastName, kavyaNow?.title], facts: smileMember?.facts }));
 
-  // ---------------------------------------------------------- 4. continuation: short of the target, the request goes on by itself
-  replies = turn("Searching again with other words.", [{ tool: "find_leads", args: { what: "dentists", where: "Pune", contactAfter: true, channels: ["whatsapp"] } }]);
-  await step(driver!.id);
-  check("6 of 10: the request continues with no owner message", await continuationEnded(requestId, 1));
+  // ---------------------------------------------------------- 4. the second search, then the request's last turn at its target
   await step(driver!.id);
   await finishSearches(requestId);
+  const secondSearch = (await searches(requestId))[1];
+  const secondResult = (secondSearch?.result ?? {}) as { found?: number; eligible?: number };
+  check("the second search qualified 6 more", secondSearch?.status === "succeeded" && secondResult.found === 6 && secondResult.eligible === 6 && (await plans(thread.id)).length === 1,
+    JSON.stringify({ status: secondSearch?.status, found: secondResult.found, eligible: secondResult.eligible, plans: (await plans(thread.id)).length }));
+  // At the target the owner named, the request is not stopped at once: it gets one last turn, in which no search starts.
+  replies = [
+    reply("I'm writing the WhatsApp plan for the clinics the second search found; it waits for your Start.", [{ tool: "prepare_outreach", args: { audienceId: secondSearch!.audienceId } }]),
+    reply("Both WhatsApp plans are below. Nothing goes out before you press Start."),
+  ];
+  await step(driver!.id);
+  const lastTurnEnded = await continuationEnded(requestId, 2);
+  const atLastTurn = await objectives.objectiveForRequest(requestId);
+  const lastNote = (await events(thread.id)).find((row) => (row.toolResult as { objectiveNote?: string } | null)?.objectiveNote === `${objective!.id}:2`);
+  check("12 of 10: before it stops, the request gets one last turn, told the target was reached and that no more searches start",
+    lastTurnEnded && (atLastTurn?.progress as { continuation?: { final?: string } }).continuation?.final === "target_reached" && atLastTurn?.status !== "stopped" && /has its 10 matching leads/.test(lastNote?.content ?? "") && /No more searches start for it/.test(lastNote?.content ?? ""),
+    JSON.stringify({ ended: lastTurnEnded, status: atLastTurn?.status, continuation: (atLastTurn?.progress as { continuation?: unknown }).continuation, note: lastNote?.content.slice(0, 240) }));
   runs = await plans(thread.id);
-  check("the second search qualified 6 more and its own plan was written", (await searches(requestId)).length === 2 && runs.length === 2 && runs[1]!.plan.assignments.length === 6 && runs[1]!.status === "proposed",
-    JSON.stringify(runs.map((run) => ({ status: run.status, leads: run.plan.assignments.length }))));
+  const planned = (run: (typeof runs)[number]) => run.plan.assignments.map((assignment) => assignment.personId);
+  check("in its last turn the assistant prepared the second search's plan: its own 6 leads, none of the first plan's, waiting for Start",
+    runs.length === 2 && runs[1]!.plan.assignments.length === 6 && runs[1]!.status === "proposed" && runs[1]!.channels.join() === "whatsapp" && runs[1]!.plan.requestId === requestId && !planned(runs[1]!).some((id) => planned(runs[0]!).includes(id)) && replies.length === 0 && (await searches(requestId)).length === 2,
+    JSON.stringify({ runs: runs.map((run) => ({ status: run.status, channels: run.channels, leads: run.plan.assignments.length })), unused: replies.length, searches: (await searches(requestId)).length }));
   const done = await step(driver!.id);
   const stopped = await objectives.objectiveForRequest(requestId);
   const report = (await events(thread.id)).filter((row) => (row.toolResult as { objectiveId?: string; reportKey?: string } | null)?.objectiveId === objective!.id && (row.toolResult as { reportKey?: string }).reportKey);
@@ -438,16 +474,19 @@ await runInOrganization(a.org.id, async () => {
   const planItems = work.filter((item) => item.type === "plan");
   check("Activity: the lead request is Done with 12 of 10, and both plans run with their 6 leads", requestItem?.state === "completed" && /12 of 10 leads/.test(requestItem.reason ?? "") && planItems.length === 2 && planItems.every((item) => item.counts?.leads === 6 && item.runStatus === "running"),
     JSON.stringify({ request: requestItem && { state: requestItem.state, reason: requestItem.reason }, plans: planItems.map((item) => ({ state: item.state, counts: item.counts })) }));
-  check("the chat model was asked twice per turn and the writer wrote each plan", modelCalls.filter((name) => name === "assistant_reply").length === 4 && modelCalls.filter((name) => name === "outreach_sequences").length >= 2,
+  check("the chat model was asked once for the owner's prompt and twice in each continuation (the plan, then the next search or the close), and the writer wrote each plan",
+    modelCalls.filter((name) => name === "assistant_reply").length === 5 && replies.length === 0 && modelCalls.filter((name) => name === "outreach_sequences").length >= 2,
     modelCalls.join(","));
 
   // ---------------------------------------------------------- 8. a second request: Reddit research through Bright Data, qualified, planned and reported
-  replies = turn("Researching Reddit for clinics complaining about missed calls; I will write a WhatsApp plan for anyone whose own profile or website gives a number.", [{ tool: "research_social_sources", args: { platforms: ["reddit"], customers: "dental clinics", need: "missed calls at the front desk", where: "Pune", contactAfter: true, channels: ["whatsapp"] } }]);
+  // No brief this time: the search starts a new request for the owner's new message (the first one has stopped), from their words.
+  replies = [reply("Researching Reddit for clinics complaining about missed calls; I will write a WhatsApp plan for anyone whose own profile or website gives a number.", [{ tool: "research_social_sources", args: { platforms: ["reddit"], customers: "dental clinics", need: "missed calls at the front desk", where: "Pune" } }])];
   await runAgentTurn({ threadId: thread.id, userId: a.owner.id, text: "Find 1 dental clinic on Reddit complaining about missed calls and message them on WhatsApp" });
   const requestId2 = [...(await listMessages(thread.id, 500))].reverse().find((row) => row.role === "user")!.id;
   const objective2 = await objectives.objectiveForRequest(requestId2);
   const [social] = await searches(requestId2);
-  check("the second prompt starts a Reddit research job through Bright Data for a request with a target of 1", Boolean(objective2) && objective2!.leadTarget === 1 && social?.kind === "social_research", JSON.stringify({ target: objective2?.leadTarget, kind: social?.kind }));
+  check("the second prompt starts a Reddit research job through Bright Data for a new request with a target of 1", Boolean(objective2) && objective2!.id !== objective!.id && objective2!.leadTarget === 1 && objective2!.controls.named?.target === true && social?.kind === "social_research" && (await searches(requestId)).length === 2 && replies.length === 0,
+    JSON.stringify({ target: objective2?.leadTarget, named: objective2?.controls.named, kind: social?.kind, firstRequestSearches: (await searches(requestId)).length, unused: replies.length }));
   await finishSearches(requestId2);
   const socialDone = await jobRow(social!.id);
   const socialResult = (socialDone.result ?? {}) as { found?: number; eligible?: number; excluded?: number; discussions?: number; creditsUsed?: number; fit?: { qualified?: number } };
@@ -461,10 +500,19 @@ await runInOrganization(a.org.id, async () => {
   check("the lead keeps its evidence: the post, her words, the profile that led to the website, and the phone with its page",
     posterMember?.fit === "match" && posterMember.sourceUrl === `https://www.reddit.com/user/${REDDIT_POSTER}/` && posterMember.facts.discussion === REDDIT_POST && /Looking for a service/.test(posterMember.facts.quote ?? "") && posterMember.evidence.some((item) => item.kind === "phone" && item.value === "+912025531234" && item.sourceUrl === PUNE_SMILES_SITE) && posterMember.channels.includes("whatsapp"),
     JSON.stringify({ fit: posterMember?.fit, source: posterMember?.sourceUrl, facts: posterMember?.facts, evidence: posterMember?.evidence, channels: posterMember?.channels }));
+  check("the research prepares no plan by itself", (await plans(thread.id)).length === 2, `${(await plans(thread.id)).length} plans`);
+  // Its target of 1 is reached: the request's last turn, in which the assistant prepares the plan of its match.
+  replies = [
+    reply("I'm writing the WhatsApp plan for the clinic whose website gives a number; it waits for your Start.", [{ tool: "prepare_outreach", args: {} }]),
+    reply("The WhatsApp plan is below. Nothing goes out before you press Start."),
+  ];
+  const [driver2] = await db.select().from(schema.assistantJobs).where(and(eq(schema.assistantJobs.kind, "objective"), sql`${schema.assistantJobs.payload} ->> 'objectiveId' = ${objective2!.id}`));
+  await step(driver2!.id);
+  const lastTurn2 = await continuationEnded(requestId2, 1);
   const runsAfter = await plans(thread.id);
   const plan3 = runsAfter.find((run) => run.plan.requestId === requestId2);
-  check("a WhatsApp plan was written for that one lead and waits for Start", runsAfter.length === 3 && plan3?.status === "proposed" && plan3.channels.join() === "whatsapp" && plan3.plan.assignments.length === 1, JSON.stringify(runsAfter.map((run) => ({ status: run.status, channels: run.channels, leads: run.plan.assignments.length }))));
-  const [driver2] = await db.select().from(schema.assistantJobs).where(and(eq(schema.assistantJobs.kind, "objective"), sql`${schema.assistantJobs.payload} ->> 'objectiveId' = ${objective2!.id}`));
+  check("in the request's last turn a WhatsApp plan was prepared for that one lead and waits for Start", lastTurn2 && (((await objectives.objectiveForRequest(requestId2))?.progress) as { continuation?: { final?: string } }).continuation?.final === "target_reached" && runsAfter.length === 3 && plan3?.status === "proposed" && plan3.channels.join() === "whatsapp" && plan3.plan.assignments.length === 1 && replies.length === 0,
+    JSON.stringify({ lastTurn: lastTurn2, unused: replies.length, runs: runsAfter.map((run) => ({ status: run.status, channels: run.channels, leads: run.plan.assignments.length })) }));
   await step(driver2!.id);
   const stopped2 = await objectives.objectiveForRequest(requestId2);
   const report2 = (await events(thread.id)).filter((row) => (row.toolResult as { objectiveId?: string; reportKey?: string } | null)?.objectiveId === objective2!.id && (row.toolResult as { reportKey?: string }).reportKey);

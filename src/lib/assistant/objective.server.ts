@@ -812,7 +812,8 @@ export async function postObjectiveReport(objectiveId: string): Promise<boolean>
     stillRunning: facts.openChildren,
     funnel: facts.funnel,
     atStop: (objective.progress as ObjectiveProgress).atStop ?? null,
-    targetNamed: objective.controls.brief ? objective.controls.brief.leadTarget !== null : true,
+    // The same reading of the target as the driver's: no owner number, no "N of 25 wanted".
+    targetNamed: requestLimits(objective).targetNamed,
   });
   return db.transaction(async (tx) => {
     const claimed = await tx.update(assistantObjectives).set({ reportedAt: new Date(), updatedAt: new Date() })
