@@ -16,7 +16,7 @@ import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { apifyReadiness, pollTrackedRun, startTrackedRun } from "@/lib/apify/apify.server";
 import { jobRequestId, objectiveSpendGuard } from "@/lib/assistant/objective.server";
 import { APIFY_ACTORS, APIFY_LIMITS, type ApifyActorKey } from "@/lib/apify/catalog";
-import { hashtagsFor, mentionsPlace, placesFromFacebookItems, placesFromLinkedinCompanyItems, placesFromMapsItems, postsFromHashtagItems, profilesFromItems, usernamesFromSearchItems, type InstagramPost } from "@/lib/apify/mapping";
+import { facebookSearchInput, hashtagsFor, linkedinCompanySearchInput, mentionsPlace, placesFromFacebookItems, placesFromLinkedinCompanyItems, placesFromMapsItems, postsFromHashtagItems, profilesFromItems, usernamesFromSearchItems, type InstagramPost } from "@/lib/apify/mapping";
 import { needSignal } from "./webDiscovery";
 import { cleanEmail, websiteDomain } from "./contacts";
 import { geocodePlace } from "./geocode.server";
@@ -182,15 +182,17 @@ export function discoveryAvailability(): { available: boolean; reason: string | 
     : { available: false, reason: "The Google Maps scraper is not set up on this server (GMAPS_SCRAPER_URL). Contact lists can still be uploaded." };
 }
 
-export function normalizeCriteria(input: { what?: unknown; where?: unknown; maxResults?: unknown; language?: unknown }, fallbackLanguage = "en"): DiscoveryCriteria | { error: string } {
+/** `maxResults`: the most one search may ask for (the built-in scraper's MAX_DISCOVERY_RESULTS; an Apify search, the owner's results per run). */
+export function normalizeCriteria(input: { what?: unknown; where?: unknown; maxResults?: unknown; language?: unknown }, fallbackLanguage = "en", maxResults = MAX_DISCOVERY_RESULTS): DiscoveryCriteria | { error: string } {
   const what = typeof input.what === "string" ? input.what.trim().slice(0, 200) : "";
   const where = typeof input.where === "string" ? input.where.trim().slice(0, 200) : "";
   if (!what) return { error: "Say what kind of businesses to look for." };
   if (!where) return { error: "Say where to look (a city, region or country)." };
+  const most = Math.max(5, maxResults);
   const requested = Number(input.maxResults ?? 50);
-  const maxResults = Number.isFinite(requested) ? Math.min(MAX_DISCOVERY_RESULTS, Math.max(5, Math.round(requested))) : 50;
+  const wanted = Number.isFinite(requested) ? Math.min(most, Math.max(5, Math.round(requested))) : Math.min(most, 50);
   const language = typeof input.language === "string" && /^[a-z]{2}$/i.test(input.language) ? input.language.toLowerCase() : fallbackLanguage;
-  return { what, where, maxResults, language };
+  return { what, where, maxResults: wanted, language };
 }
 
 export type StartedDiscovery = {
@@ -241,7 +243,7 @@ export async function startDiscovery(
   const notes: string[] = [];
   if (asked && apifyRuns) {
     provider = "apify";
-    providerReason = "the owner asked for Apify";
+    providerReason = "provider 'apify' was chosen for this search";
   } else if (scraper.available) {
     provider = "scraper";
     providerReason = "the built-in scraper is the normal Google Maps search";
@@ -301,7 +303,7 @@ async function startWebsiteFallback(
   requestMessageId: string | null = null,
   handedOffFrom: string | null = null,
 ): Promise<(Omit<StartedDiscovery, "note"> & { note: string }) | { unavailable: string }> {
-  const note = `Searching business websites and directories for “${criteria.what}” in ${criteria.where} instead of Google Maps listings: it covers businesses the web search finds, usually fewer than a Maps search.`;
+  const note = `Searching business websites and directories for “${criteria.what}”${criteria.where ? ` in ${criteria.where}` : ""} instead of Google Maps listings: it covers businesses the web search finds, usually fewer than a Maps search.`;
   if (handedOffFrom) {
     // A job's hand-off that runs again (its result could not be saved) finds the search it already started.
     const [earlier] = await db.select({ id: assistantJobs.id, audienceId: assistantJobs.audienceId, payload: assistantJobs.payload }).from(assistantJobs)
@@ -354,7 +356,7 @@ export async function startInstagramProspects(
   const criteria: DiscoveryCriteria = { what: input.what, where: input.where, maxResults: input.maxResults, language: input.language };
   const phrase = `#${hashtags.join(" #")}`;
   const audienceId = await createAudience({
-    name: `Instagram: ${input.what} — ${input.where}`,
+    name: `Instagram: ${input.what}${input.where ? ` — ${input.where}` : ""}`,
     source: "discovery",
     criteria: { ...criteria, source: "apify_instagram", phrase, hashtags },
     threadId: context.threadId,
@@ -399,12 +401,14 @@ export async function startSocialProspects(
   const readiness = await apifyReadiness(actor, input.maxResults);
   const waiting = !readiness.usable && Boolean(readiness.slotsFull);
   if (!readiness.usable && !waiting) {
-    throw new DiscoveryUnavailableError(`${label} search runs through Apify: ${apifyFallbackNote(readiness) ?? readiness.reason} Approve the ${APIFY_ACTORS[actor].label} in Settings → Providers & features → Apify to use it.`);
+    // The approval is the owner's step only when the Actor is not approved; a used budget or an unreadable account is said as it is.
+    const approve = /is not approved/.test(readiness.reason) ? ` Approve the ${APIFY_ACTORS[actor].label} in Settings → Providers & features → Apify to use it.` : "";
+    throw new DiscoveryUnavailableError(`${label} search runs through Apify: ${apifyFallbackNote(readiness) ?? readiness.reason}${approve}`);
   }
   const criteria: DiscoveryCriteria = { what: input.what, where: input.where, maxResults: input.maxResults, language: input.language };
-  const phrase = `${input.what} — ${input.where}`;
+  const phrase = input.where ? `${input.what} — ${input.where}` : input.what;
   const audienceId = await createAudience({
-    name: `${label}: ${input.what} — ${input.where}`,
+    name: `${label}: ${phrase}`,
     source: "discovery",
     criteria: { ...criteria, source: platform === "instagram" ? "apify_instagram" : SOCIAL[platform].source, phrase },
     threadId: context.threadId,
@@ -457,8 +461,8 @@ async function stageQueued(job: AssistantJob): Promise<StepOutcome> {
     const started = await startTrackedRun({
       actor: platform.actor,
       input: payload.target === "facebook"
-        ? (maxItems) => ({ categories: [payload.criteria.what], locations: [payload.criteria.where], resultsLimit: maxItems })
-        : (maxItems) => ({ searchQuery: payload.criteria.what, locations: [payload.criteria.where], scraperMode: "full", maxItems }),
+        ? (maxItems) => facebookSearchInput(payload.criteria, maxItems)
+        : (maxItems) => linkedinCompanySearchInput(payload.criteria, maxItems),
       wantedItems: payload.criteria.maxResults,
       jobId: job.id,
       requestId,
@@ -637,7 +641,7 @@ async function stageApify(job: AssistantJob): Promise<StepOutcome> {
   if (open.actor === "facebook_pages" || open.actor === "linkedin_companies") {
     const platform: SocialPlatform = open.actor === "facebook_pages" ? "facebook" : "linkedin";
     const found = platform === "facebook" ? placesFromFacebookItems(polled.items, country).places : placesFromLinkedinCompanyItems(polled.items, country).places;
-    if (!found.length) return doneWithNothing(job, [...notes, `Apify's ${SOCIAL[platform].label} search returned nothing for “${payload.criteria.what}” in ${payload.criteria.where}.`]);
+    if (!found.length) return doneWithNothing(job, [...notes, `Apify's ${SOCIAL[platform].label} search returned nothing for “${payload.criteria.what}”${payload.criteria.where ? ` in ${payload.criteria.where}` : ""}.`]);
     const kept = found.slice(0, payload.criteria.maxResults);
     const enriched: EnrichedPlace[] = kept.map((place) => ({
       ...place,
@@ -658,7 +662,7 @@ async function stageApify(job: AssistantJob): Promise<StepOutcome> {
 
   if (open.actor === "instagram_search") {
     const usernames = usernamesFromSearchItems(polled.items).slice(0, payload.criteria.maxResults);
-    if (!usernames.length) return doneWithNothing(job, [...notes, `Instagram's search found no accounts for “${payload.criteria.what} ${payload.criteria.where}”.`]);
+    if (!usernames.length) return doneWithNothing(job, [...notes, `Instagram's search found no accounts for “${`${payload.criteria.what} ${payload.criteria.where}`.trim()}”.`]);
     // No post matched these accounts: their profile is the evidence.
     const posts: InstagramPost[] = usernames.map((username) => ({ username, url: null, caption: null, timestamp: null, locationName: null, hashtag: null }));
     const profiles = await startTrackedRun({
@@ -796,7 +800,7 @@ function instagramPlaces(job: AssistantJob, posts: InstagramPost[], profiles: Ma
   });
   if (!places.length) return doneWithNothing(job, [...notes, "No Instagram accounts were found."]);
   const unknownPlace = places.filter((place) => !place.origin?.placeNamed).length;
-  if (unknownPlace) notes.push(`${unknownPlace} of ${places.length} accounts do not name ${payload.criteria.where} in the post or profile: their location is unknown (hashtags do not filter by place).`);
+  if (unknownPlace && payload.criteria.where) notes.push(`${unknownPlace} of ${places.length} accounts do not name ${payload.criteria.where} in the post or profile: their location is unknown (hashtags do not filter by place).`);
   return {
     next: "stage",
     stage: "enriching",
@@ -1000,11 +1004,13 @@ function instagramSignals(place: EnrichedPlace): LeadSignal[] {
 }
 
 function matchReasonOf(place: EnrichedPlace, payload: DiscoveryPayload): string {
-  if (place.listing) return `Found on ${SOCIAL[place.listing].label} for “${payload.criteria.what}” in ${payload.criteria.where} (through Apify). A page is a potential match, not interest.`;
-  if (place.origin && !place.origin.postUrl) return `Found by Instagram's account search for “${payload.criteria.what} ${payload.criteria.where}”; ${place.origin.placeNamed ? `the profile names ${payload.criteria.where}` : `its location is unknown`}. An account is a potential match, not interest.`;
+  // A search with no place says nothing about one.
+  const at = payload.criteria.where;
+  if (place.listing) return `Found on ${SOCIAL[place.listing].label} for “${payload.criteria.what}”${at ? ` in ${at}` : ""} (through Apify). A page is a potential match, not interest.`;
+  if (place.origin && !place.origin.postUrl) return `Found by Instagram's account search for “${`${payload.criteria.what} ${at}`.trim()}”${at ? `; ${place.origin.placeNamed ? `the profile names ${at}` : "its location is unknown"}` : ""}. An account is a potential match, not interest.`;
   if (!place.origin) return `Listed on Google Maps for “${payload.phrase}”${payload.provider === "apify" ? " (found through Apify)" : ""}.`;
-  const where = place.origin.placeNamed ? `names ${payload.criteria.where}` : `does not name ${payload.criteria.where} (location unknown)`;
-  return `Posted on Instagram under ${place.origin.hashtag ? `#${place.origin.hashtag}` : payload.phrase}${place.origin.postedAt ? ` on ${place.origin.postedAt.slice(0, 10)}` : ""}; the post or profile ${where}. A post is a potential match, not interest.`;
+  const where = !at ? null : place.origin.placeNamed ? `names ${at}` : `does not name ${at} (location unknown)`;
+  return `Posted on Instagram under ${place.origin.hashtag ? `#${place.origin.hashtag}` : payload.phrase}${place.origin.postedAt ? ` on ${place.origin.postedAt.slice(0, 10)}` : ""}${where ? `; the post or profile ${where}` : ""}. A post is a potential match, not interest.`;
 }
 
 async function savePlace(place: EnrichedPlace, payload: DiscoveryPayload): Promise<{ member: NewMember | null; outcome: "eligible" | "excluded" | "duplicate"; email: boolean; phone?: boolean; instagram?: boolean }> {

@@ -23,17 +23,18 @@ import { formatDuration, sourceLine, type ObjectiveControls, type SourceYield } 
  */
 
 /** Steps per turn; a turn ends early when the model waits for a search or the owner. */
-export const V2_MAX_STEPS = 12;
-export const V2_AUTONOMOUS_MAX_STEPS = 24;
+export const V2_MAX_STEPS = 24;
+export const V2_AUTONOMOUS_MAX_STEPS = 40;
 /** The conversation's share of the prompt, in characters. */
-export const V2_TRANSCRIPT_CHARS = 60_000;
+export const V2_TRANSCRIPT_CHARS = 160_000;
 /** Page reads kept whole; older ones are cut to their first lines. */
-const PAGE_READS_KEPT = 3;
+const PAGE_READS_KEPT = 6;
 const OLD_PAGE_CHARS = 400;
+/** How much of a page read (or a web search's results) the model sees, and of any other tool's result. */
+const PAGE_RESULT_CHARS = 12_000;
+const TOOL_RESULT_CHARS = 6_000;
 
 export const V2_TOOLS = new Set(["set_brief", "review_leads", "set_lead_fit", "finish_request"]);
-/** Tools v2 does not offer: review_leads shows the leads with their evidence. */
-export const V2_HIDDEN_TOOLS = new Set(["describe_audience"]);
 
 /** A search tool's arguments without the automatic follow-up plan: in v2 the model prepares outreach itself after review. */
 export function withoutContactAfter(argumentsText: string): string {
@@ -42,14 +43,14 @@ export function withoutContactAfter(argumentsText: string): string {
 
 function sourcesText(features: FeatureState): string {
   return [
-    "- find_leads: businesses with a Google Maps listing in one city or district (about 20 per area; several cities are several searches), then each business's own website for its emails and phones.",
+    `- find_leads: businesses with a Google Maps listing, then each business's own website for its emails and phones. The built-in scraper covers one city or district per search (about 20 per area; several cities are several searches)${features.apify_discovery ? "; with provider 'apify', one Apify run covers a city, a region or a whole country" : ""}.`,
     "- find_linkedin_leads: people on LinkedIn by role, kind of business and place, contacted on LinkedIn only (LinkedIn gives no email or phone). For an email request, read their company's site with read_webpage for an address, or use another source.",
-    "- web_search and read_webpage: search the web and read a page (a directory, a company's team page, a lead's own site). Use them to check a lead's place or kind when the judge could not, and to find decision makers.",
-    features.web_discovery ? "- find_customers_on_web: a web search for the businesses' own websites and directories in a place, then their published contacts." : null,
-    features.apify_discovery ? "- find_instagram_prospects (Instagram accounts posting under hashtags made from the kind and place) and find_social_leads (Facebook pages, LinkedIn companies or Instagram's own account search), through Apify. Searching Instagram does not need an Instagram account linked; sending DMs does." : null,
+    "- web_search, read_webpage and the browser_* tools: search the web, read any public page, and work pages that need clicks or typing (directories, member and exhibitor lists, company team pages, a lead's own site). Use them for anything the request needs: finding leads yourself (save the people and businesses a page publishes with add_contacts), choosing a niche or place, checking a lead's place or kind, and finding decision makers and their published contacts.",
+    features.web_discovery ? "- find_customers_on_web: a background web search (your own queries, or ones built from the kind and an optional place) for businesses' own websites and directories, then the contacts they publish." : null,
+    features.apify_discovery ? "- find_instagram_prospects (Instagram accounts posting under hashtags you choose, plus ones made from the kind and place) and find_social_leads (Facebook pages, LinkedIn companies or Instagram's own account search, by keyword in a city, region or country, or with no place at all), through Apify. Searching Instagram does not need an Instagram account linked; sending DMs does." : null,
     features.brightdata ? "- research_social_sources: Reddit, X, Instagram and Facebook through Bright Data: people by what they post (need), or the customers' own pages and profiles (leave need out). Someone is contactable only through what their profile, page or its website publishes." : null,
-    features.treg ? "- treg_search / treg_call: lookups (a person's work email, checks) for a handful of named leads." : null,
-    "- add_contacts / add_instagram_contacts / use_existing_leads: people the owner gave you, or already saved.",
+    features.treg ? "- treg_search / treg_call: lookups (a person's work email, a phone, email checks, enrichment) for any lead that needs them." : null,
+    "- add_contacts / add_instagram_contacts: save as leads the people and businesses the owner gave you, or that a page you read, a web_search result or a Treg answer publishes (they count toward the request and are judged like any lead). use_existing_leads: people already saved.",
   ].filter(Boolean).join("\n");
 }
 
@@ -68,9 +69,9 @@ export function systemPromptV2(input: { features: FeatureState; catalog: string;
     'Answer with this JSON object only: {"message":"...","actions":[{"tool":"NAME","arguments":"{...}"}],"suggestions":[]}. actions is an array (empty when you wait for the owner or for a search); each arguments value is a JSON object written as a string.',
     "",
     "HOW TO WORK",
-    "1. Understand the request. Read every owner message about it (an answer to your question is part of the request) and the BUSINESS PROFILE: what they sell and, often, to whom. When the owner leaves the kind of customer or the place to you (\"any niche\", \"anywhere\", \"you find\"), choosing them is your research: find out who needs the offer most and can be reached (web_search, read pages), pick, and tell the owner why in a sentence; the profile's customers are a starting point, not the answer. Ask one short question and wait only when you need something the owner did not leave to you and you cannot find out. Never ask what the brief already settles: whether to keep looking toward its lead target, or whether to prepare the plan it says to contact; a question stops the request until the owner answers.",
+    "1. Understand the request. Read every owner message about it (an answer to your question is part of the request) and the BUSINESS PROFILE: what they sell and, often, to whom. When the owner leaves the kind of customer or the place to you (\"any niche\", \"anywhere\", \"you find\"), choosing them is your research: find out who needs the offer most and can be reached (with any tool: web_search, pages, social research, the browser), pick, and tell the owner why in a sentence; the profile's customers are a starting point, not the answer. Ask one short question and wait only when you need something the owner did not leave to you and you cannot find out. Never ask what the brief already settles: whether to keep looking toward its lead target, or whether to prepare the plan it says to contact; a question stops the request until the owner answers.",
     "2. Write the brief with set_brief when you take on a request, and again whenever the owner changes it. Put in what the owner said: their number of leads, the channels they named (\"DM them on Instagram\" is instagram only), their budget (\"free tools only\" is 0), their time limit; null where they said nothing. done says what finished means (\"both tests run, 5 results each\"; \"10 Miami salons found and a DM plan ready\"). For a new, different request, call set_brief with newRequest true; when the owner follows up on one that has ended (\"outreach them all\"), call it without newRequest: the new request continues it, with the leads it found.",
-    "3. Find leads with the sources that fit (SOURCES), in the place and of the kind the owner named: a neighbouring city, a suburb or the wider area is another place, searched only when the owner allows it (ask when their place yields too few). When the owner names no place, the place is open: search wherever such leads are, choosing the places yourself; the profile's places do not limit it. Choose the sources yourself: any in SOURCES that could find such leads, as many as help; when the owner names a source, use it. Searches run in the background: start them, tell the owner in a sentence, and return no actions; you are woken when they finish. Never repeat a search PROGRESS lists, even worded differently; try another source, place or query instead.",
+    "3. Find leads with the sources that fit (SOURCES), in the place and of the kind the owner named: a neighbouring city, a suburb or the wider area is another place, searched only when the owner allows it (ask when their place yields too few). When the owner names no place, the place is open: search wherever such leads are, choosing the places yourself; the profile's places do not limit it. Choose the tools yourself: any tool in TOOLS that could find or check such leads, as many as help (SOURCES lists the main ones; the browser tools work search forms, filters and \"load more\" pages); when the owner names a source, use it. Searches run in the background: start them, tell the owner in a sentence, and return no actions; you are woken when they finish. Do not run the same search again (PROGRESS lists those that ran); a narrower, broader or differently worded query, another place, platform or source is a new search when it can find new leads.",
     "4. Check the leads. review_leads shows each lead with its evidence and the judge's verdict. The verdict is advice, not a rule: the judge can be wrong (a salon whose own website gives a Miami address marked unconfirmed; a hair-product brand marked a salon). Read the page when needed and decide yourself; set_lead_fit records your verdict.",
     "5. When the owner asks to contact them, prepare_outreach puts them into one plan on the brief's channels: by default the leads judged a match; when the owner says all of them, pass leads all; when you have chosen who fits, pass their personIds. Prepare it once you have enough; do not wait for every source.",
     "6. Finish. When the brief's done condition is met, or nothing more fits within its limits, call finish_request with one sentence on what was done; the owner gets the final report. Never keep searching past what the owner asked for. A turn in which you start no search, prepare no plan, ask nothing and do not finish ends the request as \"nothing more to try\": so before you stop, prepare the plan from the leads that match (when the brief says contact) or finish the request.",
@@ -149,7 +150,7 @@ export function transcriptV2(messages: readonly TranscriptMessage[], maxChars = 
     const summary = typeof message.toolResult?.summary === "string" ? message.toolResult.summary : message.content;
     const args = message.toolInput && Object.keys(message.toolInput).length ? JSON.stringify(message.toolInput).slice(0, 300) : "";
     const page = PAGE_STATE_TOOLS.has(message.tool ?? "") || message.tool === "web_search";
-    const limit = page ? (keepWhole.has(index) || message.tool === "web_search" ? 6_000 : OLD_PAGE_CHARS) : 2_500;
+    const limit = page ? (keepWhole.has(index) || message.tool === "web_search" ? PAGE_RESULT_CHARS : OLD_PAGE_CHARS) : TOOL_RESULT_CHARS;
     const body = summary.length > limit ? `${summary.slice(0, limit)}… (cut)` : summary;
     return { owner: false, text: `TOOL ${message.tool}(${args}) → ${message.status ?? "?"}: ${body}` };
   });

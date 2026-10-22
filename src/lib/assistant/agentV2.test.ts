@@ -9,12 +9,27 @@ const row = (role: TranscriptMessage["role"], content: string, tool: string | nu
 describe("what the model reads", () => {
   test("the owner's request survives many page reads (v1 lost it after four)", () => {
     const page = (n: number) => row("tool", `Read https://site${n}.example/ — ${"page text ".repeat(500)}`, "read_webpage");
-    const messages = [row("user", "Find 10 wedding photographers in Austin and email them"), row("assistant", "Searching the web."), page(1), page(2), page(3), page(4), page(5), page(6)];
+    const messages = [row("user", "Find 10 wedding photographers in Austin and email them"), row("assistant", "Searching the web."), ...Array.from({ length: 8 }, (_, index) => page(index + 1))];
     expect(transcriptText(messages)).not.toContain("Find 10 wedding photographers");
     const v2 = transcriptV2(messages);
     expect(v2).toContain("OWNER: Find 10 wedding photographers in Austin and email them");
-    // The newest three pages whole, older ones cut.
-    expect(v2.match(/… \(cut\)/g)?.length).toBe(3);
+    // The newest six pages whole, older ones cut.
+    expect(v2.match(/… \(cut\)/g)?.length).toBe(2);
+    expect(v2).toContain(page(8).content);
+  });
+
+  test("a long tool result keeps more than a screen: review_leads and Treg answers are not cut to a few lines", () => {
+    const review = row("tool", `Leads: ${"lead line with its evidence ".repeat(200)}`, "review_leads");
+    const text = transcriptV2([row("user", "review them"), review]);
+    expect(text).toContain("lead line with its evidence ".repeat(150).trim());
+  });
+
+  test("with Apify on, Google Maps through Apify covers a region or a country", () => {
+    const withApify = systemPromptV2({ features: { ...defaultFeatureState(), apify_discovery: true }, catalog: "", autonomy: null });
+    expect(withApify).toContain("with provider 'apify', one Apify run covers a city, a region or a whole country");
+    expect(withApify).toContain("hashtags you choose");
+    expect(withApify).toContain("or with no place at all");
+    expect(systemPromptV2({ features: defaultFeatureState(), catalog: "", autonomy: null })).not.toContain("with provider 'apify'");
   });
 
   test("over budget, old lines go before owner messages", () => {
@@ -72,8 +87,15 @@ describe("the harness keeps only what protects", () => {
     // The owner's place holds outside Autonomous mode too.
     expect(prompt).toContain("a neighbouring city, a suburb or the wider area is another place");
     expect(prompt).toContain("Never ask what the brief already settles");
-    // The model chooses its sources; none is reserved for one kind of request. The spend cap is the server's.
-    expect(prompt).toContain("Choose the sources yourself");
+    // The model chooses its tools (the browser too); none is reserved for one kind of request. The spend cap is the server's.
+    expect(prompt).toContain("Choose the tools yourself: any tool in TOOLS");
+    expect(prompt).toContain("the browser_* tools");
+    // The same search is not run twice; a different query, place, platform or source is a new search.
+    expect(prompt).not.toContain("even worded differently");
+    expect(prompt).toContain("a narrower, broader or differently worded query");
+    // Found contacts are leads too, and the web tools find leads, not only check them.
+    expect(prompt).toContain("save the people and businesses a page publishes with add_contacts");
+    expect(prompt).not.toContain("for a handful of named leads");
     expect(prompt).not.toContain("does not find these leads");
     expect(prompt).toContain("never ask to raise it");
     // An open niche or place is the model's research, not the profile's.
@@ -83,6 +105,23 @@ describe("the harness keeps only what protects", () => {
     const autonomous = systemPromptV2({ features: defaultFeatureState(), catalog: "", autonomy: { runsPerDay: 2, leadsPerDay: 50, searchesPerDay: 10 } });
     expect(autonomous).toContain("AUTONOMOUS MODE IS ON");
     expect(autonomous).toContain("Widen nothing the owner named");
+  });
+});
+
+describe("the tools as v2 reads them", () => {
+  test("every tool its features allow is offered (describe_audience too), described by what it does, not steered away from", async () => {
+    const { toolCatalog } = await import("./tools.server");
+    const catalog = toolCatalog({ ...defaultFeatureState(), research_agent_v2: true, brightdata: true, apify_discovery: true, web_discovery: true });
+    expect(catalog).toContain("- describe_audience:");
+    expect(catalog).not.toContain("stop when a few searches find nothing new");
+    expect(catalog).not.toContain("other networks are not supported");
+    expect(catalog).not.toContain("hashtags the owner named");
+    expect(catalog).not.toContain("is used only when the owner asks for Apify");
+    expect(catalog).toContain("urls (optional array of up to 50");
+    expect(catalog).toContain("one browser per chat");
+    // The price comes after what research_social_sources does.
+    const social = catalog.split("\n").find((line) => line.startsWith("- research_social_sources:")) ?? "";
+    expect(social.indexOf("Metered from the owner's Bright Data account")).toBeGreaterThan(social.indexOf("Every finding keeps its link"));
   });
 });
 

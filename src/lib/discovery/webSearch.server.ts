@@ -14,7 +14,7 @@ import type { ResearchSource } from "@/lib/research/schema";
 import { TAVILY_LIMITS, tavilySources } from "@/lib/tavily/catalog";
 import { tavilyConnection } from "@/lib/tavily/tavily.server";
 import { tavilySearch, TavilyError } from "@/services/tavily";
-import { searchWithTinyfish, tinyfishConnection } from "@/lib/tinyfish/tinyfish.server";
+import { searchWithTinyfish, tinyfishConnection, TinyfishWaitError } from "@/lib/tinyfish/tinyfish.server";
 import { tavilyCapProblem } from "@/lib/tavily/catalog";
 import { tavilySearchesToday } from "@/lib/tavily/tavily.server";
 import { reserveQuota, settleQuota } from "@/lib/quota/quota.server";
@@ -282,9 +282,21 @@ export async function generalSearchRoute(): Promise<GeneralSearchRoute> {
 
 export type GeneralSearchInput = { query: string; country?: string | null; page?: number | null; purpose?: string | null };
 
-/** One search for the assistant; throws TinyfishWaitError while TinyFish asks to wait, and a plain Error with the reason otherwise. */
-export async function generalWebSearch(input: GeneralSearchInput, context: { threadId?: string | null; requestId?: string | null; freeOnly?: boolean } = {}): Promise<{ provider: "tinyfish" | "tavily"; hits: (ResearchSource & { site?: string | null; date?: string | null })[] }> {
-  const route = await generalSearchRoute();
+/** The longest TinyFish wait (a per-minute limit) the assistant's search sits out rather than going elsewhere. */
+const SHORT_TINYFISH_WAIT_MS = 60_000;
+
+/**
+ * One search for the assistant. A short TinyFish wait (a per-minute limit)
+ * is waited out once; a longer one (its free day used up) goes to Tavily
+ * when a Tavily key is saved and the request may pay, under Tavily's own
+ * daily cap. Throws TinyfishWaitError when nothing else can search, and a
+ * plain Error with the reason otherwise.
+ */
+export async function generalWebSearch(
+  input: GeneralSearchInput,
+  context: { threadId?: string | null; requestId?: string | null; freeOnly?: boolean; sleep?: (ms: number) => Promise<void> } = {},
+): Promise<{ provider: "tinyfish" | "tavily"; hits: (ResearchSource & { site?: string | null; date?: string | null })[] }> {
+  let route = await generalSearchRoute();
   if (route.provider === null) throw new WebSearchUnavailableError(route.reason);
   // A request limited to free sources ($0 spend cap) never uses Tavily's paid credits.
   if (route.provider === "tavily" && context.freeOnly) {
@@ -292,16 +304,35 @@ export async function generalWebSearch(input: GeneralSearchInput, context: { thr
   }
   const query = input.query.replace(/\s+/g, " ").trim().slice(0, MAX_QUERY_LENGTH);
   if (route.provider === "tinyfish") {
-    const hits = await searchWithTinyfish({ query, location: input.country ?? null, page: input.page ?? null, purpose: input.purpose ?? null }, { threadId: context.threadId ?? null, ...(context.requestId ? { detail: { requestId: context.requestId } } : {}) });
-    return { provider: "tinyfish", hits };
+    const search = () => searchWithTinyfish({ query, location: input.country ?? null, page: input.page ?? null, purpose: input.purpose ?? null }, { threadId: context.threadId ?? null, ...(context.requestId ? { detail: { requestId: context.requestId } } : {}) });
+    const sleep = context.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    try {
+      return { provider: "tinyfish", hits: await search() };
+    } catch (error) {
+      if (!(error instanceof TinyfishWaitError)) throw error;
+      let waiting = error;
+      const waitMs = waiting.until.getTime() - Date.now();
+      if (waitMs <= SHORT_TINYFISH_WAIT_MS) {
+        await sleep(Math.max(0, waitMs) + 250);
+        try {
+          return { provider: "tinyfish", hits: await search() };
+        } catch (again) {
+          if (!(again instanceof TinyfishWaitError)) throw again;
+          waiting = again;
+        }
+      }
+      const tavily = context.freeOnly ? null : await tavilyConnection();
+      if (!tavily) throw waiting;
+      route = { provider: "tavily", key: tavily.key, dailySearches: tavily.dailySearches };
+    }
   }
   const problem = tavilyCapProblem(await tavilySearchesToday(), 1, route.dailySearches);
   if (problem) throw new WebSearchUnavailableError(`Tavily: ${problem}`);
   const reservation = await reserveQuota({ provider: "tavily", product: "search", scopeKey: null, units: 1, limits: {}, label: "Tavily", threadId: context.threadId ?? null, detail: { query: query.slice(0, 200), ...(context.requestId ? { requestId: context.requestId } : {}) } });
   if (!reservation.ok) throw new WebSearchUnavailableError(reservation.reason);
   try {
-    const body = await tavilySearch(route.key, query, 10);
-    const hits = tavilySources(body, 10);
+    const body = await tavilySearch(route.key, query, TAVILY_LIMITS.resultsPerSearch);
+    const hits = tavilySources(body, TAVILY_LIMITS.resultsPerSearch);
     await settleQuota(reservation.usageId, { status: "settled", usedUnits: 1, detail: { results: hits.length } });
     return { provider: "tavily", hits };
   } catch (error) {

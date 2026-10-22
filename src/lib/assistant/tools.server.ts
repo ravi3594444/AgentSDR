@@ -5,18 +5,23 @@ import { db } from "@/lib/db";
 import { getByokSettings } from "@/lib/ai/byok";
 import { getAiConnection } from "@/lib/ai/connections";
 import { retrieveKnowledge } from "@/lib/crm/knowledge";
-import { discoveryAvailability, DiscoveryUnavailableError, normalizeCriteria, sourceLabel, startDiscovery, startInstagramProspects, startSocialProspects } from "@/lib/discovery/discovery.server";
+import { discoveryAvailability, DiscoveryUnavailableError, MAX_DISCOVERY_RESULTS, normalizeCriteria, sourceLabel, startDiscovery, startInstagramProspects, startSocialProspects } from "@/lib/discovery/discovery.server";
+import { apifySettingsView } from "@/lib/apify/apify.server";
+import { APIFY_LIMITS } from "@/lib/apify/catalog";
+import { MAX_HASHTAGS } from "@/lib/apify/mapping";
 import { coverageLine } from "./coverage";
 import { requestCoverageFor } from "./coverage.server";
 import { searchAreaProblem } from "@/lib/discovery/geocode";
 import { extractContacts, publicLinks, visibleText } from "@/lib/discovery/contacts";
 import { assertPublicPageUrl, fetchPublicPage, LOGIN_WALLED_HOST, PageRedirectRefusedError } from "@/lib/discovery/websiteContacts.server";
-import { normalizeWebCriteria, startWebDiscovery, WebDiscoveryLimitError, WebDiscoveryUnavailableError } from "@/lib/discovery/webDiscovery.server";
-import { normalizeSocialCriteria, SocialResearchUnavailableError, startSocialResearch, urlFinderName } from "@/lib/discovery/socialResearch.server";
+import { MAX_WEB_SITES, normalizeWebCriteria, startWebDiscovery, WebDiscoveryLimitError, WebDiscoveryUnavailableError } from "@/lib/discovery/webDiscovery.server";
+import { MAX_SEARCH_QUERIES } from "@/lib/discovery/webDiscovery";
+import { SocialResearchUnavailableError, startSocialResearch, urlFinderName } from "@/lib/discovery/socialResearch.server";
+import { givenUrlsFor, MAX_SOCIAL_KEYWORDS, MAX_SOCIAL_URLS, MAX_SUBREDDITS, normalizeSocialCriteria, REDDIT_PERIODS } from "@/lib/discovery/socialResearch";
 import { brightdataSettingsView } from "@/lib/brightdata/brightdata.server";
-import { BRIGHTDATA_LIMITS, PLATFORM_NAMES } from "@/lib/brightdata/catalog";
+import { PLATFORM_NAMES } from "@/lib/brightdata/catalog";
 import { generalWebSearch, webSearchAvailability, webSearchAvailabilityFrom, webSearchProviderName, WebSearchUnavailableError } from "@/lib/discovery/webSearch.server";
-import { fetchFailureText } from "@/lib/tinyfish/catalog";
+import { fetchFailureText, TINYFISH_LIMITS } from "@/lib/tinyfish/catalog";
 import { fetchWithTinyfish, tinyfishConnection, TinyfishWaitError } from "@/lib/tinyfish/tinyfish.server";
 import { browserAct, BrowserUnavailableError, closeBrowser, openBrowser, type BrowserAction } from "@/lib/browser/browser.server";
 import { BROWSER_LIMITS, formatSnapshot, type PageSnapshot } from "@/lib/browser/snapshot";
@@ -181,7 +186,14 @@ function pageTitle(html: string): string {
   return end < 0 ? "" : html.slice(start + 1, end);
 }
 
-const MAX_CHAT_CONTACTS = 50;
+const MAX_CHAT_CONTACTS = 200;
+/** A page read's text the model reads (the whole page is still searched for contacts), and the links it lists. */
+const PAGE_TEXT_CHARS = 12_000;
+const PAGE_LINKS = 100;
+/** Emails and phones kept from one page. */
+const PAGE_CONTACTS = 200;
+/** What browser_fill may type. */
+const MAX_FILL_CHARS = 2_000;
 /** Sites that need a login and forbid automated reading (the direct reader will not follow a redirect to one either). */
 const LOGIN_WALLED = LOGIN_WALLED_HOST;
 
@@ -303,6 +315,23 @@ function webDiscoveryProgress(job: typeof assistantJobs.$inferSelect): string {
   return `Searching the web (${progress.searchesDone ?? 0} of ${progress.searches ?? "?"} searches done)…`;
 }
 
+/** What a social research job (Bright Data) is doing, for lead_search_status. */
+function socialResearchProgress(job: typeof assistantJobs.$inferSelect): string {
+  const progress = job.progress as { found?: number; credits?: number; sources?: { platform: string; state: string; found?: number }[]; waiting?: { reason?: string } };
+  const result = (job.result ?? {}) as { found?: number; eligible?: number; note?: string | null };
+  const sources = (progress.sources ?? []).map((source) => `${PLATFORM_NAMES[source.platform as keyof typeof PLATFORM_NAMES] ?? source.platform} ${source.state.replace(/_/g, " ")}${source.found ? ` (${source.found})` : ""}`).join(", ");
+  if (job.status === "failed") return `The social research failed: ${job.error ?? "unknown error"}`;
+  if (job.status === "succeeded") return `Finished: ${result.found ?? 0} found, ${result.eligible ?? 0} can be contacted.${result.note ? ` ${result.note}` : ""}`;
+  const waiting = progress.waiting?.reason ? ` Waiting: ${progress.waiting.reason}.` : "";
+  return `Social research (Bright Data), ${job.stage}: ${progress.found ?? 0} findings so far${sources ? `; ${sources}` : ""}.${waiting}`;
+}
+
+/** A find_instagram_prospects or find_social_leads maxResults: at least 5, and no more than one Apify run can return (the owner's results per run bounds each run further). */
+function apifyResults(value: unknown): number {
+  const requested = Number(value ?? 30);
+  return Number.isFinite(requested) ? Math.min(APIFY_LIMITS.maxResultsPerRun.max, Math.max(5, Math.round(requested))) : 30;
+}
+
 /** Where a browser navigation ended: a public website without a login wall, or why not. */
 async function browserNavigationProblem(raw: string): Promise<string | null> {
   let url: URL;
@@ -398,28 +427,28 @@ async function redirectRefusal(requested: URL, finalUrl: string): Promise<ToolRe
     return null;
   }
   if (isRedditHost(host)) return { ok: false, summary: `${requested.toString()} leads to ${host}. ${redditRefusal(await redditApprovalRecorded())}` };
-  if (LOGIN_WALLED.test(host)) return { ok: false, summary: `${requested.toString()} leads to ${host}, which needs a login and does not allow automated reading, so it cannot be opened. LinkedIn people can be found with find_linkedin_leads; other networks are not supported.` };
+  if (LOGIN_WALLED.test(host)) return { ok: false, summary: `${requested.toString()} leads to ${host}, which needs a login and does not allow automated reading, so it cannot be opened here. ${SOCIAL_TOOLS_NOTE}` };
   return null;
 }
 
+/** Where the networks read_webpage and the browser cannot open are searched instead. */
+const SOCIAL_TOOLS_NOTE = "LinkedIn people are found with find_linkedin_leads; Instagram, Facebook and X accounts with find_instagram_prospects, find_social_leads or research_social_sources when those are on.";
+
 /**
- * A page read for the model: text, contacts and the links it may follow
- * next. A page on a discussion site (Hacker News, Stack Exchange) carries
- * its evidence rule instead of contacts: its authors are pseudonymous and
- * are not leads.
+ * A page read for the model: text, contacts and the links on it (social
+ * profiles included: the social tools read those). A page on a discussion
+ * site (Hacker News, Stack Exchange) carries its evidence rule instead of
+ * contacts: its authors are pseudonymous and are not leads.
  */
 function pageResult(page: { url: string; title: string; body: string; contacts: { kind: string; value: string }[]; links: string[]; via: string; evidence?: ResearchEvidence[] }): ToolResult {
   const title = page.title.slice(0, 200);
   const host = new URL(page.url).hostname.replace(/^www\./, "");
-  const links = page.links.filter((link) => {
-    const linkHost = new URL(link).hostname;
-    return !LOGIN_WALLED.test(linkHost) && !isRedditHost(linkHost);
-  }).slice(0, 40);
+  const links = page.links.slice(0, PAGE_LINKS);
   const note = discussionNote(new URL(page.url).hostname);
   const contacts = note ? [] : page.contacts;
   return {
     ok: true,
-    summary: `Read ${page.url}${title ? ` “${title}”` : ""} via ${page.via} (${page.body.length.toLocaleString("en-US")} characters).${note ? ` ${note}` : ""} Contacts on the page: ${contacts.map((contact) => `${contact.kind} ${contact.value}`).join(", ") || "none"}. Links on the page: ${links.join(" ") || "none"}. Text: ${page.body.slice(0, 6_000)}`,
+    summary: `Read ${page.url}${title ? ` “${title}”` : ""} via ${page.via} (${page.body.length.toLocaleString("en-US")} characters).${note ? ` ${note}` : ""} Contacts on the page: ${contacts.map((contact) => `${contact.kind} ${contact.value}`).join(", ") || "none"}. Links on the page: ${links.join(" ") || "none"}. Text: ${page.body.slice(0, PAGE_TEXT_CHARS)}`,
     display: note
       ? `${host}${title ? ` · ${title}` : ""} · evidence of a stated need or problem; authors are pseudonymous, not leads`
       : `${host}${title ? ` · ${title}` : ""} · ${contacts.length} contact${contacts.length === 1 ? "" : "s"} found`,
@@ -566,23 +595,26 @@ export const TOOLS: Record<string, Tool> = {
   },
 
   find_leads: {
-    description: "Search public Google Maps business listings for leads matching the owner's target customers, then read each business's own website for published contact details. Takes a few minutes and runs in the background; the chat shows its progress and announces the result. It runs on the built-in Google Maps scraper (no cost per search). Apify's Google Maps Actor (paid from the owner's Apify account) is used only when the owner asks for Apify (provider 'apify'), or as the fallback the organization approved when the built-in scraper is not set up or fails; with neither, website search takes it when that is on. The result names the source and provider, and the reason. Google Maps is one source however many cities or providers search it. Only businesses with a public listing are found.",
-    arguments: "what (kind of business, e.g. 'dental clinics'), where (city/region/country), maxResults (5-200, default 50), language (two letters, optional), provider (optional: 'apify' for Apify's Google Maps Actor, approved in Settings and paid, e.g. when the built-in scraper is not set up, failed or found too few), contactAfter (true only when the owner asked to contact, email or message the leads found: the outreach plan is then prepared automatically when the search finishes), channels (optional, with contactAfter: array of email|whatsapp|linkedin|instagram, only when the owner's own words named how to contact them; otherwise leave it out and each lead gets its best ready route)",
+    description: "Search public Google Maps business listings for leads matching the owner's target customers, then read each business's own website for published contact details. Takes a few minutes and runs in the background; the chat shows its progress and announces the result. It runs on the built-in Google Maps scraper (no cost per search). With provider 'apify' it runs on Apify's Google Maps Actor instead (the owner's Apify account, within their Apify budget): one run covers a city, a region or a whole country. Apify also takes the search when the built-in scraper is not set up or fails and Apify can run it; with neither, website search takes it when that is on. The result names the source and provider, and the reason. Google Maps is one source however many cities or providers search it. Only businesses with a public listing are found.",
+    arguments: `what (kind of business, e.g. 'dental clinics'), where (a city or district; with provider 'apify' also a region or a whole country), maxResults (default 50; the built-in scraper returns about 20 per area, up to 9 areas, at most ${MAX_DISCOVERY_RESULTS}; with provider 'apify', up to the owner's Apify results per run), language (two letters, optional), provider (optional: 'apify' for Apify's Google Maps Actor; leave it out for the built-in scraper), contactAfter (true only when the owner asked to contact, email or message the leads found: the outreach plan is then prepared automatically when the search finishes), channels (optional, with contactAfter: array of email|whatsapp|linkedin|instagram, only when the owner's own words named how to contact them; otherwise leave it out and each lead gets its best ready route)`,
     run: async (args, context) => {
+      if (args.provider !== undefined && args.provider !== null && args.provider !== "apify") throw new ToolArgumentError("provider may only be 'apify'; leave it out for the built-in scraper");
+      const apify = args.provider === "apify";
       const profile = await getBusinessProfile();
-      const criteria = normalizeCriteria(args, profile.language ?? "en");
+      // An Apify run is bounded by the owner's results per run; the built-in scraper by its own areas.
+      const criteria = normalizeCriteria(args, profile.language ?? "en", apify ? (await apifySettingsView()).maxResultsPerRun : MAX_DISCOVERY_RESULTS);
       if ("error" in criteria) throw new ToolArgumentError(criteria.error);
       if (args.contactAfter !== undefined && typeof args.contactAfter !== "boolean") throw new ToolArgumentError("contactAfter must be true or false");
       const request = args.contactAfter === true ? requireOutreachRequest(context) : null;
-      const area = await checkSearchArea(criteria.where, criteria.language);
+      // Apify's Google Maps Actor takes a city, a region or a whole country itself; the area check is the built-in scraper's (it samples a few areas of a geocoded place).
+      const area = apify ? null : await checkSearchArea(criteria.where, criteria.language);
       if (area?.refused) throw new ToolArgumentError(area.problem);
       if (area) return { ok: false, summary: area.problem };
-      if (args.provider !== undefined && args.provider !== null && args.provider !== "apify") throw new ToolArgumentError("provider may only be 'apify'; leave it out for the built-in scraper");
       const contactAfter = request ? { channels: channels(args) ?? null, ownerRequest: request, requestId: searchRequestId(context) ?? undefined } : null;
       const objective = await searchObjective(context);
       if (objective.problem) return objectiveRefusal(objective.problem);
       try {
-        const started = await startDiscovery(criteria, context, { contactAfter, provider: args.provider === "apify" ? "apify" : null, requestMessageId: searchRequestId(context) });
+        const started = await startDiscovery(criteria, context, { contactAfter, provider: apify ? "apify" : null, requestMessageId: searchRequestId(context) });
         const source = started.provider === "website" ? "business websites and directories (no Google Maps search is available)" : sourceLabel("maps", started.provider);
         return withControls({
           ok: true,
@@ -599,20 +631,18 @@ export const TOOLS: Record<string, Tool> = {
 
   find_instagram_prospects: {
     available: (features) => features.apify_discovery,
-    description: "Find Instagram accounts that post about the owner's kind of customers in a place, through Apify (the organization's approved Instagram Actors, within its budget; paid from the owner's Apify account): public posts under hashtags made from the customer type and place (plus any the owner names), then the accounts' public profiles and the websites they list, for emails and phones they publish. Instagram profiles can receive one initial DM through a connected Unipile Instagram account after the outreach plan is approved, within Instagram sending rules; recipient restrictions may still prevent delivery. Published emails and phones remain alternative channels. Hashtags do not filter by place: accounts whose post or profile does not name the place are marked location unknown. Without Apify available, website search takes the request when it is on (same request), else it says nothing was searched. Runs in the background and announces the result.",
-    arguments: "what (kind of customer or business, e.g. 'home bakers'), where (city/area), hashtags (optional array of hashtags the owner named), maxResults (5-100 accounts, default 30), contactAfter (true only when the owner asked to contact the people found: the plan uses Instagram when connected, or the requested supported contact channels), channels (optional, with contactAfter: array of instagram|email|whatsapp|linkedin, only when the owner's own words named how to contact them; otherwise leave it out and each lead gets its best ready route)",
+    description: "Find Instagram accounts by the hashtags they post under, through Apify (the owner's Apify account, within its budget): public posts under the hashtags you give, plus ones made from the customer type and place (when given), then the accounts' public profiles and the websites they list, for emails and phones they publish. Instagram profiles can receive one initial DM through a connected Unipile Instagram account after the outreach plan is approved, within Instagram sending rules; recipient restrictions may still prevent delivery. Published emails and phones remain alternative channels. Hashtags do not filter by place: with a place, accounts whose post or profile does not name it are marked location unknown. Without Apify available, website search takes the request when it is on (same request), else it says nothing was searched. Runs in the background and announces the result.",
+    arguments: `what (kind of customer or business, e.g. 'home bakers'), where (optional: a city, area or country; hashtags made from it are added, and an account whose post or profile names it is marked so), hashtags (optional array of up to ${MAX_HASHTAGS} hashtags to search, without #: your own choice or the owner's), maxResults (accounts, default 30; each Apify run is bounded by the owner's results-per-run setting), contactAfter (true only when the owner asked to contact the people found: the plan uses Instagram when connected, or the requested supported contact channels), channels (optional, with contactAfter: array of instagram|email|whatsapp|linkedin, only when the owner's own words named how to contact them; otherwise leave it out and each lead gets its best ready route)`,
     run: async (args, context) => {
       if (!(await featureEnabled("apify_discovery"))) return { ok: false, summary: new FeatureDisabledError("apify_discovery").message };
       const profile = await getBusinessProfile();
-      // v2: the model names who and where (an open niche or place is its research); the profile fills them only for the older agent.
+      // v2: the model names who and where (an open niche or place is its research; no place searches by hashtag alone); the profile fills them only for the older agent.
       const what = text(args, "what") ?? (context.v2 ? null : profile.targetCustomers?.trim() ?? null);
-      const where = text(args, "where") ?? (context.v2 ? null : profile.locations?.trim() ?? null);
+      const where = (text(args, "where") ?? (context.v2 ? null : profile.locations?.trim() ?? null))?.trim() ?? "";
       if (!what) throw new ToolArgumentError("say what kind of accounts to look for");
-      if (!where) throw new ToolArgumentError("say which place (a city or area)");
       if (args.contactAfter !== undefined && typeof args.contactAfter !== "boolean") throw new ToolArgumentError("contactAfter must be true or false");
-      const hashtags = Array.isArray(args.hashtags) ? args.hashtags.filter((tag): tag is string => typeof tag === "string").slice(0, 3) : [];
-      const requested = Number(args.maxResults ?? 30);
-      const maxResults = Number.isFinite(requested) ? Math.min(100, Math.max(5, Math.round(requested))) : 30;
+      const hashtags = Array.isArray(args.hashtags) ? args.hashtags.filter((tag): tag is string => typeof tag === "string").slice(0, MAX_HASHTAGS) : [];
+      const maxResults = apifyResults(args.maxResults);
       const request = args.contactAfter === true ? requireOutreachRequest(context) : null;
       const contactAfter = request ? { channels: channels(args) ?? ["instagram", "email", "whatsapp"], ownerRequest: request, requestId: searchRequestId(context) ?? undefined } : null;
       const objective = await searchObjective(context);
@@ -620,7 +650,7 @@ export const TOOLS: Record<string, Tool> = {
       try {
         const started = await startInstagramProspects({ what: what.slice(0, 200), where: where.slice(0, 200), hashtags, maxResults, language: profile.language ?? "en" }, context, { contactAfter, requestMessageId: searchRequestId(context) });
         const via = started.provider !== "apify"
-          ? `Instagram was NOT searched (Apify cannot run it now); website and directory search started instead for “${what}” in ${where}, which is not an Instagram search`
+          ? `Instagram was NOT searched (Apify cannot run it now); website and directory search started instead for “${what}”${where ? ` in ${where}` : ""}, which is not an Instagram search`
           : started.waiting
             ? `Instagram search for ${started.phrase} through Apify is queued: it waits for a free Apify run slot and starts by itself`
             : `Instagram search started for ${started.phrase} through Apify`;
@@ -638,8 +668,8 @@ export const TOOLS: Record<string, Tool> = {
 
   find_social_leads: {
     available: (features) => features.apify_discovery,
-    description: "Find businesses on a social platform by keyword and place, through Apify (the organization's approved Actors, within its budget; paid from the owner's Apify account): platform 'facebook' — Facebook business pages with the phone, email, website and address each publishes; 'linkedin' — LinkedIn companies (no emails on LinkedIn: contacts come from reading each company's own website; the Actor reads LinkedIn without logging in, which LinkedIn's terms do not allow, so the owner approves it knowingly); 'instagram' — Instagram accounts from Instagram's own account search, then their public profiles. Each lead's website is read for the contacts it publishes. Finding a page or account is NOT a way to contact it: Facebook pages need a published email or phone. Instagram profiles can receive one initial DM through a connected Unipile Instagram account after plan approval, subject to sending rules and recipient restrictions. When the platform's Actor is not approved or the budget is used, it says so and nothing is searched. Runs in the background and announces the result.",
-    arguments: "platform (facebook|linkedin|instagram), what (kind of business, e.g. 'real estate agencies'), where (city/area), maxResults (5-100, default 30), contactAfter (true only when the owner asked to contact the people found), channels (optional, with contactAfter: array of email|whatsapp|linkedin|instagram, only when the owner's own words named how to contact them; otherwise leave it out and each lead gets its best ready route)",
+    description: "Find businesses on a social platform by keyword, in a city, region or country or with no place, through Apify (the owner's Apify account, within its budget): platform 'facebook' — Facebook business pages with the phone, email, website and address each publishes; 'linkedin' — LinkedIn companies (no emails on LinkedIn: contacts come from reading each company's own website; the Actor reads LinkedIn without logging in, which LinkedIn's terms do not allow, so the owner approves it knowingly); 'instagram' — Instagram accounts from Instagram's own account search, then their public profiles. Each lead's website is read for the contacts it publishes. Finding a page or account is NOT a way to contact it: Facebook pages need a published email or phone. Instagram profiles can receive one initial DM through a connected Unipile Instagram account after plan approval, subject to sending rules and recipient restrictions. When Apify cannot run it (the Actor is not approved, the budget is used), it says why and nothing is searched. Runs in the background and announces the result.",
+    arguments: "platform (facebook|linkedin|instagram), what (keyword or kind of business, e.g. 'real estate agencies'), where (optional: a city, region or country; leave it out to search by keyword alone), maxResults (default 30; each Apify run is bounded by the owner's results-per-run setting), contactAfter (true only when the owner asked to contact the people found), channels (optional, with contactAfter: array of email|whatsapp|linkedin|instagram, only when the owner's own words named how to contact them; otherwise leave it out and each lead gets its best ready route)",
     run: async (args, context) => {
       if (!(await featureEnabled("apify_discovery"))) return { ok: false, summary: new FeatureDisabledError("apify_discovery").message };
       const platform = args.platform;
@@ -647,12 +677,10 @@ export const TOOLS: Record<string, Tool> = {
       const profile = await getBusinessProfile();
       // v2: the model names who and where (an open niche or place is its research); the profile fills them only for the older agent.
       const what = text(args, "what") ?? (context.v2 ? null : profile.targetCustomers?.trim() ?? null);
-      const where = text(args, "where") ?? (context.v2 ? null : profile.locations?.trim() ?? null);
+      const where = (text(args, "where") ?? (context.v2 ? null : profile.locations?.trim() ?? null))?.trim() ?? "";
       if (!what) throw new ToolArgumentError("say what kind of businesses to look for");
-      if (!where) throw new ToolArgumentError("say which place (a city or area)");
       if (args.contactAfter !== undefined && typeof args.contactAfter !== "boolean") throw new ToolArgumentError("contactAfter must be true or false");
-      const requested = Number(args.maxResults ?? 30);
-      const maxResults = Number.isFinite(requested) ? Math.min(100, Math.max(5, Math.round(requested))) : 30;
+      const maxResults = apifyResults(args.maxResults);
       const request = args.contactAfter === true ? requireOutreachRequest(context) : null;
       const contactAfter = request ? { channels: channels(args) ?? (platform === "instagram" ? ["instagram", "email", "whatsapp"] : null), ownerRequest: request, requestId: searchRequestId(context) ?? undefined } : null;
       const objective = await searchObjective(context);
@@ -662,7 +690,7 @@ export const TOOLS: Record<string, Tool> = {
         const name = platform === "facebook" ? "Facebook" : platform === "linkedin" ? "LinkedIn" : "Instagram";
         return withControls({
           ok: true,
-          summary: `${name} search ${started.waiting ? "queued (it waits for a free Apify run slot and starts by itself)" : "started"} for “${what}” in ${where} through Apify (up to ${maxResults}); job ${started.jobId}, audience ${started.audienceId}. Results are announced in the chat when done.${contactAfter ? ` The outreach plan will be prepared automatically for those who can be contacted, ${followUpChannels(contactAfter)}.` : ""} ${started.note ?? ""}`.trim(),
+          summary: `${name} search ${started.waiting ? "queued (it waits for a free Apify run slot and starts by itself)" : "started"} for “${what}”${where ? ` in ${where}` : " (no place: by keyword alone)"} through Apify (up to ${maxResults}, within the owner's Apify results per run); job ${started.jobId}, audience ${started.audienceId}. Results are announced in the chat when done.${contactAfter ? ` The outreach plan will be prepared automatically for those who can be contacted, ${followUpChannels(contactAfter)}.` : ""} ${started.note ?? ""}`.trim(),
           data: { jobId: started.jobId, audienceId: started.audienceId, phrase: started.phrase, provider: started.provider, note: started.note },
         }, objective.line);
       } catch (error) {
@@ -674,8 +702,8 @@ export const TOOLS: Record<string, Tool> = {
 
   find_customers_on_web: {
     available: (features) => features.web_discovery,
-    description: "Find customers matching the owner's description of them with a real web search provider (TinyFish when connected, free within its daily allowance; else Tavily when the organization saved a Tavily key; else its OpenRouter connection with its web plugin, or AI/ML API's web research model; never a model answering from memory): only the pages the provider returned are used. It reads the businesses' own websites and the local directories or lists the search returned (and the business websites those directories link to) for the emails and phones they publish, and keeps each contact with the page it came from; it never guesses an email, phone, person or page, and people already in the leads are reused, not duplicated. Public Instagram profiles and posts the search returns are read (a profile's website, a post's comments) only when Instagram is connected (the Instagram feature on and an account linked); otherwise they are skipped. Instagram-only profiles can receive an initial DM after plan approval when an Instagram sender is connected. Up to 3 searches (free on TinyFish, paid on the others); runs in the background, waits when TinyFish's free allowance asks it to, and announces the result in the chat. Needs the Website and directory search feature.",
-    arguments: "customers (who the customers are, from the owner's words or the business profile), where (city/area/region), maxResults (5-40 business websites to read, default 20), contactAfter (true only when the owner asked to contact, email or message the leads found: the outreach plan is then prepared automatically when the search finishes), channels (optional, with contactAfter: array of email|whatsapp|linkedin|instagram, only when the owner's own words named how to contact them; otherwise leave it out and each lead gets its best ready route)",
+    description: "Find customers matching a description with a real web search provider (TinyFish when connected, free within its daily allowance; else Tavily when the organization saved a Tavily key; else its OpenRouter connection with its web plugin, or AI/ML API's web research model; never a model answering from memory): only the pages the provider returned are used. It reads the businesses' own websites and the local directories or lists the search returned (and the business websites those directories link to) for the emails and phones they publish, and keeps each contact with the page it came from; it never guesses an email, phone, person or page, and people already in the leads are reused, not duplicated. Public Instagram profiles and posts the search returns are read (a profile's website, a post's comments) only when Instagram is connected (the Instagram feature on and an account linked); otherwise they are skipped. Instagram-only profiles can receive an initial DM after plan approval when an Instagram sender is connected. Runs in the background (its searches are the keyword queries you give, or ones built from customers and where; free on TinyFish, paid on the others), waits when TinyFish's free allowance asks it to, and announces the result in the chat. Needs the Website and directory search feature.",
+    arguments: `customers (who to find, e.g. 'dental clinics'), where (optional city/area/region; leave it out to search anywhere), queries (optional array of up to ${MAX_SEARCH_QUERIES} keyword searches you write, e.g. 'dental clinic Baner Pune', used as they are instead of the built ones), maxResults (1-${MAX_WEB_SITES} business websites to read, default 40), contactAfter (true only when the owner asked to contact, email or message the leads found: the outreach plan is then prepared automatically when the search finishes), channels (optional, with contactAfter: array of email|whatsapp|linkedin|instagram, only when the owner's own words named how to contact them; otherwise leave it out and each lead gets its best ready route)`,
     run: async (args, context) => {
       if (!(await featureEnabled("web_discovery"))) return { ok: false, summary: new FeatureDisabledError("web_discovery").message };
       const availability = await webSearchAvailability();
@@ -684,6 +712,7 @@ export const TOOLS: Record<string, Tool> = {
       const criteria = normalizeWebCriteria({
         customers: text(args, "customers") ?? (context.v2 ? null : profile.targetCustomers),
         where: text(args, "where") ?? (context.v2 ? null : profile.locations),
+        queries: args.queries,
         maxResults: args.maxResults,
         language: profile.language,
         offer: profile.offer,
@@ -716,8 +745,8 @@ export const TOOLS: Record<string, Tool> = {
 
   research_social_sources: {
     available: (features) => features.brightdata,
-    description: "Search social platforms through Bright Data (metered from the owner's Bright Data account: one credit per record, within the monthly limit set in Settings): Reddit posts with their comments, found by keyword and in subreddits — only when the owner turned Reddit research on in the Bright Data settings (the result says when it is off) — and X, Instagram and Facebook posts, profiles and pages that a web search returns for the terms, read through Bright Data. It finds people and businesses by what they say (give need) or by who they are (leave need out: the search is for the customers themselves, such as their Facebook pages or Instagram and X profiles). Every finding keeps its link, the words quoted, who wrote them and when it was read. Someone can be contacted only when their own profile or page, or the website it lists, publishes an email or phone (or, on Instagram, by one DM through a connected Instagram sender after plan approval); everyone else stays in the list as excluded, with the reason, and AgentSDR never messages anyone on Reddit, X or Facebook. Runs in the background and announces the result.",
-    arguments: `platforms (array of reddit|x|instagram|facebook), customers (who to find, e.g. 'real estate agents'), need (optional: what they would be asking about or struggling with, in plain words; leave it out to search for the customers themselves), where (optional city or area; leave it out for a topic without a place), subreddits (optional array of subreddit names to search, without r/), keywords (optional array of up to 3 exact search phrases, used as they are), maxResults (5-${BRIGHTDATA_LIMITS.maxRecordsPerSearch.max} records across the job, default 40; the organization's own cap applies), contactAfter (true only when the owner asked to contact the people found), channels (optional, with contactAfter: array of email|whatsapp|linkedin|instagram, only when the owner's own words named how to contact them)`,
+    description: "Search social platforms through Bright Data: Reddit posts with their comments, found by keyword and in subreddits — only when the owner turned Reddit research on in the Bright Data settings (the result says when it is off) — and X, Instagram and Facebook posts, profiles and pages that a web search returns for the terms, read through Bright Data; or the profiles, pages and posts you found yourself (urls), read directly. It finds people and businesses by what they say (give need) or by who they are (leave need out: the search is for the customers themselves, such as their Facebook pages or Instagram and X profiles). Every finding keeps its link, the words quoted, who wrote them and when it was read. Someone can be contacted only when their own profile or page, or the website it lists, publishes an email or phone (or, on Instagram, by one DM through a connected Instagram sender after plan approval); everyone else stays in the list as excluded, with the reason, and AgentSDR never messages anyone on Reddit, X or Facebook. Metered from the owner's Bright Data account (one credit per record, within the monthly limit set in Settings). Runs in the background and announces the result.",
+    arguments: `platforms (optional array of reddit|x|instagram|facebook; every platform when left out), customers (who to find, e.g. 'real estate agents'; optional when need, keywords or urls say it), need (optional: what they would be asking about or struggling with, in plain words; leave it out to search for the customers themselves), where (optional city or area; leave it out for a topic without a place), subreddits (optional array of up to ${MAX_SUBREDDITS} subreddit names, without r/), keywords (optional array of up to ${MAX_SOCIAL_KEYWORDS} exact search phrases, each searched as it is), urls (optional array of up to ${MAX_SOCIAL_URLS} Instagram, Facebook, X or Reddit profile, page or post links you found, read directly; a link it cannot read is named in the result), since (optional, Reddit's keyword search: ${Object.keys(REDDIT_PERIODS).join("|")}; default past_year), maxResults (optional: records across the job; default and most, the organization's records-per-search setting), contactAfter (true only when the owner asked to contact the people found), channels (optional, with contactAfter: array of email|whatsapp|linkedin|instagram, only when the owner's own words named how to contact them)`,
     run: async (args, context) => {
       if (!(await featureEnabled("brightdata"))) return { ok: false, summary: new FeatureDisabledError("brightdata").message };
       const [profile, settings] = await Promise.all([getBusinessProfile(), brightdataSettingsView()]);
@@ -729,6 +758,8 @@ export const TOOLS: Record<string, Tool> = {
         where: args.where,
         subreddits: args.subreddits,
         keywords: args.keywords,
+        urls: args.urls,
+        since: args.since,
         maxResults: args.maxResults,
         language: profile.language,
       }, { maxRecordsPerSearch: settings.maxRecordsPerSearch }, profile.language ?? "en");
@@ -740,12 +771,18 @@ export const TOOLS: Record<string, Tool> = {
       if (objective.problem) return objectiveRefusal(objective.problem);
       try {
         const started = await startSocialResearch(criteria, context, { contactAfter, requestMessageId: searchRequestId(context) });
-        const lines = started.sources.map((source) => `${PLATFORM_NAMES[source.platform]}: ${source.state === "pending" ? `searching for ${source.queries.map((query) => `“${query}”`).join(", ")}` : `NOT searched (${source.reason})`}`);
+        const lines = started.sources.map((source) => {
+          if (source.state !== "pending") return `${PLATFORM_NAMES[source.platform]}: NOT searched (${source.reason})`;
+          const given = givenUrlsFor(criteria, source.platform).length;
+          const work = [source.queries.length ? `searching for ${source.queries.map((query) => `“${query}”`).join(", ")}` : null, given ? `reading ${given} link${given === 1 ? "" : "s"} given` : null].filter(Boolean);
+          return `${PLATFORM_NAMES[source.platform]}: ${work.join(" and ") || "nothing to search"}`;
+        });
+        const unreadable = criteria.unreadableUrls ?? [];
         const searching = started.sources.filter((source) => source.state === "pending").map((source) => PLATFORM_NAMES[source.platform]);
         const finder = started.sources.some((source) => source.state === "pending" && source.platform !== "reddit") ? ` X, Instagram and Facebook pages are found with ${urlFinderName(started.urlFinder)}, then read through Bright Data.` : "";
         return withControls({
           ok: true,
-          summary: `Social research started for “${started.phrase}” through Bright Data (up to ${criteria.maxResults} records): ${lines.join("; ")}.${finder} Job ${started.jobId}, audience ${started.audienceId}. Results are announced in the chat when done; only people and businesses whose own profile, page or website publishes a contact route can be contacted.${contactAfter ? ` The outreach plan will be prepared automatically for those who can be contacted, ${followUpChannels(contactAfter)}.` : ""}`,
+          summary: `Social research started for “${started.phrase}” through Bright Data (up to ${criteria.maxResults} records): ${lines.join("; ")}.${finder}${unreadable.length ? ` Not read (not a post, profile or page Bright Data reads): ${unreadable.slice(0, 10).join(", ")}${unreadable.length > 10 ? ", …" : ""}.` : ""} Job ${started.jobId}, audience ${started.audienceId}. Results are announced in the chat when done; only people and businesses whose own profile, page or website publishes a contact route can be contacted.${contactAfter ? ` The outreach plan will be prepared automatically for those who can be contacted, ${followUpChannels(contactAfter)}.` : ""}`,
           display: `Researching ${searching.join(", ") || "social platforms"} for “${started.phrase}” (Bright Data, up to ${criteria.maxResults} records).`,
           data: { jobId: started.jobId, audienceId: started.audienceId, phrase: started.phrase, criteria, sources: started.sources, urlFinder: started.urlFinder, provider: "brightdata" },
         }, objective.line);
@@ -840,11 +877,11 @@ export const TOOLS: Record<string, Tool> = {
   },
 
   add_contacts: {
-    description: "Add people the owner gave in the chat (phone numbers, emails or LinkedIn profile links, with a name or company when given) as a new lead list, so outreach can be prepared for them (contactAfter true when the owner asked for it: the plan follows automatically). Only contacts the owner wrote, that are on a page read with read_webpage, or that a successful treg_call returned. A phone number without + and a country code is refused unless the organization has a Default phone country: ask the owner which country, never guess it.",
-    arguments: "contacts (array of objects with name, phone, email, linkedinUrl, company; each needs a phone, email or linkedinUrl; up to 50), listName (optional), contactAfter (true when the owner asked to contact, message or pitch these people: the outreach plan is then prepared right after), channels (optional, with contactAfter: array of email|whatsapp|linkedin|instagram, only when the owner's own words named how to contact them; otherwise leave it out and each lead gets its best ready route)",
+    description: "Save people or businesses as a new lead list of the current request (phone numbers, emails or LinkedIn profile links, with a name or company when known): ones the owner gave in the chat, or ones a page you read (read_webpage or the browser), a web_search result or a successful treg_call publishes (contactAfter true when the owner asked to contact them: the plan follows automatically). Each contact must appear there as written; those found on pages count toward the request and are judged like any lead. A phone number without + and a country code needs the organization's Default phone country: write it with + and its country code when the page or the owner shows the country (an address, a +code elsewhere on the page); ask the owner only when nothing shows it.",
+    arguments: `contacts (array of objects with name, phone, email, linkedinUrl, company; each needs a phone, email or linkedinUrl; up to ${MAX_CHAT_CONTACTS} a call), listName (optional), contactAfter (true when the owner asked to contact, message or pitch these people: the outreach plan is then prepared right after), channels (optional, with contactAfter: array of email|whatsapp|linkedin|instagram, only when the owner's own words named how to contact them; otherwise leave it out and each lead gets its best ready route)`,
     run: async (args, context) => {
       if (!Array.isArray(args.contacts) || !args.contacts.length) throw new ToolArgumentError("contacts must be a non-empty array");
-      if (args.contacts.length > MAX_CHAT_CONTACTS) throw new ToolArgumentError(`at most ${MAX_CHAT_CONTACTS} contacts at once; for more, attach a CSV or Excel list`);
+      if (args.contacts.length > MAX_CHAT_CONTACTS) throw new ToolArgumentError(`at most ${MAX_CHAT_CONTACTS} contacts in one call; add the first ${MAX_CHAT_CONTACTS} now and the rest in another add_contacts call`);
       const rows: ImportRow[] = args.contacts.map((item, index) => {
         const contact = (item && typeof item === "object" ? item : {}) as Record<string, unknown>;
         const field = (key: string) => (typeof contact[key] === "string" && contact[key].trim() ? contact[key].trim() : null);
@@ -952,15 +989,15 @@ export const TOOLS: Record<string, Tool> = {
   },
 
   web_search: {
-    description: "Search the web for pages that match a query: businesses' own websites, directories and member lists, public profiles, news and public discussions. Returns titles, URLs and snippets from TinyFish Search (free within its daily allowance), or Tavily when only Tavily is connected. A result is a candidate, not a verified lead or buyer: read the promising pages with read_webpage (results become links you may open) and check fit, location and contact route there. Refine the query and use page for more results when the first ones do not fit; stop when a few searches find nothing new. Keyword queries work best (e.g. 'real estate agency Pune', 'wholesale tile distributors Lagos list').",
-    arguments: "query (keywords), country (optional 2-letter code where results should come from, e.g. IN), page (optional 0–3, for more results), purpose (optional: why you are searching, one sentence)",
+    description: "Search the web for pages that match a query: businesses' own websites, directories and member lists, public profiles, news and public discussions. Returns titles, URLs and snippets from TinyFish Search (free within its daily allowance; a short wait it asks for is waited out), or Tavily when TinyFish is not connected or is waiting. Read any result with read_webpage for its full text and contacts; page gives more results for the same query. Keyword queries work best (e.g. 'real estate agency Pune', 'wholesale tile distributors Lagos list').",
+    arguments: `query (keywords), country (optional 2-letter code where results should come from, e.g. IN), page (optional 0–${TINYFISH_LIMITS.maxSearchPage}, for more results), purpose (optional: why you are searching, one sentence)`,
     run: async (args, context) => {
       const query = text(args, "query", true)!.trim();
       if (query.length < 2) throw new ToolArgumentError("query is empty");
       const country = text(args, "country");
       if (country && !/^[A-Za-z]{2}$/.test(country)) throw new ToolArgumentError("country must be a 2-letter code such as IN or US");
       const page = args.page === undefined ? 0 : Number(args.page);
-      if (!Number.isInteger(page) || page < 0 || page > 3) throw new ToolArgumentError("page must be a whole number from 0 to 3");
+      if (!Number.isInteger(page) || page < 0 || page > TINYFISH_LIMITS.maxSearchPage) throw new ToolArgumentError(`page must be a whole number from 0 to ${TINYFISH_LIMITS.maxSearchPage}`);
       const held = await webToolHold(context);
       if (held) return held;
       try {
@@ -973,13 +1010,13 @@ export const TOOLS: Record<string, Tool> = {
         return {
           ok: true,
           summary: hits.length
-            ? `${name} for “${query}”${page ? ` (page ${page})` : ""}: ${hits.length} results (candidates; read a page before relying on it).\n${lines.join("\n")}`
+            ? `${name} for “${query}”${page ? ` (page ${page})` : ""}: ${hits.length} results.\n${lines.join("\n")}`
             : `${name} for “${query}” returned nothing. Try different keywords or another source.`,
           display: `Searched the web (${name}) for “${query}”: ${hits.length} result${hits.length === 1 ? "" : "s"}`,
           data: { query, page, provider, results: hits },
         };
       } catch (error) {
-        if (error instanceof TinyfishWaitError) return { ok: false, summary: `Web search is waiting: ${error.message}. Use another source meanwhile, or tell the owner when it resumes.`, data: { waiting: true, until: error.until.toISOString() } };
+        if (error instanceof TinyfishWaitError) return { ok: false, summary: `Web search is waiting: ${error.message}.`, data: { waiting: true, until: error.until.toISOString() } };
         if (error instanceof WebSearchUnavailableError) return { ok: false, summary: `Web search is not available: ${error.message}.` };
         throw error;
       }
@@ -987,7 +1024,7 @@ export const TOOLS: Record<string, Tool> = {
   },
 
   read_webpage: {
-    description: "Open one public web page and read its text, the emails, phones and LinkedIn links on it, and the links it contains (which you may open next): a link the owner gave, a result of web_search, or a link on a page already read. Read through TinyFish when it is connected (it renders pages that need JavaScript), else directly. Hacker News threads (news.ycombinator.com/item?id=…) and Stack Exchange questions (Stack Overflow, Super User, Server Fault, Ask Ubuntu, *.stackexchange.com) are read through their public APIs, with authors and dates, as evidence of a stated need or problem: never buying intent, and their pseudonymous authors are not leads. It cannot log in, so Instagram, Facebook, X, TikTok and LinkedIn pages cannot be read, and Reddit cannot be read at all.",
+    description: "Open any public web page and read its text, the emails, phones and profile links on it, and the links it contains. Read through TinyFish when it is connected (it renders pages that need JavaScript), else directly. Hacker News threads (news.ycombinator.com/item?id=…) and Stack Exchange questions (Stack Overflow, Super User, Server Fault, Ask Ubuntu, *.stackexchange.com) are read through their public APIs, with authors and dates; their authors are pseudonymous, not leads. It does not open Instagram, Facebook, X, TikTok, Threads, LinkedIn or Reddit pages (they need a login, or Reddit's approval); those networks are searched with find_instagram_prospects, find_social_leads, research_social_sources and find_linkedin_leads where those are on.",
     arguments: "url",
     run: async (args, context) => {
       const raw = text(args, "url", true)!.trim();
@@ -1000,7 +1037,7 @@ export const TOOLS: Record<string, Tool> = {
         throw new ToolArgumentError(`“${raw}” is not a web address`);
       }
       if (LOGIN_WALLED.test(url.hostname)) {
-        return { ok: false, summary: `${url.hostname} needs a login and does not allow automated reading, so it cannot be opened. LinkedIn people can be found with find_linkedin_leads; other networks are not supported.` };
+        return { ok: false, summary: `${url.hostname} needs a login and does not allow automated reading, so it cannot be opened here. ${SOCIAL_TOOLS_NOTE}` };
       }
       // No Reddit reader and no workaround (src/lib/research/sources/reddit.ts): refused before anything is looked up or sent.
       if (isRedditHost(url.hostname)) return { ok: false, summary: redditRefusal(await redditApprovalRecorded()) };
@@ -1025,7 +1062,7 @@ export const TOOLS: Record<string, Tool> = {
           if (page) {
             const refused = await redirectRefusal(url, page.finalUrl);
             if (refused) return refused;
-            const contacts = extractContacts(`${page.contactLinks.map((link) => `<a href="${link.replace(/"/g, "")}"></a>`).join("")}${page.text}`, page.finalUrl).slice(0, 60);
+            const contacts = extractContacts(`${page.contactLinks.map((link) => `<a href="${link.replace(/"/g, "")}"></a>`).join("")}${page.text}`, page.finalUrl).slice(0, PAGE_CONTACTS);
             return pageResult({ url: page.finalUrl, title: page.title ?? "", body: page.text, contacts, links: page.links, via: via("TinyFish") });
           }
           if (failures[0] && ["page_not_found", "login_required", "invalid_url", "invalid_redirect_url"].includes(failures[0].code)) {
@@ -1054,15 +1091,15 @@ export const TOOLS: Record<string, Tool> = {
         url: page.url,
         title: visibleText(pageTitle(page.html)).trim(),
         body: visibleText(page.html).trim(),
-        contacts: extractContacts(page.html, page.url).slice(0, 60),
-        links: publicLinks(page.html, page.url, 40),
+        contacts: extractContacts(page.html, page.url).slice(0, PAGE_CONTACTS),
+        links: publicLinks(page.html, page.url, PAGE_LINKS),
         via: via("direct"),
       });
     },
   },
 
   browser_open: {
-    description: `Open a page in a remote browser (TinyFish Browser), when reading a page with read_webpage is not enough: a search form, filters, "load more" buttons, pagination by clicking, or a page that shows content only after interaction. It is paid by the minute (about $0.002) within the owner's daily browser minutes (Settings → Lead research → TinyFish; off unless set), one browser per organization, each session at most ${BROWSER_LIMITS.maxSessionMinutes} minutes; it closes when the turn ends. The URL is any public page (private and local addresses are refused). It never logs in, never types passwords, and cannot use Instagram, Facebook, X, TikTok, LinkedIn or Reddit. Returns the page text and its numbered elements for browser_click and browser_fill.`,
+    description: `Open a page in a remote browser (TinyFish Browser) and work it with browser_click, browser_fill and browser_scroll: search forms, filters, "load more" buttons, pagination by clicking, pages that show content only after interaction. It is paid by the minute (about $0.002) within the owner's daily browser minutes (Settings → Lead research → TinyFish; off unless set), one browser per chat, each session at most ${BROWSER_LIMITS.maxSessionMinutes} minutes (open it again to go on); it closes when the turn ends. The URL is any public page (private and local addresses are refused). It never logs in, never types passwords, and cannot use Instagram, Facebook, X, TikTok, LinkedIn or Reddit. Returns the page text and its numbered elements for browser_click and browser_fill.`,
     arguments: "url",
     run: async (args, context) => {
       const raw = text(args, "url", true)!.trim();
@@ -1102,10 +1139,10 @@ export const TOOLS: Record<string, Tool> = {
 
   browser_fill: {
     description: "Type into a text field of the page open in the browser (a search box or a filter), by its number from the latest reading; submit true presses Enter. Never a password or login field.",
-    arguments: "n (element number), text (what to type, up to 200 characters), submit (optional true/false)",
+    arguments: `n (element number), text (what to type, up to ${MAX_FILL_CHARS.toLocaleString("en-US")} characters), submit (optional true/false)`,
     run: async (args, context) => {
       const value = text(args, "text", true)!;
-      if (value.length > 200) throw new ToolArgumentError("text must be at most 200 characters");
+      if (value.length > MAX_FILL_CHARS) throw new ToolArgumentError(`text must be at most ${MAX_FILL_CHARS.toLocaleString("en-US")} characters`);
       if (args.submit !== undefined && typeof args.submit !== "boolean") throw new ToolArgumentError("submit must be true or false");
       return runBrowserStep(context, `Typed into element ${String(args.n)}`, { kind: "fill", n: elementNumber(args), text: value, submit: args.submit === true });
     },
@@ -1159,16 +1196,24 @@ export const TOOLS: Record<string, Tool> = {
   },
 
   lead_search_status: {
-    description: "The progress or result of a lead search (Google Maps, Instagram, Facebook, LinkedIn or web), and for a request that named several platforms, each platform's state (searched, searching, waiting, not searched, not started) with its reason.",
+    description: "The progress or result of a lead search (Google Maps, Instagram, Facebook, LinkedIn, web, or social research through Bright Data), and for a request that named several platforms, each platform's state (searched, searching, waiting, not searched, not started) with its reason.",
     arguments: "jobId (optional; the latest search when left out)",
     run: async (args, context) => {
       const [platforms, objective] = await Promise.all([requestCoverageLine(context), objectiveLine(searchRequestId(context))]);
       const coverage = [platforms, objective].filter(Boolean).join(" ") || null;
       const jobId = uuid(args, "jobId", false);
       const [job] = await db.select().from(assistantJobs)
-        .where(and(inOrg(assistantJobs), inArray(assistantJobs.kind, ["discovery", "linkedin_search", "web_discovery", "apify_instagram"]), ...(jobId ? [eq(assistantJobs.id, jobId)] : [])))
+        .where(and(inOrg(assistantJobs), inArray(assistantJobs.kind, ["discovery", "linkedin_search", "web_discovery", "apify_instagram", "social_research"]), ...(jobId ? [eq(assistantJobs.id, jobId)] : [])))
         .orderBy(desc(assistantJobs.createdAt)).limit(1);
       if (!job) return { ok: false, summary: "No lead search found." };
+      if (job.kind === "social_research") {
+        return {
+          ok: true,
+          summary: `Social research ${job.id}: ${job.status} (${job.stage}). Progress ${JSON.stringify(job.progress)}.${job.error ? ` Error: ${job.error}` : ""}${job.result ? ` Result: ${JSON.stringify(job.result)}` : ""}${coverage ? ` ${coverage}` : ""}`,
+          display: `${socialResearchProgress(job)}${coverage ? `\n${coverage}` : ""}`,
+          data: { jobId: job.id, kind: job.kind, status: job.status, stage: job.stage, progress: job.progress, result: job.result, error: job.error, audienceId: job.audienceId },
+        };
+      }
       if (job.kind === "web_discovery") {
         return {
           ok: true,
@@ -1324,7 +1369,6 @@ export const TOOLS: Record<string, Tool> = {
   },
 
   describe_audience: {
-    available: (features) => !features.research_agent_v2,
     description: "One lead list in detail: how many leads per channel, who was left out and why, and a few examples with where their contact details came from.",
     arguments: "audienceId",
     run: async (args) => {

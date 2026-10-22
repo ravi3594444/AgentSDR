@@ -39,6 +39,15 @@ describe("keyword searches for a search engine", () => {
     expect(keywords).toHaveLength(sentences.length);
     expect(buildKeywordQueries({ customers: "tile wholesalers", where: "Lagos" })).toHaveLength(2);
   });
+
+  test("with no place, the searches are for such businesses anywhere, never “in ”", () => {
+    const input = { customers: "tile wholesalers", where: "", instagram: true };
+    expect(buildKeywordQueries(input)).toEqual(["tile wholesalers", "tile wholesalers directory list", "tile wholesalers instagram"]);
+    const sentences = buildSearchQueries(input);
+    expect(sentences[0]).toStartWith("tile wholesalers: the businesses' own websites");
+    expect(sentences[1]).toStartWith("Directories and lists of tile wholesalers (");
+    expect(sentences.join(" ")).not.toMatch(/ in [(:.]| in $/);
+  });
 });
 
 describe("which web search a website search uses", () => {

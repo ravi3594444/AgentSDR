@@ -22,8 +22,8 @@ export const BROWSER_LIMITS = {
   idleTimeoutSeconds: 300,
   /** Idle minutes after which AgentSDR closes it at the next chance. */
   idleCloseMinutes: 5,
-  maxTextChars: 6_000,
-  maxElements: 80,
+  maxTextChars: 12_000,
+  maxElements: 150,
 } as const;
 
 /**
