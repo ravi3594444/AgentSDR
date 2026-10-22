@@ -130,6 +130,12 @@ async function loadOwn(key: PlatformKey): Promise<Record<string, string> | null>
   return row?.enabled && row.encryptedPayload ? decryptIntegrationCredentials(row.encryptedPayload) : null;
 }
 
+/** The organization's own saved credentials, normalized, whatever it chose: for an operator adopting them as defaults. Server-only. */
+export async function getOwnPlatformCredentials<K extends PlatformKey>(key: K): Promise<PlatformCredentials[K] | null> {
+  const own = await loadOwn(key);
+  return own ? normalize(key, own) : null;
+}
+
 /** Thrown when an action that only makes sense for the organization's own Unipile is asked while it uses the Included one. */
 export class ManagedPlatformError extends Error {
   constructor(platform: PlatformKey) {

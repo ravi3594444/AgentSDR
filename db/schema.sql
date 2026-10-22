@@ -1150,7 +1150,7 @@ CREATE TABLE public.brightdata_settings (
     reddit_enabled boolean DEFAULT false NOT NULL,
     updated_by uuid,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT brightdata_settings_limits_chk CHECK (((monthly_credits >= 0) AND (monthly_credits <= 100000) AND ((max_records_per_search >= 5) AND (max_records_per_search <= 300))))
+    CONSTRAINT brightdata_settings_limits_chk CHECK ((((monthly_credits >= 0) AND (monthly_credits <= 100000)) AND ((max_records_per_search >= 5) AND (max_records_per_search <= 300))))
 );
 
 --

@@ -1,6 +1,7 @@
 import "server-only";
 
 import { headers as nextHeaders } from "next/headers";
+import { assertSameOriginMutation, CrmRequestError } from "@/lib/crm/http";
 import { isPlatformOperatorUser } from "./operator.server";
 import { auth } from "./server";
 
@@ -43,22 +44,40 @@ export function operatorErrorResponse(error: unknown): Response | null {
   return Response.json({ error: error.message }, { status: error.status });
 }
 
+/** An error an operator route may show as it is (a verification message, a refused setting). */
+export class OperatorActionError extends Error {
+  constructor(message: string, readonly status: 400 | 404 | 409 = 400) {
+    super(message);
+    this.name = "OperatorActionError";
+  }
+}
+
 /**
  * The usual first line of an operator route:
  *   return withOperator(request, async (operator) => Response.json(…));
- * Any other error is answered 500 with a generic message (it may carry a
- * provider's text, which is not sent to the browser) and logged.
+ * Operator first (a visitor who is not one gets 404 and learns nothing),
+ * then same origin for a state-changing call. An OperatorActionError is
+ * answered with its message; any other error is logged and answered 500
+ * with a generic message (it may carry a provider's text).
  */
-export async function withOperator(request: HasHeaders, fn: (operator: OperatorContext) => Promise<Response>): Promise<Response> {
+export async function withOperator(request: Request, fn: (operator: OperatorContext) => Promise<Response>): Promise<Response> {
   let operator: OperatorContext;
   try {
     operator = await requireOperator(request);
+    assertSameOriginMutation(request);
   } catch (error) {
     const denied = operatorErrorResponse(error);
     if (denied) return denied;
+    if (error instanceof CrmRequestError) return Response.json({ error: "Cross-origin request refused" }, { status: 403 });
     throw error;
   }
-  return fn(operator);
+  try {
+    return await fn(operator);
+  } catch (error) {
+    if (error instanceof OperatorActionError) return Response.json({ error: error.message }, { status: error.status });
+    console.error("[platform] operator request failed:", error instanceof Error ? error.message : error);
+    return Response.json({ error: "The request failed" }, { status: 500 });
+  }
 }
 
 /** For the operator pages: the visitor's operator context, or Next's 404 page. */

@@ -168,6 +168,9 @@ const [orgA] = await db.insert(organizations).values({ name: `Apify check A ${st
 const [orgB] = await db.insert(organizations).values({ name: `Apify check B ${stamp}`, slug: `apify-check-b-${stamp}` }).returning();
 const createdProviders: string[] = [];
 let runOfA = "";
+// These checks are about a workspace's own Apify token (My own provider); the Included service is checked in managed-saas.ts.
+const { setServiceMode } = await import("@/lib/managed/modes.server");
+for (const org of [orgA!, orgB!]) await runInOrganization(org.id, () => setServiceMode("apify", "own", null, "apify e2e: own token"));
 
 await runInOrganization(orgA!.id, async () => {
   clearFeatureCache();
