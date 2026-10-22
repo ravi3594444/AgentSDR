@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { check, index, integer, jsonb, pgTable, primaryKey, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { check, index, integer, jsonb, numeric, pgTable, primaryKey, text, timestamp, uuid } from "drizzle-orm/pg-core";
 import { organizations } from "@/lib/auth/schema";
 
 /**
@@ -55,6 +55,14 @@ export const providerUsage = pgTable(
     threadId: uuid("thread_id"),
     detail: jsonb("detail").$type<Record<string, unknown>>(),
     error: text("error"),
+    /**
+     * Whose credentials did the work (scripts/add-managed-saas.ts): the
+     * platform's ('managed', an Included service, counted against the
+     * allowances) or the organization's own ('own'). Rows from before are own.
+     */
+    credentialSource: text("credential_source").notNull().default("own").$type<"managed" | "own">(),
+    /** US$ the call cost: reported by the provider, or estimated (detail.costEstimated). While reserved, the amount held. */
+    costUsd: numeric("cost_usd", { precision: 14, scale: 6 }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     settledAt: timestamp("settled_at", { withTimezone: true }),
   },
@@ -63,5 +71,7 @@ export const providerUsage = pgTable(
     // scripts/add-brightdata.ts: a job's collections, found again by a retried step.
     index("provider_usage_job_idx").on(table.jobId).where(sql`${table.jobId} IS NOT NULL`),
     check("provider_usage_status_chk", sql`${table.status} IN ('reserved', 'settled', 'failed', 'uncertain')`),
+    check("provider_usage_credential_source_chk", sql`${table.credentialSource} IN ('managed', 'own')`),
+    index("provider_usage_managed_idx").on(table.provider, table.createdAt).where(sql`${table.credentialSource} = 'managed'`),
   ],
 );

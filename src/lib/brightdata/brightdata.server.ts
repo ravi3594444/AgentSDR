@@ -29,6 +29,11 @@ import { collectionKey, creditsUsed, errorKind, progressOutcome, reservedCredits
 import { brightdataSettings } from "./schema";
 import { brightdataRetryAfterMs } from "./waits";
 import type { SpendGuard } from "@/lib/assistant/objective.server";
+import { MANAGED_LIMITS } from "@/lib/managed/allowances";
+import type { ServiceMode } from "@/lib/managed/catalog";
+import { chooseOwnOnSave, serviceMode } from "@/lib/managed/modes.server";
+import { getPlatformCredential } from "@/lib/managed/store.server";
+import { allowanceFor } from "@/lib/managed/usage.server";
 
 /**
  * The organization's Bright Data connection and its collections. Every
@@ -75,12 +80,15 @@ function monthStart(now = new Date()): Date {
 }
 
 /** This month's credits (UTC): what finished collections used, and what open ones hold. Uncertain rows count as used. */
-async function monthUsage(executor: Pick<typeof db, "select"> = db): Promise<{ used: number; reserved: number; open: number }> {
+async function monthUsage(executor: Pick<typeof db, "select"> = db, source?: ServiceMode): Promise<{ used: number; reserved: number; open: number }> {
   const [row] = await executor.select({
     used: sql<number>`coalesce(sum(case when ${providerUsage.status} = 'reserved' then 0 else coalesce(${providerUsage.usedUnits}, ${providerUsage.units}) end), 0)::int`,
     reserved: sql<number>`coalesce(sum(case when ${providerUsage.status} = 'reserved' then ${providerUsage.units} else 0 end), 0)::int`,
     open: sql<number>`count(*) filter (where ${providerUsage.status} = 'reserved')::int`,
-  }).from(providerUsage).where(and(inOrg(providerUsage), eq(providerUsage.provider, BRIGHTDATA_PROVIDER), gte(providerUsage.createdAt, monthStart())));
+  }).from(providerUsage).where(and(
+    inOrg(providerUsage), eq(providerUsage.provider, BRIGHTDATA_PROVIDER), gte(providerUsage.createdAt, monthStart()),
+    ...(source ? [eq(providerUsage.credentialSource, source)] : []),
+  ));
   return { used: Number(row?.used ?? 0), reserved: Number(row?.reserved ?? 0), open: Number(row?.open ?? 0) };
 }
 
@@ -116,6 +124,23 @@ async function datasetStates(): Promise<BrightdataSettingsView["datasets"]> {
 
 export async function brightdataSettingsView(): Promise<BrightdataSettingsView> {
   const row = await settingsRow();
+  if ((await serviceMode("brightdata")) === "managed") {
+    // The platform's key is not shown; the monthly figure is the workspace's included allowance, its use this workspace's own.
+    const managed = await getPlatformCredential("brightdata");
+    const usage = await monthUsage(db, "managed");
+    return {
+      included: true,
+      connected: Boolean(managed?.apiKey),
+      keyHint: null,
+      monthlyCredits: allowanceFor("brightdata_credits").workspace,
+      maxRecordsPerSearch: MANAGED_LIMITS.brightdataMaxRecordsPerSearch,
+      serpZone: managed?.serpZone || null,
+      redditEnabled: row?.redditEnabled ?? false,
+      usedThisMonth: usage.used,
+      reservedThisMonth: usage.reserved,
+      datasets: await datasetStates(),
+    };
+  }
   const usage = row ? await monthUsage() : { used: 0, reserved: 0, open: 0 };
   return {
     connected: Boolean(row?.encryptedKey),
@@ -173,11 +198,12 @@ export async function saveBrightdataSettings(
   const values = { encryptedKey, keyHint, monthlyCredits, maxRecordsPerSearch, serpZone, redditEnabled, updatedBy: userId, updatedAt: new Date() };
   await db.insert(brightdataSettings).values({ organizationId: currentOrganizationId(), ...values })
     .onConflictDoUpdate({ target: brightdataSettings.organizationId, set: values });
+  if (typeof input.key === "string" && input.key.trim()) await chooseOwnOnSave("brightdata", userId);
   return brightdataSettingsView();
 }
 
 export type BrightdataReadiness =
-  | { usable: true; key: string; settings: SettingsRow; creditsLeft: number }
+  | { usable: true; key: string; settings: SettingsRow; creditsLeft: number; source: ServiceMode }
   | { usable: false; exhausted: boolean; reason: string };
 
 /**
@@ -188,16 +214,43 @@ export type BrightdataReadiness =
 export async function brightdataReadiness(): Promise<BrightdataReadiness> {
   if (!(await featureEnabled("brightdata"))) return { usable: false, exhausted: false, reason: "Bright Data research is off for this organization (Settings → Providers & features)" };
   const row = await settingsRow();
+  if ((await serviceMode("brightdata")) === "managed") {
+    // The platform's key, within the workspace's included allowance (checked again, with the platform
+    // budget, under its lock when a collection is reserved). The owner's Reddit switch still applies.
+    const managed = await getPlatformCredential("brightdata");
+    if (!managed?.apiKey) return { usable: false, exhausted: false, reason: "the included Bright Data research is not available right now" };
+    await sweepStaleCollections();
+    const usage = await monthUsage(db, "managed");
+    const left = allowanceFor("brightdata_credits").workspace - usage.used - usage.reserved;
+    if (left < 1) return { usable: false, exhausted: true, reason: `this workspace's included social research for this month (${allowanceFor("brightdata_credits").workspace.toLocaleString("en-US")} records, estimated) is used up` };
+    const settings: SettingsRow = {
+      organizationId: currentOrganizationId(),
+      encryptedKey: null,
+      keyHint: null,
+      monthlyCredits: allowanceFor("brightdata_credits").workspace,
+      maxRecordsPerSearch: MANAGED_LIMITS.brightdataMaxRecordsPerSearch,
+      serpZone: managed.serpZone || null,
+      redditEnabled: row?.redditEnabled ?? false,
+      updatedBy: null,
+      updatedAt: new Date(),
+    };
+    return { usable: true, key: managed.apiKey, settings, creditsLeft: left, source: "managed" };
+  }
   if (!row?.encryptedKey) return { usable: false, exhausted: false, reason: "no Bright Data key is saved (Settings → Providers & features → Bright Data)" };
   await sweepStaleCollections();
   const usage = await monthUsage();
   const left = row.monthlyCredits - usage.used - usage.reserved;
   if (left < 1) return { usable: false, exhausted: true, reason: `this month's Bright Data limit (${row.monthlyCredits.toLocaleString("en-US")} credits, estimated from delivered records) is used up; owners and admins can raise it` };
-  return { usable: true, key: decryptIntegrationCredential(row.encryptedKey), settings: row, creditsLeft: left };
+  return { usable: true, key: decryptIntegrationCredential(row.encryptedKey), settings: row, creditsLeft: left, source: "own" };
 }
 
-/** The saved key, for polling a collection already started. */
-async function savedKey(): Promise<string | null> {
+/**
+ * The key a collection was started with, for polling it: the platform's for
+ * one started on the Included service, the organization's own otherwise,
+ * whatever the organization chose since.
+ */
+async function savedKey(source: ServiceMode): Promise<string | null> {
+  if (source === "managed") return (await getPlatformCredential("brightdata"))?.apiKey ?? null;
   const row = await settingsRow();
   return row?.encryptedKey ? decryptIntegrationCredential(row.encryptedKey) : null;
 }
@@ -257,13 +310,13 @@ async function jobCollection(jobId: string, key: string): Promise<UsageRow | nul
   return row ?? null;
 }
 
-/** A settled collection of this organization with the same inputs, recent enough to download again for free. */
-async function reusableCollection(key: string): Promise<UsageRow | null> {
+/** A settled collection of this organization with the same inputs, on the same account's key, recent enough to download again for free. */
+async function reusableCollection(key: string, source: ServiceMode): Promise<UsageRow | null> {
   const since = new Date(Date.now() - BRIGHTDATA_LIMITS.reuseDays * 24 * 60 * 60_000);
   const [row] = await db.select().from(providerUsage)
     .where(and(
       inOrg(providerUsage), eq(providerUsage.provider, BRIGHTDATA_PROVIDER), eq(providerUsage.product, RECORDS_PRODUCT), eq(providerUsage.status, "settled"),
-      gte(providerUsage.createdAt, since), sql`${providerUsage.detail} ->> 'collectionKey' = ${key}`, sql`${providerUsage.detail} ->> 'snapshotId' is not null`, sql`coalesce((${providerUsage.detail} ->> 'records')::int, 0) > 0`,
+      eq(providerUsage.credentialSource, source), gte(providerUsage.createdAt, since), sql`${providerUsage.detail} ->> 'collectionKey' = ${key}`, sql`${providerUsage.detail} ->> 'snapshotId' is not null`, sql`coalesce((${providerUsage.detail} ->> 'records')::int, 0) > 0`,
     ))
     .orderBy(desc(providerUsage.createdAt)).limit(1);
   return row ?? null;
@@ -311,11 +364,11 @@ export async function startCollection(input: {
   const readiness = await brightdataReadiness();
   if (!readiness.usable) return { started: false, wait: false, exhausted: readiness.exhausted, reason: readiness.reason };
   // The same inputs settled recently, for this or another job: the snapshot is downloaded again, free.
-  const reusable = await reusableCollection(key);
+  const reusable = await reusableCollection(key, readiness.source);
   if (reusable) {
     const snapshotId = String(reusable.detail!.snapshotId);
     const [row] = await db.insert(providerUsage).values({
-      organizationId: currentOrganizationId(), provider: BRIGHTDATA_PROVIDER, product: RECORDS_PRODUCT, scopeKey: null, units: 0, usedUnits: 0, status: "settled",
+      organizationId: currentOrganizationId(), provider: BRIGHTDATA_PROVIDER, product: RECORDS_PRODUCT, scopeKey: null, units: 0, usedUnits: 0, status: "settled", credentialSource: readiness.source,
       jobId: input.jobId, threadId: input.threadId ?? null, settledAt: new Date(),
       detail: { dataset: spec.dataset, method: spec.discoverBy, collectionKey: key, snapshotId, reusedFrom: reusable.id, records: reusable.detail?.records ?? null, ...(input.requestId ? { requestId: input.requestId } : {}) },
     }).returning({ id: providerUsage.id });
@@ -325,12 +378,15 @@ export async function startCollection(input: {
   const reservation = await reserveQuota({
     provider: BRIGHTDATA_PROVIDER, product: RECORDS_PRODUCT, scopeKey: null, units, limits: {}, label: "Bright Data",
     jobId: input.jobId, threadId: input.threadId ?? null,
+    credentialSource: readiness.source,
+    ...(readiness.source === "managed" ? { managed: { allowance: "brightdata_credits" as const, amount: units } } : {}),
     detail: { dataset: spec.dataset, method: spec.discoverBy, inputs: spec.inputs.slice(0, 20), limitPerInput: spec.limitPerInput, collectionKey: key, attempt, ...(input.requestId ? { requestId: input.requestId } : {}) },
     guard: async (tx) => {
       // The owner's monthly limit, checked again under the organization's lock with every open reservation…
       await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`brightdata-start:${currentOrganizationId()}`}, 0))`);
       const usage = await monthUsage(tx);
-      const left = readiness.settings.monthlyCredits - usage.used - usage.reserved;
+      // On the Included service the included allowance and the platform budget are checked after this guard (reserveQuota).
+      const left = readiness.source === "managed" ? Number.POSITIVE_INFINITY : readiness.settings.monthlyCredits - usage.used - usage.reserved;
       if (left < units) {
         hold = { wait: false, budget: false, exhausted: left < 1, slotsFull: false };
         return left < 1
@@ -351,7 +407,7 @@ export async function startCollection(input: {
       return null;
     },
   });
-  if (!reservation.ok) return { started: false, wait: hold.wait, exhausted: hold.exhausted, budget: hold.budget, slotsFull: hold.slotsFull, reason: reservation.reason };
+  if (!reservation.ok) return { started: false, wait: hold.wait, exhausted: hold.exhausted || Boolean(reservation.allowance), budget: hold.budget, slotsFull: hold.slotsFull, reason: reservation.reason };
   try {
     const { snapshotId } = await triggerCollection(readiness.key, {
       datasetId: BRIGHTDATA_DATASETS[spec.dataset].datasetId,
@@ -411,7 +467,7 @@ export async function pollCollection(usageId: string, options: { stopWaiting?: b
   const row = await usageRow(usageId);
   const snapshotId = typeof row?.detail?.snapshotId === "string" ? row.detail.snapshotId : null;
   if (!row || !snapshotId) throw new BrightdataError(null, "The Bright Data collection was not recorded");
-  const key = await savedKey();
+  const key = await savedKey(row.credentialSource);
   // Without the key nothing can be read or cancelled; Bright Data may still deliver it.
   if (!key) return giveUp(row, snapshotId, null, "the Bright Data key was removed while the collection was open");
   let progress;
@@ -461,10 +517,12 @@ export async function serpSearchThroughBrightdata(query: string, input: { jobId:
   const reservation = await reserveQuota({
     provider: BRIGHTDATA_PROVIDER, product: SERP_PRODUCT, scopeKey: null, units: 1, limits: {}, label: "Bright Data SERP",
     jobId: input.jobId, threadId: input.threadId ?? null, detail: { query: query.slice(0, 200), zone, ...(input.requestId ? { requestId: input.requestId } : {}) },
+    credentialSource: readiness.source,
+    ...(readiness.source === "managed" ? { managed: { allowance: "brightdata_credits" as const, amount: 1 } } : {}),
     guard: async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`brightdata-start:${currentOrganizationId()}`}, 0))`);
       const usage = await monthUsage(tx);
-      if (readiness.settings.monthlyCredits - usage.used - usage.reserved < 1) return "this month's Bright Data limit is used up";
+      if (readiness.source === "own" && readiness.settings.monthlyCredits - usage.used - usage.reserved < 1) return "this month's Bright Data limit is used up";
       if (!input.spendGuard) return null;
       const room = await input.spendGuard(tx as Parameters<SpendGuard>[0], BRIGHTDATA_USD_PER_CREDIT);
       if (!room.ok) {

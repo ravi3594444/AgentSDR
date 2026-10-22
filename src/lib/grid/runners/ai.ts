@@ -1,5 +1,5 @@
 import { getAiConnection, getAiCredentials } from "@/lib/ai/connections";
-import { getByokSettings } from "@/lib/ai/byok";
+import { getByokSettings, isManagedAiConnectionId } from "@/lib/ai/byok";
 import { RUNTIME_PROVIDERS, isRuntimeProvider } from "@/lib/ai/runtimePlan";
 import { getAiModel, getAiProvider, promptColumnKeys } from "@/lib/ai/catalog";
 import { getAiRunner } from "@/lib/ai/server/registry";
@@ -72,6 +72,8 @@ export const aiRunner: ColumnRunner<AiConfig> = {
     if (!invoke) throw new PermanentRunError(`${provider.name} is not available`);
 
     const settings = await getByokSettings();
+    // A workspace on the Included AI service runs its tables' AI columns on its own provider only.
+    if (isManagedAiConnectionId(settings.connectionId)) throw new PermanentRunError("AI columns in tables run on your own AI provider: choose My own provider for AI in Settings → Advanced → Use your own providers.");
     const connection = settings.connectionId ? await getAiConnection(settings.connectionId) : null;
     if (!connection || !connection.verified) {
       throw new PermanentRunError(`Connect a verified ${provider.name} account`);

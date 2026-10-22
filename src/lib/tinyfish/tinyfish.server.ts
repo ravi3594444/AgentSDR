@@ -7,6 +7,10 @@ import { decryptIntegrationCredential, encryptIntegrationCredential } from "@/li
 import { waitFromRefusal } from "@/lib/quota/quota";
 import { blockQuota, quotaState, reserveQuota, settleQuota, usedToday } from "@/lib/quota/quota.server";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
+import { MANAGED_LIMITS } from "@/lib/managed/allowances";
+import type { ServiceMode } from "@/lib/managed/catalog";
+import { chooseOwnOnSave, serviceMode } from "@/lib/managed/modes.server";
+import { getPlatformCredential } from "@/lib/managed/store.server";
 import { tinyfishFetch, TinyfishError, tinyfishSearch, type TinyfishSearchInput } from "@/services/tinyfish";
 import {
   browserMinutesProblem,
@@ -73,18 +77,42 @@ export function keyScopeOf(key: string): string {
   return `tinyfish:${createHash("sha256").update(key).digest("hex")}`;
 }
 
-export type TinyfishConnection = { key: string; scopeKey: string; useForWebSearch: boolean; browserMinutesPerDay: number };
+export type TinyfishConnection = { key: string; scopeKey: string; useForWebSearch: boolean; browserMinutesPerDay: number; source: ServiceMode };
 
-/** The saved key and preferences, or null when no key is saved. */
+/**
+ * The key and preferences this organization uses, or null when it has none:
+ * on the Included service the platform's key (its free allowance shared by
+ * every Included workspace, the metered browser kept off), on My own
+ * provider its own saved key. Never one for the other.
+ */
 export async function tinyfishConnection(): Promise<TinyfishConnection | null> {
   const row = await settingsRow();
+  if ((await serviceMode("tinyfish")) === "managed") {
+    const key = (await getPlatformCredential("tinyfish"))?.apiKey;
+    if (!key) return null;
+    return { key, scopeKey: keyScopeOf(key), useForWebSearch: row?.useForWebSearch ?? true, browserMinutesPerDay: MANAGED_LIMITS.tinyfishBrowserMinutesPerDay, source: "managed" };
+  }
   if (!row?.encryptedKey) return null;
   const key = decryptIntegrationCredential(row.encryptedKey);
-  return { key, scopeKey: row.keyScope ?? keyScopeOf(key), useForWebSearch: row.useForWebSearch, browserMinutesPerDay: row.browserMinutesPerDay };
+  return { key, scopeKey: row.keyScope ?? keyScopeOf(key), useForWebSearch: row.useForWebSearch, browserMinutesPerDay: row.browserMinutesPerDay, source: "own" };
 }
 
 export async function tinyfishSettingsView(): Promise<TinyfishSettingsView> {
   const row = await settingsRow();
+  if ((await serviceMode("tinyfish")) === "managed") {
+    // The platform's key and its shared counters are not shown: only this workspace's own use today.
+    const connected = Boolean((await getPlatformCredential("tinyfish"))?.apiKey);
+    return {
+      included: true,
+      connected,
+      keyHint: null,
+      useForWebSearch: row?.useForWebSearch ?? true,
+      browserMinutesPerDay: MANAGED_LIMITS.tinyfishBrowserMinutesPerDay,
+      today: { searches: await usedToday(TINYFISH_PROVIDER, "search"), fetchedUrls: await usedToday(TINYFISH_PROVIDER, "fetch"), browserMinutes: 0 },
+      waitingUntil: null,
+      waitingReason: null,
+    };
+  }
   const connected = Boolean(row?.encryptedKey);
   let searches = 0;
   let fetchedUrls = 0;
@@ -151,6 +179,8 @@ export async function saveTinyfishSettings(
   const values = { encryptedKey, keyHint: hint, keyScope, useForWebSearch, browserMinutesPerDay, updatedBy: userId, updatedAt: new Date() };
   await db.insert(tinyfishSettings).values({ organizationId: currentOrganizationId(), ...values })
     .onConflictDoUpdate({ target: tinyfishSettings.organizationId, set: values });
+  // Saving a key of its own, with no explicit choice yet, is the choice of My own provider.
+  if (typeof input.key === "string" && input.key.trim()) await chooseOwnOnSave("tinyfish", userId);
   return tinyfishSettingsView();
 }
 
@@ -179,10 +209,12 @@ async function recordRefusal(scopeKey: string, product: "search" | "fetch", erro
   throw error;
 }
 
-async function guardedSearch(connection: Pick<TinyfishConnection, "key" | "scopeKey">, input: TinyfishSearchInput, context: CallContext): Promise<TinyfishSearchHit[]> {
+async function guardedSearch(connection: Pick<TinyfishConnection, "key" | "scopeKey"> & { source?: ServiceMode }, input: TinyfishSearchInput, context: CallContext): Promise<TinyfishSearchHit[]> {
   const reservation = await reserveQuota({
     provider: TINYFISH_PROVIDER, product: "search", scopeKey: connection.scopeKey, units: 1,
     limits: TINYFISH_FREE_LIMITS.search, label: "TinyFish Search",
+    credentialSource: connection.source ?? "own",
+    ...(connection.source === "managed" ? { managed: { allowance: "tinyfish_search" as const, amount: 1 } } : {}),
     jobId: context.jobId, threadId: context.threadId, detail: { query: input.query.slice(0, 200), ...context.detail },
   });
   if (!reservation.ok) throw new TinyfishWaitError(reservation.until, reservation.reason);
@@ -219,6 +251,8 @@ export async function fetchWithTinyfish(urls: string[], context: CallContext & {
   const reservation = await reserveQuota({
     provider: TINYFISH_PROVIDER, product: "fetch", scopeKey: connection.scopeKey, units: batch.length,
     limits: TINYFISH_FREE_LIMITS.fetch, label: "TinyFish Fetch",
+    credentialSource: connection.source,
+    ...(connection.source === "managed" ? { managed: { allowance: "tinyfish_fetch" as const, amount: batch.length } } : {}),
     jobId: context.jobId, threadId: context.threadId, detail: { urls: batch.map((url) => url.slice(0, 300)), ...context.detail },
   });
   if (!reservation.ok) throw new TinyfishWaitError(reservation.until, reservation.reason);

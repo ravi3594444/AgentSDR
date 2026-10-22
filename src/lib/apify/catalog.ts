@@ -99,6 +99,8 @@ export const APIFY_LIMITS = {
 
 /** What the settings card shows and saves (never the token itself). */
 export type ApifySettingsView = {
+  /** On the Included service: the platform's token; the budget is the workspace's included allowance. */
+  included?: boolean;
   connected: boolean;
   tokenHint: string | null;
   approvedActors: ApifyActorKey[];

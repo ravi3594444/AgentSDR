@@ -6,6 +6,8 @@ import { AIML_PROVIDER_KEY, AIML_PROVIDER_NAME } from "@/lib/ai/aimlapi-types";
 import { getByokSettings } from "@/lib/ai/byok";
 import { getAiConnection, getAiCredentials } from "@/lib/ai/connections";
 import { createAimlClient } from "@/lib/ai/server/aimlapi";
+import { isManagedAiConnectionId } from "@/lib/ai/byok";
+import { meteredAiClient } from "@/lib/managed/aiMeter.server";
 import { assistantJobs } from "@/lib/assistant/schema";
 import { isTransientOpenRouterError } from "@/lib/ai/server/openrouter-errors";
 import { companies } from "@/lib/leads/schema";
@@ -108,7 +110,12 @@ export async function researchRuntime(timeoutMs = RESEARCH_TIMEOUT_MS) {
   const credentials = await getAiCredentials(connection.id);
   if (!credentials?.apiKey) throw new ResearchError(409, `Reconnect ${AIML_PROVIDER_NAME} in Settings → AI provider.`);
   return {
-    client: createAimlClient(credentials.apiKey, timeoutMs),
+    // Metered like every model call (src/lib/managed/aiMeter.server.ts); on the Included engine, within the AI allowance.
+    client: meteredAiClient(createAimlClient(credentials.apiKey, timeoutMs), {
+      source: isManagedAiConnectionId(connection.id) ? "managed" : "own",
+      engine: "aimlapi",
+      model: settings.researchModel.modelId,
+    }),
     model: settings.researchModel.modelId,
     dailyLimit: settings.researchDailyLimit,
   };

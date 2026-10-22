@@ -62,6 +62,8 @@ export const TINYFISH_LIMITS = {
 
 /** What Settings → Lead research → TinyFish shows and edits (never the key). */
 export type TinyfishSettingsView = {
+  /** On the Included service: the platform's key; no key, hint or shared counters are shown. */
+  included?: boolean;
   connected: boolean;
   keyHint: string | null;
   /** Web searches use TinyFish while connected; off sends them to Tavily or the AI provider instead. */

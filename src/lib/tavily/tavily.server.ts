@@ -10,6 +10,10 @@ import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { getTavilyUsage, TavilyError } from "@/services/tavily";
 import { TAVILY_LIMITS, tavilyPlanOf, type TavilySettingsView } from "./catalog";
 import { tavilySettings } from "./schema";
+import { MANAGED_LIMITS } from "@/lib/managed/allowances";
+import type { ServiceMode } from "@/lib/managed/catalog";
+import { chooseOwnOnSave, serviceMode } from "@/lib/managed/modes.server";
+import { getPlatformCredential } from "@/lib/managed/store.server";
 
 /**
  * The organization's Tavily key and its daily cap. Searches are counted
@@ -35,10 +39,18 @@ async function settingsRow(): Promise<SettingsRow | null> {
   }
 }
 
-/** The saved key and cap, or null when no key is saved. */
-export async function tavilyConnection(): Promise<{ key: string; dailySearches: number } | null> {
+/**
+ * The key and daily cap this organization uses, or null when it has none:
+ * on the Included service the platform's key with the Included daily cap,
+ * on My own provider its own saved key and cap. Never one for the other.
+ */
+export async function tavilyConnection(): Promise<{ key: string; dailySearches: number; source: ServiceMode } | null> {
+  if ((await serviceMode("tavily")) === "managed") {
+    const key = (await getPlatformCredential("tavily"))?.apiKey;
+    return key ? { key, dailySearches: MANAGED_LIMITS.tavilyDailySearches, source: "managed" } : null;
+  }
   const row = await settingsRow();
-  return row?.encryptedKey ? { key: decryptIntegrationCredential(row.encryptedKey), dailySearches: row.dailySearches } : null;
+  return row?.encryptedKey ? { key: decryptIntegrationCredential(row.encryptedKey), dailySearches: row.dailySearches, source: "own" } : null;
 }
 
 /** Tavily searches the organization used in the last 24 hours: its website searches' queries, and the assistant's own web searches (provider_usage). */
@@ -68,6 +80,17 @@ export async function tavilySearchesToday(executor: Pick<typeof db, "select"> = 
 
 export async function tavilySettingsView(): Promise<TavilySettingsView> {
   const row = await settingsRow();
+  if ((await serviceMode("tavily")) === "managed") {
+    // The platform's key and its plan are not shown: only this workspace's own searches.
+    return {
+      included: true,
+      connected: Boolean((await getPlatformCredential("tavily"))?.apiKey),
+      keyHint: null,
+      dailySearches: MANAGED_LIMITS.tavilyDailySearches,
+      searchesToday: await tavilySearchesToday(),
+      plan: null,
+    };
+  }
   let plan: TavilySettingsView["plan"] = null;
   if (row?.encryptedKey) {
     // Read live (it spends no credits); a slow or failing answer only leaves the plan line out.
@@ -116,5 +139,6 @@ export async function saveTavilySettings(input: { key?: unknown; dailySearches?:
   const values = { encryptedKey, keyHint, dailySearches, updatedBy: userId, updatedAt: new Date() };
   await db.insert(tavilySettings).values({ organizationId: currentOrganizationId(), ...values })
     .onConflictDoUpdate({ target: tavilySettings.organizationId, set: values });
+  if (typeof input.key === "string" && input.key.trim()) await chooseOwnOnSave("tavily", userId);
   return tavilySettingsView();
 }

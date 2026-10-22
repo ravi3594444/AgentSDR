@@ -18,6 +18,11 @@ import { APIFY_ACTORS, APIFY_LIMITS, isApifyActorKey, type ApifyActorKey, type A
 import { apifyAllowance, looksExhausted, runOutcome } from "./mapping";
 import { apifyRuns, apifySettings, type ApifyRunRow } from "./schema";
 import type { SpendGuard } from "@/lib/assistant/objective.server";
+import { MANAGED_LIMITS } from "@/lib/managed/allowances";
+import type { ServiceMode } from "@/lib/managed/catalog";
+import { chooseOwnOnSave, serviceMode } from "@/lib/managed/modes.server";
+import { getPlatformCredential } from "@/lib/managed/store.server";
+import { allowanceFor, checkManagedAllowance } from "@/lib/managed/usage.server";
 
 /**
  * The organization's Apify connection and its runs. Every run is recorded
@@ -46,18 +51,33 @@ function monthStart(now = new Date()): Date {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
 }
 
-/** This month's spend (UTC): reported usage of finished runs, and the caps of runs still open. */
-async function monthUsage(executor: Pick<typeof db, "select"> = db): Promise<{ spentUsd: number; reservedUsd: number; openRuns: number }> {
+/** This month's spend (UTC): reported usage of finished runs, and the caps of runs still open; `source` narrows it to one account's runs. */
+async function monthUsage(executor: Pick<typeof db, "select"> = db, source?: ServiceMode): Promise<{ spentUsd: number; reservedUsd: number; openRuns: number }> {
   const [row] = await executor.select({
     spent: sql<number>`coalesce(sum(case when ${apifyRuns.status} in ('starting', 'running') then 0 else coalesce(${apifyRuns.usageUsd}, 0) end), 0)::float8`,
     reserved: sql<number>`coalesce(sum(case when ${apifyRuns.status} in ('starting', 'running') then ${apifyRuns.maxChargeUsd} else 0 end), 0)::float8`,
     open: sql<number>`count(*) filter (where ${apifyRuns.status} in ('starting', 'running'))::int`,
-  }).from(apifyRuns).where(and(inOrg(apifyRuns), gte(apifyRuns.createdAt, monthStart())));
+  }).from(apifyRuns).where(and(inOrg(apifyRuns), gte(apifyRuns.createdAt, monthStart()), ...(source ? [eq(apifyRuns.credentialSource, source)] : [])));
   return { spentUsd: Number(row?.spent ?? 0), reservedUsd: Number(row?.reserved ?? 0), openRuns: Number(row?.open ?? 0) };
 }
 
 export async function apifySettingsView(): Promise<ApifySettingsView> {
   const row = await settingsRow();
+  if ((await serviceMode("apify")) === "managed") {
+    // The platform's token is not shown; the budget is the workspace's included allowance, its spend this workspace's own.
+    const usage = await monthUsage(db, "managed");
+    return {
+      included: true,
+      connected: Boolean((await getPlatformCredential("apify"))?.apiKey),
+      tokenHint: null,
+      approvedActors: Object.keys(APIFY_ACTORS).filter(isApifyActorKey),
+      monthlyBudgetUsd: allowanceFor("apify_usd").workspace,
+      maxChargePerRunUsd: MANAGED_LIMITS.apifyMaxChargePerRunUsd,
+      maxResultsPerRun: MANAGED_LIMITS.apifyMaxResultsPerRun,
+      spentThisMonthUsd: Math.round(usage.spentUsd * 10_000) / 10_000,
+      reservedUsd: Math.round(usage.reservedUsd * 10_000) / 10_000,
+    };
+  }
   const usage = row ? await monthUsage() : { spentUsd: 0, reservedUsd: 0, openRuns: 0 };
   return {
     connected: Boolean(row?.encryptedToken),
@@ -107,13 +127,14 @@ export async function saveApifySettings(
   const values = { encryptedToken, tokenHint, approvedActors: approved, monthlyBudgetUsd, maxChargePerRunUsd, maxResultsPerRun, updatedBy: userId, updatedAt: new Date() };
   await db.insert(apifySettings).values({ organizationId: currentOrganizationId(), ...values })
     .onConflictDoUpdate({ target: apifySettings.organizationId, set: values });
+  if (typeof input.token === "string" && input.token.trim()) await chooseOwnOnSave("apify", userId);
   return apifySettingsView();
 }
 
 type AccountLimits = { maxMonthlyUsageUsd: number | null; monthlyUsageUsd: number | null };
 
 export type ApifyReadiness =
-  | { usable: true; token: string; maxChargeUsd: number; maxItems: number; settings: SettingsRow; account: AccountLimits }
+  | { usable: true; token: string; maxChargeUsd: number; maxItems: number; settings: SettingsRow; account: AccountLimits; source: ServiceMode }
   | { usable: false; exhausted: boolean; slotsFull?: boolean; reason: string };
 
 /**
@@ -124,12 +145,34 @@ export type ApifyReadiness =
  */
 export async function apifyReadiness(actor: ApifyActorKey, wantedItems: number): Promise<ApifyReadiness> {
   if (!(await featureEnabled("apify_discovery"))) return { usable: false, exhausted: false, reason: "Apify discovery is off for this organization" };
-  const row = await settingsRow();
-  if (!row?.encryptedToken) return { usable: false, exhausted: false, reason: "no Apify token is saved" };
-  if (!row.approvedActors.includes(actor)) return { usable: false, exhausted: false, reason: `the ${APIFY_ACTORS[actor].label} is not approved in Settings → Providers & features → Apify` };
-  const token = decryptIntegrationCredential(row.encryptedToken);
+  const source = await serviceMode("apify");
+  let row: SettingsRow | null;
+  let token: string;
+  if (source === "managed") {
+    // The platform's token: every catalog Actor, the Included per-run limits, and the
+    // workspace's included allowance as its budget (the platform budget is checked under the lock).
+    const managed = (await getPlatformCredential("apify"))?.apiKey;
+    if (!managed) return { usable: false, exhausted: false, reason: "the included Maps and Instagram discovery is not available right now" };
+    token = managed;
+    row = {
+      organizationId: currentOrganizationId(),
+      encryptedToken: null,
+      tokenHint: null,
+      approvedActors: Object.keys(APIFY_ACTORS).filter(isApifyActorKey),
+      monthlyBudgetUsd: allowanceFor("apify_usd").workspace,
+      maxChargePerRunUsd: MANAGED_LIMITS.apifyMaxChargePerRunUsd,
+      maxResultsPerRun: MANAGED_LIMITS.apifyMaxResultsPerRun,
+      updatedBy: null,
+      updatedAt: new Date(),
+    };
+  } else {
+    row = await settingsRow();
+    if (!row?.encryptedToken) return { usable: false, exhausted: false, reason: "no Apify token is saved" };
+    if (!row.approvedActors.includes(actor)) return { usable: false, exhausted: false, reason: `the ${APIFY_ACTORS[actor].label} is not approved in Settings → Providers & features → Apify` };
+    token = decryptIntegrationCredential(row.encryptedToken);
+  }
   await sweepStaleRuns();
-  const usage = await monthUsage();
+  const usage = await monthUsage(db, source === "managed" ? "managed" : undefined);
   let account: AccountLimits | null = null;
   try {
     account = await getApifyAccountLimits(token);
@@ -148,11 +191,12 @@ export async function apifyReadiness(actor: ApifyActorKey, wantedItems: number):
     account,
   });
   if (!allowance.ok) return { usable: false, exhausted: allowance.exhausted, slotsFull: allowance.slotsFull, reason: allowance.reason };
-  return { usable: true, token, maxChargeUsd: allowance.maxChargeUsd, maxItems: Math.max(1, Math.min(wantedItems, row.maxResultsPerRun)), settings: row, account: account! };
+  return { usable: true, token, maxChargeUsd: allowance.maxChargeUsd, maxItems: Math.max(1, Math.min(wantedItems, row.maxResultsPerRun)), settings: row, account: account!, source };
 }
 
-/** The token of the organization's saved connection (for polling a run already started). */
-async function savedToken(): Promise<string | null> {
+/** The token a run was started with, for polling it: the platform's for an Included run, the organization's own otherwise. */
+async function savedToken(source: ServiceMode): Promise<string | null> {
+  if (source === "managed") return (await getPlatformCredential("apify"))?.apiKey ?? null;
   const row = await settingsRow();
   return row?.encryptedToken ? decryptIntegrationCredential(row.encryptedToken) : null;
 }
@@ -239,7 +283,7 @@ export async function startTrackedRun(input: {
   const reserved = await db.transaction(async (tx) => {
     // …then the owner's budget is checked again and the run reserved under the organization's lock.
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`apify-start:${currentOrganizationId()}`}, 0))`);
-    const usage = await monthUsage(tx);
+    const usage = await monthUsage(tx, readiness.source === "managed" ? "managed" : undefined);
     const allowance = apifyAllowance({
       monthlyBudgetUsd: readiness.settings.monthlyBudgetUsd,
       maxChargePerRunUsd: readiness.settings.maxChargePerRunUsd,
@@ -254,6 +298,11 @@ export async function startTrackedRun(input: {
     if (room && !room.ok) return { usable: false as const, exhausted: false, slotsFull: room.wait, budget: !room.wait, reason: room.reason };
     const maxChargeUsd = room ? Math.floor(Math.min(allowance.maxChargeUsd, room.maxUsd) * 100) / 100 : allowance.maxChargeUsd;
     if (maxChargeUsd <= 0) return { usable: false as const, exhausted: false, slotsFull: false, budget: true, reason: "this request's spend cap leaves less than a cent for an Apify run" };
+    // Included: the run's cap against the workspace allowance and the platform budget, under the allowance's lock.
+    if (readiness.source === "managed") {
+      const over = await checkManagedAllowance(tx, "apify_usd", maxChargeUsd);
+      if (over) return { usable: false as const, exhausted: true, slotsFull: false, reason: over.message };
+    }
     const [row] = await tx.insert(apifyRuns).values({
       organizationId: currentOrganizationId(),
       jobId: input.jobId,
@@ -263,6 +312,7 @@ export async function startTrackedRun(input: {
       status: "starting",
       maxChargeUsd,
       maxItems: readiness.maxItems,
+      credentialSource: readiness.source,
     }).returning();
     return { usable: true as const, row: row!, token: readiness.token };
   });
@@ -313,7 +363,7 @@ export type PolledRun =
 export async function pollTrackedRun(rowId: string, options: { stopWaiting?: boolean } = {}): Promise<PolledRun> {
   const row = await trackedRun(rowId);
   if (!row?.apifyRunId) throw new ApifyError(null, null, "The Apify run was not recorded");
-  const token = await savedToken();
+  const token = await savedToken(row.credentialSource);
   if (!token) {
     await finishRow(row, { status: "failed", error: "The Apify token was removed while the run was open", usageUsd: row.usageUsd, itemsRead: 0, partial: true });
     return { state: "finished", items: [], partial: true, exhausted: false, note: "The Apify token was removed while the run was open.", row };

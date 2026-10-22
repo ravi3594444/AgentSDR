@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getByokSettings, saveByokSettings } from "@/lib/ai/byok";
+import { getOwnByokSettings, isManagedAiConnectionId, saveByokSettings } from "@/lib/ai/byok";
 import { normalizeByokSettings } from "@/lib/ai/openrouter-types";
 import { getAiConnection, getAiCredentials } from "@/lib/ai/connections";
 import { listOpenRouterByokCatalog } from "@/lib/ai/server/openrouter";
@@ -10,7 +10,8 @@ import { authContextErrorResponse, requirePermission, withOrgContext } from "@/l
 export async function GET(request: NextRequest) {
   try {
     return await withOrgContext(request, async () => {
-      return NextResponse.json(await getByokSettings());
+      // The workspace's own settings only: the Included engine's configuration never reaches the browser.
+      return NextResponse.json(await getOwnByokSettings());
     });
   } catch (error) {
     const response = authContextErrorResponse(error);
@@ -27,6 +28,7 @@ export async function PUT(req: NextRequest) {
         return NextResponse.json({ error: "Invalid settings" }, { status: 400 });
       }
       const settings = normalizeByokSettings(body);
+      if (isManagedAiConnectionId(settings.connectionId)) return NextResponse.json({ error: "Choose one of this workspace's own AI connections" }, { status: 400 });
       // AI/ML API: one key and its catalog; none of OpenRouter's BYOK rules below apply.
       const selected = settings.connectionId ? await getAiConnection(settings.connectionId) : null;
       if (selected?.providerKey === AIML_PROVIDER_KEY) {

@@ -1,7 +1,7 @@
 import "server-only";
 
 import { AIML_PROVIDER_KEY, AIML_PROVIDER_NAME } from "@/lib/ai/aimlapi-types";
-import { getByokSettings } from "@/lib/ai/byok";
+import { getByokSettings, isManagedAiConnectionId } from "@/lib/ai/byok";
 import { getAiConnection, type AiConnection } from "@/lib/ai/connections";
 import { openRouterTokenLimit, type ByokSettings } from "@/lib/ai/openrouter-types";
 import { planAiRuntime } from "@/lib/ai/runtimePlan";
@@ -124,17 +124,19 @@ export function webSearchAvailabilityFrom(
   if (tinyfish?.connected && tinyfish.useForWebSearch) return { available: true, provider: "tinyfish", model: TINYFISH_SEARCH_MODEL, reason: null };
   if (tavily?.connected) return { available: true, provider: "tavily", model: TAVILY_SEARCH_MODEL, reason: null };
   if (!settings.connectionId || !connection) return unavailable(NO_PROVIDER);
-  if (!connection.verified) return unavailable(`The AI connection in Settings → AI provider is not verified. ${NO_PROVIDER}`);
+  // The Included AI engine searches like the same engine would, but its model is the platform's configuration: not named.
+  const included = isManagedAiConnectionId(settings.connectionId);
+  if (!connection.verified) return unavailable(included ? NO_PROVIDER : `The AI connection in Settings → AI provider is not verified. ${NO_PROVIDER}`);
   if (connection.providerKey === "openrouter") {
     const planned = planAiRuntime(settings, connection);
-    if (!planned.ok) return unavailable(`OpenRouter cannot search yet: ${planned.error}.`);
-    return { available: true, provider: "openrouter", model: planned.plan.selection.modelId, reason: null };
+    if (!planned.ok) return unavailable(included ? NO_PROVIDER : `OpenRouter cannot search yet: ${planned.error}.`);
+    return { available: true, provider: "openrouter", model: included ? "included AI" : planned.plan.selection.modelId, reason: null };
   }
   if (connection.providerKey === AIML_PROVIDER_KEY) {
     if (!settings.researchModel) {
-      return unavailable(`${AIML_PROVIDER_NAME} searches the web only with a web research model: choose one in Settings → AI provider (step 4), e.g. Perplexity Sonar.`);
+      return unavailable(included ? NO_PROVIDER : `${AIML_PROVIDER_NAME} searches the web only with a web research model: choose one in Settings → AI provider (step 4), e.g. Perplexity Sonar.`);
     }
-    return { available: true, provider: AIML_PROVIDER_KEY, model: settings.researchModel.modelId, reason: null };
+    return { available: true, provider: AIML_PROVIDER_KEY, model: included ? "included AI" : settings.researchModel.modelId, reason: null };
   }
   return unavailable(NO_PROVIDER);
 }
@@ -156,7 +158,7 @@ export type WebSearchRuntime =
       /** OpenRouter's strict provider routing; nothing for AI/ML API. */
       routing: Record<string, unknown>;
     }
-  | { provider: "tavily"; model: string; key: string }
+  | { provider: "tavily"; model: string; key: string; source?: "managed" | "own" }
   | { provider: "tinyfish"; model: string };
 
 /** The runtime of the provider a search must use: the one its website search started with, when given. */
@@ -171,7 +173,7 @@ async function loadRuntime(expected?: WebSearchProvider | null): Promise<WebSear
   if (availability.provider === "tavily") {
     const tavily = await tavilyConnection();
     if (!tavily) throw new WebSearchUnavailableError(NO_PROVIDER);
-    return { provider: "tavily", model: TAVILY_SEARCH_MODEL, key: tavily.key };
+    return { provider: "tavily", model: TAVILY_SEARCH_MODEL, key: tavily.key, source: tavily.source };
   }
   if (availability.provider === "openrouter") {
     const runtime = await getAiRuntime(undefined, WEB_SEARCH_TIMEOUT_MS);
@@ -225,15 +227,28 @@ export async function searchWeb(
     return { query: keywords, sources: hits.map(({ url, title, snippet }) => ({ url, title, snippet })), costUsd: 0, provider: "tinyfish", model: runtime.model };
   }
   if (runtime.provider === "tavily") {
+    // On the platform's key (an Included service) every search is reserved against the
+    // workspace's allowance first; the website-search job already counted it in the daily cap,
+    // so it is recorded under its own product ("website_search") that the cap does not read.
+    const reservation = runtime.source === "managed"
+      ? await reserveQuota({ provider: "tavily", product: "website_search", scopeKey: null, units: 1, limits: {}, label: "Tavily", jobId: dependencies.jobId ?? null, detail: { query: question.slice(0, 200) }, credentialSource: "managed", managed: { allowance: "tavily_search", amount: 1 } })
+      : null;
+    if (reservation && !reservation.ok) throw new WebSearchUnavailableError(reservation.reason);
     let body: unknown;
     try {
-      body = await tavilySearch(runtime.key, question, TAVILY_LIMITS.resultsPerSearch);
+      try {
+        body = await tavilySearch(runtime.key, question, TAVILY_LIMITS.resultsPerSearch);
+      } catch (error) {
+        // One retry, only when Tavily said it is busy (a rate limit is not billed).
+        if (!(error instanceof TavilyError && error.status === 429)) throw error;
+        await sleep(RETRY_DELAY_MS);
+        body = await tavilySearch(runtime.key, question, TAVILY_LIMITS.resultsPerSearch);
+      }
     } catch (error) {
-      // One retry, only when Tavily said it is busy (a rate limit is not billed).
-      if (!(error instanceof TavilyError && error.status === 429)) throw error;
-      await sleep(RETRY_DELAY_MS);
-      body = await tavilySearch(runtime.key, question, TAVILY_LIMITS.resultsPerSearch);
+      if (reservation?.ok) await settleQuota(reservation.usageId, { status: error instanceof TavilyError && error.status !== null ? "failed" : "uncertain", usedUnits: 1, error: error instanceof Error ? error.message : String(error) });
+      throw error;
     }
+    if (reservation?.ok) await settleQuota(reservation.usageId, { status: "settled", usedUnits: 1 });
     // The price depends on the Tavily plan (free credits first), so it is not guessed here.
     return { query: question, sources: tavilySources(body), costUsd: null, provider: "tavily", model: runtime.model };
   }
@@ -257,7 +272,7 @@ export async function searchWeb(
 
 export type GeneralSearchRoute =
   | { provider: "tinyfish" }
-  | { provider: "tavily"; key: string; dailySearches: number }
+  | { provider: "tavily"; key: string; dailySearches: number; source: "managed" | "own" }
   | { provider: null; reason: string };
 
 /**
@@ -271,7 +286,7 @@ export async function generalSearchRoute(): Promise<GeneralSearchRoute> {
   const tinyfish = await tinyfishConnection();
   if (tinyfish?.useForWebSearch) return { provider: "tinyfish" };
   const tavily = await tavilyConnection();
-  if (tavily) return { provider: "tavily", key: tavily.key, dailySearches: tavily.dailySearches };
+  if (tavily) return { provider: "tavily", key: tavily.key, dailySearches: tavily.dailySearches, source: tavily.source };
   return {
     provider: null,
     reason: tinyfish
@@ -297,7 +312,12 @@ export async function generalWebSearch(input: GeneralSearchInput, context: { thr
   }
   const problem = tavilyCapProblem(await tavilySearchesToday(), 1, route.dailySearches);
   if (problem) throw new WebSearchUnavailableError(`Tavily: ${problem}`);
-  const reservation = await reserveQuota({ provider: "tavily", product: "search", scopeKey: null, units: 1, limits: {}, label: "Tavily", threadId: context.threadId ?? null, detail: { query: query.slice(0, 200), ...(context.requestId ? { requestId: context.requestId } : {}) } });
+  const reservation = await reserveQuota({
+    provider: "tavily", product: "search", scopeKey: null, units: 1, limits: {}, label: "Tavily", threadId: context.threadId ?? null,
+    detail: { query: query.slice(0, 200), ...(context.requestId ? { requestId: context.requestId } : {}) },
+    credentialSource: route.source,
+    ...(route.source === "managed" ? { managed: { allowance: "tavily_search" as const, amount: 1 } } : {}),
+  });
   if (!reservation.ok) throw new WebSearchUnavailableError(reservation.reason);
   try {
     const body = await tavilySearch(route.key, query, 10);

@@ -65,6 +65,8 @@ export const apifyRuns = pgTable(
     itemsRead: integer("items_read").notNull().default(0),
     partial: boolean("partial").notNull().default(false),
     error: text("error"),
+    /** The platform's token ('managed', an Included service) or the organization's own ('own'); polled with the same one. */
+    credentialSource: text("credential_source").notNull().default("own").$type<"managed" | "own">(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
   },
@@ -72,6 +74,7 @@ export const apifyRuns = pgTable(
     unique("apify_runs_apify_run_id_uq").on(table.apifyRunId),
     index("apify_runs_org_created_idx").on(table.organizationId, table.createdAt),
     check("apify_runs_status_chk", sql`${table.status} IN ('starting', 'running', 'succeeded', 'partial', 'failed', 'refused')`),
+    check("apify_runs_credential_source_chk", sql`${table.credentialSource} IN ('managed', 'own')`),
   ],
 );
 

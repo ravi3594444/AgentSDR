@@ -11,6 +11,28 @@ import { gridProviderCredentials, gridProviders, type GridProvider } from "@/lib
 import { getAiProvider } from "./catalog";
 import { verifyAiCredentials } from "./server/verify";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
+import { serviceMode, chooseOwnOnSave } from "@/lib/managed/modes.server";
+import { getManagedAiSettings, getPlatformCredential } from "@/lib/managed/store.server";
+
+/** Must match MANAGED_AI_CONNECTION_ID in byok.ts (kept here too: byok.ts imports nothing from this file). */
+const MANAGED_AI_CONNECTION_ID = "included-ai";
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The Included AI engine as a connection, only for an organization on the
+ * Included service: anything else asking for this id (an own-provider
+ * organization that wrote it into its settings) gets nothing.
+ */
+async function managedAiConnection(): Promise<{ connection: AiConnection; credentials: Record<string, string> | null } | null> {
+  if ((await serviceMode("ai")) !== "managed") return null;
+  const settings = await getManagedAiSettings();
+  if (!settings.engine) return null;
+  const credentials = await getPlatformCredential(settings.engine);
+  return {
+    connection: { id: MANAGED_AI_CONNECTION_ID, providerKey: settings.engine, name: "Included AI", enabled: true, verified: Boolean(credentials?.apiKey) },
+    credentials: credentials?.apiKey ? credentials : null,
+  };
+}
 
 /**
  * AI provider accounts.
@@ -65,6 +87,8 @@ export async function listAiConnections(providerKey?: string): Promise<AiConnect
 }
 
 export async function getAiConnection(id: string): Promise<AiConnection | null> {
+  if (id === MANAGED_AI_CONNECTION_ID) return (await managedAiConnection())?.connection ?? null;
+  if (!UUID.test(id)) return null;
   const [row] = await db
     .select()
     .from(gridProviders)
@@ -122,10 +146,15 @@ export async function createAiConnection(input: {
       encryptedPayload: encryptIntegrationCredentials(credentials),
     });
     return toConnection(row);
+  }).then(async (connection) => {
+    // Connecting an AI account of its own, with no explicit choice yet, is the choice of My own provider.
+    await chooseOwnOnSave("ai", null);
+    return connection;
   });
 }
 
 export async function deleteAiConnection(id: string): Promise<boolean> {
+  if (!UUID.test(id)) return false;
   const deleted = await db
     .delete(gridProviders)
     .where(and(inOrg(gridProviders), eq(gridProviders.id, id), sql`${gridProviders.config} ? 'aiProviderKey'`))
@@ -135,6 +164,8 @@ export async function deleteAiConnection(id: string): Promise<boolean> {
 
 /** Decrypted only inside the runner, immediately before a provider call. */
 export async function getAiCredentials(id: string): Promise<Record<string, string> | null> {
+  if (id === MANAGED_AI_CONNECTION_ID) return (await managedAiConnection())?.credentials ?? null;
+  if (!UUID.test(id)) return null;
   const [row] = await db
     .select({
       provider: gridProviders,

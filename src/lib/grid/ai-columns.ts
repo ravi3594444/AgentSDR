@@ -1,7 +1,7 @@
 import { db } from "@/lib/db";
 import { and, eq } from "drizzle-orm";
 import { getAiModel } from "@/lib/ai/catalog";
-import { getByokSettings } from "@/lib/ai/byok";
+import { getByokSettings, isManagedAiConnectionId } from "@/lib/ai/byok";
 import { getAiConnection, getAiCredentials } from "@/lib/ai/connections";
 import { listOpenRouterByokCatalog } from "@/lib/ai/server/openrouter";
 import { listAimlModels } from "@/lib/ai/server/aimlapi";
@@ -33,6 +33,9 @@ export type AiColumnInput = {
 };
 
 async function assertUsable(input: AiColumnInput) {
+  if (isManagedAiConnectionId(input.connectionId) || isManagedAiConnectionId((await getByokSettings()).connectionId)) {
+    throw new Error("AI columns in tables run on your own AI provider: choose My own provider for AI in Settings → Advanced → Use your own providers.");
+  }
   const model = getAiModel(input.providerKey, input.modelKey, input.useCase);
   if (!model) throw new Error("Select an AI model");
   const connection = await getAiConnection(input.connectionId);

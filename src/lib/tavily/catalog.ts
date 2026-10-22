@@ -28,6 +28,8 @@ export const TAVILY_LIMITS = {
 
 /** What an owner sees and edits in Settings → Providers & features → Tavily (never the key). */
 export type TavilySettingsView = {
+  /** On the Included service: the platform's key; no key, hint or plan is shown. */
+  included?: boolean;
   connected: boolean;
   keyHint: string | null;
   dailySearches: number;

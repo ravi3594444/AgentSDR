@@ -5,6 +5,8 @@ import { db } from "@/lib/db";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { EMPTY_COUNTERS, quotaDecision, released, rolled, windowStarts, type QuotaCounters, type QuotaLimits } from "./quota";
 import { providerQuotaState, providerUsage, type ProviderUsageStatus } from "./schema";
+import type { AllowanceKey } from "@/lib/managed/allowances";
+import { checkManagedAllowance } from "@/lib/managed/usage.server";
 
 /**
  * Reserve, then settle: every metered or rate-limited provider call takes
@@ -42,7 +44,8 @@ async function writeState(tx: Executor, scopeKey: string, product: string, count
 
 export type QuotaReservation =
   | { ok: true; usageId: string; reservedAt: Date }
-  | { ok: false; until: Date; reason: string };
+  /** `allowance`: an Included service's monthly allowance or the platform budget refused it (until is its reset). */
+  | { ok: false; until: Date; reason: string; allowance?: AllowanceKey };
 
 export type ReserveInput = {
   provider: string;
@@ -64,6 +67,17 @@ export type ReserveInput = {
    * the reservation.
    */
   guard?: (tx: Pick<typeof db, "select" | "execute">) => Promise<string | null>;
+  /** Whose credentials do the work; recorded on the row. Default 'own'. */
+  credentialSource?: "managed" | "own";
+  /**
+   * An Included service (credentialSource 'managed'): `amount` of this
+   * allowance is checked against the workspace allowance and the platform
+   * budget under the allowance's platform-wide lock, in this transaction,
+   * after `guard` (src/lib/managed/usage.server.ts).
+   */
+  managed?: { allowance: AllowanceKey; amount: number };
+  /** US$ held while reserved, when the amount is money. */
+  costUsd?: number | null;
 };
 
 /** Takes `units` from the scope's quota and opens a ledger row, or says until when to wait. */
@@ -73,6 +87,10 @@ export async function reserveQuota(input: ReserveInput): Promise<QuotaReservatio
   return db.transaction(async (tx) => {
     const refused = input.guard ? await input.guard(tx) : null;
     if (refused) return { ok: false, until: now, reason: refused } as const;
+    if (input.managed) {
+      const over = await checkManagedAllowance(tx, input.managed.allowance, input.managed.amount, now);
+      if (over) return { ok: false, until: over.resetsAt ?? new Date(8.64e15), reason: over.message, allowance: input.managed.allowance } as const;
+    }
     if (input.scopeKey) {
       const decision = quotaDecision(await lockedState(tx, input.scopeKey, product), input.limits, input.units, now, input.label);
       if (!decision.ok) return decision;
@@ -88,6 +106,8 @@ export async function reserveQuota(input: ReserveInput): Promise<QuotaReservatio
       jobId: input.jobId ?? null,
       threadId: input.threadId ?? null,
       detail: input.detail ?? null,
+      credentialSource: input.credentialSource ?? (input.managed ? "managed" : "own"),
+      costUsd: input.costUsd === undefined || input.costUsd === null ? null : input.costUsd.toFixed(6),
       createdAt: now,
     }).returning({ id: providerUsage.id });
     return { ok: true, usageId: row!.id, reservedAt: now } as const;
@@ -99,7 +119,7 @@ export async function reserveQuota(input: ReserveInput): Promise<QuotaReservatio
  * the quota. Settling twice changes nothing. `uncertain` keeps every
  * reserved unit counted: the provider may have done the work.
  */
-export async function settleQuota(usageId: string, outcome: { status: Exclude<ProviderUsageStatus, "reserved">; usedUnits: number; error?: string | null; detail?: Record<string, unknown> }): Promise<void> {
+export async function settleQuota(usageId: string, outcome: { status: Exclude<ProviderUsageStatus, "reserved">; usedUnits: number; error?: string | null; detail?: Record<string, unknown>; costUsd?: number | null }): Promise<void> {
   await db.transaction(async (tx) => {
     const [usage] = await tx.select().from(providerUsage).where(and(inOrg(providerUsage), eq(providerUsage.id, usageId))).for("update");
     if (!usage || usage.status !== "reserved") return;
@@ -114,6 +134,7 @@ export async function settleQuota(usageId: string, outcome: { status: Exclude<Pr
       usedUnits: used,
       error: outcome.error?.slice(0, 500) ?? null,
       ...(outcome.detail ? { detail: { ...(usage.detail ?? {}), ...outcome.detail } } : {}),
+      ...(outcome.costUsd === undefined ? {} : { costUsd: outcome.costUsd === null ? null : outcome.costUsd.toFixed(6) }),
       settledAt: new Date(),
     }).where(and(inOrg(providerUsage), eq(providerUsage.id, usageId)));
   });

@@ -102,6 +102,8 @@ export const BRIGHTDATA_LIMITS = {
 
 /** What the settings card shows and saves (never the key itself). */
 export type BrightdataSettingsView = {
+  /** On the Included service: the platform's key; the monthly figure is the workspace's included allowance. */
+  included?: boolean;
   connected: boolean;
   keyHint: string | null;
   monthlyCredits: number;

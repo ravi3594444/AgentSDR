@@ -85,3 +85,20 @@ INSERT INTO provider_credential_modes (organization_id, service, mode, reason)
 SELECT organization_id, 'apify', 'own', 'had its own Apify token before Included services'
 FROM apify_settings WHERE encrypted_token IS NOT NULL
 ON CONFLICT (organization_id, service) DO NOTHING;
+
+-- Usage attribution: whose credentials did the work. 'managed' rows are an
+-- Included service and count against the allowances
+-- (src/lib/managed/allowances.ts); every earlier row was the organization's
+-- own key. cost_usd: what the call cost (reported or estimated, see
+-- detail.costEstimated), the amount held while reserved.
+ALTER TABLE provider_usage ADD COLUMN IF NOT EXISTS credential_source text NOT NULL DEFAULT 'own';
+ALTER TABLE provider_usage ADD COLUMN IF NOT EXISTS cost_usd numeric(14,6);
+ALTER TABLE provider_usage DROP CONSTRAINT IF EXISTS provider_usage_credential_source_chk;
+ALTER TABLE provider_usage ADD CONSTRAINT provider_usage_credential_source_chk
+  CHECK (credential_source IN ('managed', 'own'));
+CREATE INDEX IF NOT EXISTS provider_usage_managed_idx ON provider_usage (provider, created_at) WHERE credential_source = 'managed';
+
+ALTER TABLE apify_runs ADD COLUMN IF NOT EXISTS credential_source text NOT NULL DEFAULT 'own';
+ALTER TABLE apify_runs DROP CONSTRAINT IF EXISTS apify_runs_credential_source_chk;
+ALTER TABLE apify_runs ADD CONSTRAINT apify_runs_credential_source_chk
+  CHECK (credential_source IN ('managed', 'own'));

@@ -3,10 +3,23 @@ import "server-only";
 import { getByokSettings } from "../byok";
 import { getAiConnection, getAiCredentials, type AiConnection } from "../connections";
 import type { OpenRouterModelSelection } from "../openrouter-types";
-import { RUNTIME_PROVIDERS, planAiRuntime, type AiRuntimePlan } from "../runtimePlan";
-import { aimlFunctionCallFallback, aimlStructuredMode, type AimlModelSummary } from "../aimlapi-types";
+import { ANTHROPIC_ENGINE_KEY, RUNTIME_PROVIDERS, planAiRuntime, type AiRuntimePlan } from "../runtimePlan";
+import { AIML_PROVIDER_KEY, aimlFunctionCallFallback, aimlStructuredMode, type AimlModelSummary } from "../aimlapi-types";
 import { createAimlClient, listAimlModelsCached } from "./aimlapi";
 import { createOpenRouterClient } from "./openrouter";
+import { createAnthropicCompatClient } from "./anthropicRuntime";
+import { isManagedAiConnectionId } from "../byok";
+import { meteredAiClient } from "@/lib/managed/aiMeter.server";
+import { serviceMode } from "@/lib/managed/modes.server";
+import type { ManagedAiEngine } from "@/lib/managed/catalog";
+
+/** Thrown when a workspace on the Included AI service asks while the platform has no working engine. */
+export class ManagedAiUnavailableError extends Error {
+  constructor() {
+    super("The included AI service is not available right now. Try again later, or choose My own provider for AI in Settings → Advanced → Use your own providers.");
+    this.name = "ManagedAiUnavailableError";
+  }
+}
 
 export type StrictOpenRouterRouting = {
   only: string[];
@@ -27,13 +40,30 @@ export async function getAiRuntime(
   timeout = 30_000,
 ) {
   const settings = await getByokSettings();
+  const managed = (await serviceMode("ai")) === "managed";
   const connection = settings.connectionId ? await getAiConnection(settings.connectionId) : null;
+  // An Included workspace never sees the engine's configuration in an error: only that it is unavailable.
+  if (managed && (!connection?.verified || !isManagedAiConnectionId(connection.id))) throw new ManagedAiUnavailableError();
   const planned = planAiRuntime(settings, connection, requested);
-  if (!planned.ok) throw new Error(planned.error);
+  if (!planned.ok) {
+    if (managed) throw new ManagedAiUnavailableError();
+    throw new Error(planned.error);
+  }
 
   const credentials = await getAiCredentials(connection!.id);
-  if (!credentials?.apiKey) throw new Error(`Reconnect ${RUNTIME_PROVIDERS[planned.plan.providerKey]} in AI Settings`);
-  return runtimeFor(planned.plan, connection!, credentials.apiKey, timeout);
+  if (!credentials?.apiKey) {
+    if (managed) throw new ManagedAiUnavailableError();
+    throw new Error(`Reconnect ${RUNTIME_PROVIDERS[planned.plan.providerKey]} in AI Settings`);
+  }
+  const runtime = await runtimeFor(planned.plan, connection!, credentials.apiKey, timeout);
+  return {
+    ...runtime,
+    client: meteredAiClient(runtime.client, {
+      source: managed ? "managed" : "own",
+      engine: planned.plan.providerKey as ManagedAiEngine,
+      model: planned.plan.selection.modelId,
+    }),
+  };
 }
 
 export type AiRuntime = Awaited<ReturnType<typeof getAiRuntime>>;
@@ -52,14 +82,17 @@ export async function runtimeFor(
   timeout: number,
   catalog: { listModels?: () => Promise<AimlModelSummary[]>; waitMs?: number } = {},
 ) {
-  const structured = plan.providerKey === "openrouter" ? null : await aimlModeFor(plan.selection.modelId, plan.structuredOutput, catalog);
+  const structured = plan.providerKey === AIML_PROVIDER_KEY ? await aimlModeFor(plan.selection.modelId, plan.structuredOutput, catalog) : null;
   return {
     ...plan,
     structuredOutput: structured?.structuredOutput ?? plan.structuredOutput,
     ...(structured ? { functionCallFallback: structured.functionCallFallback } : {}),
     client: plan.providerKey === "openrouter"
       ? createOpenRouterClient(apiKey, timeout)
-      : createAimlClient(apiKey, timeout),
+      : plan.providerKey === ANTHROPIC_ENGINE_KEY
+        // The Messages API behind the one method the app calls; its answers have the same shape.
+        ? createAnthropicCompatClient(apiKey, timeout) as unknown as ReturnType<typeof createOpenRouterClient>
+        : createAimlClient(apiKey, timeout),
     apiKey,
     connection,
   } satisfies AiRuntimePlan & Record<string, unknown>;

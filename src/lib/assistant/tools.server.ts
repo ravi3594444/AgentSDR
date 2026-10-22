@@ -2,7 +2,7 @@ import "server-only";
 
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { getByokSettings } from "@/lib/ai/byok";
+import { getByokSettings, isManagedAiConnectionId } from "@/lib/ai/byok";
 import { getAiConnection } from "@/lib/ai/connections";
 import { retrieveKnowledge } from "@/lib/crm/knowledge";
 import { discoveryAvailability, DiscoveryUnavailableError, normalizeCriteria, sourceLabel, startDiscovery, startInstagramProspects, startSocialProspects } from "@/lib/discovery/discovery.server";
@@ -261,7 +261,8 @@ async function setupSnapshot() {
     webDiscovery: { enabled: webDiscoveryOn, ...webSearchAvailabilityFrom(byok, connection, { connected: Boolean(await tavilyConnection()) }, tinyfish ? { connected: true, useForWebSearch: tinyfish.useForWebSearch } : null) },
     /** The assistant's own web_search and page reading: TinyFish when connected. */
     webAccess: { tinyfish: Boolean(tinyfish), searchProvider: tinyfish?.useForWebSearch ? "TinyFish" : (await tavilyConnection()) ? "Tavily" : null, browserMinutesPerDay: tinyfish?.browserMinutesPerDay ?? 0 },
-    ai: { connected: Boolean(connection?.verified), defaultModel: byok.defaultModel?.modelId ?? null },
+    // On the Included AI service the engine and model are the platform's configuration: not named.
+    ai: { connected: Boolean(connection?.verified), defaultModel: isManagedAiConnectionId(byok.connectionId) ? "included AI" : byok.defaultModel?.modelId ?? null },
     /** Optional features (Settings → Providers & features), all off by default, and whether new inquiries can be answered. */
     features: await featureState(),
     inquiryReplies: { problem: await inquiryRunReadiness() },

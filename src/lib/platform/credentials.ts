@@ -21,6 +21,23 @@ import {
 import { registerUnipileWebhooks, unipileWebhookEndpoints, unregisterUnipileWebhooks, type UnipileWebhookEndpoint } from "./unipileWebhooks";
 import { verifyPlatformCredentials } from "./verify";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
+import type { ServiceMode } from "@/lib/managed/catalog";
+import { chooseOwnOnSave, serviceMode } from "@/lib/managed/modes.server";
+import { getPlatformCredential } from "@/lib/managed/store.server";
+
+/**
+ * Unipile as an Included service: the platform's Unipile, shared by every
+ * Included workspace, with account ownership enforced (src/lib/unipile/).
+ * Off until that ownership layer is in place: a shared key without it would
+ * let one workspace list another's accounts.
+ */
+const MANAGED_UNIPILE = false;
+
+/** Which credentials Unipile resolves to for the organization in scope. Google and R2 are always the organization's own. */
+export async function platformCredentialSource(key: PlatformKey): Promise<ServiceMode> {
+  if (key !== "unipile" || !MANAGED_UNIPILE) return "own";
+  return serviceMode("unipile");
+}
 
 /**
  * Storage for platform integrations (see catalog.ts).
@@ -48,8 +65,8 @@ const PLATFORM_ROW_NAME = "Platform integration";
 type Cached = { value: Record<string, string> | null; expires: number };
 const cache = new Map<string, Cached>();
 
-function cacheKey(key: PlatformKey): string {
-  return `${currentOrganizationId()}:${key}`;
+function cacheKey(key: PlatformKey, source: ServiceMode = "own"): string {
+  return `${currentOrganizationId()}:${key}:${source}`;
 }
 
 type PlatformConfig = {
@@ -81,19 +98,44 @@ function rowKey(key: PlatformKey): string {
 }
 
 async function load(key: PlatformKey): Promise<Record<string, string> | null> {
-  const hit = cache.get(cacheKey(key));
+  const source = await platformCredentialSource(key);
+  const hit = cache.get(cacheKey(key, source));
   if (hit && hit.expires > Date.now()) return hit.value;
 
+  if (source === "managed") {
+    // The platform's Unipile (an Included service): never this organization's own row, and never a fallback to it.
+    const value = await getPlatformCredential("unipile");
+    cache.set(cacheKey(key, source), { value, expires: Date.now() + CACHE_TTL_MS });
+    return value;
+  }
+
+  const value = await loadOwn(key);
+  cache.set(cacheKey(key, source), { value, expires: Date.now() + CACHE_TTL_MS });
+  return value;
+}
+
+/**
+ * The organization's own saved credentials, whatever it chose. Saving,
+ * webhook registration and disconnecting work on these only: the platform's
+ * credentials are never merged into, revealed through or unregistered from
+ * an organization's row.
+ */
+async function loadOwn(key: PlatformKey): Promise<Record<string, string> | null> {
   const [row] = await db
     .select({ enabled: gridProviders.enabled, encryptedPayload: gridProviderCredentials.encryptedPayload })
     .from(gridProviders)
     .leftJoin(gridProviderCredentials, eq(gridProviderCredentials.providerId, gridProviders.id))
     .where(and(inOrg(gridProviders), eq(gridProviders.key, rowKey(key))))
     .limit(1);
+  return row?.enabled && row.encryptedPayload ? decryptIntegrationCredentials(row.encryptedPayload) : null;
+}
 
-  const value = row?.enabled && row.encryptedPayload ? decryptIntegrationCredentials(row.encryptedPayload) : null;
-  cache.set(cacheKey(key), { value, expires: Date.now() + CACHE_TTL_MS });
-  return value;
+/** Thrown when an action that only makes sense for the organization's own Unipile is asked while it uses the Included one. */
+export class ManagedPlatformError extends Error {
+  constructor(platform: PlatformKey) {
+    super(`${getPlatformIntegration(platform)?.name ?? platform} is the Included service for this workspace: the platform registers its webhooks, and its secrets are never shown. Choose My own provider to manage your own.`);
+    this.name = "ManagedPlatformError";
+  }
 }
 
 /** Decrypted credentials, or null when the platform is not connected. Server-only — never return these from an API route. */
@@ -154,7 +196,8 @@ export async function savePlatformIntegration(key: PlatformKey, input: Record<st
   }
 
   cache.delete(cacheKey(key));
-  const existing = (await load(key)) ?? {};
+  // The organization's own saved values only: a blank secret keeps its own, never the platform's.
+  const existing = (await loadOwn(key)) ?? {};
   const merged: Record<string, string> = {};
   for (const field of integration.fields) {
     const given = String(input[field.key] ?? "").trim();
@@ -199,6 +242,8 @@ export async function savePlatformIntegration(key: PlatformKey, input: Record<st
   });
 
   cache.delete(cacheKey(key));
+  // Saving its own Unipile, with no explicit choice yet, is the choice of My own provider.
+  if (key === "unipile") await chooseOwnOnSave("unipile", null);
   const webhooks =
     key === "unipile"
       ? await storeWebhookRegistration(
@@ -247,8 +292,10 @@ export async function storeGmailWatchRegistration(registration: GmailWatchRegist
 
 /** Register Unipile's webhooks again (Settings → LinkedIn → Connection → Register again). */
 export async function reregisterUnipileWebhooks(): Promise<UnipileWebhookRegistration> {
-  const credentials = await requirePlatformCredentials("unipile");
-  return storeWebhookRegistration(await registerUnipileWebhooks(currentOrganizationId(), credentials));
+  if ((await platformCredentialSource("unipile")) === "managed") throw new ManagedPlatformError("unipile");
+  const own = await loadOwn("unipile");
+  if (!own) throw new PlatformNotConnectedError("unipile");
+  return storeWebhookRegistration(await registerUnipileWebhooks(currentOrganizationId(), normalize("unipile", own)));
 }
 
 /**
@@ -258,6 +305,8 @@ export async function reregisterUnipileWebhooks(): Promise<UnipileWebhookRegistr
  * Settings. Null when nothing needed doing.
  */
 export async function ensureUnipileWebhook(key: string): Promise<UnipileWebhookRegistration | null> {
+  // The Included Unipile's webhooks are the platform's, registered once for every Included workspace.
+  if ((await platformCredentialSource("unipile")) === "managed") return null;
   const [row] = await db
     .select({ config: gridProviders.config })
     .from(gridProviders)
@@ -275,15 +324,19 @@ export async function ensureUnipileWebhook(key: string): Promise<UnipileWebhookR
  * integrations permission.
  */
 export async function revealUnipileWebhookSetup(): Promise<{ endpoints: UnipileWebhookEndpoint[] | null; secret: string }> {
-  const credentials = await requirePlatformCredentials("unipile");
-  return { endpoints: unipileWebhookEndpoints(currentOrganizationId()), secret: credentials.notifySecret };
+  // Only the organization's own secret is ever revealed; the platform's never leaves the server.
+  if ((await platformCredentialSource("unipile")) === "managed") throw new ManagedPlatformError("unipile");
+  const own = await loadOwn("unipile");
+  if (!own) throw new PlatformNotConnectedError("unipile");
+  return { endpoints: unipileWebhookEndpoints(currentOrganizationId()), secret: normalize("unipile", own).notifySecret };
 }
 
 /** Deletes the row and its credentials (cascade). Features depending on it stop at once in this process. */
 export async function disconnectPlatformIntegration(key: PlatformKey): Promise<void> {
   if (key === "unipile") {
-    const credentials = await getPlatformCredentials("unipile");
-    if (credentials) await unregisterUnipileWebhooks(currentOrganizationId(), credentials);
+    // The organization's own Unipile's registrations only.
+    const own = await loadOwn("unipile");
+    if (own) await unregisterUnipileWebhooks(currentOrganizationId(), normalize("unipile", own));
   }
   await db.delete(gridProviders).where(and(inOrg(gridProviders), eq(gridProviders.key, rowKey(key))));
   cache.delete(cacheKey(key));

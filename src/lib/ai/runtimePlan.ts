@@ -19,11 +19,19 @@ import { CLAUDE_CODE_ENGINE_KEY, CLAUDE_CODE_ENGINE_NAME } from "./claudeCode/co
  *   (`response_format`), which every selectable model advertises.
  */
 
-export type AiProviderKey = "openrouter" | typeof AIML_PROVIDER_KEY;
+/**
+ * Anthropic (Claude API) runs only as the platform's Included engine, on the
+ * key an operator stored (src/lib/managed/); no workspace connects its own
+ * Anthropic account here, because the AI catalog does not list it.
+ */
+export const ANTHROPIC_ENGINE_KEY = "anthropic";
+
+export type AiProviderKey = "openrouter" | typeof AIML_PROVIDER_KEY | typeof ANTHROPIC_ENGINE_KEY;
 
 export const RUNTIME_PROVIDERS: Record<AiProviderKey, string> = {
   openrouter: "OpenRouter",
   [AIML_PROVIDER_KEY]: AIML_PROVIDER_NAME,
+  [ANTHROPIC_ENGINE_KEY]: "Anthropic (Claude API)",
 };
 
 /**
@@ -81,6 +89,9 @@ export function planAiRuntime(
   if (providerKey === AIML_PROVIDER_KEY && selection.provider !== AIML_PROVIDER_KEY) {
     return { ok: false, error: `This model is not an ${AIML_PROVIDER_NAME} model; choose one in AI Settings` };
   }
+  if (providerKey === ANTHROPIC_ENGINE_KEY && selection.provider !== ANTHROPIC_ENGINE_KEY) {
+    return { ok: false, error: "This model is not a Claude model" };
+  }
   if (!settings.providers.includes(selection.provider)) {
     return {
       ok: false,
@@ -102,6 +113,9 @@ export function planAiRuntime(
     ok: true,
     plan: providerKey === "openrouter"
       ? { providerKey, selection, routing: { provider: strictProviderRouting(selection.provider) }, structuredOutput: "tool_call", supportsPlugins: true }
-      : { providerKey, selection, routing: {}, structuredOutput: "json_schema", supportsPlugins: false },
+      // Claude answers structured requests with one tool call (anthropicRuntime.ts).
+      : providerKey === ANTHROPIC_ENGINE_KEY
+        ? { providerKey, selection, routing: {}, structuredOutput: "tool_call", supportsPlugins: false }
+        : { providerKey, selection, routing: {}, structuredOutput: "json_schema", supportsPlugins: false },
   };
 }

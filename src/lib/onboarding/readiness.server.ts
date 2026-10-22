@@ -5,7 +5,7 @@ import { db } from "@/lib/db";
 import { can, type OrgContext } from "@/lib/auth/context";
 import { ROLE_LABELS } from "@/lib/auth/permissions";
 import { invitations, members } from "@/lib/auth/schema";
-import { getByokSettings } from "@/lib/ai/byok";
+import { getByokSettings, isManagedAiConnectionId } from "@/lib/ai/byok";
 import { getAiConnection } from "@/lib/ai/connections";
 import { people } from "@/lib/leads/schema";
 import { campaigns as linkedinCampaigns, linkedInAccounts, messages as linkedinMessages } from "@/lib/linkedin/schema";
@@ -174,7 +174,18 @@ export async function loadReadinessFacts(ctx: OrgContext): Promise<ReadinessFact
     linkedinAccounts: { connected: linkedinCounts.CONNECTED ?? 0, disconnected: linkedinCounts.DISCONNECTED ?? 0 },
     whatsappAccounts: { connected: whatsappConnected, notConnected: whatsappTotal - whatsappConnected },
     instagram,
-    ai: {
+    ai: isManagedAiConnectionId(byok.connectionId) ? {
+      // The Included engine: only whether it is available, never which engine or model.
+      included: { available: Boolean(aiConnection?.verified) },
+      provider: null,
+      connectionSaved: true,
+      connectionVerified: Boolean(aiConnection?.verified),
+      providers: 1,
+      defaultModel: null,
+      defaultModelEnabled: true,
+      routingConfirmed: true,
+      researchModel: null,
+    } : {
       provider: aiConnection?.providerKey === "openrouter" || aiConnection?.providerKey === "aimlapi" ? aiConnection.providerKey : null,
       connectionSaved: Boolean(aiConnection),
       connectionVerified: Boolean(aiConnection?.verified && (aiConnection.providerKey === "openrouter" || aiConnection.providerKey === "aimlapi")),

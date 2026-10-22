@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { listOpenRouterByokCatalog, listOpenRouterByokCatalogCached } from "@/lib/ai/server/openrouter";
 import { listAimlModels, listAimlModelsCached } from "@/lib/ai/server/aimlapi";
 import { AIML_PROVIDER_KEY, AIML_PROVIDER_NAME } from "@/lib/ai/aimlapi-types";
-import { getByokSettings } from "@/lib/ai/byok";
+import { getOwnByokSettings, isManagedAiConnectionId } from "@/lib/ai/byok";
 import { getAiConnection, getAiCredentials } from "@/lib/ai/connections";
 import { authContextErrorResponse, withOrgContext } from "@/lib/auth/context";
 import { isDemoMode } from "@/lib/demo/mode";
@@ -12,9 +12,10 @@ export async function GET(request: NextRequest) {
   try {
     return await withOrgContext(request, async () => {
       try {
-        const settings = await getByokSettings();
+        // The workspace's own connection and settings only: the Included engine's catalog is never listed.
+        const settings = await getOwnByokSettings();
         const connectionId = request.nextUrl.searchParams.get("connectionId") ?? settings.connectionId;
-        if (!connectionId) return NextResponse.json({ providerKey: null, providers: [], models: [], settings });
+        if (!connectionId || isManagedAiConnectionId(connectionId)) return NextResponse.json({ providerKey: null, providers: [], models: [], settings });
         const connection = await getAiConnection(connectionId);
         if (connection?.providerKey === AIML_PROVIDER_KEY) {
           if (!connection.verified) return NextResponse.json({ error: `Reconnect ${AIML_PROVIDER_NAME} in AI Settings` }, { status: 409 });

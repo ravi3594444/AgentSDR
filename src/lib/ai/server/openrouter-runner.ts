@@ -4,6 +4,7 @@ import { isTransientOpenRouterError } from "./openrouter-errors";
 import { openRouterTokenLimit, strictImageProviderRouting } from "../openrouter-types";
 import { generateOpenRouterImage } from "./openrouter";
 import { getAiRuntime } from "./runtime";
+import { isManagedAiConnectionId } from "../byok";
 import { completeStructured } from "./structuredCompletion";
 import type { AiRunner } from "./types";
 import { AIML_PROVIDER_KEY, AIML_PROVIDER_NAME } from "../aimlapi-types";
@@ -123,10 +124,12 @@ export const runOpenRouterImage: AiRunner = async ({ config, model, prompt, time
   let auditRequest: unknown;
   try {
     if (!config.upstreamProvider) throw new PermanentRunError("Re-save this AI column with an OpenRouter provider");
-    const { apiKey, providerKey } = await getAiRuntime(
+    const { apiKey, providerKey, connection } = await getAiRuntime(
       { provider: config.upstreamProvider, modelId: model.modelId },
       timeoutMs,
     );
+    // Images go straight to OpenRouter's image endpoint, outside the metered client: never on the platform's key.
+    if (isManagedAiConnectionId(connection.id)) throw new PermanentRunError("AI columns in tables run on your own AI provider: choose My own provider for AI in Settings → Advanced → Use your own providers.");
     if (providerKey !== "openrouter") throw new PermanentRunError("Image columns need an OpenRouter connection in AI Settings");
     const provider = strictImageProviderRouting(config.upstreamProvider);
     const request = { model: model.modelId, prompt, n: 1, provider };

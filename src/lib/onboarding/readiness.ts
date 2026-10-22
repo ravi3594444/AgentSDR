@@ -106,6 +106,8 @@ export type ReadinessFacts = {
    */
   instagram?: { ready: boolean; connected: number; notConnected: number } | null;
   ai: {
+    /** On the Included AI service: whether the platform's engine is available now. Nothing about the engine itself. */
+    included?: { available: boolean };
     /** The provider of the connection AI Settings selected, if any. */
     provider: "openrouter" | "aimlapi" | null;
     connectionSaved: boolean;
@@ -491,6 +493,16 @@ export function aiReadiness(facts: ReadinessFacts): ReadinessItem {
     title: "AI drafting and reply sorting",
     links: [{ href: "/settings/ai", label: "AI provider" }],
   };
+  if (ai.included) {
+    return {
+      ...base,
+      links: [{ href: "/settings/usage", label: "Plan & usage" }],
+      status: ai.included.available ? "connected" : "needs_attention",
+      summary: ai.included.available ? "Ready: AI is included with your workspace." : "The included AI service is not available right now.",
+      details: [REPLY_MODES],
+      next: ai.included.available ? null : forRole("Try again later, or choose My own provider for AI under Settings → Advanced → Use your own providers.", canManage),
+    };
+  }
   const aiml = ai.provider === "aimlapi";
   const name = aiml ? "AI/ML API" : "OpenRouter";
   const notReady = (summary: string, next: string, status: ReadinessStatus = "not_configured"): ReadinessItem => ({

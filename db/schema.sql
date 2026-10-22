@@ -954,6 +954,8 @@ CREATE TABLE public.apify_runs (
     error text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     finished_at timestamp with time zone,
+    credential_source text DEFAULT 'own'::text NOT NULL,
+    CONSTRAINT apify_runs_credential_source_chk CHECK ((credential_source = ANY (ARRAY['managed'::text, 'own'::text]))),
     CONSTRAINT apify_runs_status_chk CHECK ((status = ANY (ARRAY['starting'::text, 'running'::text, 'succeeded'::text, 'partial'::text, 'failed'::text, 'refused'::text])))
 );
 
@@ -3017,6 +3019,9 @@ CREATE TABLE public.provider_usage (
     error text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     settled_at timestamp with time zone,
+    credential_source text DEFAULT 'own'::text NOT NULL,
+    cost_usd numeric(14,6),
+    CONSTRAINT provider_usage_credential_source_chk CHECK ((credential_source = ANY (ARRAY['managed'::text, 'own'::text]))),
     CONSTRAINT provider_usage_status_chk CHECK ((status = ANY (ARRAY['reserved'::text, 'settled'::text, 'failed'::text, 'uncertain'::text])))
 );
 
@@ -5848,6 +5853,12 @@ CREATE INDEX people_phone_lookup_idx ON public.people USING btree (phone) WHERE 
 --
 
 CREATE INDEX provider_usage_job_idx ON public.provider_usage USING btree (job_id) WHERE (job_id IS NOT NULL);
+
+--
+-- Name: provider_usage_managed_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX provider_usage_managed_idx ON public.provider_usage USING btree (provider, created_at) WHERE (credential_source = 'managed'::text);
 
 --
 -- Name: provider_usage_org_product_idx; Type: INDEX; Schema: public; Owner: -
