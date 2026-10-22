@@ -61,7 +61,10 @@ describe("the harness keeps only what protects", () => {
 
   test("the prompt teaches the method and the limits, not scenarios", () => {
     const prompt = systemPromptV2({ features: defaultFeatureState(), catalog: "- set_brief: …", autonomy: null });
-    expect(prompt).toContain("set_brief before the first search");
+    expect(prompt).toContain("set_brief when you take on a request");
+    // Who goes in the plan is the model's choice, not only the judge's matches.
+    expect(prompt).toContain("pass leads all");
+    expect(prompt).not.toContain("Only leads marked match are contacted");
     expect(prompt).toContain("finish_request");
     expect(prompt).not.toContain("contactAfter");
     expect(prompt).not.toContain("AUTONOMOUS MODE");

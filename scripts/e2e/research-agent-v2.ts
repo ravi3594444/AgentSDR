@@ -118,12 +118,13 @@ await runInOrganization(a.org.id, async () => {
   const brief = { goal: "Find 2 dentists in Austin and email them, free tools only", contact: true, channels: ["email"], spendCapUsd: 0, timeLimitMinutes: null, done: "2 Austin dentists found and an email plan ready" };
 
   // ---------------------------------------------------------- the brief
-  const tooMany = await runTool("set_brief", { ...brief, leadTarget: 40 }, context);
-  check("a brief may not raise the lead target past what the owner wrote", !tooMany.ok && /did not ask for 40 leads/.test(tooMany.summary), tooMany.summary);
-  const paid = await runTool("set_brief", { ...brief, leadTarget: 2, spendCapUsd: 20 }, context);
-  check("…nor the spend cap", !paid.ok && /did not allow \$20/.test(paid.summary), paid.summary);
   const beforeBrief = await runTool("find_leads", { what: "dentists", where: "Austin, TX" }, context);
-  check("a search before the brief is refused", !beforeBrief.ok && /no brief yet/.test(beforeBrief.summary), beforeBrief.summary);
+  const started = await objectiveForRequest(request.id);
+  check("a search before the brief starts the request with the defaults (no brief needed first)", beforeBrief.ok && Boolean(started) && !started!.controls.brief, beforeBrief.summary);
+  const paid = await runTool("set_brief", { ...brief, leadTarget: 2, spendCapUsd: 20 }, context);
+  check("a brief may not raise the spend cap past what the owner wrote", !paid.ok && /did not allow \$20/.test(paid.summary), paid.summary);
+  const many = await runTool("set_brief", { ...brief, leadTarget: 40 }, context);
+  check("…but the lead target is the assistant's to set", many.ok && (await objectiveForRequest(request.id))?.leadTarget === 40, many.summary);
   const saved = await runTool("set_brief", { ...brief, leadTarget: 2 }, context);
   const objective = await objectiveForRequest(request.id);
   check("a valid brief becomes the request's objective, with the owner's limits", saved.ok && objective?.leadTarget === 2 && objective.spendCapUsd === 0 && objective.controls.named?.target === true, saved.summary);
@@ -177,7 +178,7 @@ await runInOrganization(a.org.id, async () => {
   const researchContext: Context = { ...context, ownerText: research.content, requestMessageId: research.id, searchRequestId: research.id };
   await runTool("set_brief", { goal: "Research 3 orthodontists in Austin, no outreach", leadTarget: 3, contact: false, channels: null, spendCapUsd: null, timeLimitMinutes: null, done: "3 orthodontists found", newRequest: true }, researchContext);
   const refused = await runTool("prepare_outreach", {}, researchContext);
-  check("a research-only brief prepares no plan", !refused.ok && /research only/.test(refused.summary), refused.summary);
+  check("a research-only brief does not refuse a plan the assistant prepares (nothing is sent before Start)", !/research only/.test(refused.summary), refused.summary);
   check("…and the earlier request ended as finished when the new one began", (await getObjective(objective!.id))?.stopReason === "finished");
 
   const thread2 = await createThread(a.owner.id);
@@ -277,6 +278,20 @@ await runInOrganization(a.org.id, async () => {
   check("…with the brief written once (no refusal loop)", followTools.filter((row) => row.tool === "set_brief").length === 1 && chatAnswers.length === 0, `${followTools.filter((row) => row.tool === "set_brief").length} briefs`);
   const reviewFollow = await runTool("review_leads", {}, { ...scoutContext, requestMessageId: followRequestId, searchRequestId: followRequestId });
   check("…and review_leads on the new request shows the leads it continued", reviewFollow.ok && /3 match/.test(reviewFollow.summary), reviewFollow.summary.split("\n")[0]);
+  const followContext: Context = { ...scoutContext, requestMessageId: followRequestId, searchRequestId: followRequestId };
+  const planOf = async (result: Awaited<ReturnType<typeof runTool>>) => {
+    const id = typeof result.data?.runId === "string" ? result.data.runId : null;
+    const [row] = id ? await db.select().from(outreachRuns).where(eq(outreachRuns.id, id)) : [];
+    return (((row?.plan ?? {}) as { assignments?: { personId: string }[] }).assignments ?? []).map((item) => item.personId);
+  };
+  const everyone = await runTool("prepare_outreach", { leads: "all" }, followContext);
+  const everyoneIds = await planOf(everyone);
+  check("prepare_outreach with leads all puts in every contactable lead, the one the judge said no to included", everyone.ok && everyoneIds.length === 4 && everyoneIds.includes(dallas), `${everyone.summary.slice(0, 160)} | ${everyoneIds.length}`);
+  const picked = await runTool("prepare_outreach", { personIds: [dallas] }, followContext);
+  const pickedIds = await planOf(picked);
+  check("…and with personIds exactly the people the assistant picked", picked.ok && pickedIds.length === 1 && pickedIds[0] === dallas, `${picked.summary.slice(0, 160)} | ${pickedIds.join(",")}`);
+  const stranger = await runTool("prepare_outreach", { personIds: [personIds["Barton Creek Dental"]] }, followContext);
+  check("…but not someone who is not a lead of this request", !stranger.ok && /none of the 1 people named/.test(stranger.summary), stranger.summary);
   chatAnswers.length = 0;
 
   shared = { threadId: thread.id, requestId: request.id, personIds };

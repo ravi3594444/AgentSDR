@@ -98,9 +98,7 @@ export function checkBrief(raw: Record<string, unknown>, ownerWords: string, def
   if (target === undefined || (target !== null && (!Number.isInteger(target) || target < 1 || target > MAX_TARGET))) {
     return { ok: false, error: `leadTarget must be a whole number from 1 to ${MAX_TARGET}, or null when the owner named no number` };
   }
-  if (target !== null && target > defaults.leadTarget && !numbersIn(ownerWords).includes(target)) {
-    return { ok: false, error: `the owner did not ask for ${target} leads; use a number they wrote, or null for the default of ${defaults.leadTarget}` };
-  }
+  // The lead target and the time limit are the model's to set ("all of them", "keep going"); only money above the default needs the owner's own number.
   const spend = optionalNumber(raw, "spendCapUsd");
   if (spend === undefined || (spend !== null && spend < 0)) return { ok: false, error: "spendCapUsd must be a number of dollars (0 for free sources only), or null when the owner said nothing about money" };
   if (spend !== null && spend > defaults.spendUsd && !amountsIn(ownerWords).some((amount) => Math.abs(amount - spend) < 0.005)) {
@@ -109,9 +107,6 @@ export function checkBrief(raw: Record<string, unknown>, ownerWords: string, def
   const minutes = optionalNumber(raw, "timeLimitMinutes");
   if (minutes === undefined || (minutes !== null && (!Number.isInteger(minutes) || minutes < 5 || minutes > MAX_MINUTES))) {
     return { ok: false, error: `timeLimitMinutes must be a whole number of minutes from 5 to ${MAX_MINUTES}, or null when the owner named no time` };
-  }
-  if (minutes !== null && minutes > defaults.hours * 60 && !durationsIn(ownerWords).includes(minutes)) {
-    return { ok: false, error: `the owner did not allow ${minutes} minutes; use a time they wrote, or null for the default of ${defaults.hours} hours` };
   }
   let channels: AudienceChannel[] | null = null;
   if (raw.channels !== undefined && raw.channels !== null) {

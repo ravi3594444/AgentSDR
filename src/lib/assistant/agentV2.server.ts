@@ -91,12 +91,15 @@ export async function v2ContextText(input: { threadId: string; requestMessageId:
 
 type RequestMember = typeof leadAudienceMembers.$inferSelect;
 
+/** Who a request's plan takes: its leads judged a match, every contactable lead, or exactly the people the model named. */
+export type LeadPick = { kind: "match" } | { kind: "all" } | { kind: "people"; ids: string[] };
+
 async function requestMembers(objective: Objective, audienceId: string | null): Promise<RequestMember[]> {
   const audienceIds = audienceId ? [audienceId] : (await objectiveFacts(objective)).audienceIds;
   if (!audienceIds.length) return [];
   return db.select().from(leadAudienceMembers)
     .where(and(inOrg(leadAudienceMembers), inArray(leadAudienceMembers.audienceId, audienceIds)))
-    .orderBy(asc(leadAudienceMembers.createdAt)).limit(400);
+    .orderBy(asc(leadAudienceMembers.createdAt)).limit(3_000);
 }
 
 export type ReviewFilter = "all" | "match" | "unconfirmed" | "no_match" | "unjudged" | "not_saved";
@@ -163,10 +166,8 @@ async function quoteFound(threadId: string, rows: readonly RequestMember[], quot
 export async function setLeadFit(input: { objective: Objective; threadId: string; personId: string; fit: "match" | "no_match"; reason: string; quote: string | null; url: string | null }): Promise<{ ok: true; name: string; lists: number } | { ok: false; problem: string }> {
   const rows = (await requestMembers(input.objective, null)).filter((row) => row.personId === input.personId);
   if (!rows.length) return { ok: false, problem: "that person is not one of this request's leads; use a person id from review_leads" };
-  if (input.fit === "match") {
-    if (!input.quote || input.quote.trim().length < 8) return { ok: false, problem: "a match needs quote: the words (at least a few) from a page you read, or from the lead's own profile, that show it fits" };
-    if (!(await quoteFound(input.threadId, rows, input.quote))) return { ok: false, problem: "that quote is not in any page read in this chat or in the lead's own profile; read the page first (read_webpage), then quote it exactly" };
-  }
+  // The verdict is the assistant's; a quote, when it gives one, must really be in what was read (the owner sees it as evidence).
+  if (input.quote && !(await quoteFound(input.threadId, rows, input.quote))) return { ok: false, problem: "that quote is not in any page read in this chat or in the lead's own profile; quote it exactly, or leave quote out" };
   const evidence = input.quote ? ` (“${input.quote.trim().slice(0, 200)}”${input.url ? ` — ${input.url.slice(0, 200)}` : ""})` : "";
   await db.update(leadAudienceMembers).set({
     fit: input.fit,
@@ -184,23 +185,30 @@ export async function setLeadFit(input: { objective: Objective; threadId: string
  * who matches it and can be contacted, once, newest verdicts kept, up to
  * `max`. Null when nobody qualifies (the reason says why).
  */
-export async function matchingLeadsAudience(input: { objective: Objective; brief: Brief | null; threadId: string; userId: string | null; max: number; audienceId?: string | null }): Promise<{ audienceId: string; leads: number } | { problem: string }> {
+export async function matchingLeadsAudience(input: { objective: Objective; brief: Brief | null; threadId: string; userId: string | null; max: number; audienceId?: string | null; pick?: LeadPick }): Promise<{ audienceId: string; leads: number } | { problem: string }> {
+  const pick = input.pick ?? { kind: "match" };
   const members = await requestMembers(input.objective, input.audienceId ?? null);
   const byPerson = new Map<string, RequestMember[]>();
   for (const member of members) if (member.personId) byPerson.set(member.personId, [...(byPerson.get(member.personId) ?? []), member]);
+  const wanted = pick.kind === "people" ? new Set(pick.ids) : null;
   const chosen: RequestMember[] = [];
-  for (const rows of byPerson.values()) {
-    if (personFit(rows.map((row) => row.fit)) !== "match") continue;
-    const reachable = rows.find((row) => row.status === "eligible" && row.fit === "match");
+  for (const [personId, rows] of byPerson) {
+    if (wanted && !wanted.has(personId)) continue;
+    if (pick.kind === "match" && personFit(rows.map((row) => row.fit)) !== "match") continue;
+    const reachable = pick.kind === "match"
+      ? rows.find((row) => row.status === "eligible" && row.fit === "match")
+      : rows.find((row) => row.status === "eligible");
     if (reachable) chosen.push(reachable);
     if (chosen.length >= input.max) break;
   }
   if (!chosen.length) {
+    if (pick.kind === "people") return { problem: `none of the ${pick.ids.length} people named is a contactable lead of this request (review_leads lists them, with their ids)` };
+    if (pick.kind === "all") return { problem: "no lead of this request can be contacted yet (none has an email, phone or profile to reach)" };
     const matches = [...byPerson.values()].filter((rows) => personFit(rows.map((row) => row.fit)) === "match").length;
-    return { problem: matches ? `the ${matches} matching ${matches === 1 ? "lead has" : "leads have"} no contact route yet` : "no lead of this request is marked match yet; review_leads, and correct verdicts with set_lead_fit where the evidence shows a fit" };
+    return { problem: matches ? `the ${matches} matching ${matches === 1 ? "lead has" : "leads have"} no contact route yet` : "no lead of this request is judged a match; review_leads, then pass leads all or the personIds you want in the plan" };
   }
   const goal = input.brief?.goal ?? "this request";
-  const audienceId = await createAudience({ name: `Matching leads: ${goal.slice(0, 120)}`, source: "list", criteria: { requestId: input.objective.requestMessageId, fromRequest: true }, threadId: input.threadId, userId: input.userId });
+  const audienceId = await createAudience({ name: `${pick.kind === "match" ? "Matching leads" : "Leads"}: ${goal.slice(0, 120)}`, source: "list", criteria: { requestId: input.objective.requestMessageId, fromRequest: true }, threadId: input.threadId, userId: input.userId });
   await addAudienceMembers(audienceId, chosen.map((member) => ({
     // One id per (list, person): a retry adds nothing twice.
     id: undefined,
