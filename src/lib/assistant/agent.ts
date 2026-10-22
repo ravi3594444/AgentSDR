@@ -1,5 +1,5 @@
 import { ungroundedInstagramContacts } from "./instagramContacts";
-import { mergeProfile, profileChanges, ungroundedProfileValues } from "./profile";
+import { ungroundedProfileValues } from "./profile";
 import type { AssistantRole, BusinessProfile } from "./schema";
 
 /**
@@ -54,12 +54,18 @@ export type AgentReply = { message: string; actions: AgentAction[]; suggestions:
  * Keep oversized but valid plans in order across steps. A webpage read ends
  * the batch: later actions may have guessed its contents, so re-plan from
  * the actual result instead of executing those guesses or showing their
- * completion message. The owner's request remains in the conversation.
+ * completion message. Several page reads in a row run together (each is
+ * independent); a browser step stays alone, as they share one browser. The
+ * owner's request remains in the conversation.
  */
 export function nextAgentBatch(reply: AgentReply): { batch: AgentReply; pending: AgentReply | null; replanAfterRead: boolean } {
   const pageIndex = reply.actions.findIndex((action) => PAGE_STATE_TOOLS.has(action.tool));
   const replanAfterRead = pageIndex >= 0 && pageIndex < MAX_ACTIONS_PER_STEP;
-  const count = replanAfterRead ? pageIndex + 1 : MAX_ACTIONS_PER_STEP;
+  let end = pageIndex;
+  if (replanAfterRead && reply.actions[pageIndex]!.tool === "read_webpage") {
+    while (end + 1 < Math.min(reply.actions.length, MAX_ACTIONS_PER_STEP) && reply.actions[end + 1]!.tool === "read_webpage") end += 1;
+  }
+  const count = replanAfterRead ? end + 1 : MAX_ACTIONS_PER_STEP;
   const actions = reply.actions.slice(0, count);
   const remaining = reply.actions.slice(count);
   const holdMessage = remaining.length > 0 || replanAfterRead;
@@ -193,8 +199,11 @@ const OUTREACH_LIVE = /\b(?:outreach|campaign|emails?|messages?)\s+(?:is|are|has
  * record of it starting. Returns the reason, or null. (A message sent with
  * tools is shown only after they ran; agent.server.ts drops it when one failed.)
  */
-export function unbackedClaim(message: string, succeededThisTurn: readonly string[], outreachStartedOnRecord: boolean): string | null {
-  if (!succeededThisTurn.length && CLAIMS_DONE.test(message)) {
+export function unbackedClaim(message: string, succeededThisTurn: readonly string[], outreachStartedOnRecord: boolean, searchedOnRecord = false): string | null {
+  // "I found 30 dentists" may report an earlier search that finished (on record); "I've sent / saved / prepared …" needs this turn's tool.
+  const claims = [...message.matchAll(new RegExp(CLAIMS_DONE.source, "gi"))].map((match) => match[0].toLowerCase());
+  const reportsEarlierSearch = searchedOnRecord && claims.length > 0 && claims.every((claim) => /\b(?:found|searched)$/.test(claim));
+  if (!succeededThisTurn.length && claims.length && !reportsEarlierSearch) {
     return "Your message says something was done, but no tool has succeeded in this turn. Put the tool in actions, or say what you will do instead.";
   }
   if (!outreachStartedOnRecord && OUTREACH_LIVE.test(message)) {
@@ -862,14 +871,12 @@ export function urlGiven(url: unknown, corpus: string | Set<string>): boolean {
 /**
  * Why the model's planned tool calls must not run, or null. Checked before
  * anything runs or is shown, so a mistaken call is sent back to the model
- * instead of appearing in the chat: no tools on a greeting, and no
- * business-information save that changes nothing or holds words the owner
- * never wrote.
+ * instead of appearing in the chat: no contacts or business information the
+ * owner or a read source never gave. (Which pages to open and whether a save
+ * changes anything are the model's; page reads are still limited to public
+ * addresses, and a save that changes nothing says so.)
  */
-export function actionsProblem(actions: readonly AgentAction[], input: { smallTalk: boolean; profile: BusinessProfile; ownerCorpus: string; outreachRequested: boolean; inquiryRepliesRequested?: boolean }): string | null {
-  if (input.smallTalk && actions.length) {
-    return "The owner only greeted or thanked you. Run no tools: answer in one or two friendly sentences and offer the next useful step.";
-  }
+export function actionsProblem(actions: readonly AgentAction[], input: { profile: BusinessProfile; ownerCorpus: string; outreachRequested: boolean; inquiryRepliesRequested?: boolean }): string | null {
   const contacts = actions.some((action) => action.tool === "prepare_outreach" || ((CONTACT_AFTER_TOOLS.has(action.tool) || DIRECT_CONTACT_TOOLS.has(action.tool)) && action.args.contactAfter === true));
   if (contacts && !input.outreachRequested) return outreachRequestProblem("", null);
   if (actions.some((action) => action.tool === "prepare_inquiry_replies") && !input.inquiryRepliesRequested) {
@@ -886,14 +893,7 @@ export function actionsProblem(actions: readonly AgentAction[], input: { smallTa
       if (invented.length) return `add_contacts: ${invented.join(", ")} ${invented.length === 1 ? "is" : "are"} not in what the owner wrote, a page read for them or a Treg answer. Add only those contacts, exactly as given.`;
       continue;
     }
-    if (action.tool === "read_webpage" || action.tool === "browser_open") {
-      if (!urlGiven(action.args.url, input.ownerCorpus)) return `${action.tool} opens only links the owner gave, links on a page already read, or results web_search returned. Search for it with web_search, or ask the owner for the link.`;
-      continue;
-    }
     if (action.tool !== "save_business_info") continue;
-    if (!mergeProfile(input.profile, action.args).problems.length && !profileChanges(input.profile, action.args).length) {
-      return "save_business_info would change nothing: the owner gave no new business information. Do not call it; answer them instead.";
-    }
     const ungrounded = ungroundedProfileValues(action.args, input.ownerCorpus);
     if (ungrounded.length) {
       return `save_business_info: ${ungrounded.join(", ")} ${ungrounded.length === 1 ? "is" : "are"} not what the owner wrote. Save only the owner's own information, in their words; ask them about the rest.`;
@@ -902,14 +902,11 @@ export function actionsProblem(actions: readonly AgentAction[], input: { smallTa
   return null;
 }
 
-/** Whether two messages say the same thing (same words, nearly), so a turn never repeats itself. */
+/** Whether two messages are the same words (case, spacing and punctuation aside), so a turn never repeats itself; a message that differs in a number or a place is new. */
 export function sameMessage(a: string, b: string): boolean {
-  const words = (text: string) => new Set(text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []);
+  const words = (text: string) => (text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).join(" ");
   const left = words(a);
-  const right = words(b);
-  if (!left.size || !right.size) return false;
-  const shared = [...left].filter((word) => right.has(word)).length;
-  return shared / Math.max(left.size, right.size) >= 0.8;
+  return left.length > 0 && left === words(b);
 }
 
 /**

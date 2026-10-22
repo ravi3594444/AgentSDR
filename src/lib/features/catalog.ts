@@ -62,13 +62,28 @@ export const FEATURES: Record<FeatureKey, FeatureInfo> = {
   },
 };
 
+/**
+ * Built into every organization, with no switch: the research agent is the
+ * assistant's one harness. Its key stays in FEATURE_KEYS (older rows name it,
+ * and code reads it like the others), but a saved "off" is ignored.
+ */
+export const BUILT_IN_FEATURES: readonly FeatureKey[] = ["research_agent_v2"];
+
+/** The features an owner or admin can switch on or off. */
+export const OPTIONAL_FEATURE_KEYS: readonly FeatureKey[] = FEATURE_KEYS.filter((key) => !BUILT_IN_FEATURES.includes(key));
+
 export function isFeatureKey(value: unknown): value is FeatureKey {
   return typeof value === "string" && (FEATURE_KEYS as readonly string[]).includes(value);
 }
 
+/** A feature with a switch (the settings page and its route take only these). */
+export function isOptionalFeatureKey(value: unknown): value is FeatureKey {
+  return isFeatureKey(value) && !BUILT_IN_FEATURES.includes(value);
+}
+
 export type FeatureState = Record<FeatureKey, boolean>;
 
-/** Every feature off: what an organization has until someone turns one on. */
+/** Every optional feature off, the built-in ones on: what an organization has until someone turns one on. */
 export function defaultFeatureState(): FeatureState {
-  return Object.fromEntries(FEATURE_KEYS.map((key) => [key, false])) as FeatureState;
+  return Object.fromEntries(FEATURE_KEYS.map((key) => [key, BUILT_IN_FEATURES.includes(key)])) as FeatureState;
 }

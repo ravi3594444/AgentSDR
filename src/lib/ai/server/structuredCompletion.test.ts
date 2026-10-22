@@ -499,7 +499,7 @@ describe("assistant completion recovery", () => {
           accept: (text) => {
             accepted = parseAgentReply(text, tools);
             const staged = nextAgentBatch(accepted);
-            const problem = actionsProblem(staged.batch.actions, { smallTalk: false, profile: {}, ownerCorpus: prompt, outreachRequested: outreachRequested(prompt) });
+            const problem = actionsProblem(staged.batch.actions, { profile: {}, ownerCorpus: prompt, outreachRequested: outreachRequested(prompt) });
             if (problem) throw new Error(problem);
           },
         }, { runtime, sleep: noSleep });

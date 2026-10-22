@@ -17,9 +17,11 @@
  * (partial); exhausted credit (at start, the account's limit, the owner's
  * budget) falls back to the scraper, an empty run too, and with no scraper
  * to website search — always with the same customer type, place and
- * request id; Instagram accounts found are kept apart from accounts that can
- * be contacted; nothing ever tops up or raises a limit; a second
- * organization sees none of it.
+ * request id; an Instagram account whose profile was read is a lead, its
+ * place left to the judge when the profile and post do not name it (one whose
+ * profile could not be read is still kept for research, not contacted);
+ * nothing ever tops up or raises a limit; a second organization sees none of
+ * it.
  *
  * Creates its own organizations ("Apify check A/B …") and leaves them;
  * removes the AI connection it made. Refuses a non-local DATABASE_URL.
@@ -380,14 +382,24 @@ await runInOrganization(orgA!.id, async () => {
   const profileRun = [...apify.runs.values()].find((entry) => entry.actorId === "apify~instagram-profile-scraper");
   check("hashtags keep the owner's own and the customer type in the place", (hashtagRun?.input.hashtags as string[] | undefined)?.join(",") === "punehomebaker,punehomebaker,homebakerpune,homebaker".split(",").filter((tag, index, all) => all.indexOf(tag) === index).join(","), JSON.stringify(hashtagRun?.input.hashtags));
   check("profiles are read once per account (posts deduplicated)", JSON.stringify(profileRun?.input.usernames) === JSON.stringify(["sweet.treats", "crumbs.and.co"]), JSON.stringify(profileRun?.input.usernames));
-  check("two accounts found; the one naming Pune is a lead (with the email its profile publishes); the other, Instagram-only and not naming Pune, is kept for research", igJob.status === "succeeded" && igResult.found === 2 && igResult.eligible === 1 && igResult.withEmail === 1 && igResult.instagramOnly === 1, JSON.stringify(igResult));
+  // One harness (research agent): an account whose profile was read is a lead even when neither its profile nor the
+  // post names the place; the place is the judge's matter (review_leads, set_lead_fit), not a code filter.
+  check("two accounts found, both read and both leads: the one naming Pune (with the email its profile publishes), and the Instagram-only one that does not name Pune, its place left to the judge",
+    igJob.status === "succeeded" && igResult.found === 2 && igResult.eligible === 2 && igResult.excluded === 0 && igResult.withEmail === 1 && igResult.instagramOnly === 1
+      && /1 of 2 accounts do not name Pune/.test(String(igResult.providerNote)) && /location is unknown/.test(String(igResult.providerNote)),
+    JSON.stringify(igResult));
   const igMembers = await memberInsightsOf(ig.audienceId);
-  const contactable = igMembers.find((member) => member.personId);
-  const unreachable = igMembers.find((member) => !member.personId);
-  check("the contactable one's email is sourced to the Instagram profile it was published on", JSON.stringify(contactable?.evidence ?? []).includes("\"source\":\"Instagram profile\"") && JSON.stringify(contactable?.evidence ?? []).includes("instagram.com/sweet.treats"), JSON.stringify(contactable?.evidence));
-  check("the other is kept for research because its location is not verified (a hashtag does not place it), never called uncontactable", /location is not verified/.test(unreachable?.reason ?? "") && /kept for research/.test(unreachable?.reason ?? "") && !/cannot|no supported channel/.test(unreachable?.reason ?? "") && JSON.stringify(unreachable?.evidence ?? []).includes("instagram.com/crumbs.and.co"), unreachable?.reason ?? "");
-  check("a post is a potential match, not interest; the place is unknown when not named", /potential match, not interest/.test(contactable?.matchReason ?? "") && /Unknown/.test((unreachable?.facts as Record<string, string> | undefined)?.location ?? ""), `${contactable?.matchReason} | ${JSON.stringify(unreachable?.facts)}`);
-  check("a generic post caption is engagement, not a need", (unreachable?.signals ?? []).every((signal) => signal.kind === "engagement"));
+  const contactable = igMembers.find((member) => JSON.stringify(member.evidence ?? []).includes("instagram.com/sweet.treats"));
+  const placeUnknown = igMembers.find((member) => JSON.stringify(member.evidence ?? []).includes("instagram.com/crumbs.and.co"));
+  check("the contactable one's email is sourced to the Instagram profile it was published on", Boolean(contactable?.personId) && JSON.stringify(contactable?.evidence ?? []).includes("\"source\":\"Instagram profile\"") && JSON.stringify(contactable?.evidence ?? []).includes("instagram.com/sweet.treats"), JSON.stringify(contactable?.evidence));
+  const placeUnknownPerson = placeUnknown?.personId ? (await db.select().from(people).where(and(inOrg(people), eq(people.id, placeUnknown.personId))))[0] : null;
+  check("the other (a hashtag does not place it) is saved as a lead with its Instagram username, its location recorded as unknown for the judge, never called uncontactable or excluded",
+    Boolean(placeUnknown?.personId) && placeUnknown?.status === "eligible" && !placeUnknown?.reason && (placeUnknown?.channels ?? []).includes("instagram")
+      && (placeUnknownPerson?.raw as { instagram?: { username?: string } } | null)?.instagram?.username === "crumbs.and.co"
+      && /does not name Pune \(location unknown\)/.test(placeUnknown?.matchReason ?? ""),
+    JSON.stringify({ personId: placeUnknown?.personId ?? null, status: placeUnknown?.status, reason: placeUnknown?.reason ?? null, channels: placeUnknown?.channels, matchReason: placeUnknown?.matchReason }));
+  check("a post is a potential match, not interest; the place is unknown when not named", /potential match, not interest/.test(contactable?.matchReason ?? "") && /potential match, not interest/.test(placeUnknown?.matchReason ?? "") && /Unknown/.test((placeUnknown?.facts as Record<string, string> | undefined)?.location ?? "") && !(contactable?.facts as Record<string, string> | undefined)?.location, `${contactable?.matchReason} | ${JSON.stringify(placeUnknown?.facts)}`);
+  check("a generic post caption is engagement, not a need", Boolean(placeUnknown) && (placeUnknown?.signals ?? []).every((signal) => signal.kind === "engagement"), JSON.stringify(placeUnknown?.signals));
   check("both Instagram runs carry the request id", [...(await db.select().from(apifyRuns).where(and(inOrg(apifyRuns), eq(apifyRuns.jobId, ig.jobId))))].every((entry) => entry.requestId === "req-ig"));
 
   // ---------------------------------------------------------- a step that runs again does not pay for the profiles twice
@@ -407,6 +419,13 @@ await runInOrganization(orgA!.id, async () => {
   const notRepaid = await runDiscoveryStep(atHashtags, async () => {});
   check("…and once that run was swept as failed, the profiles are not paid for again: the accounts go on unread, with the reason",
     profileRuns() === startedOnce && /Profiles were not read \(an earlier attempt's run failed .*not paid for again\)/.test(JSON.stringify(notRepaid)), `${profileRuns()} vs ${startedOnce} ${JSON.stringify(notRepaid).slice(0, 300)}`);
+  // The same step applied and run to its end: an account whose profile was never read is not verified, so it stays held (one harness too).
+  const unreadJob = await runToEnd(again.jobId);
+  const unreadMembers = await memberInsightsOf(again.audienceId);
+  const unread = unreadMembers.find((member) => JSON.stringify(member.evidence ?? []).includes("instagram.com/again.bakes"));
+  check("…and that account, its profile unread, is kept for research and not contacted (no lead), with the reason; no profiles run was started for it",
+    unreadJob.status === "succeeded" && profileRuns() === startedOnce && Boolean(unread) && !unread?.personId && unread?.status === "excluded" && /profile could not be read/.test(unread?.reason ?? "") && /kept for research, not contacted/.test(unread?.reason ?? ""),
+    `${unreadJob.status} ${profileRuns()} vs ${startedOnce} ${JSON.stringify({ personId: unread?.personId ?? null, status: unread?.status, reason: unread?.reason ?? null })}`);
 
   // ---------------------------------------------------------- social platforms (find_social_leads)
   let socialRefused = "";
@@ -478,7 +497,7 @@ await runInOrganization(orgA!.id, async () => {
   const igSearchJob = await runToEnd(igSearch.jobId);
   const searchRun = [...apify.runs.values()].find((entry) => entry.actorId === "apify~instagram-search-scraper");
   const igSearchResult = (igSearchJob.result ?? {}) as Record<string, unknown>;
-  check("Instagram account search asks for accounts matching the kind of business and place, then reads their profiles", searchRun?.input.search === "beauty salons Los Angeles" && searchRun?.input.searchType === "user" && igSearchJob.status === "succeeded" && igSearchResult.found === 3 && igSearchResult.eligible === 2, `${JSON.stringify(searchRun?.input)} ${JSON.stringify(igSearchResult)}`);
+  check("Instagram account search asks for accounts matching the kind of business and place, then reads their profiles: all three read, all three leads (the place is the judge's matter)", searchRun?.input.search === "beauty salons Los Angeles" && searchRun?.input.searchType === "user" && igSearchJob.status === "succeeded" && igSearchResult.found === 3 && igSearchResult.eligible === 3 && igSearchResult.excluded === 0 && /1 of 3 accounts do not name Los Angeles/.test(String(igSearchResult.providerNote)), `${JSON.stringify(searchRun?.input)} ${JSON.stringify(igSearchResult)}`);
   const igSearchMembers = await memberInsightsOf(igSearch.audienceId);
   const brows = igSearchMembers.find((member) => JSON.stringify(member.evidence).includes("instagram.com/brows.la"));
   const browsPerson = brows?.personId ? (await db.select().from(people).where(eq(people.id, brows.personId)))[0] : null;
@@ -486,7 +505,9 @@ await runInOrganization(orgA!.id, async () => {
     Boolean(brows?.personId) && !brows?.reason && !browsPerson?.email && !browsPerson?.phone && (browsPerson?.raw as { instagram?: { username?: string } } | null)?.instagram?.username === "brows.la",
     JSON.stringify({ reason: brows?.reason ?? null, email: browsPerson?.email ?? null, raw: browsPerson?.raw ?? null }));
   const nails = igSearchMembers.find((member) => JSON.stringify(member.evidence).includes("instagram.com/nails.by.kim"));
-  check("…while the one that does not name Los Angeles is kept for research", !nails?.personId && /location is not verified/.test(nails?.reason ?? ""), nails?.reason ?? "missing");
+  check("…while the one that does not name Los Angeles is a lead too, not excluded: its location is recorded as unknown and left to the judge",
+    Boolean(nails?.personId) && nails?.status === "eligible" && !nails?.reason && /Unknown/.test((nails?.facts as Record<string, string> | undefined)?.location ?? "") && /its location is unknown/.test(nails?.matchReason ?? ""),
+    nails ? JSON.stringify({ personId: nails.personId, status: nails.status, reason: nails.reason, location: (nails.facts as Record<string, string> | undefined)?.location, matchReason: nails.matchReason }) : "missing");
   check("…an account found by search is a potential match from Instagram's account search", igSearchMembers.some((member) => /Instagram's account search/.test(member.matchReason ?? "")), igSearchMembers.map((member) => member.matchReason).join(" | "));
 
   // ---------------------------------------------------------- every run slot busy: wait, never hand off

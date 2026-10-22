@@ -300,7 +300,13 @@ export function spendRoom(input: { capUsd: number; settledUsd: number; reservedU
 
 // ── Limits and the driver ────────────────────────────────────────────────────
 
-export type LimitFacts = { now: Date; deadline: Date; leadTarget: number; leads: number; spendCapUsd: number; spentUsd: number };
+export type LimitFacts = {
+  now: Date; deadline: Date; leadTarget: number; leads: number; spendCapUsd: number; spentUsd: number;
+  /** v2: the target ends the request only when the owner gave the number; otherwise the model decides when it is done. */
+  targetNamed?: boolean;
+  /** v2: a used spend cap does not end the request: paid sources are refused at their reservation, free ones go on. */
+  budgetEnds?: boolean;
+};
 
 export function formatDuration(ms: number): string {
   const total = Math.max(0, Math.round(ms / 60_000));
@@ -318,8 +324,8 @@ export type FinalReason = LimitReason | "sources_exhausted";
 /** The first limit the request has reached, in order: its target, its spend cap (settled spend), its time. */
 
 export function limitReached(facts: LimitFacts): { reason: LimitReason; detail: string } | null {
-  if (facts.leads >= facts.leadTarget) return { reason: "target_reached", detail: `${facts.leads} qualified leads found, the target was ${facts.leadTarget}` };
-  if (facts.spendCapUsd > 0 && facts.spentUsd >= facts.spendCapUsd - EPSILON) return { reason: "budget_spent", detail: `${usd(facts.spentUsd)} of the ${usd(facts.spendCapUsd)} spend cap was used` };
+  if (facts.targetNamed !== false && facts.leads >= facts.leadTarget) return { reason: "target_reached", detail: `${facts.leads} qualified leads found, the target was ${facts.leadTarget}` };
+  if (facts.budgetEnds !== false && facts.spendCapUsd > 0 && facts.spentUsd >= facts.spendCapUsd - EPSILON) return { reason: "budget_spent", detail: `${usd(facts.spentUsd)} of the ${usd(facts.spendCapUsd)} spend cap was used` };
   if (facts.now.getTime() >= facts.deadline.getTime()) return { reason: "time_limit", detail: "the time limit passed" };
   return null;
 }
@@ -343,7 +349,7 @@ export function waitsForOwner(input: { lastWord: { role: string; content: string
 export function judgeRequestText(goal: string, ownerWords: readonly string[]): string {
   const words = ownerWords.map((text) => text.replace(/\s+/g, " ").trim()).filter(Boolean);
   if (!words.length || (words.length === 1 && words[0] === goal.trim())) return goal;
-  return `${goal}\nThe owner's own words for this request, in order (they decide where they disagree with the line above): ${words.map((text, index) => `(${index + 1}) ${text.slice(0, 500)}`).join(" ")}`;
+  return `${goal}\nThe owner's own words for this request, in order (they decide where they disagree with the line above; a place only the line above names is the assistant's choice of where to search, not a requirement): ${words.map((text, index) => `(${index + 1}) ${text.slice(0, 500)}`).join(" ")}`;
 }
 
 /** How a continuation turn ended (agent.server.ts runAgentTurn). */
@@ -441,6 +447,12 @@ export function nextDriverStep(facts: DriverFacts): DriverStep {
     if (last.end === "failed" && last.attempt < MAX_CONTINUATION_ATTEMPTS) {
       const retryAt = new Date(last.endedAt).getTime() + RETRY_BACKOFF_MS * last.attempt;
       return facts.now.getTime() < retryAt ? { kind: "wait", delayMs: retryAt - facts.now.getTime(), reason: "the AI model did not answer; trying again shortly" } : again();
+    }
+    // A last turn begun because no source seemed left, in which the assistant found one and searched: the request goes on
+    // only if that search brought new leads (a search that found nothing, or a paid one refused at its reservation, ends it).
+    if (last.final === "sources_exhausted" && !limit && facts.newSearches > 0) {
+      if (facts.openChildren > 0) return wait(WATCH_MS, "searches still running");
+      if (facts.leads > last.leadsAtStart) return { kind: "continue", n: last.n + 1, attempt: 1, dry: 0 };
     }
     return end();
   }
@@ -595,14 +607,18 @@ export function continuationNote(input: {
   /** v2: why the request is ending; this turn is its last. */
   final?: FinalReason;
   finalDetail?: string;
+  /** v2: whether the owner gave the lead target (otherwise it is no goal to count toward). */
+  targetNamed?: boolean;
 }): string {
   if (input.v2) {
-    if (input.final === "sources_exhausted") return `Your request has no further source to search (${input.finalDetail ?? "nothing more was found"}) with ${input.leads} of ${input.leadTarget} matching leads (step ${input.n}). No more searches start for it. Next: review them, prepare outreach from the leads that match if the brief says contact, then finish_request.`;
-    if (input.final === "target_reached") return `Your request has its ${input.leadTarget} matching leads (step ${input.n}); the counts are in PROGRESS. Next: review them, prepare outreach if the brief says contact, then finish_request. No more searches start for it.`;
-    if (input.final) return `Your request reached its ${input.final === "budget_spent" ? "spend cap" : "time limit"} with ${input.leads} of ${input.leadTarget} matching leads (step ${input.n}). No more searches start for it. Next: review them, prepare outreach from the leads that match if the brief says contact, then finish_request.`;
-    return input.leads >= input.leadTarget
-      ? `Your request has its ${input.leadTarget} matching leads (step ${input.n}); the counts are in PROGRESS. Next: review them, prepare outreach if the brief says contact, then finish_request. No more searches start for it.`
-      : `The searches for your request have finished for now (step ${input.n}); the counts are in PROGRESS. Next: review the leads, correct verdicts the evidence contradicts, prepare outreach when the brief says contact and enough leads match, search another source if the brief still needs leads, or finish_request when its done condition is met.`;
+    const named = input.targetNamed !== false;
+    const matched = named ? `${input.leads} of ${input.leadTarget} matching leads` : `${input.leads} matching leads`;
+    if (input.final === "sources_exhausted") return `Your request found no further source to search (${input.finalDetail ?? "nothing more was found"}) with ${matched} (step ${input.n}). Search another source only if one fits the request; otherwise review the leads, prepare outreach if the owner asked to contact them, then finish_request.`;
+    if (input.final === "target_reached") return `Your request has its ${input.leadTarget} matching leads (step ${input.n}); the counts are in PROGRESS. Next: review them, prepare outreach if the owner asked to contact them, then finish_request. No more searches start for it.`;
+    if (input.final) return `Your request reached its ${input.final === "budget_spent" ? "spend cap" : "time limit"} with ${matched} (step ${input.n}). No more searches start for it. Next: review them, prepare outreach if the owner asked to contact them, then finish_request.`;
+    return named && input.leads >= input.leadTarget
+      ? `Your request has its ${input.leadTarget} matching leads (step ${input.n}); the counts are in PROGRESS. Next: review them, prepare outreach if the owner asked to contact them, then finish_request. No more searches start for it.`
+      : `The searches for your request have finished for now (step ${input.n}); the counts are in PROGRESS. Next: review the leads, prepare outreach when the owner asked to contact them and you have enough, search another source if the request still needs leads, or finish_request when it is done.`;
   }
   const request = input.request.replace(/\s+/g, " ").trim().slice(0, 200);
   return [

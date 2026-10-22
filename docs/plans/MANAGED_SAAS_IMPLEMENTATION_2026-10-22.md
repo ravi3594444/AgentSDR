@@ -329,7 +329,7 @@ it back.
 2. **Grant the first operator, explicitly.** Until this runs nobody sees
    `/platform` or the LinkedIn job logs (before, owners and admins of the
    initial organization saw the job logs):
-   `docker compose exec app bun scripts/grant-platform-operator.ts --email <operator email> --note "initial operator"`
+   `docker compose exec app agentsdr-entrypoint bun scripts/grant-platform-operator.ts --email <operator email> --note "initial operator"`
    (`--list` shows grants, `--revoke` removes one).
 3. **Default keys.** On `/platform` the operator stores each provider's key
    (verified with one call first; TinyFish's check is one search), or uses

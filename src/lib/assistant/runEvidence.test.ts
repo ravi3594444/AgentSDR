@@ -227,7 +227,9 @@ describe("LinkedIn sender status", () => {
     const now = new Date("2026-10-19T06:00:00Z");
     const reset = new Date("2026-10-19T18:30:00Z"); // midnight in India
     const status = linkedinSenderStatus({ ...base, limitReached: true, limitResetsAt: reset, checkEveryMinutes: 30, displayTimeZone: "Asia/Kolkata", now });
-    expect(status.gates).toEqual(["LinkedIn reported this account's invitation limit; the flag is cleared at the organization's daily reset, Tue 20 Oct 00:00 (Asia/Kolkata)"]);
+    expect(status.gates).toHaveLength(1);
+    // ICU versions differ on the comma after a weekday; the reset instant and zone must agree.
+    expect(status.gates[0]).toMatch(/^LinkedIn reported this account's invitation limit; the flag is cleared at the organization's daily reset, Tue,? 20 Oct 00:00 \(Asia\/Kolkata\)$/);
     // After the reset, on the first scheduled check.
     expect(status.nextAt).toBe("2026-10-19T18:30:00.000Z");
     expect(linkedinSenderStatus({ ...base, limitReached: true, now }).gates[0]).toBe("LinkedIn reported this account's invitation limit; the flag is cleared at the organization's daily reset");
@@ -247,7 +249,7 @@ describe("display times", () => {
     expect(displayTime(new Date("2026-10-19T12:00:29.508Z"), now, "America/New_York", { seconds: true })).toBe("08:00:29 (America/New_York)");
   });
   test("another local day carries its date; an unknown zone falls back to UTC", () => {
-    expect(displayTime(new Date("2026-10-19T19:00:00Z"), now, "Asia/Kolkata")).toBe("Tue 20 Oct 00:30 (Asia/Kolkata)");
+    expect(displayTime(new Date("2026-10-19T19:00:00Z"), now, "Asia/Kolkata")).toMatch(/^Tue,? 20 Oct 00:30 \(Asia\/Kolkata\)$/);
     expect(displayTime(new Date("2026-10-19T12:30:00Z"), now, "Mars/Olympus")).toBe("12:30 (UTC)");
   });
 });

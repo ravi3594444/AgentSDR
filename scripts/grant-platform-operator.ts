@@ -9,7 +9,7 @@
  *   bun scripts/grant-platform-operator.ts --list
  *
  * Run by whoever runs the server, against its database (in the container:
- * `docker compose exec app bun scripts/grant-platform-operator.ts …`). The
+ * `docker compose exec app agentsdr-entrypoint bun scripts/grant-platform-operator.ts …`). The
  * person must already have an account. Uses Bun's built-in PostgreSQL client
  * and no packages, so it also runs inside the Docker image.
  */

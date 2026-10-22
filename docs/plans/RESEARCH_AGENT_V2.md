@@ -1,9 +1,9 @@
 # Research agent v2: the model plans, the code guards (21 Oct 2026)
 
-Branch `claude/research-agent-fixes`, from `f25af92` (the pilot merge). Not
-merged, not deployed. Off by default: an owner or admin turns on
-**Research agent v2 (beta)** on the Providers & features page. With it off,
-the assistant behaves exactly as before.
+Branch `claude/research-agent-fixes`, from `f25af92` (the pilot merge).
+Since 22 Oct (branch `claude/research-v2-live-fixes`) it is the assistant's
+only harness: built in, no switch (see "Live fixes and one harness" at the
+end).
 
 ## Why
 
@@ -221,3 +221,40 @@ Bright Data has run one `social_research` job, re-running `add-objectives`
 job-kind list and `deploy.sh` stopped before the switch. The same fix is
 on `claude/outreach-polish-20261021`. `docker/deploy.test.ts` now fails
 when two default migrations rewrite one CHECK with different values.
+
+## Live fixes and one harness (22 Oct)
+
+Branch `claude/research-v2-live-fixes`, from the deployed `5c1d03f`. Found
+in two live runs on the deployed app (the owner's model: Claude Opus 5.5
+through the Claude Code engine). Every failure traced was the harness's,
+not the model's.
+
+| Live symptom | Cause | Fix |
+| --- | --- | --- |
+| "Outreach them all" after a research-only request: `set_brief` 19 times, every plan refused "research only", no plan | `set_brief` wrote to the chat's active request (none: the research had finished, so it made a new empty one) while `prepare_outreach` and `review_leads` read the turn's request (the finished research-only one) | One request per turn: every v2 tool reads the turn's request, which follows `set_brief`; a follow-up to an ended request continues it and inherits its leads and verdicts (`controls.continues`) |
+| "any niche, anywhere": it copied the profile's customers and places | The prompt said "find businesses usually means their target customers"; search tools filled who and where from the profile | An open niche or place is the model's research; v2 search tools no longer fill them from the profile |
+| "Tell me if you want a higher limit"; Reddit/X searched for business leads | Nothing told the model the money is the server's, or that a named source is allowed, not required | Prompt: choose sources by where the leads are; do not discuss the budget |
+| A second "still running… nothing found yet" message each turn | After starting searches the loop asked the model again; PROGRESS hid a running search's count | A step that only starts searches (and writes the brief) ends the turn; running searches show their count so far |
+| "Working… 0 businesses found" on Apify; "0 of ?" while judging; "Current counts are on the plan card" with no plan | The card looked up the job's own stage name; the judging total was taken per batch; one fixed pointer | Card falls back to the progress stage; the total is taken once; the pointer names This request first |
+
+Then, at the owner's direction ("the model sees the tools, uses them and
+does what was asked"), the rules that second-guessed the model went:
+searches waiting for a brief, the research-only refusal, plans from judged
+matches only (`leads: "all"` and `personIds` now), the 25/100 plan cap (an
+owner's number still sizes the plan), the owner's-own-number rule for the
+lead target and time (it stays for money), and the quote required to mark
+a match (a quote given must still be found). Kept: Start (or Autonomous
+caps, with the owner's words asking for contact), Do Not Contact,
+suppression, sending limits, connected senders, the spend cap and its
+reservations, no double sends, tenancy, claims checked against the record.
+
+Finally the switch went: `research_agent_v2` is built in
+(`BUILT_IN_FEATURES`), on for every organization; a saved "off" is
+ignored and the settings page no longer lists it.
+
+Verified with stand-ins (no live provider, no model): the v2 e2e suite
+replays the live "outreach them all" case (a new request continuing the
+ended one, a plan of its 3 matching leads, the brief written once),
+`leads: "all"` and `personIds` plans, the brief-free search, and one model
+call for a step that only starts searches. The prompt changes (open niche
+and place, money, sources) are **unmeasured with a real model**.

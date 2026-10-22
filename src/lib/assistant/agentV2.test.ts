@@ -29,14 +29,20 @@ describe("what the model reads", () => {
     const block = requestBlock({ ownerMessages: ["Find 10 hair salons on Instagram and DM them", "Miami."], brief: null, controls: null, status: null });
     expect(block).toContain("1. Find 10 hair salons on Instagram and DM them");
     expect(block).toContain("2. Miami.");
-    expect(block).toContain("Call set_brief before the first search");
+    expect(block).toContain("BRIEF: none yet (set_brief writes what the owner asked");
   });
 
   test("progress lists the searches that ran so none is repeated", () => {
     const text = progressBlock({ funnel: { ...EMPTY_FUNNEL, found: 12, contactable: 9, qualified: 4 }, sources: [], searches: [{ tool: "discovery", what: "dentists New York", status: "succeeded", found: 12, contactable: 9 }], spentUsd: 0, spendCapUsd: 0, msLeft: 3_600_000, plans: [] });
     expect(text).toContain("12 found, 9 contactable; 4 match");
     expect(text).toContain("discovery “dentists New York” succeeded, 12 found, 9 contactable");
-    expect(text).toContain("free sources only");
+    expect(text).toContain("Free sources only");
+    expect(text).not.toMatch(/\$\d/);
+  });
+
+  test("a running search shows what it found so far", () => {
+    const text = progressBlock({ funnel: EMPTY_FUNNEL, sources: [], searches: [{ tool: "discovery", what: "cleaning companies Houston", status: "running", found: 50, contactable: null }], spentUsd: 0, spendCapUsd: 5, msLeft: 3_600_000, plans: [] });
+    expect(text).toContain("discovery “cleaning companies Houston” running, 50 found");
   });
 });
 
@@ -56,13 +62,23 @@ describe("the harness keeps only what protects", () => {
 
   test("the prompt teaches the method and the limits, not scenarios", () => {
     const prompt = systemPromptV2({ features: defaultFeatureState(), catalog: "- set_brief: …", autonomy: null });
-    expect(prompt).toContain("set_brief before the first search");
+    expect(prompt).toContain("set_brief when you take on a request");
+    // Who goes in the plan is the model's choice, not only the judge's matches.
+    expect(prompt).toContain("pass leads all");
+    expect(prompt).not.toContain("Only leads marked match are contacted");
     expect(prompt).toContain("finish_request");
     expect(prompt).not.toContain("contactAfter");
     expect(prompt).not.toContain("AUTONOMOUS MODE");
     // The owner's place holds outside Autonomous mode too.
     expect(prompt).toContain("a neighbouring city, a suburb or the wider area is another place");
     expect(prompt).toContain("Never ask what the brief already settles");
+    // Sources are chosen by where the leads are; the spend cap is the server's.
+    expect(prompt).toContain("a source the owner names is one you may use, not one you must");
+    expect(prompt).toContain("never ask to raise it");
+    // An open niche or place is the model's research, not the profile's.
+    expect(prompt).toContain("choosing them is your research");
+    expect(prompt).toContain("When the owner names no place, the place is open");
+    expect(prompt).not.toContain("usually means their target customers");
     const autonomous = systemPromptV2({ features: defaultFeatureState(), catalog: "", autonomy: { runsPerDay: 2, leadsPerDay: 50, searchesPerDay: 10 } });
     expect(autonomous).toContain("AUTONOMOUS MODE IS ON");
     expect(autonomous).toContain("Widen nothing the owner named");

@@ -144,10 +144,10 @@ describe("nextAgentBatch", () => {
 
   test("queued batches are checked again against current business information", () => {
     const reply = plan(8);
-    reply.actions.push({ tool: "save_business_info", args: { businessName: "Bright Path" } });
+    reply.actions.push({ tool: "save_business_info", args: { senderName: "Amit Sharma" } });
     const queued = nextAgentBatch(reply).pending!;
     const batch = nextAgentBatch(queued).batch;
-    expect(actionsProblem(batch.actions, { smallTalk: false, profile: { businessName: "Bright Path" }, ownerCorpus: "We are Bright Path", outreachRequested: true })).toContain("change nothing");
+    expect(actionsProblem(batch.actions, { profile: { businessName: "Bright Path" }, ownerCorpus: "We are Bright Path", outreachRequested: true })).toContain("not what the owner wrote");
   });
 });
 
@@ -156,6 +156,14 @@ describe("unbackedClaim", () => {
     expect(unbackedClaim("I've saved your business details.", [], false)).toContain("no tool has succeeded");
     expect(unbackedClaim("I have found 40 dentists.", [], false)).toContain("no tool has succeeded");
     expect(unbackedClaim("I've saved your business details.", ["save_business_info"], false)).toBeNull();
+  });
+
+  test("an earlier search backs \"I found …\", never \"I've sent / saved / prepared …\"", () => {
+    expect(unbackedClaim("I found 30 dentists in Austin; 12 match.", [], false, true)).toBeNull();
+    expect(unbackedClaim("I've sent emails to all 24 dentists.", [], false, true)).toContain("no tool has succeeded");
+    expect(unbackedClaim("I've saved that you offer free delivery.", [], false, true)).toContain("no tool has succeeded");
+    expect(unbackedClaim("I found 30 dentists and I've prepared the plan.", [], false, true)).toContain("no tool has succeeded");
+    expect(unbackedClaim("I found 30 dentists.", [], false, false)).toContain("no tool has succeeded");
   });
 
   test("future intentions and questions pass", () => {
@@ -203,13 +211,13 @@ describe("outreachRequested", () => {
     for (const prompt of [plain, withUrl]) {
       expect(outreachRequested(prompt)).toBe(true);
       expect(actionsProblem([{ tool: "find_leads", args: { what: "dental clinics", where: "Pune", contactAfter: true } }], {
-        smallTalk: isSmallTalk(prompt), profile: { businessName: "Our Agency", offer: "AI automations", locations: "Pune" },
+        profile: { businessName: "Our Agency", offer: "AI automations", locations: "Pune" },
         ownerCorpus: prompt, outreachRequested: outreachRequested(prompt),
       })).toBeNull();
     }
     expect(urlGiven("https://22nd-x-ai-studio.vercel.app", withUrl)).toBe(true);
     expect(actionsProblem([{ tool: "read_webpage", args: { url: "https://22nd-x-ai-studio.vercel.app" } }], {
-      smallTalk: false, profile: {}, ownerCorpus: withUrl, outreachRequested: true,
+      profile: {}, ownerCorpus: withUrl, outreachRequested: true,
     })).toBeNull();
   });
 
@@ -526,29 +534,28 @@ describe("actionsProblem", () => {
   const profile = { businessName: "Bright Path Dental Supplies" };
   const ownerCorpus = "We are Bright Path Dental Supplies in Pune. We service dental chairs and autoclaves within the week. Sign as Ravi.";
 
-  test("no tools on a greeting", () => {
-    expect(actionsProblem([{ tool: "check_setup", args: {} }], { smallTalk: true, profile, ownerCorpus: "hey", outreachRequested: false })).toContain("greeted");
-    expect(actionsProblem([], { smallTalk: true, profile, ownerCorpus: "hey", outreachRequested: false })).toBeNull();
+  test("a greeting does not stop tools: \"test\" or \"hey\" is the model's to read", () => {
+    expect(actionsProblem([{ tool: "check_setup", args: {} }], { profile, ownerCorpus: "hey", outreachRequested: false })).toBeNull();
   });
 
   test("a search that contacts people, or a plan, needs the owner to have asked", () => {
     const contactSearch = [{ tool: "find_leads", args: { what: "dental clinics", where: "Pune", contactAfter: true } }];
-    expect(actionsProblem(contactSearch, { smallTalk: false, profile, ownerCorpus, outreachRequested: false })).toContain("has not asked");
-    expect(actionsProblem(contactSearch, { smallTalk: false, profile, ownerCorpus, outreachRequested: true })).toBeNull();
-    expect(actionsProblem([{ tool: "find_leads", args: { what: "dental clinics", where: "Pune" } }], { smallTalk: false, profile, ownerCorpus, outreachRequested: false })).toBeNull();
-    expect(actionsProblem([{ tool: "prepare_outreach", args: { audienceId: "x" } }], { smallTalk: false, profile, ownerCorpus, outreachRequested: false })).toContain("has not asked");
+    expect(actionsProblem(contactSearch, { profile, ownerCorpus, outreachRequested: false })).toContain("has not asked");
+    expect(actionsProblem(contactSearch, { profile, ownerCorpus, outreachRequested: true })).toBeNull();
+    expect(actionsProblem([{ tool: "find_leads", args: { what: "dental clinics", where: "Pune" } }], { profile, ownerCorpus, outreachRequested: false })).toBeNull();
+    expect(actionsProblem([{ tool: "prepare_outreach", args: { audienceId: "x" } }], { profile, ownerCorpus, outreachRequested: false })).toContain("has not asked");
   });
 
-  test("a save that changes nothing is refused", () => {
-    expect(actionsProblem([{ tool: "save_business_info", args: {} }], { smallTalk: false, profile, ownerCorpus, outreachRequested: false })).toContain("change nothing");
-    expect(actionsProblem([{ tool: "save_business_info", args: { businessName: "Bright Path Dental Supplies" } }], { smallTalk: false, profile, ownerCorpus, outreachRequested: false })).toContain("change nothing");
+  test("a save that changes nothing is not refused (the tool answers that nothing was new)", () => {
+    expect(actionsProblem([{ tool: "save_business_info", args: {} }], { profile, ownerCorpus, outreachRequested: false })).toBeNull();
+    expect(actionsProblem([{ tool: "save_business_info", args: { businessName: "Bright Path Dental Supplies" } }], { profile, ownerCorpus, outreachRequested: false })).toBeNull();
   });
 
   test("the owner's information is saved, paraphrased or not; invented values are refused", () => {
-    expect(actionsProblem([{ tool: "save_business_info", args: { offer: "Same-week servicing of dental chairs and autoclaves", locations: "Pune", senderName: "Ravi" } }], { smallTalk: false, profile, ownerCorpus, outreachRequested: false })).toBeNull();
-    expect(actionsProblem([{ tool: "save_business_info", args: { senderName: "Amit Sharma", website: "brightpath.in" } }], { smallTalk: false, profile, ownerCorpus, outreachRequested: false })).toContain("senderName, website are not what the owner wrote");
-    expect(actionsProblem([{ tool: "save_business_info", args: { offer: "Monthly plan at ₹2,499 with 20% discount" } }], { smallTalk: false, profile, ownerCorpus, outreachRequested: false })).toContain("offer is not what the owner wrote");
-    expect(actionsProblem([{ tool: "save_business_info", args: { notes: "" , language: "en" } }], { smallTalk: false, profile: { ...profile, notes: "old" }, ownerCorpus, outreachRequested: false })).toBeNull();
+    expect(actionsProblem([{ tool: "save_business_info", args: { offer: "Same-week servicing of dental chairs and autoclaves", locations: "Pune", senderName: "Ravi" } }], { profile, ownerCorpus, outreachRequested: false })).toBeNull();
+    expect(actionsProblem([{ tool: "save_business_info", args: { senderName: "Amit Sharma", website: "brightpath.in" } }], { profile, ownerCorpus, outreachRequested: false })).toContain("senderName, website are not what the owner wrote");
+    expect(actionsProblem([{ tool: "save_business_info", args: { offer: "Monthly plan at ₹2,499 with 20% discount" } }], { profile, ownerCorpus, outreachRequested: false })).toContain("offer is not what the owner wrote");
+    expect(actionsProblem([{ tool: "save_business_info", args: { notes: "" , language: "en" } }], { profile: { ...profile, notes: "old" }, ownerCorpus, outreachRequested: false })).toBeNull();
   });
 });
 
@@ -568,7 +575,7 @@ describe("contacts and links from the chat", () => {
     expect(urlGiven("", owner)).toBe(false);
   });
 
-  test("a browser step ends the batch, like a page read; browser_open follows the link rule", () => {
+  test("a browser step ends the batch, like a page read; browser_open may open any public page", () => {
     const reply = { message: "Working.", suggestions: [], actions: [
       { tool: "browser_open", args: { url: "https://dir.example/agents" } },
       { tool: "browser_click", args: { n: 3 } },
@@ -576,8 +583,8 @@ describe("contacts and links from the chat", () => {
     const { batch, replanAfterRead } = nextAgentBatch(reply);
     expect(batch.actions.map((action) => action.tool)).toEqual(["browser_open"]);
     expect(replanAfterRead).toBe(true);
-    expect(actionsProblem([{ tool: "browser_open", args: { url: "https://dir.example/agents" } }], { smallTalk: false, profile: {}, ownerCorpus: "TOOL web_search: https://dir.example/agents", outreachRequested: false })).toBeNull();
-    expect(actionsProblem([{ tool: "browser_open", args: { url: "https://elsewhere.example/" } }], { smallTalk: false, profile: {}, ownerCorpus: "TOOL web_search: https://dir.example/agents", outreachRequested: false })).toContain("browser_open opens only links");
+    expect(actionsProblem([{ tool: "browser_open", args: { url: "https://dir.example/agents" } }], { profile: {}, ownerCorpus: "TOOL web_search: https://dir.example/agents", outreachRequested: false })).toBeNull();
+    expect(actionsProblem([{ tool: "browser_open", args: { url: "https://elsewhere.example/" } }], { profile: {}, ownerCorpus: "TOOL web_search: https://dir.example/agents", outreachRequested: false })).toBeNull();
   });
 
   test("a link is given only for the same site or its subdomain, never a look-alike or a parent", () => {
@@ -591,19 +598,19 @@ describe("contacts and links from the chat", () => {
     expect(urlGiven("https://acme-realty.example.evil.test/", corpus)).toBe(false);
   });
 
-  test("actionsProblem refuses invented contacts and links nobody gave", () => {
-    const input = { smallTalk: false, profile: {}, ownerCorpus: owner, outreachRequested: true };
+  test("actionsProblem refuses invented contacts; which public page to read is the model's", () => {
+    const input = { profile: {}, ownerCorpus: owner, outreachRequested: true };
     expect(actionsProblem([{ tool: "add_contacts", args: { contacts: [{ phone: "8084794983" }] } }], input)).toBeNull();
     expect(actionsProblem([{ tool: "add_contacts", args: { contacts: [{ phone: "9999999999" }] } }], input)).toContain("not in what the owner wrote");
     expect(actionsProblem([{ tool: "read_webpage", args: { url: "https://www.sparklehome.example/team" } }], input)).toBeNull();
-    expect(actionsProblem([{ tool: "read_webpage", args: { url: "https://example.org" } }], input)).toContain("only links the owner gave");
-    expect(actionsProblem([{ tool: "read_webpage", args: { url: "https://example.org" } }], input)).toContain("web_search");
+    // A directory the model knows of, not given in the chat (the tool itself still refuses private addresses).
+    expect(actionsProblem([{ tool: "read_webpage", args: { url: "https://example.org" } }], input)).toBeNull();
   });
 
   test("a supplied Instagram handle needs no URL, city or other contact identity", () => {
     const prompt = "hey cna u contact dev__ravi_35 via instagrma and try to sell our services";
     const action = { tool: "add_instagram_contacts", args: { usernames: ["dev__ravi_35"], contactAfter: true } };
-    const input = { smallTalk: false, profile: {}, ownerCorpus: prompt, outreachRequested: outreachRequested(prompt) };
+    const input = { profile: {}, ownerCorpus: prompt, outreachRequested: outreachRequested(prompt) };
     expect(input.outreachRequested).toBe(true);
     expect(actionsProblem([action], input)).toBeNull();
     expect(actionsProblem([{ ...action, args: { ...action.args, usernames: ["dev_ravi_35"] } }], input)).toContain("do not invent or shorten");
@@ -611,7 +618,7 @@ describe("contacts and links from the chat", () => {
   });
 
   test("saving an Instagram handle is distinct from requesting outreach", () => {
-    const input = { smallTalk: false, profile: {}, ownerCorpus: "Save @dev__ravi_35", outreachRequested: false };
+    const input = { profile: {}, ownerCorpus: "Save @dev__ravi_35", outreachRequested: false };
     const action = { tool: "add_instagram_contacts", args: { usernames: ["@dev__ravi_35"], contactAfter: false } };
     expect(actionsProblem([action], input)).toBeNull();
     expect(actionsProblem([{ ...action, args: { ...action.args, contactAfter: true } }], input)).toContain("has not asked");
@@ -634,7 +641,7 @@ describe("groundingCorpus: what the owner wrote and what sources returned", () =
     return { role: "tool" as const, tool: "web_search", status, content: summary, toolResult: { summary, data: { query, page: 0, provider: "tinyfish", results } } };
   };
   const ask = "find the email of Acme Dental, Pune and contact them";
-  const input = (corpus: string) => ({ smallTalk: false, profile: {}, ownerCorpus: corpus, outreachRequested: true });
+  const input = (corpus: string) => ({ profile: {}, ownerCorpus: corpus, outreachRequested: true });
   const addGuess = { tool: "add_contacts", args: { contacts: [{ email: "info@acmedental.in", name: "Acme Dental" }], contactAfter: true } };
   const readGuess = { tool: "read_webpage", args: { url: "https://acmedental.in/contact" } };
 
@@ -642,12 +649,12 @@ describe("groundingCorpus: what the owner wrote and what sources returned", () =
     for (const query of ["info@acmedental.in", "acmedental.in"]) {
       const corpus = groundingCorpus([owner(ask), searched(query, [])]);
       expect(actionsProblem([addGuess], input(corpus))).toContain("not in what the owner wrote");
-      expect(actionsProblem([readGuess], input(corpus))).toContain("only links the owner gave");
+      expect(urlGiven(readGuess.args.url, corpus)).toBe(false);
     }
     // A search that returned other businesses does not ground the query either.
     const other = groundingCorpus([owner(ask), searched("acmedental.in contact email", [{ url: "https://www.justdial.example/pune/dentists", title: "Dentists in Pune", snippet: "Top 20 dentists" }])]);
     expect(actionsProblem([addGuess], input(other))).toContain("not in what the owner wrote");
-    expect(actionsProblem([readGuess], input(other))).toContain("only links the owner gave");
+    expect(urlGiven(readGuess.args.url, other)).toBe(false);
     expect(actionsProblem([{ tool: "read_webpage", args: { url: "https://justdial.example/pune/dentists" } }], input(other))).toBeNull();
   });
 
@@ -704,7 +711,7 @@ describe("groundingCorpus: what the owner wrote and what sources returned", () =
     for (const corpus of [read, opened, trailing]) {
       expect(actionsProblem([addGuess], input(corpus))).toContain("not in what the owner wrote");
       expect(actionsProblem([addPhoneGuess], input(corpus))).toContain("not in what the owner wrote");
-      expect(actionsProblem([readGuess], input(corpus))).toContain("only links the owner gave");
+      expect(urlGiven(readGuess.args.url, corpus)).toBe(false);
       expect(corpus).not.toContain("acmedental");
       expect(corpus).not.toContain("9822011111");
       // The page itself, and the site it is on, are still what was read.
@@ -726,7 +733,7 @@ describe("groundingCorpus: what the owner wrote and what sources returned", () =
     for (const corpus of [echoed, groundingCorpus([owner(listedOn), redirected]), pathEcho]) {
       expect(actionsProblem([addGuess], input(corpus))).toContain("not in what the owner wrote");
       expect(actionsProblem([addPhoneGuess], input(corpus))).toContain("not in what the owner wrote");
-      expect(actionsProblem([readGuess], input(corpus))).toContain("only links the owner gave");
+      expect(urlGiven(readGuess.args.url, corpus)).toBe(false);
       expect(actionsProblem([{ tool: "read_webpage", args: { url: "https://knowndir.example/listings" } }], input(corpus))).toBeNull();
     }
   });
@@ -745,7 +752,7 @@ describe("groundingCorpus: what the owner wrote and what sources returned", () =
     expect(actionsProblem([addGuess], input(corpus))).toBeNull();
     // A domain only the model wrote is still taken out.
     const guessed = groundingCorpus([owner(ask), pageRead("https://knowndir.example/search?q=acmedental.in", { title: "Search", text: "No results for acmedental.in" })]);
-    expect(actionsProblem([readGuess], input(guessed))).toContain("only links the owner gave");
+    expect(urlGiven(readGuess.args.url, guessed)).toBe(false);
   });
 
   test("a query naming the page's own site, or plain words, takes nothing from what the page returned", () => {

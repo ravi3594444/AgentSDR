@@ -6,7 +6,7 @@ import { compactEvent, eventData, reportAsOf } from "./chatEvents";
 // points to where the current counts are.
 describe("chat reports say when they were written", () => {
   const createdAt = "2026-10-21T05:48:10.000Z";
-  const pointer = "Current counts are on the plan card and in This request.";
+  const pointer = "Current counts are in This request, and on the plan card when there is one.";
 
   test("a run report, a results card, a daily summary and a job's report event carry 'As of' in the organization's zone", () => {
     expect(reportAsOf({ role: "tool", tool: "report", createdAt, toolResult: { data: { channels: [] } } }, "Asia/Kolkata")).toEqual({ label: "As of Wed, Oct 21, 11:18 AM", pointer });

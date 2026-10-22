@@ -32,15 +32,22 @@ if (!/@(localhost|127\.0\.0\.1)[:/]/.test(process.env.DATABASE_URL ?? "")) {
 }
 const root = join(import.meta.dir, "..", "..");
 const stamp = Date.now();
+// A search can be started (its job is recorded); nothing runs it here, so the scraper is never called.
+process.env.GMAPS_SCRAPER_URL = "http://scraper.research-v2-check.test";
+process.env.GEOCODER_URL = "off";
 
 // ------------------------------------------------------------ stand-ins
 type Input = { userPrompt: string; systemPrompt?: string; schemaName?: string; accept: (text: string) => void };
 const writerCalls: string[] = [];
+// The chat model's answers, in order, for the turn checked below.
+const chatAnswers: string[] = [];
 mock.module(join(root, "src/lib/ai/server/structuredCompletion.ts"), () => ({
   completeStructured: async (input: Input) => {
     writerCalls.push(input.schemaName ?? "?");
     let text: string;
-    if (input.schemaName === "outreach_sequences") {
+    if (input.schemaName === "assistant_reply" && chatAnswers.length) {
+      text = chatAnswers.shift()!;
+    } else if (input.schemaName === "outreach_sequences") {
       const key = `${input.systemPrompt ?? ""}\n${input.userPrompt}`.match(/\{\{(p_[0-9a-f]+)\}\}/)?.[1];
       const line = key ? `{{${key}}}\n` : "";
       text = JSON.stringify({ channels: [{ channel: "email", messages: [{ subject: "Fewer no-shows", body: `Hi there,\n${line}Do missed appointments cost you bookings? We send reminders. Worth a look?\nRavi`, waitDays: 0 }] }] });
@@ -74,6 +81,7 @@ const { addAudienceMembers, createAudience } = await import("@/lib/assistant/aud
 const { runTool } = await import("@/lib/assistant/tools.server");
 const { getObjective, objectiveForRequest, objectiveJudgeRequest, objectiveRequest, saveObjectiveProgress } = await import("@/lib/assistant/objective.server");
 const { runOneAssistantStep } = await import("@/lib/assistant/worker");
+const { runAgentTurn } = await import("@/lib/assistant/agent.server");
 const { registerAssistantJobs } = await import("@/lib/assistant/register.server");
 registerAssistantJobs();
 type Progress = import("@/lib/assistant/schema").ObjectiveProgress;
@@ -110,12 +118,13 @@ await runInOrganization(a.org.id, async () => {
   const brief = { goal: "Find 2 dentists in Austin and email them, free tools only", contact: true, channels: ["email"], spendCapUsd: 0, timeLimitMinutes: null, done: "2 Austin dentists found and an email plan ready" };
 
   // ---------------------------------------------------------- the brief
-  const tooMany = await runTool("set_brief", { ...brief, leadTarget: 40 }, context);
-  check("a brief may not raise the lead target past what the owner wrote", !tooMany.ok && /did not ask for 40 leads/.test(tooMany.summary), tooMany.summary);
-  const paid = await runTool("set_brief", { ...brief, leadTarget: 2, spendCapUsd: 20 }, context);
-  check("…nor the spend cap", !paid.ok && /did not allow \$20/.test(paid.summary), paid.summary);
   const beforeBrief = await runTool("find_leads", { what: "dentists", where: "Austin, TX" }, context);
-  check("a search before the brief is refused", !beforeBrief.ok && /no brief yet/.test(beforeBrief.summary), beforeBrief.summary);
+  const started = await objectiveForRequest(request.id);
+  check("a search before the brief starts the request with the defaults (no brief needed first)", beforeBrief.ok && Boolean(started) && !started!.controls.brief, beforeBrief.summary);
+  const paid = await runTool("set_brief", { ...brief, leadTarget: 2, spendCapUsd: 20 }, context);
+  check("a brief may not raise the spend cap past what the owner wrote", !paid.ok && /did not allow \$20/.test(paid.summary), paid.summary);
+  const many = await runTool("set_brief", { ...brief, leadTarget: 40 }, context);
+  check("…but the lead target is the assistant's to set", many.ok && (await objectiveForRequest(request.id))?.leadTarget === 40, many.summary);
   const saved = await runTool("set_brief", { ...brief, leadTarget: 2 }, context);
   const objective = await objectiveForRequest(request.id);
   check("a valid brief becomes the request's objective, with the owner's limits", saved.ok && objective?.leadTarget === 2 && objective.spendCapUsd === 0 && objective.controls.named?.target === true, saved.summary);
@@ -159,17 +168,17 @@ await runInOrganization(a.org.id, async () => {
   check("prepare_outreach makes one plan of matching leads only, up to the brief's target, on email only", plan.ok && assigned.length === 2 && assigned.every((item) => item.channel === "email") && !names.includes("Austin Dental Supply"), `${plan.summary.slice(0, 160)} | ${names.join(", ")}`);
   check("…and nothing is sent: the plan waits for Start", run?.status === "proposed", run?.status ?? "no run");
 
-  // ---------------------------------------------------------- the request's last turn (the driver found no source left)
-  await saveObjectiveProgress(objective!.id, { continuation: { n: 3, attempt: 1, startedAt: new Date().toISOString(), endedAt: null, end: null, leadsAtStart: 2, judged: null, final: "sources_exhausted", finalDetail: "the assistant found no further source or query worth searching" } });
+  // ---------------------------------------------------------- the request's last turn (its target, which the owner named, is reached)
+  await saveObjectiveProgress(objective!.id, { continuation: { n: 3, attempt: 1, startedAt: new Date().toISOString(), endedAt: null, end: null, leadsAtStart: 2, judged: null, final: "target_reached", finalDetail: "3 qualified leads found, the target was 2" } });
   const lastSearch = await runTool("find_leads", { what: "dentists", where: "Round Rock, TX" }, context);
-  check("in a request's last turn no search starts", !lastSearch.ok && /this request is ending/.test(lastSearch.summary), lastSearch.summary);
+  check("in a request's last turn at its target no search starts", !lastSearch.ok && /this request is ending/.test(lastSearch.summary), lastSearch.summary);
 
   // ---------------------------------------------------------- research only, Autonomous mode
   const research = await addMessage({ threadId: thread.id, role: "user", content: "Now just research 3 orthodontists in Austin. No outreach.", createdBy: a.owner.id });
   const researchContext: Context = { ...context, ownerText: research.content, requestMessageId: research.id, searchRequestId: research.id };
   await runTool("set_brief", { goal: "Research 3 orthodontists in Austin, no outreach", leadTarget: 3, contact: false, channels: null, spendCapUsd: null, timeLimitMinutes: null, done: "3 orthodontists found", newRequest: true }, researchContext);
   const refused = await runTool("prepare_outreach", {}, researchContext);
-  check("a research-only brief prepares no plan", !refused.ok && /research only/.test(refused.summary), refused.summary);
+  check("a research-only brief does not refuse a plan the assistant prepares (nothing is sent before Start)", !/research only/.test(refused.summary), refused.summary);
   check("…and the earlier request ended as finished when the new one began", (await getObjective(objective!.id))?.stopReason === "finished");
 
   const thread2 = await createThread(a.owner.id);
@@ -204,7 +213,7 @@ await runInOrganization(a.org.id, async () => {
   const lastTurn = ((await getObjective(salonObjective.id))!.progress as Progress).continuation;
   const [lastNote] = await db.select({ content: assistantMessages.content }).from(assistantMessages).where(and(eq(assistantMessages.threadId, thread3.id), eq(assistantMessages.role, "event"))).orderBy(sql`${assistantMessages.createdAt} desc`).limit(1);
   check("an idle turn does not end the request: the driver starts its last turn, with the reason", lastTurn?.n === 2 && lastTurn.final === "sources_exhausted" && lastTurn.finalDetail === "the assistant found no further source or query worth searching" && (await getObjective(salonObjective.id))?.status === "active", JSON.stringify(lastTurn));
-  check("…and the note asks for the plan from what matched", /has no further source to search .* prepare outreach from the leads that match/.test(lastNote?.content ?? ""), lastNote?.content.slice(0, 160));
+  check("…and the note leaves a fitting source open, else asks for the plan and the finish", /found no further source to search .*Search another source only if one fits the request; otherwise review the leads, prepare outreach if the owner asked to contact them, then finish_request/.test(lastNote?.content ?? ""), lastNote?.content.slice(0, 200));
   // That turn ran on the stand-in model (which answers no chat turn); once it has ended, the request stops with its reason.
   for (let waited = 0; waited < 20_000 && !((await getObjective(salonObjective.id))!.progress as Progress).continuation?.endedAt; waited += 250) await new Promise((resolve) => setTimeout(resolve, 250));
   const ended = ((await getObjective(salonObjective.id))!.progress as Progress).continuation!;
@@ -212,6 +221,124 @@ await runInOrganization(a.org.id, async () => {
   await drive();
   const stopped = await getObjective(salonObjective.id);
   check("…then the request stops as sources exhausted, with that reason's detail", stopped?.status === "stopped" && stopped.stopReason === "sources_exhausted" && stopped.stopDetail === "the assistant found no further source or query worth searching", `${stopped?.status} ${stopped?.stopReason}: ${stopped?.stopDetail}`);
+
+  // ---------------------------------------------------------- a step that only starts searches ends the turn
+  const thread4 = await createThread(a.owner.id);
+  const florists = "Research 3 florists in Austin. No outreach.";
+  const florBrief = { goal: "Research 3 florists in Austin, no outreach", leadTarget: 3, contact: false, channels: null, spendCapUsd: 0, timeLimitMinutes: null, done: "3 Austin florists found" };
+  chatAnswers.length = 0;
+  chatAnswers.push(
+    JSON.stringify({ message: "I started a free Google Maps search for florists in Austin. I'll tell you what it finds.", actions: [{ tool: "set_brief", arguments: JSON.stringify(florBrief) }, { tool: "find_leads", arguments: JSON.stringify({ what: "florists", where: "Austin, TX" }) }], suggestions: [] }),
+    JSON.stringify({ message: "The search is still running. Nothing has been found yet.", actions: [], suggestions: [] }),
+  );
+  const chatCallsBefore = writerCalls.filter((name) => name === "assistant_reply").length;
+  await runAgentTurn({ threadId: thread4.id, userId: a.owner.id, text: florists });
+  const chatCalls = writerCalls.filter((name) => name === "assistant_reply").length - chatCallsBefore;
+  const said = await db.select({ content: assistantMessages.content }).from(assistantMessages).where(and(eq(assistantMessages.threadId, thread4.id), eq(assistantMessages.role, "assistant")));
+  const [florJob] = await db.select({ id: assistantJobs.id }).from(assistantJobs).where(and(eq(assistantJobs.threadId, thread4.id), eq(assistantJobs.kind, "discovery")));
+  check("a step that only writes the brief and starts searches ends the turn: one model call, one message", chatCalls === 1 && said.length === 1 && Boolean(florJob) && chatAnswers.length === 1, `${chatCalls} call(s); ${said.map((row) => row.content).join(" | ")}`);
+  chatAnswers.length = 0;
+
+  // ---------------------------------------------------------- "outreach them all" after a research-only request ended (live, 22 Oct)
+  const thread5 = await createThread(a.owner.id);
+  const scout = await addMessage({ threadId: thread5.id, role: "user", content: "Find leads for my AI automation offer, any niche, anywhere.", createdBy: a.owner.id });
+  const scoutContext: Context = { threadId: thread5.id, userId: a.owner.id, ownerText: scout.content, requestMessageId: scout.id, searchRequestId: scout.id, v2: true, autonomous: false };
+  await runTool("set_brief", { goal: "Find leads for AI automation: cleaning companies in Houston", leadTarget: null, contact: false, channels: null, spendCapUsd: null, timeLimitMinutes: null, done: "leads found and reported" }, scoutContext);
+  const scoutList = await createAudience({ name: "cleaning companies in Houston", source: "discovery", threadId: thread5.id, userId: a.owner.id });
+  const cleaners = await db.insert(people).values(["Bayou Cleaning", "Spotless Houston", "Heights Maids", "Dallas Janitorial"].map((name, index) => ({
+    organizationId: a.org.id, fullName: name, email: `office${index}-${stamp}@cleaning.research-v2.test`, source: "research-v2-check",
+  }))).returning();
+  await addAudienceMembers(scoutList, cleaners.map((row) => ({ personId: row.id, source: "discovery", facts: { businessName: row.fullName ?? "", city: row.fullName === "Dallas Janitorial" ? "Dallas" : "Houston" } })));
+  for (const row of cleaners) {
+    const fit = row.fullName === "Dallas Janitorial" ? "no_match" : "match";
+    await db.update(leadAudienceMembers).set({ fit, fitReason: fit === "match" ? "A Houston cleaning company." : "In Dallas.", fitApproach: fit === "match" ? "standard" : "skip", fitGroup: "Cleaning", fitRequestId: scout.id, fitAt: new Date() })
+      .where(and(eq(leadAudienceMembers.audienceId, scoutList), eq(leadAudienceMembers.personId, row.id)));
+  }
+  await db.insert(assistantJobs).values({ organizationId: a.org.id, kind: "discovery", stage: "done", status: "succeeded", threadId: thread5.id, audienceId: scoutList, payload: { requestMessageId: scout.id, phrase: "cleaning companies in Houston, TX" }, result: { found: 4, eligible: 4 } });
+  await runTool("finish_request", { summary: "Found Houston cleaning companies." }, scoutContext);
+  check("(setup) the research-only request has ended", (await objectiveForRequest(scout.id))?.status === "stopped");
+  const followBrief = { goal: "Contact the matching leads already found: cleaning companies in Houston", leadTarget: null, contact: true, channels: null, spendCapUsd: null, timeLimitMinutes: null, done: "an outreach plan for the matching leads" };
+  chatAnswers.length = 0;
+  chatAnswers.push(
+    JSON.stringify({ message: "I'm preparing the outreach plan for the matching Houston cleaning companies.", actions: [{ tool: "set_brief", arguments: JSON.stringify(followBrief) }, { tool: "prepare_outreach", arguments: JSON.stringify({ forRequest: true }) }], suggestions: [] }),
+    JSON.stringify({ message: "", actions: [], suggestions: [] }),
+  );
+  await runAgentTurn({ threadId: thread5.id, userId: a.owner.id, text: "outreach them all" });
+  const followTools = await db.select({ tool: assistantMessages.tool, status: assistantMessages.status, content: assistantMessages.content, toolResult: assistantMessages.toolResult }).from(assistantMessages)
+    .where(and(eq(assistantMessages.threadId, thread5.id), eq(assistantMessages.role, "tool"))).orderBy(sql`${assistantMessages.createdAt} asc`);
+  const briefRow = followTools.filter((row) => row.tool === "set_brief").at(-1);
+  const planRow = followTools.filter((row) => row.tool === "prepare_outreach").at(-1);
+  const followRequestId = (briefRow?.toolResult as { data?: { requestId?: string } } | null)?.data?.requestId ?? null;
+  const followObjective = followRequestId ? await objectiveForRequest(followRequestId) : null;
+  check("\"outreach them all\" after a research-only request ended continues it: a new request that carries its leads", Boolean(followObjective) && followObjective!.requestMessageId !== scout.id && followObjective!.controls.continues === scout.id && followObjective!.status === "active", JSON.stringify(followObjective?.controls ?? null));
+  const [followRun] = await db.select().from(outreachRuns).where(eq(outreachRuns.threadId, thread5.id));
+  const followAssigned = ((followRun?.plan ?? {}) as { assignments?: { personId: string }[] }).assignments ?? [];
+  const dallas = cleaners.find((row) => row.fullName === "Dallas Janitorial")!.id;
+  check("…and the plan prepared in the same turn reads that request: the 3 matching leads, not the one that does not match", planRow?.status === "ok" && followAssigned.length === 3 && !followAssigned.some((item) => item.personId === dallas), `${planRow?.status}: ${planRow?.content.slice(0, 200)}`);
+  check("…with the brief written once (no refusal loop)", followTools.filter((row) => row.tool === "set_brief").length === 1 && chatAnswers.length === 0, `${followTools.filter((row) => row.tool === "set_brief").length} briefs`);
+  const reviewFollow = await runTool("review_leads", {}, { ...scoutContext, requestMessageId: followRequestId, searchRequestId: followRequestId });
+  check("…and review_leads on the new request shows the leads it continued", reviewFollow.ok && /3 match/.test(reviewFollow.summary), reviewFollow.summary.split("\n")[0]);
+  const followContext: Context = { ...scoutContext, requestMessageId: followRequestId, searchRequestId: followRequestId };
+  const planOf = async (result: Awaited<ReturnType<typeof runTool>>) => {
+    const id = typeof result.data?.runId === "string" ? result.data.runId : null;
+    const [row] = id ? await db.select().from(outreachRuns).where(eq(outreachRuns.id, id)) : [];
+    return (((row?.plan ?? {}) as { assignments?: { personId: string }[] }).assignments ?? []).map((item) => item.personId);
+  };
+  const everyone = await runTool("prepare_outreach", { leads: "all" }, followContext);
+  const everyoneIds = await planOf(everyone);
+  check("prepare_outreach with leads all puts in every contactable lead, the one the judge said no to included", everyone.ok && everyoneIds.length === 4 && everyoneIds.includes(dallas), `${everyone.summary.slice(0, 160)} | ${everyoneIds.length}`);
+  const picked = await runTool("prepare_outreach", { personIds: [dallas] }, followContext);
+  const pickedIds = await planOf(picked);
+  check("…and with personIds exactly the people the assistant picked", picked.ok && pickedIds.length === 1 && pickedIds[0] === dallas, `${picked.summary.slice(0, 160)} | ${pickedIds.join(",")}`);
+  const stranger = await runTool("prepare_outreach", { personIds: [personIds["Barton Creek Dental"]] }, followContext);
+  check("…but not someone who is not a lead of this request", !stranger.ok && /none of the 1 people named/.test(stranger.summary), stranger.summary);
+
+  // ---------------------------------------------------------- a new ask after a request ended: its search is a new request
+  const thread6 = await createThread(a.owner.id);
+  const first = await addMessage({ threadId: thread6.id, role: "user", content: "Research 3 bakeries in Austin.", createdBy: a.owner.id });
+  const firstContext: Context = { threadId: thread6.id, userId: a.owner.id, ownerText: first.content, requestMessageId: first.id, searchRequestId: first.id, v2: true, autonomous: false };
+  await runTool("set_brief", { goal: "Research 3 bakeries in Austin", leadTarget: 3, contact: false, channels: null, spendCapUsd: 0, timeLimitMinutes: null, done: "3 bakeries found" }, firstContext);
+  await runTool("finish_request", { summary: "Found the bakeries." }, firstContext);
+  const next = await addMessage({ threadId: thread6.id, role: "user", content: "Now find florists in Dallas.", createdBy: a.owner.id });
+  // The turn serves the chat's newest request (the ended one) until something records a new one.
+  const nextContext: Context = { ...firstContext, ownerText: next.content, requestMessageId: next.id, searchRequestId: first.id };
+  const newSearch = await runTool("find_leads", { what: "florists", where: "Dallas, TX" }, nextContext);
+  const nextObjective = await objectiveForRequest(next.id);
+  check("a search for a new ask after the request ended starts that new request (not refused by the ended one)", newSearch.ok && Boolean(nextObjective) && !nextObjective!.controls.continues && nextContext.searchRequestId === next.id, newSearch.summary.slice(0, 160));
+
+  // ---------------------------------------------------------- "find 10 more" after a request ended with 4 matches
+  const endedWithMatches = async (label: string) => {
+    const t = await createThread(a.owner.id);
+    const ask = await addMessage({ threadId: t.id, role: "user", content: `Research plumbers in Austin (${label}).`, createdBy: a.owner.id });
+    const ctx: Context = { threadId: t.id, userId: a.owner.id, ownerText: ask.content, requestMessageId: ask.id, searchRequestId: ask.id, v2: true, autonomous: false };
+    await runTool("set_brief", { goal: "Research plumbers in Austin", leadTarget: 4, contact: false, channels: null, spendCapUsd: 0, timeLimitMinutes: null, done: "plumbers found" }, ctx);
+    const list = await createAudience({ name: `plumbers ${label}`, source: "discovery", threadId: t.id, userId: a.owner.id });
+    const rows = await db.insert(people).values([1, 2, 3, 4].map((index) => ({ organizationId: a.org.id, fullName: `Plumber ${label} ${index}`, email: `p${index}-${label}-${stamp}@plumb.research-v2.test`, source: "research-v2-check" }))).returning();
+    await addAudienceMembers(list, rows.map((row) => ({ personId: row.id, source: "discovery", facts: { businessName: row.fullName ?? "", city: "Austin" } })));
+    await db.update(leadAudienceMembers).set({ fit: "match", fitReason: "An Austin plumber.", fitApproach: "standard", fitGroup: "Plumbers", fitRequestId: ask.id, fitAt: new Date() }).where(eq(leadAudienceMembers.audienceId, list));
+    await db.insert(assistantJobs).values({ organizationId: a.org.id, kind: "discovery", stage: "done", status: "succeeded", threadId: t.id, audienceId: list, payload: { requestMessageId: ask.id, phrase: "plumbers in Austin, TX" }, result: { found: 4, eligible: 4 } });
+    await runTool("finish_request", { summary: "Found 4 plumbers." }, ctx);
+    const more = await addMessage({ threadId: t.id, role: "user", content: "Find 10 more in Round Rock and email them all.", createdBy: a.owner.id });
+    return { ask, more, ctx: { ...ctx, ownerText: more.content, requestMessageId: more.id, searchRequestId: ask.id } as Context };
+  };
+  const moreBrief = { goal: "Find 10 more plumbers in Round Rock and email them, with the Austin ones", leadTarget: 10, contact: true, channels: ["email"], spendCapUsd: 0, timeLimitMinutes: null, done: "10 Round Rock plumbers found and an email plan ready" };
+  {
+    const { ask, more, ctx } = await endedWithMatches("brief-first");
+    await runTool("set_brief", moreBrief, ctx);
+    const moreSearch = await runTool("find_leads", { what: "plumbers", where: "Round Rock, TX" }, ctx);
+    const continuing = await objectiveForRequest(more.id);
+    check("\"find 10 more\" continues the ended request but starts at its own count: its search is not refused at the target", continuing?.controls.continues === ask.id && moreSearch.ok, moreSearch.summary.slice(0, 160));
+  }
+  {
+    const { ask, more, ctx } = await endedWithMatches("search-first");
+    const firstSearch = await runTool("find_leads", { what: "plumbers", where: "Round Rock, TX" }, ctx);
+    await runTool("set_brief", moreBrief, ctx);
+    const continuing = await objectiveForRequest(more.id);
+    check("…and a search before the brief still continues it (the earlier leads come along in either order)", firstSearch.ok && continuing?.controls.continues === ask.id, JSON.stringify(continuing?.controls ?? null));
+    const all = await runTool("prepare_outreach", { leads: "all" }, ctx);
+    check("…so \"email them all\" can plan the Austin leads it found earlier", all.ok, all.summary.slice(0, 160));
+  }
+  chatAnswers.length = 0;
 
   shared = { threadId: thread.id, requestId: request.id, personIds };
 });

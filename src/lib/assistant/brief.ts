@@ -6,9 +6,9 @@ import type { AudienceChannel } from "./schema";
  * written down once by the model from every message the owner sent about it
  * (a clarification included), and read by every step after it — the lead
  * judge, the plan, the writer, the report. The model reads the owner's
- * words; this module only bounds what it may set: a limit above the
- * organization's default must be one the owner actually wrote, so the model
- * can tighten a limit freely but never raise one on its own.
+ * words and sets the brief; this module only bounds money: a spend cap
+ * above the organization's default must be an amount the owner actually
+ * wrote. The lead target and the time are the model's.
  */
 
 export type Brief = {
@@ -29,7 +29,8 @@ export type Brief = {
 };
 
 export const BRIEF_CHANNELS: readonly AudienceChannel[] = ["email", "whatsapp", "linkedin", "instagram"];
-const MAX_TARGET = 500;
+/** As many as one plan can hold (outreach.server.ts HARD_MAX_LEADS). */
+const MAX_TARGET = 1_000;
 const MAX_MINUTES = 7 * 24 * 60;
 
 const WORD_NUMBERS: Record<string, number> = {
@@ -90,17 +91,15 @@ function optionalNumber(raw: Record<string, unknown>, key: string): number | nul
 export function checkBrief(raw: Record<string, unknown>, ownerWords: string, defaults: ControlDefaults): BriefCheck {
   const goal = typeof raw.goal === "string" ? raw.goal.replace(/\s+/g, " ").trim() : "";
   if (!goal) return { ok: false, error: "goal is required: the owner's request in one or two sentences, from all their messages about it" };
-  const done = typeof raw.done === "string" ? raw.done.replace(/\s+/g, " ").trim() : "";
-  if (!done) return { ok: false, error: "done is required: what finished means for this request, in a sentence" };
+  // With no done of its own, the request is done when its goal is.
+  const done = (typeof raw.done === "string" ? raw.done.replace(/\s+/g, " ").trim() : "") || goal;
   if (raw.contact !== undefined && typeof raw.contact !== "boolean") return { ok: false, error: "contact must be true or false" };
 
   const target = optionalNumber(raw, "leadTarget");
   if (target === undefined || (target !== null && (!Number.isInteger(target) || target < 1 || target > MAX_TARGET))) {
     return { ok: false, error: `leadTarget must be a whole number from 1 to ${MAX_TARGET}, or null when the owner named no number` };
   }
-  if (target !== null && target > defaults.leadTarget && !numbersIn(ownerWords).includes(target)) {
-    return { ok: false, error: `the owner did not ask for ${target} leads; use a number they wrote, or null for the default of ${defaults.leadTarget}` };
-  }
+  // The lead target and the time limit are the model's to set ("all of them", "keep going"); only money above the default needs the owner's own number.
   const spend = optionalNumber(raw, "spendCapUsd");
   if (spend === undefined || (spend !== null && spend < 0)) return { ok: false, error: "spendCapUsd must be a number of dollars (0 for free sources only), or null when the owner said nothing about money" };
   if (spend !== null && spend > defaults.spendUsd && !amountsIn(ownerWords).some((amount) => Math.abs(amount - spend) < 0.005)) {
@@ -109,9 +108,6 @@ export function checkBrief(raw: Record<string, unknown>, ownerWords: string, def
   const minutes = optionalNumber(raw, "timeLimitMinutes");
   if (minutes === undefined || (minutes !== null && (!Number.isInteger(minutes) || minutes < 5 || minutes > MAX_MINUTES))) {
     return { ok: false, error: `timeLimitMinutes must be a whole number of minutes from 5 to ${MAX_MINUTES}, or null when the owner named no time` };
-  }
-  if (minutes !== null && minutes > defaults.hours * 60 && !durationsIn(ownerWords).includes(minutes)) {
-    return { ok: false, error: `the owner did not allow ${minutes} minutes; use a time they wrote, or null for the default of ${defaults.hours} hours` };
   }
   let channels: AudienceChannel[] | null = null;
   if (raw.channels !== undefined && raw.channels !== null) {
@@ -144,12 +140,13 @@ export function checkBrief(raw: Record<string, unknown>, ownerWords: string, def
 
 /** The brief in a line, for the model's context and the tool result. */
 export function briefLine(brief: Brief, controls: Pick<ObjectiveControls, "leadTarget" | "timeLimitMinutes" | "spendCapUsd">): string {
-  const spend = controls.spendCapUsd > 0 ? `up to $${controls.spendCapUsd} on paid sources${brief.spendCapUsd === null ? " (default)" : ""}` : "free sources only";
+  // Money is shown only as the owner put it ("free tools only", "up to $20"); the default cap is the server's business.
+  const spend = controls.spendCapUsd <= 0 ? "free sources only" : brief.spendCapUsd !== null ? `up to $${controls.spendCapUsd} on paid sources` : null;
   return [
     `Goal: ${brief.goal}`,
-    `leads: ${brief.leadTarget ?? `no number named (stops at ${controls.leadTarget} at most)`}`,
-    brief.contact ? `contact them${brief.channels ? ` only by ${brief.channels.join(" or ")}` : " on each lead's best ready channel"}` : "research only: contact nobody",
-    spend,
+    `leads: ${brief.leadTarget ?? "no number named (as many as fit, until you judge it done)"}`,
+    brief.contact ? `contact them${brief.channels ? ` only by ${brief.channels.join(" or ")}` : " on each lead's best ready channel"}` : "research only so far",
+    ...(spend ? [spend] : []),
     `time: ${Math.round(controls.timeLimitMinutes)} min${brief.timeLimitMinutes === null ? " (default)" : ""}`,
     `done when: ${brief.done}`,
   ].join(" · ");

@@ -4,19 +4,24 @@
  * ledgers. Stand-ins: the model (the structured-completion module is
  * replaced by a script), the Google Maps scraper and Apify (global fetch is
  * intercepted), and prepare_outreach's plan writer; nothing leaves the
- * machine and nothing is sent.
+ * machine and nothing is sent. Every request runs on the one harness (the
+ * research agent): searches only make lists, the model prepares plans
+ * itself, and a request that would end on its own gets one last turn first.
  *
  * - the controls a request names are kept (target, time, spend); the rest
- *   are the organization's defaults;
+ *   are the organization's defaults; the model reads them in the REQUEST
+ *   block of every step;
  * - target reached after a continuation: the request's searches end short,
- *   the driver resumes the turn with a note (found vs target, spend and time
- *   left, each source's yield), the model starts another search, and the
- *   request stops with one final report;
+ *   the driver resumes the turn with a note (the counts are in PROGRESS),
+ *   the model starts another search; at the owner's target it gets one last
+ *   turn, in which no search starts, and then stops with one final report;
  * - spend cap used: an Apify run reserved at most what the request had
- *   left, settled with what it cost, then the request stops, leads kept; a
- *   run whose start lost its answer is never started again and stays counted;
- * - time limit: the request stops, a search that had not begun is not
- *   started, leads kept;
+ *   left, settled with what it cost; the used cap does not end the request,
+ *   but a paid start over it is refused at its reservation while free
+ *   searches go on, leads kept; a run whose start lost its answer is never
+ *   started again and stays counted;
+ * - time limit: a last turn in which no search starts, then the request
+ *   stops, a search that had not begun is not started, leads kept;
  * - pause holds a queued search, cancel stops new work and keeps leads;
  * - full Apify slots: the search waits, the request waits with it (not a
  *   failure), and finishes once a slot frees;
@@ -86,6 +91,8 @@ const reply = (message: string, actions: { tool: string; args: Record<string, un
   JSON.stringify({ message, actions: actions.map((action) => ({ tool: action.tool, arguments: JSON.stringify(action.args) })), suggestions: [] });
 /** A turn that runs these tools, then has nothing more to say. */
 const turn = (message: string, actions: { tool: string; args: Record<string, unknown> }[]) => [reply(message, actions), reply("")];
+/** A step that tells the owner and only starts searches: the turn ends there, with no second model call. */
+const startsOnly = (message: string, actions: { tool: string; args: Record<string, unknown> }[]) => [reply(message, actions)];
 
 // ------------------------------------------------------------ the scraper and Apify, stood in
 const MAPS_HEADER = "input_id,link,title,category,address,website,phone,review_count,review_rating,place_id,cid,status,complete_address,emails";
@@ -168,7 +175,8 @@ const { continueAfterEvent, runAgentTurn } = await import("@/lib/assistant/agent
 const { createThread, listMessages } = await import("@/lib/assistant/threads.server");
 const { runOneAssistantStep, reconcileAssistantJobReports } = await import("@/lib/assistant/worker");
 const { registerAssistantJobs, reportFinishedJob } = await import("@/lib/assistant/register.server");
-const { runTool, TOOLS } = await import("@/lib/assistant/tools.server");
+const { runTool, searchRequestId, TOOLS } = await import("@/lib/assistant/tools.server");
+const { matchingLeadsAudience, objectiveBrief } = await import("@/lib/assistant/agentV2.server");
 const objectives = await import("@/lib/assistant/objective.server");
 const { assessMembers } = await import("@/lib/assistant/qualify.server");
 type AssistantJob = typeof schema.assistantJobs.$inferSelect;
@@ -185,12 +193,22 @@ function check(label: string, ok: boolean, detail = "") {
 }
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// prepare_outreach writes plans with the model; here a stand-in records each call (the follow-up path is the real one).
-const planCalls: string[] = [];
+// prepare_outreach writes plans with the model. Here a stand-in takes the request's leads as the real one does
+// (its matching leads by default, leads "all" or the personIds named; sized by the owner's number, else everyone
+// picked) and records the plan; the writer is what it stands in for. Section 6c runs the real tool and its checks.
+const planCalls: { requestId: string; audienceId: string; leads: number }[] = [];
 const realPrepareOutreach = TOOLS.prepare_outreach!.run;
-const standInPrepareOutreach: typeof realPrepareOutreach = async (args) => {
-  planCalls.push(String(args.audienceId));
-  return { ok: true, summary: "The outreach plan is ready (stand-in).", data: { runId: crypto.randomUUID() } };
+const standInPrepareOutreach: typeof realPrepareOutreach = async (args, context) => {
+  const objective = await objectives.objectiveForRequest(searchRequestId(context));
+  if (!objective) return { ok: false, summary: "No plan prepared: this chat has no lead request yet; find leads first." };
+  const brief = objectiveBrief(objective);
+  const personIds = Array.isArray(args.personIds) ? (args.personIds as string[]) : [];
+  const pick = personIds.length ? { kind: "people" as const, ids: personIds } : { kind: args.leads === "all" ? "all" as const : "match" as const };
+  const max = Math.min(1_000, Math.round(Number(args.maxLeads ?? brief?.leadTarget ?? 1_000)));
+  const built = await matchingLeadsAudience({ objective, brief, threadId: context.threadId, userId: context.userId, max, pick });
+  if ("problem" in built) return { ok: false, summary: `No plan prepared: ${built.problem}.` };
+  planCalls.push({ requestId: objective.requestMessageId, audienceId: built.audienceId, leads: built.leads });
+  return { ok: true, summary: `The outreach plan for ${built.leads} leads is ready (stand-in); it waits for the owner's Start.`, data: { runId: crypto.randomUUID(), audienceId: built.audienceId } };
 };
 TOOLS.prepare_outreach!.run = standInPrepareOutreach;
 
@@ -254,6 +272,18 @@ async function continuationEnded(requestId: string, n: number): Promise<boolean>
   }
   return false;
 }
+/**
+ * One driver step that starts continuation `n`, answered by `script`, waited
+ * for until the turn recorded its end (it runs in the background, so the
+ * next turn's answers must not be set before it ends).
+ */
+async function continueWith(driverId: string, requestId: string, n: number, script: Script[]): Promise<boolean> {
+  replies = [...script];
+  await step(driverId);
+  const ended = await continuationEnded(requestId, n);
+  if (replies.length) console.warn(`continuation ${n}: ${replies.length} scripted answer(s) left unused`);
+  return ended;
+}
 async function events(threadId: string) {
   return (await listMessages(threadId, 500)).filter((row) => row.role === "event");
 }
@@ -262,6 +292,7 @@ const notesOf = async (threadId: string, objectiveId: string) => (await events(t
 async function ask(threadId: string, text: string, script: Script[]): Promise<string> {
   replies = [...script];
   await runAgentTurn({ threadId, userId: a.owner.id, text });
+  if (replies.length) console.warn(`“${text}”: ${replies.length} scripted answer(s) left unused`);
   const rows = await listMessages(threadId, 500);
   return [...rows].reverse().find((row) => row.role === "user")!.id;
 }
@@ -282,25 +313,43 @@ await runInOrganization(a.org.id, async () => {
     check("controls: the target named in the request, the organization's defaults for time and spend",
       objective.leadTarget === 10 && objective.timeLimitMinutes === 240 && objective.spendCapUsd === 5 && objective.controls.named?.target === true && objective.controls.named?.time === false,
       JSON.stringify({ target: objective.leadTarget, minutes: objective.timeLimitMinutes, spend: objective.spendCapUsd, named: objective.controls.named }));
-    const firstTool = (await listMessages(thread.id)).find((row) => row.tool === "find_leads");
-    check("the first search's result tells the model the controls", /until it has 10 qualified leads, for up to 4 h \(default\)/.test(String((firstTool?.toolResult as { summary?: string } | null)?.summary ?? "")), String(firstTool?.toolResult && (firstTool.toolResult as { summary?: string }).summary));
+    // The limits are not appended to the search's result: the model reads them in the REQUEST block of every step.
+    const afterSearch = prompts.at(-1) ?? "";
+    check("after the first search the model reads the request in its prompt: the owner's words (the target) and the time it runs for",
+      afterSearch.includes("REQUEST — the owner's messages since it began:\n  1. find 10 dentists in Pune") && /The request runs for up to 240 min/.test(afterSearch) && /Searches so far \(do not repeat\): discovery “dentists in Pune” running/.test(afterSearch),
+      afterSearch.slice(afterSearch.indexOf("REQUEST"), afterSearch.indexOf("REQUEST") + 400));
     const driver = await driverOf(objective.id);
     check("one driver job per request, queued in the request's chat", driver.status === "queued" && driver.threadId === thread.id);
 
     await finishSearches(requestId);
     // The model is asked again only by the driver: the search's report alone ends nothing.
-    replies = turn("Looking for dental clinics too.", [{ tool: "find_leads", args: { what: "dental clinics", where: "Pune" } }]);
-    await step(driver.id);
-    check("searches done short of the target: the request continues with no owner message", await continuationEnded(requestId, 1));
+    check("searches done short of the target: the request continues with no owner message",
+      await continueWith(driver.id, requestId, 1, startsOnly("Looking for dental clinics too.", [{ tool: "find_leads", args: { what: "dental clinics", where: "Pune" } }])));
     const notes = await notesOf(thread.id, objective.id);
-    check("…with one note: found vs target, spend and time left, and each source's yield",
-      notes.length === 1 && /6 of 10 qualified leads/.test(notes[0]!.content) && /Spent \$0\.00 of \$5\.00/.test(notes[0]!.content) && /left/.test(notes[0]!.content) && /Google Maps through the built-in scraper: 1 search, 6 found, 6 can be contacted/.test(notes[0]!.content),
+    check("…with one note, which leaves the counts to PROGRESS rather than repeating them",
+      notes.length === 1 && /^The searches for your request have finished for now \(step 1\); the counts are in PROGRESS\./.test(notes[0]!.content) && !/\b6\b|Spent/.test(notes[0]!.content),
       notes.map((row) => row.content).join(" | "));
-    check("…which the model read in its turn", prompts.at(-2)?.includes("Continuing your request “find 10 dentists in Pune”") === true);
+    const continuationPrompt = prompts.find((prompt) => notes[0] !== undefined && prompt.includes(notes[0].content)) ?? "";
+    check("…which the model read in its turn, beside the request and its progress: found and matching, time left, each source's yield",
+      continuationPrompt.includes("1. find 10 dentists in Pune") && /PROGRESS: 6 found, 6 contactable; 6 match/.test(continuationPrompt) && /\d+ (h|min)( \d+ min)? left\./.test(continuationPrompt)
+        && continuationPrompt.includes("By source: Google Maps through the built-in scraper: 1 search, 6 found, 6 can be contacted, 6 of them match your request"),
+      continuationPrompt.slice(continuationPrompt.indexOf("PROGRESS"), continuationPrompt.indexOf("PROGRESS") + 400));
     const searches = await children(requestId);
     check("the model chose a second search, carrying the request's id", searches.length === 2 && (searches[1]!.payload as { phrase?: string }).phrase === "dental clinics in Pune", searches.map((job) => (job.payload as { phrase?: string }).phrase).join(", "));
     await step(driver.id);
     await finishSearches(requestId);
+    // At the target the owner named, the request first gets one last turn; a search tried in it does not start.
+    const lastTurn = await continueWith(driver.id, requestId, 2, [
+      reply("Checking orthodontists as well.", [{ tool: "find_leads", args: { what: "orthodontists", where: "Pune" } }]),
+      reply("These are the dentists for this request."),
+    ]);
+    const lastNote = (await notesOf(thread.id, objective.id))[1];
+    check("target reached: one last turn first, told the request has its 10 and that no more searches start",
+      lastTurn && /^Your request has its 10 matching leads \(step 2\)/.test(lastNote?.content ?? "") && /No more searches start for it\./.test(lastNote?.content ?? ""), lastNote?.content ?? "(no second note)");
+    const lastSearch = (await listMessages(thread.id, 500)).filter((row) => row.tool === "find_leads").at(-1);
+    check("…in which no search starts: the one the model tried is refused with the reason, and nothing is queued or scraped",
+      lastSearch?.status === "error" && /this request is ending/.test(lastSearch.content) && (await children(requestId)).length === 2 && !scraper.posts.includes("orthodontists in Pune"),
+      `${lastSearch?.status}: ${lastSearch?.content}`);
     const done = await step(driver.id);
     const stopped = await objectiveOf(requestId);
     const reports = await reportsOf(thread.id, objective.id);
@@ -323,12 +372,12 @@ await runInOrganization(a.org.id, async () => {
     check("a duplicate callback, the reconciliation and a second post add no report", (await reportsOf(thread.id, objective.id)).length === 1);
     const view = await objectives.objectiveView(requestId);
     check("objectiveView: completed, with its leads, routes, sources and spend", view?.outcome === "completed" && view.leads === 12 && view.remaining === 0 && view.routes.email === 12 && view.sources.length === 1 && view.spentUsd === 0 && view.reported, JSON.stringify(view));
-    const refused = await runTool("find_leads", { what: "orthodontists", where: "Pune" }, { threadId: thread.id, userId: a.owner.id, ownerText: "find 10 dentists in Pune", requestMessageId: requestId });
-    check("a stopped request starts no new search", !refused.ok && /has stopped/.test(refused.summary), refused.summary);
+    const refused = await runTool("find_leads", { what: "orthodontists", where: "Pune" }, { threadId: thread.id, userId: a.owner.id, ownerText: "find 10 dentists in Pune", requestMessageId: requestId, v2: true });
+    check("a stopped request starts no new search (no newer owner message to make a new request of)", !refused.ok && /has stopped/.test(refused.summary) && (await children(requestId)).length === 2, refused.summary);
     crossOrg = { requestId, objectiveId: objective.id, threadId: thread.id, driverId: driver.id };
   }
 
-  // ---------------------------------------------------------- 2. spend cap: reserve, settle, stop with the leads kept
+  // ---------------------------------------------------------- 2. spend cap: reserve, settle; over the cap paid starts are refused, free ones go on
   {
     const thread = await createThread(a.owner.id);
     apify.items = [1, 2, 3].map((n) => ({ title: `Iron Gym ${n}`, pageUrl: `https://www.facebook.com/irongym${n}-${stamp}`, email: `hello@irongym${n}-${stamp}.test` }));
@@ -347,18 +396,40 @@ await runInOrganization(a.org.id, async () => {
     check("other paid work for the request waits while the reservation is open (not refused, not run)", !second.started && second.slotsFull === true && apify.posts.length === posts, second.started ? "started" : second.reason);
     await finishSearches(requestId);
     const driver = await driverOf(objective.id);
+    const [settled] = await db.select().from(apifyRuns).where(eq(apifyRuns.jobId, search!.id));
+    // The used cap does not end the request: the driver continues it, and the model tries another paid search and a free one.
+    const continued = await continueWith(driver.id, requestId, 1, startsOnly("Trying fitness centres on Facebook, and gyms on Google Maps.", [
+      { tool: "find_social_leads", args: { platform: "facebook", what: "fitness centres", where: "Mumbai" } },
+      { tool: "find_leads", args: { what: "gyms", where: "Mumbai" } },
+    ]));
+    const going = await objectiveOf(requestId);
+    check("settled with what Apify reported; the used cap does not end the request, which continues",
+      settled?.status === "succeeded" && settled.usageUsd === 1 && continued && going.status === "active" && !going.stopReason, `${settled?.status} ${settled?.usageUsd} ${going.status} ${going.stopReason}`);
+    const [, paid, free] = await children(requestId);
+    await finishSearches(requestId);
+    const paidDone = await jobRow(paid!.id);
+    const paidResult = (paidDone.result ?? {}) as { notSearched?: boolean; note?: string };
+    const overCap = await objectives.objectiveView(requestId);
+    const [paidRun] = await db.select().from(apifyRuns).where(eq(apifyRuns.jobId, paid!.id));
+    check("a paid start over the used cap is refused at its own reservation: not searched, with the reason, Apify not called, nothing more counted",
+      paidDone.status === "succeeded" && paidResult.notSearched === true && /spend cap of \$1\.00 is used/.test(paidResult.note ?? "") && !paidRun && apify.posts.length === posts && overCap?.spentUsd === 1 && overCap.reservedUsd === 0,
+      JSON.stringify({ status: paidDone.status, ...paidResult, run: paidRun?.status ?? null, posts: apify.posts.length - posts, spent: overCap?.spentUsd, reserved: overCap?.reservedUsd }));
+    const freeDone = await jobRow(free!.id);
+    check("…while a free search goes on", freeDone.status === "succeeded" && (freeDone.result as { found?: number } | null)?.found === 6 && scraper.posts.includes("gyms in Mumbai"), JSON.stringify({ status: freeDone.status, result: freeDone.result }));
+    // The searches done, the next step continues the request again; this time the model ends it (finish_request).
+    const finished = await continueWith(driver.id, requestId, 2, [reply("", [{ tool: "finish_request", args: { summary: "The $1 spend cap is used; the gyms found on Facebook and Google Maps are saved" } }]), reply("")]);
     await step(driver.id);
     const stopped = await objectiveOf(requestId);
-    const [settled] = await db.select().from(apifyRuns).where(eq(apifyRuns.jobId, search!.id));
-    check("settled with what Apify reported, then stopped: spend cap used", settled?.status === "succeeded" && settled.usageUsd === 1 && stopped.stopReason === "budget_spent", `${settled?.status} ${settled?.usageUsd} ${stopped.stopReason}`);
+    check("the model finishes the request: stopped as finished, with its words", finished && stopped.stopReason === "finished" && /spend cap is used/.test(stopped.stopDetail ?? ""), `${stopped.stopReason}: ${stopped.stopDetail}`);
     const reports = await reportsOf(thread.id, objective.id);
-    check("the report keeps the leads found and gives the spend and the exact reason",
-      reports.length === 1 && /^Research stopped: \$1\.00 of the \$1\.00 spend cap was used/.test(reports[0]!.content) && /3 qualified leads \(contactable and matching your request\) of the 25 wanted; 22 still to find/.test(reports[0]!.content) && /Recorded spend: \$1\.00 of the \$1\.00 cap \(Apify \$1\.00\)/.test(reports[0]!.content) && /Facebook through Apify: 1 search, 3 found, 3 can be contacted/.test(reports[0]!.content),
+    check("the report keeps the leads found and gives the spend, the source refused for the cap, and the exact reason",
+      reports.length === 1 && /^Research finished: The \$1 spend cap is used/.test(reports[0]!.content) && /9 qualified leads \(contactable and matching your request\)/.test(reports[0]!.content) && /Recorded spend: \$1\.00 of the \$1\.00 cap \(Apify \$1\.00\)/.test(reports[0]!.content)
+        && /Facebook through Apify: 1 search, 3 found, 3 can be contacted[^;]*; 1 not searched/.test(reports[0]!.content) && /Google Maps through the built-in scraper: 1 search, 6 found, 6 can be contacted/.test(reports[0]!.content),
       reports.map((row) => row.content).join(" | "));
     const members = await db.select().from(schema.leadAudienceMembers).where(and(eq(schema.leadAudienceMembers.audienceId, search!.audienceId!), eq(schema.leadAudienceMembers.status, "eligible")));
     check("the leads are kept", members.length === 3);
     const after = await startTrackedRun({ actor: "facebook_pages", input: () => ({}), wantedItems: 5, jobId: null, requestId, spendGuard: await objectives.objectiveSpendGuard(requestId) });
-    check("paid work for a stopped request is refused", !after.started && !after.slotsFull && apify.posts.length === posts, after.started ? "started" : after.reason);
+    check("paid work for a stopped request is refused", !after.started && !after.slotsFull && /has stopped/.test(after.reason ?? "") && apify.posts.length === posts, after.started ? "started" : after.reason);
   }
 
   // ---------------------------------------------------------- 2a. a paid start whose answer never arrives: counted, never retried
@@ -421,14 +492,27 @@ await runInOrganization(a.org.id, async () => {
     await finishSearches(requestId, [first!.id]);
     // Thirty minutes pass while the second search still waits to begin.
     await db.update(schema.assistantObjectives).set({ deadlineAt: new Date(Date.now() - 1_000) }).where(eq(schema.assistantObjectives.id, objective.id));
-    await step((await driverOf(objective.id)).id);
+    const driverId = (await driverOf(objective.id)).id;
+    // Past its time the request first gets one last turn; a search tried in it does not start.
+    const lastTurn = await continueWith(driverId, requestId, 1, [
+      reply("Searching Chinchwad too.", [{ tool: "find_leads", args: { what: "bakeries", where: "Chinchwad" } }]),
+      reply("The time for this request is up."),
+    ]);
+    const lastNote = (await notesOf(thread.id, objective.id))[0];
+    const lastSearch = (await listMessages(thread.id, 500)).filter((row) => row.tool === "find_leads").at(-1);
+    check("time limit: one last turn first, told so, in which the search the model tried does not start",
+      lastTurn && /^Your request reached its time limit with 6 matching leads \(step 1\)\. No more searches start for it\./.test(lastNote?.content ?? "")
+        && lastSearch?.status === "error" && /this request is ending/.test(lastSearch.content) && (await children(requestId)).length === 2 && !scraper.posts.includes("bakeries in Chinchwad"),
+      `${lastNote?.content ?? "(no note)"} | ${lastSearch?.status}: ${lastSearch?.content}`);
+    await step(driverId);
     const stopped = await objectiveOf(requestId);
     const notBegun = await jobRow(second!.id);
     const reports = await reportsOf(thread.id, objective.id);
     check("time limit: stopped with that reason", stopped.stopReason === "time_limit" && stopped.status === "stopped", String(stopped.stopReason));
     check("the search that had not begun is not started", notBegun.status === "cancelled" && (notBegun.result as { notSearched?: boolean } | null)?.notSearched === true && !scraper.posts.includes("bakeries in Pimpri"), notBegun.status);
     check("the report keeps the first search's leads and says what was not searched",
-      reports.length === 1 && /^Research stopped: the time limit passed/.test(reports[0]!.content) && /6 qualified leads \(contactable and matching your request\) of the 25 wanted/.test(reports[0]!.content) && /1 not searched/.test(reports[0]!.content),
+      // No number from the owner: no "of the 25 wanted" (the default target is no goal of theirs).
+      reports.length === 1 && /^Research stopped: the time limit passed/.test(reports[0]!.content) && /6 qualified leads \(contactable and matching your request\)\./.test(reports[0]!.content) && !/of the 25 wanted/.test(reports[0]!.content) && /1 not searched/.test(reports[0]!.content),
       reports.map((row) => row.content).join(" | "));
   }
 
@@ -439,10 +523,8 @@ await runInOrganization(a.org.id, async () => {
     const objective = await objectiveOf(requestId);
     const driver = await driverOf(objective.id);
     await finishSearches(requestId);
-    replies = turn("Looking at yoga classes too.", [{ tool: "find_leads", args: { what: "yoga classes", where: "Pune" } }]);
-    await step(driver.id);
-    await continuationEnded(requestId, 1);
-    const context = { threadId: thread.id, userId: a.owner.id, ownerText: "pause the search", requestMessageId: requestId };
+    await continueWith(driver.id, requestId, 1, startsOnly("Looking at yoga classes too.", [{ tool: "find_leads", args: { what: "yoga classes", where: "Pune" } }]));
+    const context = { threadId: thread.id, userId: a.owner.id, ownerText: "pause the search", requestMessageId: requestId, v2: true };
     const paused = await runTool("control_research", { action: "pause" }, context);
     const queued = (await children(requestId)).find((job) => job.status === "queued")!;
     const held = await step(queued.id);
@@ -462,7 +544,7 @@ await runInOrganization(a.org.id, async () => {
     await step(driver.id);
     const reports = await reportsOf(thread.id, objective.id);
     check("the report keeps the leads already saved and says it was cancelled",
-      reports.length === 1 && /^Research stopped: cancelled by the owner/.test(reports[0]!.content) && /6 qualified leads \(contactable and matching your request\) of the 25 wanted/.test(reports[0]!.content), reports.map((row) => row.content).join(" | "));
+      reports.length === 1 && /^Research stopped: cancelled by the owner/.test(reports[0]!.content) && /6 qualified leads \(contactable and matching your request\)\./.test(reports[0]!.content) && !/of the 25 wanted/.test(reports[0]!.content), reports.map((row) => row.content).join(" | "));
     const again = await runTool("control_research", { action: "resume" }, context);
     check("a cancelled request cannot be resumed", !again.ok, again.summary);
   }
@@ -470,11 +552,23 @@ await runInOrganization(a.org.id, async () => {
   // ---------------------------------------------------------- 4a. a new request after a stopped one, in Autonomous mode
   {
     const thread = await createThread(a.owner.id);
+    const plansBefore = planCalls.length;
     const first = await ask(thread.id, "find 6 florists in Pune and contact them", turn("", [{ tool: "find_leads", args: { what: "florists", where: "Pune", contactAfter: true } }]));
     const firstObjective = await objectiveOf(first);
     await finishSearches(first);
-    await step((await driverOf(firstObjective.id)).id);
+    const [florists] = await children(first);
+    check("a search asked to contact what it finds only makes its list: its contact-after is dropped and it prepares no plan",
+      florists !== undefined && (florists.payload as { contactAfter?: unknown }).contactAfter == null && planCalls.length === plansBefore, JSON.stringify({ contactAfter: (florists?.payload as { contactAfter?: unknown } | undefined)?.contactAfter ?? null, plans: planCalls.length - plansBefore }));
+    // At its target the request's last turn is where the model prepares the plan of what matched.
+    const firstDriver = (await driverOf(firstObjective.id)).id;
+    const lastTurn = await continueWith(firstDriver, first, 1, [
+      reply("", [{ tool: "prepare_outreach", args: {} }]),
+      reply("The plan for these florists is below; it waits for your Start."),
+    ]);
+    await step(firstDriver);
     check("a find-and-contact request reaches its target and stops", (await objectiveOf(first)).stopReason === "target_reached", String((await objectiveOf(first)).stopReason));
+    check("…after its last turn prepared one plan, of the request's 6 matching leads",
+      lastTurn && planCalls.length === plansBefore + 1 && planCalls.at(-1)?.requestId === first && planCalls.at(-1)?.leads === 6, JSON.stringify(planCalls.slice(plansBefore)));
     // In Autonomous mode that request to contact people stands for what follows; the owner then asks for something new.
     await db.update(schema.assistantThreads).set({ autonomous: true, autonomousBy: a.owner.id, autonomousAt: new Date() }).where(eq(schema.assistantThreads.id, thread.id));
     const second = await ask(thread.id, "now find bakeries in Pune", turn("", [{ tool: "find_leads", args: { what: "bakeries", where: "Pune" } }]));
@@ -508,7 +602,7 @@ await runInOrganization(a.org.id, async () => {
     await step(driver.id);
     check("…and the request waits while paused", (await objectiveOf(requestId)).status === "paused");
     await objectives.setObjectiveState(objective.id, "resume", { name: null });
-    replies = turn("Trying beauty parlours now.", [{ tool: "find_leads", args: { what: "beauty parlours", where: "Pune" } }]);
+    replies = startsOnly("Trying beauty parlours now.", [{ tool: "find_leads", args: { what: "beauty parlours", where: "Pune" } }]);
     await step(driver.id);
     const afterResume = await objectiveOf(requestId);
     check("…resumed, it continues: the paused turn is not taken for sources exhausted", afterResume.status === "active" && !afterResume.stopReason && await continuationEnded(requestId, 2) && (await children(requestId)).length === 2,
@@ -573,9 +667,11 @@ await runInOrganization(a.org.id, async () => {
     check("…and the request waits with it: active, not failed, no continuation", driver.status === "queued" && view?.status === "active" && view.continuations === 0 && /search/.test(view.waiting ?? ""), JSON.stringify({ status: view?.status, waiting: view?.waiting }));
     await db.update(apifyRuns).set({ status: "succeeded", usageUsd: 0.1, finishedAt: new Date() }).where(inArray(apifyRuns.id, others.map((row) => row.id)));
     await finishSearches(requestId);
+    // At the owner's 3 its last turn runs first, then it stops.
+    const lastTurn = await continueWith(driver.id, requestId, 1, [reply("These are the salons for this request.")]);
     await step(driver.id);
     const stopped = await objectiveOf(requestId);
-    check("a slot frees: the search runs, and the request reaches its target", stopped.stopReason === "target_reached" && (await reportsOf(thread.id, objective.id)).length === 1, String(stopped.stopReason));
+    check("a slot frees: the search runs, and the request reaches its target (after its last turn)", lastTurn && stopped.stopReason === "target_reached" && (await reportsOf(thread.id, objective.id)).length === 1, String(stopped.stopReason));
   }
 
   // ---------------------------------------------------------- 6. a restart in the middle of a continuation
@@ -586,40 +682,59 @@ await runInOrganization(a.org.id, async () => {
     const objective = await objectiveOf(requestId);
     const driver = await driverOf(objective.id);
     await finishSearches(requestId);
-    check("the first search's plan is prepared once, by its follow-up", planCalls.length === plansBefore + 1);
-    replies = turn("Looking at coffee shops too.", [{ tool: "find_leads", args: { what: "coffee shops", where: "Kothrud, Pune", contactAfter: true } }]);
-    await step(driver.id);
-    await continuationEnded(requestId, 1);
+    check("the first search prepares no plan by itself: the model prepares it", planCalls.length === plansBefore);
+    await continueWith(driver.id, requestId, 1, startsOnly("Looking at coffee shops too.", [{ tool: "find_leads", args: { what: "coffee shops", where: "Kothrud, Pune", contactAfter: true } }]));
     // The process stops after the continuation started its search, before it recorded its end:
     // its record says it is still under way, the chat is held by a process that is gone, and so is the driver's claim.
-    await db.update(schema.assistantObjectives).set({
-      progress: sql`jsonb_set(${schema.assistantObjectives.progress}, '{continuation}', (${schema.assistantObjectives.progress} -> 'continuation') || '{"endedAt": null, "end": null}'::jsonb)`,
-    }).where(eq(schema.assistantObjectives.id, objective.id));
-    await db.update(schema.assistantThreads).set({ busySince: new Date(Date.now() - 6 * 60_000) }).where(eq(schema.assistantThreads.id, thread.id));
-    await db.update(schema.assistantJobs).set({ status: "running", lockedBy: "worker-gone", heartbeatAt: new Date(Date.now() - 4 * 60_000) }).where(eq(schema.assistantJobs.id, driver.id));
+    const interrupt = async () => {
+      await db.update(schema.assistantObjectives).set({
+        progress: sql`jsonb_set(${schema.assistantObjectives.progress}, '{continuation}', (${schema.assistantObjectives.progress} -> 'continuation') || '{"endedAt": null, "end": null}'::jsonb)`,
+      }).where(eq(schema.assistantObjectives.id, objective.id));
+      await db.update(schema.assistantThreads).set({ busySince: new Date(Date.now() - 6 * 60_000) }).where(eq(schema.assistantThreads.id, thread.id));
+      await db.update(schema.assistantJobs).set({ status: "running", lockedBy: "worker-gone", heartbeatAt: new Date(Date.now() - 4 * 60_000) }).where(eq(schema.assistantJobs.id, driver.id));
+    };
+    const attemptOf = async () => ((await objectiveOf(requestId)).progress as { continuation?: { attempt?: number } }).continuation?.attempt;
+    await interrupt();
     // After the restart the model sees the search its earlier attempt started, and does not start it again.
     replies = [(input) => {
       check("after the restart the model is shown the search the interrupted continuation started", input.userPrompt.includes("TOOL find_leads({\"what\":\"coffee shops\""));
       return JSON.stringify({ message: "The coffee shops search is still running.", actions: [], suggestions: [] });
     }];
     await runOneAssistantStep({ jobId: driver.id });
-    check("the driver's stale claim is taken over and the continuation taken again (attempt 2)", await continuationEnded(requestId, 1) && ((await objectiveOf(requestId)).progress as { continuation?: { attempt?: number } }).continuation?.attempt === 2);
+    check("the driver's stale claim is taken over and the continuation taken again (attempt 2)", await continuationEnded(requestId, 1) && (await attemptOf()) === 2);
     await step(driver.id);
     await finishSearches(requestId);
     const searches = await children(requestId);
     const scraperPosts = scraper.posts.filter((phrase) => phrase === "coffee shops in Kothrud, Pune").length;
     check("no duplicate search: one search per query, and the scraper asked once", searches.length === 2 && scraperPosts === 1, `${searches.map((job) => (job.payload as { phrase?: string }).phrase).join(", ")}; scraper asked ${scraperPosts} time(s)`);
-    check("no duplicate outreach: one plan per search", planCalls.length === plansBefore + 2, String(planCalls.length - plansBefore));
+    check("no outreach from the searches: neither carries a contact-after, and no plan was prepared", planCalls.length === plansBefore && searches.every((job) => (job.payload as { contactAfter?: unknown }).contactAfter == null), String(planCalls.length - plansBefore));
     await reportFinishedJob(await jobRow(searches[1]!.id));
     await sleep(300);
-    check("a duplicate search callback prepares no second plan", planCalls.length === plansBefore + 2);
+    check("a duplicate search callback prepares no plan", planCalls.length === plansBefore);
     check("no duplicate note: one per continuation", (await notesOf(thread.id, objective.id)).length === 1);
-    replies = [reply("Nothing else fits this request in Kothrud.")];
-    await step(driver.id);
-    await continuationEnded(requestId, 2);
+    await continueWith(driver.id, requestId, 2, [reply("Nothing else fits this request in Kothrud.")]);
+    // A continuation that starts nothing: no source is left, so the request's last turn comes first; there the model prepares the plan.
+    const lastTurn = await continueWith(driver.id, requestId, 3, [
+      reply("", [{ tool: "prepare_outreach", args: {} }]),
+      reply("The plan for the cafes and coffee shops is below; it waits for your Start."),
+    ]);
+    const lastNote = (await notesOf(thread.id, objective.id))[2];
+    check("a continuation that starts nothing: one last turn, told no further source was found, which prepares one plan of the request's 12 matching leads",
+      lastTurn && /^Your request found no further source to search \(the assistant found no further source or query worth searching\) with 12 matching leads \(step 3\)/.test(lastNote?.content ?? "")
+        && planCalls.length === plansBefore + 1 && planCalls.at(-1)?.requestId === requestId && planCalls.at(-1)?.leads === 12,
+      `${lastNote?.content ?? "(no note)"} | ${JSON.stringify(planCalls.slice(plansBefore))}`);
+    // The process stops again, in the last turn after its plan was prepared: the last turn is taken again, and sees its plan.
+    await interrupt();
+    replies = [(input) => {
+      check("after a restart in the last turn the model is shown the plan it prepared", input.userPrompt.includes("TOOL prepare_outreach(") && input.userPrompt.includes("The outreach plan for 12 leads is ready"));
+      return JSON.stringify({ message: "The plan for the cafes and coffee shops is below; it waits for your Start.", actions: [], suggestions: [] });
+    }];
+    await runOneAssistantStep({ jobId: driver.id });
+    check("…the last turn is taken again (attempt 2), and no second plan is prepared", await continuationEnded(requestId, 3) && (await attemptOf()) === 2 && planCalls.length === plansBefore + 1, String(planCalls.length - plansBefore));
     await step(driver.id);
     const stopped = await objectiveOf(requestId);
-    check("a continuation that starts nothing: no source left, stopped with that reason", stopped.stopReason === "sources_exhausted" && /no further source/.test(stopped.stopDetail ?? ""), `${stopped.stopReason}: ${stopped.stopDetail}`);
+    check("…then stopped with that reason", stopped.stopReason === "sources_exhausted" && /no further source/.test(stopped.stopDetail ?? ""), `${stopped.stopReason}: ${stopped.stopDetail}`);
+    check("one note per continuation, the retaken ones included", (await notesOf(thread.id, objective.id)).length === 3, String((await notesOf(thread.id, objective.id)).length));
     // The process stops again, after the report was posted and before the driver finished.
     await db.update(schema.assistantJobs).set({ status: "running", lockedBy: "worker-gone", heartbeatAt: new Date(Date.now() - 4 * 60_000) }).where(eq(schema.assistantJobs.id, driver.id));
     await runOneAssistantStep({ jobId: driver.id });
@@ -627,7 +742,7 @@ await runInOrganization(a.org.id, async () => {
     await reportFinishedJob(await jobRow(driver.id));
     const reports = await reportsOf(thread.id, objective.id);
     check("one report, however often a restart, the reconciliation or a duplicate callback asks", reports.length === 1 && (await jobRow(driver.id)).status === "succeeded", String(reports.length));
-    check("…and it covers both searches and the leads they found", /12 qualified leads \(contactable and matching your request\) of the 25 wanted; 13 still to find/.test(reports[0]?.content ?? ""), reports[0]?.content ?? "");
+    check("…and it covers both searches and the leads they found", /12 qualified leads \(contactable and matching your request\)\./.test(reports[0]?.content ?? "") && !/still to find/.test(reports[0]?.content ?? ""), reports[0]?.content ?? "");
   }
 
   // ---------------------------------------------------------- 6a. a turn a finished job started serves that job's request
@@ -636,7 +751,7 @@ await runInOrganization(a.org.id, async () => {
     const requestId = await ask(thread.id, "find opticians in Pune", turn("", [{ tool: "find_leads", args: { what: "opticians", where: "Pune" } }]));
     const later = await ask(thread.id, "thanks", [reply("You're welcome.")]);
     // A search of the request ended (here, as a finished job's event would): the assistant continues on its own.
-    replies = turn("Trying eye clinics too.", [{ tool: "find_leads", args: { what: "eye clinics", where: "Pune" } }]);
+    replies = startsOnly("Trying eye clinics too.", [{ tool: "find_leads", args: { what: "eye clinics", where: "Pune" } }]);
     await continueAfterEvent(thread.id, requestId);
     const started = (await db.select().from(schema.assistantJobs).where(and(eq(schema.assistantJobs.organizationId, a.org.id), eq(schema.assistantJobs.threadId, thread.id), eq(schema.assistantJobs.kind, "discovery"))))
       .find((job) => (job.payload as { criteria?: { what?: string } }).criteria?.what === "eye clinics");
@@ -680,11 +795,14 @@ await runInOrganization(a.org.id, async () => {
     const again = await assessMembers({ audienceIds: facts.audienceIds, request: ask25, requestId, maxBatches: 2 });
     check("judging again judges nobody twice, and the count stays", again.judged === 0 && again.remaining === 0 && judgedLeads.length === before + 10 && (await objectives.objectiveFacts(objective)).leads === 2);
     await objectives.setObjectiveState(objective.id, "cancel", { name: null });
-    const context = { threadId: thread.id, userId: a.owner.id, ownerText: ask25, requestMessageId: requestId };
+    const context = { threadId: thread.id, userId: a.owner.id, ownerText: ask25, requestMessageId: requestId, v2: true };
+    const refusedSearch = await runTool("find_leads", { what: "real estate brokers", where: "Pune" }, context);
     const web = await runTool("web_search", { query: "real estate agency Pune" }, context);
     const page = await runTool("read_webpage", { url: `https://agency-two-${stamp}.test/` }, context);
-    check("a stopped request: web_search and read_webpage refuse with the same reason, as the searches do",
-      !web.ok && !page.ok && /^Not run: this request's research has stopped/.test(web.summary) && web.summary === page.summary, `${web.summary} | ${page.summary}`);
+    // One harness: a page read and a web search are how the model checks what it found, also after the request ended
+    // (only the owner's pause holds them, section 4); a new search still does not start, and paid work is refused by the spend guard.
+    check("a stopped request starts no lead search, while web_search and read_webpage are not held by the stop (the model may still check what it found)",
+      !refusedSearch.ok && /has stopped/.test(refusedSearch.summary) && !/stopped|^Not run:/.test(web.summary) && !/stopped|^Not run:/.test(page.summary), `${refusedSearch.summary} | ${web.summary} | ${page.summary}`);
     await step((await driverOf(objective.id)).id);
     const reports = await reportsOf(thread.id, objective.id);
     check("the final report keeps found, contactable and matching apart, with the reasons",
@@ -712,15 +830,14 @@ await runInOrganization(a.org.id, async () => {
       return realFind(args, context);
     };
     const plansBefore = planCalls.length;
+    // The real prepare_outreach for this whole request: its own check on the owner's words, not the stand-in.
+    TOOLS.prepare_outreach!.run = realPrepareOutreach;
     const requestId = await ask(thread.id, REQUEST, turn("", [{ tool: "find_leads", args: { what: "dental clinics", where: "Pune, India", maxResults: 3 } }]));
     const objective = await objectiveOf(requestId);
     check("the research-only request: a target of 3, its time and $0 named, and no outreach request in the turn",
       objective.leadTarget === 3 && objective.spendCapUsd === 0 && objective.controls.named?.time === true && seen.length === 1 && seen[0]!.outreachRequest === null && seen[0]!.contactAfter === undefined,
       JSON.stringify({ target: objective.leadTarget, minutes: objective.timeLimitMinutes, spend: objective.spendCapUsd, named: objective.controls.named, seen }));
-    const context = { threadId: thread.id, userId: a.owner.id, ownerText: REQUEST, requestMessageId: requestId };
-    const refusals = await Promise.all([REQUEST, BUDGET_WORDS].map((ownerText) => runTool("find_leads", { what: "dental clinics", where: "Pune, India", contactAfter: true }, { ...context, ownerText })));
-    check("a search that would contact what it finds is refused under “Research only. Spend $0. Do not contact anyone.”: the owner did not ask",
-      refusals.every((refused) => !refused.ok && refused.refused === true && /not asked to contact/.test(refused.summary)), refusals.map((refused) => refused.summary).join(" | "));
+    const context = { threadId: thread.id, userId: a.owner.id, ownerText: REQUEST, requestMessageId: requestId, v2: true };
     const judgedBefore = judgedAgainst.length;
     await finishSearches(requestId);
     // Pilot L02: the leads are judged against what to find, not against "$0", "5 minutes" or "do not contact anyone".
@@ -729,21 +846,31 @@ await runInOrganization(a.org.id, async () => {
     check("…under the sorter's rules: how the research runs is no requirement, and the request outranks the saved target customers",
       sortingRules.length > judgedBefore && sortingRules.slice(judgedBefore).every((rules) => /Instructions about how the research runs[^\n]*are NOT requirements/.test(rules) && /replaces the target customers and locations saved/.test(rules)),
       sortingRules.at(-1)?.slice(0, 300) ?? "no sorting call");
-    // Short of the target (2 of 3) the driver continues the request, now with the chat in Autonomous mode.
+    // Short of the target (2 of 3) the driver continues the request, now with the chat in Autonomous mode;
+    // the model asks its search to contact what it finds, as if the owner had asked.
     await db.update(schema.assistantThreads).set({ autonomous: true, autonomousBy: a.owner.id, autonomousAt: new Date() }).where(eq(schema.assistantThreads.id, thread.id));
-    replies = turn("Trying dentists too.", [{ tool: "find_leads", args: { what: "dentists", where: "Pune, India", maxResults: 3 } }]);
-    await step((await driverOf(objective.id)).id);
-    const continued = await continuationEnded(requestId, 1);
-    check("the continuation carries outreach: false, so its search got no outreach request and asked for no contact-after",
-      continued && seen.length === 4 && seen[3]!.what === "dentists" && seen[3]!.outreachRequest === null && seen[3]!.contactAfter === undefined, JSON.stringify({ continued, seen }));
+    const continued = await continueWith((await driverOf(objective.id)).id, requestId, 1, startsOnly("Trying dentists too.", [{ tool: "find_leads", args: { what: "dentists", where: "Pune, India", maxResults: 3, contactAfter: true } }]));
+    const asked = (await listMessages(thread.id, 500)).filter((row) => row.tool === "find_leads").at(-1);
+    check("the continuation carries outreach: false, so its search got no outreach request",
+      continued && seen.length === 2 && seen[1]!.what === "dentists" && seen[1]!.outreachRequest === null, JSON.stringify({ continued, seen }));
+    // Under "Research only. Spend $0. Do not contact anyone." ("Spend $0" once read as "send", 652c84d) a search's contact-after is dropped before it runs.
+    check("a search asked to contact what it finds, under “Research only. Spend $0. Do not contact anyone.”, runs only as a search: its contact-after is dropped before the tool runs",
+      (asked?.toolInput as { contactAfter?: unknown } | null)?.contactAfter === true && seen[1]!.contactAfter === undefined && ((await children(requestId))[1]?.payload as { contactAfter?: unknown } | undefined)?.contactAfter == null,
+      JSON.stringify({ modelAsked: (asked?.toolInput as { contactAfter?: unknown } | null)?.contactAfter, toolGot: seen[1]?.contactAfter }));
     const audienceId = (await children(requestId))[0]!.audienceId!;
-    // The real tool this once: its own check on the owner's words, not the stand-in.
-    TOOLS.prepare_outreach!.run = realPrepareOutreach;
     const plan = await runTool("prepare_outreach", { audienceId }, { ...context, autonomous: true });
-    TOOLS.prepare_outreach!.run = standInPrepareOutreach;
     check("…and a plan for its leads is refused even in Autonomous mode", !plan.ok && plan.refused === true && /not asked to contact/.test(plan.summary), plan.summary);
     await finishSearches(requestId);
+    // At its target, the last turn: the model tries to prepare a plan in Autonomous mode, and is refused there too.
+    const lastTurn = await continueWith((await driverOf(objective.id)).id, requestId, 2, [
+      reply("", [{ tool: "prepare_outreach", args: {} }]),
+      reply("These are the dental clinics for this research."),
+    ]);
+    const lastPlan = (await listMessages(thread.id, 500)).filter((row) => row.tool === "prepare_outreach").at(-1);
+    check("…and in its last turn, the plan the model tries is refused for the same reason",
+      lastTurn && lastPlan?.status === "error" && /not asked to contact/.test(lastPlan.content), `${lastPlan?.status}: ${lastPlan?.content}`);
     await step((await driverOf(objective.id)).id);
+    TOOLS.prepare_outreach!.run = standInPrepareOutreach;
     const runs = await db.select({ id: schema.outreachRuns.id }).from(schema.outreachRuns).where(and(eq(schema.outreachRuns.organizationId, a.org.id), eq(schema.outreachRuns.threadId, thread.id)));
     const starts = await db.select({ id: schema.assistantJobs.id }).from(schema.assistantJobs).where(and(eq(schema.assistantJobs.organizationId, a.org.id), eq(schema.assistantJobs.threadId, thread.id), eq(schema.assistantJobs.kind, "outreach_start")));
     const searches = await children(requestId);

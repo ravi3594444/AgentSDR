@@ -26,17 +26,20 @@ describe("checkBrief", () => {
     expect(checked.ok && checked.controls).toEqual({ leadTarget: 25, timeLimitMinutes: 240, spendCapUsd: 5, named: { target: false, time: false, spend: false } });
   });
 
-  test("the model may not raise a limit the owner did not write", () => {
-    expect(checkBrief({ ...base, leadTarget: 100 }, "Find salons in Miami", DEFAULTS)).toMatchObject({ ok: false, error: expect.stringContaining("did not ask for 100") });
+  test("only money above the default needs the owner's own number", () => {
     expect(checkBrief({ ...base, spendCapUsd: 50 }, "Find salons in Miami", DEFAULTS)).toMatchObject({ ok: false, error: expect.stringContaining("did not allow $50") });
-    expect(checkBrief({ ...base, timeLimitMinutes: 600 }, "Find salons in Miami", DEFAULTS)).toMatchObject({ ok: false, error: expect.stringContaining("did not allow 600 minutes") });
+    // The lead target and the time are the model's to set ("all of them", "keep going").
+    expect(checkBrief({ ...base, leadTarget: 100 }, "Find salons in Miami", DEFAULTS).ok).toBe(true);
+    expect(checkBrief({ ...base, timeLimitMinutes: 600 }, "Find salons in Miami", DEFAULTS).ok).toBe(true);
     // Written by the owner: allowed.
     expect(checkBrief({ ...base, leadTarget: 100, spendCapUsd: 50, timeLimitMinutes: 600 }, "Find 100 salons, spend up to $50, take 10 hours", DEFAULTS).ok).toBe(true);
   });
 
   test("bad values are refused with what to fix", () => {
     expect(checkBrief({ ...base, goal: "" }, "x", DEFAULTS)).toMatchObject({ ok: false, error: expect.stringContaining("goal is required") });
-    expect(checkBrief({ ...base, done: "" }, "x", DEFAULTS)).toMatchObject({ ok: false, error: expect.stringContaining("done is required") });
+    // With no done of its own, the request is done when its goal is.
+    const noDone = checkBrief({ ...base, done: "" }, "x", DEFAULTS);
+    expect(noDone.ok && noDone.brief.done).toBe(noDone.ok ? noDone.brief.goal : false);
     expect(checkBrief({ ...base, leadTarget: 2.5 }, "x", DEFAULTS).ok).toBe(false);
     expect(checkBrief({ ...base, channels: ["fax"] }, "x", DEFAULTS).ok).toBe(false);
     expect(checkBrief({ ...base, contact: "yes" }, "x", DEFAULTS).ok).toBe(false);

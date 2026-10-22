@@ -310,6 +310,21 @@ describe("the driver: wait, continue or stop", () => {
     expect(nextDriverStep(facts({ wakeAtLimit: true, leadTarget: 5, leads: 4, continuation: turn({ n: 2, final: "target_reached", finalDetail: "5 qualified leads found, the target was 5" }) }))).toEqual({ kind: "continue", n: 3, attempt: 1, dry: 0 });
     // v1 is unchanged: an idle turn stops at once.
     expect(nextDriverStep(facts({ leadTarget: 10, leads: 4, continuation: turn({ n: 2, leadsAtStart: 4 }) }))).toMatchObject({ kind: "stop", reason: "sources_exhausted" });
+    // A last turn begun because no source seemed left, in which the assistant found one and searched: it goes on.
+    expect(nextDriverStep(facts({ ...idle, newSearches: 1, openChildren: 1, continuation: last }))).toMatchObject({ kind: "wait", reason: "searches still running" });
+    expect(nextDriverStep(facts({ ...idle, newSearches: 1, leads: 6, continuation: last }))).toEqual({ kind: "continue", n: 4, attempt: 1, dry: 0 });
+    // …but a search that found nothing new (or a paid one refused at its reservation) ends it: no cycle of last turns.
+    expect(nextDriverStep(facts({ ...idle, newSearches: 1, leads: 4, continuation: last }))).toEqual({ kind: "stop", reason: "sources_exhausted", detail: "the assistant found no further source or query worth searching" });
+  });
+
+  test("the one harness: a target ends the request only when the owner gave it; a used spend cap does not end it", () => {
+    // "find me leads", no number: 25 matches (the default target) is no reason to stop; the assistant decides.
+    expect(limitReached({ now: minutes(0), deadline: minutes(60), leadTarget: 25, leads: 30, spendCapUsd: 5, spentUsd: 0, targetNamed: false })).toBeNull();
+    expect(limitReached({ now: minutes(0), deadline: minutes(60), leadTarget: 25, leads: 30, spendCapUsd: 5, spentUsd: 0, targetNamed: true })).toMatchObject({ reason: "target_reached" });
+    // The cap used: paid starts are refused at their reservation, free sources go on.
+    expect(limitReached({ now: minutes(0), deadline: minutes(60), leadTarget: 25, leads: 3, spendCapUsd: 5, spentUsd: 5, budgetEnds: false })).toBeNull();
+    // The time limit still ends it.
+    expect(limitReached({ now: minutes(0), deadline: minutes(-1), leadTarget: 25, leads: 3, spendCapUsd: 5, spentUsd: 5, targetNamed: false, budgetEnds: false })).toMatchObject({ reason: "time_limit" });
   });
 
   test("research agent v2: only a question from a turn that started nothing holds the request", () => {
@@ -467,10 +482,12 @@ describe("wording", () => {
 
   test("research agent v2: the note names the limit that ends the request and asks for the plan from what matched", () => {
     const base = { request: "x", n: 4, leads: 6, leadTarget: 10, spend: spendFromLedgers([]), spendCapUsd: 5, msLeft: 0, sources: [], web: null, v2: true };
-    expect(continuationNote({ ...base, final: "time_limit" })).toMatch(/reached its time limit with 6 of 10 matching leads \(step 4\)\. No more searches start for it\. Next: review them, prepare outreach from the leads that match if the brief says contact, then finish_request\./);
+    expect(continuationNote({ ...base, final: "time_limit" })).toMatch(/reached its time limit with 6 of 10 matching leads \(step 4\)\. No more searches start for it\. Next: review them, prepare outreach if the owner asked to contact them, then finish_request\./);
     expect(continuationNote({ ...base, final: "budget_spent" })).toMatch(/reached its spend cap with 6 of 10/);
     expect(continuationNote({ ...base, leads: 10, final: "target_reached" })).toMatch(/has its 10 matching leads/);
-    expect(continuationNote({ ...base, final: "sources_exhausted", finalDetail: "the assistant found no further source or query worth searching" })).toMatch(/has no further source to search \(the assistant found no further source or query worth searching\) with 6 of 10 matching leads \(step 4\)\. No more searches start for it\. Next: review them, prepare outreach from the leads that match if the brief says contact, then finish_request\./);
+    // A last turn begun because no source seemed left may still search one that fits.
+    expect(continuationNote({ ...base, final: "sources_exhausted", finalDetail: "the assistant found no further source or query worth searching" })).toMatch(/found no further source to search \(the assistant found no further source or query worth searching\) with 6 of 10 matching leads \(step 4\)\. Search another source only if one fits the request; otherwise review the leads, prepare outreach if the owner asked to contact them, then finish_request\./);
+    expect(continuationNote({ ...base, final: "sources_exhausted", targetNamed: false })).toContain("with 6 matching leads");
     expect(continuationNote(base)).toMatch(/have finished for now/);
   });
 

@@ -200,7 +200,8 @@ function judged(handler: StepHandler): StepHandler {
     const outcome = await handler(job, heartbeat);
     if (outcome.next !== "done" || !job.audienceId || outcome.result.notSearched || !Number(outcome.result.eligible ?? 0)) return outcome;
     if (!(await objectiveForJob(job))) return outcome;
-    return { next: "stage", stage: QUALIFYING, progress: { ...(outcome.progress ?? {}), stage: QUALIFYING }, payload: { searchResult: outcome.result } };
+    const toJudge = await unjudgedMembers([job.audienceId]);
+    return { next: "stage", stage: QUALIFYING, progress: { ...(outcome.progress ?? {}), stage: QUALIFYING, judged: 0, toJudge }, payload: { searchResult: outcome.result } };
   };
 }
 
@@ -215,11 +216,14 @@ async function runQualifyingStage(job: AssistantJob, heartbeat: () => Promise<vo
   const objective = await objectiveForJob(job);
   if (!objective) return finish(null);
   if (objective.status === "paused") return { next: "wait", delayMs: 60_000, progress: { stage: QUALIFYING, waiting: { kind: "paused", reason: "the owner paused this request's research; its leads are judged when resumed" } } };
-  if (objective.status === "stopped") return finish("Its leads were not judged against your request: the research stopped first.");
+  // Only the owner's cancel leaves them unjudged; after any other stop (finished, a limit) they are judged so a follow-up can plan them.
+  if (objective.status === "stopped" && objective.stopReason === "cancelled") return finish("Its leads were not judged against your request: the owner cancelled the research first.");
   try {
-    const before = await unjudgedMembers(audienceIds);
+    // The count to judge is taken once, entering the stage: each step judges a batch of what is left.
+    const recorded = Number((job.progress as { toJudge?: unknown } | null)?.toJudge);
+    const toJudge = Number.isFinite(recorded) && recorded > 0 ? recorded : await unjudgedMembers(audienceIds);
     const { judged: count, remaining } = await assessMembers({ audienceIds, request: await objectiveJudgeRequest(objective), requestId: objective.requestMessageId, heartbeat });
-    if (remaining > 0) return { next: "wait", delayMs: count ? 1_000 : QUALIFY_CLAIMED_MS, progress: { stage: QUALIFYING, judged: before - remaining, toJudge: before } };
+    if (remaining > 0) return { next: "wait", delayMs: count ? 1_000 : QUALIFY_CLAIMED_MS, progress: { stage: QUALIFYING, judged: Math.max(0, toJudge - remaining), toJudge: Math.max(toJudge, remaining) } };
     return finish(null);
   } catch (error) {
     const failures = (payload.qualifyFailures ?? 0) + 1;
