@@ -72,8 +72,9 @@ describe("the harness keeps only what protects", () => {
     // The owner's place holds outside Autonomous mode too.
     expect(prompt).toContain("a neighbouring city, a suburb or the wider area is another place");
     expect(prompt).toContain("Never ask what the brief already settles");
-    // Sources are chosen by where the leads are; the spend cap is the server's.
-    expect(prompt).toContain("a source the owner names is one you may use, not one you must");
+    // The model chooses its sources; none is reserved for one kind of request. The spend cap is the server's.
+    expect(prompt).toContain("Choose the sources yourself");
+    expect(prompt).not.toContain("does not find these leads");
     expect(prompt).toContain("never ask to raise it");
     // An open niche or place is the model's research, not the profile's.
     expect(prompt).toContain("choosing them is your research");
