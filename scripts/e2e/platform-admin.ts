@@ -65,6 +65,7 @@ const aiRoute = await import("@/app/api/platform/ai/route");
 const usageRoute = await import("@/app/api/platform/usage/route");
 const adoptRoute = await import("@/app/api/platform/adopt/route");
 const tavilySettingsRoute = await import("@/app/api/settings/tavily/route");
+const providersRoute = await import("@/app/api/settings/providers/route");
 setTavilyApiBase("https://tavily.platform.test");
 
 let failures = 0;
@@ -191,6 +192,26 @@ try {
   check("…its own row and its choice stay exactly as they were", after?.encryptedKey === before?.encryptedKey && mode?.mode === "own");
   const status = (await store.listPlatformCredentialStatus()).find((s) => s.key === "tavily");
   check("…and the default records where it came from", status?.adoptedFrom?.organizationId === org!.id);
+
+  // ------------------------------------------------------------ Settings → Advanced → Use your own providers, by role
+  const modeOf = async (service: string) => (await db.select().from(providerCredentialModes).where(and(eq(providerCredentialModes.organizationId, org!.id), eq(providerCredentialModes.service, service as never))))[0]?.mode ?? null;
+  const memberRead = await send(providersRoute.GET as never, "/api/settings/providers", { headers: await session(member.email, org!.id) });
+  check("a member reads the provider choices, without the right to change them", memberRead.status === 200 && Array.isArray(memberRead.body?.services) && memberRead.body?.canManage === false, memberRead.text.slice(0, 120));
+  check("…and no key, engine or model of the platform's is in them", !memberRead.text.includes(OWN_TAVILY) && !memberRead.text.includes(PLATFORM_TAVILY) && !memberRead.text.includes(ANTHROPIC) && !/claude-|anthropic/i.test(memberRead.text));
+  const memberPut = await send(providersRoute.PUT as never, "/api/settings/providers", { method: "PUT", headers: await session(member.email, org!.id), body: { service: "apify", mode: "managed" } });
+  check("a member cannot change a choice (403)", memberPut.status === 403 && (await modeOf("apify")) === null, String(memberPut.status));
+  const adminPut = await send(providersRoute.PUT as never, "/api/settings/providers", { method: "PUT", headers: await session(admin.email, org!.id), body: { service: "apify", mode: "own" } });
+  check("an admin chooses My own provider", adminPut.status === 200 && (await modeOf("apify")) === "own", adminPut.text.slice(0, 120));
+  const ownerPut = await send(providersRoute.PUT as never, "/api/settings/providers", { method: "PUT", headers: await session(owner.email, org!.id), body: { service: "apify", mode: "managed" } });
+  check("an owner chooses the Included service", ownerPut.status === 200 && (await modeOf("apify")) === "managed");
+  const ownerCross = await send(providersRoute.PUT as never, "/api/settings/providers", { method: "PUT", headers: await session(owner.email, org!.id), body: { service: "apify", mode: "own" }, origin: "https://evil.example" });
+  check("…not from another origin (403)", ownerCross.status === 403 && (await modeOf("apify")) === "managed");
+  const badService = await send(providersRoute.PUT as never, "/api/settings/providers", { method: "PUT", headers: await session(owner.email, org!.id), body: { service: "google", mode: "managed" } });
+  check("Google Workspace is not a choice (400)", badService.status === 400);
+  const anonymous = await send(providersRoute.GET as never, "/api/settings/providers", {});
+  check("without a session the choices are 401", anonymous.status === 401);
+  const operatorPut = await send(providersRoute.PUT as never, "/api/settings/providers", { method: "PUT", headers: op, body: { service: "apify", mode: "own" } });
+  check("the platform operator, not a member, changes nothing in the workspace", operatorPut.status !== 200 && (await modeOf("apify")) === "managed", String(operatorPut.status));
 
   // ------------------------------------------------------------ what a customer on the Included service reads
   await runInOrganization(fresh!.id, () => setFeature("web_discovery", true, owner.id).catch(() => undefined));
