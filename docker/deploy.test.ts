@@ -25,6 +25,7 @@ const MIGRATIONS = [
   "add-brightdata",
   "add-always-on-sending",
   "add-research-agent-v2",
+  "add-managed-saas",
 ];
 const DEFAULT_FILES = "-f docker-compose.yml -f docker-compose.build.yml -f docker-compose.discovery.yml";
 const ENOUGH_MEMORY = "MemTotal: 8000000 kB\nMemAvailable: 4000000 kB\nSwapTotal: 4194300 kB\nSwapFree: 4194300 kB\n";

@@ -16,7 +16,7 @@ an organization that already saved its own credentials keeps them and keeps
 | Step | What | State |
 |---|---|---|
 | 0 | This plan | written |
-| a | Platform operator grant (`platform_operators`), operator route guard, LinkedIn job logs | planned |
+| a | Platform operator grant (`platform_operators`), operator route guard, LinkedIn job logs | done: `scripts/grant-platform-operator.ts`, `src/lib/auth/operatorAccess.server.ts`; auth-policies e2e covers grant, re-grant, unknown address, revoke, workspace owners |
 | b | Platform credential store, per-provider Included/My own choice, resolver | planned |
 | c | Consumers switched to the resolver (AI, Unipile, TinyFish, Tavily, Bright Data, Apify, workers, gates) | planned |
 | d | Operator panel (default keys, Included AI engine and model, usage), adopt-defaults action | planned |

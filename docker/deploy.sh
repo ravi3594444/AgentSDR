@@ -58,7 +58,7 @@ set -euo pipefail
 
 readonly IMAGE=agentsdr:local
 readonly WORKER_READY='[assistant/worker] starting'
-readonly DEFAULT_MIGRATIONS="add-tinyfish add-research-sources add-browser-sessions add-wrong-number add-activity add-assistant-job-reports add-objectives add-pilot-fixes add-brightdata add-always-on-sending add-research-agent-v2"
+readonly DEFAULT_MIGRATIONS="add-tinyfish add-research-sources add-browser-sessions add-wrong-number add-activity add-assistant-job-reports add-objectives add-pilot-fixes add-brightdata add-always-on-sending add-research-agent-v2 add-managed-saas"
 
 SCRIPT_PATH=$(realpath "${BASH_SOURCE[0]}")
 ORIGINAL_ARGS=("$@")

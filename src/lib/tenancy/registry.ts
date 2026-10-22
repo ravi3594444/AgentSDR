@@ -170,6 +170,9 @@ export const GLOBAL: readonly string[] = [
   // a wait only, shared by every organization that saved the same key
   // (src/lib/quota/schema.ts). Each organization's use is in provider_usage.
   "provider_quota_state",
+  // The people granted platform operator access (scripts/grant-platform-operator.ts);
+  // not a role in any organization (src/lib/managed/schema.ts).
+  "platform_operators",
 ];
 
 /**

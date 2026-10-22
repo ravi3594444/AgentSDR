@@ -1148,7 +1148,7 @@ CREATE TABLE public.brightdata_settings (
     reddit_enabled boolean DEFAULT false NOT NULL,
     updated_by uuid,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT brightdata_settings_limits_chk CHECK ((((monthly_credits >= 0) AND (monthly_credits <= 100000)) AND ((max_records_per_search >= 5) AND (max_records_per_search <= 300))))
+    CONSTRAINT brightdata_settings_limits_chk CHECK (((monthly_credits >= 0) AND (monthly_credits <= 100000) AND ((max_records_per_search >= 5) AND (max_records_per_search <= 300))))
 );
 
 --
@@ -2928,6 +2928,17 @@ CREATE TABLE public.people (
 );
 
 --
+-- Name: platform_operators; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.platform_operators (
+    user_id uuid NOT NULL,
+    granted_by text NOT NULL,
+    note text,
+    granted_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+--
 -- Name: provider_quota_state; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4325,6 +4336,13 @@ ALTER TABLE ONLY public.owner_decisions
 
 ALTER TABLE ONLY public.people
     ADD CONSTRAINT people_pkey PRIMARY KEY (id);
+
+--
+-- Name: platform_operators platform_operators_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.platform_operators
+    ADD CONSTRAINT platform_operators_pkey PRIMARY KEY (user_id);
 
 --
 -- Name: provider_quota_state provider_quota_state_pkey; Type: CONSTRAINT; Schema: public; Owner: -
@@ -7182,6 +7200,13 @@ ALTER TABLE ONLY public.lead_audiences
     ADD CONSTRAINT lead_audiences_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
 
 --
+-- Name: lead_audiences lead_audiences_thread_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lead_audiences
+    ADD CONSTRAINT lead_audiences_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES public.assistant_threads(id) ON DELETE SET NULL;
+
+--
 -- Name: lead_first_contacts lead_first_contacts_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7194,13 +7219,6 @@ ALTER TABLE ONLY public.lead_first_contacts
 
 ALTER TABLE ONLY public.lead_first_contacts
     ADD CONSTRAINT lead_first_contacts_person_id_fkey FOREIGN KEY (person_id) REFERENCES public.people(id) ON DELETE CASCADE;
-
---
--- Name: lead_audiences lead_audiences_thread_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.lead_audiences
-    ADD CONSTRAINT lead_audiences_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES public.assistant_threads(id) ON DELETE SET NULL;
 
 --
 -- Name: lead_research lead_research_company_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
@@ -7369,6 +7387,13 @@ ALTER TABLE ONLY public.people
 
 ALTER TABLE ONLY public.people
     ADD CONSTRAINT people_organization_fk FOREIGN KEY (organization_id) REFERENCES public.organizations(id) ON DELETE RESTRICT;
+
+--
+-- Name: platform_operators platform_operators_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.platform_operators
+    ADD CONSTRAINT platform_operators_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
 
 --
 -- Name: provider_usage provider_usage_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -

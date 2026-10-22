@@ -6,7 +6,7 @@ import { cache } from "react";
 import { db } from "@/lib/db";
 import { runInOrganization } from "@/lib/tenancy/scope";
 import { roles, type OrgRole } from "./permissions";
-import { operatorOrganizationId } from "./operator.server";
+import { isPlatformOperatorUser } from "./operator.server";
 import { members, organizations } from "./schema";
 import { auth } from "./server";
 import { BRAND } from "@/lib/brand";
@@ -168,19 +168,19 @@ export async function withOrgContext<T>(
 }
 
 /**
- * The platform operator: an owner or admin of the operator organization —
- * the one flagged `initial` by the migration from the single-workspace app,
- * or on a fresh install the first organization created — i.e. the team that
- * runs this AgentSDR instance. Platform-wide system data that
- * cannot be split by organization (the LinkedIn job runs and their logs,
- * which cover every organization's accounts) is visible to them alone.
+ * The platform operator: a person explicitly granted operator access in
+ * `platform_operators` (scripts/grant-platform-operator.ts) — the team that
+ * runs this AgentSDR instance. Not a role in any organization: owning or
+ * creating an organization, the initial one included, never makes anyone an
+ * operator. Platform-wide system data that cannot be split by organization
+ * (the LinkedIn job runs and their logs, which cover every organization's
+ * accounts) is visible to operators alone.
  */
-export async function isPlatformOperator(ctx: Pick<OrgContext, "organizationId" | "roles">): Promise<boolean> {
-  if (!ctx.roles.some((role) => role === "owner" || role === "admin")) return false;
-  return ctx.organizationId === (await operatorOrganizationId());
+export async function isPlatformOperator(ctx: Pick<OrgContext, "userId">): Promise<boolean> {
+  return isPlatformOperatorUser(ctx.userId);
 }
 
-export async function requirePlatformOperator(ctx: Pick<OrgContext, "organizationId" | "roles">): Promise<void> {
+export async function requirePlatformOperator(ctx: Pick<OrgContext, "userId">): Promise<void> {
   if (!(await isPlatformOperator(ctx))) {
     throw new AuthContextError(`Only the team running this ${BRAND.name} instance can see system job logs`, 403, "FORBIDDEN");
   }

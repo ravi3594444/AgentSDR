@@ -2,13 +2,38 @@ import "server-only";
 
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
+import { platformOperators } from "@/lib/managed/schema";
 import { members, organizations } from "./schema";
 
 /**
+ * Whether this person holds an explicit platform operator grant
+ * (`platform_operators`, scripts/grant-platform-operator.ts). The only test
+ * for operator access: no organization role implies it. A missing table
+ * (the migration has not run yet) means nobody is an operator.
+ */
+export async function isPlatformOperatorUser(userId: string): Promise<boolean> {
+  try {
+    const [row] = await db
+      .select({ userId: platformOperators.userId })
+      .from(platformOperators)
+      .where(eq(platformOperators.userId, userId))
+      .limit(1);
+    return Boolean(row);
+  } catch (error) {
+    for (let current: unknown = error; current && typeof current === "object"; current = (current as { cause?: unknown }).cause) {
+      if ((current as { code?: unknown }).code === "42P01") return false;
+    }
+    throw error;
+  }
+}
+
+/**
  * The operator organization — flagged `initial` by the migration from the
- * single-workspace app, else the oldest one — i.e. the team that runs this
- * AgentSDR instance. Kept apart from context.ts so background work (which
- * has no session) can ask without loading the auth server.
+ * single-workspace app, else the oldest one. Used only by the Claude Code
+ * subscription-login pilot (src/lib/ai/claudeCode/), which stays restricted
+ * to an owner of this one organization. It is NOT platform operator access:
+ * that is the explicit grant above. Kept apart from context.ts so background
+ * work (which has no session) can ask without loading the auth server.
  */
 export async function operatorOrganizationId(): Promise<string | null> {
   const [flagged] = await db

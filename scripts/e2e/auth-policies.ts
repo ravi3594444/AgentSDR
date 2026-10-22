@@ -5,9 +5,10 @@
  *
  *   bun --conditions=react-server scripts/e2e/auth-policies.ts
  *
- * Needs an EMPTY schema'd database (`bun run db:setup`) — it asserts on the
- * "first account" and "first organization" rules — and refuses to run
- * against anything but localhost. No server is needed.
+ * Needs an EMPTY schema'd database (`bun run db:setup`, then
+ * `bun scripts/add-managed-saas.ts`) — it asserts on the "first account" and
+ * "first organization" rules — and refuses to run against anything but
+ * localhost. No server is needed.
  */
 import { eq } from "drizzle-orm";
 
@@ -93,22 +94,40 @@ const secondOperatorOrg = await createOrg(await signIn(operator), `operator-seco
 check("invite-only: the operator can create further organizations", secondOperatorOrg.ok);
 
 // ---- operator ------------------------------------------------------------
+// Operator access is an explicit grant (platform_operators), never a role: the
+// first organization's owner is not an operator until the grant script names them.
 await auth.api.setActiveOrganization({ headers: await signIn(operator), body: { organizationId: firstOrg.id! } });
 const operatorCtx = await requireOrgContext({ headers: await signIn(operator) });
 check(
-  "fresh install: the first organization's owner is the platform operator",
-  operatorCtx.organizationId === firstOrg.id && (await isPlatformOperator(operatorCtx)),
+  "fresh install: the first organization's owner is NOT a platform operator before a grant",
+  operatorCtx.organizationId === firstOrg.id && !(await isPlatformOperator(operatorCtx)),
 );
+const grantScript = (args: string[]) => {
+  const run = Bun.spawnSync(["bun", "scripts/grant-platform-operator.ts", ...args], { env: process.env, stdout: "pipe", stderr: "pipe" });
+  return { code: run.exitCode, out: `${run.stdout.toString()}${run.stderr.toString()}`.trim() };
+};
+const granted = grantScript(["--email", operator, "--note", "auth-policies e2e"]);
+check("grant script: names an existing account and grants it", granted.code === 0 && /Granted/.test(granted.out), granted.out);
+check("after the grant: that person is a platform operator, whatever organization is active", await isPlatformOperator(operatorCtx));
+check("grant script: granting twice changes nothing", /already/.test(grantScript(["--email", operator]).out));
+const unknown = grantScript(["--email", `nobody+${stamp}@example.com`]);
+check("grant script: refuses an address with no account", unknown.code !== 0, unknown.out);
+const inviteeCtxUser = await db.select({ id: users.id }).from(users).where(eq(users.email, invitee)).limit(1);
 check(
-  "fresh install: an owner of a later organization is not",
-  !(await isPlatformOperator({ organizationId: secondOperatorOrg.id!, roles: ["owner"] })),
+  "a member of the first organization is not an operator without a grant",
+  !(await isPlatformOperator({ userId: inviteeCtxUser[0]!.id })),
 );
+const revoked = grantScript(["--email", operator, "--revoke"]);
+check("grant script: --revoke removes the grant", revoked.code === 0 && !(await isPlatformOperator(operatorCtx)), revoked.out);
+grantScript(["--email", operator]);
 
 // ---- open ----------------------------------------------------------------
 process.env.AUTH_SIGNUP = "open";
 const walkIn = `walk-in+${stamp}@example.com`;
 check("open: anyone can sign up", (await signUp(walkIn)).ok);
 check("open: anyone can create an organization", (await createOrg(await signIn(walkIn), `walk-in-org-${stamp}`)).ok);
+const [walkInUser] = await db.select({ id: users.id }).from(users).where(eq(users.email, walkIn)).limit(1);
+check("open: the owner of a workspace they created is not a platform operator", !(await isPlatformOperator({ userId: walkInUser!.id })));
 
 console.log(failures ? `\n✗ ${failures} failure(s)` : "\n✓ all auth policy checks pass");
 process.exit(failures ? 1 : 0);

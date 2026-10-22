@@ -149,6 +149,7 @@ const OWNED_TABLES = [
   "browser_sessions",
   "activity_seen",
   "research_settings",
+  "platform_operators",
 ];
 
 export default {
