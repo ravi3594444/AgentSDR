@@ -63,8 +63,10 @@ describe("Reddit", () => {
   });
 
   test("the refusal says nothing was read, and approval does not enable reading", () => {
-    expect(redditRefusal(false)).toBe("Reddit is unavailable to research: its API needs Reddit's approval for this use, and that approval is not recorded (Settings → Lead research → Research sources). Nothing was read from Reddit.");
+    expect(redditRefusal(false)).toBe("read_webpage does not read Reddit (its API needs Reddit's approval for this use, not recorded in Settings → Lead research → Research sources). Reddit posts and comments are searched with research_social_sources (Bright Data) when the owner turned Reddit research on. Nothing was read from Reddit.");
     expect(redditRefusal(true)).toContain("approval recorded; a Reddit reader is not built yet");
+    // Where Reddit is researched instead, so the model does not drop the platform.
+    expect(redditRefusal(true)).toContain("research_social_sources");
     expect(redditRefusal(true)).toContain("Nothing was read from Reddit.");
   });
 
@@ -82,7 +84,8 @@ test("researchSourceOf picks the reader, and nothing for other sites", () => {
 });
 
 test("a discussion page carries the evidence rule; other pages none", () => {
-  expect(discussionNote("news.ycombinator.com")).toMatch(/not buying intent.*pseudonymous.*not leads/);
+  expect(discussionNote("news.ycombinator.com")).toMatch(/pseudonymous.*not leads unless their own page publishes a contact.*never matched/);
+  expect(discussionNote("news.ycombinator.com")).not.toContain("buying intent");
   expect(discussionNote("serverfault.com")).toMatch(/stated problem.*pseudonymous serverfault\.com users/);
   expect(discussionNote("example.com")).toBeNull();
 });

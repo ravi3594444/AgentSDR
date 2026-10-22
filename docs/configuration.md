@@ -431,8 +431,8 @@ unless noted.
 
 | Variable | Default | What it does | Read in |
 |---|---|---|---|
-| `OUTREACH_TICK_INTERVAL_MS` | `60000` | How often the in-process email send loop ticks. | `src/lib/outreach/internalScheduler.ts` |
-| `WHATSAPP_CAMPAIGN_TICK_INTERVAL_MS` | `30000` (values under `1000` fall back to `30000`) | How often the WhatsApp campaign sender ticks. | `src/lib/whatsapp/campaigns/internalScheduler.ts` |
+| `OUTREACH_TICK_INTERVAL_MS` | `10000` | How often the in-process email send loop checks for work; the sender gap still applies. | `src/lib/outreach/internalScheduler.ts` |
+| `WHATSAPP_CAMPAIGN_TICK_INTERVAL_MS` | `10000` (values under `1000` fall back to `10000`) | How often the WhatsApp campaign sender checks for work; the sender gap still applies. | `src/lib/whatsapp/campaigns/internalScheduler.ts` |
 | `GRID_WORKER_POLL_MS` | `1000` | How often the enrichment worker looks for cells to run. | `src/lib/grid/worker.ts` |
 | `GRID_WORKER_CONCURRENCY` | `8` | Enrichment cells processed at once. Lower it if a provider rate-limits you. | `src/lib/grid/worker.ts` |
 | `GRID_CELL_TIMEOUT_MS` | `30000` | Per-cell timeout. | `src/lib/grid/worker.ts` |

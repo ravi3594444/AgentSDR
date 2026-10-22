@@ -17,13 +17,13 @@ describe("registry", () => {
     }
   });
   test("defaults reproduce today's hardcoded behaviour", () => {
-    expect(defaultValues("email")).toEqual({ dailySendLimit: 30, sendGapMinutes: [18, 24] });
+    expect(defaultValues("email")).toEqual({ dailySendLimit: 30, secondsBetweenSends: 30 });
     expect(defaultValues("linkedin")).toEqual({
       invitesPerDayPremium: 30, invitesPerDayFree: 5, invitesPerRun: [3, 4], inviteDelaySeconds: [30, 60],
       runGapMinutes: [30, 60], followUpsPerRun: [3, 6], profileLookupsPerRun: [4, 8], searchLeadsPerDay: 400,
     });
-    expect(defaultValues("whatsapp")).toEqual({ warmupHours: 24, newChatsPerDay: 25, secondsBetweenSends: 10 });
-    expect(defaultValues("instagram")).toEqual({ newChatsPerDay: 10, sendGapMinutes: [5, 10] });
+    expect(defaultValues("whatsapp")).toEqual({ warmupHours: 24, newChatsPerDay: 25, secondsBetweenSends: 30 });
+    expect(defaultValues("instagram")).toEqual({ newChatsPerDay: 10, secondsBetweenSends: 30 });
   });
 });
 
@@ -45,12 +45,12 @@ describe("sending is always on: no channel has sending hours", () => {
         expect(result.ok ? "" : result.error).toContain("always on");
       }
     }
-    expect(RETIRED_RULE_KEYS).toEqual({ email: ["sendingHours"], linkedin: ["workingHours"], whatsapp: ["sendingHours"], instagram: ["sendingHours"], general: [] });
+    expect(RETIRED_RULE_KEYS).toEqual({ email: ["sendingHours", "sendGapMinutes"], linkedin: ["workingHours"], whatsapp: ["sendingHours"], instagram: ["sendingHours", "sendGapMinutes"], general: [] });
   });
 
   test("stored hours are ignored when read and dropped by the next save", () => {
-    expect(resolveValues("email", { sendingHours: hours, dailySendLimit: 40 })).toEqual({ dailySendLimit: 40, sendGapMinutes: [18, 24] });
-    expect(mergeStoredRules("email", { sendingHours: hours, dailySendLimit: 40 }, { sendGapMinutes: [20, 30] })).toEqual({ dailySendLimit: 40, sendGapMinutes: [20, 30] });
+    expect(resolveValues("email", { sendingHours: hours, dailySendLimit: 40 })).toEqual({ dailySendLimit: 40, secondsBetweenSends: 30 });
+    expect(mergeStoredRules("email", { sendingHours: hours, dailySendLimit: 40 }, { secondsBetweenSends: 60 })).toEqual({ dailySendLimit: 40, secondsBetweenSends: 60 });
     expect(mergeStoredRules("linkedin", { workingHours: hours }, {})).toEqual({});
     // A key this version does not know (a later release's) is kept, so a rolling deploy cannot erase it.
     expect(mergeStoredRules("whatsapp", { sendingHours: hours, fromTheFuture: 1 }, {})).toEqual({ fromTheFuture: 1 });
@@ -59,7 +59,7 @@ describe("sending is always on: no channel has sending hours", () => {
 
 describe("validation", () => {
   const limit = CHANNEL_RULES.linkedin.find((r) => r.key === "invitesPerDayPremium")!;
-  const gap = CHANNEL_RULES.email.find((r) => r.key === "sendGapMinutes")!;
+  const gap = CHANNEL_RULES.linkedin.find((r) => r.key === "inviteDelaySeconds")!;
   const country = CHANNEL_RULES.general.find((rule) => rule.key === "defaultPhoneCountry")!;
 
   test("hard ceilings refuse a typo", () => {
@@ -78,7 +78,7 @@ describe("validation", () => {
     expect(ruleWarning(limit, 30)).toBeNull();
     expect(ruleWarning(limit, 45)).toContain("LinkedIn restricts");
     expect(ruleError(limit, 45)).toBeNull();
-    expect(ruleWarning(gap, [5, 8])).toContain("10 minutes");
+    expect(ruleWarning(gap, [5, 8])).toContain("20 seconds");
   });
   test("country: empty or two capital letters", () => {
     expect(ruleError(country, "")).toBeNull();
@@ -89,17 +89,32 @@ describe("validation", () => {
   test("validateValues refuses unknown keys and returns clean values", () => {
     expect(validateValues("email", { nope: 1 })).toEqual({ ok: false, error: "Unknown setting: nope" });
     expect(validateValues("email", { dailySendLimit: 500 }).ok).toBe(false);
-    expect(validateValues("email", { dailySendLimit: 40, sendGapMinutes: [20, 30] })).toEqual({ ok: true, values: { dailySendLimit: 40, sendGapMinutes: [20, 30] } });
+    expect(validateValues("email", { dailySendLimit: 40, secondsBetweenSends: 30 })).toEqual({ ok: true, values: { dailySendLimit: 40, secondsBetweenSends: 30 } });
   });
 });
 
 describe("resolveValues", () => {
   test("stored values override defaults; invalid or unknown ones fall back", () => {
     const resolved = resolveValues("whatsapp", { newChatsPerDay: 40, secondsBetweenSends: 1, legacy: true });
-    expect(resolved).toEqual({ warmupHours: 24, newChatsPerDay: 40, secondsBetweenSends: 10 });
+    expect(resolved).toEqual({ warmupHours: 24, newChatsPerDay: 40, secondsBetweenSends: 30 });
   });
   test("nothing stored means today's defaults", () => {
     expect(resolveValues("email", null)).toEqual(defaultValues("email"));
+  });
+});
+
+describe("30-second sender pacing", () => {
+  test("all three channels use seconds and ignore old minute-based settings", () => {
+    for (const channel of ["email", "whatsapp", "instagram"] as const) {
+      expect(defaultValues(channel).secondsBetweenSends).toBe(30);
+      expect(validateValues(channel, { secondsBetweenSends: 30 }).ok).toBe(true);
+      expect(validateValues(channel, { secondsBetweenSends: 0 }).ok).toBe(false);
+    }
+    for (const channel of ["email", "instagram"] as const) {
+      expect(resolveValues(channel, { sendGapMinutes: [18, 24] }).secondsBetweenSends).toBe(30);
+      expect(validateValues(channel, { sendGapMinutes: [18, 24] }).ok).toBe(false);
+      expect(mergeStoredRules(channel, { sendGapMinutes: [18, 24] }, {})).toEqual({});
+    }
   });
 });
 

@@ -133,7 +133,7 @@ await runInOrganization(a.org.id, async () => {
   check("an HN item is read through the API, not the page", hn.ok && /via the Hacker News API/.test(hn.summary) && hnCalls.every((call) => call.host === "hacker-news.firebaseio.com"), hn.summary.slice(0, 160));
   check("the item and its top-level comments are one request each", hnCalls.length === 4 && hnCalls[0]!.path === "/v0/item/9001.json", hnCalls.map((call) => call.path).join(" "));
   check("authors, times and each comment's own link are given", /ops_person \(a pseudonymous username\)/.test(hn.summary) && /\[1\] pg_fan, \d{4}-\d{2}-\d{2} — https:\/\/news\.ycombinator\.com\/item\?id=9002/.test(hn.summary) && !/9004/.test(hn.summary.split("Text:")[1] ?? ""));
-  check("it is evidence of a stated need, and its authors are not leads", /not buying intent/.test(hn.summary) && /not leads to contact/.test(hn.summary));
+  check("it is evidence of what people say, and its authors are not leads", /evidence of what people say they need/.test(hn.summary) && /not leads unless their own page publishes a contact/.test(hn.summary));
   check("no contacts are offered from a discussion, even an email in a comment", /Contacts on the page: none\./.test(hn.summary) && (hn.data?.contacts as unknown[]).length === 0);
   const evidence = hn.data?.evidence as { url: string; author: string | null; shows: string }[] | undefined;
   check("the evidence lists the item and readable comments by URL", evidence?.length === 3 && evidence[0]!.url === "https://news.ycombinator.com/item?id=9001" && evidence.every((entry) => entry.shows === "a stated need or opinion"), JSON.stringify(evidence?.map((entry) => entry.url)));
@@ -159,7 +159,7 @@ await runInOrganization(a.org.id, async () => {
   check("an SE question is read through the API", se.ok && /via the Stack Exchange API/.test(se.summary) && hostCalls("api.stackexchange.com") === seBefore + 1, se.summary.slice(0, 160));
   const sePath = calls.filter((call) => call.host === "api.stackexchange.com").at(-1)!.path;
   check("it asks for the question with its body on the right site, with no key", sePath === "/2.3/questions/5001?site=stackoverflow.com&filter=withbody", sePath);
-  check("title, asker, tags and the stated-problem rule are given", /How do I automate "invoice" reminders\?/.test(se.summary) && /Dana K \(a pseudonymous display name\)/.test(se.summary) && /tags: automation, email/.test(se.summary) && /stated problem, not buying intent/.test(se.summary));
+  check("title, asker, tags and the stated-problem rule are given", /How do I automate "invoice" reminders\?/.test(se.summary) && /Dana K \(a pseudonymous display name\)/.test(se.summary) && /tags: automation, email/.test(se.summary) && /evidence of a stated problem/.test(se.summary));
   const seEvidence = se.data?.evidence as { url: string; shows: string }[] | undefined;
   check("the question is the evidence", seEvidence?.length === 1 && seEvidence[0]!.url === "https://stackoverflow.com/questions/5001/how-do-i-automate" && seEvidence[0]!.shows === "a stated problem");
   const again = await runTool("read_webpage", { url: "https://stackoverflow.com/q/5001" }, context);
@@ -197,7 +197,7 @@ await runInOrganization(a.org.id, async () => {
   // ------------------------------------------------------------ Reddit
   const beforeReddit = calls.length;
   const reddits = await Promise.all(["https://www.reddit.com/r/smallbusiness/comments/abc/invoicing/", "old.reddit.com/r/sales", "https://redd.it/abc123", "https://reddit.com/user/someone"].map((url) => runTool("read_webpage", { url }, context)));
-  check("Reddit addresses are refused, with the approval not recorded", reddits.every((result) => !result.ok && result.summary === "Reddit is unavailable to research: its API needs Reddit's approval for this use, and that approval is not recorded (Settings → Lead research → Research sources). Nothing was read from Reddit."), reddits[0]!.summary);
+  check("Reddit addresses are refused, with the approval not recorded", reddits.every((result) => !result.ok && result.summary === "read_webpage does not read Reddit (its API needs Reddit's approval for this use, not recorded in Settings → Lead research → Research sources). Reddit posts and comments are searched with research_social_sources (Bright Data) when the owner turned Reddit research on. Nothing was read from Reddit."), reddits[0]!.summary);
   check("nothing was fetched for Reddit, TinyFish included", calls.length === beforeReddit);
 
   const view = await settings.saveResearchSources({ redditApproved: true, redditApprovalNote: "Approved by Reddit's data team, ticket 123", redditClientId: "abcDEF123wxyz" }, a.owner.id);
@@ -205,7 +205,7 @@ await runInOrganization(a.org.id, async () => {
   const [stored] = await db.select().from(researchSettings).where(eq(researchSettings.organizationId, a.org.id));
   check("the full client id is never stored", !JSON.stringify(stored).includes("abcDEF123wxyz"));
   const afterApproval = await runTool("read_webpage", { url: "https://www.reddit.com/r/smallbusiness/" }, context);
-  check("recording approval does not enable reading Reddit", !afterApproval.ok && afterApproval.summary === "Reddit is unavailable to research: approval recorded; a Reddit reader is not built yet. Nothing was read from Reddit." && calls.length === beforeReddit, afterApproval.summary);
+  check("recording approval does not enable reading Reddit", !afterApproval.ok && afterApproval.summary === "read_webpage does not read Reddit (approval recorded; a Reddit reader is not built yet). Reddit posts and comments are searched with research_social_sources (Bright Data) when the owner turned Reddit research on. Nothing was read from Reddit." && calls.length === beforeReddit, afterApproval.summary);
   const tooLong = await caught(settings.saveResearchSources({ redditApprovalNote: "x".repeat(501) }, a.owner.id));
   check("a note over 500 characters is refused", tooLong instanceof settings.ResearchSourcesSettingsError);
   const kept = await settings.saveResearchSources({ redditApprovalNote: "still approved" }, a.owner.id);
@@ -233,7 +233,7 @@ await runInOrganization(b.org.id, async () => {
   const thread = await createThread(b.owner.id);
   const before = calls.length;
   const refused = await runTool("read_webpage", { url: "https://www.reddit.com/r/sales/" }, { threadId: thread.id, userId: b.owner.id, ownerText: "x" });
-  check("for B, Reddit's approval is not recorded", !refused.ok && /that approval is not recorded/.test(refused.summary) && calls.length === before);
+  check("for B, Reddit's approval is not recorded", !refused.ok && /not recorded in Settings/.test(refused.summary) && calls.length === before);
 
   // B has no TinyFish, so read_webpage reads directly and follows the redirect itself. The direct
   // reader fetches through fetch (intercepted here) when a proxy is configured; make sure it is.
@@ -245,7 +245,7 @@ await runInOrganization(b.org.id, async () => {
     const followed = calls.slice(before).some((call) => call.host === "example.com");
     const contacted = calls.slice(before).filter((call) => call.host === "www.reddit.com" || call.host === "www.linkedin.com").map((call) => call.host);
     check("the direct reader stops at a redirect to Reddit or a login wall: neither host is asked for anything", followed && contacted.length === 0, contacted.join(", "));
-    check("a link read directly that redirects to Reddit is refused, its page unused", followed && !directReddit.ok && /www\.reddit\.com/.test(directReddit.summary) && /that approval is not recorded/.test(directReddit.summary) && !/Thread text|ops@acme-agency/.test(directReddit.summary), directReddit.summary.slice(0, 200));
+    check("a link read directly that redirects to Reddit is refused, its page unused", followed && !directReddit.ok && /www\.reddit\.com/.test(directReddit.summary) && /not recorded in Settings/.test(directReddit.summary) && !/Thread text|ops@acme-agency/.test(directReddit.summary), directReddit.summary.slice(0, 200));
     check("a link read directly that redirects to a login wall is refused, its page unused", !directWalled.ok && /www\.linkedin\.com needs a login|leads to www\.linkedin\.com/.test(directWalled.summary) && !/Thread text|ops@acme-agency/.test(directWalled.summary), directWalled.summary.slice(0, 200));
   } finally {
     if (proxy === undefined) delete process.env.HTTPS_PROXY;

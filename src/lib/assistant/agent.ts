@@ -9,7 +9,7 @@ import type { AssistantRole, BusinessProfile } from "./schema";
  */
 
 export const MAX_STEPS = 6;
-export const MAX_ACTIONS_PER_STEP = 8;
+export const MAX_ACTIONS_PER_STEP = 12;
 // Some providers ignore the schema's batch size. Validate a bounded plan in
 // full, then stage it across steps instead of rejecting otherwise valid work.
 export const MAX_ACTIONS_PER_REPLY = 32;

@@ -532,6 +532,22 @@ spend cap (above the default only when the owner wrote the amount) and its
 reservations, no double sends, tenancy, and claims checked against the
 record.
 
+Every tool is the model's to use as it judges ("Tools loosened" in
+`docs/plans/RESEARCH_AGENT_V2.md`): a place is optional for Apify's social
+searches (its own hashtags too) and for `find_customers_on_web` (which takes
+its own `queries`); `find_leads` with provider `apify` takes a region or a
+country; the web tools and the browser find leads, not only check them
+(`add_contacts` takes up to 200 a page published); one browser per chat,
+within the owner's daily minutes. A turn has 24 steps (40 in Autonomous
+mode) of up to 12 actions. What bounds the tools is money (the owner's
+budgets and results per run, the request's spend guard), real provider
+limits (an Apify account full is a wait; TinyFish's allowance), people
+(Do Not Contact, the Hacker News, Stack Exchange and Reddit rules, private
+Instagram accounts, the owner's Actor approvals) and the truth (grounded
+contacts, claims checked). Tool text says what a tool does and cannot do;
+do not add steering back ("only to check", "a last resort", "for a
+handful").
+
 Judge changes with the eval, not one transcript:
 `scripts/eval/research-agent/` runs a case end to end on a local
 `agentsdr_eval…` database with fake providers and a real model, and
@@ -567,6 +583,20 @@ the balance, so the monthly limit is AgentSDR's own count and every figure
 says "estimated". Nothing tops up or changes a plan. Findings keep their link, quote, author and read time;
 someone is contactable only through what their own profile, page or
 website publishes — AgentSDR never messages anyone on Reddit, X or Facebook.
+
+The model chooses what to research (`normalizeSocialCriteria`, the pure
+`socialResearch.ts`): `platforms` left out is every platform (Reddit still
+skips itself while the switch is off), a need or keywords stand without
+`customers`, and `urls` (up to 50) are the profiles, pages and posts it
+found itself, read through `datasetForUrl` (a link it cannot read is named
+in the result, never sent: a failed input is billed). `maxResults` defaults
+to the organization's records per search, which stays the most a job
+collects (its CHECK holds 300). Authors' profiles are read in order within
+the records, with no phrase list deciding whose; a search for the customers
+themselves holds nothing back for authors and reads their profiles and
+pages first. Waiting for one of the organization's open-collection slots
+is a queue: only Bright Data's own refusals count toward
+`collectionTimeoutMinutes` (45).
 
 ## WhatsApp messaging (Unipile)
 

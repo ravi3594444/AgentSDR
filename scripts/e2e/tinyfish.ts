@@ -45,6 +45,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (key === BAD_KEY) return json(401, { error: { code: "INVALID_API_KEY" } });
   if (url.hostname === "search.tf.test") return nextSearch();
   if (url.hostname === "fetch.tf.test") return nextFetch((body as { urls: string[] }).urls);
+  if (url.hostname === "tavily.tf.test") return json(200, { results: [{ url: "https://tavily-result.example/agents", title: "Agents (Tavily)", content: "Real estate agents" }] });
   return json(404, {});
 }) as typeof fetch;
 
@@ -209,7 +210,7 @@ await runInOrganization(b.org.id, async () => {
     check("web_search returns candidates through TinyFish", search.ok && /TinyFish Search/.test(search.summary) && search.summary.includes("https://example.com/agents"), search.summary.slice(0, 120));
     const sentCountry = calls.filter((call) => call.host === "search.tf.test").length > 0;
     check("the search was made on the stand-in with the key", sentCountry && calls.at(-1)!.key === KEY);
-    const refusedArgs = await runTool("web_search", { query: "x y", page: 9 }, context);
+    const refusedArgs = await runTool("web_search", { query: "x y", page: 11 }, context);
     check("bad arguments are refused for the model", !refusedArgs.ok && refusedArgs.refused === true);
 
     const corpus1 = `OWNER: find real estate agents in Pune\n${search.summary}`;
@@ -217,7 +218,7 @@ await runInOrganization(b.org.id, async () => {
     const read = await runTool("read_webpage", { url: "https://example.com/agents" }, context);
     check("read_webpage reads the result through TinyFish", read.ok && /via TinyFish/.test(read.summary), read.summary.slice(0, 160));
     check("it finds the page's contacts, including mailto and tel links", /email sales@punehomes\.in/.test(read.summary) && /email raj@punehomes\.in/.test(read.summary) && /phone \+91/.test(read.summary), read.summary.slice(0, 300));
-    check("it lists the page's links, without login-walled ones", read.summary.includes("https://www.iana.org/agents/raj") && !read.summary.includes("instagram.com/someone"));
+    check("it lists the page's links, its social profiles too (the social tools read those)", read.summary.includes("https://www.iana.org/agents/raj") && read.summary.includes("instagram.com/someone"));
     const corpus2 = `${corpus1}\n${read.summary}`;
     check("a link on a page read may be followed next", urlGiven("https://www.iana.org/agents/raj", corpus2));
 
@@ -277,6 +278,24 @@ await runInOrganization(b.org.id, async () => {
     check("…and with only Tavily left, it refuses rather than spend Tavily credits", !paidSearch.ok && /limited to free sources/.test(paidSearch.summary) && /Tavily/.test(paidSearch.summary) && calls.length === sentBefore, paidSearch.summary);
     await db.delete(tavilySettings).where(eq(tavilySettings.organizationId, a.org.id));
     await tf.saveTinyfishSettings({ useForWebSearch: true }, a.owner.id);
+
+    // A short TinyFish wait (a per-minute limit) is sat out; a long one goes to Tavily when it is saved and the request may pay.
+    const { setTavilyApiBase } = await import("@/services/tavily");
+    await setState("search", { blockedUntil: new Date(Date.now() + 1_500), blockedReason: "a per-minute limit" });
+    const shortWait = await runTool("web_search", { query: "real estate agents Pune" }, context);
+    check("web_search waits out a short TinyFish wait, then searches TinyFish", shortWait.ok && /TinyFish Search/.test(shortWait.summary), shortWait.summary.slice(0, 120));
+    await setState("search", { blockedUntil: new Date(Date.now() + 6 * 3_600_000), blockedReason: "the free daily allowance is used up" });
+    const noTavily = await runTool("web_search", { query: "real estate agents Pune" }, context);
+    check("a long wait with no Tavily key: it says the search waits", !noTavily.ok && /Web search is waiting/.test(noTavily.summary) && noTavily.data?.waiting === true, noTavily.summary);
+    setTavilyApiBase("https://tavily.tf.test");
+    await db.insert(tavilySettings).values({ organizationId: a.org.id, encryptedKey: encryptIntegrationCredential(`tvly-fallback-check-${stamp}`), keyHint: "…heck", dailySearches: 10 });
+    const fallback = await runTool("web_search", { query: "real estate agents Pune" }, context);
+    check("a long TinyFish wait goes to Tavily when a key is saved and the request may pay", fallback.ok && /Tavily/.test(fallback.summary) && fallback.summary.includes("https://tavily-result.example/agents"), fallback.summary.slice(0, 160));
+    const freeWait = await runTool("web_search", { query: "real estate agents Pune" }, freeContext);
+    check("…never for a free-only request: it waits for TinyFish", !freeWait.ok && /Web search is waiting/.test(freeWait.summary), freeWait.summary);
+    await db.delete(tavilySettings).where(eq(tavilySettings.organizationId, a.org.id));
+    setTavilyApiBase(null);
+    await setState("search", { blockedUntil: null, blockedReason: null });
     coverageRequestId = request.id;
   });
   const seenByB = await runInOrganization(b.org.id, () => requestCoverageFor(coverageRequestId));

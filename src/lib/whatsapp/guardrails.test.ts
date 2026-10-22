@@ -4,7 +4,7 @@ import { defaultValues } from "@/lib/channels/rules";
 
 const NOW = new Date("2026-09-30T10:00:00.000Z");
 const HOUR = 60 * 60 * 1000;
-const DEFAULTS = { warmUpHours: 24, newChatsPerDay: 25, minSecondsBetweenSends: 10 };
+const DEFAULTS = { warmUpHours: 24, newChatsPerDay: 25, minSecondsBetweenSends: 30 };
 
 describe("whatsappGuardrails", () => {
   const RULES = defaultValues("whatsapp");

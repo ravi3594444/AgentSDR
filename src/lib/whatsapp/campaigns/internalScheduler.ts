@@ -7,7 +7,7 @@
  */
 import { runWhatsappCampaignTick } from "./engine";
 
-const TICK_INTERVAL_MS = Number(process.env.WHATSAPP_CAMPAIGN_TICK_INTERVAL_MS ?? 30_000);
+const TICK_INTERVAL_MS = Number(process.env.WHATSAPP_CAMPAIGN_TICK_INTERVAL_MS ?? 10_000);
 
 let started = false;
 let tickRunning = false;
@@ -36,7 +36,7 @@ async function safeTick() {
 export function startInternalWhatsappCampaignScheduler() {
   if (started) return;
   started = true;
-  const interval = Number.isFinite(TICK_INTERVAL_MS) && TICK_INTERVAL_MS >= 1000 ? TICK_INTERVAL_MS : 30_000;
+  const interval = Number.isFinite(TICK_INTERVAL_MS) && TICK_INTERVAL_MS >= 1000 ? TICK_INTERVAL_MS : 10_000;
   console.log(`[whatsapp/campaigns/internalScheduler] starting — tick every ${interval}ms`);
   setInterval(safeTick, interval);
   setTimeout(safeTick, 7_000);

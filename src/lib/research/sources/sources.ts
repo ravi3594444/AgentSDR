@@ -17,17 +17,17 @@ export function researchSourceOf(url: string | URL): ResearchSourceRef | null {
 }
 
 /**
- * For a page on Hacker News or a Stack Exchange site: what it is evidence
- * of, and that its authors are pseudonymous and not leads. Null elsewhere.
- * Such a page's contacts are not offered as leads either.
+ * For a page on Hacker News or a Stack Exchange site: what it holds, and
+ * that its authors are pseudonymous and not leads. Null elsewhere. Such a
+ * page's contacts are not offered as leads either.
  */
 export function discussionNote(hostname: string): string | null {
   if (isHackerNewsHost(hostname)) {
-    return "Evidence: what is written on Hacker News shows a stated need or opinion, not buying intent. Its authors are pseudonymous usernames: not leads to contact, and never to be matched to people or accounts elsewhere.";
+    return "Hacker News: posts and comments with their authors' usernames and dates, evidence of what people say they need or think. Its authors are pseudonymous: not leads unless their own page publishes a contact, and a username is never matched to people or accounts elsewhere.";
   }
   const site = stackExchangeSite(hostname);
   if (site) {
-    return `Evidence: a question on ${site} shows a stated problem, not buying intent. The asker and answerers are pseudonymous ${site} users: not leads to contact, and never to be matched to people or accounts elsewhere.`;
+    return `${site}: the question and answers with their authors and dates, evidence of a stated problem. The asker and answerers are pseudonymous ${site} users: not leads unless their own page publishes a contact, and a username is never matched to people or accounts elsewhere.`;
   }
   return null;
 }

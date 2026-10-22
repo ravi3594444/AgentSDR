@@ -7,7 +7,7 @@
  * per-instance or add a DB-based "only one instance runs this" claim.
  *
  * Started once from instrumentation.ts at process boot. This is only the send
- * tick (every TICK_INTERVAL_MS, default 1 min), with its repair (due work
+ * tick (every TICK_INTERVAL_MS, default 10 seconds), with its repair (due work
  * missing from the queue topped up every few minutes). The daily queue rebuild is
  * each organization's daily rollover in src/lib/scheduler/ — at a fixed
  * wall-clock time claimed in scheduled_job_runs, not an "every 24h since
@@ -19,7 +19,7 @@
  */
 import { runSchedulerTick } from "./scheduler";
 
-const TICK_INTERVAL_MS = Number(process.env.OUTREACH_TICK_INTERVAL_MS ?? 60_000);
+const TICK_INTERVAL_MS = Number(process.env.OUTREACH_TICK_INTERVAL_MS ?? 10_000);
 
 let started = false;
 let tickRunning = false;
@@ -35,7 +35,7 @@ async function safeTick() {
     // With its repair: due work missing from the queue is topped up every few minutes.
     const result = await runSchedulerTick({ repair: "auto" });
     tickCount += 1;
-    // One-line heartbeat every 10 ticks (~10 min at the default interval)
+    // One-line heartbeat every 10 ticks (~100 seconds at the default interval)
     // instead of every tick, so logs stay readable but liveness is still visible.
     if (tickCount % 10 === 0 || result.sent > 0 || result.failed > 0) {
       console.log(`[outreach/internalScheduler] tick #${tickCount}:`, result);

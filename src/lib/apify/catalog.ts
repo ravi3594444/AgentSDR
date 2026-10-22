@@ -90,10 +90,10 @@ export const APIFY_LIMITS = {
   monthlyBudgetUsd: { default: 10, min: 0, max: 1_000 },
   maxChargePerRunUsd: { default: 2, min: 0.1, max: 50 },
   maxResultsPerRun: { default: 100, min: 5, max: 500 },
-  /** Runs one organization may have open at once. */
-  openRuns: 2,
-  /** How long one run may take before AgentSDR stops waiting and reads what it has. */
-  runTimeoutSeconds: 600,
+  /** Runs one organization may have open at once (Apify's own plan limits refuse beyond its memory; that refusal is a wait, see apifyRefusalIsBusy). */
+  openRuns: 4,
+  /** How long one run may take before AgentSDR stops waiting and reads what it has; its spend stays capped by maxTotalChargeUsd and maxItems. */
+  runTimeoutSeconds: 1_800,
   memoryMbytes: 1024,
 } as const;
 

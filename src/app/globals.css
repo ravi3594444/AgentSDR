@@ -32,6 +32,68 @@
   }
 }
 
+/* The assistant's mascot (src/components/assistant/Mascot.tsx) and the
+   research card: motion marks work that is running and stops with it; a
+   finished search gets one hop. Nothing moves under reduced motion. */
+@keyframes mascot-scan {
+  0%, 100% { transform: translateX(-1.8px); }
+  50% { transform: translateX(1.8px); }
+}
+@keyframes mascot-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-1.4px); }
+}
+@keyframes mascot-blink {
+  0%, 93%, 100% { transform: scaleY(0); }
+  96% { transform: scaleY(1); }
+}
+@keyframes mascot-hop {
+  0%, 100% { transform: translateY(0); }
+  30% { transform: translateY(-5px) rotate(-4deg); }
+  55% { transform: translateY(0) rotate(0); }
+  75% { transform: translateY(-1.5px); }
+}
+@keyframes research-sweep {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(300%); }
+}
+@keyframes research-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.mascot .mascot-body,
+.mascot .mascot-pupils,
+.mascot .mascot-lids ellipse {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.mascot .mascot-lids ellipse {
+  transform-origin: center top;
+  transform: scaleY(0);
+}
+.mascot[data-mood="searching"] .mascot-pupils { animation: mascot-scan 1.6s ease-in-out infinite; }
+.mascot[data-mood="searching"] .mascot-body,
+.mascot[data-mood="thinking"] .mascot-body { animation: mascot-bob 1.8s ease-in-out infinite; }
+.mascot[data-mood="searching"] .mascot-lids ellipse,
+.mascot[data-mood="thinking"] .mascot-lids ellipse { animation: mascot-blink 4.2s ease-in-out infinite; }
+.mascot[data-mood="thinking"] .mascot-pupils { transform: translate(1.4px, -1.8px); }
+.mascot[data-mood="stuck"] .mascot-pupils { transform: translateY(2px); }
+.mascot[data-mood="done"] .mascot-body { animation: mascot-hop 720ms cubic-bezier(.22, 1, .36, 1) 1; }
+
+.research-sweep { animation: research-sweep 1.4s cubic-bezier(.4, 0, .2, 1) infinite; }
+.research-in { animation: research-in 320ms cubic-bezier(.22, 1, .36, 1) both; }
+.research-bar { transition: width 600ms cubic-bezier(.22, 1, .36, 1); }
+
+@media (prefers-reduced-motion: reduce) {
+  .mascot *,
+  .research-sweep,
+  .research-in {
+    animation: none !important;
+  }
+  .research-bar { transition: none; }
+}
+
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {

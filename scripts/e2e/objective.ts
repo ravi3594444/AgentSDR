@@ -654,7 +654,8 @@ await runInOrganization(a.org.id, async () => {
   // ---------------------------------------------------------- 5. full Apify slots: a wait, not a failure
   {
     const thread = await createThread(a.owner.id);
-    const others = await db.insert(apifyRuns).values([1, 2].map(() => ({ organizationId: a.org.id, jobId: null, requestId: null, actorKey: "facebook_pages" as const, actorId: "apify~facebook-search-scraper", status: "running" as const, maxChargeUsd: 0.1, maxItems: 1 }))).returning({ id: apifyRuns.id });
+    const { APIFY_LIMITS } = await import("@/lib/apify/catalog");
+    const others = await db.insert(apifyRuns).values(Array.from({ length: APIFY_LIMITS.openRuns }, () => ({ organizationId: a.org.id, jobId: null, requestId: null, actorKey: "facebook_pages" as const, actorId: "apify~facebook-search-scraper", status: "running" as const, maxChargeUsd: 0.1, maxItems: 1 }))).returning({ id: apifyRuns.id });
     apify.items = [1, 2, 3].map((n) => ({ title: `Glow Salon ${n}`, pageUrl: `https://www.facebook.com/glowsalon${n}-${stamp}`, email: `hello@glowsalon${n}-${stamp}.test` }));
     apify.usage = 0.2;
     const requestId = await ask(thread.id, "find 3 salons in Pune on Facebook", turn("", [{ tool: "find_social_leads", args: { platform: "facebook", what: "salons", where: "Pune" } }]));
@@ -663,7 +664,7 @@ await runInOrganization(a.org.id, async () => {
     const waiting = await step(search!.id);
     const driver = await step((await driverOf(objective.id)).id);
     const view = await objectives.objectiveView(requestId);
-    check("both Apify slots busy: the search waits for one", waiting.status === "queued" && (waiting.progress as { waiting?: { kind?: string } }).waiting?.kind === "slot", JSON.stringify(waiting.progress));
+    check("every Apify slot busy: the search waits for one", waiting.status === "queued" && (waiting.progress as { waiting?: { kind?: string } }).waiting?.kind === "slot", JSON.stringify(waiting.progress));
     check("…and the request waits with it: active, not failed, no continuation", driver.status === "queued" && view?.status === "active" && view.continuations === 0 && /search/.test(view.waiting ?? ""), JSON.stringify({ status: view?.status, waiting: view?.waiting }));
     await db.update(apifyRuns).set({ status: "succeeded", usageUsd: 0.1, finishedAt: new Date() }).where(inArray(apifyRuns.id, others.map((row) => row.id)));
     await finishSearches(requestId);

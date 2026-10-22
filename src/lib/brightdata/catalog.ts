@@ -95,7 +95,7 @@ export const BRIGHTDATA_LIMITS = {
   /** Times one collection is sent after Bright Data refused it outright (a rate limit); a lost answer is never sent again. */
   triggerRetries: 3,
   /** How long AgentSDR waits for a collection before it stops waiting and keeps what it has. */
-  collectionTimeoutMinutes: 20,
+  collectionTimeoutMinutes: 45,
   /** A settled collection with the same inputs is downloaded again (free) rather than paid for, within this many days (Bright Data keeps snapshots 30). */
   reuseDays: 7,
 } as const;

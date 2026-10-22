@@ -123,13 +123,13 @@ describe("nextAgentBatch", () => {
   });
 
   test("a read in a later batch still stops speculative following actions", () => {
-    const reply = plan(10);
-    reply.actions[8] = { tool: "read_webpage", args: { url: "https://agency.example" } };
+    const reply = plan(MAX_ACTIONS_PER_STEP + 2);
+    reply.actions[MAX_ACTIONS_PER_STEP] = { tool: "read_webpage", args: { url: "https://agency.example" } };
     const first = nextAgentBatch(reply);
-    expect(first.batch.actions).toHaveLength(8);
+    expect(first.batch.actions).toHaveLength(MAX_ACTIONS_PER_STEP);
     expect(first.pending).not.toBeNull();
     const second = nextAgentBatch(first.pending!);
-    expect(second.batch.actions).toEqual([reply.actions[8]!]);
+    expect(second.batch.actions).toEqual([reply.actions[MAX_ACTIONS_PER_STEP]!]);
     expect(second.pending).toBeNull();
     expect(second.replanAfterRead).toBe(true);
   });
@@ -143,7 +143,7 @@ describe("nextAgentBatch", () => {
   });
 
   test("queued batches are checked again against current business information", () => {
-    const reply = plan(8);
+    const reply = plan(MAX_ACTIONS_PER_STEP);
     reply.actions.push({ tool: "save_business_info", args: { senderName: "Amit Sharma" } });
     const queued = nextAgentBatch(reply).pending!;
     const batch = nextAgentBatch(queued).batch;

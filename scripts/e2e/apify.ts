@@ -216,7 +216,7 @@ await runInOrganization(orgA!.id, async () => {
   // ---------------------------------------------------------- a full Apify run (asked for)
   apify.next.set("compass~crawler-google-places", [{ pollsUntilDone: 2, finalStatus: "SUCCEEDED", items: mapsItems, usage: 0.42 }]);
   const started = await startDiscovery(criteria(), context, { contactAfter: contactAfter("req-apify"), provider: "apify" });
-  check("asked for Apify, set up, approved, allowance left: the search runs on Apify and says why", started.provider === "apify" && /owner asked for Apify/.test(started.note ?? ""), `${started.provider} ${started.note}`);
+  check("asked for Apify, set up, approved, allowance left: the search runs on Apify and says why", started.provider === "apify" && /provider 'apify' was chosen for this search/.test(started.note ?? ""), `${started.provider} ${started.note}`);
   let job = await step(started.jobId);
   const opened = (payloadOf(job).apify ?? null) as { runRowId: string } | null;
   const row = opened ? await trackedRun(opened.runRowId) : null;
@@ -482,6 +482,23 @@ await runInOrganization(orgA!.id, async () => {
   const liMembers = await memberInsightsOf(li.audienceId);
   check("a LinkedIn company is contacted by the email its own website publishes, and keeps its LinkedIn page", liJob.status === "succeeded" && Boolean(liMembers[0]?.personId) && JSON.stringify(liMembers[0]?.evidence ?? []).includes("sales@acmerobotics.example") && JSON.stringify(liMembers[0]?.evidence ?? []).includes("linkedin.com/company/acme-robotics"), JSON.stringify(liMembers[0]?.evidence));
 
+  // ---------------------------------------------------------- no place: a keyword search, and hashtags the model chose
+  {
+    const { runTool } = await import("@/lib/assistant/tools.server");
+    const { createThread } = await import("@/lib/assistant/threads.server");
+    const chat = await createThread(null);
+    const toolContext = { threadId: chat.id, userId: null, ownerText: "find vegan bakeries anywhere", v2: true };
+    apify.next.set("apify~facebook-search-scraper", [{ pollsUntilDone: 1, finalStatus: "SUCCEEDED", usage: 0.01, items: [] }]);
+    const keywordOnly = await runTool("find_social_leads", { platform: "facebook", what: "vegan bakeries" }, toolContext);
+    check("find_social_leads with no place is not refused: it searches by keyword alone", keywordOnly.ok && /no place: by keyword alone/.test(keywordOnly.summary), keywordOnly.summary);
+    await runToEnd(String(keywordOnly.data?.jobId ?? ""));
+    const keywordRun = [...apify.runs.values()].filter((entry) => entry.actorId === "apify~facebook-search-scraper").at(-1);
+    check("…Facebook's Actor gets the keyword, no location, and the pages search", JSON.stringify(keywordRun?.input.categories) === "[\"vegan bakeries\"]" && JSON.stringify(keywordRun?.input.locations) === "[]" && keywordRun?.input.searchType === "pages", JSON.stringify(keywordRun?.input));
+    const tags = await runTool("find_instagram_prospects", { what: "home bakers", hashtags: ["#cakesofinstagram", "customcakes", "bentocakes", "cupcakeart"] }, toolContext);
+    check("find_instagram_prospects with no place searches the hashtags the model chose, more than three of them", tags.ok && /#cakesofinstagram #customcakes #bentocakes #cupcakeart #homebaker/.test(tags.summary), tags.summary);
+    await db.update(assistantJobs).set({ status: "cancelled" }).where(inArray(assistantJobs.id, [String(keywordOnly.data?.jobId ?? ""), String(tags.data?.jobId ?? "")].filter(Boolean)));
+  }
+
   apify.next.set("apify~instagram-search-scraper", [{ pollsUntilDone: 1, finalStatus: "SUCCEEDED", usage: 0.01, items: [{ username: "glow.salon.la" }, { username: "nails.by.kim" }, { username: "brows.la" }] }]);
   apify.next.set("apify~instagram-profile-scraper", [{
     pollsUntilDone: 1,
@@ -511,12 +528,13 @@ await runInOrganization(orgA!.id, async () => {
   check("…an account found by search is a potential match from Instagram's account search", igSearchMembers.some((member) => /Instagram's account search/.test(member.matchReason ?? "")), igSearchMembers.map((member) => member.matchReason).join(" | "));
 
   // ---------------------------------------------------------- every run slot busy: wait, never hand off
-  const fillers = await db.insert(apifyRuns).values([0, 1].map(() => ({
+  const { APIFY_LIMITS } = await import("@/lib/apify/catalog");
+  const fillers = await db.insert(apifyRuns).values(Array.from({ length: APIFY_LIMITS.openRuns }, () => ({
     organizationId: currentOrganizationId(), jobId: null, requestId: null, actorKey: "google_maps" as const, actorId: "compass~crawler-google-places", status: "running" as const, maxChargeUsd: 0.1, maxItems: 1,
   }))).returning({ id: apifyRuns.id });
   const runsBeforeWait = apify.runs.size;
   const queued = await startInstagramProspects({ what: "home bakers", where: "Nashik", maxResults: 10, language: "en" }, context, { contactAfter: contactAfter("req-wait") });
-  check("two runs open: the Instagram search is queued, not handed to website search", queued.provider === "apify" && queued.waiting === true && /starts as soon as/.test(queued.note ?? ""), `${queued.provider} ${queued.note}`);
+  check(`${APIFY_LIMITS.openRuns} runs open: the Instagram search is queued, not handed to website search`, queued.provider === "apify" && queued.waiting === true && /starts as soon as/.test(queued.note ?? ""), `${queued.provider} ${queued.note}`);
   let waitJob = await step(queued.jobId);
   const waitProgress = waitJob.progress as { waiting?: { kind?: string } };
   check("…its job waits for a slot without calling Apify", waitJob.status === "queued" && waitJob.stage === "queued" && waitProgress.waiting?.kind === "slot" && apify.runs.size === runsBeforeWait, JSON.stringify(waitJob.progress));
@@ -530,6 +548,20 @@ await runInOrganization(orgA!.id, async () => {
   check("…replaying its start after a restart reuses the open run instead of starting another", waitJob.stage === "apify" && apify.runs.size === runsBeforeWait + 1);
   await db.update(assistantJobs).set({ status: "cancelled" }).where(eq(assistantJobs.id, queued.jobId));
   await db.update(apifyRuns).set({ status: "succeeded", usageUsd: 0.02, finishedAt: new Date() }).where(and(inOrg(apifyRuns), eq(apifyRuns.jobId, queued.jobId)));
+
+  // ---------------------------------------------------------- Apify's own plan full (its memory for runs at once): a wait, not exhaustion
+  apify.startError = { status: 402, type: "actor-memory-limit-exceeded", message: "By launching this job you will exceed the memory limit of 8192MB for all your Actor runs and builds (currently used: 8192MB, requested: 1024MB)." };
+  const runsBeforeBusy = apify.runs.size;
+  const busy = await startInstagramProspects({ what: "home bakers", where: "Thane", maxResults: 10, language: "en" }, context, { contactAfter: contactAfter("req-busy") });
+  let busyJob = await step(busy.jobId);
+  const busyProgress = busyJob.progress as { waiting?: { kind?: string; reason?: string } };
+  check("Apify refusing a run for its plan's memory: the search waits for a slot, never called exhausted or handed off", busy.provider === "apify" && busyJob.status === "queued" && busyProgress.waiting?.kind === "slot" && /as many Actors as its plan allows/.test(busyProgress.waiting?.reason ?? "") && apify.runs.size === runsBeforeBusy, JSON.stringify(busyJob.progress));
+  apify.startError = null;
+  apify.next.set("apify~instagram-hashtag-scraper", [{ pollsUntilDone: 3, finalStatus: "SUCCEEDED", usage: 0.02, items: [] }]);
+  busyJob = await step(busy.jobId);
+  check("…and starts once Apify has room", busyJob.stage === "apify" && apify.runs.size === runsBeforeBusy + 1, `${busyJob.stage} ${apify.runs.size - runsBeforeBusy}`);
+  await db.update(assistantJobs).set({ status: "cancelled" }).where(eq(assistantJobs.id, busy.jobId));
+  await db.update(apifyRuns).set({ status: "succeeded", usageUsd: 0.02, finishedAt: new Date() }).where(and(inOrg(apifyRuns), eq(apifyRuns.jobId, busy.jobId)));
 
   // ---------------------------------------------------------- a run left "starting" by a crash
   const [stale] = await db.insert(apifyRuns).values({

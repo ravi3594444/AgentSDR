@@ -31,8 +31,10 @@ export type ApifyAllowance = { ok: true; maxChargeUsd: number } | { ok: false; e
 /**
  * Whether one more run may start, and the most it may spend: the owner's
  * per-run cap, never more than what is left of the owner's monthly budget or
- * of the Apify account's monthly allowance. Fails closed when the allowance
- * cannot be read.
+ * of the Apify account's monthly allowance. When the account's allowance
+ * could not be read (a passing fault), the owner's budget and per-run cap
+ * still bound the run, and Apify enforces the account's own limit itself (a
+ * refusal then comes back as exhaustion).
  */
 export function apifyAllowance(input: ApifyAllowanceInput): ApifyAllowance {
   if (input.openRuns >= APIFY_LIMITS.openRuns) {
@@ -42,8 +44,7 @@ export function apifyAllowance(input: ApifyAllowanceInput): ApifyAllowance {
   if (budgetLeft < 0.05) {
     return { ok: false, exhausted: true, reason: `this month's Apify budget ($${input.monthlyBudgetUsd.toFixed(2)}) is used up` };
   }
-  if (!input.account) return { ok: false, exhausted: false, reason: "the Apify account's allowance could not be read" };
-  const { maxMonthlyUsageUsd, monthlyUsageUsd } = input.account;
+  const { maxMonthlyUsageUsd, monthlyUsageUsd } = input.account ?? { maxMonthlyUsageUsd: null, monthlyUsageUsd: null };
   const accountLeft = maxMonthlyUsageUsd === null || monthlyUsageUsd === null ? null : maxMonthlyUsageUsd - monthlyUsageUsd;
   if (accountLeft !== null && accountLeft < 0.05) {
     return { ok: false, exhausted: true, reason: "the Apify account's monthly usage limit is reached (AgentSDR never tops up or raises it)" };
@@ -52,8 +53,22 @@ export function apifyAllowance(input: ApifyAllowanceInput): ApifyAllowance {
   return { ok: true, maxChargeUsd: Math.floor(maxChargeUsd * 100) / 100 };
 }
 
-/** Whether an Apify error or run status means credits or limits ran out (rather than a fault). */
+/**
+ * Whether Apify refused a run because the account is busy: its plan's memory
+ * for runs at once, or its concurrent runs, are in use. That frees when a
+ * run ends, so the search waits for a slot; it is not out of credit (which
+ * Apify also answers with a 402).
+ */
+export function apifyRefusalIsBusy(input: { httpStatus?: number | null; type?: string | null; message?: string | null }): boolean {
+  const type = (input.type ?? "").toLowerCase();
+  if (/memory-limit|concurrent/.test(type)) return true;
+  if (type && /usage|credit|payment|charge/.test(type)) return false;
+  return /memory limit|concurrent (?:actor )?runs?/i.test(input.message ?? "");
+}
+
+/** Whether an Apify error or run status means credits or limits ran out (rather than a fault, or a busy account). */
 export function looksExhausted(input: { httpStatus?: number | null; type?: string | null; message?: string | null }): boolean {
+  if (apifyRefusalIsBusy(input)) return false;
   if (input.httpStatus === 402) return true;
   const text = `${input.type ?? ""} ${input.message ?? ""}`.toLowerCase();
   return /not-enough-usage|usage-limit|monthly-usage|payment|insufficient|credit|exceeded.*(?:limit|usage)|(?:limit|usage).*exceeded|max(?:imum)? ?total ?charge|platform-feature-disabled/.test(text);
@@ -253,16 +268,34 @@ export function usernamesFromSearchItems(items: readonly unknown[]): string[] {
   return out;
 }
 
+/** Hashtags one Instagram search sends: the model's own first, then those made from the customer type and place. */
+export const MAX_HASHTAGS = 20;
+
 /**
  * Hashtags for a customer type in a place: "dentist" + "Pune" →
- * punedentist, dentistpune, dentist. Letters and digits only, at most 5.
+ * punedentist, dentistpune, dentist (with no place, the kind alone).
+ * Letters and digits only, at most MAX_HASHTAGS.
  */
 export function hashtagsFor(what: string, where: string, extra: readonly string[] = []): string[] {
   const slug = (value: string) => value.toLowerCase().normalize("NFKD").replace(/[^\p{L}\p{N}]+/gu, "");
   const kind = slug(what.replace(/\b(?:clinics?|shops?|stores?|companies|company|businesses|business)\b/gi, "").trim() || what).replace(/s$/, "");
   const place = slug(where.split(",")[0] ?? where);
   const tags = [...extra.map((tag) => slug(tag.replace(/^#/, ""))), place && `${place}${kind}`, place && `${kind}${place}`, kind];
-  return [...new Set(tags.filter((tag): tag is string => Boolean(tag) && tag.length >= 3 && tag.length <= 60))].slice(0, 5);
+  return [...new Set(tags.filter((tag): tag is string => Boolean(tag) && tag.length >= 3 && tag.length <= 60))].slice(0, MAX_HASHTAGS);
+}
+
+/**
+ * apify/facebook-search-scraper's input: pages found by keyword, in a place
+ * when one is given (a city, region or country; none searches by keyword
+ * alone). searchType is pages, the records placesFromFacebookItems reads.
+ */
+export function facebookSearchInput(criteria: { what: string; where: string }, maxItems: number): Record<string, unknown> {
+  return { categories: [criteria.what], locations: criteria.where ? [criteria.where] : [], searchType: "pages", resultsLimit: maxItems };
+}
+
+/** harvestapi/linkedin-company-search's input: companies by keyword, in a place when one is given (its only required parameter is one search parameter). */
+export function linkedinCompanySearchInput(criteria: { what: string; where: string }, maxItems: number): Record<string, unknown> {
+  return { searchQuery: criteria.what, ...(criteria.where ? { locations: [criteria.where] } : {}), scraperMode: "full", maxItems };
 }
 
 export type InstagramPost = { username: string; url: string | null; caption: string | null; timestamp: string | null; locationName: string | null; hashtag: string | null };

@@ -87,7 +87,7 @@ Started from `src/instrumentation.ts` when the server boots:
 
 | Worker | What it does | Notes |
 |---|---|---|
-| Outreach scheduler | Sends the next queued email for each mailbox every minute (`OUTREACH_TICK_INTERVAL_MS`, default 60000). | **Production only** (`NODE_ENV=production`). Single instance only. |
+| Outreach scheduler | Checks each mailbox's queue every 10 seconds (`OUTREACH_TICK_INTERVAL_MS`, default 10000); sends only when its gap and limits allow. | **Production only** (`NODE_ENV=production`). Single instance only. |
 | WhatsApp campaign sender | Sends WhatsApp campaign steps, one step per number per tick. | Production only, single instance. Paused by `PAUSE_WHATSAPP_OUTBOUND`. |
 | Enrichment (grid) worker | Runs queued cells of Tables. | Safe with several instances (`FOR UPDATE SKIP LOCKED`). Also runs in development. |
 | CRM worker | Classifies replies and drafts responses from the durable job queue. | Safe with several instances. |

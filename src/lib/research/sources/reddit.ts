@@ -16,11 +16,12 @@ export function isRedditHost(hostname: string): boolean {
   return REDDIT_HOST.test(hostname.replace(/\.$/, ""));
 }
 
-/** What read_webpage answers for a Reddit address. */
+/** What read_webpage answers for a Reddit address: why it is not read here, and where Reddit is researched instead. */
 export function redditRefusal(approvalRecorded: boolean): string {
+  const instead = "Reddit posts and comments are searched with research_social_sources (Bright Data) when the owner turned Reddit research on. Nothing was read from Reddit.";
   return approvalRecorded
-    ? "Reddit is unavailable to research: approval recorded; a Reddit reader is not built yet. Nothing was read from Reddit."
-    : "Reddit is unavailable to research: its API needs Reddit's approval for this use, and that approval is not recorded (Settings → Lead research → Research sources). Nothing was read from Reddit.";
+    ? `read_webpage does not read Reddit (approval recorded; a Reddit reader is not built yet). ${instead}`
+    : `read_webpage does not read Reddit (its API needs Reddit's approval for this use, not recorded in Settings → Lead research → Research sources). ${instead}`;
 }
 
 /** A short hint of a Reddit app's client id: its last four characters, like an API key's hint. */

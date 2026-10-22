@@ -66,7 +66,7 @@ export const WHATSAPP_NEW_CHAT_WARMUP_HOURS = 24;
 /** New chats (numbers never messaged from this account) per account per day. */
 export const WHATSAPP_NEW_CHATS_PER_DAY = 25;
 /** Minimum seconds between two sends from one account. */
-export const WHATSAPP_MIN_SECONDS_BETWEEN_SENDS = 10;
+export const WHATSAPP_MIN_SECONDS_BETWEEN_SENDS = 30;
 
 // --- chats and messages ---------------------------------------------------------------
 

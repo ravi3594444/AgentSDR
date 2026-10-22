@@ -22,7 +22,6 @@ import { mentionsPlace } from "@/lib/apify/mapping";
 import {
   BRIGHTDATA_LIMITS,
   BRIGHTDATA_USD_PER_CREDIT,
-  isBrightdataPlatform,
   PLATFORM_LIMITATIONS,
   PLATFORM_NAMES,
   type BrightdataDatasetKey,
@@ -42,6 +41,9 @@ import { mailCheckText, ownerIdentity, ownsDomain, ownsEmail, webDiscoveryMailCh
 import { searchWeb, webSearchAvailability, webSearchProviderName, WebSearchUnavailableError, type WebSearchProvider } from "./webSearch.server";
 import { collectWebsiteContacts } from "./websiteContacts.server";
 import { offerFocus } from "./websiteProfile";
+import { DEFAULT_REDDIT_PERIOD, givenUrlsFor, REDDIT_PERIODS, socialPhrase, socialQueries, type SocialResearchCriteria } from "./socialResearch";
+
+export { normalizeSocialCriteria, socialQueries, type SocialResearchCriteria } from "./socialResearch";
 
 /**
  * Social research through Bright Data (src/lib/brightdata/): what people
@@ -69,15 +71,14 @@ import { offerFocus } from "./websiteProfile";
 
 export const SOCIAL_RESEARCH_SOURCE = "social_research";
 const PERSON_SOURCE = "discovery:social-research";
-export const MAX_OPEN_SOCIAL_RESEARCH = 2;
-/** Keyword searches per platform (each is a paid web search, or one Reddit discovery input). */
-const MAX_QUERIES_PER_PLATFORM = 2;
-/** Authors whose own profile is read after their post, per platform (each profile is a record). */
-const MAX_PROFILE_HOPS = 10;
-const MAX_WEBSITE_READS = 12;
+export const MAX_OPEN_SOCIAL_RESEARCH = 4;
+/** Authors whose own profile is read after their post, per platform, within the job's records (each profile is a record). */
+const MAX_PROFILE_HOPS = 25;
+/** Websites the profiles and pages list, read directly (free) for the contacts they publish. */
+const MAX_WEBSITE_READS = 40;
 const READ_BATCH = 4;
 const SAVE_BATCH = 25;
-const MAX_FINDINGS_KEPT = 300;
+const MAX_FINDINGS_KEPT = 600;
 const MAX_FAILURES_KEPT = 30;
 const FINDING_TEXT_CHARS = 1_200;
 const POLL_DELAY_MS = 20_000;
@@ -87,22 +88,6 @@ const MIN_WAIT_MS = 60_000;
 const JOB_OPEN_COLLECTIONS = 2;
 const MAX_EMAILS_PER_LEAD = 5;
 
-export type SocialResearchCriteria = {
-  platforms: BrightdataPlatform[];
-  /** Who the customers are, in the owner's words. */
-  customers: string;
-  /** What they would be asking about or complaining of, in the owner's words; the search terms come from it. */
-  need: string | null;
-  where: string | null;
-  /** Subreddits the owner named, without r/. */
-  subreddits: string[];
-  /** Exact search phrases the owner gave, used as they are. */
-  keywords: string[];
-  /** At most this many records across the job (posts, comments do not count, profiles, pages). */
-  maxResults: number;
-  language: string;
-};
-
 type ContactAfter = { channels: AudienceChannel[] | null; ownerRequest?: string; requestId?: string } | null;
 
 export type SourceState = {
@@ -110,7 +95,7 @@ export type SourceState = {
   state: "pending" | "searching" | "collecting" | "searched" | "failed" | "not_searched";
   reason: string | null;
   queries: string[];
-  /** URLs the web search returned for this platform that Bright Data can read. */
+  /** URLs the web search returned (or the model gave) for this platform that Bright Data can read. */
   urls: number;
   /** Findings (posts, comments, profiles, pages) read from it. */
   found: number;
@@ -138,7 +123,8 @@ type CollectionState = {
   note: string | null;
 };
 
-type FoundUrl = { url: string; dataset: BrightdataDatasetKey; title: string | null; snippet: string | null; query: string };
+/** `given`: a link the model gave, read before what the searches found. */
+type FoundUrl = { url: string; dataset: BrightdataDatasetKey; title: string | null; snippet: string | null; query: string; given?: boolean };
 
 /** Web search records in the same shape as a website search's, so the request's spend reads them the same way (objective.ts webSearchLedger). */
 type SearchRecord = { query: string; sources: number; provider: string | null; model: string | null; costUsd: number | null; error: string | null; estimateUsd?: number };
@@ -221,38 +207,6 @@ export class SocialResearchUnavailableError extends Error {
   }
 }
 
-const DEFAULT_RESULTS = 40;
-
-export function normalizeSocialCriteria(
-  input: { platforms?: unknown; customers?: unknown; need?: unknown; where?: unknown; subreddits?: unknown; keywords?: unknown; maxResults?: unknown; language?: unknown },
-  limits: { maxRecordsPerSearch: number },
-  fallbackLanguage = "en",
-): SocialResearchCriteria | { error: string } {
-  const text = (value: unknown, limit: number) => (typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, limit) : "");
-  const platforms = [...new Set((Array.isArray(input.platforms) ? input.platforms : []).filter(isBrightdataPlatform))];
-  if (!platforms.length) return { error: "Say which platforms to research: any of reddit, x, instagram, facebook." };
-  const customers = text(input.customers, 200);
-  if (!customers) return { error: "Say who the customers are (in the owner's words or from the business profile)." };
-  const need = text(input.need, 300) || null;
-  const where = text(input.where, 200) || null;
-  const list = (value: unknown, limit: number, each: number) => [...new Set((Array.isArray(value) ? value : []).map((item) => text(item, each)).filter(Boolean))].slice(0, limit);
-  const subreddits = list(input.subreddits, 3, 40).map((name) => name.replace(/^\/?r\//i, "").replace(/\/$/, "")).filter((name) => /^[A-Za-z0-9_]{2,21}$/.test(name));
-  const keywords = list(input.keywords, 3, 120);
-  const requested = Number(input.maxResults ?? DEFAULT_RESULTS);
-  const cap = Math.min(limits.maxRecordsPerSearch, BRIGHTDATA_LIMITS.maxRecordsPerSearch.max);
-  const maxResults = Number.isFinite(requested) ? Math.min(cap, Math.max(5, Math.round(requested))) : Math.min(cap, DEFAULT_RESULTS);
-  const language = typeof input.language === "string" && /^[a-z]{2}$/i.test(input.language) ? input.language.toLowerCase() : fallbackLanguage;
-  return { platforms, customers, need, where, subreddits, keywords, maxResults, language };
-}
-
-/** The search phrases for a platform: the owner's own, else the need (and the customers with it), with the place when one is named. */
-export function socialQueries(criteria: SocialResearchCriteria, platform: BrightdataPlatform): string[] {
-  const base = criteria.keywords.length ? criteria.keywords : [criteria.need ?? criteria.customers, criteria.need ? `${criteria.customers} ${criteria.need}` : null].filter((item): item is string => Boolean(item));
-  const placed = criteria.where && platform !== "reddit" ? base.map((query) => `${query} ${criteria.where}`) : base;
-  const site = platform === "reddit" ? null : platform === "x" ? "site:x.com" : platform === "instagram" ? "site:instagram.com" : "site:facebook.com";
-  return [...new Set(placed.map((query) => (site ? `${site} ${query}` : query).replace(/\s+/g, " ").trim()))].slice(0, MAX_QUERIES_PER_PLATFORM);
-}
-
 /** Starts social research: an audience to fill and the job that fills it. */
 export async function startSocialResearch(
   criteria: SocialResearchCriteria,
@@ -273,10 +227,12 @@ export async function startSocialResearch(
   const urlFinder: Payload["urlFinder"] = availability.available ? availability.provider! : readiness.settings.serpZone ? "brightdata_serp" : null;
   const sources: SourceState[] = criteria.platforms.map((platform) => {
     const queries = socialQueries(criteria, platform);
+    const given = givenUrlsFor(criteria, platform).length;
     if (platform === "reddit" && !readiness.settings.redditEnabled) {
-      return { platform, state: "not_searched", reason: "Reddit research is off: an owner or admin turns it on in Settings → Providers & features → Bright Data", queries, urls: 0, found: 0, credits: 0, notes: [] };
+      return { platform, state: "not_searched", reason: `Reddit research is off: an owner or admin turns it on in Settings → Providers & features → Bright Data${given ? ` (the ${given} Reddit link${given === 1 ? "" : "s"} given ${given === 1 ? "was" : "were"} not read)` : ""}`, queries, urls: 0, found: 0, credits: 0, notes: [] };
     }
-    if (platform !== "reddit" && !urlFinder) {
+    // A platform with links given needs no web search to find its pages.
+    if (platform !== "reddit" && !urlFinder && !given) {
       return { platform, state: "not_searched", reason: `${PLATFORM_NAMES[platform]} needs a web search to find its pages (TinyFish, Tavily or an AI provider that searches the web), or a SERP API zone in the Bright Data settings; none is set up`, queries, urls: 0, found: 0, credits: 0, notes: [] };
     }
     return { platform, state: "pending", reason: null, queries, urls: 0, found: 0, credits: 0, notes: [] };
@@ -284,7 +240,7 @@ export async function startSocialResearch(
   if (!sources.some((source) => source.state === "pending")) {
     throw new SocialResearchUnavailableError(`Not started: ${sources.map((source) => `${PLATFORM_NAMES[source.platform]} — ${source.reason}`).join("; ")}.`);
   }
-  const phrase = [criteria.need ?? criteria.customers, criteria.where ? `in ${criteria.where}` : null].filter(Boolean).join(" ");
+  const phrase = socialPhrase(criteria);
   const organizationId = currentOrganizationId();
   const started = await db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`social_research:${organizationId}`}, 0))`);
@@ -295,9 +251,9 @@ export async function startSocialResearch(
       throw new SocialResearchUnavailableError(`${open} social research job${open === 1 ? " is" : "s are"} already running for this organization (at most ${MAX_OPEN_SOCIAL_RESEARCH} at a time). Ask again when one has finished.`, { slotsFull: true });
     }
     const audienceId = await createAudience({
-      name: `${criteria.customers} — ${phrase} (social)`,
+      name: `${criteria.customers && criteria.customers !== phrase ? `${criteria.customers} — ` : ""}${phrase} (social)`,
       source: "discovery",
-      criteria: { source: SOCIAL_RESEARCH_SOURCE, platforms: criteria.platforms, customers: criteria.customers, need: criteria.need, where: criteria.where, maxResults: criteria.maxResults },
+      criteria: { source: SOCIAL_RESEARCH_SOURCE, platforms: criteria.platforms, customers: criteria.customers, need: criteria.need, where: criteria.where, maxResults: criteria.maxResults, ...(criteria.urls?.length ? { urls: criteria.urls.length } : {}) },
       threadId: context.threadId,
       userId: context.userId,
     });
@@ -351,10 +307,16 @@ async function savePayload(job: AssistantJob, patch: Partial<Payload>): Promise<
     .where(and(inOrg(assistantJobs), eq(assistantJobs.id, job.id), job.lockedBy ? eq(assistantJobs.lockedBy, job.lockedBy) : sql`false`));
 }
 
-/** The records budget split over the platforms still pending, leaving room for the authors' profiles. */
+/**
+ * The records budget split over the platforms still pending. A search by
+ * need leaves room for the authors' profiles (their posts carry the words,
+ * their profiles the contacts); a search for the customers themselves reads
+ * their profiles and pages directly, so nothing is held back (what it leaves
+ * unused still reaches authors, profileHops).
+ */
 function platformBudget(payload: Payload): number {
   const pending = payload.sources.filter((item) => item.state === "pending" || item.state === "searching" || item.state === "collecting").length || 1;
-  const forProfiles = Math.min(MAX_PROFILE_HOPS * pending, Math.floor(payload.criteria.maxResults / 3));
+  const forProfiles = payload.criteria.need ? Math.min(MAX_PROFILE_HOPS * pending, Math.floor(payload.criteria.maxResults / 3)) : 0;
   return Math.max(3, Math.floor((payload.criteria.maxResults - forProfiles) / pending));
 }
 
@@ -363,31 +325,63 @@ async function stageQueued(job: AssistantJob): Promise<StepOutcome> {
   const payload = payloadOf(job);
   const plan: SearchTask[] = [];
   const budget = platformBudget(payload);
+  const urls: Partial<Record<BrightdataPlatform, FoundUrl[]>> = {};
   for (const state of payload.sources) {
     if (state.state !== "pending") continue;
     state.state = "searching";
+    const given = givenUrlsFor(payload.criteria, state.platform);
+    const tasksBefore = plan.length;
     if (state.platform === "reddit") {
-      const perInput = Math.max(1, Math.floor(budget / Math.max(1, state.queries.length)));
-      plan.push({
-        kind: "collect", platform: "reddit", hop: false, label: `Reddit posts for ${state.queries.map((query) => `“${query}”`).join(", ")}`,
-        spec: { dataset: "reddit_posts", discoverBy: "keyword", inputs: state.queries.map((keyword) => ({ keyword, date: "Past year", num_of_posts: perInput })), limitPerInput: perInput },
-      });
-      if (payload.criteria.subreddits.length) {
+      // The links given first, within the platform's share of the records; the keyword search takes what is left.
+      const take = given.slice(0, budget);
+      if (given.length > take.length) note(state, `${given.length - take.length} of the Reddit links given were not read: this job's limit of ${payload.criteria.maxResults} records`);
+      for (const dataset of [...new Set(take.map((item) => item.dataset))]) {
+        const items = take.filter((item) => item.dataset === dataset);
+        plan.push({ kind: "collect", platform: "reddit", hop: false, label: `${items.length} Reddit ${dataset === "reddit_profiles" ? "profiles" : "posts"} given`, spec: { dataset, discoverBy: null, inputs: items.map((item) => ({ url: item.url })), limitPerInput: null } });
+      }
+      state.urls += take.length;
+      const room = budget - take.length;
+      const queries = state.queries.slice(0, Math.max(0, room));
+      if (queries.length < state.queries.length) note(state, `${state.queries.length - queries.length} Reddit keyword search${state.queries.length - queries.length === 1 ? " was" : "es were"} not made: the links given use this job's records`);
+      if (queries.length) {
+        const perInput = Math.max(1, Math.floor(room / queries.length));
+        const date = REDDIT_PERIODS[payload.criteria.since ?? DEFAULT_REDDIT_PERIOD];
+        plan.push({
+          kind: "collect", platform: "reddit", hop: false, label: `Reddit posts for ${queries.map((query) => `“${query}”`).join(", ")}`,
+          spec: { dataset: "reddit_posts", discoverBy: "keyword", inputs: queries.map((keyword) => ({ keyword, date, num_of_posts: perInput })), limitPerInput: perInput },
+        });
+      }
+      const keyword = payload.criteria.keywords[0] ?? payload.criteria.need ?? (payload.criteria.customers || null);
+      if (payload.criteria.subreddits.length && keyword) {
         const perSub = Math.max(1, Math.floor(budget / payload.criteria.subreddits.length));
-        const keyword = payload.criteria.keywords[0] ?? payload.criteria.need ?? payload.criteria.customers;
         plan.push({
           kind: "collect", platform: "reddit", hop: false, label: `Reddit posts in ${payload.criteria.subreddits.map((name) => `r/${name}`).join(", ")} about “${keyword}”`,
           spec: { dataset: "reddit_posts", discoverBy: "subreddit_url", inputs: payload.criteria.subreddits.map((name) => ({ url: `https://www.reddit.com/r/${name}/`, keyword, num_of_posts: perSub, sort_by: "Relevance" })), limitPerInput: perSub },
         });
+      } else if (payload.criteria.subreddits.length) {
+        note(state, "the subreddits were not searched: no words to search them for (customers, need or keywords)");
+      }
+      if (plan.length === tasksBefore) {
+        state.state = "not_searched";
+        state.reason = "no search terms and no Reddit links were given";
       }
     } else {
-      for (const query of state.queries) plan.push({ kind: "web", platform: state.platform, query });
+      // The links given are collected with what the searches find (collectTasksFor), and read first.
+      if (given.length) {
+        urls[state.platform] = given.map((item) => ({ url: item.url, dataset: item.dataset, title: null, snippet: null, query: "a link given", given: true }));
+        state.urls += given.length;
+      }
+      if (payload.urlFinder) {
+        for (const query of state.queries) plan.push({ kind: "web", platform: state.platform, query });
+      } else if (state.queries.length) {
+        note(state, "no web search is set up to find more pages: only the links given are read");
+      }
     }
   }
   return {
     next: "stage",
     stage: "searching",
-    payload: { sources: payload.sources, plan, searchIndex: 0, searches: [], urls: {}, collections: [], findings: [], failures: [], reservedRecords: 0 },
+    payload: { sources: payload.sources, plan, searchIndex: 0, searches: [], urls, collections: [], findings: [], failures: [], reservedRecords: 0 },
     progress: progressOf(payload, "searching", { searches: plan.length, searchesDone: 0 }),
   };
 }
@@ -443,8 +437,11 @@ function collectTasksFor(payload: Payload): SearchTask[] {
       state.reason = state.queries.length ? `the web search returned no ${PLATFORM_NAMES[state.platform]} post, profile or page it can read` : "no search terms";
       continue;
     }
-    // Posts first (they carry the words), then profiles and pages, within the platform's share of the budget.
-    const ordered = [...found].sort((a, b) => Number(/_profiles$|_pages$/.test(a.dataset)) - Number(/_profiles$|_pages$/.test(b.dataset))).slice(0, budget);
+    // The links given first; then a search by need reads posts first (they carry the words), a search for the customers
+    // themselves their profiles and pages first (they carry the contacts); all within the platform's share of the budget.
+    const identityFirst = payload.criteria.need ? 1 : -1;
+    const identity = (item: FoundUrl) => Number(/_profiles$|_pages$/.test(item.dataset));
+    const ordered = [...found].sort((a, b) => Number(Boolean(b.given)) - Number(Boolean(a.given)) || identityFirst * (identity(a) - identity(b))).slice(0, budget);
     if (ordered.length < found.length) note(state, `${found.length - ordered.length} more ${PLATFORM_NAMES[state.platform]} pages the search returned were not read: this job's limit of ${payload.criteria.maxResults} records`);
     const byDataset = new Map<BrightdataDatasetKey, FoundUrl[]>();
     for (const item of ordered) byDataset.set(item.dataset, [...(byDataset.get(item.dataset) ?? []), item]);
@@ -478,7 +475,9 @@ async function startPlannedCollection(job: AssistantJob, payload: Payload, task:
       // Open collections in the way (this job's, or another's): poll this job's own first, else wait.
       if (started.slotsFull && (payload.collections ?? []).some((item) => item.state === "open")) return pollFirst(payload);
       const waiting = { kind: started.rateLimited ? "quota" : "paused", provider: "brightdata", reason: `${task.label} waits: ${started.reason}` };
-      const hold = started.rateLimited || started.slotsFull ? waitFor(payload, index, started.retryAfterMs ?? null) : { next: "wait" as const, delayMs: MIN_WAIT_MS, payload: {} };
+      // Only Bright Data's own refusals count toward the time a collection may take: waiting for one of this
+      // organization's open-collection slots is a queue (stale reservations are swept, so slots free up).
+      const hold = started.rateLimited ? waitFor(payload, index, started.retryAfterMs ?? null) : { next: "wait" as const, delayMs: MIN_WAIT_MS, payload: {} };
       if (hold) return { ...hold, progress: progressOf(payload, "searching", { waiting }) };
       // Waited as long as a collection may take: this collection is given up, the source goes on with what it has.
       const reason = `Bright Data kept asking to wait for ${BRIGHTDATA_LIMITS.collectionTimeoutMinutes} minutes (${started.reason})`;
@@ -519,7 +518,8 @@ async function stageSearching(job: AssistantJob, heartbeat: () => Promise<void>)
   const task = payload.plan[index];
   const searches = [...(payload.searches ?? [])];
   const finish = (): StepOutcome => {
-    const next = index + 1;
+    // The next task; with no task at all (a job that only reads the links it was given) the collections start at 0.
+    const next = Math.min(index + 1, payload.plan.length);
     const common = { sources: payload.sources, plan: payload.plan, searches, urls: payload.urls ?? {}, collections: payload.collections ?? [], reservedRecords: payload.reservedRecords ?? 0, searchIndex: next };
     if (next < payload.plan.length) return { next: "stage", stage: "searching", payload: common, progress: progressOf(payload, "searching", { searches: payload.plan.length, searchesDone: next }) };
     // Every web search made: the URLs become collections, started one per step like the rest.
@@ -588,8 +588,12 @@ async function stageSearching(job: AssistantJob, heartbeat: () => Promise<void>)
         state.urls += kept;
       } catch (error) {
         if (error instanceof WebSearchUnavailableError) {
-          state.state = "failed";
-          state.reason = error.message;
+          // What it already has (the links given, or an earlier search's pages) is still read.
+          if (state.urls) note(state, `the search “${task.query}” could not run: ${error.message}`);
+          else {
+            state.state = "failed";
+            state.reason = error.message;
+          }
         } else if (error instanceof TinyfishWaitError) {
           await savePayload(job, { searchStarted: -1 });
           return { next: "wait", delayMs: Math.max(1_000, error.until.getTime() - Date.now()), payload: { searchStarted: -1 }, progress: progressOf(payload, "searching", { waiting: { kind: "quota", provider: "tinyfish", until: error.until.toISOString(), reason: error.reason } }) };
@@ -612,7 +616,7 @@ function clipFinding(finding: SocialFinding): SocialFinding {
   return { ...finding, text: finding.text ? finding.text.slice(0, FINDING_TEXT_CHARS) : null, identity: finding.identity ? { ...finding.identity, bio: finding.identity.bio?.slice(0, 600) ?? null } : null };
 }
 
-/** The authors worth reading after their posts: on Reddit those whose words ask for something; elsewhere every post author the search found, within the budget. */
+/** The authors of the posts and comments found, in the order they were found, within the job's records budget. */
 function profileHops(payload: Payload): SearchTask[] {
   const findings = payload.findings ?? [];
   const known = new Set(findings.filter((item) => item.kind === "profile" || item.kind === "page").map((item) => item.url));
@@ -625,7 +629,6 @@ function profileHops(payload: Payload): SearchTask[] {
     const urls: { url: string; dataset: BrightdataDatasetKey }[] = [];
     for (const finding of findings) {
       if (finding.platform !== state.platform || (finding.kind !== "post" && finding.kind !== "comment") || !finding.author?.profileUrl) continue;
-      if (state.platform === "reddit" && needSignal(finding.text ?? "") !== "need") continue;
       const target = datasetForUrl(finding.author.profileUrl);
       if (!target || known.has(target.url) || seen.has(target.url) || !/_profiles$|_pages$/.test(target.dataset)) continue;
       seen.add(target.url);
@@ -845,7 +848,6 @@ function buildLeads(payload: Payload, websites: WebsiteRead[]): Lead[] {
       ...(discussions.length > 1 ? { discussions: String(discussions.length) } : {}),
     };
     const unread = identity ? null
-      : platform === "reddit" && !signals.some((signal) => signal.kind === "need") ? "their words do not ask for anything, so their profile was not read"
       : hopLimited.has(platform) ? "the limit on authors' profiles read was reached"
       : author?.profileUrl ? "their profile could not be read" : "the post names no author profile";
     leads.push({
@@ -958,12 +960,16 @@ async function saveLead(lead: Lead, payload: Payload, context: { job: AssistantJ
     return { member: { personId: null, name: lead.name, reason: noContactReason(lead, rejected), ...base }, outcome: "excluded", known: false, email: false, phone: false, instagram: false };
   }
   // An Instagram-only lead is reached by DM once a plan is approved, under the same rule as every other
-  // Instagram profile: read, and naming the place when the research named one (instagramEligibility.ts).
+  // Instagram profile: its own profile read (instagramEligibility.ts). As with Apify's accounts, research agent v2
+  // checks the place itself: a read profile that does not name it is saved with its location unconfirmed, judged
+  // so, and contacted only once marked a match.
   if (!email && !phone && igUsername) {
     const hold = lead.kind === "identity"
       ? instagramResearchHold({ profileRead: true, placeNamed: mentionsPlace(payload.criteria.where ?? "", lead.bio, lead.name), where: payload.criteria.where ?? "" })
       : "found by their Instagram post only; their profile was not read, so the account is kept for research";
-    if (hold) return { member: { personId: null, name: lead.name, reason: hold, ...base }, outcome: "excluded", known: false, email: false, phone: false, instagram: true };
+    const placeOnly = hold !== null && lead.kind === "identity" && (await featureEnabled("research_agent_v2"));
+    if (hold && !placeOnly) return { member: { personId: null, name: lead.name, reason: hold, ...base }, outcome: "excluded", known: false, email: false, phone: false, instagram: true };
+    if (placeOnly) base.facts = { ...base.facts, location: lead.facts.location ?? `Unknown (the profile does not name ${(payload.criteria.where ?? "").split(",")[0]!.trim()})` };
   }
   const memberIds = new Set(payload.memberIds ?? []);
   const createdIds = new Set(payload.createdIds ?? []);
@@ -1062,6 +1068,8 @@ async function stageSaving(job: AssistantJob, heartbeat: () => Promise<void>): P
   for (const item of payload.sources) {
     if (item.state === "failed" || item.state === "not_searched") notes.push(`${PLATFORM_NAMES[item.platform]} ${item.state === "failed" ? "failed" : "was not searched"}: ${item.reason ?? "no reason recorded"}.`);
   }
+  const unreadable = payload.criteria.unreadableUrls ?? [];
+  if (unreadable.length) notes.push(`${unreadable.length} link${unreadable.length === 1 ? " was" : "s were"} not read: not a post, profile or page Bright Data reads (${unreadable.slice(0, 5).join(", ")}${unreadable.length > 5 ? ", …" : ""}).`);
   const notSearched = !searched.length && !findings.length;
   return {
     next: "done",

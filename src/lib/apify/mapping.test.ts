@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { APIFY_LIMITS } from "./catalog";
 import {
   apifyAllowance,
+  apifyRefusalIsBusy,
+  facebookSearchInput,
+  linkedinCompanySearchInput,
+  MAX_HASHTAGS,
   placesFromFacebookItems,
   placesFromLinkedinCompanyItems,
   usernamesFromSearchItems,
@@ -37,9 +42,12 @@ describe("apifyAllowance", () => {
     expect(refused.ok ? "" : refused.reason).toContain("never tops up");
   });
 
-  test("fails closed when the account allowance cannot be read, and on too many open runs", () => {
-    expect(apifyAllowance({ ...base, account: null })).toMatchObject({ ok: false, exhausted: false });
-    expect(apifyAllowance({ ...base, openRuns: 2 })).toMatchObject({ ok: false, exhausted: false, slotsFull: true });
+  test("an allowance that could not be read leaves the owner's budget and per-run cap in charge; too many open runs wait", () => {
+    expect(apifyAllowance({ ...base, account: null })).toEqual({ ok: true, maxChargeUsd: 2 });
+    expect(apifyAllowance({ ...base, account: null, spentThisMonthUsd: 9.5 })).toEqual({ ok: true, maxChargeUsd: 0.5 });
+    expect(apifyAllowance({ ...base, account: null, spentThisMonthUsd: 10 })).toMatchObject({ ok: false, exhausted: true });
+    expect(apifyAllowance({ ...base, openRuns: APIFY_LIMITS.openRuns - 1 })).toEqual({ ok: true, maxChargeUsd: 2 });
+    expect(apifyAllowance({ ...base, openRuns: APIFY_LIMITS.openRuns })).toMatchObject({ ok: false, exhausted: false, slotsFull: true });
     expect(apifyAllowance({ ...base, monthlyBudgetUsd: 0.01 })).not.toHaveProperty("slotsFull");
   });
 
@@ -55,6 +63,18 @@ describe("looksExhausted and runOutcome", () => {
     expect(looksExhausted({ message: "ABORTED The run reached its maximum total charge (maxTotalChargeUsd)" })).toBe(true);
     expect(looksExhausted({ httpStatus: 404, type: "record-not-found", message: "Actor not found" })).toBe(false);
     expect(looksExhausted({ httpStatus: 500, message: "Internal error" })).toBe(false);
+  });
+
+  test("an account running as many Actors as its plan's memory allows is busy (a wait), not out of credit", () => {
+    const memory = { httpStatus: 402, type: "actor-memory-limit-exceeded", message: "By launching this job you will exceed the memory limit of 8192MB for all your Actor runs and builds (currently used: 8192MB, requested: 1024MB)." };
+    expect(apifyRefusalIsBusy(memory)).toBe(true);
+    expect(looksExhausted(memory)).toBe(false);
+    expect(apifyRefusalIsBusy({ httpStatus: 402, message: "You have reached the maximum number of concurrent Actor runs" })).toBe(true);
+    // A 402 about credit stays exhaustion.
+    const credit = { httpStatus: 402, type: "not-enough-usage-to-run-paid-actor", message: "You do not have enough usage left; the memory limit is not the problem" };
+    expect(apifyRefusalIsBusy(credit)).toBe(false);
+    expect(looksExhausted(credit)).toBe(true);
+    expect(apifyRefusalIsBusy({ httpStatus: 404, type: "record-not-found", message: "Actor not found" })).toBe(false);
   });
 
   test("open, complete and cut-short runs", () => {
@@ -86,6 +106,13 @@ describe("Instagram mapping", () => {
     expect(hashtagsFor("bakers", "Mumbai", ["#HomeBakersMumbai"])).toEqual(["homebakersmumbai", "mumbaibaker", "bakermumbai", "baker"]);
   });
 
+  test("with no place, the model's hashtags and the kind alone; up to MAX_HASHTAGS reach the Actor", () => {
+    expect(hashtagsFor("home bakers", "", ["#cakesofinstagram", "customcakes"])).toEqual(["cakesofinstagram", "customcakes", "homebaker"]);
+    const many = Array.from({ length: 30 }, (_, index) => `tag${index}xyz`);
+    expect(hashtagsFor("bakers", "Mumbai", many)).toHaveLength(MAX_HASHTAGS);
+    expect(hashtagsFor("bakers", "Mumbai", many).slice(0, 3)).toEqual(["tag0xyz", "tag1xyz", "tag2xyz"]);
+  });
+
   test("posts keep their author; posts without one are skipped", () => {
     const posts = postsFromHashtagItems([
       { ownerUsername: "Sweet.Treats", url: "https://www.instagram.com/p/abc/", caption: "Fresh cakes in Pune", timestamp: "2026-10-10T10:00:00Z", locationName: "Pune", inputUrl: "https://www.instagram.com/explore/tags/punebaker/" },
@@ -107,6 +134,18 @@ describe("Instagram mapping", () => {
   test("a place is known only when the post or profile names it", () => {
     expect(mentionsPlace("Pune, India", "Cakes in pune")).toBe(true);
     expect(mentionsPlace("Pune, India", "Best cakes!", null)).toBe(false);
+  });
+});
+
+describe("social search inputs", () => {
+  test("Facebook pages by keyword: with a place, or with none (locations empty), always the pages search", () => {
+    expect(facebookSearchInput({ what: "dentists", where: "Austin, TX" }, 40)).toEqual({ categories: ["dentists"], locations: ["Austin, TX"], searchType: "pages", resultsLimit: 40 });
+    expect(facebookSearchInput({ what: "vegan bakeries", where: "" }, 25)).toEqual({ categories: ["vegan bakeries"], locations: [], searchType: "pages", resultsLimit: 25 });
+  });
+
+  test("LinkedIn companies by keyword, with locations only when a place is given", () => {
+    expect(linkedinCompanySearchInput({ what: "logistics", where: "Germany" }, 30)).toEqual({ searchQuery: "logistics", locations: ["Germany"], scraperMode: "full", maxItems: 30 });
+    expect(linkedinCompanySearchInput({ what: "logistics", where: "" }, 30)).toEqual({ searchQuery: "logistics", scraperMode: "full", maxItems: 30 });
   });
 });
 

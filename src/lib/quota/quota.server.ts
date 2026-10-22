@@ -165,8 +165,8 @@ export async function quotaState(scopeKey: string, provider: string, product: st
 }
 
 /** Units the organization used of one product since the start of today (UTC); reserved rows count in full. */
-export async function usedToday(provider: string, product: string, now = new Date()): Promise<number> {
-  const [row] = await db.select({
+export async function usedToday(provider: string, product: string, now = new Date(), executor: Pick<typeof db, "select"> = db): Promise<number> {
+  const [row] = await executor.select({
     n: sql<number>`coalesce(sum(coalesce(${providerUsage.usedUnits}, ${providerUsage.units})), 0)::int`,
   }).from(providerUsage).where(and(
     inOrg(providerUsage),

@@ -218,7 +218,7 @@ async function fixture(
       ids.org,
       {
         newChatsPerDay: opts.ruleCap ?? 10,
-        sendGapMinutes: [1, 1],
+        secondsBetweenSends: 60,
       },
     ],
   );
@@ -304,7 +304,7 @@ async function chatFixture(name: string, autonomous = false, role = "owner") {
   );
   await pg.query(
     "insert into channel_settings(organization_id,channel,values) values($1,'instagram',$2)",
-    [org, { newChatsPerDay: 10, sendGapMinutes: [1, 1] }],
+    [org, { newChatsPerDay: 10, secondsBetweenSends: 60 }],
   );
   await pg.query(
     "insert into instagram_accounts(id,organization_id,unipile_account_id,username,status) values($1,$2,$3,'sender','connected')",

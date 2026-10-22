@@ -14,7 +14,7 @@
  * with due work missing from the queue (a follow-up that fell due after the
  * day's build, the leads of a build that failed) and tops their queues up
  * (topUpMailboxQueues). An empty queue with nothing due is left alone.
- * Invoked every minute by the in-process scheduler (internalScheduler.ts), or
+ * Invoked every 10 seconds by the in-process scheduler (internalScheduler.ts), or
  * by hand through /api/outreach/tick.
  */
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
@@ -31,7 +31,6 @@ import { EMAIL_DNC_BLOCKED_ERROR, leadAfterSend, leadDueNow, mailboxAtDailyLimit
 import { topUpMailboxQueues } from "./buildQueue";
 import { newLeadAllowance, recordNewLead, releaseNewLead } from "@/lib/channels/dailyLeadLimit.server";
 import { channelRules } from "@/lib/channels/rules.server";
-import { pickInRange } from "@/lib/channels/rules";
 import { fillTemplate, renderEmail, unsubscribePostUrl } from "./render";
 import { isMigrationControlPaused } from "@/lib/migration/controls";
 import { isPersonDoNotContact } from "@/lib/crm/policies";
@@ -40,10 +39,10 @@ import { wrongRouteSendRefusal } from "@/lib/crm/wrongRoutes";
 import { inOrg, currentOrganizationId, runInOrganization } from "@/lib/tenancy/scope";
 import { leadsInOrg } from "./orgScope";
 
-/** When this mailbox may send again: a random gap from the organization's sending rules. */
-async function randomNextSendDelay(): Promise<Date> {
-  const { sendGapMinutes } = await channelRules("email");
-  return new Date(Date.now() + pickInRange(sendGapMinutes) * 60 * 1000);
+/** When this mailbox may send again: the organization's minimum gap, in seconds. */
+async function nextEmailSendTime(): Promise<Date> {
+  const { secondsBetweenSends } = await channelRules("email");
+  return new Date(Date.now() + secondsBetweenSends * 1000);
 }
 
 export type TickResult = {
@@ -459,7 +458,7 @@ async function sendNextStep(
 
     await db
       .update(mailboxes)
-      .set({ todayEmailsSent: sql`${mailboxes.todayEmailsSent} + 1`, nextEmailTime: await randomNextSendDelay() })
+      .set({ todayEmailsSent: sql`${mailboxes.todayEmailsSent} + 1`, nextEmailTime: await nextEmailSendTime() })
       .where(and(inOrg(mailboxes), eq(mailboxes.id, mailbox.id)));
 
     result.sent += 1;

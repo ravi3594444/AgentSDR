@@ -50,6 +50,7 @@ const { setBrowserConnector } = await import("@/lib/browser/driver.server");
 const { sweepBrowserSessions } = await import("@/lib/browser/browser.server");
 const { browserSessions } = await import("@/lib/browser/schema");
 const { providerUsage } = await import("@/lib/quota/schema");
+const { usedToday } = await import("@/lib/quota/quota.server");
 const { runTool } = await import("@/lib/assistant/tools.server");
 const { createThread } = await import("@/lib/assistant/threads.server");
 setTinyfishApiBase({ search: "https://search.tf.test", fetch: "https://fetch.tf.test", browser: "https://browser.tf.test" });
@@ -112,6 +113,8 @@ await runInOrganization(a.org.id, async () => {
   await saveTinyfishSettings({ key: KEY }, a.owner.id);
   const thread = await createThread(a.owner.id);
   const other = await createThread(a.owner.id);
+  const third = await createThread(a.owner.id);
+  const fourth = await createThread(a.owner.id);
   const ctx = (threadId: string) => ({ threadId, userId: a.owner.id, ownerText: "find agents" });
 
   const off = await runTool("browser_open", { url: "https://example.com/agents" }, ctx(thread.id));
@@ -132,8 +135,17 @@ await runInOrganization(a.org.id, async () => {
   const [reserved] = await db.select().from(providerUsage).where(and(eq(providerUsage.organizationId, a.org.id), eq(providerUsage.product, "browser")));
   check("its 10 minutes are reserved against today's allowance", reserved?.status === "reserved" && reserved.units === 10);
 
-  const busy = await runTool("browser_open", { url: "https://example.com/" }, ctx(other.id));
-  check("another chat of the organization waits: one browser at a time", !busy.ok && /in use by another chat/.test(busy.summary) && creates() === 1, busy.summary);
+  // One browser per chat: other chats open their own, and together they stay within the day's minutes.
+  const second = await runTool("browser_open", { url: "https://example.com/" }, ctx(other.id));
+  check("another chat of the organization opens its own browser", second.ok && creates() === 2, second.summary.slice(0, 120));
+  const thirdOpen = await runTool("browser_open", { url: "https://example.com/" }, ctx(third.id));
+  check("…and a third, while the day's minutes leave room for its session", thirdOpen.ok && creates() === 3, thirdOpen.summary.slice(0, 120));
+  const full = await runTool("browser_open", { url: "https://example.com/" }, ctx(fourth.id));
+  check("once open sessions hold the day's minutes, a further chat is refused with what is left", !full.ok && /30 minutes\) has 0 left/.test(full.summary) && creates() === 3, full.summary);
+  const reopened = await runTool("browser_open", { url: "https://example.com/agents" }, ctx(thread.id));
+  check("a chat's own browser is reused, not opened twice", reopened.ok && /Opened in the chat's browser/.test(reopened.summary) && creates() === 3, reopened.summary.slice(0, 120));
+  await runTool("browser_close", {}, ctx(other.id));
+  await runTool("browser_close", {}, ctx(third.id));
 
   const next = await runTool("browser_click", { n: 1 }, ctx(thread.id));
   check("a click returns the next page", next.ok && /page 2/.test(next.summary) && /patilrealty/.test(next.summary));
@@ -148,9 +160,10 @@ await runInOrganization(a.org.id, async () => {
   const rescrolled = await runTool("browser_scroll", { direction: "down" }, ctx(thread.id));
   check("reading or scrolling the refused page returns none of it", [reread, rescrolled].every((step) => !step.ok && /needs a login/.test(step.summary) && !/Shah Homes/.test(step.summary)), `${reread.summary.slice(0, 120)} | ${rescrolled.summary.slice(0, 120)}`);
 
+  const deletesBefore = deletes();
   const closed = await runTool("browser_close", {}, ctx(thread.id));
   const [settled] = await db.select().from(providerUsage).where(eq(providerUsage.id, reserved!.id));
-  check("closing ends it at TinyFish and settles the minutes used", closed.ok && deletes() === 1 && settled?.status === "settled" && settled.usedUnits === 1, `${closed.summary} ${settled?.status} ${settled?.usedUnits}`);
+  check("closing ends it at TinyFish and settles the minutes used", closed.ok && deletes() === deletesBefore + 1 && settled?.status === "settled" && settled.usedUnits === 1, `${closed.summary} ${settled?.status} ${settled?.usedUnits}`);
   const notOpen = await runTool("browser_read", {}, ctx(thread.id));
   check("after closing, a step asks to open first", !notOpen.ok && /open the page with browser_open/.test(notOpen.summary));
 
@@ -160,10 +173,11 @@ await runInOrganization(a.org.id, async () => {
   await db.update(browserSessions).set({ lastUsedAt: new Date(Date.now() - 6 * 60_000) }).where(eq(browserSessions.id, idle!.id));
   const swept = await sweepBrowserSessions();
   const [after] = await db.select().from(browserSessions).where(eq(browserSessions.id, idle!.id));
-  check("an idle session is swept: ended at TinyFish and closed", again.ok && swept === 1 && after?.status === "closed" && deletes() === 2);
+  check("an idle session is swept: ended at TinyFish and closed", again.ok && swept === 1 && after?.status === "closed" && deletes() === deletesBefore + 2);
 
   // ---------------------------------------------------------- the day's allowance
-  await saveTinyfishSettings({ browserMinutesPerDay: 11 }, a.owner.id);
+  const usedSoFar = await usedToday("tinyfish", "browser");
+  await saveTinyfishSettings({ browserMinutesPerDay: usedSoFar + 9 }, a.owner.id);
   const short = await runTool("browser_open", { url: "https://example.com/agents" }, ctx(thread.id));
   check("less than one session's minutes left today: refused with what is left", !short.ok && /has 9 left/.test(short.summary), short.summary);
 

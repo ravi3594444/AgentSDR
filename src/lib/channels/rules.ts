@@ -45,10 +45,10 @@ export type Channel = (typeof CHANNELS)[number];
  * strips the stored ones).
  */
 export const RETIRED_RULE_KEYS: Record<Channel, readonly string[]> = {
-  email: ["sendingHours"],
+  email: ["sendingHours", "sendGapMinutes"],
   linkedin: ["workingHours"],
   whatsapp: ["sendingHours"],
-  instagram: ["sendingHours"],
+  instagram: ["sendingHours", "sendGapMinutes"],
   general: [],
 };
 
@@ -109,16 +109,14 @@ export const CHANNEL_RULES = {
       override: "Each mailbox keeps the limit it was connected with.",
     },
     {
-      key: "sendGapMinutes",
-      kind: "range",
+      key: "secondsBetweenSends",
+      kind: "number",
       label: "Gap between emails from one mailbox",
-      help: "After each send, the mailbox waits a random time in this range before the next, so sending looks human.",
-      unit: "minutes",
-      default: [18, 24],
-      min: 1,
-      max: 240,
-      safe: { below: 10 },
-      warning: "Sending more often than every 10 minutes from one mailbox looks automated to spam filters.",
+      help: "The minimum time between emails sent from the same mailbox. Daily limits still apply.",
+      unit: "seconds",
+      default: 30,
+      min: 3,
+      max: 14400,
     },
   ],
   linkedin: [
@@ -253,7 +251,7 @@ export const CHANNEL_RULES = {
       label: "Seconds between messages, per number",
       help: "The shortest gap between two messages sent from one number.",
       unit: "seconds",
-      default: 10,
+      default: 30,
       min: 3,
       max: 600,
       safe: { below: 10 },
@@ -262,7 +260,7 @@ export const CHANNEL_RULES = {
   ],
   instagram: [
     { key: "newChatsPerDay", kind: "number", label: "New conversations per account", help: "Initial outreach DMs one connected Instagram account may attempt in a rolling 24 hours. Replies use the run's reply limits.", unit: "new chats / 24 hours", default: 10, min: 1, max: 100 },
-    { key: "sendGapMinutes", kind: "range", label: "Time between initial DMs", help: "Wait between initial outreach messages from the same account.", unit: "minutes", default: [5, 10], min: 1, max: 1440 },
+    { key: "secondsBetweenSends", kind: "number", label: "Time between initial DMs", help: "The minimum time between initial outreach messages from the same account. Daily limits still apply.", unit: "seconds", default: 30, min: 3, max: 86400 },
   ],
   general: [
     {
@@ -540,7 +538,7 @@ export function validateValues(channel: Channel, input: Record<string, unknown>)
   const values: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(input)) {
     const rule = known.get(key);
-    if (!rule && RETIRED_RULE_KEYS[channel].includes(key)) return { ok: false, error: RETIRED_RULE_ERROR };
+    if (!rule && RETIRED_RULE_KEYS[channel].includes(key)) return { ok: false, error: key === "sendGapMinutes" ? "Send pacing is now measured in seconds; use secondsBetweenSends." : RETIRED_RULE_ERROR };
     if (!rule) return { ok: false, error: `Unknown setting: ${key}` };
     const error = ruleError(rule, value);
     if (error) return { ok: false, error };

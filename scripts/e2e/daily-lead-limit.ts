@@ -223,7 +223,7 @@ try {
   }
   const instagramA = await runInOrganization(a.org.id, async () => {
     await setFeature("instagram", true, a.owner.id);
-    await saveChannelRules("instagram", { sendGapMinutes: [1, 1] }, a.owner.id);
+    await saveChannelRules("instagram", { secondsBetweenSends: 60 }, a.owner.id);
     // As for WhatsApp, an old stored sending-hours value that is closed now: ignored.
     await db.execute(sql`update channel_settings set values = values || ${JSON.stringify({ sendingHours: closedNow })}::jsonb where organization_id = ${a.org.id} and channel = 'instagram'`);
     const [account] = await db.insert(instagramAccounts).values({ organizationId: a.org.id, unipileAccountId: `lead-limit-ig-${stamp}`, username: `lead_limit_sender_${stamp}`, status: "connected" }).returning();

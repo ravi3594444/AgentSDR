@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { channelRules } from "@/lib/channels/rules.server";
-import { pickInRange } from "@/lib/channels/rules";
 import {
   contactedByAutomation,
   newLeadAllowance,
@@ -299,7 +298,7 @@ async function runForOrganization(): Promise<void> {
             .update(instagramAccounts)
             .set({
               outreachNextSendAt: new Date(
-                Date.now() + pickInRange(liveRules.sendGapMinutes) * 60_000,
+                Date.now() + liveRules.secondsBetweenSends * 1000,
               ),
             })
             .where(
@@ -422,7 +421,7 @@ export function startInstagramOutreachWorker(): void {
       working = false;
     }
   };
-  timer = setInterval(() => void tick(), 30_000);
+  timer = setInterval(() => void tick(), 10_000);
   timer.unref();
   void tick();
 }

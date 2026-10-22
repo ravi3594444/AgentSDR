@@ -15,7 +15,7 @@ import type { SpendGuard } from "@/lib/assistant/objective.server";
 
 /**
  * The assistant's remote browser: one TinyFish Browser session at a time
- * per organization, only while its owner allows browser minutes for the day
+ * per chat, only while its owner allows browser minutes for the day
  * (Settings → Lead research → TinyFish; 0, the default, keeps it off). A
  * session reserves its longest life (BROWSER_LIMITS.maxSessionMinutes) in
  * provider_usage when it opens, is closed when idle, at the end of the chat
@@ -38,10 +38,10 @@ const pages = new Map<string, BrowserPage>();
 
 export type BrowserAllowance = { available: boolean; reason: string | null; minutesPerDay: number; usedToday: number };
 
-export async function browserAllowance(): Promise<BrowserAllowance> {
+export async function browserAllowance(executor?: Pick<typeof db, "select">): Promise<BrowserAllowance> {
   const connection = await tinyfishConnection();
   if (!connection) return { available: false, reason: "TinyFish is not connected (Settings → Lead research → TinyFish)", minutesPerDay: 0, usedToday: 0 };
-  const used = await usedToday(TINYFISH_PROVIDER, "browser");
+  const used = await usedToday(TINYFISH_PROVIDER, "browser", new Date(), executor);
   if (connection.browserMinutesPerDay <= 0) {
     return { available: false, reason: "the browser is off: an owner or admin sets browser minutes a day in Settings → Lead research → TinyFish (it is paid by the minute)", minutesPerDay: 0, usedToday: used };
   }
@@ -119,9 +119,11 @@ export type NavigationCheck = (url: string) => Promise<string | null>;
 
 /**
  * Opens `url` in the chat's browser: the session it already has, or a new
- * one when the organization's allowance and its one-at-a-time rule permit.
- * A new session's minutes are reserved for the owner's request it serves
- * (`requestId`) and pass that request's spend cap (`spendGuard`) first.
+ * one when the organization's daily minutes allow it. Chats each have their
+ * own browser; a new session's minutes are reserved under the
+ * organization's lock, so sessions opening at once never pass the owner's
+ * daily minutes together, for the owner's request it serves (`requestId`)
+ * and within that request's spend cap (`spendGuard`).
  */
 export async function openBrowser(url: string, threadId: string, check: NavigationCheck, options: { requestId?: string | null; spendGuard?: SpendGuard } = {}): Promise<{ snapshot: PageSnapshot; reused: boolean; problem: string | null; allowance: BrowserAllowance }> {
   await sweepBrowserSessions();
@@ -135,13 +137,15 @@ export async function openBrowser(url: string, threadId: string, check: Navigati
   }
   const connection = await tinyfishConnection();
   if (!connection) throw new BrowserUnavailableError("TinyFish is not connected (Settings → Lead research → TinyFish)");
+  const lock = sql`select pg_advisory_xact_lock(hashtextextended(${`browser:${currentOrganizationId()}`}, 0))`;
   const row = await db.transaction(async (tx) => {
-    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`browser:${currentOrganizationId()}`}, 0))`);
-    const allowance = await browserAllowance();
+    await tx.execute(lock);
+    const allowance = await browserAllowance(tx);
     if (!allowance.available) throw new BrowserUnavailableError(`The browser cannot open: ${allowance.reason}.`);
+    // One browser per chat: a second open while this chat's is still starting waits for it.
     const [busy] = await tx.select({ id: browserSessions.id }).from(browserSessions)
-      .where(and(inOrg(browserSessions), inArray(browserSessions.status, ["opening", "open"]))).limit(1);
-    if (busy) throw new BrowserUnavailableError(`The organization's one browser is in use by another chat; it frees within ${BROWSER_LIMITS.maxSessionMinutes} minutes.`);
+      .where(and(inOrg(browserSessions), eq(browserSessions.threadId, threadId), inArray(browserSessions.status, ["opening", "open"]))).limit(1);
+    if (busy) throw new BrowserUnavailableError("This chat's browser is still opening; read it with browser_read in a moment.");
     const [inserted] = await tx.insert(browserSessions).values({ organizationId: currentOrganizationId(), threadId, status: "opening", currentUrl: url.slice(0, 2_000) }).returning();
     return inserted!;
   });
@@ -149,10 +153,15 @@ export async function openBrowser(url: string, threadId: string, check: Navigati
   const reservation = await reserveQuota({
     provider: TINYFISH_PROVIDER, product: "browser", scopeKey: null, units: BROWSER_LIMITS.maxSessionMinutes, limits: {}, label: "TinyFish Browser", threadId,
     detail: { sessionId: row.id, ...(options.requestId ? { requestId: options.requestId } : {}) },
-    guard: guard ? async (tx) => {
+    // The day's minutes, read again under the organization's lock with every reservation so far: chats opening at once take turns.
+    guard: async (tx) => {
+      await tx.execute(lock);
+      const allowance = await browserAllowance(tx);
+      if (!allowance.available) return `The browser cannot open: ${allowance.reason}.`;
+      if (!guard) return null;
       const room = await guard(tx, BROWSER_LIMITS.maxSessionMinutes * TINYFISH_LIMITS.browserUsdPerMinute);
       return room.ok ? null : `The browser cannot open: ${room.reason}.`;
-    } : undefined,
+    },
   });
   if (!reservation.ok) {
     await endSession(row, { failed: reservation.reason });
