@@ -48,6 +48,7 @@ scripts
 !scripts/add-pilot-fixes.ts
 !scripts/add-brightdata.ts
 !scripts/add-always-on-sending.ts
+!scripts/add-research-agent-v2.ts
 
 README.md
 

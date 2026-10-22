@@ -32,6 +32,8 @@ ALTER TABLE assistant_jobs DROP CONSTRAINT IF EXISTS assistant_jobs_kind_chk;
 ALTER TABLE assistant_jobs ADD CONSTRAINT assistant_jobs_kind_chk
   CHECK (kind IN ('discovery', 'outreach_start', 'linkedin_search', 'web_discovery', 'apify_instagram', 'objective', 'social_research'));
 
+-- Every key a later migration added too (research_agent_v2, 20261021-research-agent-v2.sql): deploy.sh
+-- re-runs this file on every deploy, and a shorter list fails on the rows those keys wrote.
 ALTER TABLE organization_features DROP CONSTRAINT IF EXISTS organization_features_key_chk;
 ALTER TABLE organization_features ADD CONSTRAINT organization_features_key_chk
-  CHECK (key IN ('instagram', 'web_discovery', 'inquiry_intake', 'apify_discovery', 'treg', 'brightdata'));
+  CHECK (key IN ('instagram', 'web_discovery', 'inquiry_intake', 'apify_discovery', 'treg', 'brightdata', 'research_agent_v2'));

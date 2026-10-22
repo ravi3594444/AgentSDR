@@ -1,13 +1,13 @@
 import "server-only";
 
-import { and, eq, gte, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { inOrg } from "@/lib/tenancy/scope";
 import { outreachRequested } from "./agent";
 import { runAgentTurn } from "./agent.server";
 import { SEARCH_TOOLS } from "./autonomy";
-import { continuationNote, nextDriverStep, type Continuation, type DriverFacts, type DriverStep, type TurnEnd } from "./objective";
-import { getObjective, nudgeObjective, objectiveFacts, postObjectiveReport, readyToReport, saveObjectiveProgress, stopObjective, type Objective, type ObjectiveFacts } from "./objective.server";
+import { continuationNote, nextDriverStep, waitsForOwner, type Continuation, type DriverFacts, type DriverStep, type TurnEnd } from "./objective";
+import { getObjective, nudgeObjective, objectiveFacts, objectiveJudgeRequest, postObjectiveReport, readyToReport, saveObjectiveProgress, stopObjective, type Objective, type ObjectiveFacts } from "./objective.server";
 import { assistantMessages, assistantObjectives, type ObjectiveProgress } from "./schema";
 import { addMessage, claimThread, releaseThread, threadBusy } from "./threads.server";
 import type { AssistantJob, StepOutcome } from "./worker";
@@ -69,6 +69,19 @@ async function driverFacts(objective: Objective, facts: ObjectiveFacts): Promise
     ))
     : [];
   const waiting = (row: { toolResult: Record<string, unknown> | null }) => (row.toolResult?.data as { waiting?: unknown } | undefined)?.waiting === true;
+  const v2 = Boolean(objective.controls.brief);
+  const [lastWord] = v2
+    ? await db.select({ role: assistantMessages.role, content: assistantMessages.content }).from(assistantMessages)
+      .where(and(inOrg(assistantMessages), eq(assistantMessages.threadId, objective.threadId), inArray(assistantMessages.role, ["user", "assistant"])))
+      .orderBy(desc(assistantMessages.createdAt)).limit(1)
+    : [];
+  // The turn that asked began at the owner's last message, or at the continuation that ran after it.
+  const [lastOwner] = v2 && lastWord?.role === "assistant"
+    ? await db.select({ createdAt: assistantMessages.createdAt }).from(assistantMessages)
+      .where(and(inOrg(assistantMessages), eq(assistantMessages.threadId, objective.threadId), eq(assistantMessages.role, "user")))
+      .orderBy(desc(assistantMessages.createdAt)).limit(1)
+    : [];
+  const turnStart = Math.max(lastOwner?.createdAt.getTime() ?? 0, since?.getTime() ?? 0);
   return {
     status: objective.status === "paused" ? "paused" : "active",
     now: new Date(),
@@ -89,6 +102,8 @@ async function driverFacts(objective: Objective, facts: ObjectiveFacts): Promise
     pausedAt: progress.pausedAt ?? null,
     pendingMembers: facts.funnel.pendingMembers,
     qualifyFailures: progress.qualifyFailures ?? 0,
+    wakeAtLimit: v2,
+    waitingForOwner: waitsForOwner({ lastWord, turnStartedSearch: facts.children.some((job) => job.createdAt.getTime() >= turnStart) }),
   };
 }
 
@@ -97,7 +112,7 @@ const JUDGING = "judging the leads found against the request";
 /** Judges leads left unjudged (qualify.server.ts); a failure is counted, and after MAX_QUALIFY_ATTEMPTS they stay uncounted. */
 async function qualifyLeft(objective: Objective, facts: ObjectiveFacts): Promise<StepOutcome> {
   try {
-    const { judged } = await assessMembers({ audienceIds: facts.audienceIds, request: facts.request, requestId: objective.requestMessageId, maxBatches: 4 });
+    const { judged } = await assessMembers({ audienceIds: facts.audienceIds, request: await objectiveJudgeRequest(objective), requestId: objective.requestMessageId, maxBatches: 4 });
     // Nothing judged: the rest are claimed by a search judging them now.
     const delay = judged ? 1_000 : TURN_POLL_MS;
     await saveObjectiveProgress(objective.id, { waiting: JUDGING }, new Date(Date.now() + delay));
@@ -179,6 +194,8 @@ async function continueRequest(objective: Objective, facts: ObjectiveFacts, step
           sources: facts.sources,
           web: facts.web,
           funnel: facts.funnel,
+          v2: Boolean(objective.controls.brief),
+          ...(step.final ? { final: step.final, finalDetail: step.finalDetail } : {}),
         }),
         toolResult: {
           objectiveNote: noteKey,
@@ -197,6 +214,7 @@ async function continueRequest(objective: Objective, facts: ObjectiveFacts, step
       leadsAtStart: retry?.leadsAtStart ?? facts.leads,
       judged: null,
       waitUntil: null,
+      ...(step.final ? { final: step.final, ...(step.finalDetail ? { finalDetail: step.finalDetail } : {}) } : {}),
     };
     await saveObjectiveProgress(objective.id, { continuation, dry: step.dry, waiting: "the assistant is choosing the next source" }, new Date(Date.now() + TURN_POLL_MS));
   } catch (error) {

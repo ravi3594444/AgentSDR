@@ -21,14 +21,15 @@ import type { LeadFunnel } from "./leadFit";
 
 export type ObjectiveStatus = "active" | "paused" | "stopped";
 
-export type StopReason = "target_reached" | "sources_exhausted" | "budget_spent" | "time_limit" | "cancelled" | "failed";
-export const STOP_REASONS: readonly StopReason[] = ["target_reached", "sources_exhausted", "budget_spent", "time_limit", "cancelled", "failed"];
+/** "finished": the assistant ended it as the owner asked (research agent v2's finish_request), whatever the target. */
+export type StopReason = "target_reached" | "finished" | "sources_exhausted" | "budget_spent" | "time_limit" | "cancelled" | "failed";
+export const STOP_REASONS: readonly StopReason[] = ["target_reached", "finished", "sources_exhausted", "budget_spent", "time_limit", "cancelled", "failed"];
 
 /** How the request ended, for the chat and Activity: the target reached is complete; any other limit leaves it partial. */
 export type ObjectiveOutcome = "completed" | "partial" | "cancelled" | "failed";
 
 export function outcomeOf(reason: StopReason): ObjectiveOutcome {
-  if (reason === "target_reached") return "completed";
+  if (reason === "target_reached" || reason === "finished") return "completed";
   if (reason === "cancelled") return "cancelled";
   if (reason === "failed") return "failed";
   return "partial";
@@ -309,12 +310,40 @@ export function formatDuration(ms: number): string {
   return mins ? `${hours} h ${mins} min` : `${hours} h`;
 }
 
+/** The stop reasons a limit gives (limitReached). */
+export type LimitReason = Extract<StopReason, "target_reached" | "budget_spent" | "time_limit">;
+/** Research agent v2: why a request is ending on its own, which gives the assistant one last turn first. */
+export type FinalReason = LimitReason | "sources_exhausted";
+
 /** The first limit the request has reached, in order: its target, its spend cap (settled spend), its time. */
-export function limitReached(facts: LimitFacts): { reason: StopReason; detail: string } | null {
+
+export function limitReached(facts: LimitFacts): { reason: LimitReason; detail: string } | null {
   if (facts.leads >= facts.leadTarget) return { reason: "target_reached", detail: `${facts.leads} qualified leads found, the target was ${facts.leadTarget}` };
   if (facts.spendCapUsd > 0 && facts.spentUsd >= facts.spendCapUsd - EPSILON) return { reason: "budget_spent", detail: `${usd(facts.spentUsd)} of the ${usd(facts.spendCapUsd)} spend cap was used` };
   if (facts.now.getTime() >= facts.deadline.getTime()) return { reason: "time_limit", detail: "the time limit passed" };
   return null;
+}
+
+/**
+ * Research agent v2: whether the request waits for the owner. Only a question
+ * from a turn that started no search holds it ("Which city should I search
+ * in?"); a side question asked while work runs ("do you have prices I can
+ * mention?") does not.
+ */
+export function waitsForOwner(input: { lastWord: { role: string; content: string } | undefined; turnStartedSearch: boolean }): boolean {
+  return input.lastWord?.role === "assistant" && input.lastWord.content.trim().endsWith("?") && !input.turnStartedSearch;
+}
+
+/**
+ * Research agent v2: what a request's leads are judged against. The brief's
+ * goal is the model's reading of the request; the owner's own messages for
+ * it come beside it, so a place or kind given in an answer counts even when
+ * the brief was written before it.
+ */
+export function judgeRequestText(goal: string, ownerWords: readonly string[]): string {
+  const words = ownerWords.map((text) => text.replace(/\s+/g, " ").trim()).filter(Boolean);
+  if (!words.length || (words.length === 1 && words[0] === goal.trim())) return goal;
+  return `${goal}\nThe owner's own words for this request, in order (they decide where they disagree with the line above): ${words.map((text, index) => `(${index + 1}) ${text.slice(0, 500)}`).join(" ")}`;
 }
 
 /** How a continuation turn ended (agent.server.ts runAgentTurn). */
@@ -331,6 +360,10 @@ export type Continuation = {
   /** Judged once its turn ended: it started work (productive), or met only a full slot or quota wait (waiting). */
   judged: "productive" | "waiting" | null;
   waitUntil?: string | null;
+  /** Research agent v2: why the request is ending; this turn is its last, to plan from what matched and finish. */
+  final?: FinalReason;
+  /** That reason in words, said in the stop once the turn has ended. */
+  finalDetail?: string;
 };
 
 export type DriverFacts = LimitFacts & {
@@ -356,6 +389,10 @@ export type DriverFacts = LimitFacts & {
   pendingMembers: number;
   /** The driver's failed attempts at judging them. */
   qualifyFailures: number;
+  /** Research agent v2: a request that would end on its own (a limit reached, or no source left) wakes the assistant once, to prepare the plan from what matched and finish, before it stops. */
+  wakeAtLimit?: boolean;
+  /** Research agent v2: the chat's last word is the assistant's question to the owner; the request waits for the answer. */
+  waitingForOwner?: boolean;
 };
 
 export type DriverStep =
@@ -363,7 +400,7 @@ export type DriverStep =
   | { kind: "wait"; delayMs: number; reason: string }
   | { kind: "judge"; judged: "productive" | "waiting"; waitUntil: Date | null }
   | { kind: "qualify" }
-  | { kind: "continue"; n: number; attempt: number; dry: number };
+  | { kind: "continue"; n: number; attempt: number; dry: number; final?: FinalReason; finalDetail?: string };
 
 export const MAX_CONTINUATION_ATTEMPTS = 3;
 /** The driver's attempts at judging leads left unjudged; after these they stay uncounted, and the report says so. */
@@ -384,10 +421,40 @@ const SLOT_RETRY_MS = 5 * 60_000;
  */
 export function nextDriverStep(facts: DriverFacts): DriverStep {
   const limit = limitReached(facts);
-  if (limit) return { kind: "stop", ...limit };
   const untilDeadline = Math.max(1_000, facts.deadline.getTime() - facts.now.getTime() + 1_000);
   const wait = (delayMs: number, reason: string): DriverStep => ({ kind: "wait", delayMs: Math.min(delayMs, untilDeadline), reason });
+  // v2: a request that would end on its own first gets one last turn, started with the reason, in which no search
+  // starts (objectiveStartProblem); it prepares the plan from what matched and finishes. Once that turn has ended
+  // (or cannot be run), the request stops at a limit that holds, or with "sources exhausted" when that is why it
+  // began; begun at a limit that no longer holds (verdicts corrected below the target), it goes on as before.
+  // Its waits are not clamped to the deadline: past the time limit that would poll every second.
+  const last = facts.wakeAtLimit && facts.continuation?.final ? facts.continuation : null;
+  if (last) {
+    const again = (): DriverStep => ({ kind: "continue", n: last.n, attempt: last.attempt + 1, dry: facts.dry, final: last.final, ...(last.finalDetail ? { finalDetail: last.finalDetail } : {}) });
+    const end = (): DriverStep => limit ? { kind: "stop", ...limit }
+      : last.final === "sources_exhausted" ? { kind: "stop", reason: "sources_exhausted", detail: last.finalDetail ?? "the assistant found no further source or query worth searching" }
+      : { kind: "continue", n: last.n + 1, attempt: 1, dry: facts.dry };
+    if (!last.endedAt && facts.threadBusy) return { kind: "wait", delayMs: TURN_POLL_MS, reason: "the assistant is preparing what follows" };
+    // Paused by the owner: nothing runs and it does not end on its own; a limit still ends it.
+    if (facts.status === "paused") return limit ? { kind: "stop", ...limit } : wait(PAUSED_POLL_MS, "paused by the owner");
+    if (!last.endedAt) return last.attempt >= MAX_CONTINUATION_ATTEMPTS ? end() : again();
+    if (last.end === "failed" && last.attempt < MAX_CONTINUATION_ATTEMPTS) {
+      const retryAt = new Date(last.endedAt).getTime() + RETRY_BACKOFF_MS * last.attempt;
+      return facts.now.getTime() < retryAt ? { kind: "wait", delayMs: retryAt - facts.now.getTime(), reason: "the AI model did not answer; trying again shortly" } : again();
+    }
+    return end();
+  }
+  const lastTurn = (reason: FinalReason, detail: string, n: number, dry: number): DriverStep => facts.threadBusy
+    ? { kind: "wait", delayMs: TURN_POLL_MS, reason: "the chat is busy" }
+    : { kind: "continue", n, attempt: 1, dry, final: reason, finalDetail: detail };
+  if (limit && facts.wakeAtLimit) return lastTurn(limit.reason, limit.detail, (facts.continuation?.n ?? 0) + 1, facts.dry);
+  if (limit) return { kind: "stop", ...limit };
+  const exhausted = (detail: string, n: number, dry: number): DriverStep => facts.wakeAtLimit
+    ? lastTurn("sources_exhausted", detail, n, dry)
+    : { kind: "stop", reason: "sources_exhausted", detail };
   if (facts.status === "paused") return wait(PAUSED_POLL_MS, "paused by the owner");
+  // A question to the owner is not a source exhausted: the request waits for the answer (the time limit still ends it).
+  if (facts.waitingForOwner && facts.openChildren === 0) return wait(PAUSED_POLL_MS, "waiting for the owner's answer");
   // Leads found but not yet judged against the request (a list added by hand, an earlier failure): judged before
   // anything is decided on the count. Searches still running judge their own.
   if (facts.openChildren === 0 && facts.pendingMembers > 0 && facts.qualifyFailures < MAX_QUALIFY_ATTEMPTS) return { kind: "qualify" };
@@ -414,7 +481,7 @@ export function nextDriverStep(facts: DriverFacts): DriverStep {
     // now that it is resumed the request continues, and that turn is not counted as dry.
     if (facts.pausedAt && Date.parse(facts.pausedAt) >= Date.parse(turn.startedAt)) return { kind: "continue", n: turn.n + 1, attempt: 1, dry: facts.dry };
     const why = facts.refusals[0];
-    return { kind: "stop", reason: "sources_exhausted", detail: why ? `no other source could be searched (${why.replace(/\.$/, "")})` : "the assistant found no further source or query worth searching" };
+    return exhausted(why ? `no other source could be searched (${why.replace(/\.$/, "")})` : "the assistant found no further source or query worth searching", turn.n + 1, facts.dry);
   }
 
   if (facts.openChildren > 0) return wait(WATCH_MS, `${facts.openChildren} search${facts.openChildren === 1 ? "" : "es"} still running`);
@@ -424,7 +491,7 @@ export function nextDriverStep(facts: DriverFacts): DriverStep {
     return wait(new Date(turn.waitUntil).getTime() - facts.now.getTime(), "a provider slot or quota is full; trying again when it frees");
   }
   const dry = turn ? (facts.leads > turn.leadsAtStart ? 0 : facts.dry + 1) : 0;
-  if (dry >= MAX_DRY_CONTINUATIONS) return { kind: "stop", reason: "sources_exhausted", detail: `${dry} continuations in a row found no new lead` };
+  if (dry >= MAX_DRY_CONTINUATIONS) return exhausted(`${dry} continuations in a row found no new lead`, (turn?.n ?? 0) + 1, dry);
   return { kind: "continue", n: (turn?.n ?? 0) + 1, attempt: 1, dry };
 }
 
@@ -523,7 +590,20 @@ export function continuationNote(input: {
   sources: readonly SourceYield[];
   web: WebUse | null;
   funnel?: LeadFunnel;
+  /** Research agent v2: the model holds the brief and the counts; the note only wakes it, without pressing for more searches. */
+  v2?: boolean;
+  /** v2: why the request is ending; this turn is its last. */
+  final?: FinalReason;
+  finalDetail?: string;
 }): string {
+  if (input.v2) {
+    if (input.final === "sources_exhausted") return `Your request has no further source to search (${input.finalDetail ?? "nothing more was found"}) with ${input.leads} of ${input.leadTarget} matching leads (step ${input.n}). No more searches start for it. Next: review them, prepare outreach from the leads that match if the brief says contact, then finish_request.`;
+    if (input.final === "target_reached") return `Your request has its ${input.leadTarget} matching leads (step ${input.n}); the counts are in PROGRESS. Next: review them, prepare outreach if the brief says contact, then finish_request. No more searches start for it.`;
+    if (input.final) return `Your request reached its ${input.final === "budget_spent" ? "spend cap" : "time limit"} with ${input.leads} of ${input.leadTarget} matching leads (step ${input.n}). No more searches start for it. Next: review them, prepare outreach from the leads that match if the brief says contact, then finish_request.`;
+    return input.leads >= input.leadTarget
+      ? `Your request has its ${input.leadTarget} matching leads (step ${input.n}); the counts are in PROGRESS. Next: review them, prepare outreach if the brief says contact, then finish_request. No more searches start for it.`
+      : `The searches for your request have finished for now (step ${input.n}); the counts are in PROGRESS. Next: review the leads, correct verdicts the evidence contradicts, prepare outreach when the brief says contact and enough leads match, search another source if the brief still needs leads, or finish_request when its done condition is met.`;
+  }
   const request = input.request.replace(/\s+/g, " ").trim().slice(0, 200);
   return [
     `Continuing your request “${request}” on its own (step ${input.n}): ${input.leads} of ${input.leadTarget} qualified leads so far (contactable and matching the request), ${Math.max(0, input.leadTarget - input.leads)} to go.`,
@@ -547,6 +627,7 @@ function funnelText(funnel: LeadFunnel): string {
 
 export const STOP_WORDS: Record<StopReason, string> = {
   target_reached: "the target was reached",
+  finished: "the assistant finished what was asked",
   sources_exhausted: "no further source was left to try",
   budget_spent: "the spend cap was used",
   time_limit: "the time limit passed",
@@ -573,11 +654,14 @@ export function objectiveReportText(input: {
   funnel?: LeadFunnel;
   /** The counts when it stopped: more found by searches already running then are explained, not printed as a second total. */
   atStop?: { qualified: number } | null;
+  /** False when the owner named no number (a brief without one): the count is not set against a default target. */
+  targetNamed?: boolean;
 }): string {
-  const head = input.reason === "target_reached" ? "Research finished" : "Research stopped";
+  const head = input.reason === "target_reached" || input.reason === "finished" ? "Research finished" : "Research stopped";
   // A reached target is said without the count it was recorded with: the line below gives the one total.
   const why = input.reason === "target_reached" ? `the target of ${input.leadTarget} was reached` : input.detail ? input.detail : STOP_WORDS[input.reason];
-  const remaining = Math.max(0, input.leadTarget - input.leads);
+  const targetNamed = input.targetNamed ?? true;
+  const remaining = targetNamed && input.reason !== "finished" ? Math.max(0, input.leadTarget - input.leads) : 0;
   const routes = [
     input.routes.email ? `${input.routes.email} by email` : null,
     input.routes.whatsapp ? `${input.routes.whatsapp} by WhatsApp or phone` : null,
@@ -592,7 +676,7 @@ export function objectiveReportText(input: {
     : "";
   return [
     `${head}: ${why} (request “${request}”).`,
-    `${plural(input.leads, "qualified lead")} (contactable and matching your request) of the ${input.leadTarget} wanted${remaining ? `; ${remaining} still to find` : ""}.${late}${routes.length ? ` Their contact routes (one person can have several): ${routes.join(", ")}.` : ""}`,
+    `${plural(input.leads, "qualified lead")} (contactable and matching your request)${targetNamed ? ` of the ${input.leadTarget} wanted` : ""}${remaining ? `; ${remaining} still to find` : ""}.${late}${routes.length ? ` Their contact routes (one person can have several): ${routes.join(", ")}.` : ""}`,
     input.funnel && input.funnel.found ? `${funnelText(input.funnel)}.` : null,
     `Searched — ${sourcesText(input.sources, input.web)}.`,
     `Recorded spend: ${spendText(input.spend, input.spendCapUsd)}. The AI model's own use for chat, judging leads and writing is not in this figure; your AI provider bills it.`,

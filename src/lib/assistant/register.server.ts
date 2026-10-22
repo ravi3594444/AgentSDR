@@ -10,7 +10,7 @@ import { continueAfterEvent, runToolInThread } from "./agent.server";
 import { coverageLineForJob } from "./coverage.server";
 import { autoStartPlan, threadAutonomy } from "./autonomy.server";
 import { runLinkedinSearchStep } from "./linkedinSearch.server";
-import { failObjective, jobRequestId, nudgeObjective, objectiveForJob, objectiveHold, objectiveRequest, postObjectiveReport } from "./objective.server";
+import { failObjective, jobRequestId, nudgeObjective, objectiveForJob, objectiveHold, objectiveJudgeRequest, postObjectiveReport } from "./objective.server";
 import { assessMembers, audienceFunnel, unjudgedMembers } from "./qualify.server";
 import { funnelLine, type LeadFunnel } from "./leadFit";
 import type { ChatEvent } from "./chatEvents";
@@ -218,7 +218,7 @@ async function runQualifyingStage(job: AssistantJob, heartbeat: () => Promise<vo
   if (objective.status === "stopped") return finish("Its leads were not judged against your request: the research stopped first.");
   try {
     const before = await unjudgedMembers(audienceIds);
-    const { judged: count, remaining } = await assessMembers({ audienceIds, request: await objectiveRequest(objective), requestId: objective.requestMessageId, heartbeat });
+    const { judged: count, remaining } = await assessMembers({ audienceIds, request: await objectiveJudgeRequest(objective), requestId: objective.requestMessageId, heartbeat });
     if (remaining > 0) return { next: "wait", delayMs: count ? 1_000 : QUALIFY_CLAIMED_MS, progress: { stage: QUALIFYING, judged: before - remaining, toJudge: before } };
     return finish(null);
   } catch (error) {

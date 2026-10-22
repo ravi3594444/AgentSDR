@@ -57,7 +57,7 @@ describe("runtimeFor: how AI/ML API models are asked for structured answers", ()
     assert.equal(toolsOnly.functionCallFallback, false);
   });
 
-  test("a catalog that does not list the model, fails or is too slow keeps json_schema with no fallback", async () => {
+  test("a catalog that does not list the model, fails or is too slow keeps json_schema, and a refusal may still be asked once as a function call", async () => {
     const cases: Array<{ listModels: () => Promise<AimlModelSummary[]>; waitMs?: number }> = [
       { listModels: async () => [entry("other/model", ["structured_output", "tools"])] },
       { listModels: async () => { throw new Error("Could not load the AI/ML API model list (503)"); } },
@@ -66,7 +66,7 @@ describe("runtimeFor: how AI/ML API models are asked for structured answers", ()
     for (const options of cases) {
       const runtime = await runtimeFor(aimlPlan("deepseek/deepseek-chat"), connection, "key", 1_000, options);
       assert.equal(runtime.structuredOutput, "json_schema");
-      assert.equal(runtime.functionCallFallback, false);
+      assert.equal(runtime.functionCallFallback, true);
     }
   });
 

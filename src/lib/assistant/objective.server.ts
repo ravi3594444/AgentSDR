@@ -11,6 +11,7 @@ import { tregCalls } from "@/lib/treg/schema";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { webToolUse } from "./coverage.server";
 import {
+  judgeRequestText,
   formatDuration,
   limitReached,
   objectiveReportKey,
@@ -25,6 +26,7 @@ import {
   type ContactRoutes,
   type ControlDefaults,
   type LedgerRow,
+  type ObjectiveControls,
   type ObjectiveOutcome,
   type ObjectiveStatus,
   type SourceYield,
@@ -35,6 +37,7 @@ import {
 } from "./objective";
 import { assistantJobs, assistantMessages, assistantObjectives, leadAudiences, type ObjectiveProgress } from "./schema";
 import { addMessage } from "./threads.server";
+import type { Brief } from "./brief";
 import type { AssistantJob, StepOutcome } from "./worker";
 import { audienceFunnel } from "./qualify.server";
 import type { LeadFunnel } from "./leadFit";
@@ -173,7 +176,7 @@ export async function objectiveDefaults(): Promise<ControlDefaults> {
  * when there is no owner request to pursue (no request id, or not an owner
  * message of this chat), or the migration has not run.
  */
-export async function ensureObjective(input: { requestMessageId: string | null | undefined; threadId: string | null; userId: string | null }): Promise<{ objective: Objective; created: boolean } | null> {
+export async function ensureObjective(input: { requestMessageId: string | null | undefined; threadId: string | null; userId: string | null; brief?: { brief: Brief; controls: ObjectiveControls } }): Promise<{ objective: Objective; created: boolean } | null> {
   const requestId = input.requestMessageId;
   const threadId = input.threadId;
   if (!requestId || !threadId || !UUID.test(requestId)) return null;
@@ -182,7 +185,7 @@ export async function ensureObjective(input: { requestMessageId: string | null |
   const [message] = await db.select({ content: assistantMessages.content, threadId: assistantMessages.threadId, role: assistantMessages.role })
     .from(assistantMessages).where(and(inOrg(assistantMessages), eq(assistantMessages.id, requestId))).limit(1);
   if (!message || message.role !== "user" || message.threadId !== threadId) return null;
-  const controls = parseObjectiveControls(message.content, await objectiveDefaults());
+  const controls = input.brief?.controls ?? parseObjectiveControls(message.content, await objectiveDefaults());
   const now = Date.now();
   return tolerant(() => db.transaction(async (tx) => {
     const [created] = await tx.insert(assistantObjectives).values({
@@ -193,7 +196,7 @@ export async function ensureObjective(input: { requestMessageId: string | null |
       timeLimitMinutes: controls.timeLimitMinutes,
       deadlineAt: new Date(now + controls.timeLimitMinutes * 60_000),
       spendCapUsd: controls.spendCapUsd,
-      controls: { named: controls.named },
+      controls: { named: controls.named, ...(input.brief ? { brief: input.brief.brief } : {}) },
       status: "active",
       nextEligibleAt: new Date(now + FIRST_LOOK_MS),
       createdBy: input.userId,
@@ -218,6 +221,32 @@ export async function ensureObjective(input: { requestMessageId: string | null |
     });
     return { objective: created, created: true };
   }), null);
+}
+
+/**
+ * Writes the request's brief (research agent v2, brief.ts): creates its
+ * objective with the brief's controls, or updates an active or paused one
+ * (the time limit still counts from when it began). A stopped request takes
+ * no new brief: a new owner message starts a new request.
+ */
+export async function setObjectiveBrief(input: { requestMessageId: string; threadId: string; userId: string | null; brief: Brief; controls: ObjectiveControls }): Promise<{ objective: Objective; created: boolean } | { problem: string }> {
+  const existing = await objectiveForRequest(input.requestMessageId);
+  if (!existing) {
+    const ensured = await ensureObjective({ ...input, brief: { brief: input.brief, controls: input.controls } });
+    return ensured ?? { problem: "this request cannot be recorded (it is not an owner message of this chat)" };
+  }
+  if (existing.status === "stopped") return { problem: `this request has ended (${stopText(existing)}); a new request needs a new message from the owner, then set_brief with newRequest true` };
+  const [updated] = await db.update(assistantObjectives).set({
+    leadTarget: input.controls.leadTarget,
+    timeLimitMinutes: input.controls.timeLimitMinutes,
+    deadlineAt: new Date(existing.createdAt.getTime() + input.controls.timeLimitMinutes * 60_000),
+    spendCapUsd: input.controls.spendCapUsd,
+    controls: { named: input.controls.named, brief: input.brief },
+    updatedAt: new Date(),
+  }).where(and(inOrg(assistantObjectives), eq(assistantObjectives.id, existing.id), ne(assistantObjectives.status, "stopped"))).returning();
+  if (!updated) return { problem: "this request ended while the brief was being saved" };
+  await nudgeObjective(updated.id);
+  return { objective: updated, created: false };
 }
 
 /** The controls in a sentence, for the first search's result (the model tells the owner). */
@@ -479,7 +508,8 @@ export async function objectiveFacts(objective: Objective): Promise<ObjectiveFac
   const web = message ? await webToolUse(message) : null;
   return {
     objective,
-    request: message?.content ?? "",
+    // A brief (research agent v2) is the request as the owner meant it, clarifications included.
+    request: objective.controls.brief?.goal ?? message?.content ?? "",
     children,
     leads,
     routes,
@@ -697,17 +727,38 @@ export async function setObjectiveState(objectiveId: string, action: "pause" | "
   return { changed, objective: await getObjective(objectiveId) };
 }
 
-async function requestText(objective: Pick<Objective, "requestMessageId">): Promise<string> {
-  const [message] = await db.select({ content: assistantMessages.content }).from(assistantMessages)
-    .where(and(inOrg(assistantMessages), eq(assistantMessages.id, objective.requestMessageId))).limit(1);
-  return (message?.content ?? "").replace(/\s+/g, " ").trim().slice(0, 160);
+async function requestText(objective: Pick<Objective, "requestMessageId" | "controls">): Promise<string> {
+  return (await objectiveRequest(objective)).replace(/\s+/g, " ").trim().slice(0, 160);
 }
 
-/** The owner's words that asked for the request, whole (what its leads are judged against). */
-export async function objectiveRequest(objective: Pick<Objective, "requestMessageId">): Promise<string> {
+/** The owner's words that asked for the request, whole (what its leads are judged against); its brief's goal when it has one. */
+export async function objectiveRequest(objective: Pick<Objective, "requestMessageId" | "controls">): Promise<string> {
+  if (objective.controls.brief?.goal) return objective.controls.brief.goal;
   const [message] = await db.select({ content: assistantMessages.content }).from(assistantMessages)
     .where(and(inOrg(assistantMessages), eq(assistantMessages.id, objective.requestMessageId))).limit(1);
   return message?.content ?? "";
+}
+
+/**
+ * What the request's leads are judged against: its owner's words, or for
+ * research agent v2 its brief's goal with the owner's own messages for it
+ * beside it (from the request's message up to the next request in the chat),
+ * so a place or kind given in an answer counts though the brief was written
+ * before it.
+ */
+export async function objectiveJudgeRequest(objective: Pick<Objective, "id" | "requestMessageId" | "controls" | "threadId">): Promise<string> {
+  const goal = objective.controls.brief?.goal;
+  if (!goal) return objectiveRequest(objective);
+  // Compared in SQL: the stored times have microseconds, a JS Date only milliseconds.
+  const org = currentOrganizationId();
+  const requestAt = sql`(select r.created_at from assistant_messages r where r.organization_id = ${org} and r.id = ${objective.requestMessageId})`;
+  const words = await db.execute<{ content: string }>(sql`select m.content from assistant_messages m
+    where m.organization_id = ${org} and m.thread_id = ${objective.threadId} and m.role = 'user'
+      and m.created_at >= ${requestAt}
+      and m.created_at < coalesce((select min(n.created_at) from assistant_objectives o join assistant_messages n on n.id = o.request_message_id
+        where o.organization_id = ${org} and o.thread_id = ${objective.threadId} and o.id <> ${objective.id} and n.created_at > ${requestAt}), 'infinity'::timestamptz)
+    order by m.created_at asc limit 20`);
+  return judgeRequestText(goal, words.map((row) => row.content));
 }
 
 /** Whether the stopped objective may report now: its running searches have finished, or it has waited long enough for them. */
@@ -740,6 +791,7 @@ export async function postObjectiveReport(objectiveId: string): Promise<boolean>
     stillRunning: facts.openChildren,
     funnel: facts.funnel,
     atStop: (objective.progress as ObjectiveProgress).atStop ?? null,
+    targetNamed: objective.controls.brief ? objective.controls.brief.leadTarget !== null : true,
   });
   return db.transaction(async (tx) => {
     const claimed = await tx.update(assistantObjectives).set({ reportedAt: new Date(), updatedAt: new Date() })
@@ -788,6 +840,8 @@ export async function objectiveStartProblem(requestId: string | null | undefined
   if (!objective) return null;
   if (objective.status === "paused") return "the research for this request is paused; it continues when the owner resumes it";
   if (objective.status === "stopped") return `the research for this request has stopped (${stopText(objective)}); a new request starts new research`;
+  // Research agent v2: the request's last turn (objective.ts nextDriverStep) plans from what matched and finishes.
+  if ((objective.progress as ObjectiveProgress).continuation?.final) return "this request is ending: its last turn prepares outreach from the leads that match and finishes, and no more searches start for it";
   const children = await objectiveChildren(objective);
   const { leads } = await objectiveLeads(objective, children);
   const spend = await objectiveSpend(objective, db, children);

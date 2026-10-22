@@ -8,7 +8,7 @@ import { aimlFunctionCallFallback, aimlStructuredMode } from "../aimlapi-types";
 import { DECISION_SCHEMA } from "@/lib/assistant/replyAgent/decisionSchema";
 import { parseAgentDecision } from "@/lib/assistant/replyAgent/agent";
 
-type Reply = { toolArgs?: string; content?: string; throws?: Error; error?: unknown; finish?: string };
+type Reply = { toolArgs?: string; content?: string; throws?: Error; error?: unknown; finish?: string; otherCalls?: Array<{ name: string; arguments: string }> };
 
 /** A runtime whose client answers each call from the scripted list, in order. */
 function scripted(replies: Reply[], schemaName = "submit", providerKey: "openrouter" | "aimlapi" = "openrouter") {
@@ -28,7 +28,9 @@ function scripted(replies: Reply[], schemaName = "submit", providerKey: "openrou
       return {
         choices: [{ finish_reason: reply.finish ?? "tool_calls", message: {
           content: reply.content ?? null,
-          tool_calls: reply.toolArgs === undefined
+          tool_calls: reply.otherCalls
+            ? reply.otherCalls.map((call) => ({ type: "function", function: call }))
+            : reply.toolArgs === undefined
             ? []
             : [{ type: "function", function: { name: schemaName, arguments: reply.toolArgs } }],
         } }],
@@ -50,6 +52,22 @@ const input = {
 const noSleep = async () => {};
 
 describe("completeStructured", () => {
+  test("a model that calls other functions is told on the retry that the named function is the only one", async () => {
+    // DeepSeek Chat on AI/ML, 21 Oct 2026: forced to call assistant_reply, it called the
+    // assistant's action names (set_brief, search_knowledge) as functions, three times alike.
+    const { runtime, requests } = scripted([
+      { otherCalls: [{ name: "set_brief", arguments: '{"goal":"Find 10 hair salons"}' }, { name: "search_knowledge", arguments: '{"query":"city"}' }] },
+      { toolArgs: '{"category":"a"}' },
+    ], "submit", "aimlapi");
+    const result = await completeStructured(input, { runtime, sleep: noSleep });
+    assert.equal(result.text, '{"category":"a"}');
+    assert.equal(requests.length, 2);
+    const retry = (requests[1] as { messages: Array<{ role: string; content: string }> }).messages.find((message) => message.role === "user")!.content;
+    assert.match(retry, /you called set_brief and search_knowledge/);
+    assert.match(retry, /the only function is submit/);
+    assert.match(retry, /"name":"set_brief"/);
+  });
+
   test("asks for the answer as a tool call, never as a response_format", async () => {
     const { runtime, requests } = scripted([{ toolArgs: '{"category":"a"}' }]);
     const result = await completeStructured(input, { runtime, sleep: noSleep });

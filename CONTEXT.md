@@ -11,6 +11,14 @@ word means here and, where it matters, what it does not mean.
   identified by the owner's message id (`requestId`). Several jobs and plans
   can serve one objective. A child job finishing does not finish the
   objective.
+- **Brief** (research agent v2): the model's written-down reading of one
+  request (`brief.ts`): its goal, the number of leads, whether to contact
+  them, the only channels allowed, the spend cap, the time limit and what
+  "done" means, taken from every owner message about it (an answer to the
+  assistant's question included) and stored on the objective. The model
+  may tighten a limit freely; a limit above the organization's default
+  stands only when the owner wrote that number. Searches wait for it; the
+  plan, the judge and the final report read it.
 - **Research-only request**: a request whose latest words say not to contact
   anyone ("research only", "no outreach", "do not contact anyone", "kisi ko
   contact mat karo"). It is a veto: nothing in it authorizes outreach, and it
@@ -66,7 +74,10 @@ word means here and, where it matters, what it does not mean.
   that the judging found to match the owner's request (`fit = match`,
   `leadFit.ts`), deduplicated against People and outreach history. Each
   person counts once, however many sources found them. A contact route
-  alone is not a match, and keyword hits are hints, not proof.
+  alone is not a match, and keyword hits are hints, not proof. In research
+  agent v2 the model may correct a verdict (`set_lead_fit`), only with a
+  quote found in a page it read or in the lead's own saved facts; a name,
+  title or @handle is a hint, never proof of a place.
 - **Lead funnel**: a request's leads by distinct person: found, contactable,
   then of the contactable: match, no match (with the reason), unconfirmed (a
   requirement could not be checked, such as "no website") and not judged
@@ -136,10 +147,14 @@ word means here and, where it matters, what it does not mean.
   without an owner message, once its searches have ended short of the
   target, with a note of what each source yielded. The model chooses the
   next source or query; a continuation that starts nothing means the
-  sources are exhausted.
+  sources are exhausted. In research agent v2 a request that would end on
+  its own first gets one **last turn** (no search starts in it) to prepare
+  the plan from what matched and finish.
 - **Stop reason**: why an objective ended, the first of: target reached,
-  sources exhausted, spend cap used, time limit, cancelled, or failed. It is
-  stored with the objective and said in its final report.
+  finished (research agent v2: the assistant called `finish_request` once
+  the brief's done condition was met), sources exhausted, spend cap used,
+  time limit, cancelled, or failed. It is stored with the objective and
+  said in its final report.
 
 ## Outreach
 

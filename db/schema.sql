@@ -1053,7 +1053,7 @@ CREATE TABLE public.assistant_objectives (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT assistant_objectives_limits_chk CHECK (((lead_target >= 1) AND (time_limit_minutes >= 1) AND (spend_cap_usd >= (0)::double precision))),
     CONSTRAINT assistant_objectives_status_chk CHECK ((status = ANY (ARRAY['active'::text, 'paused'::text, 'stopped'::text]))),
-    CONSTRAINT assistant_objectives_stop_reason_chk CHECK (((stop_reason IS NULL) OR (stop_reason = ANY (ARRAY['target_reached'::text, 'sources_exhausted'::text, 'budget_spent'::text, 'time_limit'::text, 'cancelled'::text, 'failed'::text]))))
+    CONSTRAINT assistant_objectives_stop_reason_chk CHECK (((stop_reason IS NULL) OR (stop_reason = ANY (ARRAY['target_reached'::text, 'finished'::text, 'sources_exhausted'::text, 'budget_spent'::text, 'time_limit'::text, 'cancelled'::text, 'failed'::text]))))
 );
 
 --
@@ -2706,7 +2706,7 @@ CREATE TABLE public.organization_features (
     enabled boolean DEFAULT false NOT NULL,
     updated_by uuid,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT organization_features_key_chk CHECK ((key = ANY (ARRAY['instagram'::text, 'web_discovery'::text, 'inquiry_intake'::text, 'apify_discovery'::text, 'treg'::text, 'brightdata'::text])))
+    CONSTRAINT organization_features_key_chk CHECK ((key = ANY (ARRAY['instagram'::text, 'web_discovery'::text, 'inquiry_intake'::text, 'apify_discovery'::text, 'treg'::text, 'brightdata'::text, 'research_agent_v2'::text])))
 );
 
 --
