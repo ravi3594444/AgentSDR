@@ -1,6 +1,7 @@
 /**
  * Puts one row of each table added by scripts/add-instagram-intake-discovery.ts
- * and the later add-* migrations (and the new lead-list columns) into an
+ * and the later add-* migrations (and the new lead-list columns, and the
+ * managed SaaS tables) into an
  * organization, so
  * scripts/e2e/tenancy-isolation.ts has organization A identifiers in every
  * new table to look for in organization B's responses.
@@ -41,6 +42,8 @@ const { crmWrongRoutes } = await import("@/lib/crm/schema");
 const { activitySeen } = await import("@/lib/activity/schema");
 const { members } = await import("@/lib/auth/schema");
 const { assistantMessages, assistantObjectives, assistantThreads } = await import("@/lib/assistant/schema");
+const { providerCredentialModes } = await import("@/lib/managed/schema");
+const { unipileAccountOwners, unipileConnectStates } = await import("@/lib/unipile/schema");
 const { eq } = await import("drizzle-orm");
 
 const stamp = Date.now();
@@ -80,6 +83,10 @@ await runInOrganization(organizationId, async () => {
   const [thread] = await db.insert(assistantThreads).values({ organizationId, title: `Isolation research ${stamp}`, createdBy: owner?.userId ?? null }).returning();
   const [request] = await db.insert(assistantMessages).values({ organizationId, threadId: thread!.id, role: "user", content: `isolation request ${stamp}`, createdBy: owner?.userId ?? null }).returning();
   await db.insert(assistantObjectives).values({ organizationId, threadId: thread!.id, requestMessageId: request!.id, leadTarget: 25, timeLimitMinutes: 240, deadlineAt: new Date(Date.now() + 4 * 3_600_000), spendCapUsd: 5, progress: { waiting: `isolation waiting ${stamp}` } });
+  // Managed SaaS (scripts/add-managed-saas.ts): a Unipile connection link, an account it owns, an Included / own choice.
+  if (owner) await db.insert(unipileConnectStates).values({ organizationId, userId: owner.userId, channel: "whatsapp", kind: "create", credentialSource: "own", tokenHash: "0".repeat(64), status: "rejected", reason: `isolation connection ${stamp}`, expiresAt: new Date(), completedAt: new Date() });
+  await db.insert(unipileAccountOwners).values({ accountId: `iso-unipile-owned-${stamp}`, organizationId, channel: "whatsapp", credentialSource: "own", claimedVia: "operator" }).onConflictDoNothing();
+  await db.insert(providerCredentialModes).values({ organizationId, service: "brightdata", mode: "own", reason: `isolation choice ${stamp}` }).onConflictDoNothing();
   console.log(`Seeded new-feature fixtures into ${organizationId}: instagram account ${account!.id}, chat ${chat!.id}, endpoint ${endpoint!.id}, audience ${audienceId}.`);
 });
 process.exit(0);
