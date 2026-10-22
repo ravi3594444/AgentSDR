@@ -303,6 +303,11 @@ export async function listOrganizationsWithPlatform(key: PlatformKey): Promise<s
   return rows.map((row) => row.organizationId);
 }
 
+/** Unipile's credentials as stored: the DSN given a scheme and no trailing slash. Throws a user-facing Error for a malformed DSN. */
+export function normalizeUnipileCredentials(raw: Record<string, string>): PlatformCredentials["unipile"] {
+  return normalize("unipile", raw);
+}
+
 function normalize<K extends PlatformKey>(key: K, raw: Record<string, string>): PlatformCredentials[K] {
   const text = (name: string) => (raw[name] ?? "").trim();
   if (key === "unipile") {

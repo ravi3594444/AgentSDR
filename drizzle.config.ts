@@ -150,6 +150,9 @@ const OWNED_TABLES = [
   "activity_seen",
   "research_settings",
   "platform_operators",
+  "platform_credentials",
+  "platform_settings",
+  "provider_credential_modes",
 ];
 
 export default {

@@ -101,6 +101,8 @@ export const SCOPED_TABLES: readonly ScopedTable[] = [
   snake("browser_sessions"),
   snake("activity_seen"),
   snake("research_settings"),
+  // Included service or My own provider, per service (src/lib/managed/)
+  snake("provider_credential_modes"),
   // LinkedIn (ex-Prisma, camelCase columns)
   pascal("LinkedInAccount"),
   pascal("Campaign"),
@@ -173,6 +175,10 @@ export const GLOBAL: readonly string[] = [
   // The people granted platform operator access (scripts/grant-platform-operator.ts);
   // not a role in any organization (src/lib/managed/schema.ts).
   "platform_operators",
+  // The platform's own credentials for each Included service, and its
+  // platform-wide choices (the Included AI engine): src/lib/managed/schema.ts.
+  "platform_credentials",
+  "platform_settings",
 ];
 
 /**

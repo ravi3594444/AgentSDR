@@ -2928,6 +2928,22 @@ CREATE TABLE public.people (
 );
 
 --
+-- Name: platform_credentials; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.platform_credentials (
+    provider text NOT NULL,
+    encrypted_payload text NOT NULL,
+    config jsonb DEFAULT '{}'::jsonb NOT NULL,
+    fingerprint text NOT NULL,
+    source_organization_id uuid,
+    updated_by uuid,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT platform_credentials_provider_chk CHECK ((provider = ANY (ARRAY['unipile'::text, 'openrouter'::text, 'aimlapi'::text, 'anthropic'::text, 'tinyfish'::text, 'tavily'::text, 'brightdata'::text, 'apify'::text])))
+);
+
+--
 -- Name: platform_operators; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2936,6 +2952,32 @@ CREATE TABLE public.platform_operators (
     granted_by text NOT NULL,
     note text,
     granted_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+--
+-- Name: platform_settings; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.platform_settings (
+    key text NOT NULL,
+    value jsonb NOT NULL,
+    updated_by uuid,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+--
+-- Name: provider_credential_modes; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.provider_credential_modes (
+    organization_id uuid NOT NULL,
+    service text NOT NULL,
+    mode text NOT NULL,
+    reason text,
+    updated_by uuid,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT provider_credential_modes_mode_chk CHECK ((mode = ANY (ARRAY['managed'::text, 'own'::text]))),
+    CONSTRAINT provider_credential_modes_service_chk CHECK ((service = ANY (ARRAY['ai'::text, 'unipile'::text, 'tinyfish'::text, 'tavily'::text, 'brightdata'::text, 'apify'::text])))
 );
 
 --
@@ -4338,11 +4380,32 @@ ALTER TABLE ONLY public.people
     ADD CONSTRAINT people_pkey PRIMARY KEY (id);
 
 --
+-- Name: platform_credentials platform_credentials_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.platform_credentials
+    ADD CONSTRAINT platform_credentials_pkey PRIMARY KEY (provider);
+
+--
 -- Name: platform_operators platform_operators_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.platform_operators
     ADD CONSTRAINT platform_operators_pkey PRIMARY KEY (user_id);
+
+--
+-- Name: platform_settings platform_settings_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.platform_settings
+    ADD CONSTRAINT platform_settings_pkey PRIMARY KEY (key);
+
+--
+-- Name: provider_credential_modes provider_credential_modes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.provider_credential_modes
+    ADD CONSTRAINT provider_credential_modes_pkey PRIMARY KEY (organization_id, service);
 
 --
 -- Name: provider_quota_state provider_quota_state_pkey; Type: CONSTRAINT; Schema: public; Owner: -
@@ -7389,11 +7452,39 @@ ALTER TABLE ONLY public.people
     ADD CONSTRAINT people_organization_fk FOREIGN KEY (organization_id) REFERENCES public.organizations(id) ON DELETE RESTRICT;
 
 --
+-- Name: platform_credentials platform_credentials_source_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.platform_credentials
+    ADD CONSTRAINT platform_credentials_source_organization_id_fkey FOREIGN KEY (source_organization_id) REFERENCES public.organizations(id) ON DELETE SET NULL;
+
+--
+-- Name: platform_credentials platform_credentials_updated_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.platform_credentials
+    ADD CONSTRAINT platform_credentials_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES public.users(id) ON DELETE SET NULL;
+
+--
 -- Name: platform_operators platform_operators_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.platform_operators
     ADD CONSTRAINT platform_operators_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+--
+-- Name: platform_settings platform_settings_updated_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.platform_settings
+    ADD CONSTRAINT platform_settings_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES public.users(id) ON DELETE SET NULL;
+
+--
+-- Name: provider_credential_modes provider_credential_modes_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.provider_credential_modes
+    ADD CONSTRAINT provider_credential_modes_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
 
 --
 -- Name: provider_usage provider_usage_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -

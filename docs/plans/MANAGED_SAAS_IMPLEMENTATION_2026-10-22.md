@@ -17,7 +17,7 @@ an organization that already saved its own credentials keeps them and keeps
 |---|---|---|
 | 0 | This plan | written |
 | a | Platform operator grant (`platform_operators`), operator route guard, LinkedIn job logs | done: `scripts/grant-platform-operator.ts`, `src/lib/auth/operatorAccess.server.ts`; auth-policies e2e covers grant, re-grant, unknown address, revoke, workspace owners |
-| b | Platform credential store, per-provider Included/My own choice, resolver | planned |
+| b | Platform credential store, per-provider Included/My own choice, resolver | done: `src/lib/managed/` (catalog, allowances, store, modes, verify), the Anthropic engine adapter `src/lib/ai/server/anthropicRuntime.ts`; migration writes `own` for every organization with saved credentials |
 | c | Consumers switched to the resolver (AI, Unipile, TinyFish, Tavily, Bright Data, Apify, workers, gates) | planned |
 | d | Operator panel (default keys, Included AI engine and model, usage), adopt-defaults action | planned |
 | e | Customer settings: Plan & usage, Advanced → Use your own providers | planned |
