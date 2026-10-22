@@ -243,5 +243,5 @@ export function ConnectionOutcome() {
   if (!connection || !outcome) return null;
   if (outcome.status === "claimed") return <Callout tone="success">The account is connected to this workspace.</Callout>;
   if (outcome.status === "pending" && !outcome.expired) return <Callout tone="info">Waiting for Unipile to confirm the connection…</Callout>;
-  return <Callout tone="error">The account was not connected{outcome.reason ? `: ${outcome.reason}` : outcome.expired ? ": the link expired" : ""}.</Callout>;
+  return <Callout tone="error">The account was not connected{outcome.reason ? `: ${outcome.reason.replace(/\.+$/, "")}` : outcome.expired ? ": the link expired" : ""}.</Callout>;
 }

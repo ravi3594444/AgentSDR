@@ -122,7 +122,7 @@ export function allowanceDecision(
     return {
       ok: false,
       scope: "workspace",
-      reason: `This workspace's Included allowance for ${allowance.label} is used up (${amountText(used.workspace)} of ${amountText(allowance.workspace)}${allowance.period === "month" ? " this month" : ""}).${when}`,
+      reason: `This workspace's Included allowance for ${allowance.label} is used up (${allowance.unit === "usd" ? amountText(used.workspace) : Math.round(used.workspace).toLocaleString("en-US")} of ${amountText(allowance.workspace)}${allowance.period === "month" ? " this month" : ""}).${when}`,
       resetsAt,
     };
   }

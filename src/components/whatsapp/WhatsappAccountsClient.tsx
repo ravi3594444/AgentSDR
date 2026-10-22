@@ -188,7 +188,7 @@ export function WhatsappAccountsClient({ rules }: { rules: WhatsappNumberRules }
               <EmptyState
                 icon={WhatsappLogo}
                 title="No WhatsApp numbers yet"
-                description="In the Unipile dashboard choose Accounts → Connect → WhatsApp and scan the QR with the phone the rep calls from. Then sync here."
+                description="Connect a number: Unipile shows a QR code to scan with the phone the rep calls from. A number already linked in your own Unipile dashboard appears after a sync."
                 action={syncAction}
               />
             </FramePanel>

@@ -17,7 +17,7 @@ describe("allowances", () => {
     expect(workspace.ok).toBe(false);
     if (!workspace.ok) {
       expect(workspace.scope).toBe("workspace");
-      expect(workspace.reason).toContain("10 requests of 10 requests");
+      expect(workspace.reason).toContain("Included allowance for Web searches is used up (10 of 10 requests this month)");
       expect(workspace.resetsAt?.toISOString()).toBe("2026-11-01T00:00:00.000Z");
     }
     const platform = allowanceDecision(allowance, { workspace: 0, platform: 100 }, 1, now);
