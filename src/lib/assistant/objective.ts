@@ -310,15 +310,40 @@ export function formatDuration(ms: number): string {
   return mins ? `${hours} h ${mins} min` : `${hours} h`;
 }
 
-/** The first limit the request has reached, in order: its target, its spend cap (settled spend), its time. */
 /** The stop reasons a limit gives (limitReached). */
 export type LimitReason = Extract<StopReason, "target_reached" | "budget_spent" | "time_limit">;
+/** Research agent v2: why a request is ending on its own, which gives the assistant one last turn first. */
+export type FinalReason = LimitReason | "sources_exhausted";
+
+/** The first limit the request has reached, in order: its target, its spend cap (settled spend), its time. */
 
 export function limitReached(facts: LimitFacts): { reason: LimitReason; detail: string } | null {
   if (facts.leads >= facts.leadTarget) return { reason: "target_reached", detail: `${facts.leads} qualified leads found, the target was ${facts.leadTarget}` };
   if (facts.spendCapUsd > 0 && facts.spentUsd >= facts.spendCapUsd - EPSILON) return { reason: "budget_spent", detail: `${usd(facts.spentUsd)} of the ${usd(facts.spendCapUsd)} spend cap was used` };
   if (facts.now.getTime() >= facts.deadline.getTime()) return { reason: "time_limit", detail: "the time limit passed" };
   return null;
+}
+
+/**
+ * Research agent v2: whether the request waits for the owner. Only a question
+ * from a turn that started no search holds it ("Which city should I search
+ * in?"); a side question asked while work runs ("do you have prices I can
+ * mention?") does not.
+ */
+export function waitsForOwner(input: { lastWord: { role: string; content: string } | undefined; turnStartedSearch: boolean }): boolean {
+  return input.lastWord?.role === "assistant" && input.lastWord.content.trim().endsWith("?") && !input.turnStartedSearch;
+}
+
+/**
+ * Research agent v2: what a request's leads are judged against. The brief's
+ * goal is the model's reading of the request; the owner's own messages for
+ * it come beside it, so a place or kind given in an answer counts even when
+ * the brief was written before it.
+ */
+export function judgeRequestText(goal: string, ownerWords: readonly string[]): string {
+  const words = ownerWords.map((text) => text.replace(/\s+/g, " ").trim()).filter(Boolean);
+  if (!words.length || (words.length === 1 && words[0] === goal.trim())) return goal;
+  return `${goal}\nThe owner's own words for this request, in order (they decide where they disagree with the line above): ${words.map((text, index) => `(${index + 1}) ${text.slice(0, 500)}`).join(" ")}`;
 }
 
 /** How a continuation turn ended (agent.server.ts runAgentTurn). */
@@ -335,8 +360,10 @@ export type Continuation = {
   /** Judged once its turn ended: it started work (productive), or met only a full slot or quota wait (waiting). */
   judged: "productive" | "waiting" | null;
   waitUntil?: string | null;
-  /** Research agent v2: the limit this turn was started at, to plan from what matched and finish. */
-  final?: LimitReason;
+  /** Research agent v2: why the request is ending; this turn is its last, to plan from what matched and finish. */
+  final?: FinalReason;
+  /** That reason in words, said in the stop once the turn has ended. */
+  finalDetail?: string;
 };
 
 export type DriverFacts = LimitFacts & {
@@ -362,7 +389,7 @@ export type DriverFacts = LimitFacts & {
   pendingMembers: number;
   /** The driver's failed attempts at judging them. */
   qualifyFailures: number;
-  /** Research agent v2: reaching a limit (the target, the spend cap, the time limit) wakes the assistant once, to prepare the plan from what matched and finish, before the request stops. */
+  /** Research agent v2: a request that would end on its own (a limit reached, or no source left) wakes the assistant once, to prepare the plan from what matched and finish, before it stops. */
   wakeAtLimit?: boolean;
   /** Research agent v2: the chat's last word is the assistant's question to the owner; the request waits for the answer. */
   waitingForOwner?: boolean;
@@ -373,7 +400,7 @@ export type DriverStep =
   | { kind: "wait"; delayMs: number; reason: string }
   | { kind: "judge"; judged: "productive" | "waiting"; waitUntil: Date | null }
   | { kind: "qualify" }
-  | { kind: "continue"; n: number; attempt: number; dry: number; final?: LimitReason };
+  | { kind: "continue"; n: number; attempt: number; dry: number; final?: FinalReason; finalDetail?: string };
 
 export const MAX_CONTINUATION_ATTEMPTS = 3;
 /** The driver's attempts at judging leads left unjudged; after these they stay uncounted, and the report says so. */
@@ -396,17 +423,24 @@ export function nextDriverStep(facts: DriverFacts): DriverStep {
   const limit = limitReached(facts);
   const untilDeadline = Math.max(1_000, facts.deadline.getTime() - facts.now.getTime() + 1_000);
   const wait = (delayMs: number, reason: string): DriverStep => ({ kind: "wait", delayMs: Math.min(delayMs, untilDeadline), reason });
-  if (limit && facts.wakeAtLimit) {
-    // v2: one turn that starts at the limit (it prepares the plan from what matched and finishes); once it has
-    // ended, the request stops there. Not clamped to the deadline: at the time limit that would poll every second.
-    const turn = facts.continuation;
-    const final = limit.reason as LimitReason;
-    if (!turn?.final) return facts.threadBusy ? { kind: "wait", delayMs: TURN_POLL_MS, reason: "the chat is busy" } : { kind: "continue", n: (turn?.n ?? 0) + 1, attempt: 1, dry: facts.dry, final };
-    if (turn.endedAt || turn.attempt >= MAX_CONTINUATION_ATTEMPTS) return { kind: "stop", ...limit };
-    if (facts.threadBusy) return { kind: "wait", delayMs: TURN_POLL_MS, reason: "the assistant is preparing what follows the limit" };
-    return { kind: "continue", n: turn.n, attempt: turn.attempt + 1, dry: facts.dry, final: turn.final };
+  // v2: a request that would end on its own first gets one last turn, started with the reason, in which no search
+  // starts (objectiveStartProblem); it prepares the plan from what matched and finishes. Once that turn has ended
+  // (or cannot be run), the request stops: at a limit reached meanwhile, else with the reason the turn started for.
+  // Its waits are not clamped to the deadline: past the time limit that would poll every second.
+  const last = facts.wakeAtLimit && facts.continuation?.final ? facts.continuation : null;
+  if (last) {
+    if (last.endedAt || last.attempt >= MAX_CONTINUATION_ATTEMPTS) return limit ? { kind: "stop", ...limit } : { kind: "stop", reason: last.final!, detail: last.finalDetail ?? "the assistant's last turn ended" };
+    if (facts.threadBusy) return { kind: "wait", delayMs: TURN_POLL_MS, reason: "the assistant is preparing what follows" };
+    return { kind: "continue", n: last.n, attempt: last.attempt + 1, dry: facts.dry, final: last.final, ...(last.finalDetail ? { finalDetail: last.finalDetail } : {}) };
   }
+  const lastTurn = (reason: FinalReason, detail: string, n: number, dry: number): DriverStep => facts.threadBusy
+    ? { kind: "wait", delayMs: TURN_POLL_MS, reason: "the chat is busy" }
+    : { kind: "continue", n, attempt: 1, dry, final: reason, finalDetail: detail };
+  if (limit && facts.wakeAtLimit) return lastTurn(limit.reason, limit.detail, (facts.continuation?.n ?? 0) + 1, facts.dry);
   if (limit) return { kind: "stop", ...limit };
+  const exhausted = (detail: string, n: number, dry: number): DriverStep => facts.wakeAtLimit
+    ? lastTurn("sources_exhausted", detail, n, dry)
+    : { kind: "stop", reason: "sources_exhausted", detail };
   if (facts.status === "paused") return wait(PAUSED_POLL_MS, "paused by the owner");
   // A question to the owner is not a source exhausted: the request waits for the answer (the time limit still ends it).
   if (facts.waitingForOwner && facts.openChildren === 0) return wait(PAUSED_POLL_MS, "waiting for the owner's answer");
@@ -436,7 +470,7 @@ export function nextDriverStep(facts: DriverFacts): DriverStep {
     // now that it is resumed the request continues, and that turn is not counted as dry.
     if (facts.pausedAt && Date.parse(facts.pausedAt) >= Date.parse(turn.startedAt)) return { kind: "continue", n: turn.n + 1, attempt: 1, dry: facts.dry };
     const why = facts.refusals[0];
-    return { kind: "stop", reason: "sources_exhausted", detail: why ? `no other source could be searched (${why.replace(/\.$/, "")})` : "the assistant found no further source or query worth searching" };
+    return exhausted(why ? `no other source could be searched (${why.replace(/\.$/, "")})` : "the assistant found no further source or query worth searching", turn.n + 1, facts.dry);
   }
 
   if (facts.openChildren > 0) return wait(WATCH_MS, `${facts.openChildren} search${facts.openChildren === 1 ? "" : "es"} still running`);
@@ -446,7 +480,7 @@ export function nextDriverStep(facts: DriverFacts): DriverStep {
     return wait(new Date(turn.waitUntil).getTime() - facts.now.getTime(), "a provider slot or quota is full; trying again when it frees");
   }
   const dry = turn ? (facts.leads > turn.leadsAtStart ? 0 : facts.dry + 1) : 0;
-  if (dry >= MAX_DRY_CONTINUATIONS) return { kind: "stop", reason: "sources_exhausted", detail: `${dry} continuations in a row found no new lead` };
+  if (dry >= MAX_DRY_CONTINUATIONS) return exhausted(`${dry} continuations in a row found no new lead`, (turn?.n ?? 0) + 1, dry);
   return { kind: "continue", n: (turn?.n ?? 0) + 1, attempt: 1, dry };
 }
 
@@ -547,10 +581,12 @@ export function continuationNote(input: {
   funnel?: LeadFunnel;
   /** Research agent v2: the model holds the brief and the counts; the note only wakes it, without pressing for more searches. */
   v2?: boolean;
-  /** v2: the limit this turn starts at; it is the request's last turn. */
-  final?: LimitReason;
+  /** v2: why the request is ending; this turn is its last. */
+  final?: FinalReason;
+  finalDetail?: string;
 }): string {
   if (input.v2) {
+    if (input.final === "sources_exhausted") return `Your request has no further source to search (${input.finalDetail ?? "nothing more was found"}) with ${input.leads} of ${input.leadTarget} matching leads (step ${input.n}). No more searches start for it. Next: review them, prepare outreach from the leads that match if the brief says contact, then finish_request.`;
     if (input.final === "target_reached") return `Your request has its ${input.leadTarget} matching leads (step ${input.n}); the counts are in PROGRESS. Next: review them, prepare outreach if the brief says contact, then finish_request. No more searches start for it.`;
     if (input.final) return `Your request reached its ${input.final === "budget_spent" ? "spend cap" : "time limit"} with ${input.leads} of ${input.leadTarget} matching leads (step ${input.n}). No more searches start for it. Next: review them, prepare outreach from the leads that match if the brief says contact, then finish_request.`;
     return input.leads >= input.leadTarget

@@ -72,7 +72,7 @@ const { updateBusinessProfile } = await import("@/lib/assistant/profile.server")
 const { addMessage, createThread } = await import("@/lib/assistant/threads.server");
 const { addAudienceMembers, createAudience } = await import("@/lib/assistant/audiences.server");
 const { runTool } = await import("@/lib/assistant/tools.server");
-const { getObjective, objectiveForRequest, objectiveRequest } = await import("@/lib/assistant/objective.server");
+const { getObjective, objectiveForRequest, objectiveRequest, saveObjectiveProgress } = await import("@/lib/assistant/objective.server");
 
 let failures = 0;
 function check(label: string, ok: boolean, detail = "") {
@@ -154,6 +154,11 @@ await runInOrganization(a.org.id, async () => {
   const names = assigned.map((item) => Object.entries(personIds).find(([, id]) => id === item.personId)?.[0]).sort();
   check("prepare_outreach makes one plan of matching leads only, up to the brief's target, on email only", plan.ok && assigned.length === 2 && assigned.every((item) => item.channel === "email") && !names.includes("Austin Dental Supply"), `${plan.summary.slice(0, 160)} | ${names.join(", ")}`);
   check("…and nothing is sent: the plan waits for Start", run?.status === "proposed", run?.status ?? "no run");
+
+  // ---------------------------------------------------------- the request's last turn (the driver found no source left)
+  await saveObjectiveProgress(objective!.id, { continuation: { n: 3, attempt: 1, startedAt: new Date().toISOString(), endedAt: null, end: null, leadsAtStart: 2, judged: null, final: "sources_exhausted", finalDetail: "the assistant found no further source or query worth searching" } });
+  const lastSearch = await runTool("find_leads", { what: "dentists", where: "Round Rock, TX" }, context);
+  check("in a request's last turn no search starts", !lastSearch.ok && /this request is ending/.test(lastSearch.summary), lastSearch.summary);
 
   // ---------------------------------------------------------- research only, Autonomous mode
   const research = await addMessage({ threadId: thread.id, role: "user", content: "Now just research 3 orthodontists in Austin. No outreach.", createdBy: a.owner.id });
