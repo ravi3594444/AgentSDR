@@ -3,6 +3,7 @@ import { authContextErrorResponse, requirePermission, withOrgContext } from "@/l
 import { isPlatformKey } from "@/lib/platform/catalog";
 import { disconnectPlatformIntegration, listPlatformStatus, savePlatformIntegration } from "@/lib/platform/credentials";
 import { registerOrganizationWatchesNow } from "@/lib/outreach/mailboxWatch";
+import { resyncUnipileAccounts } from "@/lib/platform/unipileAccounts.server";
 
 // Behind the session cookie like every /api route not listed in proxy.ts PUBLIC.
 // Responses carry PlatformStatus only — never a secret value.
@@ -23,6 +24,8 @@ export async function PUT(req: NextRequest, { params }: Ctx) {
     return await withOrgContext(req, async (ctx) => {
       requirePermission(ctx, { integrations: ["manage"] });
       const saved = await savePlatformIntegration(key, body as Record<string, unknown>);
+      // Possibly another Unipile account: its accounts are read in the background, so the save answers at once.
+      if (key === "unipile") void resyncUnipileAccounts(ctx.organizationId);
       if (key !== "google") return NextResponse.json(saved);
       // A new or changed Pub/Sub topic takes effect now rather than at the next daily rollover.
       await registerOrganizationWatchesNow(ctx.organizationId);

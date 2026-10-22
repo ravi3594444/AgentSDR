@@ -1,5 +1,5 @@
 import { isPlatformConnected } from "@/lib/platform/credentials";
-import { and, eq, or } from "drizzle-orm";
+import { and, eq, ne, notInArray, or } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { linkedInAccounts } from "@/lib/linkedin/schema";
 import { getLinkedInAccounts, getProfile } from "@/services/unipile.service";
@@ -46,10 +46,7 @@ const syncOrganizationAccounts = async (): Promise<void> => {
 
   const accounts = await getLinkedInAccounts();
 
-  if (accounts.length === 0) {
-    console.log("[syncAllAccounts] No LinkedIn accounts found in Unipile");
-    return;
-  }
+  if (accounts.length === 0) console.log("[syncAllAccounts] No LinkedIn accounts found in Unipile");
 
   for (const acc of accounts) {
     const status = acc.status === "CONNECTED" ? ("CONNECTED" as const) : ("DISCONNECTED" as const);
@@ -142,6 +139,21 @@ const syncOrganizationAccounts = async (): Promise<void> => {
       }
     }
   }
+
+  // An account the connected Unipile no longer lists (unlinked there, or the organization switched to another
+  // Unipile account) cannot send: marked disconnected, never deleted (its leads and history stay), like WhatsApp,
+  // Instagram and email. Linking the same profile again reconnects this row (matched by username above).
+  const listedIds = accounts.map((acc) => acc.linkedinId);
+  const gone = await db
+    .update(linkedInAccounts)
+    .set({ status: "DISCONNECTED", updatedAt: new Date() })
+    .where(and(
+      inOrg(linkedInAccounts),
+      ne(linkedInAccounts.status, "DISCONNECTED"),
+      ...(listedIds.length ? [notInArray(linkedInAccounts.linkedinId, listedIds)] : []),
+    ))
+    .returning({ username: linkedInAccounts.username });
+  if (gone.length) console.log(`[syncAllAccounts] Not listed in Unipile, marked disconnected: ${gone.map((row) => row.username).join(", ")}`);
 
   console.log(`[syncAllAccounts] Synced ${accounts.length} account(s)`);
 };

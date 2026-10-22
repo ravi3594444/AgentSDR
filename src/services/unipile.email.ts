@@ -1,4 +1,4 @@
-import { getUnipileClient } from "@/services/unipile.service";
+import { getUnipileClient, unipileAccountItems } from "@/services/unipile.service";
 import { unipileEmailAccount, type UnipileEmailAccount } from "@/lib/outreach/unipileMail";
 
 /**
@@ -13,7 +13,7 @@ import { unipileEmailAccount, type UnipileEmailAccount } from "@/lib/outreach/un
 /** Every email inbox linked to this organization's Unipile workspace. */
 export async function listUnipileEmailAccounts(): Promise<UnipileEmailAccount[]> {
   const response = (await (await getUnipileClient()).account.getAll({ limit: 250 })) as { items?: Record<string, unknown>[] };
-  return (response.items ?? []).map(unipileEmailAccount).filter((account): account is UnipileEmailAccount => Boolean(account));
+  return unipileAccountItems(response).map(unipileEmailAccount).filter((account): account is UnipileEmailAccount => Boolean(account));
 }
 
 /** One linked account, re-read; null when it is gone or not an email inbox. */

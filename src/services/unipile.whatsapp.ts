@@ -1,4 +1,4 @@
-import { getUnipileClient } from "@/services/unipile.service";
+import { getUnipileClient, unipileAccountItems } from "@/services/unipile.service";
 import type { WhatsappAccountStatus } from "@/lib/whatsapp/contract";
 
 /**
@@ -82,7 +82,7 @@ export function whatsappAccountPhone(account: Record<string, unknown>): string |
 /** Every WhatsApp number linked to this Unipile workspace. */
 export async function listUnipileWhatsappAccounts(): Promise<UnipileWhatsappAccount[]> {
   const response = (await (await getUnipileClient()).account.getAll({ limit: 250 })) as { items?: Record<string, unknown>[] };
-  return (response.items ?? [])
+  return unipileAccountItems(response)
     .filter((account) => account.type === "WHATSAPP")
     .map((account) => ({
       unipileAccountId: String(account.id),
