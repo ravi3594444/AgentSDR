@@ -8,6 +8,7 @@ import { linkedInAccounts, searchQueries } from "@/lib/linkedin/schema";
 import { createSearchBatch, getSearchBatchDetail, startSearchBatchRun } from "@/lib/linkedin/searchBatches";
 import { isMigrationControlPaused } from "@/lib/migration/controls";
 import { isPlatformConnected } from "@/lib/platform/credentials";
+import { PLATFORM_SETTINGS_LABEL } from "@/lib/platform/catalog";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { addAudienceMembers, createAudience } from "./audiences.server";
 import { assistantJobs, type AudienceChannel } from "./schema";
@@ -39,7 +40,7 @@ type Payload = {
 };
 
 export async function linkedinSearchAvailability(): Promise<{ available: boolean; reason: string | null; accountId: string | null }> {
-  if (!(await isPlatformConnected("unipile"))) return { available: false, reason: "Unipile is not connected (Settings → LinkedIn → Connection).", accountId: null };
+  if (!(await isPlatformConnected("unipile"))) return { available: false, reason: `Unipile is not connected (${PLATFORM_SETTINGS_LABEL.unipile}).`, accountId: null };
   const [account] = await db.select({ id: linkedInAccounts.id }).from(linkedInAccounts)
     .where(and(inOrg(linkedInAccounts), eq(linkedInAccounts.status, "CONNECTED"))).limit(1);
   if (!account) return { available: false, reason: "No LinkedIn account is connected (Settings → LinkedIn → Accounts).", accountId: null };

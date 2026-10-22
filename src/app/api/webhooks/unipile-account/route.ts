@@ -22,7 +22,7 @@ import { syncUnipileChannel } from "@/lib/platform/unipileAccounts.server";
 //
 // Public (see proxy.ts) because Unipile calls it without our session cookie,
 // so it carries a shared-secret check: the notify secret stored with the Unipile
-// integration (Settings → LinkedIn → Connection); refused while it is empty or Unipile is not connected.
+// integration (Settings → Advanced → Use your own providers → Unipile); refused while it is empty or Unipile is not connected.
 // Whose secret? notify_url carries `org=<organization id>` (hostedAuthUrls.ts),
 // and the secret is verified against that organization's own. URLs registered
 // before that existed carry no `org`; the organization is then the one whose

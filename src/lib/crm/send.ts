@@ -5,6 +5,7 @@ import { inboxContacts, inboxMessages } from "@/lib/inbox/schema";
 import { people } from "@/lib/leads/schema";
 import { connections as linkedinConnections, messages as linkedinMessages } from "@/lib/linkedin/schema";
 import { isPlatformNotConnectedError } from "@/lib/platform/credentials";
+import { PLATFORM_SETTINGS_LABEL } from "@/lib/platform/catalog";
 import { mailboxProviderConnected, sendFromMailbox } from "@/lib/outreach/mailboxProviders";
 import { mailboxes } from "@/lib/outreach/schema";
 import { unipileReplyTarget } from "@/lib/outreach/unipileMail";
@@ -195,8 +196,8 @@ export const sendThroughCrmProvider: CrmSendAdapter = async (input) => {
     const provider = mailbox?.provider ?? "google";
     if (!(await mailboxProviderConnected(provider))) {
       throw new DefiniteCrmSendError(provider === "unipile"
-        ? "Unipile is not connected — connect it in Settings → LinkedIn → Connection"
-        : "Google Workspace is not connected — connect it in Settings → Email → Connection");
+        ? `Unipile is not connected — connect it in ${PLATFORM_SETTINGS_LABEL.unipile}`
+        : `Google Workspace is not connected — connect it in ${PLATFORM_SETTINGS_LABEL.google}`);
     }
     const result = await sendFromMailbox(mailbox ?? { provider, emailAddress: input.accountRef, unipileAccountId: null }, {
       from: input.accountRef,

@@ -47,6 +47,11 @@ Drizzle table definitions live in domain-scoped files, not one central schema:
   (`scheduled_job_runs`, platform-wide; see `src/lib/scheduler/`)
 - `src/lib/auth/schema.ts` — Better Auth: users, sessions, accounts,
   verifications, organizations, members, invitations, teams, team_members
+- `src/lib/managed/schema.ts` — platform operators, the platform's
+  credentials and settings (GLOBAL), each organization's Included / own
+  choice per provider (`provider_credential_modes`)
+- `src/lib/unipile/schema.ts` — Unipile account ownership and hosted-auth
+  connection states
 
 ## Multi-tenancy: everything belongs to an organization
 
@@ -95,8 +100,14 @@ fields — are per organization, created lazily on first use. Members can use
 the product; owners and admins also manage integrations, AI settings,
 members and teams (`requirePermission`, `src/lib/auth/permissions.ts`).
 LinkedIn `JobRun`/`JobLog` are platform-wide (the cron covers every
-organization), so only the **platform operator** — an owner or admin of the
-initial organization (`metadata.initial`) — sees them (`isPlatformOperator`).
+organization), so only a **platform operator** sees them
+(`isPlatformOperator`). Operator access is an explicit grant in the GLOBAL
+`platform_operators` table, made and revoked only by `bun run
+scripts/grant-platform-operator.ts --email <address> [--revoke | --list]`;
+no workspace role (owner included) and no route grants it. Operator routes
+(`/api/platform/*`, the `/platform` page) go through `withOperator` /
+`requirePageOperator` (`src/lib/auth/operatorAccess.server.ts`): 401 signed
+out, 404 for everyone else, same-origin for changes.
 
 ## Outreach merge fields
 
@@ -109,26 +120,72 @@ first name.
 
 ## Platform integrations, not env
 
-Unipile, Google Workspace (Gmail service account) and Cloudflare R2 are
-connected **per organization** from the Connection page of the channel each
-powers (Settings → Email / LinkedIn / WhatsApp), never from env —
-there is no env fallback. `src/lib/platform/` owns them: `catalog.ts` (client-safe fields),
-`credentials.ts` (`getPlatformCredentials` / `requirePlatformCredentials` /
-`isPlatformConnected`), `verify.ts` (one live call before saving).
+Provider credentials live encrypted in the database, never in env, and
+there is no env fallback. Each provider a workspace uses comes from one of
+two places, chosen per provider (`src/lib/managed/`, design and decisions
+in `docs/plans/MANAGED_SAAS_IMPLEMENTATION_2026-10-22.md`):
 
-Each is one row per organization in `grid_providers` keyed `platform-<key>`
-(unique per organization), its credentials encrypted in
+- **Included service** (`managed`): the platform's own credentials, stored
+  by a platform operator on `/platform` in the GLOBAL `platform_credentials`
+  table (`store.server.ts`; masked hints only ever leave the server), used
+  within the workspace's **Included allowance**. Providers: AI (the operator
+  stores AI/ML API, OpenRouter and Anthropic keys and picks the engine and
+  default model, `platform_settings` key `ai`), Unipile, TinyFish, Tavily,
+  Bright Data, Apify.
+- **My own provider** (`own`): the workspace's own saved credentials, set
+  under Settings → Advanced → Use your own providers.
+
+The choice is a `provider_credential_modes` row (one per organization and
+service); without one, a workspace with its own credentials saved is on My
+own provider and every other on the Included service. Saving own
+credentials with no explicit choice records My own provider. Never both,
+never a fallback: a failing own key is that key's error and the platform's
+account is never charged for it. Modes and platform credentials are cached
+30 s per process (cleared at once in the process that changes them). An
+operator can copy one named organization's own key into the platform's
+(adopt, `adopt.server.ts`); the organization's own row and choice stay as
+they were.
+
+Google Workspace (Gmail service account) and Cloudflare R2 stay the
+workspace's own only, connected per organization from the Connection page
+of the channel each powers. `src/lib/platform/` owns those and Unipile:
+`catalog.ts` (client-safe fields), `credentials.ts`
+(`getPlatformCredentials` / `requirePlatformCredentials` /
+`isPlatformConnected`, which resolve Unipile Included or own;
+`getOwnPlatformCredentials` for the workspace's own row only), `verify.ts`
+(one live call before saving). Saving, revealing webhook setup and
+disconnecting work on the workspace's own row only, never the platform's.
+
+Each own integration is one row per organization in `grid_providers` keyed
+`platform-<key>` (unique per organization), its credentials encrypted in
 `grid_provider_credentials` like every other integration. Reads are cached
-30 s per process, keyed by (organization, platform), so a change reaches
-other instances within that window. Unipile webhook URLs carry `org=`; a
-webhook's secret is checked against the organization the payload's account
-belongs to.
+30 s per process, keyed by (organization, platform, source), so a change
+reaches other instances within that window. Unipile webhook URLs carry
+`org=`; a webhook's secret is checked against the organization the
+payload's account belongs to.
+
+On the Included Unipile every workspace shares the platform's key, which
+lists every workspace's accounts, so `unipile_account_owners`
+(`src/lib/unipile/`) decides what each workspace may touch: syncs keep only
+owned accounts, the SDK client refuses calls naming an account the
+workspace does not own, new accounts come only through the verified
+hosted-auth flow (`POST /api/unipile/connect`, claimed by the
+`notify_url` callback with its secret token), and webhooks registered at
+`org=managed` reach only the owning workspace. An owner is never replaced.
+Unipile v1 has no Scopes; the plan doc records the v2 upgrade path.
+
+Included use is reserved before each provider call inside the provider's
+own reservation transaction, under a platform-wide advisory lock per
+allowance (`usage.server.ts`): the workspace allowance and the platform
+budget, one default set in `src/lib/managed/allowances.ts`. Every
+`provider_usage` / `apify_runs` row carries `credential_source`; every AI
+call is a `provider_usage` row (provider `ai`) with its `cost_usd`.
 
 A feature works only while its integration is connected: background jobs
 return early, user-facing routes answer 409 (`PlatformNotConnectedError`),
 and pages wrap in `RequiresPlatform`, which shows a Connect prompt. New code
-that calls one of these services must do the same — never read its keys
-from `process.env`.
+that calls one of these services must resolve it the same way — never read
+its keys from `process.env`.
 
 Env keeps only what is needed before the database can be read or decrypted
 (`DATABASE_URL`, `BETTER_AUTH_*`, `INTEGRATION_CREDENTIALS_KEY`), platform
@@ -505,9 +562,11 @@ website publishes — AgentSDR never messages anyone on Reddit, X or Facebook.
 
 ## WhatsApp messaging (Unipile)
 
-Reps link their WhatsApp number in the Unipile dashboard; AgentSDR reads it
-into `whatsapp_accounts` (`src/lib/whatsapp/accounts.ts`, "Sync from
-Unipile" on /calling/accounts). Unipile account reads are split by provider:
+Reps connect their WhatsApp number from the WhatsApp accounts page (the
+verified hosted-auth flow, required on the Included Unipile) or, on their
+own Unipile, in its dashboard; AgentSDR reads it into `whatsapp_accounts`
+(`src/lib/whatsapp/accounts.ts`, "Sync from Unipile" on /calling/accounts),
+keeping only numbers the workspace owns. Unipile account reads are split by provider:
 `src/functions/syncAllAccounts.ts` takes only type LINKEDIN,
 `src/services/unipile.whatsapp.ts` only WHATSAPP — keep them apart, and the
 account-status webhook runs each sync in its own try/catch.
@@ -530,8 +589,12 @@ secret as `x-unipile-secret`. `gateUnipileWebhook`
 events for accounts that are not that organization's; URLs without `org` keep
 the older rules. Registration replaces earlier ones (including the retired
 separate `message-received` / `whatsapp-message` registrations) and is skipped on a
-localhost origin. A new webhook route belongs in `UNIPILE_WEBHOOKS` and behind
-the same gate.
+localhost origin. On the Included Unipile the platform registers them once
+when the operator stores its key (`org=managed`, the platform's generated
+secret; `src/lib/managed/hooks.server.ts`), and the gate accepts a delivery
+there only for an account whose owner is an Included workspace. A new
+webhook route belongs in `UNIPILE_WEBHOOKS` and behind the same gate, and
+passes the event's account id to it.
 
 A message's `origin` says who wrote it: `lead`, `agentsdr` (sent through
 Unipile — the row is stored before the send so its echo is recognised), or

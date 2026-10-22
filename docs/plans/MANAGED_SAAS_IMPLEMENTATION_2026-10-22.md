@@ -307,12 +307,101 @@ is below.
 
 ## Migration and deploy
 
-To be completed.
+Nothing new in env. `INTEGRATION_CREDENTIALS_KEY` (already set) encrypts the
+platform's credentials; `BETTER_AUTH_URL` must be the public https origin,
+since on the Included Unipile a connection is confirmed by Unipile calling
+it back.
+
+1. **Deploy the image as usual.** `docker/deploy.sh` runs
+   `scripts/add-managed-saas.ts` with the other `DEFAULT_MIGRATIONS` (one
+   transaction, `lock_timeout` 10 s, idempotent). It creates
+   `platform_operators`, `platform_credentials`, `platform_settings`,
+   `provider_credential_modes`, `unipile_account_owners`,
+   `unipile_connect_states`; adds `provider_usage.credential_source` /
+   `cost_usd` and `apify_runs.credential_source` (default `own`); writes
+   `own` for every organization that saved its own AI connection, Unipile,
+   TinyFish, Tavily, Bright Data or Apify key; gives every Unipile account an
+   organization already holds an ownership row for it; prints the operator
+   count, the ownership count and any ownership conflict (never resolved
+   automatically). By hand: `bun run scripts/add-managed-saas.ts`.
+2. **Grant the first operator, explicitly.** Until this runs nobody sees
+   `/platform` or the LinkedIn job logs (before, owners and admins of the
+   initial organization saw the job logs):
+   `docker compose exec app bun scripts/grant-platform-operator.ts --email <operator email> --note "initial operator"`
+   (`--list` shows grants, `--revoke` removes one).
+3. **Default keys.** On `/platform` the operator stores each provider's key
+   (verified with one call first; TinyFish's check is one search), or uses
+   **Adopt** to copy the keys an existing organization (e.g. the initial one)
+   saved for itself: that organization keeps its own rows and stays on My own
+   provider. Storing Unipile generates the platform's webhook secret and
+   registers the platform's webhooks (`org=managed`). Adopting the initial
+   organization's Unipile means both its own registrations and the
+   platform's sit on that Unipile account, so each event is delivered twice
+   and each copy is routed to (or dropped for) its owner.
+4. **Included AI.** Store at least one AI key, then pick the engine
+   (OpenRouter, AI/ML API or Anthropic) and the default model; OpenRouter also
+   needs BYOK-only routing confirmed. Until then Included workspaces' AI steps
+   stop with "The included AI service is not available right now…" and
+   nothing is sent.
+5. **What customers see.** Organizations that had their own keys keep them,
+   on My own provider, unchanged. Every other organization is on the
+   Included service for each provider whose platform key is stored, within
+   the allowances in `src/lib/managed/allowances.ts`. Their existing
+   Unipile accounts (if any were on their own Unipile) stay theirs.
+
+**Rollback.** Everything is additive (new tables; new columns with
+defaults; one CHECK widened), so the previous image runs on the migrated
+database: redeploy it. Then Included workspaces lose their Included
+providers again (the old code has no such thing), accounts connected
+through the platform's Unipile stay connected there unused, and the new
+tables and columns are ignored; redeploying this version picks everything up
+again. Do not drop the new tables: `unipile_account_owners` is the record of
+who owns which account. To stop one Included provider at runtime without a
+rollback, the operator removes its key on `/platform` (that process at once,
+others within 30 s); workspaces on My own provider are unaffected.
 
 ## Verification
 
-To be completed.
+To be completed with the final gate run.
 
 ## Limitations
 
-To be completed.
+- **Unipile isolation is an ownership mapping, not Unipile Scopes** (v1 has
+  none; see above). The callback's secret token travels only in the
+  server-to-server `notify_url`; a forged callback without it claims
+  nothing. A residual window remains: a workspace holding a valid token of
+  its own could claim an account created in the platform's Unipile by
+  someone else in the minutes before that account's own callback arrived,
+  if it learned the new account's id (ids are not shown to browsers). The v2
+  move removes this.
+- An account whose claim is refused stays connected in the platform's
+  Unipile (it is never deleted automatically); the operator removes such
+  strays in Unipile's dashboard. They count against the subscription.
+- If Unipile answers a "create" with an existing, older account id that no
+  workspace owns (e.g. a profile connected earlier straight in Unipile's
+  dashboard), the claim is refused ("not created by this connection"); an
+  operator decides.
+- Calls addressed by chat id (send into an existing chat, read its messages)
+  are not re-checked against Unipile; their chat ids come only from the
+  workspace's own rows, which exist only for accounts it owns.
+- Two organizations sharing one own Unipile key (not the platform's): a sync
+  still claims an unowned account for whichever syncs first, as before.
+- Connecting an account on the Included Unipile needs the public origin; on
+  localhost only own-key connections work. Here it was exercised against a
+  stand-in only.
+- AI columns in tables and image generation run on own AI only; on the
+  Included service they are refused with a message pointing to My own
+  provider.
+- Allowances are one default set in code; no plan editor, no billing or
+  invoices. An AI call reserves US$0.05 before it is sent and settles at its
+  cost, so calls in flight together can pass the AI allowance by their own
+  cost. Costs are estimates unless the provider reported them (Anthropic
+  from tokens and list prices; TinyFish, Tavily and Bright Data from unit
+  rates).
+- A rotated or removed platform key reaches other instances within 30 s.
+- `/platform` has no link in the app's navigation; operators open it by
+  address.
+- Google Workspace and Cloudflare R2 stay My own provider only.
+- The Claude Code subscription pilot keeps its own gate (owner of the
+  operator organization), separate from the platform operator grant; it is
+  never offered to Included workspaces.

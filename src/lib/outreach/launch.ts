@@ -1,3 +1,4 @@
+import { PLATFORM_SETTINGS_LABEL } from "@/lib/platform/catalog";
 import type { MailboxProvider, SequenceStep } from "./schema";
 
 /**
@@ -61,8 +62,8 @@ export function emailLaunchProblems(facts: EmailLaunchFacts): string[] {
   if (google + unipile === 0) {
     problems.push("Connect at least one sending mailbox in Settings → Email → Mailboxes: a Google Workspace address, or an inbox linked in Unipile.");
   } else if (sending === 0) {
-    if (google > 0) problems.push("Connect Google Workspace in Settings → Email → Connection.");
-    if (unipile > 0) problems.push("Connect Unipile in Settings → LinkedIn → Connection.");
+    if (google > 0) problems.push(`Connect Google Workspace in ${PLATFORM_SETTINGS_LABEL.google}.`);
+    if (unipile > 0) problems.push(`Connect Unipile in ${PLATFORM_SETTINGS_LABEL.unipile}.`);
   }
   const sequence = parseSequence(facts.sequence);
   if (!sequence.ok) problems.push(sequence.error);

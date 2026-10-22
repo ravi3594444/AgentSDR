@@ -299,7 +299,7 @@ export async function storeGmailWatchRegistration(registration: GmailWatchRegist
     .where(and(inOrg(gridProviders), eq(gridProviders.id, row.id)));
 }
 
-/** Register Unipile's webhooks again (Settings → LinkedIn → Connection → Register again). */
+/** Register Unipile's webhooks again (Settings → Advanced → Use your own providers → Unipile → Register again). */
 export async function reregisterUnipileWebhooks(): Promise<UnipileWebhookRegistration> {
   if ((await platformCredentialSource("unipile")) === "managed") throw new ManagedPlatformError("unipile");
   const own = await loadOwn("unipile");

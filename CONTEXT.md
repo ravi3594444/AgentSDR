@@ -101,6 +101,12 @@ word means here and, where it matters, what it does not mean.
   such as the Apify monthly budget, Treg's daily dollar cap, Tavily
   searches per day or browser minutes per day. Browser minutes default to 0,
   so a metered browser never runs without an explicit choice.
+- **Included allowance**: how much of an Included service a workspace may
+  use, per month (AI dollars, searches, pages, records, Apify dollars) or in
+  total (connected accounts per channel), plus the platform's own budget
+  across all workspaces. One default set for everyone, in code
+  (`src/lib/managed/allowances.ts`); no per-workspace plans. Separate from
+  an owner's allowances and from a request's research spend cap.
 - **Quota**: a provider's own limit, such as TinyFish Search at 30 requests a
   minute and 500 an hour, or Stack Exchange's `quota_remaining`.
 - **Quota scope**: what a quota is counted against: the API key, the IP or
@@ -137,6 +143,37 @@ word means here and, where it matters, what it does not mean.
   fail with the reset time (CRM reply sorting is put back until then), never
   switch to an API. Extra usage (billed beyond the plan) holds it the same
   way. It runs only while the owner is the organization's only member.
+
+## Included services
+
+- **Included service**: a provider the platform supplies on its own
+  credentials (AI, Unipile, TinyFish, Tavily, Bright Data, Apify), within
+  the workspace's Included allowance. The customer needs no account or key.
+- **My own provider**: the workspace's own saved credentials for one
+  provider, chosen under Settings → Advanced → Use your own providers. A
+  failing own key is an error; it never falls back to the Included service.
+  A workspace that had saved its own key before keeps My own provider.
+- **Platform operator**: a person explicitly granted operator access (the
+  `platform_operators` table, by `scripts/grant-platform-operator.ts`). Not a
+  role in any workspace: owning one grants nothing. Stores and removes the
+  platform's default keys, picks the Included AI engine, sees usage by
+  workspace. Customers never see the platform's keys or model settings.
+- **Adopt**: an operator copying one named workspace's own key into the
+  platform's default keys, on an explicit click; the workspace's own key
+  and choice stay as they were.
+- **Account owner (Unipile)**: the workspace a connected Unipile account
+  belongs to (`unipile_account_owners`). Set by a verified connection, the
+  upgrade's backfill, or a sync on the workspace's own Unipile; never
+  replaced. On the Included Unipile it decides what a workspace can list,
+  send from and receive.
+- **Connection (Unipile)**: one hosted-auth link the server minted for a
+  workspace (`unipile_connect_states`): an opaque id as the link's name and
+  a secret token in its callback address. Unipile's callback claims the new
+  account for that workspace only.
+- **Scope (Unipile)**: Unipile API v2's isolation boundary for connected
+  accounts inside one Application, with its own scoped keys. AgentSDR uses
+  Unipile v1, which has none; account ownership does that job until the v2
+  move.
 
 ## Background work
 

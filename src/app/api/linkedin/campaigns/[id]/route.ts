@@ -20,6 +20,7 @@ import {
   normalizeLinkedinSequence,
 } from "@/lib/linkedin/campaignSequence";
 import { isPlatformConnected } from "@/lib/platform/credentials";
+import { PLATFORM_SETTINGS_LABEL } from "@/lib/platform/catalog";
 import type { LeadStatus } from "@/lib/linkedin/schema";
 
 /** Leads the engine can still act on: everything not replied, completed, failed or cancelled. */
@@ -224,7 +225,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         // a lead the engine can still work.
         if (!(await isPlatformConnected("unipile"))) {
           return NextResponse.json(
-            { ok: false, error: "Connect Unipile in Settings → LinkedIn → Connection before launching" },
+            { ok: false, error: `Connect Unipile in ${PLATFORM_SETTINGS_LABEL.unipile} before launching` },
             { status: 409 },
           );
         }

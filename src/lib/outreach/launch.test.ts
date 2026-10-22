@@ -56,7 +56,7 @@ describe("emailLaunchProblems", () => {
 
   test("a disconnected Google Workspace blocks a resume even with everything else in place", () => {
     expect(emailLaunchProblems({ ...ready, googleConnected: false })).toEqual([
-      "Connect Google Workspace in Settings → Email → Connection.",
+      "Connect Google Workspace in Settings → Advanced → Use your own providers → Google Workspace.",
     ]);
   });
 
@@ -66,7 +66,7 @@ describe("emailLaunchProblems", () => {
 
   test("a Unipile inbox needs Unipile connected", () => {
     expect(emailLaunchProblems({ ...ready, googleConnected: false, connectedMailboxes: { google: 0, unipile: 2 } })).toEqual([
-      "Connect Unipile in Settings → LinkedIn → Connection.",
+      "Connect Unipile in Settings → Advanced → Use your own providers → Unipile.",
     ]);
   });
 
