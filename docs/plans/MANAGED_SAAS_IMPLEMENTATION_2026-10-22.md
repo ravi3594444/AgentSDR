@@ -23,7 +23,7 @@ an organization that already saved its own credentials keeps them and keeps
 | e | Customer settings: Plan & usage, Advanced → Use your own providers | done: `/settings/usage`, `/settings/providers` (+ `/api/settings/providers`), the Unipile / Google / AI provider pages moved under Advanced, Included cards for TinyFish, Tavily, Bright Data, Apify |
 | f | Unipile ownership, hosted-auth connection flow, scoped sync/send/webhooks, allowance | done: `src/lib/unipile/` (ownership, connect, accounts), `/api/unipile/connect`, `/api/unipile/accounts/disconnect`, the guarded client in `src/services/unipile.service.ts`, the `org=managed` webhook gate; `scripts/e2e/unipile-ownership.ts` (69 checks) |
 | g | Usage accounting and allowances | done in the same commit: `provider_usage.credential_source` / `cost_usd`, `apify_runs.credential_source`, `src/lib/managed/usage.server.ts` (allowance locks), `aiMeter.server.ts` (every AI call metered) |
-| h | Docs, gates, push | planned |
+| h | Docs, gates, push | done: CLAUDE.md, CONTEXT.md, this plan; gates below |
 
 ## Words
 
@@ -295,15 +295,17 @@ is below.
 
 ## Commit sequence
 
-1. Plan doc.
-2. Operator grant and guard.
-3. Credential store, modes, resolver, migration.
-4. Consumers on the resolver; AI engines incl. Anthropic.
-5. Operator panel and adopt action.
-6. Customer settings.
-7. Unipile ownership and connection flow.
-8. Usage accounting and allowances (if not folded into 4/7).
-9. Docs and gates.
+1. `6162d50` Plan doc.
+2. `aedf543` Operator grant and guard.
+3. `ccdb12d` Credential store, modes, resolver, migration, Anthropic adapter.
+4. `0f7736c` Consumers on the resolver, AI metering, allowances (step g).
+5. `9c3b994` Operator panel and adopt action.
+6. `7b5ba45` Customer settings.
+7. `401266b` Unipile ownership, connection flow, scoped sync, sends, webhooks.
+8. `3e0e32b` Docs (CLAUDE.md, CONTEXT.md, deploy, limitations).
+9. `1dddedd` Account page fixes from the browser check.
+10. `228b772`, `a8c5351` e2e additions (providers route by role, isolation
+    fixtures); `c50cf92` code graph.
 
 ## Migration and deploy
 
@@ -362,7 +364,52 @@ others within 30 s); workspaces on My own provider are unaffected.
 
 ## Verification
 
-To be completed with the final gate run.
+All on the local Postgres (127.0.0.1:5433), disposable databases only, at
+commit `a8c5351`. Every provider was a stand-in (fetch intercepted for fake
+hosts); nothing called Unipile, Anthropic, OpenRouter, AI/ML API, TinyFish,
+Tavily, Bright Data or Apify. The only live network reads were Unipile's
+public documentation pages listed above.
+
+| Gate | Result |
+|---|---|
+| `NODE_OPTIONS=--max-old-space-size=6144 npx tsc --noEmit` | pass |
+| eslint on every changed .ts/.tsx | pass, 0 errors |
+| `npm test` | 2162 pass, 0 fail |
+| fresh database: `db:setup`, every `DEFAULT_MIGRATIONS` entry, `db:check` (incl. tenancy contract) | pass |
+| upgrade path: copy of `agentsdr_iso2`, every migration twice, `db:check` | pass; schema equal to fresh except the existing Bright Data CHECK's parenthesisation (from an earlier migration, same conditions) |
+| `scripts/check-organization-scope.ts --contract` | all checks pass |
+| e2e auth-policies (empty database) | 19 checks pass |
+| 38 e2e suites on the fresh database (every non-live, non-server suite) | all exit 0, no FAIL line; incl. managed-saas 28, platform-admin 57, unipile-ownership 69 |
+| production build (`next build --webpack`, heap 4096) | pass |
+| `bun server.js` + tenancy-isolation (A seeded with the managed SaaS fixtures) | no isolation failures; 1221 fingerprints from 79 tables; 16 items to review, all existing routes answering 200 without A's data or changes |
+| `bun server.js` + owner-controls (fresh server) | 35 pass, 1 fail: "launching an empty campaign is refused with every reason" expects 3 reasons, and the fixture's demo organization has Google Workspace and 6 mailboxes connected, so only 2 apply. The same failure appears in an earlier gate run of another branch against the same template database; this branch does not change that code path |
+| Browser (Chromium, 1366 and 390 wide) | `/platform`, `/settings/usage`, `/settings/providers`, `/settings/research`, `/settings/advanced`, `/settings/ai`, and the WhatsApp, email, LinkedIn and Instagram account pages of an Included workspace: no horizontal overflow, no console errors other than the deliberate 409 of a refused connect |
+
+What the managed suites prove (stand-ins): an Included workspace runs on the
+platform's key without any row of its own; an own key is used and a failing
+own key is never replaced by the platform's; usage rows carry managed / own;
+truly parallel reservations cannot pass a workspace allowance or the
+platform budget (TinyFish searches and Unipile connected accounts, each in
+one workspace and across two; the other providers share the same
+`checkManagedAllowance` lock, not raced separately); the Anthropic engine
+answers structured calls through the Messages API stand-in and is metered;
+customers never receive a platform key, engine or model; every operator
+route is 404 to customer owners, admins and members, 401 signed out, 403
+cross-origin; adopt leaves the source organization's rows and choice as
+they were; Unipile accounts are claimed only through verified callbacks,
+never by another workspace's state, an old unowned account or a forged
+token, and cross-workspace list, send, reconnect and disconnect are refused;
+webhooks reach only the owner; the migration is idempotent and reports
+conflicts.
+
+Still to accept live (not possible here): storing real platform keys and
+their verification calls; a real Unipile hosted-auth sign-in for each
+channel (the `notify_url` body, `created_at` on the account read back,
+whether Unipile reuses an account id for a profile connected before); the
+platform's webhook registration and real deliveries on `org=managed`; one
+real Anthropic call per model id (`claude-opus-5-5`, `claude-sonnet-5-5`,
+`claude-haiku-5-5`) and its reported usage; OpenRouter / AI/ML API cost
+reporting on the platform's keys; the first operator grant on the VM.
 
 ## Limitations
 
@@ -386,6 +433,11 @@ To be completed with the final gate run.
   workspace's own rows, which exist only for accounts it owns.
 - Two organizations sharing one own Unipile key (not the platform's): a sync
   still claims an unowned account for whichever syncs first, as before.
+- A workspace whose own Unipile key is the platform's key (the organization
+  an operator adopted it from) holds the platform's key itself: its syncs
+  claim nothing, but its client is not guarded, and nothing in the app can
+  stop a key holder calling Unipile directly. Only the operator's own
+  organization should be in that position.
 - Connecting an account on the Included Unipile needs the public origin; on
   localhost only own-key connections work. Here it was exercised against a
   stand-in only.
