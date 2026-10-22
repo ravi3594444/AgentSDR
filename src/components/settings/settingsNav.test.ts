@@ -26,7 +26,7 @@ const RETIRED_RULE_PAGES = ["email-rules", "linkedin-rules", "whatsapp-rules", "
 describe("the settings rail", () => {
   test("five groups, in order", () => {
     expect(SETTINGS_NAV.map((group) => group.label)).toEqual(["Your business", "Connected accounts", "Sending & automation", "Research & budget", "Advanced"]);
-    expect(SETTINGS_NAV.map((group) => group.items[0]?.href)).toEqual(["/settings/business", "/settings/email-accounts", "/settings/sending", "/settings/research", "/settings/advanced"]);
+    expect(SETTINGS_NAV.map((group) => group.items[0]?.href)).toEqual(["/settings/business", "/settings/email-accounts", "/settings/sending", "/settings/research", "/settings/providers"]);
   });
 
   test("Settings opens Your business", () => {
@@ -41,21 +41,25 @@ describe("the settings rail", () => {
     expect(new Set(all).size).toBe(all.length);
     expect(all).not.toContain("/settings/organization");
     for (const name of RETIRED_RULE_PAGES) expect(all).not.toContain(`/settings/${name}`);
-    expect(all.sort()).toEqual([...OLD_PAGES, "/settings/business", "/settings/sending", "/settings/research", "/settings/advanced"].sort());
+    expect(all.sort()).toEqual([...OLD_PAGES, "/settings/business", "/settings/sending", "/settings/research", "/settings/advanced", "/settings/usage", "/settings/providers"].sort());
   });
 
   test("each group holds what the plan put there", () => {
     const group = (label: string) => pages(SETTINGS_NAV.filter((g) => g.label === label));
-    expect(group("Your business")).toEqual(["/settings/business", "/settings/members", "/settings/teams", "/settings/instructions", "/settings/knowledge"]);
+    expect(group("Your business")).toEqual(["/settings/business", "/settings/members", "/settings/teams", "/settings/instructions", "/settings/knowledge", "/settings/usage"]);
+    // The accounts a workspace sends from; the technical connections are under Advanced (managed SaaS).
     expect(group("Connected accounts")).toEqual([
-      "/settings/email-accounts", "/settings/email-connection", "/settings/linkedin-accounts", "/settings/linkedin-connection",
-      "/settings/whatsapp-accounts", "/settings/whatsapp-connection", "/settings/instagram-accounts", "/settings/ai",
+      "/settings/email-accounts", "/settings/linkedin-accounts",
+      "/settings/whatsapp-accounts", "/settings/whatsapp-connection", "/settings/instagram-accounts",
     ]);
     // The one visible sending input: everything else that paces sending is automatic.
     expect(group("Sending & automation")).toEqual(["/settings/sending"]);
     expect(SETTINGS_NAV.find((g) => g.label === "Sending & automation")!.items[0]!.label).toBe("Daily lead limit");
     expect(group("Research & budget")).toEqual(["/settings/research"]);
-    expect(group("Advanced")).toEqual(["/settings/advanced", "/settings/lead-categories", "/settings/columns", "/settings/inquiries", "/settings/appearance"]);
+    expect(group("Advanced")).toEqual([
+      "/settings/providers", "/settings/ai", "/settings/linkedin-connection", "/settings/email-connection",
+      "/settings/advanced", "/settings/lead-categories", "/settings/columns", "/settings/inquiries", "/settings/appearance",
+    ]);
   });
 
   test("row labels are unique, so the phone strip and ⌘K never show two of the same", () => {

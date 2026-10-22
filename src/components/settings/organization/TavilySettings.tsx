@@ -72,6 +72,17 @@ export function TavilySettings() {
   if (!enabled || !settings) return null;
   const field = "h-9 w-full rounded-lg border border-stroke-soft-200 bg-bg-white-0 px-3 text-paragraph-sm text-text-strong-950 disabled:opacity-60";
   const plan = settings.plan;
+  if (settings.included) {
+    // Included: the platform's key and daily cap; nothing here to set.
+    return (
+      <Frame>
+        <FrameHeader title="Website search (included)" description="Website searches use the included web search: no account or key is needed. What is left this month is on Settings → Plan & usage." />
+        <FramePanel>
+          <p className="text-paragraph-xs text-text-sub-600">{settings.connected ? "Available." : "Not available right now."} Last 24 hours: {settings.searchesToday} of {settings.dailySearches} searches.</p>
+        </FramePanel>
+      </Frame>
+    );
+  }
 
   return (
     <Frame>

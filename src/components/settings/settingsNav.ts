@@ -1,6 +1,8 @@
 import {
   RiBookOpenLine,
   RiCpuLine,
+  RiDashboard3Line,
+  RiKey2Line,
   RiGroupLine,
   RiInstagramLine,
   RiTeamLine,
@@ -48,9 +50,10 @@ export function visibleSettingsNav(features: FeatureState | null): typeof SETTIN
 
 /**
  * Every settings screen in the app, in five groups: what the assistant knows
- * about the business and who works in it; the accounts and services it is
- * connected to; how many new people it may contact a day; how far one
- * request researches and spends; and the optional extras. Each screen is its
+ * about the business, who works in it and what the plan includes; the
+ * accounts it sends from; how many new people it may contact a day; how far
+ * one request researches and spends; and the advanced extras, among them the
+ * technical connections for a workspace that uses its own providers. Each screen is its
  * own route under /settings and is listed once; the pages they replaced
  * redirect here (next.config.ts, and /settings/organization → /settings/business).
  */
@@ -63,31 +66,18 @@ export const SETTINGS_NAV: { label: string; items: SettingsNavItem[] }[] = [
       { href: "/settings/teams", label: "Teams", icon: RiTeamLine },
       { href: "/settings/instructions", label: "Instructions", icon: RiQuillPenLine },
       { href: "/settings/knowledge", label: "Knowledge", icon: RiBookOpenLine },
+      // What is included with the workspace and what is left of it (src/lib/managed/).
+      { href: "/settings/usage", label: "Plan & usage", icon: RiDashboard3Line },
     ],
   },
-  // A channel's accounts and the integration it runs on are tabs across the
-  // top of its section (SettingsShell).
+  // The accounts a workspace sends from. The technical connections they run
+  // on (Unipile, Google Workspace, the AI provider) are under Advanced → Use
+  // your own providers: AI and account connections are included by default.
   {
     label: "Connected accounts",
     items: [
-      {
-        href: "/settings/email-accounts",
-        label: "Email",
-        icon: RiMailLine,
-        tabs: [
-          { href: "/settings/email-accounts", label: "Mailboxes", icon: RiMailLine },
-          { href: "/settings/email-connection", label: "Connection", icon: RiPlugLine },
-        ],
-      },
-      {
-        href: "/settings/linkedin-accounts",
-        label: "LinkedIn",
-        icon: RiLinkedinBoxLine,
-        tabs: [
-          { href: "/settings/linkedin-accounts", label: "Accounts", icon: RiLinkedinBoxLine },
-          { href: "/settings/linkedin-connection", label: "Connection", icon: RiPlugLine },
-        ],
-      },
+      { href: "/settings/email-accounts", label: "Email", icon: RiMailLine },
+      { href: "/settings/linkedin-accounts", label: "LinkedIn", icon: RiLinkedinBoxLine },
       {
         href: "/settings/whatsapp-accounts",
         label: "WhatsApp",
@@ -99,7 +89,6 @@ export const SETTINGS_NAV: { label: string; items: SettingsNavItem[] }[] = [
       },
       // Only for organizations that turned Instagram messages on.
       { href: "/settings/instagram-accounts", label: "Instagram", icon: RiInstagramLine, feature: "instagram" },
-      { href: "/settings/ai", label: "AI provider", icon: RiCpuLine },
     ],
   },
   // The one sending input: the daily lead limit (src/lib/channels/rules.ts,
@@ -117,6 +106,17 @@ export const SETTINGS_NAV: { label: string; items: SettingsNavItem[] }[] = [
   {
     label: "Advanced",
     items: [
+      {
+        href: "/settings/providers",
+        label: "Use your own providers",
+        icon: RiKey2Line,
+        tabs: [
+          { href: "/settings/providers", label: "Included or own", icon: RiKey2Line },
+          { href: "/settings/ai", label: "AI provider", icon: RiCpuLine },
+          { href: "/settings/linkedin-connection", label: "Unipile", icon: RiPlugLine },
+          { href: "/settings/email-connection", label: "Google Workspace", icon: RiMailLine },
+        ],
+      },
       { href: "/settings/advanced", label: "Providers & features", icon: RiPuzzleLine },
       { href: "/settings/lead-categories", label: "Lead categories", icon: RiPriceTag3Line },
       { href: "/settings/columns", label: "Lead columns", icon: RiLayoutColumnLine },

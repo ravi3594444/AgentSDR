@@ -81,6 +81,20 @@ export function ApifySettings() {
 
   if (!enabled || !settings) return null;
   const field = "h-9 w-full rounded-lg border border-stroke-soft-200 bg-bg-white-0 px-3 text-paragraph-sm text-text-strong-950 disabled:opacity-60";
+  if (settings.included) {
+    // Included: the platform's token, its Actors and per-run limits; nothing here to set.
+    return (
+      <Frame>
+        <FrameHeader title="Maps and Instagram discovery (included)" description="Paid discovery on Google Maps and Instagram is included with your workspace, within its monthly allowance: no account or token is needed. When the allowance is used, searches continue with the built-in Maps search, LinkedIn or website search." />
+        <FramePanel>
+          <p className="text-paragraph-xs text-text-sub-600">
+            {settings.connected ? "Available." : "Not available right now."} This month: ${settings.spentThisMonthUsd.toFixed(2)} used
+            {settings.reservedUsd > 0 ? `, up to $${settings.reservedUsd.toFixed(2)} held by open runs` : ""} of ${settings.monthlyBudgetUsd.toFixed(2)} included.
+          </p>
+        </FramePanel>
+      </Frame>
+    );
+  }
 
   return (
     <Frame>

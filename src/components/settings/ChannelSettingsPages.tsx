@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { ServiceModeNotice } from "@/components/settings/ServiceModeNotice";
 import { ComingSoonCard, PlatformConnection, type ComingSoonConnection } from "@/components/settings/PlatformConnection";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import { requirePageOrgContext } from "@/lib/auth/context";
@@ -34,6 +35,7 @@ export async function ConnectionSettingsPage({
   return (
     <SettingsPage title={title} description={description} width="narrow">
       <div className="flex flex-col gap-6">
+        {platforms.some(({ platform }) => platform === "unipile") && <ServiceModeNotice service="unipile" />}
         {platforms.map(({ platform, note }) => (
           <PlatformConnection key={platform} platformKey={platform} status={statuses.find((s) => s.key === platform) ?? null} note={note} />
         ))}

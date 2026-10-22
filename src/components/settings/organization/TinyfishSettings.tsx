@@ -53,7 +53,8 @@ export function TinyfishSettings() {
       const response = await fetch("/api/settings/tinyfish", {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
+        // Included: the platform's key, browser kept off; only "use for web searches" is the workspace's.
+        body: JSON.stringify(settings?.included ? { useForWebSearch: useForSearch } : {
           ...(extra.key !== undefined ? { key: extra.key } : key.trim() ? { key: key.trim() } : {}),
           useForWebSearch: useForSearch,
           browserMinutesPerDay: Number(minutes),
@@ -76,42 +77,47 @@ export function TinyfishSettings() {
   // The server's rule as typed: 1-9 minutes could never open a 10-minute session, so no spend is shown for them.
   const minutesHint = browserMinutesHint(minutes);
   const waiting = settings.waitingUntil ? new Date(settings.waitingUntil) : null;
+  const included = settings.included === true;
 
   return (
     <Frame>
       <FrameHeader
-        title="TinyFish web access"
-        description={`The assistant searches the web, reads pages and, if you allow it, uses a remote browser through TinyFish (tinyfish.ai). Search (${TINYFISH_FREE_LIMITS.search.perMinute} a minute, ${TINYFISH_FREE_LIMITS.search.perDay.toLocaleString("en")} a day) and page reading (${TINYFISH_FREE_LIMITS.fetch.perDay.toLocaleString("en")} pages a day) are free; AgentSDR stops at those limits and waits for the 00:00 UTC reset instead of spending your TinyFish Wallet. The browser is paid by the minute and stays off until you set minutes below.`}
+        title={included ? "Web search and page reading (included)" : "TinyFish web access"}
+        description={included
+          ? "The assistant searches the web and reads public pages as part of your workspace: no account or key is needed. What is left this month is on Settings → Plan & usage."
+          : `The assistant searches the web, reads pages and, if you allow it, uses a remote browser through TinyFish (tinyfish.ai). Search (${TINYFISH_FREE_LIMITS.search.perMinute} a minute, ${TINYFISH_FREE_LIMITS.search.perDay.toLocaleString("en")} a day) and page reading (${TINYFISH_FREE_LIMITS.fetch.perDay.toLocaleString("en")} pages a day) are free; AgentSDR stops at those limits and waits for the 00:00 UTC reset instead of spending your TinyFish Wallet. The browser is paid by the minute and stays off until you set minutes below.`}
       />
       <FramePanel className="flex flex-col gap-4">
         <p className="text-paragraph-xs text-text-sub-600">
-          {settings.connected ? `Connected (key ${settings.keyHint ?? "saved"}).` : "Not connected: the assistant has no general web search, and reads pages directly."}{" "}
+          {included ? (settings.connected ? "Available." : "Not available right now: the assistant reads pages directly.") : settings.connected ? `Connected (key ${settings.keyHint ?? "saved"}).` : "Not connected: the assistant has no general web search, and reads pages directly."}{" "}
           {settings.connected && `Today (UTC): ${settings.today.searches} searches, ${settings.today.fetchedUrls} pages read, ${settings.today.browserMinutes} browser minutes.`}
         </p>
         {/* The server only reports a wait that has not ended yet. */}
         {waiting && (
           <Callout tone="warning">{settings.waitingReason ?? "TinyFish asked AgentSDR to wait"}: work resumes at {waiting.toLocaleString()}.</Callout>
         )}
-        <label className="flex flex-col gap-1 text-label-xs text-text-strong-950">
-          API key
-          <input className={field} type="password" autoComplete="off" placeholder={settings.connected ? "Leave empty to keep the saved key" : "Paste your TinyFish key (agent.tinyfish.ai → API keys)"} value={key} disabled={!canManage || busy} onChange={(event) => setKey(event.target.value)} />
-        </label>
+        {!included && (
+          <label className="flex flex-col gap-1 text-label-xs text-text-strong-950">
+            API key
+            <input className={field} type="password" autoComplete="off" placeholder={settings.connected ? "Leave empty to keep the saved key" : "Paste your TinyFish key (agent.tinyfish.ai → API keys)"} value={key} disabled={!canManage || busy} onChange={(event) => setKey(event.target.value)} />
+          </label>
+        )}
         <label className="flex items-center gap-2 text-paragraph-sm text-text-strong-950">
           <input type="checkbox" checked={useForSearch} disabled={!canManage || busy} onChange={(event) => setUseForSearch(event.target.checked)} />
           Use TinyFish for web searches (off: website searches use Tavily or your AI provider, as before)
         </label>
-        <label className="flex flex-col gap-1 text-label-xs text-text-strong-950 sm:max-w-xs">
+        {!included && <label className="flex flex-col gap-1 text-label-xs text-text-strong-950 sm:max-w-xs">
           Browser minutes a day (0 = off)
           <input className={field} type="number" min={TINYFISH_LIMITS.browserMinutesPerDay.min} max={TINYFISH_LIMITS.browserMinutesPerDay.max} step="1" value={minutes} disabled={!canManage || busy} onChange={(event) => setMinutes(event.target.value)} />
           <span className={`text-paragraph-xs font-normal ${minutesHint.problem ? "text-error-base" : "text-text-sub-600"}`}>
             {minutesHint.text}
           </span>
-        </label>
+        </label>}
         {error && <Callout tone="error">{error}</Callout>}
         {saved && !error && <p className="text-paragraph-xs text-success-base">Saved.</p>}
         {canManage && (
           <div className="flex flex-wrap justify-end gap-2">
-            {settings.connected && (
+            {settings.connected && !included && (
               <Button.Root variant="neutral" mode="stroke" size="xsmall" disabled={busy} onClick={() => void save({ key: "" })}>Disconnect</Button.Root>
             )}
             <Button.Root variant="primary" mode="filled" size="xsmall" disabled={busy} onClick={() => void save()}>{busy ? "Saving…" : "Save"}</Button.Root>

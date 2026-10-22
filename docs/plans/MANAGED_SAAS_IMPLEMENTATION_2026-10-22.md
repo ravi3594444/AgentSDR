@@ -20,7 +20,7 @@ an organization that already saved its own credentials keeps them and keeps
 | b | Platform credential store, per-provider Included/My own choice, resolver | done: `src/lib/managed/` (catalog, allowances, store, modes, verify), the Anthropic engine adapter `src/lib/ai/server/anthropicRuntime.ts`; migration writes `own` for every organization with saved credentials |
 | c | Consumers switched to the resolver (AI, Unipile, TinyFish, Tavily, Bright Data, Apify, workers, gates) | done for AI (incl. the Anthropic engine), TinyFish, Tavily, Bright Data, Apify; Unipile wired but gated off until (f); `scripts/e2e/managed-saas.ts` |
 | d | Operator panel (default keys, Included AI engine and model, usage), adopt-defaults action | done: `/platform`, `/api/platform/*` (credentials, ai, usage, adopt); `scripts/e2e/platform-admin.ts` (owner/admin/member 404 on every route, 401 signed out, cross-origin 403, masked answers, adopt keeps originals) |
-| e | Customer settings: Plan & usage, Advanced → Use your own providers | planned |
+| e | Customer settings: Plan & usage, Advanced → Use your own providers | done: `/settings/usage`, `/settings/providers` (+ `/api/settings/providers`), the Unipile / Google / AI provider pages moved under Advanced, Included cards for TinyFish, Tavily, Bright Data, Apify |
 | f | Unipile ownership, hosted-auth connection flow, scoped sync/send/webhooks, allowance | planned |
 | g | Usage accounting and allowances | done in the same commit: `provider_usage.credential_source` / `cost_usd`, `apify_runs.credential_source`, `src/lib/managed/usage.server.ts` (allowance locks), `aiMeter.server.ts` (every AI call metered) |
 | h | Docs, gates, push | planned |

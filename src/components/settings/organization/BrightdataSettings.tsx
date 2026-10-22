@@ -60,7 +60,8 @@ export function BrightdataSettings() {
       const response = await fetch("/api/settings/brightdata", {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
+        // Included: the platform's key and limits; only the Reddit choice is the workspace's.
+        body: JSON.stringify(settings?.included ? { redditEnabled: reddit } : {
           ...(extra.key !== undefined ? { key: extra.key } : key.trim() ? { key: key.trim() } : {}),
           monthlyCredits: Number(monthly),
           maxRecordsPerSearch: Number(perSearch),
@@ -83,18 +84,24 @@ export function BrightdataSettings() {
   if (!enabled || !settings) return null;
   const field = "h-9 w-full rounded-lg border border-stroke-soft-200 bg-bg-white-0 px-3 text-paragraph-sm text-text-strong-950 disabled:opacity-60";
   const used = settings.datasets.filter((dataset) => dataset.state !== "unused");
+  const included = settings.included === true;
 
   return (
     <Frame>
       <FrameHeader
-        title="Bright Data research"
-        description={`Social research runs through Bright Data's Scraper API (brightdata.com) with your key: Reddit discussions by keyword, and X, Instagram and Facebook posts, profiles and pages a web search finds. Bright Data bills one credit per record it returns; its free tier is ${BRIGHTDATA_FREE_MONTHLY_CREDITS.toLocaleString("en-US")} credits a month shared across its products. AgentSDR stops at the limit you set here and never tops up or changes your plan.`}
+        title={included ? "Social research (included)" : "Bright Data research"}
+        description={included
+          ? "Social research is included with your workspace: Reddit discussions by keyword, and X, Instagram and Facebook posts, profiles and pages a web search finds. No account or key is needed. What is left this month is on Settings → Plan & usage."
+          : `Social research runs through Bright Data's Scraper API (brightdata.com) with your key: Reddit discussions by keyword, and X, Instagram and Facebook posts, profiles and pages a web search finds. Bright Data bills one credit per record it returns; its free tier is ${BRIGHTDATA_FREE_MONTHLY_CREDITS.toLocaleString("en-US")} credits a month shared across its products. AgentSDR stops at the limit you set here and never tops up or changes your plan.`}
       />
       <FramePanel className="flex flex-col gap-4">
         <p className="text-paragraph-xs text-text-sub-600">
-          {settings.connected ? `Connected (key ${settings.keyHint ?? "saved"}). ` : "Not connected. "}
-          {creditsLine(settings.usedThisMonth, settings.reservedThisMonth, settings.monthlyCredits)}. Bright Data&apos;s API does not report the credits left on the account; check the Control Panel for the exact figure.
+          {included
+            ? `${settings.connected ? "Available." : "Not available right now."} ${creditsLine(settings.usedThisMonth, settings.reservedThisMonth, settings.monthlyCredits)}.`
+            : <>{settings.connected ? `Connected (key ${settings.keyHint ?? "saved"}). ` : "Not connected. "}
+          {creditsLine(settings.usedThisMonth, settings.reservedThisMonth, settings.monthlyCredits)}. Bright Data&apos;s API does not report the credits left on the account; check the Control Panel for the exact figure.</>}
         </p>
+        {!included && <>
         <label className="flex flex-col gap-1 text-label-xs text-text-strong-950">
           API key
           <input className={field} type="password" autoComplete="off" placeholder={settings.connected ? "Leave empty to keep the saved key" : "Paste your Bright Data API key (Control Panel → Account settings)"} value={key} disabled={!canManage || busy} onChange={(event) => setKey(event.target.value)} />
@@ -114,6 +121,7 @@ export function BrightdataSettings() {
           <input className={field} type="text" autoComplete="off" placeholder="A SERP zone from your Control Panel" value={zone} disabled={!canManage || busy} onChange={(event) => setZone(event.target.value)} />
           <span className="text-paragraph-xs text-text-sub-600">Used only to find X, Instagram and Facebook pages when no web search (TinyFish, Tavily or your AI provider) is set up. One credit per search.</span>
         </label>
+        </>}
         <label className="flex items-start gap-2 text-paragraph-sm text-text-strong-950">
           <input type="checkbox" className="mt-1" checked={reddit} disabled={!canManage || busy} onChange={(event) => setReddit(event.target.checked)} />
           <span>
@@ -135,7 +143,7 @@ export function BrightdataSettings() {
         {saved && !error && <p className="text-paragraph-xs text-success-base">Saved.</p>}
         {canManage && (
           <div className="flex flex-wrap justify-end gap-2">
-            {settings.connected && (
+            {settings.connected && !included && (
               <Button.Root variant="neutral" mode="stroke" size="xsmall" disabled={busy} onClick={() => void save({ key: "" })}>Disconnect</Button.Root>
             )}
             <Button.Root variant="primary" mode="filled" size="xsmall" disabled={busy} onClick={() => void save()}>{busy ? "Saving…" : "Save"}</Button.Root>

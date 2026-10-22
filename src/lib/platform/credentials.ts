@@ -32,6 +32,7 @@ import { getPlatformCredential } from "@/lib/managed/store.server";
  * let one workspace list another's accounts.
  */
 const MANAGED_UNIPILE = false;
+export const MANAGED_UNIPILE_ENABLED = MANAGED_UNIPILE;
 
 /** Which credentials Unipile resolves to for the organization in scope. Google and R2 are always the organization's own. */
 export async function platformCredentialSource(key: PlatformKey): Promise<ServiceMode> {

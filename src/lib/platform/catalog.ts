@@ -277,8 +277,8 @@ export const PLATFORM_SETTINGS_HREF: Record<PlatformKey, string> = {
 
 /** Where that page sits in the Settings sidebar, for messages. */
 export const PLATFORM_SETTINGS_LABEL: Record<PlatformKey, string> = {
-  google: "Settings → Email → Connection",
-  unipile: "Settings → LinkedIn → Connection",
+  google: "Settings → Advanced → Use your own providers → Google Workspace",
+  unipile: "Settings → Advanced → Use your own providers → Unipile",
   r2: "Settings → WhatsApp → Integrations",
 };
 
