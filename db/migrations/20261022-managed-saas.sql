@@ -102,3 +102,79 @@ ALTER TABLE apify_runs ADD COLUMN IF NOT EXISTS credential_source text NOT NULL 
 ALTER TABLE apify_runs DROP CONSTRAINT IF EXISTS apify_runs_credential_source_chk;
 ALTER TABLE apify_runs ADD CONSTRAINT apify_runs_credential_source_chk
   CHECK (credential_source IN ('managed', 'own'));
+
+-- unipile_account_owners: which organization owns each Unipile account. The
+-- authority every list, sync, send and webhook is filtered by
+-- (src/lib/unipile/ownership.server.ts). The account id stays globally
+-- unique (a provider identity; inbound webhooks find the organization
+-- through it). Rows are written only by a verified hosted-auth callback, by
+-- a sync on the organization's own Unipile key, by an operator command, or by
+-- the backfill below. Never reassigned: a released account keeps its row.
+CREATE TABLE IF NOT EXISTS unipile_account_owners (
+  account_id text PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  channel text NOT NULL,
+  credential_source text NOT NULL,
+  claimed_via text NOT NULL,
+  claimed_by uuid,
+  -- The Unipile v2 Scope the account is assigned to, once Scopes are used (not yet).
+  scope_id text,
+  status text NOT NULL DEFAULT 'active',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  released_at timestamptz,
+  CONSTRAINT unipile_account_owners_channel_chk CHECK (channel IN ('linkedin', 'whatsapp', 'instagram', 'email')),
+  CONSTRAINT unipile_account_owners_source_chk CHECK (credential_source IN ('managed', 'own')),
+  CONSTRAINT unipile_account_owners_via_chk CHECK (claimed_via IN ('hosted_auth', 'existing', 'own_sync', 'operator')),
+  CONSTRAINT unipile_account_owners_status_chk CHECK (status IN ('active', 'released'))
+);
+CREATE INDEX IF NOT EXISTS unipile_account_owners_org_idx ON unipile_account_owners (organization_id, channel, status);
+
+-- unipile_connect_states: one hosted-auth link the server minted for a
+-- signed-in workspace. Its id is the link's opaque `name`; the notify_url
+-- carries a per-link secret token whose sha256 is stored here. A callback
+-- is honoured only for a pending, unexpired state with the right token.
+CREATE TABLE IF NOT EXISTS unipile_connect_states (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  user_id uuid NOT NULL,
+  channel text NOT NULL,
+  kind text NOT NULL,
+  reconnect_account_id text,
+  credential_source text NOT NULL,
+  token_hash text NOT NULL,
+  status text NOT NULL DEFAULT 'pending',
+  account_id text,
+  reason text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  expires_at timestamptz NOT NULL,
+  completed_at timestamptz,
+  CONSTRAINT unipile_connect_states_channel_chk CHECK (channel IN ('linkedin', 'whatsapp', 'instagram', 'email')),
+  CONSTRAINT unipile_connect_states_kind_chk CHECK (kind IN ('create', 'reconnect')),
+  CONSTRAINT unipile_connect_states_source_chk CHECK (credential_source IN ('managed', 'own')),
+  CONSTRAINT unipile_connect_states_status_chk CHECK (status IN ('pending', 'claimed', 'rejected', 'expired'))
+);
+CREATE INDEX IF NOT EXISTS unipile_connect_states_org_idx ON unipile_connect_states (organization_id, created_at);
+
+-- Every account an organization already holds gets its ownership row, for
+-- that organization (idempotent: an account already owned keeps its owner).
+-- A conflict (the same account id held by two organizations' tables) is
+-- not resolved here: scripts/add-managed-saas.ts reports it after this runs.
+INSERT INTO unipile_account_owners (account_id, organization_id, channel, credential_source, claimed_via)
+SELECT "linkedinId", "organizationId", 'linkedin', 'own', 'existing' FROM "LinkedInAccount"
+WHERE coalesce("linkedinId", '') <> ''
+ON CONFLICT (account_id) DO NOTHING;
+
+INSERT INTO unipile_account_owners (account_id, organization_id, channel, credential_source, claimed_via)
+SELECT unipile_account_id, organization_id, 'whatsapp', 'own', 'existing' FROM whatsapp_accounts
+WHERE coalesce(unipile_account_id, '') <> ''
+ON CONFLICT (account_id) DO NOTHING;
+
+INSERT INTO unipile_account_owners (account_id, organization_id, channel, credential_source, claimed_via)
+SELECT unipile_account_id, organization_id, 'instagram', 'own', 'existing' FROM instagram_accounts
+WHERE coalesce(unipile_account_id, '') <> ''
+ON CONFLICT (account_id) DO NOTHING;
+
+INSERT INTO unipile_account_owners (account_id, organization_id, channel, credential_source, claimed_via)
+SELECT unipile_account_id, organization_id, 'email', 'own', 'existing' FROM outreach_mailboxes
+WHERE coalesce(unipile_account_id, '') <> ''
+ON CONFLICT (account_id) DO NOTHING;

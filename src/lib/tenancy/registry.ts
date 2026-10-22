@@ -103,6 +103,9 @@ export const SCOPED_TABLES: readonly ScopedTable[] = [
   snake("research_settings"),
   // Included service or My own provider, per service (src/lib/managed/)
   snake("provider_credential_modes"),
+  // Unipile account ownership (account ids stay globally unique) and minted hosted-auth links
+  snake("unipile_account_owners"),
+  snake("unipile_connect_states"),
   // LinkedIn (ex-Prisma, camelCase columns)
   pascal("LinkedInAccount"),
   pascal("Campaign"),

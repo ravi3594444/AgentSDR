@@ -89,7 +89,12 @@ function CredentialRow({ status, onChanged }: { status: PlatformCredentialStatus
           </div>
           <p className="mt-1 break-words text-paragraph-xs text-text-sub-600">
             {status.stored
-              ? [details.join(" · "), status.verifiedAt ? `verified ${new Date(status.verifiedAt).toLocaleString()}` : null, status.adoptedFrom ? `adopted from ${status.adoptedFrom.name ?? status.adoptedFrom.organizationId}` : null].filter(Boolean).join(" · ")
+              ? [
+                details.join(" · "),
+                status.verifiedAt ? `verified ${new Date(status.verifiedAt).toLocaleString()}` : null,
+                status.adoptedFrom ? `adopted from ${status.adoptedFrom.name ?? status.adoptedFrom.organizationId}` : null,
+                status.webhooks ? `webhooks ${status.webhooks.status}${status.webhooks.message ? ` (${status.webhooks.message})` : ""}` : null,
+              ].filter(Boolean).join(" · ")
               : `Included workspaces cannot use ${info.label} until a key is stored.`}
           </p>
         </div>

@@ -53,7 +53,7 @@ export async function POST(req: NextRequest) {
   const accountId = text(payload.account_id);
   const organizationId = accountId ? await organizationOfUnipileMailbox(accountId) : null;
 
-  const gate = await gateUnipileWebhook(req, organizationId);
+  const gate = await gateUnipileWebhook(req, organizationId, accountId);
   if (gate.verdict === "reject") return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   if (gate.verdict === "ignore") return NextResponse.json({ ok: true, skipped: true });
   if (!organizationId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });

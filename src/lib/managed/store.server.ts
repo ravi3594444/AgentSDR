@@ -117,7 +117,7 @@ export async function listPlatformCredentialStatus(): Promise<PlatformCredential
     : new Map<string, string>();
   return PLATFORM_CREDENTIAL_KEYS.map((key) => {
     const row = rows.find((candidate) => candidate.provider === key);
-    const config = (row?.config ?? {}) as { values?: Record<string, string>; hints?: Record<string, string>; verifiedAt?: string };
+    const config = (row?.config ?? {}) as { values?: Record<string, string>; hints?: Record<string, string>; verifiedAt?: string; webhooks?: { status: string; message?: string; at?: string } };
     return {
       key,
       stored: Boolean(row),
@@ -126,6 +126,7 @@ export async function listPlatformCredentialStatus(): Promise<PlatformCredential
       verifiedAt: config.verifiedAt ?? null,
       updatedAt: row?.updatedAt.toISOString() ?? null,
       adoptedFrom: row?.sourceOrganizationId ? { organizationId: row.sourceOrganizationId, name: names.get(row.sourceOrganizationId) ?? null } : null,
+      ...(key === "unipile" ? { webhooks: config.webhooks ? { status: config.webhooks.status, message: config.webhooks.message, at: config.webhooks.at } : null } : {}),
     };
   });
 }

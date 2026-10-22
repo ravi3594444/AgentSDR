@@ -18,10 +18,10 @@ an organization that already saved its own credentials keeps them and keeps
 | 0 | This plan | written |
 | a | Platform operator grant (`platform_operators`), operator route guard, LinkedIn job logs | done: `scripts/grant-platform-operator.ts`, `src/lib/auth/operatorAccess.server.ts`; auth-policies e2e covers grant, re-grant, unknown address, revoke, workspace owners |
 | b | Platform credential store, per-provider Included/My own choice, resolver | done: `src/lib/managed/` (catalog, allowances, store, modes, verify), the Anthropic engine adapter `src/lib/ai/server/anthropicRuntime.ts`; migration writes `own` for every organization with saved credentials |
-| c | Consumers switched to the resolver (AI, Unipile, TinyFish, Tavily, Bright Data, Apify, workers, gates) | done for AI (incl. the Anthropic engine), TinyFish, Tavily, Bright Data, Apify; Unipile wired but gated off until (f); `scripts/e2e/managed-saas.ts` |
+| c | Consumers switched to the resolver (AI, Unipile, TinyFish, Tavily, Bright Data, Apify, workers, gates) | done for AI (incl. the Anthropic engine), TinyFish, Tavily, Bright Data, Apify; Unipile in (f); `scripts/e2e/managed-saas.ts` |
 | d | Operator panel (default keys, Included AI engine and model, usage), adopt-defaults action | done: `/platform`, `/api/platform/*` (credentials, ai, usage, adopt); `scripts/e2e/platform-admin.ts` (owner/admin/member 404 on every route, 401 signed out, cross-origin 403, masked answers, adopt keeps originals) |
 | e | Customer settings: Plan & usage, Advanced → Use your own providers | done: `/settings/usage`, `/settings/providers` (+ `/api/settings/providers`), the Unipile / Google / AI provider pages moved under Advanced, Included cards for TinyFish, Tavily, Bright Data, Apify |
-| f | Unipile ownership, hosted-auth connection flow, scoped sync/send/webhooks, allowance | planned |
+| f | Unipile ownership, hosted-auth connection flow, scoped sync/send/webhooks, allowance | done: `src/lib/unipile/` (ownership, connect, accounts), `/api/unipile/connect`, `/api/unipile/accounts/disconnect`, the guarded client in `src/services/unipile.service.ts`, the `org=managed` webhook gate; `scripts/e2e/unipile-ownership.ts` (69 checks) |
 | g | Usage accounting and allowances | done in the same commit: `provider_usage.credential_source` / `cost_usd`, `apify_runs.credential_source`, `src/lib/managed/usage.server.ts` (allowance locks), `aiMeter.server.ts` (every AI call metered) |
 | h | Docs, gates, push | planned |
 
@@ -105,37 +105,68 @@ Customers on My own provider keep their own connection and models.
 ### 4. Unipile
 
 See "Unipile: what the docs say" below. v1 (what the code uses) has no
-Scopes, so isolation is an authoritative ownership mapping:
+Scopes, so isolation is an authoritative ownership mapping
+(`src/lib/unipile/`):
 
 - `unipile_account_owners (account_id PK, organization_id, channel,
-  credential_source, claimed_via, claimed_by, scope_id, status, timestamps)`.
-  The Unipile account id stays globally unique (a provider identity);
-  inbound webhooks find their organization through it.
+  credential_source, claimed_via, claimed_by, scope_id, status, timestamps)`,
+  SCOPED. The Unipile account id stays globally unique (a provider identity);
+  inbound webhooks find their organization through it. An owner is never
+  replaced. Disconnecting marks the row `released`: the id stays that
+  organization's and only it can make it active again.
 - `unipile_connect_states (id, organization_id, user_id, channel, kind,
   reconnect_account_id, credential_source, token_hash, status, account_id,
   reason, created_at, expires_at, completed_at)`, SCOPED.
-- Connecting: the server mints the hosted-auth link for the signed-in
-  workspace with an opaque state id as `name` and a per-link secret token in
-  `notify_url` (only its hash is stored). The browser never supplies the
+- Connecting (`POST /api/unipile/connect { channel, accountId? }`; the
+  LinkedIn and Instagram link routes call the same code): the server mints
+  the hosted-auth link for the signed-in workspace with an opaque state id as
+  `name` and a per-link secret token in `notify_url` (only its sha256 is
+  stored; links expire after 15 minutes; at most 20 links an hour per
+  workspace). The browser names only a channel and, to reconnect, one of its
+  own row ids; never an organization or a Unipile account id. LinkedIn
+  accounts and WhatsApp numbers can be connected by any member (a rep's own,
+  as before); Instagram accounts and email inboxes by owners and admins. On
+  the Included Unipile a link needs the public origin (`BETTER_AUTH_URL`),
+  since only the callback claims.
+- Callback (`/api/webhooks/unipile-account?state=…&token=…`): the state must
+  exist and the token match (else 401, nothing recorded); the body must name
+  the state and report `CREATION_SUCCESS` (`RECONNECTED` for a reconnect).
+  Then, recorded on the state: pending and unexpired; the workspace still on
+  the Unipile that minted the link; the account re-read from Unipile with
+  that key; its type the channel's; a new account created after the link was
+  minted (5 minutes' clock skew), a reconnect exactly the account named. The
+  claim runs under the organization's advisory lock and, on the Included
+  Unipile, the connected-account allowance (workspace and platform, under
+  that allowance's platform-wide lock). An account owned by another
+  organization is refused and logged, never reassigned.
+- Sync (LinkedIn, WhatsApp, Instagram, email) keeps only the accounts this
+  organization owns; the rest of the listing is ignored, and a row whose
+  account it does not own is marked disconnected like any unlisted one. With
+  My own provider, an account the workspace's own key lists and nobody owns
+  is claimed (`own_sync`), as syncs always did; never when the own key is the
+  platform's key.
+- Sends and reads: on the Included Unipile the client is wrapped so that
+  every SDK call naming an account (`account_id`, `reconnect_account`, an
+  `account.*(id)` call) is refused before it is sent unless the organization
+  owns that account; minting links or connecting accounts outside the flow is
+  refused; the raw LinkedIn search call checks the same. Calls addressed by
+  chat id (sending into an existing chat, reading its messages) carry no
+  account; their chat ids come only from the workspace's own rows, which are
+  created only for accounts it owns.
+- Disconnect (`POST /api/unipile/accounts/disconnect { channel, id }`,
+  owners and admins): by the workspace's own row id; removed from Unipile,
+  the row kept as disconnected, the ownership released.
+- Webhooks: storing the platform's Unipile registers its webhooks once, with
+  `org=managed` and the platform's generated secret (removing the key removes
+  them). A delivery there is accepted only for an account whose active owner
+  is on the Included Unipile, and its rows must be that owner's; anything else
+  is acknowledged and dropped. Per-organization URLs (`org=<id>`) and
+  hand-registered ones (no `org`) also drop an account owned by another
   organization.
-- Callback: the state must be pending, unexpired and its token must match;
-  the account is re-read from Unipile with the key that minted the link; its
-  type must match the channel; a new account must have been created after the
-  link was minted; a reconnect must be the account the state named. The claim
-  runs under the organization's advisory lock with the connected-account
-  allowance; an account owned by another organization is refused and
-  reported, never reassigned.
-- Sync (LinkedIn, WhatsApp, Instagram, email) only touches accounts this
-  organization owns. With My own provider, an account the workspace's own
-  key lists and nobody owns is claimed (`own_sync`), as before; never when the
-  own key is the platform's key.
-- Sends: the managed Unipile client refuses any call naming an `account_id`
-  the organization does not own.
-- Webhooks: the platform's Unipile registers its webhooks once, with
-  `org=managed` and the platform's secret; a delivery is accepted only for an
-  account owned by a workspace on the Included Unipile.
-- Existing accounts get an ownership row for the organization they belong to
-  (idempotent migration); conflicts are reported, not resolved.
+- Existing accounts get an ownership row for the organization that holds
+  them (`claimed_via = existing`, idempotent); an account two organizations
+  hold is printed by the migration as a conflict and left with whichever
+  ownership row exists.
 
 ### 5. Usage and allowances
 

@@ -1,6 +1,7 @@
 "use client";
 /* eslint-disable react-hooks/set-state-in-effect */
 
+import { ConnectAccountButton, ConnectionOutcome } from "@/components/linkedin/HostedAuth";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   RiChat1Line,
@@ -146,10 +147,13 @@ export function WhatsappAccountsClient({ rules }: { rules: WhatsappNumberRules }
   const defaultAccount = accounts?.find((a) => a.isDefault) ?? null;
 
   const syncAction = (
-    <Button.Root variant="primary" mode="filled" size="small" disabled={syncing} onClick={() => void sync()}>
-      <Button.Icon as={RiRefreshLine} className={cn(syncing && "animate-spin")} />
-      {syncing ? "Syncing…" : "Sync from Unipile"}
-    </Button.Root>
+    <div className="flex flex-wrap items-start gap-2">
+      <ConnectAccountButton channel="whatsapp" label="Connect WhatsApp number" />
+      <Button.Root variant="neutral" mode="stroke" size="small" disabled={syncing} onClick={() => void sync()}>
+        <Button.Icon as={RiRefreshLine} className={cn(syncing && "animate-spin")} />
+        {syncing ? "Syncing…" : "Sync from Unipile"}
+      </Button.Root>
+    </div>
   );
 
   return (
@@ -159,6 +163,7 @@ export function WhatsappAccountsClient({ rules }: { rules: WhatsappNumberRules }
       actions={syncAction}
     >
       <div className="space-y-5">
+        <ConnectionOutcome />
         {notice && <Callout tone="success">{notice}</Callout>}
         {error && (
           <Callout

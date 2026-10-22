@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { members, users } from "@/lib/auth/schema";
 import { listUnipileInstagramAccounts } from "@/services/unipile.instagram";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
+import { syncableAccountIds } from "@/lib/unipile/ownership.server";
 import type { InstagramAccountSummary } from "./contract";
 import { InstagramApiError } from "./errors";
 import { instagramAccounts, type InstagramAccountRow } from "./schema";
@@ -65,7 +66,10 @@ export async function listInstagramAccounts(): Promise<InstagramAccountSummary[]
  * and marks accounts Unipile no longer lists as disconnected.
  */
 export async function syncInstagramAccounts(): Promise<InstagramAccountSummary[]> {
-  const listed = await listUnipileInstagramAccounts();
+  // Only the accounts this organization owns (unipile_account_owners); see src/lib/unipile/ownership.server.ts.
+  const all = await listUnipileInstagramAccounts();
+  const syncable = await syncableAccountIds("instagram", all.map((account) => account.unipileAccountId));
+  const listed = all.filter((account) => syncable.has(account.unipileAccountId));
   const now = new Date();
   const stamp = sql`${now.toISOString()}::timestamptz`;
 

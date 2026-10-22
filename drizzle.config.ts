@@ -153,6 +153,8 @@ const OWNED_TABLES = [
   "platform_credentials",
   "platform_settings",
   "provider_credential_modes",
+  "unipile_account_owners",
+  "unipile_connect_states",
 ];
 
 export default {

@@ -122,7 +122,7 @@ export function allowanceDecision(
     return {
       ok: false,
       scope: "workspace",
-      reason: `This workspace's included ${allowance.label.toLowerCase()} is used up (${amountText(used.workspace)} of ${amountText(allowance.workspace)}${allowance.period === "month" ? " this month" : ""}).${when}`,
+      reason: `This workspace's Included allowance for ${allowance.label} is used up (${amountText(used.workspace)} of ${amountText(allowance.workspace)}${allowance.period === "month" ? " this month" : ""}).${when}`,
       resetsAt,
     };
   }
@@ -130,7 +130,7 @@ export function allowanceDecision(
     return {
       ok: false,
       scope: "platform",
-      reason: `The included ${allowance.label.toLowerCase()} is at its platform limit for now.${when}`,
+      reason: `The Included service has no room for more ${allowance.label} right now.${when}`,
       resetsAt,
     };
   }

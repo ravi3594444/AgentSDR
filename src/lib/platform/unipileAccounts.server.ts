@@ -5,6 +5,15 @@ import { syncInstagramAccounts } from "@/lib/instagram/accounts";
 import { syncUnipileMailboxes } from "@/lib/outreach/mailboxProviders";
 import { syncWhatsappAccounts } from "@/lib/whatsapp/accounts";
 import { runInOrganization } from "@/lib/tenancy/scope";
+import type { UnipileChannel } from "@/lib/unipile/schema";
+
+/** One channel's accounts read again for the organization in scope (after a verified connection). */
+export async function syncUnipileChannel(channel: UnipileChannel): Promise<void> {
+  if (channel === "linkedin") await syncAllAccounts();
+  else if (channel === "whatsapp") await syncWhatsappAccounts();
+  else if (channel === "instagram") await syncInstagramAccounts();
+  else await syncUnipileMailboxes();
+}
 
 /**
  * After a Unipile connection is saved: every account list read again from

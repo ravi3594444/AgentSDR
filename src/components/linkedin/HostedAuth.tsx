@@ -13,15 +13,25 @@ import { Callout } from "@/components/settings/SettingsKit";
  * wizard because LinkedIn's captcha and OAuth screens break inside one. The
  * wizard sends the user back to /settings/linkedin-accounts?unipile=success|failure.
  */
-export async function startHostedAuth(accountId?: string): Promise<void> {
-  const res = await fetch("/api/linkedin/accounts/hosted-auth", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(accountId ? { accountId } : {}),
-  });
+export type ConnectChannel = "linkedin" | "whatsapp" | "instagram" | "email";
+
+export async function startHostedAuth(accountId?: string, channel: ConnectChannel = "linkedin"): Promise<void> {
+  // The server mints the link for the signed-in workspace (src/lib/unipile/connect.server.ts); the
+  // browser names only the channel and, to reconnect, one of the workspace's own row ids.
+  const res = channel === "linkedin"
+    ? await fetch("/api/linkedin/accounts/hosted-auth", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(accountId ? { accountId } : {}),
+    })
+    : await fetch("/api/unipile/connect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ channel, ...(accountId ? { accountId } : {}) }),
+    });
   const data = await res.json().catch(() => null);
   if (!res.ok || !data?.ok || !data.url) {
-    throw new Error(data?.error || "Could not start the LinkedIn connection flow");
+    throw new Error(data?.error || "Could not start the connection flow");
   }
   window.location.href = data.url as string;
 }
@@ -36,7 +46,7 @@ export async function startHostedAuth(accountId?: string): Promise<void> {
  * it is what clears the flag; on a normal load it fires with the flag already
  * false and changes nothing.
  */
-export function useHostedAuthRedirect() {
+export function useHostedAuthRedirect(channel: ConnectChannel = "linkedin") {
   const [redirecting, setRedirecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -53,14 +63,14 @@ export function useHostedAuthRedirect() {
     setRedirecting(true);
     setError(null);
     try {
-      await startHostedAuth(accountId);
+      await startHostedAuth(accountId, channel);
       // Navigation is underway — the spinner stays up until the page unloads,
       // and pageshow clears it if the user comes back instead.
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setRedirecting(false);
     }
-  }, []);
+  }, [channel]);
 
   return { redirecting, error, start };
 }
@@ -68,11 +78,13 @@ export function useHostedAuthRedirect() {
 export function ConnectAccountButton({
   label = "Connect LinkedIn account",
   variant = "default",
+  channel = "linkedin",
 }: {
   label?: string;
   variant?: "default" | "outline";
+  channel?: ConnectChannel;
 }) {
-  const { redirecting, error, start } = useHostedAuthRedirect();
+  const { redirecting, error, start } = useHostedAuthRedirect(channel);
 
   return (
     <div className="flex flex-col items-end gap-1">
@@ -85,7 +97,7 @@ export function ConnectAccountButton({
         onClick={() => start()}
       >
         <Button.Icon as={redirecting ? RiLoader4Line : RiAddLine} className={redirecting ? "animate-spin" : undefined} />
-        {redirecting ? "Opening LinkedIn…" : label}
+        {redirecting ? "Opening Unipile…" : label}
       </Button.Root>
       {error && <p role="alert" className="text-paragraph-xs text-error-base">{error}</p>}
     </div>
@@ -197,4 +209,39 @@ export function HostedAuthReturn() {
       Syncing the connected account from Unipile…
     </div>
   );
+}
+
+/**
+ * On the page the wizard returns to (`?connection=<id>`): how that connection
+ * ended, read from the server, since only Unipile's confirmation to the server
+ * connects an account. Waits briefly for it.
+ */
+export function ConnectionOutcome() {
+  const params = useSearchParams();
+  const router = useRouter();
+  const connection = params.get("connection");
+  const [outcome, setOutcome] = useState<{ status: string; reason: string | null; expired: boolean } | null>(null);
+
+  useEffect(() => {
+    if (!connection) return;
+    let stop = false;
+    let tries = 0;
+    const check = async () => {
+      const res = await fetch(`/api/unipile/connect?connection=${encodeURIComponent(connection)}`, { cache: "no-store" });
+      const data = (await res.json().catch(() => null)) as { status?: string; reason?: string | null; expired?: boolean } | null;
+      if (stop || !res.ok || !data?.status) return;
+      setOutcome({ status: data.status, reason: data.reason ?? null, expired: Boolean(data.expired) });
+      if (data.status === "claimed") router.refresh();
+      else if (data.status === "pending" && !data.expired && tries++ < 10) setTimeout(() => void check(), 3_000);
+    };
+    void check();
+    return () => {
+      stop = true;
+    };
+  }, [connection, router]);
+
+  if (!connection || !outcome) return null;
+  if (outcome.status === "claimed") return <Callout tone="success">The account is connected to this workspace.</Callout>;
+  if (outcome.status === "pending" && !outcome.expired) return <Callout tone="info">Waiting for Unipile to confirm the connection…</Callout>;
+  return <Callout tone="error">The account was not connected{outcome.reason ? `: ${outcome.reason}` : outcome.expired ? ": the link expired" : ""}.</Callout>;
 }

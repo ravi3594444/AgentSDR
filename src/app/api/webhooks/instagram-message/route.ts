@@ -98,7 +98,7 @@ export async function POST(req: NextRequest) {
   // A URL AgentSDR registered itself carries `org=` and the secret header:
   // gateUnipileWebhook checks both, and drops an account that is not this
   // organization's. A hand-registered URL (no `org`) keeps the rule below.
-  const gate = await gateUnipileWebhook(req, organizationId);
+  const gate = await gateUnipileWebhook(req, organizationId, accountId);
   if (gate.verdict === "reject") return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   if (gate.verdict === "ignore") return NextResponse.json({ ok: true, skipped: true });
   // No organization has linked this account (or the feature never synced it):

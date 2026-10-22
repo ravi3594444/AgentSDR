@@ -1,23 +1,76 @@
 import { UnipileClient } from "unipile-node-sdk";
 import axios from "axios";
-import { requirePlatformCredentials } from "@/lib/platform/credentials";
+import { platformCredentialSource, requirePlatformCredentials } from "@/lib/platform/credentials";
+import { assertAccountOwned } from "@/lib/unipile/ownership.server";
 import { serializeError } from "@/lib/linkedin/serializeError";
 import { inferLinkedinApi, linkedinLookupIdentifier, normalizeEmail, normalizeLinkedinSlug, type LinkedinApiHint } from "@/lib/leads/identity";
 
 let _client: { key: string; client: UnipileClient } | null = null;
+
+/** A plain client for these credentials, unguarded: for reading an account back while verifying who may claim it. */
+export function unipileClientFor(credentials: { baseUrl: string; apiKey: string }): UnipileClient {
+  const key = `${credentials.baseUrl}\n${credentials.apiKey}`;
+  if (!_client || _client.key !== key) {
+    _client = { key, client: new UnipileClient(credentials.baseUrl, credentials.apiKey) };
+  }
+  return _client.client;
+}
+
+/** The Unipile account ids a call names: `account_id` (and `reconnect_account`) in its body, or an `account.*` call's id. */
+export function accountIdsInCall(path: readonly string[], args: readonly unknown[]): string[] {
+  const ids: string[] = [];
+  const first = args[0];
+  if (path[0] === "account" && typeof first === "string") ids.push(first);
+  for (const arg of args) {
+    if (!arg || typeof arg !== "object") continue;
+    const body = arg as Record<string, unknown>;
+    for (const field of ["account_id", "reconnect_account"]) if (typeof body[field] === "string" && body[field]) ids.push(body[field] as string);
+  }
+  return ids;
+}
+
+/**
+ * The client with every call that names an account checked against
+ * ownership first (unipile_account_owners): on the Included Unipile one key
+ * sees every workspace's accounts, so a call for an account this workspace
+ * does not own is refused before it is sent. Listing (account.getAll) is not
+ * refused: each sync keeps only the accounts it owns.
+ */
+function ownershipGuarded(client: UnipileClient): UnipileClient {
+  const wrap = (target: object, path: string[]): unknown => new Proxy(target, {
+    get(object, property, receiver) {
+      const value = Reflect.get(object, property, receiver);
+      if (typeof property !== "string") return value;
+      if (typeof value === "function") {
+        return async (...args: unknown[]) => {
+          // A new account on the platform's Unipile comes only through the verified connection flow
+          // (src/lib/unipile/connect.server.ts), which mints its links with the unguarded client.
+          if (path[0] === "account" && (property === "createHostedAuthLink" || property.startsWith("connect"))) {
+            throw new Error("Accounts are connected through the connection flow on the Included Unipile");
+          }
+          for (const accountId of accountIdsInCall([...path, property], args)) await assertAccountOwned(accountId);
+          return (value as (...input: unknown[]) => unknown).apply(object, args);
+        };
+      }
+      if (value && typeof value === "object" && path.length < 2) return wrap(value, [...path, property]);
+      return value;
+    },
+  });
+  return wrap(client, []) as UnipileClient;
+}
+
 /**
  * The one Unipile client, shared by LinkedIn (here) and WhatsApp
  * (unipile.whatsapp.ts). Credentials come from the platform-integration store
- * only; throws PlatformNotConnectedError when Unipile is not connected. The
- * instance is rebuilt whenever the stored credentials change.
+ * only: the workspace's own Unipile, or on the Included service the
+ * platform's, whose client refuses any call for an account the workspace
+ * does not own. Throws PlatformNotConnectedError when Unipile is not
+ * connected. The instance is rebuilt whenever the stored credentials change.
  */
 export async function getUnipileClient(): Promise<UnipileClient> {
-  const { baseUrl, apiKey } = await requirePlatformCredentials("unipile");
-  const key = `${baseUrl}\n${apiKey}`;
-  if (!_client || _client.key !== key) {
-    _client = { key, client: new UnipileClient(baseUrl, apiKey) };
-  }
-  return _client.client;
+  const credentials = await requirePlatformCredentials("unipile");
+  const client = unipileClientFor(credentials);
+  return (await platformCredentialSource("unipile")) === "managed" ? ownershipGuarded(client) : client;
 }
 
 export interface LinkedInAccountInfo {
@@ -233,6 +286,8 @@ export const searchLinkedIn = async (
   const body: Record<string, string> = { url };
   if (cursor) body.cursor = cursor;
 
+  // A raw call, outside the guarded client: on the Included Unipile the account must be this workspace's.
+  if ((await platformCredentialSource("unipile")) === "managed") await assertAccountOwned(accountId);
   const { baseUrl, apiKey } = await requirePlatformCredentials("unipile");
   const response = await axios.post<LinkedInSearchResult>(
     `${baseUrl}/api/v1/linkedin/search`,

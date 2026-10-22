@@ -104,7 +104,7 @@ export function TinyfishSettings() {
         )}
         <label className="flex items-center gap-2 text-paragraph-sm text-text-strong-950">
           <input type="checkbox" checked={useForSearch} disabled={!canManage || busy} onChange={(event) => setUseForSearch(event.target.checked)} />
-          Use TinyFish for web searches (off: website searches use Tavily or your AI provider, as before)
+          {included ? "Use it for web searches (off: website searches use the included website search instead)" : "Use TinyFish for web searches (off: website searches use Tavily or your AI provider, as before)"}
         </label>
         {!included && <label className="flex flex-col gap-1 text-label-xs text-text-strong-950 sm:max-w-xs">
           Browser minutes a day (0 = off)

@@ -1,13 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withLinkedinOrg } from "@/lib/linkedin/organizations.server";
-import { and, eq } from "drizzle-orm";
-import { db } from "@/lib/db";
-import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
-import { linkedInAccounts } from "@/lib/linkedin/schema";
-import { createLinkedInHostedAuthLink } from "@/services/unipile.service";
-import { hostedAuthCallbackUrls } from "@/lib/linkedin/hostedAuthUrls";
-import { isPlatformNotConnectedError, requirePlatformCredentials } from "@/lib/platform/credentials";
+import { isPlatformNotConnectedError } from "@/lib/platform/credentials";
 import { serializeError } from "@/lib/linkedin/serializeError";
+import { unipileAccountIdForRow } from "@/lib/unipile/accounts.server";
+import { startConnection, UnipileConnectError } from "@/lib/unipile/connect.server";
 
 // POST /api/linkedin/accounts/hosted-auth
 //   {}                     → link that connects a new LinkedIn account
@@ -15,43 +11,27 @@ import { serializeError } from "@/lib/linkedin/serializeError";
 //
 // Returns a single-use Unipile URL the caller navigates to. Unipile advises
 // against iframing the wizard, so this deliberately returns a URL rather than
-// anything embeddable.
+// anything embeddable. The link is minted for the signed-in workspace and
+// verified when Unipile confirms it (src/lib/unipile/connect.server.ts); the
+// same flow as POST /api/unipile/connect { channel: "linkedin" }.
 export async function POST(req: NextRequest) {
-  return withLinkedinOrg(req, async () => {
+  return withLinkedinOrg(req, async (ctx) => {
     try {
-      const credentials = await requirePlatformCredentials("unipile");
       const body = await req.json().catch(() => ({}));
       const accountId = typeof body?.accountId === "string" ? body.accountId : null;
-
       let reconnectAccountId: string | null = null;
       if (accountId) {
-        const [account] = await db
-          .select({ id: linkedInAccounts.id, linkedinId: linkedInAccounts.linkedinId })
-          .from(linkedInAccounts)
-          .where(and(inOrg(linkedInAccounts), eq(linkedInAccounts.id, accountId)))
-          .limit(1);
-        if (!account) {
-          return NextResponse.json({ ok: false, error: "Account not found" }, { status: 404 });
-        }
-        // linkedinId is the Unipile account id — what `reconnect_account` expects.
-        reconnectAccountId = account.linkedinId;
+        // The row is this organization's, and its Unipile account id is what `reconnect_account` expects.
+        reconnectAccountId = await unipileAccountIdForRow("linkedin", accountId);
+        if (!reconnectAccountId) return NextResponse.json({ ok: false, error: "Account not found" }, { status: 404 });
       }
-
-      const url = await createLinkedInHostedAuthLink({
-        name: accountId ?? "agentsdr",
-        reconnectAccountId,
-        // The browser's own origin, so a dev session returns to localhost
-        // instead of production.
-        ...hostedAuthCallbackUrls(req.headers.get("origin"), credentials.notifySecret, currentOrganizationId()),
-      });
-
+      const { url } = await startConnection({ channel: "linkedin", userId: ctx.userId, reconnectAccountId, requestOrigin: req.headers.get("origin") });
       return NextResponse.json({ ok: true, url });
     } catch (err) {
-      if (isPlatformNotConnectedError(err)) {
-        return NextResponse.json({ ok: false, error: err.message }, { status: 409 });
-      }
+      if (isPlatformNotConnectedError(err)) return NextResponse.json({ ok: false, error: err.message }, { status: 409 });
+      if (err instanceof UnipileConnectError) return NextResponse.json({ ok: false, error: err.message }, { status: err.status });
       console.error(`[hosted-auth] Failed to create link: ${serializeError(err)}`);
-      return NextResponse.json({ ok: false, error: serializeError(err) }, { status: 500 });
+      return NextResponse.json({ ok: false, error: "Could not start the LinkedIn connection" }, { status: 500 });
     }
   });
 }

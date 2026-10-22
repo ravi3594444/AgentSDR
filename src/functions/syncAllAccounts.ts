@@ -6,6 +6,7 @@ import { getLinkedInAccounts, getProfile } from "@/services/unipile.service";
 import { serializeError } from "@/lib/linkedin/serializeError";
 import { currentOrganizationId, inOrg, maybeCurrentOrganizationId, runInOrganization } from "@/lib/tenancy/scope";
 import { unipileOrganizationIds } from "@/lib/linkedin/organizations.server";
+import { syncableAccountIds } from "@/lib/unipile/ownership.server";
 
 /**
  * Sync the LinkedIn accounts of Unipile workspaces into LinkedInAccount.
@@ -38,7 +39,11 @@ const syncOrganizationAccounts = async (): Promise<void> => {
 
   console.log("[syncAllAccounts] Syncing accounts from Unipile");
 
-  const accounts = await getLinkedInAccounts();
+  // Only the accounts this organization owns (unipile_account_owners): on the Included Unipile the
+  // key lists every workspace's accounts, and an unknown one is never adopted by whoever syncs first.
+  const listed = await getLinkedInAccounts();
+  const syncable = await syncableAccountIds("linkedin", listed.map((acc) => acc.linkedinId));
+  const accounts = listed.filter((acc) => syncable.has(acc.linkedinId));
 
   if (accounts.length === 0) console.log("[syncAllAccounts] No LinkedIn accounts found in Unipile");
 

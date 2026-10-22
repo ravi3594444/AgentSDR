@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { channelRules } from "@/lib/channels/rules.server";
 import { isPlatformConnected } from "@/lib/platform/credentials";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
+import { syncableAccountIds } from "@/lib/unipile/ownership.server";
 import { getUnipileEmailAccount, listUnipileEmailAccounts, sendUnipileEmail } from "@/services/unipile.email";
 import { unipileErrorStatus } from "@/services/unipile.whatsapp";
 import { sendEmail, type SendEmailParams, type SendEmailResult } from "./gmail";
@@ -125,7 +126,10 @@ function mailboxState(account: UnipileEmailAccount, now: Date) {
  * Unipile is marked failed, never deleted (its sent history stays).
  */
 export async function syncUnipileMailboxes(): Promise<UnipileMailboxSync> {
-  const accounts = await listUnipileEmailAccounts();
+  // Only the inboxes this organization owns (unipile_account_owners); see src/lib/unipile/ownership.server.ts.
+  const all = await listUnipileEmailAccounts();
+  const syncable = await syncableAccountIds("email", all.map((account) => account.unipileAccountId));
+  const accounts = all.filter((account) => syncable.has(account.unipileAccountId));
   const now = new Date();
   const result: UnipileMailboxSync = { synced: [], skipped: [], unlinked: [] };
   let sending: Awaited<ReturnType<typeof newMailboxSending>> | null = null;

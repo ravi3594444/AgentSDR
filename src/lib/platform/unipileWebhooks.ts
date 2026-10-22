@@ -65,6 +65,13 @@ const LOCAL_ORIGIN = /^https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(
 
 export type UnipileWebhookEndpoint = { key: string; label: string; url: string };
 
+/**
+ * The `org` value of the platform's own registration on the Included Unipile
+ * (one set of webhooks for every Included workspace; the account's owner
+ * decides the workspace). Not an organization id.
+ */
+export const MANAGED_WEBHOOK_ORG = "managed";
+
 /** The URL each webhook is registered at, for this organization. Null when the app has no public origin. */
 export function unipileWebhookEndpoints(organizationId: string): UnipileWebhookEndpoint[] | null {
   const origin = publicAppUrl();

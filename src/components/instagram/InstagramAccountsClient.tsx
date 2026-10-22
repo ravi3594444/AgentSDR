@@ -1,5 +1,6 @@
 "use client";
 
+import { ConnectionOutcome } from "@/components/linkedin/HostedAuth";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -213,6 +214,7 @@ export function InstagramAccountsClient({ inquiryIntakeOn }: { inquiryIntakeOn: 
       actions={canManage ? <>{syncAction}{connectAction}</> : undefined}
     >
       <div className="space-y-5">
+        <ConnectionOutcome />
         {notice && <Callout tone="success">{notice}</Callout>}
         {error && (
           <Callout

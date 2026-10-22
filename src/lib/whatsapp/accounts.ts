@@ -9,6 +9,7 @@ import { warmUpEndsAt } from "./guardrails";
 import { channelRules } from "@/lib/channels/rules.server";
 import { whatsappAccounts } from "./schema";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
+import { syncableAccountIds } from "@/lib/unipile/ownership.server";
 
 /**
  * The WhatsApp numbers linked in Unipile, as whatsapp_accounts. Unipile is
@@ -55,7 +56,10 @@ export async function listWhatsappAccounts(): Promise<WhatsappAccountSummary[]> 
  * and makes one account the default when none is.
  */
 export async function syncWhatsappAccounts(): Promise<WhatsappAccountSummary[]> {
-  const listed = await listUnipileWhatsappAccounts();
+  // Only the numbers this organization owns (unipile_account_owners); see src/lib/unipile/ownership.server.ts.
+  const all = await listUnipileWhatsappAccounts();
+  const syncable = await syncableAccountIds("whatsapp", all.map((account) => account.unipileAccountId));
+  const listed = all.filter((account) => syncable.has(account.unipileAccountId));
   const now = new Date();
 
   for (const account of listed) {

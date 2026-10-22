@@ -1,6 +1,7 @@
 import AddMailboxButton from "@/components/outreach/AddMailboxButton";
 import MailboxesPageClient from "@/components/outreach/MailboxesPageClient";
 import SyncUnipileMailboxesButton from "@/components/outreach/SyncUnipileMailboxesButton";
+import { ConnectAccountButton, ConnectionOutcome } from "@/components/linkedin/HostedAuth";
 import { RequiresPlatform } from "@/components/settings/RequiresPlatform";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import { requirePageOrgContext } from "@/lib/auth/context";
@@ -28,6 +29,7 @@ export default function EmailAccountsPage() {
       actions={
         <div className="flex flex-wrap items-center gap-2">
           <RequiresPlatform platform="unipile" fallback={null}>
+            <ConnectAccountButton channel="email" label="Connect an inbox" variant="outline" />
             <SyncUnipileMailboxesButton />
           </RequiresPlatform>
           <RequiresPlatform platform="google" fallback={null}>
@@ -36,6 +38,7 @@ export default function EmailAccountsPage() {
         </div>
       }
     >
+      <div className="mb-4"><ConnectionOutcome /></div>
       <RequiresPlatform platform={["google", "unipile"]} description={EMAIL_PROVIDERS_DESCRIPTION} settingsHref="/settings/email-connection">
         <Mailboxes />
       </RequiresPlatform>

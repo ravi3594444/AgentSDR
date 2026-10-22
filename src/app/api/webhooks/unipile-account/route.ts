@@ -8,6 +8,8 @@ import { syncUnipileMailboxes } from "@/lib/outreach/mailboxProviders";
 import { featureEnabled } from "@/lib/features/flags.server";
 import { applyInstagramAccountOwner, syncInstagramAccounts } from "@/lib/instagram/accounts";
 import { parseInstagramHostedAuthName } from "@/services/unipile.instagram";
+import { completeConnection } from "@/lib/unipile/connect.server";
+import { syncUnipileChannel } from "@/lib/platform/unipileAccounts.server";
 
 // POST /api/webhooks/unipile-account?secret=... — the `notify_url` of a hosted
 // auth link. Unipile POSTs { status, account_id, name } once the user finishes
@@ -44,7 +46,32 @@ async function resolveOrganization(req: NextRequest): Promise<string | null> {
   return organizationIdForNotifySecret(provided);
 }
 
+/**
+ * A link minted by src/lib/unipile/connect.server.ts carries `state` and its
+ * secret `token`: the connection is verified there (the state, the token, the
+ * account read back from Unipile) and claimed for the state's workspace only,
+ * then that channel is synced. Nothing the body says is trusted beyond being a
+ * pointer to the account.
+ */
+async function handleConnection(req: NextRequest): Promise<NextResponse> {
+  const body = await req.json().catch(() => null);
+  const outcome = await completeConnection({ stateId: req.nextUrl.searchParams.get("state"), token: req.nextUrl.searchParams.get("token"), body });
+  if (!outcome.ok && outcome.status === "invalid") return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  if (!outcome.ok) return NextResponse.json({ ok: true, claimed: false, reason: outcome.reason });
+  await runInOrganization(outcome.organizationId, async () => {
+    try {
+      await syncUnipileChannel(outcome.channel);
+      if (outcome.channel === "instagram") await applyInstagramAccountOwner(outcome.accountId, outcome.userId);
+    } catch (err) {
+      // The account is this workspace's either way; the next sync shows it.
+      console.error(`[unipile-account] sync after connecting ${outcome.channel} account ${outcome.accountId}: ${serializeError(err)}`);
+    }
+  });
+  return NextResponse.json({ ok: true, claimed: true });
+}
+
 export async function POST(req: NextRequest) {
+  if (req.nextUrl.searchParams.has("state")) return handleConnection(req);
   const organizationId = await resolveOrganization(req);
   if (!organizationId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });

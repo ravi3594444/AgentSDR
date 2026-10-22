@@ -29,7 +29,7 @@ import {
   type AccountFilter,
 } from "@/components/settings/AccountsOverview";
 import { Callout, Meter } from "@/components/settings/SettingsKit";
-import { ConnectAccountButton, useHostedAuthRedirect } from "@/components/linkedin/HostedAuth";
+import { ConnectAccountButton, useHostedAuthRedirect, ConnectionOutcome } from "@/components/linkedin/HostedAuth";
 import { formatNextAllowedRun } from "@/lib/linkedin/nextAllowedRun";
 
 export type AccountRow = {
@@ -327,6 +327,7 @@ export function AccountsClient({
         <KpiCell icon={RiUserStarLine} label="Premium" value={String(premium)} context={`${accounts.length - premium} on a free plan`} hint={`Premium accounts send up to ${inviteLimits.premium} connection requests a day, free accounts ${inviteLimits.free}. AgentSDR paces each account automatically to keep it safe.`} />
       </KpiStrip>
 
+      <div className="mt-5 empty:hidden"><ConnectionOutcome /></div>
       {disconnected > 0 && (
         <Callout tone="warning" className="mt-5" title={`${disconnected} ${disconnected === 1 ? "account is" : "accounts are"} disconnected`}>
           Campaigns skip them until they are reconnected. Reconnect re-authenticates the same account in place, so its campaigns and history stay.

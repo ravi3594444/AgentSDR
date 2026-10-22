@@ -51,6 +51,8 @@ export * from "./channels/schema";
 
 // Managed SaaS: platform operators, default provider credentials, Included / My own choices (src/lib/managed/).
 export * from "./managed/schema";
+// Unipile account ownership and the hosted-auth links the server minted (src/lib/unipile/).
+export * from "./unipile/schema";
 
 // The in-process scheduler's slot claims (src/lib/scheduler/), platform-wide.
 export * from "./scheduler/schema";

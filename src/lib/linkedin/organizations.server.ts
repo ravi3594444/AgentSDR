@@ -3,8 +3,11 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { gridProviders } from "@/lib/grid/schema";
 import { authContextErrorResponse, requireOrgContext, withOrgContext, type OrgContext } from "@/lib/auth/context";
-import { getPlatformCredentials } from "@/lib/platform/credentials";
+import { getPlatformCredentials, platformCredentialSource } from "@/lib/platform/credentials";
+import { MANAGED_WEBHOOK_ORG } from "@/lib/platform/unipileWebhooks";
+import { getPlatformCredential } from "@/lib/managed/store.server";
 import { runInOrganization } from "@/lib/tenancy/scope";
+import { accountOwner, organizationOwningAccount, organizationsOwningAccounts } from "@/lib/unipile/ownership.server";
 import { linkedInAccounts } from "./schema";
 
 /**
@@ -14,13 +17,18 @@ import { linkedInAccounts } from "./schema";
  * These are the only cross-organization reads in the LinkedIn code.
  */
 
-/** Every organization that has the Unipile integration connected. */
+/**
+ * Every organization a Unipile worker should visit: those with their own
+ * Unipile saved, and those owning accounts (on the Included Unipile they
+ * have no row of their own). Each worker still checks, inside the
+ * organization's scope, that Unipile resolves for it.
+ */
 export async function unipileOrganizationIds(): Promise<string[]> {
   const rows = await db
     .select({ organizationId: gridProviders.organizationId })
     .from(gridProviders)
     .where(and(eq(gridProviders.key, "platform-unipile"), eq(gridProviders.enabled, true)));
-  return rows.map((row) => row.organizationId);
+  return [...new Set([...rows.map((row) => row.organizationId), ...(await organizationsOwningAccounts())])];
 }
 
 /** The organization that owns a Unipile account id (LinkedInAccount.linkedinId is globally unique), or null. */
@@ -73,15 +81,37 @@ export type UnipileWebhookVerdict =
 export async function gateUnipileWebhook(
   request: { nextUrl: { searchParams: URLSearchParams }; headers: Headers },
   accountOrganizationId: string | null,
+  /** The event's account: its owner (unipile_account_owners) must be the organization the event is accepted for. */
+  accountId?: string | null,
 ): Promise<UnipileWebhookVerdict> {
   const claimed = request.nextUrl.searchParams.get("org");
-  if (claimed === null) return { verdict: "legacy" };
-  if (!ORGANIZATION_ID.test(claimed)) return { verdict: "reject" };
+  if (claimed === null) {
+    // A hand-registered URL keeps its older checks, but never for an account another organization owns.
+    if (accountId && accountOrganizationId) {
+      const owner = await accountOwner(accountId);
+      if (owner && owner.organizationId !== accountOrganizationId) return { verdict: "ignore", reason: "account is owned by another organization" };
+    }
+    return { verdict: "legacy" };
+  }
   const provided = request.headers.get("x-unipile-secret") ?? request.nextUrl.searchParams.get("secret");
+  if (claimed === MANAGED_WEBHOOK_ORG) {
+    // The platform's own registration on the Included Unipile, which sees every Included workspace's accounts:
+    // the platform's secret, then the account's owner decides the workspace, and only one on the Included Unipile.
+    const expected = (await getPlatformCredential("unipile"))?.notifySecret ?? null;
+    if (!provided || !expected || !safeEqual(expected, provided)) return { verdict: "reject" };
+    const owner = accountId ? await organizationOwningAccount(accountId) : null;
+    if (!owner) return { verdict: "ignore", reason: "account not connected to any workspace" };
+    if (accountOrganizationId !== owner) return { verdict: "ignore", reason: "account rows do not belong to its owner" };
+    const source = await runInOrganization(owner, () => platformCredentialSource("unipile"));
+    if (source !== "managed") return { verdict: "ignore", reason: "the owning workspace uses its own Unipile" };
+    return { verdict: "accept", organizationId: owner };
+  }
+  if (!ORGANIZATION_ID.test(claimed)) return { verdict: "reject" };
   const expected = await unipileNotifySecret(claimed);
   if (!provided || !expected || !safeEqual(expected, provided)) return { verdict: "reject" };
   if (!accountOrganizationId) return { verdict: "ignore", reason: "account not linked to this organization yet" };
   if (accountOrganizationId !== claimed) return { verdict: "ignore", reason: "account belongs to another organization" };
+  if (accountId && (await organizationOwningAccount(accountId)) !== claimed) return { verdict: "ignore", reason: "account is not owned by this organization" };
   return { verdict: "accept", organizationId: claimed };
 }
 

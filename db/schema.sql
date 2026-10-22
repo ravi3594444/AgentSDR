@@ -3233,6 +3233,52 @@ CREATE TABLE public.treg_settings (
 );
 
 --
+-- Name: unipile_account_owners; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.unipile_account_owners (
+    account_id text NOT NULL,
+    organization_id uuid NOT NULL,
+    channel text NOT NULL,
+    credential_source text NOT NULL,
+    claimed_via text NOT NULL,
+    claimed_by uuid,
+    scope_id text,
+    status text DEFAULT 'active'::text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    released_at timestamp with time zone,
+    CONSTRAINT unipile_account_owners_channel_chk CHECK ((channel = ANY (ARRAY['linkedin'::text, 'whatsapp'::text, 'instagram'::text, 'email'::text]))),
+    CONSTRAINT unipile_account_owners_source_chk CHECK ((credential_source = ANY (ARRAY['managed'::text, 'own'::text]))),
+    CONSTRAINT unipile_account_owners_status_chk CHECK ((status = ANY (ARRAY['active'::text, 'released'::text]))),
+    CONSTRAINT unipile_account_owners_via_chk CHECK ((claimed_via = ANY (ARRAY['hosted_auth'::text, 'existing'::text, 'own_sync'::text, 'operator'::text])))
+);
+
+--
+-- Name: unipile_connect_states; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.unipile_connect_states (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    organization_id uuid NOT NULL,
+    user_id uuid NOT NULL,
+    channel text NOT NULL,
+    kind text NOT NULL,
+    reconnect_account_id text,
+    credential_source text NOT NULL,
+    token_hash text NOT NULL,
+    status text DEFAULT 'pending'::text NOT NULL,
+    account_id text,
+    reason text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    completed_at timestamp with time zone,
+    CONSTRAINT unipile_connect_states_channel_chk CHECK ((channel = ANY (ARRAY['linkedin'::text, 'whatsapp'::text, 'instagram'::text, 'email'::text]))),
+    CONSTRAINT unipile_connect_states_kind_chk CHECK ((kind = ANY (ARRAY['create'::text, 'reconnect'::text]))),
+    CONSTRAINT unipile_connect_states_source_chk CHECK ((credential_source = ANY (ARRAY['managed'::text, 'own'::text]))),
+    CONSTRAINT unipile_connect_states_status_chk CHECK ((status = ANY (ARRAY['pending'::text, 'claimed'::text, 'rejected'::text, 'expired'::text])))
+);
+
+--
 -- Name: users; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4523,6 +4569,20 @@ ALTER TABLE ONLY public.treg_calls
 
 ALTER TABLE ONLY public.treg_settings
     ADD CONSTRAINT treg_settings_pkey PRIMARY KEY (organization_id);
+
+--
+-- Name: unipile_account_owners unipile_account_owners_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.unipile_account_owners
+    ADD CONSTRAINT unipile_account_owners_pkey PRIMARY KEY (account_id);
+
+--
+-- Name: unipile_connect_states unipile_connect_states_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.unipile_connect_states
+    ADD CONSTRAINT unipile_connect_states_pkey PRIMARY KEY (id);
 
 --
 -- Name: users users_email_key; Type: CONSTRAINT; Schema: public; Owner: -
@@ -5925,6 +5985,18 @@ CREATE INDEX teams_organization_id_idx ON public.teams USING btree (organization
 --
 
 CREATE INDEX treg_calls_org_created_idx ON public.treg_calls USING btree (organization_id, created_at);
+
+--
+-- Name: unipile_account_owners_org_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX unipile_account_owners_org_idx ON public.unipile_account_owners USING btree (organization_id, channel, status);
+
+--
+-- Name: unipile_connect_states_org_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX unipile_connect_states_org_idx ON public.unipile_connect_states USING btree (organization_id, created_at);
 
 --
 -- Name: verifications_identifier_idx; Type: INDEX; Schema: public; Owner: -
@@ -7594,6 +7666,20 @@ ALTER TABLE ONLY public.treg_calls
 
 ALTER TABLE ONLY public.treg_settings
     ADD CONSTRAINT treg_settings_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
+
+--
+-- Name: unipile_account_owners unipile_account_owners_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.unipile_account_owners
+    ADD CONSTRAINT unipile_account_owners_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
+
+--
+-- Name: unipile_connect_states unipile_connect_states_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.unipile_connect_states
+    ADD CONSTRAINT unipile_connect_states_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
 
 --
 -- Name: whatsapp_accounts whatsapp_accounts_organization_fk; Type: FK CONSTRAINT; Schema: public; Owner: -

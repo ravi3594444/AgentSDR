@@ -27,11 +27,13 @@ import { getPlatformCredential } from "@/lib/managed/store.server";
 
 /**
  * Unipile as an Included service: the platform's Unipile, shared by every
- * Included workspace, with account ownership enforced (src/lib/unipile/).
- * Off until that ownership layer is in place: a shared key without it would
- * let one workspace list another's accounts.
+ * Included workspace, with account ownership enforced (src/lib/unipile/):
+ * every sync keeps only owned accounts, the client refuses calls for others,
+ * new accounts arrive only through the verified connection flow, and
+ * webhooks are routed by owner. (A shared key without that layer would let
+ * one workspace list another's accounts.)
  */
-const MANAGED_UNIPILE = false;
+const MANAGED_UNIPILE = true;
 export const MANAGED_UNIPILE_ENABLED = MANAGED_UNIPILE;
 
 /** Which credentials Unipile resolves to for the organization in scope. Google and R2 are always the organization's own. */

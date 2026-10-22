@@ -179,6 +179,8 @@ export type PlatformCredentialStatus = {
   updatedAt: string | null;
   /** The organization an operator explicitly adopted it from, when it was copied rather than typed in. */
   adoptedFrom: { organizationId: string; name: string | null } | null;
+  /** Unipile only: the platform's own webhook registration. */
+  webhooks?: { status: string; message?: string; at?: string } | null;
 };
 
 /** The AI engines an Included workspace can run on. The Claude Code subscription login is not one: it is an owner-only pilot. */

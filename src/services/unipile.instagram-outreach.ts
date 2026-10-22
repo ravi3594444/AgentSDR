@@ -1,5 +1,11 @@
 import "server-only";
-import { requirePlatformCredentials } from "@/lib/platform/credentials";
+import { platformCredentialSource, requirePlatformCredentials } from "@/lib/platform/credentials";
+import { assertAccountOwned } from "@/lib/unipile/ownership.server";
+
+/** Raw calls outside the guarded client: on the Included Unipile the sending account must be this workspace's. */
+async function ownedOnManaged(accountId: string): Promise<void> {
+  if ((await platformCredentialSource("unipile")) === "managed") await assertAccountOwned(accountId);
+}
 import { instagramRecipient } from "@/lib/instagram/outreach";
 import { UnipileInstagramError } from "./unipile.instagram";
 
@@ -88,6 +94,7 @@ export async function resolveInstagramOutreachRecipient(
   accountId: string,
   username: string,
 ) {
+  await ownedOnManaged(accountId);
   return instagramOutreachTransport(
     await requirePlatformCredentials("unipile"),
   ).resolve(accountId, username);
@@ -98,6 +105,7 @@ export async function startInstagramOutreachChat(
   messagingId: string,
   text: string,
 ) {
+  await ownedOnManaged(accountId);
   return instagramOutreachTransport(
     await requirePlatformCredentials("unipile"),
   ).start(accountId, messagingId, text);

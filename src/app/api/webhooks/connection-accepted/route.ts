@@ -57,7 +57,7 @@ export async function POST(req: NextRequest) {
   const organizationId = replay && maybeCurrentOrganizationId()
     ? maybeCurrentOrganizationId()
     : accountId ? await organizationIdForLinkedinAccount(accountId) : null;
-  const gate = replay ? ({ verdict: "legacy" } as const) : await gateUnipileWebhook(req, organizationId);
+  const gate = replay ? ({ verdict: "legacy" } as const) : await gateUnipileWebhook(req, organizationId, accountId);
   if (gate.verdict === "reject") return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   if (gate.verdict === "ignore") {
     console.warn(`[webhook/connection-accepted] Account ${accountId ?? "?"} ignored: ${gate.reason}`);
