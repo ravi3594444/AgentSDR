@@ -1,4 +1,4 @@
-import { getUnipileClient } from "@/services/unipile.service";
+import { getUnipileClient, unipileAccountItems } from "@/services/unipile.service";
 import { isPlatformNotConnectedError, requirePlatformCredentials } from "@/lib/platform/credentials";
 import type { InstagramAccountStatus } from "@/lib/instagram/contract";
 
@@ -148,7 +148,7 @@ export async function listUnipileInstagramAccounts(): Promise<UnipileInstagramAc
       limit: ACCOUNT_PAGE_SIZE,
       ...(cursor ? { cursor } : {}),
     }))) as { items?: Record<string, unknown>[]; cursor?: string | null };
-    for (const item of response.items ?? []) {
+    for (const item of unipileAccountItems(response)) {
       const account = mapUnipileInstagramAccount(item);
       if (account) accounts.push(account);
     }

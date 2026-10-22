@@ -57,9 +57,20 @@ interface UnipileMessageItem {
 }
 
 // Fetch all LinkedIn accounts connected to this Unipile workspace
+/**
+ * The accounts in a reply from Unipile's account list. A reply without a
+ * list is an error, never "no accounts": every sync marks the accounts the
+ * list leaves out as disconnected.
+ */
+export function unipileAccountItems<T = Record<string, unknown>>(response: unknown): T[] {
+  const items = (response as { items?: unknown } | null)?.items;
+  if (!Array.isArray(items)) throw new Error("Unipile answered without an account list");
+  return items as T[];
+}
+
 export const getLinkedInAccounts = async (): Promise<LinkedInAccountInfo[]> => {
   const response = await (await getUnipileClient()).account.getAll();
-  return ((response as { items?: UnipileAccountItem[] }).items ?? [])
+  return unipileAccountItems<UnipileAccountItem>(response)
     .filter((acc) => acc.type === "LINKEDIN")
     .map((acc) => {
       const sourceStatus: string = acc.sources?.[0]?.status ?? "ERROR";
