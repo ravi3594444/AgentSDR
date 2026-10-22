@@ -15,7 +15,7 @@ import {
   type ApifyRun,
 } from "@/services/apify";
 import { APIFY_ACTORS, APIFY_LIMITS, isApifyActorKey, type ApifyActorKey, type ApifySettingsView } from "./catalog";
-import { apifyAllowance, looksExhausted, runOutcome } from "./mapping";
+import { apifyAllowance, apifyRefusalIsBusy, looksExhausted, runOutcome } from "./mapping";
 import { apifyRuns, apifySettings, type ApifyRunRow } from "./schema";
 import type { SpendGuard } from "@/lib/assistant/objective.server";
 
@@ -113,7 +113,7 @@ export async function saveApifySettings(
 type AccountLimits = { maxMonthlyUsageUsd: number | null; monthlyUsageUsd: number | null };
 
 export type ApifyReadiness =
-  | { usable: true; token: string; maxChargeUsd: number; maxItems: number; settings: SettingsRow; account: AccountLimits }
+  | { usable: true; token: string; maxChargeUsd: number; maxItems: number; settings: SettingsRow; account: AccountLimits | null }
   | { usable: false; exhausted: boolean; slotsFull?: boolean; reason: string };
 
 /**
@@ -137,6 +137,7 @@ export async function apifyReadiness(actor: ApifyActorKey, wantedItems: number):
     if (error instanceof ApifyError && looksExhausted({ httpStatus: error.status, type: error.type, message: error.message })) {
       return { usable: false, exhausted: true, reason: `Apify refused: ${error.message}` };
     }
+    // A passing fault reading the account: the owner's budget and per-run cap still bound the run (apifyAllowance).
     account = null;
   }
   const allowance = apifyAllowance({
@@ -148,7 +149,7 @@ export async function apifyReadiness(actor: ApifyActorKey, wantedItems: number):
     account,
   });
   if (!allowance.ok) return { usable: false, exhausted: allowance.exhausted, slotsFull: allowance.slotsFull, reason: allowance.reason };
-  return { usable: true, token, maxChargeUsd: allowance.maxChargeUsd, maxItems: Math.max(1, Math.min(wantedItems, row.maxResultsPerRun)), settings: row, account: account! };
+  return { usable: true, token, maxChargeUsd: allowance.maxChargeUsd, maxItems: Math.max(1, Math.min(wantedItems, row.maxResultsPerRun)), settings: row, account };
 }
 
 /** The token of the organization's saved connection (for polling a run already started). */
@@ -288,10 +289,12 @@ export async function startTrackedRun(input: {
         .where(and(inOrg(apifyRuns), eq(apifyRuns.id, row.id)));
       return { started: false, exhausted: false, reason: `starting this Apify run lost its answer (${message}), so it may have run; it is not started again, and its reserved cap stays counted` };
     }
-    const exhausted = error instanceof ApifyError && looksExhausted({ httpStatus: error.status, type: error.type, message });
+    const refusal = error instanceof ApifyError ? { httpStatus: error.status, type: error.type, message } : null;
     await db.update(apifyRuns).set({ status: "refused", error: message.slice(0, 500), finishedAt: new Date(), usageUsd: 0 })
       .where(and(inOrg(apifyRuns), eq(apifyRuns.id, row.id)));
-    return { started: false, exhausted, reason: `Apify did not start the run: ${message}` };
+    // The account is running as many Actors as its plan allows: a wait for a slot, like this organization's own run slots.
+    if (refusal && apifyRefusalIsBusy(refusal)) return { started: false, exhausted: false, slotsFull: true, reason: `the Apify account is running as many Actors as its plan allows (${message})` };
+    return { started: false, exhausted: Boolean(refusal && looksExhausted(refusal)), reason: `Apify did not start the run: ${message}` };
   }
 }
 

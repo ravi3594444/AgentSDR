@@ -26,6 +26,8 @@ const X_HANDLE = /^[A-Za-z0-9_]{1,15}$/;
 const X_RESERVED = new Set(["home", "search", "explore", "i", "settings", "hashtag", "intent", "share", "messages", "notifications", "login", "signup", "tos", "privacy", "compose"]);
 const FACEBOOK_HOST = /^(?:www\.|m\.|web\.|business\.)?facebook\.com$/i;
 const FACEBOOK_NAME = /^[A-Za-z0-9.\-]{3,80}$/;
+/** A page's newer address, /p/<Name>-<page id>/: the name part, then the numeric id. */
+const FACEBOOK_P_PAGE = /^[A-Za-z0-9.%_-]{1,150}-\d{5,25}$/;
 const FACEBOOK_RESERVED = new Set([
   "groups", "events", "watch", "marketplace", "login", "login.php", "sharer", "sharer.php", "share", "photo", "photo.php", "photos", "videos",
   "reel", "reels", "stories", "hashtag", "search", "help", "policies", "privacy", "pages", "gaming", "business", "ads", "settings", "notifications",
@@ -79,6 +81,10 @@ export function datasetForUrl(raw: string): DatasetUrl | null {
     if (first.toLowerCase() === "profile.php") {
       const id = url.searchParams.get("id");
       return id && /^\d{5,25}$/.test(id) ? { dataset: "facebook_pages", url: `https://www.facebook.com/profile.php?id=${id}`, handle: null } : null;
+    }
+    if (first.toLowerCase() === "p") {
+      const page = segments[1];
+      return page && segments.length === 2 && FACEBOOK_P_PAGE.test(page) ? { dataset: "facebook_pages", url: `https://www.facebook.com/p/${page}/`, handle: null } : null;
     }
     if (FACEBOOK_RESERVED.has(first.toLowerCase()) || !FACEBOOK_NAME.test(first)) return null;
     if (segments[1]?.toLowerCase() === "posts" && segments[2] && /^[A-Za-z0-9]{5,60}$/.test(segments[2])) {

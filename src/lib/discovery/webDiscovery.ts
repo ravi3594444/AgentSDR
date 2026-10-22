@@ -13,8 +13,8 @@ import { contactLinkSequence, emailMatchesDomain, extractContacts, ownWebsite, v
 
 export type SourceKind = "own_site" | "directory" | "instagram_profile" | "instagram_post" | "social_other" | "unusable";
 
-/** At most this many queries per discovery (each one is a paid provider search). */
-export const MAX_SEARCH_QUERIES = 3;
+/** At most this many queries per discovery (each one is a provider search: free on TinyFish, paid on the others, each through the request's spend guard). */
+export const MAX_SEARCH_QUERIES = 6;
 
 function clip(value: string, limit: number): string {
   const text = value.replace(/\s+/g, " ").trim();
@@ -34,19 +34,21 @@ function languageName(code: string): string | null {
  * The searches to run (2, or 3 with Instagram): the businesses' own
  * websites, local directories and lists of them, and, when Instagram can be
  * read, their public Instagram profiles and posts. `offer` keeps the search
- * from returning the owner's competitors (suppliers of the same thing).
+ * from returning the owner's competitors (suppliers of the same thing). With
+ * no place, the search is for such businesses anywhere.
  */
 export function buildSearchQueries(input: { customers: string; offer?: string | null; where: string; language?: string | null; instagram?: boolean }): string[] {
   const customers = clip(input.customers, 160);
   const where = clip(input.where, 120);
+  const at = where ? ` in ${where}` : "";
   const offer = input.offer?.trim() ? clip(input.offer, 80) : null;
   const language = languageName((input.language ?? "en").toLowerCase());
   const pages = language ? ` Pages in ${language} or English.` : "";
   const queries = [
-    `${customers} in ${where}: the businesses' own websites with their contact details${offer ? ` (businesses that could buy this, not suppliers of ${offer})` : ""}.${pages}`,
-    `Local directories and lists of ${customers} in ${where} (business directories, association member lists, "top" lists) that link to each business.${pages}`,
+    `${customers}${at}: the businesses' own websites with their contact details${offer ? ` (businesses that could buy this, not suppliers of ${offer})` : ""}.${pages}`,
+    `${where ? "Local directories" : "Directories"} and lists of ${customers}${at} (business directories, association member lists, "top" lists) that link to each business.${pages}`,
   ];
-  if (input.instagram) queries.push(`Public Instagram profiles and posts of ${customers} in ${where} (instagram.com pages).`);
+  if (input.instagram) queries.push(`Public Instagram profiles and posts of ${customers}${at} (instagram.com pages).`);
   return queries.slice(0, MAX_SEARCH_QUERIES);
 }
 
@@ -58,8 +60,9 @@ export function buildSearchQueries(input: { customers: string; offer?: string | 
 export function buildKeywordQueries(input: { customers: string; where: string; instagram?: boolean }): string[] {
   const customers = clip(input.customers, 120);
   const where = clip(input.where, 80);
-  const queries = [`${customers} ${where}`, `${customers} ${where} directory list`];
-  if (input.instagram) queries.push(`${customers} ${where} instagram`);
+  const subject = where ? `${customers} ${where}` : customers;
+  const queries = [subject, `${subject} directory list`];
+  if (input.instagram) queries.push(`${subject} instagram`);
   return queries.slice(0, MAX_SEARCH_QUERIES);
 }
 

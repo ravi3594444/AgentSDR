@@ -81,6 +81,10 @@ function systemPrompt(features: FeatureState, autonomy: AutonomyCaps | null = nu
   ].join("\n");
 }
 
+/** Messages the model's conversation is built from, and the longer stretch contacts and business details may be grounded in. */
+const TRANSCRIPT_MESSAGES = 80;
+const GROUNDING_MESSAGES = 200;
+
 /** The setup the model reads first. `threadId` (research agent v2): lists, runs and jobs of this chat only, not the whole organization's. */
 async function contextBlock(threadId: string | null = null): Promise<{ text: string; outreachStarted: boolean; profile: BusinessProfile }> {
   const setup = await setupSnapshot();
@@ -270,9 +274,11 @@ export async function runAgentTurn(input: {
     heartbeat = setInterval(() => void touchThread(input.threadId).catch(() => undefined), 60_000);
     for (let step = 0; step < maxSteps; step += 1) {
       const { text: setupText, outreachStarted, profile } = await contextBlock(v2 ? input.threadId : null);
-      const messages = await listMessages(input.threadId, 80);
+      // The conversation the model reads, and a longer stretch of it for grounding: a contact read on a page early in a long research turn still backs add_contacts.
+      const recent = await listMessages(input.threadId, GROUNDING_MESSAGES);
+      const messages = recent.slice(-TRANSCRIPT_MESSAGES);
       // What the owner wrote or attached: business information is saved only from it.
-      const ownerCorpus = groundingCorpus(messages, documentsText);
+      const ownerCorpus = groundingCorpus(recent, documentsText);
       let reply: AgentReply | null = null;
       // A search on record backs "I found …" about it; anything else said done needs this turn's tool.
       const searchedOnRecord = messages.some((row) => row.role === "tool" && row.status === "ok" && SEARCH_TOOLS.has(row.tool ?? ""));
@@ -306,7 +312,7 @@ export async function runAgentTurn(input: {
               else retryNoteId = (await addMessage({ threadId: input.threadId, role: "event", content, toolResult: { transient: true } })).id;
             },
             timeoutMs: 90_000,
-            maxOutputTokens: 1_500,
+            maxOutputTokens: 4_000,
             schemaName: "assistant_reply",
             schemaDescription: "Your message to the owner and the tools to run now.",
             jsonSchema: agentReplySchema(toolNames),

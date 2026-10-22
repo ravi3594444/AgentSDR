@@ -68,7 +68,7 @@ export async function v2ContextText(input: { threadId: string; requestMessageId:
       const result = (job.result ?? {}) as { found?: unknown; eligible?: unknown };
       const what = typeof payload.phrase === "string" ? payload.phrase
         : typeof payload.keywords === "string" ? payload.keywords
-          : [payload.criteria?.what ?? payload.criteria?.customers, payload.criteria?.where].filter((value) => typeof value === "string").join(" in ") || job.kind;
+          : [payload.criteria?.what ?? payload.criteria?.customers, payload.criteria?.where].filter((value) => typeof value === "string" && value.trim() !== "").join(" in ") || job.kind;
       const done = job.status === "succeeded";
       const running = job.status === "queued" || job.status === "running";
       // A running search's count so far, as its chat card shows it: without it the model says "nothing found yet".

@@ -175,6 +175,10 @@ describe("URLs sent to Bright Data", () => {
     expect(datasetForUrl("https://www.instagram.com/p/Cabc123xyz/")).toMatchObject({ dataset: "instagram_posts" });
     expect(datasetForUrl("https://m.facebook.com/lotusdentalaustin/about")).toMatchObject({ dataset: "facebook_pages", url: "https://www.facebook.com/lotusdentalaustin" });
     expect(datasetForUrl("https://www.facebook.com/lotusdentalaustin/posts/pfbid0abc123")).toMatchObject({ dataset: "facebook_posts" });
+    // A page's newer address, /p/<Name>-<id>/, is a page too; /p/ with no page id is not.
+    expect(datasetForUrl("https://m.facebook.com/p/Lotus-Dental-Austin-100063456789012/?mibextid=x")).toEqual({ dataset: "facebook_pages", url: "https://www.facebook.com/p/Lotus-Dental-Austin-100063456789012/", handle: null });
+    expect(datasetForUrl("https://www.facebook.com/p/Lotus-Dental")).toBeNull();
+    expect(datasetForUrl("https://www.facebook.com/p/Lotus-Dental-Austin-100063456789012/photos")).toBeNull();
     // Searches, logins, groups, share links and other sites are never sent (each would be a billed failure).
     for (const url of ["https://x.com/search?q=dentist", "https://x.com/i/flow/login", "https://www.facebook.com/groups/123", "https://www.facebook.com/sharer.php?u=x", "https://www.reddit.com/r/Dentists/", "https://example.com/x.com", "not a url"]) {
       expect(datasetForUrl(url)).toBeNull();

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { APIConnectionError, APIConnectionTimeoutError } from "openai";
 import { completeStructured, isStrictJsonSchema, type StructuredCompletionRuntime } from "./structuredCompletion";
-import { actionsProblem, agentReplySchema, nextAgentBatch, outreachRequested, parseAgentReply, type AgentReply } from "@/lib/assistant/agent";
+import { actionsProblem, agentReplySchema, MAX_ACTIONS_PER_STEP, nextAgentBatch, outreachRequested, parseAgentReply, type AgentReply } from "@/lib/assistant/agent";
 import { parseWriterReply, writerReplyInstructions, WRITER_REPLY_SCHEMAS } from "@/lib/assistant/writerReply";
 import { aimlFunctionCallFallback, aimlStructuredMode } from "../aimlapi-types";
 import { DECISION_SCHEMA } from "@/lib/assistant/replyAgent/decisionSchema";
@@ -487,7 +487,7 @@ describe("assistant completion recovery", () => {
     for (const prompt of [plainPrompt, websitePrompt]) {
       const websiteFirst = prompt === websitePrompt;
       test(`${mode}: accepts a larger plan ${websiteFirst ? "with a webpage read" : "without a URL"} on the first attempt`, async () => {
-        const actions = Array.from({ length: 9 }, (_, index) => ({ tool: "find_leads", arguments: JSON.stringify({ what: "dental clinics", where: `City ${index}`, contactAfter: true }) }));
+        const actions = Array.from({ length: MAX_ACTIONS_PER_STEP + 1 }, (_, index) => ({ tool: "find_leads", arguments: JSON.stringify({ what: "dental clinics", where: `City ${index}`, contactAfter: true }) }));
         if (websiteFirst) actions.unshift({ tool: "read_webpage", arguments: JSON.stringify({ url: "https://22nd-x-ai-studio.vercel.app" }) });
         const text = JSON.stringify({ message: "Searches queued.", actions, suggestions: [] });
         const { runtime, requests } = mode === "tool_call"
@@ -513,7 +513,7 @@ describe("assistant completion recovery", () => {
           assert.equal(staged.replanAfterRead, true);
           assert.equal(staged.pending, null);
         } else {
-          assert.equal(staged.batch.actions.length, 8);
+          assert.equal(staged.batch.actions.length, MAX_ACTIONS_PER_STEP);
           assert.equal(staged.pending?.actions.length, 1);
           assert.deepEqual([...staged.batch.actions, ...staged.pending!.actions], accepted.actions);
         }

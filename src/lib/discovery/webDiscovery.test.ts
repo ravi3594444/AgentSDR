@@ -270,3 +270,20 @@ describe("needSignal", () => {
     ]) expect([text, needSignal(text)]).toEqual([text, "engagement"]);
   });
 });
+
+describe("what find_customers_on_web asks for", () => {
+  test("a place is optional; the model's own queries are kept, at most MAX_SEARCH_QUERIES; up to MAX_WEB_SITES sites, 40 by default", async () => {
+    const { MAX_WEB_SITES, normalizeWebCriteria } = await import("./webDiscovery.server");
+    const anywhere = normalizeWebCriteria({ customers: "tile wholesalers" });
+    expect(anywhere).toMatchObject({ customers: "tile wholesalers", where: "", maxResults: 40 });
+    expect("queries" in anywhere).toBe(false);
+    const own = normalizeWebCriteria({ customers: "dental clinics", where: "Pune", queries: ["dental clinic Baner Pune", "dental clinic Baner Pune", " x ", ...Array.from({ length: 10 }, (_, index) => `query ${index}`)], maxResults: 500 });
+    expect(own).toMatchObject({ maxResults: MAX_WEB_SITES });
+    const queries = (own as { queries?: string[] }).queries ?? [];
+    expect(queries[0]).toBe("dental clinic Baner Pune");
+    expect(queries).toHaveLength(MAX_SEARCH_QUERIES);
+    expect(normalizeWebCriteria({ customers: "x", maxResults: 1 })).toMatchObject({ maxResults: 1 });
+    expect(normalizeWebCriteria({ where: "Pune" })).toEqual({ error: expect.stringContaining("who to find") });
+    expect(normalizeWebCriteria({ customers: "x", queries: "not a list" })).toEqual({ error: expect.stringContaining("queries must be an array") });
+  });
+});

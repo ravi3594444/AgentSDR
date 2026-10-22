@@ -54,10 +54,10 @@ export const TINYFISH_LIMITS = {
   fetchUrlsPerCall: 10,
   /** Highest Search page TinyFish serves (pages start at 0). */
   maxSearchPage: 10,
-  /** Characters kept from one fetched page for the assistant. */
-  maxPageChars: 12_000,
+  /** Characters kept from one fetched page for the assistant (its contacts are read from all of them). */
+  maxPageChars: 30_000,
   /** Links kept from one fetched page. */
-  maxPageLinks: 80,
+  maxPageLinks: 150,
 } as const;
 
 /** What Settings → Lead research → TinyFish shows and edits (never the key). */
@@ -197,7 +197,7 @@ export function browserMinutesHint(typed: string): { problem: boolean; text: str
   const problem = browserMinutesProblem(minutes);
   if (problem) return { problem: true, text: `${problem}.` };
   if (minutes === 0) return { problem: false, text: "The assistant cannot open a browser." };
-  return { problem: false, text: `Up to about $${(minutes * TINYFISH_LIMITS.browserUsdPerMinute).toFixed(2)} a day at TinyFish's $${TINYFISH_LIMITS.browserUsdPerMinute}/minute; one browser at a time.` };
+  return { problem: false, text: `Up to about $${(minutes * TINYFISH_LIMITS.browserUsdPerMinute).toFixed(2)} a day at TinyFish's $${TINYFISH_LIMITS.browserUsdPerMinute}/minute; one browser per chat, within these minutes.` };
 }
 
 /** A key that cannot be a TinyFish API key, or null. */

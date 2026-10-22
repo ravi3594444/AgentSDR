@@ -241,6 +241,9 @@ const { setTavilyApiBase } = await import("@/services/tavily");
 const { saveTavilySettings } = await import("@/lib/tavily/tavily.server");
 const { brightdataSettingsView, saveBrightdataSettings, BrightdataSettingsError, startCollection, pollCollection, sweepStaleCollections, brightdataReadiness } = await import("@/lib/brightdata/brightdata.server");
 const { setFeature } = await import("@/lib/features/flags.server");
+const { BRIGHTDATA_LIMITS } = await import("@/lib/brightdata/catalog");
+/** How long a collection, or a wait Bright Data imposes, may take before it is given up. */
+const TIMEOUT_MINUTES = BRIGHTDATA_LIMITS.collectionTimeoutMinutes;
 const { runInOrganization, currentOrganizationId, inOrg } = await import("@/lib/tenancy/scope");
 type AssistantJob = typeof assistantJobs.$inferSelect;
 
@@ -361,10 +364,12 @@ try {
 
     // What Bright Data was asked
     const reddit = triggersOf("reddit_posts");
-    check("Reddit was discovered by keyword, natively, with the limit per input, never collected by URL", reddit.length === 1 && reddit[0]!.type === "discover_new" && reddit[0]!.discoverBy === "keyword" && reddit[0]!.body.input.length === 2 && reddit[0]!.body.input.every((input) => input.date === "Past year" && input.num_of_posts === 3) && reddit[0]!.body.limit_per_input === 3, JSON.stringify(reddit[0]));
+    // No maxResults given: the organization's 60 records per search; a third held for authors, the rest over 4 platforms, 5 per keyword.
+    check("Reddit was discovered by keyword, natively, with the limit per input, never collected by URL", reddit.length === 1 && reddit[0]!.type === "discover_new" && reddit[0]!.discoverBy === "keyword" && reddit[0]!.body.input.length === 2 && reddit[0]!.body.input.every((input) => input.date === "Past year" && input.num_of_posts === 5) && reddit[0]!.body.limit_per_input === 5, JSON.stringify(reddit[0]));
     const sent = bd.triggers.flatMap((item) => item.body.input.map((input) => String(input.url ?? input.keyword)));
     check("only canonical post, profile and page URLs were sent: a search page, a login, a hashtag and a group were not", sent.includes(X_POST) && sent.includes(`https://www.instagram.com/${GLOW_IG}/`) && sent.includes(FB_BRIGHT) && !sent.some((url) => /search\?|\/i\/flow|explore\/tags|\/groups\//.test(url)), sent.join(", "));
-    check("the authors' profiles were read once each: the two Reddit authors who asked for something and the X poster, not the vendor", triggersOf("reddit_profiles").length === 1 && triggersOf("reddit_profiles")[0]!.body.input.map((input) => input.url).sort().join() === [`https://www.reddit.com/user/${FRAN}/`, `https://www.reddit.com/user/${SAM}/`].sort().join() && triggersOf("x_profiles").length === 1 && triggersOf("x_profiles")[0]!.body.input[0]!.url === `https://x.com/${X_HANDLE}`, JSON.stringify(bd.triggers.map((item) => [DATASETS[item.dataset], item.body.input])));
+    // No phrase list decides whose profile is read: every author found, within the records.
+    check("the authors' profiles were read once each: the three Reddit authors (the vendor too) and the X poster", triggersOf("reddit_profiles").length === 1 && triggersOf("reddit_profiles")[0]!.body.input.map((input) => input.url).sort().join() === [`https://www.reddit.com/user/${FRAN}/`, `https://www.reddit.com/user/${SAM}/`, `https://www.reddit.com/user/${VIC}/`].sort().join() && triggersOf("x_profiles").length === 1 && triggersOf("x_profiles")[0]!.body.input[0]!.url === `https://x.com/${X_HANDLE}`, JSON.stringify(bd.triggers.map((item) => [DATASETS[item.dataset], item.body.input])));
     check("every call carried the key as a Bearer header; 6 collections in all; nothing else left the machine", bd.triggers.length === 6 && bd.triggers.every((item) => item.auth === `Bearer ${KEY}`) && blocked.length === 0, `${bd.triggers.length} triggers, blocked: ${blocked.join(", ")}`);
     check("the websites profiles list were read, the Instagram profile's missing one was not", pageReads.some((url) => url.startsWith(site("pune-smiles"))) && pageReads.some((url) => url.startsWith(site("lotus-x"))) && pageReads.every((url) => /pune-smiles|lotus-x/.test(url)), pageReads.join(", "));
 
@@ -379,7 +384,7 @@ try {
     const sam = byName(new RegExp(SAM));
     check("the commenter who asked too, whose profile publishes nothing: kept as excluded, with why, and that Reddit cannot be messaged", sam?.status === "excluded" && /publish no email or phone; AgentSDR cannot message anyone on Reddit/.test(sam.reason ?? "") && sam.insight?.signals[0]?.source === "Reddit comment", JSON.stringify({ status: sam?.status, reason: sam?.reason }));
     const vic = byName(new RegExp(VIC));
-    check("the vendor who commented and posted without asking for anything: research only, profile never read", vic?.status === "excluded" && /kept as research: their words do not ask for anything, so their profile was not read/.test(vic.reason ?? "") && vic.insight?.signals.length === 2 && vic.insight.signals.every((signal) => signal.kind === "engagement"), JSON.stringify({ status: vic?.status, reason: vic?.reason, signals: vic?.insight?.signals.length }));
+    check("the vendor who commented and posted without asking for anything: profile read, kept as research as it publishes no contact", vic?.status === "excluded" && /publish no email or phone; AgentSDR cannot message anyone on Reddit/.test(vic.reason ?? "") && vic.insight?.signals.length === 2 && vic.insight.signals.every((signal) => signal.kind === "engagement"), JSON.stringify({ status: vic?.status, reason: vic?.reason, signals: vic?.insight?.signals.length }));
     const lotus = bySource(`https://x.com/${X_HANDLE}`);
     check("the X poster: a lead by the email written in their profile's bio and the one their website publishes, never by X", lotus?.status === "eligible" && lotus.evidence.some((item) => item.kind === "email" && item.value === `hello@${host("lotus-x")}` && item.sourceUrl === `https://x.com/${X_HANDLE}`) && lotus.evidence.some((item) => item.kind === "email" && item.value === `info@${host("lotus-x")}`) && !lotus.channels.includes("linkedin") && lotus.sourceUrl === `https://x.com/${X_HANDLE}` && lotus.insight?.signals[0]?.source === "X post", JSON.stringify({ evidence: lotus?.evidence, channels: lotus?.channels }));
     const glow = bySource(`https://www.instagram.com/${GLOW_IG}/`);
@@ -394,12 +399,12 @@ try {
     // The ledger
     const rows = await ledger(data!.jobId);
     const settled = rows.filter((row) => row.status === "settled");
-    check("six collections reserved before the call and settled from what Bright Data reported, failed inputs billed: 10 credits", rows.length === 6 && settled.length === 6 && rows.reduce((sum, row) => sum + (row.usedUnits ?? 0), 0) === 10 && rows.every((row) => typeof row.detail?.snapshotId === "string" && typeof row.detail?.collectionKey === "string"), JSON.stringify(rows.map((row) => [row.detail?.dataset, row.status, row.units, row.usedUnits])));
+    check("six collections reserved before the call and settled from what Bright Data reported, failed inputs billed: 11 credits", rows.length === 6 && settled.length === 6 && rows.reduce((sum, row) => sum + (row.usedUnits ?? 0), 0) === 11 && rows.every((row) => typeof row.detail?.snapshotId === "string" && typeof row.detail?.collectionKey === "string"), JSON.stringify(rows.map((row) => [row.detail?.dataset, row.status, row.units, row.usedUnits])));
     const instagram = rows.find((row) => row.detail?.dataset === "instagram_profiles");
     check("the Instagram collection: 2 inputs reserved, 1 record and 1 unreadable input, 2 credits used", instagram?.units === 2 && instagram.usedUnits === 2 && instagram.detail?.records === 1 && instagram.detail?.errors === 1, JSON.stringify(instagram?.detail));
-    check("the report counts the credits as estimated, and the cost at the list price", result.creditsUsed === 10 && result.creditsEstimated === true && Math.abs(Number(result.costUsd) - 10 * 0.0015) < 1e-9 && result.provider === "brightdata", JSON.stringify({ credits: result.creditsUsed, cost: result.costUsd }));
+    check("the report counts the credits as estimated, and the cost at the list price", result.creditsUsed === 11 && result.creditsEstimated === true && Math.abs(Number(result.costUsd) - 11 * 0.0015) < 1e-9 && result.provider === "brightdata", JSON.stringify({ credits: result.creditsUsed, cost: result.costUsd }));
     const after = await brightdataSettingsView();
-    check("the settings card shows the month's estimated use and, per dataset, only what this organization's collections returned", after.usedThisMonth === 10 && after.reservedThisMonth === 0 && after.datasets.find((item) => item.key === "reddit_posts")?.state === "verified" && after.datasets.find((item) => item.key === "instagram_profiles")?.state === "verified" && after.datasets.find((item) => item.key === "facebook_posts")?.state === "unused", JSON.stringify(after.datasets.filter((item) => item.state !== "unused")));
+    check("the settings card shows the month's estimated use and, per dataset, only what this organization's collections returned", after.usedThisMonth === 11 && after.reservedThisMonth === 0 && after.datasets.find((item) => item.key === "reddit_posts")?.state === "verified" && after.datasets.find((item) => item.key === "instagram_profiles")?.state === "verified" && after.datasets.find((item) => item.key === "facebook_posts")?.state === "unused", JSON.stringify(after.datasets.filter((item) => item.state !== "unused")));
     const failuresKept = (result.failures as { input: string | null; reason: string }[] | undefined) ?? [];
     check("the unreadable Instagram input is recorded with Bright Data's reason", failuresKept.some((item) => item.input === `https://www.instagram.com/${DEAD_IG}/` && /isn't available/.test(item.reason)), JSON.stringify(failuresKept));
 
@@ -446,7 +451,7 @@ try {
     await saveBrightdataSettings({ monthlyCredits: 5 }, null);
     const exhausted = await brightdataReadiness();
     const capped = await runTool("research_social_sources", ARGS, ctx(thread.id));
-    check("the monthly limit, counted from delivered and uncertain records, refuses new research with the reason", usedSoFar === 12 && !exhausted.usable && exhausted.exhausted && !capped.ok && /this month's Bright Data limit \(5 credits/.test(capped.summary), `${usedSoFar} used; ${capped.summary}`);
+    check("the monthly limit, counted from delivered and uncertain records, refuses new research with the reason", usedSoFar === 13 && !exhausted.usable && exhausted.exhausted && !capped.ok && /this month's Bright Data limit \(5 credits/.test(capped.summary), `${usedSoFar} used; ${capped.summary}`);
     await saveBrightdataSettings({ monthlyCredits: 1000 }, null);
     const stale: string[] = [];
     for (let index = 0; index < 3; index += 1) {
@@ -562,15 +567,15 @@ try {
       const job = await step(foreverData.jobId);
       if ((job.progress as { waiting?: unknown }).waiting) foreverWaiting = job;
     }
-    // Half an hour of waiting has passed.
-    await db.update(assistantJobs).set({ payload: sql`${assistantJobs.payload} || jsonb_build_object('waits', jsonb_build_object('0', ${new Date(Date.now() - 30 * 60_000).toISOString()}::text))` }).where(eq(assistantJobs.id, foreverData.jobId));
+    // Longer than a collection may take has passed.
+    await db.update(assistantJobs).set({ payload: sql`${assistantJobs.payload} || jsonb_build_object('waits', jsonb_build_object('0', ${new Date(Date.now() - (TIMEOUT_MINUTES + 10) * 60_000).toISOString()}::text))` }).where(eq(assistantJobs.id, foreverData.jobId));
     const foreverRun = await runJob(foreverData.jobId);
     bd.mode = "ok";
     const foreverResult = (foreverRun.job.result ?? {}) as Record<string, unknown> & { sources?: { platform: string; state: string; reason: string | null }[] };
     check("B01 job: a provider that keeps asking to wait is given up after the time a collection may take, the source failed with the reason, the job finished", Boolean(foreverWaiting) && foreverRun.job.status === "succeeded" && foreverResult.sources?.[0]?.state === "failed" && /kept asking to wait/.test(foreverResult.sources[0].reason ?? "") && foreverResult.found === 0, JSON.stringify({ status: foreverRun.job.status, error: foreverRun.job.error, sources: foreverResult.sources }));
 
     // A long Retry-After is a not-before time, not permission to retry after 15 minutes.
-    bd.mode = { status: 429, body: { error: "Too many requests" }, retryAfter: "1800" };
+    bd.mode = { status: 429, body: { error: "Too many requests" }, retryAfter: String((TIMEOUT_MINUTES + 10) * 60) };
     bd.once = true;
     const longWaitJob = await runTool("research_social_sources", { ...ARGS, platforms: ["reddit"], need: "booking enquiries unanswered after closing" }, ctx(thread.id));
     const longWaitData = longWaitJob.data as { jobId: string };
@@ -581,8 +586,8 @@ try {
     }
     const longRow = (await ledger(longWaitData.jobId)).find((row) => row.detail?.retryable === true);
     const retryAt = typeof longRow?.detail?.retryAt === "string" ? Date.parse(longRow.detail.retryAt) : 0;
-    check("a 30-minute Retry-After stays intact in the ledger; the job wakes at its 20-minute deadline to stop", Boolean(longWaiting) && retryAt - Date.now() > 29 * 60_000 && longWaiting!.runAfter.getTime() - Date.now() > 19 * 60_000, JSON.stringify({ retryAt: longRow?.detail?.retryAt, runAfter: longWaiting?.runAfter }));
-    await db.update(assistantJobs).set({ payload: sql`${assistantJobs.payload} || jsonb_build_object('waits', jsonb_build_object('0', ${new Date(Date.now() - 21 * 60_000).toISOString()}::text))` }).where(eq(assistantJobs.id, longWaitData.jobId));
+    check(`a Retry-After past the ${TIMEOUT_MINUTES}-minute deadline stays intact in the ledger; the job wakes at its deadline to stop`, Boolean(longWaiting) && retryAt - Date.now() > (TIMEOUT_MINUTES + 9) * 60_000 && longWaiting!.runAfter.getTime() - Date.now() > (TIMEOUT_MINUTES - 1) * 60_000 && longWaiting!.runAfter.getTime() - Date.now() <= TIMEOUT_MINUTES * 60_000, JSON.stringify({ retryAt: longRow?.detail?.retryAt, runAfter: longWaiting?.runAfter }));
+    await db.update(assistantJobs).set({ payload: sql`${assistantJobs.payload} || jsonb_build_object('waits', jsonb_build_object('0', ${new Date(Date.now() - (TIMEOUT_MINUTES + 1) * 60_000).toISOString()}::text))` }).where(eq(assistantJobs.id, longWaitData.jobId));
     bd.mode = "ok";
     const callsBeforeDeadline = triggerCalls();
     const longWaitRun = await runJob(longWaitData.jobId);
@@ -595,8 +600,8 @@ try {
     const toCollecting = await runJob(stuckData.jobId, { stopAtStage: "collecting" });
     bd.pollsUntilReady = 1;
     const stuckPayload = toCollecting.job.payload as { collections?: { startedAt: string; usageId: string; snapshotId: string }[] };
-    // Its collection started half an hour ago, and every progress read since fails.
-    for (const item of stuckPayload.collections ?? []) item.startedAt = new Date(Date.now() - 30 * 60_000).toISOString();
+    // Its collection started longer ago than a collection may take, and every progress read since fails.
+    for (const item of stuckPayload.collections ?? []) item.startedAt = new Date(Date.now() - (TIMEOUT_MINUTES + 10) * 60_000).toISOString();
     await db.update(assistantJobs).set({ payload: stuckPayload as Record<string, unknown> }).where(eq(assistantJobs.id, stuckData.jobId));
     bd.progressMode = { status: 503, body: "unavailable" };
     const stuckRun = await runJob(stuckData.jobId);
@@ -627,6 +632,25 @@ try {
     check("once the request is stopped the search is cancelled unsearched, and Bright Data was never called for it", ended.job.status === "cancelled" && endedResult.notSearched === true && /research stopped/.test(endedResult.note ?? "") && bd.triggers.length === triggersHeld, JSON.stringify({ status: ended.job.status, error: ended.job.error, result: endedResult, triggers: bd.triggers.length - triggersHeld }));
     const chatEvents = (await listMessages(chat.id, 100)).filter((row) => row.role === "event").map((row) => row.content ?? "");
     check("the chat shows the owner's pause, and the request is stopped", chatEvents.some((content) => /paused the research/.test(content)) && (await objectives.objectiveForRequest(message.id))?.status === "stopped", chatEvents.join(" | ").slice(0, 400));
+
+    // ---------------------------------------------------------- links the model found itself, read directly; lead_search_status sees the job
+    const linksBefore = bd.triggers.length;
+    const linked = await runTool("research_social_sources", { urls: [`https://www.instagram.com/${GLOW_IG}/`, FB_BRIGHT, "https://www.facebook.com/groups/123", "https://example.com/team"] }, ctx(thread.id));
+    const linkedData = linked.data as { jobId: string; criteria: { platforms: string[]; maxResults: number } } | undefined;
+    check("links alone start a job: their platforms only, the records per search as the default, the unreadable links named and never sent",
+      linked.ok && linkedData?.criteria.platforms.join() === "instagram,facebook" && linkedData.criteria.maxResults === 60 && /Instagram: reading 1 link given/.test(linked.summary) && /Not read \(not a post, profile or page Bright Data reads\): https:\/\/www\.facebook\.com\/groups\/123, https:\/\/example\.com\/team/.test(linked.summary), linked.summary);
+    const status = await runTool("lead_search_status", { jobId: linkedData!.jobId }, ctx(thread.id));
+    check("lead_search_status reads a social research job", status.ok && /^Social research /.test(status.summary) && status.data?.kind === "social_research" && /Social research \(Bright Data\)/.test(status.display ?? ""), `${status.summary.slice(0, 160)} | ${status.display}`);
+    const linkedRun = await runJob(linkedData!.jobId);
+    const linkedTriggers = bd.triggers.slice(linksBefore);
+    const linkedSent = linkedTriggers.flatMap((item) => item.body.input.map((input) => String(input.url ?? input.keyword)));
+    const linkedResult = (linkedRun.job.result ?? {}) as { found?: number; note?: string | null; sources?: { platform: string; state: string }[] };
+    check("the links were read by URL with no search: the Instagram profile and the Facebook page, nothing else",
+      linkedRun.job.status === "succeeded" && linkedTriggers.length === 2 && linkedTriggers.every((item) => item.discoverBy === null) && linkedSent.sort().join() === [`https://www.instagram.com/${GLOW_IG}/`, FB_BRIGHT].sort().join() && linkedResult.sources?.every((item) => item.state === "searched") === true && (linkedResult.found ?? 0) >= 2,
+      JSON.stringify({ status: linkedRun.job.status, error: linkedRun.job.error, sent: linkedSent, result: { found: linkedResult.found, sources: linkedResult.sources } }));
+    check("…and the final note names the links it could not read", /2 links were not read: not a post, profile or page Bright Data reads/.test(linkedResult.note ?? ""), linkedResult.note ?? "");
+    const finished = await runTool("lead_search_status", { jobId: linkedData!.jobId }, ctx(thread.id));
+    check("…and lead_search_status reports it finished", finished.ok && /Finished: \d+ found/.test(finished.display ?? ""), finished.display ?? "");
   });
 
   // ------------------------------------------------------------ C: Reddit off, a SERP zone instead of a web search

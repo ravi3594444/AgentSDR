@@ -164,7 +164,9 @@ function brightdataAnswer(method: string, url: URL, init?: RequestInit): Respons
       ? [
           { post_id: "t3_ff1", url: REDDIT_POST, user_posted: REDDIT_POSTER, title: "Our front desk misses calls all day", description: "We are a dental clinic in Pune and lose bookings every week. Looking for a service that answers missed calls.", num_comments: 1, date_posted: "2026-10-12T10:30:02.133Z", community_name: "Dentists", comments: [{ comment: "We sell exactly that, DM me", url: `${REDDIT_POST}comment/c1/`, user_commenting: REDDIT_VENDOR, date_of_comment: "2026-10-13T13:19:55.908Z", replies: [] }], timestamp: now, input: { url: REDDIT_POST }, discovery_input: { keyword: String(trigger.input[0]?.keyword ?? ""), date: "Past year" } },
         ]
-      : trigger.input.map((input) => ({ url: String(input.url), name: REDDIT_POSTER, social_links: [{ url: PUNE_SMILES_SITE }], description: "Owner, Pune Smiles dental clinic", timestamp: now, input }));
+      : trigger.input.map((input) => String(input.url).includes(REDDIT_VENDOR)
+        ? { url: String(input.url), name: REDDIT_VENDOR, social_links: [], description: "We build AI receptionists", timestamp: now, input }
+        : { url: String(input.url), name: REDDIT_POSTER, social_links: [{ url: PUNE_SMILES_SITE }], description: "Owner, Pune Smiles dental clinic", timestamp: now, input });
     if (snapshot[1] === "progress") return json(200, { status: "ready", snapshot_id: `sd_ff_${snapshot[2]}_${stamp}`, dataset_id: trigger.dataset, records: records.length, errors: 0 });
     return json(200, records);
   }
@@ -490,11 +492,11 @@ await runInOrganization(a.org.id, async () => {
   await finishSearches(requestId2);
   const socialDone = await jobRow(social!.id);
   const socialResult = (socialDone.result ?? {}) as { found?: number; eligible?: number; excluded?: number; discussions?: number; creditsUsed?: number; fit?: { qualified?: number } };
-  check("Bright Data discovered the post by keyword and read the poster's profile, with the key as a Bearer header; the vendor's was not read",
-    brightdata.triggers.length === 2 && brightdata.triggers[0]!.discoverBy === "keyword" && brightdata.triggers[1]!.input[0]!.url === `https://www.reddit.com/user/${REDDIT_POSTER}/` && brightdata.triggers.every((trigger) => trigger.auth === `Bearer ${BRIGHTDATA_KEY}`),
+  check("Bright Data discovered the post by keyword and read its authors' profiles (the poster's and the commenting vendor's), with the key as a Bearer header",
+    brightdata.triggers.length === 2 && brightdata.triggers[0]!.discoverBy === "keyword" && brightdata.triggers[1]!.input.map((input) => input.url).join() === [`https://www.reddit.com/user/${REDDIT_POSTER}/`, `https://www.reddit.com/user/${REDDIT_VENDOR}/`].join() && brightdata.triggers.every((trigger) => trigger.auth === `Bearer ${BRIGHTDATA_KEY}`),
     JSON.stringify(brightdata.triggers.map((trigger) => [trigger.discoverBy, trigger.input])));
   check("the research found the poster (a lead by the phone her website publishes) and the vendor (research only), and judged the poster against the request",
-    socialDone.status === "succeeded" && socialResult.found === 2 && socialResult.discussions === 2 && socialResult.eligible === 1 && socialResult.excluded === 1 && socialResult.fit?.qualified === 1 && socialResult.creditsUsed === 2,
+    socialDone.status === "succeeded" && socialResult.found === 2 && socialResult.discussions === 2 && socialResult.eligible === 1 && socialResult.excluded === 1 && socialResult.fit?.qualified === 1 && socialResult.creditsUsed === 3,
     JSON.stringify({ status: socialDone.status, error: socialDone.error, ...socialResult }));
   const [posterMember] = await db.select().from(schema.leadAudienceMembers).where(and(eq(schema.leadAudienceMembers.audienceId, socialDone.audienceId!), eq(schema.leadAudienceMembers.status, "eligible")));
   check("the lead keeps its evidence: the post, her words, the profile that led to the website, and the phone with its page",
@@ -517,10 +519,10 @@ await runInOrganization(a.org.id, async () => {
   const stopped2 = await objectives.objectiveForRequest(requestId2);
   const report2 = (await events(thread.id)).filter((row) => (row.toolResult as { objectiveId?: string; reportKey?: string } | null)?.objectiveId === objective2!.id && (row.toolResult as { reportKey?: string }).reportKey);
   check("target reached: one final report names Reddit through Bright Data, its yield and the credits as an estimate",
-    stopped2?.status === "stopped" && stopped2.stopReason === "target_reached" && report2.length === 1 && /Reddit through Bright Data: 1 search, 2 found/.test(report2[0]!.content) && /2 credits, estimated from delivered records/.test(report2[0]!.content),
+    stopped2?.status === "stopped" && stopped2.stopReason === "target_reached" && report2.length === 1 && /Reddit through Bright Data: 1 search, 2 found/.test(report2[0]!.content) && /3 credits, estimated from delivered records/.test(report2[0]!.content),
     `${stopped2?.status} ${stopped2?.stopReason} ${report2.map((row) => row.content).join(" | ").slice(0, 700)}`);
   const usage = await db.select({ status: providerUsage.status, used: providerUsage.usedUnits }).from(providerUsage).where(and(eq(providerUsage.organizationId, a.org.id), eq(providerUsage.provider, "brightdata")));
-  check("the request's Bright Data use is on the ledger, settled from what was delivered", usage.length === 2 && usage.every((row) => row.status === "settled") && usage.reduce((sum, row) => sum + (row.used ?? 0), 0) === 2, JSON.stringify(usage));
+  check("the request's Bright Data use is on the ledger, settled from what was delivered", usage.length === 2 && usage.every((row) => row.status === "settled") && usage.reduce((sum, row) => sum + (row.used ?? 0), 0) === 3, JSON.stringify(usage));
 
   shared = { threadId: thread.id, requestId, objectiveId: objective!.id, runIds: runs.map((run) => run.id) };
 });

@@ -80,7 +80,7 @@ describe("keys and URLs", () => {
     expect(browserMinutesHint("2.5").problem).toBe(true);
     expect(browserMinutesHint("0")).toEqual({ problem: false, text: "The assistant cannot open a browser." });
     expect(browserMinutesHint("")).toEqual({ problem: false, text: "The assistant cannot open a browser." });
-    expect(browserMinutesHint("10")).toEqual({ problem: false, text: "Up to about $0.02 a day at TinyFish's $0.002/minute; one browser at a time." });
+    expect(browserMinutesHint("10")).toEqual({ problem: false, text: "Up to about $0.02 a day at TinyFish's $0.002/minute; one browser per chat, within these minutes." });
   });
 
   test("webUrl accepts http(s) only", () => {

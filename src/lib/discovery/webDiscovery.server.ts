@@ -81,11 +81,13 @@ import { websiteStatusFact } from "@/lib/assistant/leadFit";
 
 export const WEB_DISCOVERY_SOURCE = "web_search";
 const PERSON_SOURCE = "discovery:web-search";
-export const MAX_WEB_SITES = 40;
-const DEFAULT_WEB_SITES = 20;
-const MAX_DIRECTORY_PAGES = 5;
-const MAX_DIRECTORY_LINKS = 20;
-const MAX_DIRECTORY_CONTACTS = 20;
+/** Business websites one search reads (direct reads, free). */
+export const MAX_WEB_SITES = 100;
+const DEFAULT_WEB_SITES = 40;
+/** Directory pages one search reads, and the business links and contacts kept from each. */
+const MAX_DIRECTORY_PAGES = 10;
+const MAX_DIRECTORY_LINKS = 50;
+const MAX_DIRECTORY_CONTACTS = 50;
 const MAX_INSTAGRAM_STARTS = 6;
 const MAX_POST_COMMENTS = 50;
 const READ_BATCH = 6;
@@ -95,23 +97,25 @@ const SAVE_BATCH = 25;
 const MAX_EMAILS_PER_LEAD = 5;
 const MAX_SKIPPED_KEPT = 30;
 /** Website searches an organization may have queued or running at once. */
-export const MAX_OPEN_WEB_DISCOVERIES = 2;
-/** Website searches an organization may start in 24 hours (each is up to 3 paid provider searches). */
-export const MAX_WEB_DISCOVERIES_PER_DAY = 10;
+export const MAX_OPEN_WEB_DISCOVERIES = 4;
+/** Website searches an organization may start in 24 hours on OpenRouter's web search (each is up to MAX_SEARCH_QUERIES paid searches, each through the request's spend guard). */
+export const MAX_WEB_DISCOVERIES_PER_DAY = 50;
 
 export const INSTAGRAM_ONLY_REASON = "no usable Instagram username, email or phone was returned; open the source post to check the profile";
 export const INSTAGRAM_PROFILE_ONLY_REASON = "no usable Instagram username, email or phone was returned; open the source profile to check it";
 
 export type WebDiscoveryCriteria = {
-  /** Who the customers are, in the owner's words: "dental clinics", "families renovating a flat". */
+  /** Who to find: "dental clinics", "families renovating a flat". */
   customers: string;
-  /** Where: "Baner, Pune". */
+  /** Where: "Baner, Pune"; empty for anywhere. */
   where: string;
+  /** Keyword searches the model wrote, run as they are instead of the ones built from customers and where. */
+  queries?: string[];
   /** What the owner sells, so the search does not return competitors. */
   offer: string | null;
   /** The owner's own website, never returned as a lead. */
   ownWebsite: string | null;
-  /** At most this many business websites are read (5–40). */
+  /** At most this many business websites are read (1–MAX_WEB_SITES). */
   maxResults: number;
   language: string;
 };
@@ -240,19 +244,20 @@ export function webDiscoveryMailCheck(domain: string): Promise<MailDomainCheck> 
 }
 
 export function normalizeWebCriteria(
-  input: { customers?: unknown; where?: unknown; maxResults?: unknown; language?: unknown; offer?: unknown; ownWebsite?: unknown },
+  input: { customers?: unknown; where?: unknown; queries?: unknown; maxResults?: unknown; language?: unknown; offer?: unknown; ownWebsite?: unknown },
   fallbackLanguage = "en",
 ): WebDiscoveryCriteria | { error: string } {
   const customers = typeof input.customers === "string" ? input.customers.replace(/\s+/g, " ").trim().slice(0, 200) : "";
   const where = typeof input.where === "string" ? input.where.replace(/\s+/g, " ").trim().slice(0, 200) : "";
-  if (!customers) return { error: "Say who the customers are (in the owner's words or from the business profile)." };
-  if (!where) return { error: "Say where to look (a city, area or region)." };
+  if (input.queries !== undefined && input.queries !== null && !Array.isArray(input.queries)) return { error: "queries must be an array of keyword searches." };
+  const queries = [...new Set((Array.isArray(input.queries) ? input.queries : []).filter((query): query is string => typeof query === "string").map((query) => query.replace(/\s+/g, " ").trim().slice(0, 200)).filter((query) => query.length >= 2))].slice(0, MAX_SEARCH_QUERIES);
+  if (!customers) return { error: "Say who to find (customers)." };
   const requested = Number(input.maxResults ?? DEFAULT_WEB_SITES);
-  const maxResults = Number.isFinite(requested) ? Math.min(MAX_WEB_SITES, Math.max(5, Math.round(requested))) : DEFAULT_WEB_SITES;
+  const maxResults = Number.isFinite(requested) ? Math.min(MAX_WEB_SITES, Math.max(1, Math.round(requested))) : DEFAULT_WEB_SITES;
   const language = typeof input.language === "string" && /^[a-z]{2}$/i.test(input.language) ? input.language.toLowerCase() : fallbackLanguage;
   const offer = typeof input.offer === "string" && input.offer.trim() ? input.offer.trim().slice(0, 300) : null;
   const own = typeof input.ownWebsite === "string" ? ownWebsite(input.ownWebsite) : null;
-  return { customers, where, offer, ownWebsite: own, maxResults, language };
+  return { customers, where, ...(queries.length ? { queries } : {}), offer, ownWebsite: own, maxResults, language };
 }
 
 /** Whether Instagram can be read for discovery in the organization in scope, with its linked account. */
@@ -324,9 +329,10 @@ export async function startWebDiscovery(
   }
   const readiness = await instagramReadiness();
   const instagram = { usable: readiness.usable, reason: readiness.reason };
-  const queries = buildSearchQueries({ customers: criteria.customers, offer: criteria.offer, where: criteria.where, language: criteria.language, instagram: instagram.usable });
-  const keywordQueries = buildKeywordQueries({ customers: criteria.customers, where: criteria.where, instagram: instagram.usable });
-  const phrase = `${criteria.customers} in ${criteria.where}`;
+  // The model's own keyword searches run as they are (each is both the search and, for TinyFish, its keywords).
+  const queries = criteria.queries?.length ? criteria.queries : buildSearchQueries({ customers: criteria.customers, offer: criteria.offer, where: criteria.where, language: criteria.language, instagram: instagram.usable });
+  const keywordQueries = criteria.queries?.length ? criteria.queries : buildKeywordQueries({ customers: criteria.customers, where: criteria.where, instagram: instagram.usable });
+  const phrase = criteria.where ? `${criteria.customers} in ${criteria.where}` : criteria.customers;
   const organizationId = currentOrganizationId();
   // One start at a time per organization (a transaction-scoped lock), so two requests cannot both pass the limits.
   const started = await db.transaction(async (tx) => {
@@ -358,7 +364,7 @@ export async function startWebDiscovery(
       }
     }
     const audienceId = await createAudience({
-      name: `${criteria.customers} — ${criteria.where} (web)`,
+      name: `${criteria.customers}${criteria.where ? ` — ${criteria.where}` : ""} (web)`,
       source: "discovery",
       criteria: { source: WEB_DISCOVERY_SOURCE, queries, where: criteria.where, customers: criteria.customers, maxResults: criteria.maxResults },
       threadId: context.threadId,
