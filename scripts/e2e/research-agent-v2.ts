@@ -60,19 +60,23 @@ mock.module(join(root, "src/lib/ai/server/structuredCompletion.ts"), () => ({
 const credentials = await import(join(root, "src/lib/platform/credentials.ts"));
 mock.module(join(root, "src/lib/platform/credentials.ts"), () => ({ ...credentials, isPlatformConnected: async () => true }));
 
-const { and, eq, inArray } = await import("drizzle-orm");
+const { and, eq, inArray, sql } = await import("drizzle-orm");
 const { db } = await import("@/lib/db");
 const { organizations, users, members } = await import("@/lib/auth/schema");
 const { people } = await import("@/lib/leads/schema");
 const { mailboxes } = await import("@/lib/outreach/schema");
-const { assistantJobs, leadAudienceMembers, outreachRuns } = await import("@/lib/assistant/schema");
+const { assistantJobs, assistantMessages, leadAudienceMembers, outreachRuns } = await import("@/lib/assistant/schema");
 const { setFeature, clearFeatureCache } = await import("@/lib/features/flags.server");
 const { runInOrganization } = await import("@/lib/tenancy/scope");
 const { updateBusinessProfile } = await import("@/lib/assistant/profile.server");
 const { addMessage, createThread } = await import("@/lib/assistant/threads.server");
 const { addAudienceMembers, createAudience } = await import("@/lib/assistant/audiences.server");
 const { runTool } = await import("@/lib/assistant/tools.server");
-const { getObjective, objectiveForRequest, objectiveRequest, saveObjectiveProgress } = await import("@/lib/assistant/objective.server");
+const { getObjective, objectiveForRequest, objectiveJudgeRequest, objectiveRequest, saveObjectiveProgress } = await import("@/lib/assistant/objective.server");
+const { runOneAssistantStep } = await import("@/lib/assistant/worker");
+const { registerAssistantJobs } = await import("@/lib/assistant/register.server");
+registerAssistantJobs();
+type Progress = import("@/lib/assistant/schema").ObjectiveProgress;
 
 let failures = 0;
 function check(label: string, ok: boolean, detail = "") {
@@ -179,6 +183,35 @@ await runInOrganization(a.org.id, async () => {
   const finished = await runTool("finish_request", { summary: "Found 3 orthodontists in Austin." }, researchContext);
   const researchObjective = await objectiveForRequest(research.id);
   check("finish_request ends the request as finished, with the assistant's words", finished.ok && researchObjective?.stopReason === "finished" && researchObjective.stopDetail === "Found 3 orthodontists in Austin", `${researchObjective?.stopReason}: ${researchObjective?.stopDetail}`);
+
+  // ---------------------------------------------------------- the driver: an idle turn gets the request's last turn, then it stops
+  const thread3 = await createThread(a.owner.id);
+  const salons = await addMessage({ threadId: thread3.id, role: "user", content: "Find 3 hair salons and email them", createdBy: a.owner.id });
+  const salonContext: Context = { threadId: thread3.id, userId: a.owner.id, ownerText: salons.content, requestMessageId: salons.id, searchRequestId: salons.id, v2: true, autonomous: false };
+  await runTool("set_brief", { goal: "Find 3 hair salons and email them", leadTarget: 3, contact: true, channels: ["email"], spendCapUsd: 0, timeLimitMinutes: null, done: "3 salons found and an email plan ready" }, salonContext);
+  // The owner's answer comes after the brief, which is never updated (eval c6).
+  await addMessage({ threadId: thread3.id, role: "user", content: "Dallas.", createdBy: a.owner.id });
+  const salonObjective = (await objectiveForRequest(salons.id))!;
+  check("the judge reads the owner's answer beside a brief written before it", /\(2\) Dallas\./.test(await objectiveJudgeRequest(salonObjective)), await objectiveJudgeRequest(salonObjective));
+  const [driver] = await db.select().from(assistantJobs).where(and(eq(assistantJobs.kind, "objective"), sql`${assistantJobs.payload} ->> 'objectiveId' = ${salonObjective.id}`));
+  const drive = async () => {
+    await db.update(assistantJobs).set({ runAfter: new Date(Date.now() - 1_000) }).where(and(eq(assistantJobs.id, driver!.id), eq(assistantJobs.status, "queued")));
+    await runOneAssistantStep({ jobId: driver!.id });
+  };
+  const ago = new Date(Date.now() - 60_000).toISOString();
+  await saveObjectiveProgress(salonObjective.id, { continuation: { n: 1, attempt: 1, startedAt: ago, endedAt: ago, end: "done", leadsAtStart: 0, judged: null } });
+  await drive();
+  const lastTurn = ((await getObjective(salonObjective.id))!.progress as Progress).continuation;
+  const [lastNote] = await db.select({ content: assistantMessages.content }).from(assistantMessages).where(and(eq(assistantMessages.threadId, thread3.id), eq(assistantMessages.role, "event"))).orderBy(sql`${assistantMessages.createdAt} desc`).limit(1);
+  check("an idle turn does not end the request: the driver starts its last turn, with the reason", lastTurn?.n === 2 && lastTurn.final === "sources_exhausted" && lastTurn.finalDetail === "the assistant found no further source or query worth searching" && (await getObjective(salonObjective.id))?.status === "active", JSON.stringify(lastTurn));
+  check("…and the note asks for the plan from what matched", /has no further source to search .* prepare outreach from the leads that match/.test(lastNote?.content ?? ""), lastNote?.content.slice(0, 160));
+  // That turn ran on the stand-in model (which answers no chat turn); once it has ended, the request stops with its reason.
+  for (let waited = 0; waited < 20_000 && !((await getObjective(salonObjective.id))!.progress as Progress).continuation?.endedAt; waited += 250) await new Promise((resolve) => setTimeout(resolve, 250));
+  const ended = ((await getObjective(salonObjective.id))!.progress as Progress).continuation!;
+  await saveObjectiveProgress(salonObjective.id, { continuation: { ...ended, endedAt: ended.endedAt ?? new Date().toISOString(), end: "done" } });
+  await drive();
+  const stopped = await getObjective(salonObjective.id);
+  check("…then the request stops as sources exhausted, with that reason's detail", stopped?.status === "stopped" && stopped.stopReason === "sources_exhausted" && stopped.stopDetail === "the assistant found no further source or query worth searching", `${stopped?.status} ${stopped?.stopReason}: ${stopped?.stopDetail}`);
 
   shared = { threadId: thread.id, requestId: request.id, personIds };
 });

@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, ne, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, or, sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { AIML_PROVIDER_KEY, AIML_PROVIDER_NAME } from "@/lib/ai/aimlapi-types";
 import { apifyRuns } from "@/lib/apify/schema";
@@ -746,25 +746,18 @@ export async function objectiveRequest(objective: Pick<Objective, "requestMessag
  * so a place or kind given in an answer counts though the brief was written
  * before it.
  */
-export async function objectiveJudgeRequest(objective: Pick<Objective, "requestMessageId" | "controls" | "threadId">): Promise<string> {
+export async function objectiveJudgeRequest(objective: Pick<Objective, "id" | "requestMessageId" | "controls" | "threadId">): Promise<string> {
   const goal = objective.controls.brief?.goal;
   if (!goal) return objectiveRequest(objective);
-  const [first] = await db.select({ createdAt: assistantMessages.createdAt }).from(assistantMessages)
-    .where(and(inOrg(assistantMessages), eq(assistantMessages.id, objective.requestMessageId))).limit(1);
-  if (!first) return goal;
-  const [next] = await db.select({ createdAt: assistantMessages.createdAt }).from(assistantObjectives)
-    .innerJoin(assistantMessages, eq(assistantMessages.id, assistantObjectives.requestMessageId))
-    .where(and(inOrg(assistantObjectives), inOrg(assistantMessages), eq(assistantObjectives.threadId, objective.threadId), gt(assistantMessages.createdAt, first.createdAt)))
-    .orderBy(asc(assistantMessages.createdAt)).limit(1);
-  const words = await db.select({ content: assistantMessages.content }).from(assistantMessages)
-    .where(and(
-      inOrg(assistantMessages),
-      eq(assistantMessages.threadId, objective.threadId),
-      eq(assistantMessages.role, "user"),
-      gte(assistantMessages.createdAt, first.createdAt),
-      ...(next ? [lt(assistantMessages.createdAt, next.createdAt)] : []),
-    ))
-    .orderBy(asc(assistantMessages.createdAt)).limit(20);
+  // Compared in SQL: the stored times have microseconds, a JS Date only milliseconds.
+  const org = currentOrganizationId();
+  const requestAt = sql`(select r.created_at from assistant_messages r where r.organization_id = ${org} and r.id = ${objective.requestMessageId})`;
+  const words = await db.execute<{ content: string }>(sql`select m.content from assistant_messages m
+    where m.organization_id = ${org} and m.thread_id = ${objective.threadId} and m.role = 'user'
+      and m.created_at >= ${requestAt}
+      and m.created_at < coalesce((select min(n.created_at) from assistant_objectives o join assistant_messages n on n.id = o.request_message_id
+        where o.organization_id = ${org} and o.thread_id = ${objective.threadId} and o.id <> ${objective.id} and n.created_at > ${requestAt}), 'infinity'::timestamptz)
+    order by m.created_at asc limit 20`);
   return judgeRequestText(goal, words.map((row) => row.content));
 }
 

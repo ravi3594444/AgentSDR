@@ -425,13 +425,24 @@ export function nextDriverStep(facts: DriverFacts): DriverStep {
   const wait = (delayMs: number, reason: string): DriverStep => ({ kind: "wait", delayMs: Math.min(delayMs, untilDeadline), reason });
   // v2: a request that would end on its own first gets one last turn, started with the reason, in which no search
   // starts (objectiveStartProblem); it prepares the plan from what matched and finishes. Once that turn has ended
-  // (or cannot be run), the request stops: at a limit reached meanwhile, else with the reason the turn started for.
+  // (or cannot be run), the request stops at a limit that holds, or with "sources exhausted" when that is why it
+  // began; begun at a limit that no longer holds (verdicts corrected below the target), it goes on as before.
   // Its waits are not clamped to the deadline: past the time limit that would poll every second.
   const last = facts.wakeAtLimit && facts.continuation?.final ? facts.continuation : null;
   if (last) {
-    if (last.endedAt || last.attempt >= MAX_CONTINUATION_ATTEMPTS) return limit ? { kind: "stop", ...limit } : { kind: "stop", reason: last.final!, detail: last.finalDetail ?? "the assistant's last turn ended" };
-    if (facts.threadBusy) return { kind: "wait", delayMs: TURN_POLL_MS, reason: "the assistant is preparing what follows" };
-    return { kind: "continue", n: last.n, attempt: last.attempt + 1, dry: facts.dry, final: last.final, ...(last.finalDetail ? { finalDetail: last.finalDetail } : {}) };
+    const again = (): DriverStep => ({ kind: "continue", n: last.n, attempt: last.attempt + 1, dry: facts.dry, final: last.final, ...(last.finalDetail ? { finalDetail: last.finalDetail } : {}) });
+    const end = (): DriverStep => limit ? { kind: "stop", ...limit }
+      : last.final === "sources_exhausted" ? { kind: "stop", reason: "sources_exhausted", detail: last.finalDetail ?? "the assistant found no further source or query worth searching" }
+      : { kind: "continue", n: last.n + 1, attempt: 1, dry: facts.dry };
+    if (!last.endedAt && facts.threadBusy) return { kind: "wait", delayMs: TURN_POLL_MS, reason: "the assistant is preparing what follows" };
+    // Paused by the owner: nothing runs and it does not end on its own; a limit still ends it.
+    if (facts.status === "paused") return limit ? { kind: "stop", ...limit } : wait(PAUSED_POLL_MS, "paused by the owner");
+    if (!last.endedAt) return last.attempt >= MAX_CONTINUATION_ATTEMPTS ? end() : again();
+    if (last.end === "failed" && last.attempt < MAX_CONTINUATION_ATTEMPTS) {
+      const retryAt = new Date(last.endedAt).getTime() + RETRY_BACKOFF_MS * last.attempt;
+      return facts.now.getTime() < retryAt ? { kind: "wait", delayMs: retryAt - facts.now.getTime(), reason: "the AI model did not answer; trying again shortly" } : again();
+    }
+    return end();
   }
   const lastTurn = (reason: FinalReason, detail: string, n: number, dry: number): DriverStep => facts.threadBusy
     ? { kind: "wait", delayMs: TURN_POLL_MS, reason: "the chat is busy" }

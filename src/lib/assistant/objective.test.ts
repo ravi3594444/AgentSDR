@@ -289,13 +289,25 @@ describe("the driver: wait, continue or stop", () => {
     // That turn running, interrupted, then ended: the request stops with the recorded reason, whatever the turn did not start.
     const last = turn({ n: 3, leadsAtStart: 4, final: "sources_exhausted", finalDetail: "the assistant found no further source or query worth searching" });
     expect(nextDriverStep(facts({ ...idle, threadBusy: true, continuation: { ...last, endedAt: null, end: null } }))).toMatchObject({ kind: "wait", delayMs: 15_000 });
-    expect(nextDriverStep(facts({ ...idle, continuation: { ...last, endedAt: null, end: null } }))).toMatchObject({ kind: "continue", n: 3, attempt: 2, final: "sources_exhausted" });
+    expect(nextDriverStep(facts({ ...idle, continuation: { ...last, endedAt: null, end: null } }))).toEqual({ kind: "continue", n: 3, attempt: 2, dry: 0, final: "sources_exhausted", finalDetail: "the assistant found no further source or query worth searching" });
+    // Its third attempt still running is waited for, not cut off; one that never ended after three is given up.
+    expect(nextDriverStep(facts({ ...idle, threadBusy: true, continuation: { ...last, endedAt: null, end: null, attempt: MAX_CONTINUATION_ATTEMPTS } }))).toMatchObject({ kind: "wait" });
+    expect(nextDriverStep(facts({ ...idle, continuation: { ...last, endedAt: null, end: null, attempt: MAX_CONTINUATION_ATTEMPTS } }))).toMatchObject({ kind: "stop", reason: "sources_exhausted" });
+    // Paused by the owner: an interrupted last turn waits, it is not run again; a limit still ends it.
+    expect(nextDriverStep(facts({ ...idle, status: "paused", continuation: { ...last, endedAt: null, end: null } }))).toMatchObject({ kind: "wait", reason: "paused by the owner" });
+    expect(nextDriverStep(facts({ ...idle, status: "paused", deadline: minutes(-1), continuation: { ...last, endedAt: null, end: null } }))).toMatchObject({ kind: "stop", reason: "time_limit" });
+    expect(nextDriverStep(facts({ ...idle, status: "paused", continuation: last }))).toMatchObject({ kind: "wait", reason: "paused by the owner" });
+    // The model failed to answer in it: tried again after the backoff, at most three times; no AI provider ends it.
+    expect(nextDriverStep(facts({ ...idle, continuation: { ...last, end: "failed", endedAt: minutes(0).toISOString() } }))).toMatchObject({ kind: "wait" });
+    expect(nextDriverStep(facts({ ...idle, continuation: { ...last, end: "failed", endedAt: minutes(-5).toISOString() } }))).toEqual({ kind: "continue", n: 3, attempt: 2, dry: 0, final: "sources_exhausted", finalDetail: "the assistant found no further source or query worth searching" });
+    expect(nextDriverStep(facts({ ...idle, continuation: { ...last, end: "failed", endedAt: minutes(-5).toISOString(), attempt: MAX_CONTINUATION_ATTEMPTS } }))).toMatchObject({ kind: "stop", reason: "sources_exhausted" });
+    expect(nextDriverStep(facts({ ...idle, continuation: { ...last, end: "no_ai" } }))).toMatchObject({ kind: "stop", reason: "sources_exhausted" });
     expect(nextDriverStep(facts({ ...idle, continuation: last }))).toEqual({ kind: "stop", reason: "sources_exhausted", detail: "the assistant found no further source or query worth searching" });
-    expect(nextDriverStep(facts({ ...idle, continuation: { ...last, end: "failed" } }))).toMatchObject({ kind: "stop", reason: "sources_exhausted" });
     // A limit reached during that turn stops at the limit.
     expect(nextDriverStep(facts({ ...idle, deadline: minutes(-1), continuation: last }))).toMatchObject({ kind: "stop", reason: "time_limit" });
-    // A limit's last turn that ends below the limit (the model corrected verdicts) still stops, with the limit it started at.
-    expect(nextDriverStep(facts({ wakeAtLimit: true, leadTarget: 5, leads: 4, continuation: turn({ final: "target_reached", finalDetail: "5 qualified leads found, the target was 5" }) }))).toEqual({ kind: "stop", reason: "target_reached", detail: "5 qualified leads found, the target was 5" });
+    // A limit's last turn that ends below the limit (the model corrected verdicts, 4 of 5 now match): not done, so the
+    // request goes on as an ordinary continuation (searches allowed again), never a stop that says the target was reached.
+    expect(nextDriverStep(facts({ wakeAtLimit: true, leadTarget: 5, leads: 4, continuation: turn({ n: 2, final: "target_reached", finalDetail: "5 qualified leads found, the target was 5" }) }))).toEqual({ kind: "continue", n: 3, attempt: 1, dry: 0 });
     // v1 is unchanged: an idle turn stops at once.
     expect(nextDriverStep(facts({ leadTarget: 10, leads: 4, continuation: turn({ n: 2, leadsAtStart: 4 }) }))).toMatchObject({ kind: "stop", reason: "sources_exhausted" });
   });
