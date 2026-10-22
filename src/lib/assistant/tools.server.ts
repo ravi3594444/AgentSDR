@@ -37,7 +37,7 @@ import { geocoderUrl, lookupPlace } from "@/lib/discovery/geocode.server";
 import { linkedinSearchAvailability, startLinkedinSearch } from "./linkedinSearch.server";
 import { inOrg } from "@/lib/tenancy/scope";
 import { addAudienceMembers, createAudience, listAudiences, summarizeAudience } from "./audiences.server";
-import { inquiryRepliesRequested, outreachRequested, outreachRequestProblem } from "./agent";
+import { inquiryRepliesRequested, outreachRequested, outreachRequestProblem, outreachRevoked } from "./agent";
 import { answerDecision, DecisionError, listOpenDecisions } from "./decisions.server";
 import { channelAvailability, listRuns, OutreachError, prepareOutreach, reportRun, setRunPaused, setRunReplyMode, stopRun } from "./outreach.server";
 import { channelList, channelPolicy, planChannelsLine } from "./channelPolicy";
@@ -113,9 +113,15 @@ export function searchRequestId(context: ToolContext): string | null {
  * a limit. `line` tells the model the controls, once, with the first search.
  */
 async function searchObjective(context: ToolContext): Promise<{ problem: string | null; line: string | null }> {
-  const requestId = searchRequestId(context);
+  let requestId = searchRequestId(context);
   if (context.v2) {
-    // v2: a search with no brief yet starts the request with the organization's defaults; set_brief may come before or after.
+    // The turn's request has ended and the owner has written since: this search is their new request (the rest of the turn serves it).
+    const served = await objectiveForRequest(requestId);
+    if (served?.status === "stopped" && context.requestMessageId && context.requestMessageId !== requestId) {
+      context.searchRequestId = context.requestMessageId;
+      requestId = context.requestMessageId;
+    }
+    // A search with no brief yet starts the request with the organization's defaults; set_brief may come before or after.
     if (!(await objectiveForRequest(requestId))) await ensureObjective({ requestMessageId: requestId, threadId: context.threadId, userId: context.userId });
     return { problem: await objectiveStartProblem(requestId), line: null };
   }
@@ -343,13 +349,13 @@ async function browserHold(context: ToolContext): Promise<ToolResult | null> {
 }
 
 /**
- * The web tools serve the same request as the searches: while its research
- * is paused, or once it stopped or its time passed, they do not run either,
- * with the same reason, so the two paths never disagree about the request.
+ * The web tools wait only while the owner has paused the request's
+ * research: a search and a page read are how the model checks what it
+ * found, also after a request ended (a follow-up reads the same leads).
  */
 async function webToolHold(context: ToolContext): Promise<ToolResult | null> {
-  const reason = await requestHoldReason(searchRequestId(context));
-  return reason ? { ok: false, summary: `Not run: ${reason}.` } : null;
+  const objective = await objectiveForRequest(searchRequestId(context));
+  return objective?.status === "paused" ? { ok: false, summary: "Not run: the owner paused this request's research; it runs again when they resume it." } : null;
 }
 
 async function runBrowserStep(context: ToolContext, verb: string, action: BrowserAction): Promise<ToolResult> {
@@ -448,8 +454,14 @@ async function prepareOutreachV2(args: Record<string, unknown>, context: ToolCon
   if (!objective) return { ok: false, summary: "No plan prepared: this chat has no lead request yet; find leads first." };
   const brief = objectiveBrief(objective);
   if (context.autonomous) {
-    const words = (await ownerMessagesSince(context.threadId, objective.requestMessageId)).join("\n");
-    if (!outreachRequested(words, context.lastAssistantText)) throw new ToolArgumentError(outreachRequestProblem("", null)!);
+    // The owner's latest word on contacting decides ("research only", then "outreach them all"; or a yes to the assistant's offer).
+    const words = await ownerMessagesSince(context.threadId, objective.requestMessageId);
+    let asked = Boolean(context.lastAssistantText && words.length && outreachRequested(words.at(-1)!, context.lastAssistantText));
+    for (const message of [...words].reverse()) {
+      if (asked || outreachRevoked(message)) break;
+      if (outreachRequested(message, null)) asked = true;
+    }
+    if (!asked) throw new ToolArgumentError(outreachRequestProblem("", null)!);
   }
   if (args.autopilot !== undefined && typeof args.autopilot !== "boolean") throw new ToolArgumentError("autopilot must be true or false");
   const maxLeads = args.maxLeads === undefined ? undefined : Number(args.maxLeads);
@@ -477,8 +489,8 @@ async function prepareOutreachV2(args: Record<string, unknown>, context: ToolCon
       basedOnRunId: uuid(args, "basedOnRunId", false) ?? null,
       ownerRequest: brief?.goal ?? await objectiveRequest(objective),
       requestId: objective.requestMessageId,
-      // Leads put in on purpose are written to, whatever the judge said.
-      includeSkipped: pick.kind !== "match",
+      // Who goes in is the model's choice: the sorter's "skip" does not drop anyone it picked.
+      includeSkipped: true,
       threadId: context.threadId,
       userId: context.userId,
     });
@@ -511,8 +523,8 @@ export const TOOLS: Record<string, Tool> = {
     arguments: "any of: businessName, website, offer, problemsSolved (the problems the offer solves and how), nextStep (what an interested lead is offered next: a call, a visit, a quote), prices (prices, packages or rates as the owner gave them), targetCustomers, locations, outreachInstructions, senderName, senderRole, bookingDetails, language (two letters), notes (all text); preferredChannels (array of email|whatsapp|linkedin|instagram). An empty string clears a field.",
     run: async (args, context) => {
       const current = await getBusinessProfile();
-      // Bad values are reported below; a save of valid values that changes nothing is refused.
-      if (!mergeProfile(current, args).problems.length && !profileChanges(current, args).length) throw new ToolArgumentError("nothing new to save");
+      // Bad values are reported below; a save of valid values that changes nothing says so (it is not a failure).
+      if (!mergeProfile(current, args).problems.length && !profileChanges(current, args).length) return { ok: true, summary: "Nothing new to save: the business profile already says this.", display: "Business profile already up to date" };
       const { profile, problems } = await updateBusinessProfile(args, context.userId);
       const saved = Object.keys(args).filter((key) => !problems.some((problem) => problem.startsWith(key)));
       const labels = saved.map((key) => PROFILE_LABELS[key as keyof typeof PROFILE_LABELS] ?? key).join(", ");
@@ -542,7 +554,7 @@ export const TOOLS: Record<string, Tool> = {
 
   find_leads: {
     description: "Search public Google Maps business listings for leads matching the owner's target customers, then read each business's own website for published contact details. Takes a few minutes and runs in the background; the chat shows its progress and announces the result. It runs on the built-in Google Maps scraper (no cost per search). Apify's Google Maps Actor (paid from the owner's Apify account) is used only when the owner asks for Apify (provider 'apify'), or as the fallback the organization approved when the built-in scraper is not set up or fails; with neither, website search takes it when that is on. The result names the source and provider, and the reason. Google Maps is one source however many cities or providers search it. Only businesses with a public listing are found.",
-    arguments: "what (kind of business, e.g. 'dental clinics'), where (city/region/country), maxResults (5-200, default 50), language (two letters, optional), provider (optional: 'apify' only when the owner asked for Apify), contactAfter (true only when the owner asked to contact, email or message the leads found: the outreach plan is then prepared automatically when the search finishes), channels (optional, with contactAfter: array of email|whatsapp|linkedin|instagram, only when the owner's own words named how to contact them; otherwise leave it out and each lead gets its best ready route)",
+    arguments: "what (kind of business, e.g. 'dental clinics'), where (city/region/country), maxResults (5-200, default 50), language (two letters, optional), provider (optional: 'apify' for Apify's Google Maps Actor, approved in Settings and paid, e.g. when the built-in scraper is not set up, failed or found too few), contactAfter (true only when the owner asked to contact, email or message the leads found: the outreach plan is then prepared automatically when the search finishes), channels (optional, with contactAfter: array of email|whatsapp|linkedin|instagram, only when the owner's own words named how to contact them; otherwise leave it out and each lead gets its best ready route)",
     run: async (args, context) => {
       const profile = await getBusinessProfile();
       const criteria = normalizeCriteria(args, profile.language ?? "en");
@@ -552,7 +564,7 @@ export const TOOLS: Record<string, Tool> = {
       const area = await checkSearchArea(criteria.where, criteria.language);
       if (area?.refused) throw new ToolArgumentError(area.problem);
       if (area) return { ok: false, summary: area.problem };
-      if (args.provider !== undefined && args.provider !== null && args.provider !== "apify") throw new ToolArgumentError("provider may only be 'apify' (when the owner asked for Apify); leave it out otherwise");
+      if (args.provider !== undefined && args.provider !== null && args.provider !== "apify") throw new ToolArgumentError("provider may only be 'apify'; leave it out for the built-in scraper");
       const contactAfter = request ? { channels: channels(args) ?? null, ownerRequest: request, requestId: searchRequestId(context) ?? undefined } : null;
       const objective = await searchObjective(context);
       if (objective.problem) return objectiveRefusal(objective.problem);
@@ -691,7 +703,7 @@ export const TOOLS: Record<string, Tool> = {
 
   research_social_sources: {
     available: (features) => features.brightdata,
-    description: "Research what people say on social platforms through Bright Data (metered from the owner's Bright Data account: one credit per record, within the monthly limit set in Settings): Reddit posts with their comments, found by keyword and in named subreddits — only when the owner turned Reddit research on in the Bright Data settings (the result says when it is off) — and X, Instagram and Facebook posts, profiles and pages that a web search returns for the terms, read through Bright Data. Every finding keeps its link, the words quoted, who wrote them and when it was read. A relevant discussion is research evidence, not a lead: someone can be contacted only when their own profile or page, or the website it lists, publishes an email or phone (or, on Instagram, by one DM through a connected Instagram sender after plan approval); everyone else stays in the list as excluded, with the reason, and AgentSDR never messages anyone on Reddit, X or Facebook. Use it for discussions and stated needs (people asking for, complaining about or recommending what the owner sells). For Facebook business pages or Instagram accounts by keyword and place, find_social_leads (Apify) is the right tool when it is on; never run both for the same question. Runs in the background and announces the result.",
+    description: "Research what people say on social platforms through Bright Data (metered from the owner's Bright Data account: one credit per record, within the monthly limit set in Settings): Reddit posts with their comments, found by keyword and in named subreddits — only when the owner turned Reddit research on in the Bright Data settings (the result says when it is off) — and X, Instagram and Facebook posts, profiles and pages that a web search returns for the terms, read through Bright Data. Every finding keeps its link, the words quoted, who wrote them and when it was read. A relevant discussion is research evidence, not a lead: someone can be contacted only when their own profile or page, or the website it lists, publishes an email or phone (or, on Instagram, by one DM through a connected Instagram sender after plan approval); everyone else stays in the list as excluded, with the reason, and AgentSDR never messages anyone on Reddit, X or Facebook. Use it for discussions and stated needs (people asking for, complaining about or recommending what the owner sells). For Facebook business pages or Instagram accounts by keyword and place, find_social_leads (Apify) finds businesses; this tool finds what people say. Runs in the background and announces the result.",
     arguments: `platforms (array of reddit|x|instagram|facebook), customers (who the customers are, from the owner's words or the business profile), need (what they would be asking about or struggling with, in plain words: the search terms come from it), where (optional city or area; leave it out for a topic without a place), subreddits (optional array of subreddit names the owner named, without r/), keywords (optional array of up to 3 exact search phrases the owner gave), maxResults (5-${BRIGHTDATA_LIMITS.maxRecordsPerSearch.max} records across the job, default 40; the organization's own cap applies), contactAfter (true only when the owner asked to contact the people found), channels (optional, with contactAfter: array of email|whatsapp|linkedin|instagram, only when the owner's own words named how to contact them)`,
     run: async (args, context) => {
       if (!(await featureEnabled("brightdata"))) return { ok: false, summary: new FeatureDisabledError("brightdata").message };
@@ -1233,8 +1245,8 @@ export const TOOLS: Record<string, Tool> = {
 
   review_leads: {
     available: (features) => features.research_agent_v2,
-    description: "The leads of the current request, one line per person: the verdict on the request (match, unconfirmed, no match, not judged) with the judge's reason, how each can be contacted, the facts it was judged on (place, kind, bio, website notes) and its source link; accounts that were not saved, and why. Use it after searches finish to see which leads really fit, and to find verdicts to correct with set_lead_fit.",
-    arguments: "filter (optional: all|match|unconfirmed|no_match|unjudged|not_saved, default all), limit (optional, 1-80, default 40), audienceId (optional: one list only)",
+    description: "The leads of the current request, one line per person (with its person id): the judge's verdict (match, unconfirmed, no match, not judged) and reason, how each can be contacted, the facts it was judged on (place, kind, bio, website notes) and its source link; accounts that were not saved, and why. Use it to see which leads really fit and to pick who goes in a plan (personIds for prepare_outreach); set_lead_fit records your own verdict.",
+    arguments: "filter (optional: all|match|unconfirmed|no_match|unjudged|not_saved, default all), limit (optional, 1-80, default 40), offset (optional: skip this many, for the next page), audienceId (optional: one list only)",
     run: async (args, context) => {
       const objective = await objectiveForRequest(searchRequestId(context));
       if (!objective) return { ok: false, summary: "This chat has no lead request yet (set_brief starts one)." };
@@ -1242,7 +1254,8 @@ export const TOOLS: Record<string, Tool> = {
       const filter = (text(args, "filter") ?? "all") as ReviewFilter;
       if (!filters.includes(filter)) throw new ToolArgumentError(`filter must be one of ${filters.join(", ")}`);
       const limit = Math.min(80, Math.max(1, Math.round(Number(args.limit ?? 40)) || 40));
-      const review = await reviewLeadsText({ objective, audienceId: uuid(args, "audienceId", false) ?? null, filter, limit });
+      const offset = Math.max(0, Math.round(Number(args.offset ?? 0)) || 0);
+      const review = await reviewLeadsText({ objective, audienceId: uuid(args, "audienceId", false) ?? null, filter, limit, offset });
       return { ok: true, summary: review.text, display: `Reviewed ${review.shown} of ${review.total} leads`, data: { shown: review.shown, total: review.total } };
     },
   },
@@ -1523,7 +1536,8 @@ function joinable(tool: Tool): Tool {
     ...tool,
     arguments: `${tool.arguments}, sameRequest (optional true: only when the owner's new message adds to a request whose research is still running in this chat, e.g. "use Instagram too"; the search then counts toward that request's target, time and spend cap)`,
     run: async (args, context) => {
-      if (args.sameRequest === undefined || args.sameRequest === false) return tool.run(args, context);
+      // v2: every search of a turn serves the turn's one request (set_brief and the turn decide which); sameRequest is not offered.
+      if (context.v2 || args.sameRequest === undefined || args.sameRequest === false) return tool.run(args, context);
       if (args.sameRequest !== true) throw new ToolArgumentError("sameRequest must be true or false");
       const joined = await joinedRequest(context);
       if ("problem" in joined) return { ok: false, summary: joined.problem };

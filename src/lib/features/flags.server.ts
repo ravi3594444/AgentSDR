@@ -3,7 +3,7 @@ import "server-only";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
-import { defaultFeatureState, FEATURE_KEYS, FEATURES, type FeatureKey, type FeatureState } from "./catalog";
+import { BUILT_IN_FEATURES, defaultFeatureState, FEATURE_KEYS, FEATURES, type FeatureKey, type FeatureState } from "./catalog";
 import { organizationFeatures } from "./schema";
 
 /**
@@ -48,7 +48,8 @@ async function load(): Promise<FeatureState> {
     const rows = await db.select({ key: organizationFeatures.key, enabled: organizationFeatures.enabled })
       .from(organizationFeatures)
       .where(inOrg(organizationFeatures));
-    for (const row of rows) if ((FEATURE_KEYS as readonly string[]).includes(row.key)) state[row.key] = row.enabled;
+    // A built-in feature stays on whatever an older row says.
+    for (const row of rows) if ((FEATURE_KEYS as readonly string[]).includes(row.key) && !BUILT_IN_FEATURES.includes(row.key)) state[row.key] = row.enabled;
   } catch (error) {
     if (!isMissingTable(error)) throw error;
   }

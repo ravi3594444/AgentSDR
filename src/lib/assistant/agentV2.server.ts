@@ -105,7 +105,7 @@ async function requestMembers(objective: Objective, audienceId: string | null): 
 export type ReviewFilter = "all" | "match" | "unconfirmed" | "no_match" | "unjudged" | "not_saved";
 
 /** One line per lead (one per person when it is on several lists), with what it was judged on, for the model. */
-export async function reviewLeadsText(input: { objective: Objective; audienceId: string | null; filter: ReviewFilter; limit: number }): Promise<{ text: string; shown: number; total: number }> {
+export async function reviewLeadsText(input: { objective: Objective; audienceId: string | null; filter: ReviewFilter; limit: number; offset?: number }): Promise<{ text: string; shown: number; total: number }> {
   const members = await requestMembers(input.objective, input.audienceId);
   const insights = await memberInsights(members.map((member) => member.id));
   const byPerson = new Map<string, RequestMember[]>();
@@ -130,10 +130,12 @@ export async function reviewLeadsText(input: { objective: Objective; audienceId:
     lines.push({ verdict: "not_saved", text: `- not saved “${member.name}”: ${member.reason ?? "excluded"}${member.sourceUrl ? `; source ${member.sourceUrl}` : ""}` });
   }
   const wanted = lines.filter((line) => input.filter === "all" || line.verdict === input.filter || (input.filter === "unjudged" && line.verdict === "pending"));
-  const shown = wanted.slice(0, input.limit);
+  const offset = Math.max(0, input.offset ?? 0);
+  const shown = wanted.slice(offset, offset + input.limit);
   const counts = ["match", "unconfirmed", "no_match", "pending", "not_saved"].map((verdict) => `${lines.filter((line) => line.verdict === verdict).length} ${verdict === "pending" ? "not judged" : verdict.replace("_", " ")}`).join(", ");
+  const more = offset + shown.length < wanted.length;
   return {
-    text: `${lines.length} leads in this request (${counts}).${shown.length < wanted.length ? ` Showing ${shown.length} of ${wanted.length}; pass a filter or a higher limit for more.` : ""}\n${shown.map((line) => line.text).join("\n")}`,
+    text: `${lines.length} leads in this request (${counts}).${more || offset ? ` Showing ${offset + 1}–${offset + shown.length} of ${wanted.length}${more ? `; pass offset ${offset + shown.length} for the next ones` : ""}.` : ""}\n${shown.map((line) => line.text).join("\n")}`,
     shown: shown.length,
     total: lines.length,
   };
@@ -157,12 +159,12 @@ async function quoteFound(threadId: string, rows: readonly RequestMember[], quot
   const wanted = norm(quote);
   if (rows.some((row) => norm(`${JSON.stringify(row.facts ?? {})} ${JSON.stringify(row.evidence ?? [])} ${row.name}`).includes(wanted))) return true;
   const reads = await db.select({ content: assistantMessages.content, toolResult: assistantMessages.toolResult }).from(assistantMessages)
-    .where(and(inOrg(assistantMessages), eq(assistantMessages.threadId, threadId), eq(assistantMessages.role, "tool"), eq(assistantMessages.status, "ok"), inArray(assistantMessages.tool, ["read_webpage", "web_search", "browser_open", "browser_read"])))
+    .where(and(inOrg(assistantMessages), eq(assistantMessages.threadId, threadId), eq(assistantMessages.role, "tool"), eq(assistantMessages.status, "ok"), inArray(assistantMessages.tool, ["read_webpage", "web_search", "browser_open", "browser_read", "browser_click", "browser_fill", "browser_scroll", "treg_call"])))
     .orderBy(desc(assistantMessages.createdAt)).limit(60);
   return reads.some((row) => norm(`${row.content} ${JSON.stringify(row.toolResult ?? {})}`).includes(wanted));
 }
 
-/** The assistant's own verdict on a person of the request, on all their lists; a match needs a quote the server read. */
+/** The assistant's own verdict on a person of the request, on all their lists; a quote it gives must be one the server read. */
 export async function setLeadFit(input: { objective: Objective; threadId: string; personId: string; fit: "match" | "no_match"; reason: string; quote: string | null; url: string | null }): Promise<{ ok: true; name: string; lists: number } | { ok: false; problem: string }> {
   const rows = (await requestMembers(input.objective, null)).filter((row) => row.personId === input.personId);
   if (!rows.length) return { ok: false, problem: "that person is not one of this request's leads; use a person id from review_leads" };
@@ -172,7 +174,8 @@ export async function setLeadFit(input: { objective: Objective; threadId: string
   await db.update(leadAudienceMembers).set({
     fit: input.fit,
     fitReason: `Checked by the assistant: ${input.reason.trim().slice(0, 240)}${evidence}`,
-    fitApproach: input.fit === "no_match" ? "skip" : rows[0]!.fitApproach ?? "standard",
+    // A lead turned into a match loses the judge's "skip", or the plan would still leave it out.
+    fitApproach: input.fit === "no_match" ? "skip" : rows[0]!.fitApproach && rows[0]!.fitApproach !== "skip" ? rows[0]!.fitApproach : "standard",
     fitRequestId: input.objective.requestMessageId,
     fitAt: new Date(),
     fitClaimedAt: null,
@@ -195,8 +198,9 @@ export async function matchingLeadsAudience(input: { objective: Objective; brief
   for (const [personId, rows] of byPerson) {
     if (wanted && !wanted.has(personId)) continue;
     if (pick.kind === "match" && personFit(rows.map((row) => row.fit)) !== "match") continue;
+    // A person judged a match on one list is reached through any list where they can be contacted.
     const reachable = pick.kind === "match"
-      ? rows.find((row) => row.status === "eligible" && row.fit === "match")
+      ? rows.find((row) => row.status === "eligible" && row.fit !== "no_match")
       : rows.find((row) => row.status === "eligible");
     if (reachable) chosen.push(reachable);
     if (chosen.length >= input.max) break;

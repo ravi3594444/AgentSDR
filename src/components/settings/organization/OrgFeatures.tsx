@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import * as Button from "@/components/alignui/button";
 import { Frame, FrameFooter, FrameHeader, FramePanel } from "@/components/analytics/kit/Frame";
 import { Callout } from "@/components/settings/SettingsKit";
-import { FEATURE_KEYS, FEATURES, type FeatureKey, type FeatureState } from "@/lib/features/catalog";
+import { FEATURES, OPTIONAL_FEATURE_KEYS, type FeatureKey, type FeatureState } from "@/lib/features/catalog";
 
 /**
  * Settings → Providers & features. Each is off until an owner or
@@ -58,7 +58,7 @@ export function OrgFeatures() {
       <FrameHeader title="Optional features" description="Off until you turn them on. Turning one off stops it; nothing already saved is deleted." />
       <FramePanel className="flex flex-col divide-y divide-stroke-soft-200">
         {!features && !error && <p className="text-paragraph-sm text-text-sub-600">Loading…</p>}
-        {features && FEATURE_KEYS.map((key) => (
+        {features && OPTIONAL_FEATURE_KEYS.map((key) => (
           <div key={key} className="flex flex-wrap items-start justify-between gap-3 py-3 first:pt-0 last:pb-0">
             <div className="min-w-0 max-w-xl">
               <p className="text-label-sm text-text-strong-950">

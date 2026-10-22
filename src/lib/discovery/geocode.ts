@@ -34,7 +34,7 @@ export const MAX_SEARCH_HALF_DIAGONAL_KM = 150;
 export function searchAreaProblem(area: GeoArea, where: string): string | null {
   const halfDiagonalKm = distanceMeters(area.south, area.west, area.north, area.east) / 2_000;
   if (halfDiagonalKm <= MAX_SEARCH_HALF_DIAGONAL_KM) return null;
-  return `“${where}” is too wide for one search: Google Maps gives about ${PLACES_PER_SEARCH} businesses per area and one search covers at most ${MAX_TILES} areas. Do not ask the owner: choose its 3 largest cities for this kind of business yourself and call find_leads once per city now (up to 4 at once), then tell the owner which cities you chose.`;
+  return `“${where}” is too wide for one Google Maps search (about ${PLACES_PER_SEARCH} businesses per area, at most ${MAX_TILES} areas per search): search the cities or districts where these businesses are.`;
 }
 
 /** A Google Maps zoom that shows roughly a circle of this radius. */

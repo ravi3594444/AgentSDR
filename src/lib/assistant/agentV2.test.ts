@@ -29,14 +29,15 @@ describe("what the model reads", () => {
     const block = requestBlock({ ownerMessages: ["Find 10 hair salons on Instagram and DM them", "Miami."], brief: null, controls: null, status: null });
     expect(block).toContain("1. Find 10 hair salons on Instagram and DM them");
     expect(block).toContain("2. Miami.");
-    expect(block).toContain("Call set_brief before the first search");
+    expect(block).toContain("BRIEF: none yet (set_brief writes what the owner asked");
   });
 
   test("progress lists the searches that ran so none is repeated", () => {
     const text = progressBlock({ funnel: { ...EMPTY_FUNNEL, found: 12, contactable: 9, qualified: 4 }, sources: [], searches: [{ tool: "discovery", what: "dentists New York", status: "succeeded", found: 12, contactable: 9 }], spentUsd: 0, spendCapUsd: 0, msLeft: 3_600_000, plans: [] });
     expect(text).toContain("12 found, 9 contactable; 4 match");
     expect(text).toContain("discovery “dentists New York” succeeded, 12 found, 9 contactable");
-    expect(text).toContain("free sources only");
+    expect(text).toContain("Free sources only");
+    expect(text).not.toMatch(/\$\d/);
   });
 
   test("a running search shows what it found so far", () => {

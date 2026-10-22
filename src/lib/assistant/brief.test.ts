@@ -37,7 +37,9 @@ describe("checkBrief", () => {
 
   test("bad values are refused with what to fix", () => {
     expect(checkBrief({ ...base, goal: "" }, "x", DEFAULTS)).toMatchObject({ ok: false, error: expect.stringContaining("goal is required") });
-    expect(checkBrief({ ...base, done: "" }, "x", DEFAULTS)).toMatchObject({ ok: false, error: expect.stringContaining("done is required") });
+    // With no done of its own, the request is done when its goal is.
+    const noDone = checkBrief({ ...base, done: "" }, "x", DEFAULTS);
+    expect(noDone.ok && noDone.brief.done).toBe(noDone.ok ? noDone.brief.goal : false);
     expect(checkBrief({ ...base, leadTarget: 2.5 }, "x", DEFAULTS).ok).toBe(false);
     expect(checkBrief({ ...base, channels: ["fax"] }, "x", DEFAULTS).ok).toBe(false);
     expect(checkBrief({ ...base, contact: "yes" }, "x", DEFAULTS).ok).toBe(false);

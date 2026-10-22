@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authContextErrorResponse, can, requirePermission, withOrgContext } from "@/lib/auth/context";
-import { FEATURE_KEYS, isFeatureKey } from "@/lib/features/catalog";
+import { isOptionalFeatureKey, OPTIONAL_FEATURE_KEYS } from "@/lib/features/catalog";
 import { featureState, FeaturesNotInstalledError, setFeature } from "@/lib/features/flags.server";
 
 // The organization's optional features (src/lib/features/catalog.ts), all off
@@ -28,8 +28,8 @@ export async function GET(req: NextRequest) {
 // PUT /api/settings/features — body { key, enabled }; returns { features }
 export async function PUT(req: NextRequest) {
   const body = (await req.json().catch(() => null)) as { key?: unknown; enabled?: unknown } | null;
-  if (!body || !isFeatureKey(body.key) || typeof body.enabled !== "boolean") {
-    return NextResponse.json({ error: `Send { key: one of ${FEATURE_KEYS.join(", ")}, enabled: true or false }` }, { status: 400 });
+  if (!body || !isOptionalFeatureKey(body.key) || typeof body.enabled !== "boolean") {
+    return NextResponse.json({ error: `Send { key: one of ${OPTIONAL_FEATURE_KEYS.join(", ")}, enabled: true or false }` }, { status: 400 });
   }
   const key = body.key;
   const enabled = body.enabled;

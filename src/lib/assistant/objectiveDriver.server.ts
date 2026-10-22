@@ -7,7 +7,7 @@ import { outreachRequested } from "./agent";
 import { runAgentTurn } from "./agent.server";
 import { SEARCH_TOOLS } from "./autonomy";
 import { continuationNote, nextDriverStep, waitsForOwner, type Continuation, type DriverFacts, type DriverStep, type TurnEnd } from "./objective";
-import { getObjective, nudgeObjective, objectiveFacts, objectiveJudgeRequest, postObjectiveReport, readyToReport, saveObjectiveProgress, stopObjective, type Objective, type ObjectiveFacts } from "./objective.server";
+import { getObjective, nudgeObjective, objectiveFacts, objectiveJudgeRequest, postObjectiveReport, readyToReport, requestLimits, saveObjectiveProgress, stopObjective, type Objective, type ObjectiveFacts } from "./objective.server";
 import { assistantMessages, assistantObjectives, type ObjectiveProgress } from "./schema";
 import { addMessage, claimThread, releaseThread, threadBusy } from "./threads.server";
 import type { AssistantJob, StepOutcome } from "./worker";
@@ -69,7 +69,8 @@ async function driverFacts(objective: Objective, facts: ObjectiveFacts): Promise
     ))
     : [];
   const waiting = (row: { toolResult: Record<string, unknown> | null }) => (row.toolResult?.data as { waiting?: unknown } | undefined)?.waiting === true;
-  const v2 = Boolean(objective.controls.brief);
+  // The one harness: every request gets the research agent's driver, whether a brief or a search started it.
+  const v2 = true;
   const [lastWord] = v2
     ? await db.select({ role: assistantMessages.role, content: assistantMessages.content }).from(assistantMessages)
       .where(and(inOrg(assistantMessages), eq(assistantMessages.threadId, objective.threadId), inArray(assistantMessages.role, ["user", "assistant"])))
@@ -90,6 +91,7 @@ async function driverFacts(objective: Objective, facts: ObjectiveFacts): Promise
     leads: facts.leads,
     spendCapUsd: objective.spendCapUsd,
     spentUsd: facts.spend.settledUsd,
+    ...requestLimits(objective),
     openChildren: facts.openChildren,
     followUpsPending: facts.followUpsPending,
     threadBusy: await threadBusy(objective.threadId),
@@ -153,7 +155,8 @@ async function runContinuation(objective: Objective, n: number, request: string)
       continuation: {
         requestMessageId: objective.requestMessageId,
         request,
-        outreach: outreachRequested(request),
+        // Whether the request asked for contact is its brief's when it has one.
+        outreach: objective.controls.brief?.contact ?? outreachRequested(request),
         onEnd: (end) => endContinuation(objective.id, n, end),
       },
     });
@@ -194,7 +197,8 @@ async function continueRequest(objective: Objective, facts: ObjectiveFacts, step
           sources: facts.sources,
           web: facts.web,
           funnel: facts.funnel,
-          v2: Boolean(objective.controls.brief),
+          v2: true,
+          targetNamed: requestLimits(objective).targetNamed,
           ...(step.final ? { final: step.final, finalDetail: step.finalDetail } : {}),
         }),
         toolResult: {

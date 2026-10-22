@@ -168,10 +168,10 @@ await runInOrganization(a.org.id, async () => {
   check("prepare_outreach makes one plan of matching leads only, up to the brief's target, on email only", plan.ok && assigned.length === 2 && assigned.every((item) => item.channel === "email") && !names.includes("Austin Dental Supply"), `${plan.summary.slice(0, 160)} | ${names.join(", ")}`);
   check("…and nothing is sent: the plan waits for Start", run?.status === "proposed", run?.status ?? "no run");
 
-  // ---------------------------------------------------------- the request's last turn (the driver found no source left)
-  await saveObjectiveProgress(objective!.id, { continuation: { n: 3, attempt: 1, startedAt: new Date().toISOString(), endedAt: null, end: null, leadsAtStart: 2, judged: null, final: "sources_exhausted", finalDetail: "the assistant found no further source or query worth searching" } });
+  // ---------------------------------------------------------- the request's last turn (its target, which the owner named, is reached)
+  await saveObjectiveProgress(objective!.id, { continuation: { n: 3, attempt: 1, startedAt: new Date().toISOString(), endedAt: null, end: null, leadsAtStart: 2, judged: null, final: "target_reached", finalDetail: "3 qualified leads found, the target was 2" } });
   const lastSearch = await runTool("find_leads", { what: "dentists", where: "Round Rock, TX" }, context);
-  check("in a request's last turn no search starts", !lastSearch.ok && /this request is ending/.test(lastSearch.summary), lastSearch.summary);
+  check("in a request's last turn at its target no search starts", !lastSearch.ok && /this request is ending/.test(lastSearch.summary), lastSearch.summary);
 
   // ---------------------------------------------------------- research only, Autonomous mode
   const research = await addMessage({ threadId: thread.id, role: "user", content: "Now just research 3 orthodontists in Austin. No outreach.", createdBy: a.owner.id });
@@ -213,7 +213,7 @@ await runInOrganization(a.org.id, async () => {
   const lastTurn = ((await getObjective(salonObjective.id))!.progress as Progress).continuation;
   const [lastNote] = await db.select({ content: assistantMessages.content }).from(assistantMessages).where(and(eq(assistantMessages.threadId, thread3.id), eq(assistantMessages.role, "event"))).orderBy(sql`${assistantMessages.createdAt} desc`).limit(1);
   check("an idle turn does not end the request: the driver starts its last turn, with the reason", lastTurn?.n === 2 && lastTurn.final === "sources_exhausted" && lastTurn.finalDetail === "the assistant found no further source or query worth searching" && (await getObjective(salonObjective.id))?.status === "active", JSON.stringify(lastTurn));
-  check("…and the note asks for the plan from what matched", /has no further source to search .* prepare outreach from the leads that match/.test(lastNote?.content ?? ""), lastNote?.content.slice(0, 160));
+  check("…and the note leaves a fitting source open, else asks for the plan and the finish", /found no further source to search .*Search another source only if one fits the request; otherwise review the leads, prepare outreach if the owner asked to contact them, then finish_request/.test(lastNote?.content ?? ""), lastNote?.content.slice(0, 200));
   // That turn ran on the stand-in model (which answers no chat turn); once it has ended, the request stops with its reason.
   for (let waited = 0; waited < 20_000 && !((await getObjective(salonObjective.id))!.progress as Progress).continuation?.endedAt; waited += 250) await new Promise((resolve) => setTimeout(resolve, 250));
   const ended = ((await getObjective(salonObjective.id))!.progress as Progress).continuation!;
@@ -292,6 +292,19 @@ await runInOrganization(a.org.id, async () => {
   check("…and with personIds exactly the people the assistant picked", picked.ok && pickedIds.length === 1 && pickedIds[0] === dallas, `${picked.summary.slice(0, 160)} | ${pickedIds.join(",")}`);
   const stranger = await runTool("prepare_outreach", { personIds: [personIds["Barton Creek Dental"]] }, followContext);
   check("…but not someone who is not a lead of this request", !stranger.ok && /none of the 1 people named/.test(stranger.summary), stranger.summary);
+
+  // ---------------------------------------------------------- a new ask after a request ended: its search is a new request
+  const thread6 = await createThread(a.owner.id);
+  const first = await addMessage({ threadId: thread6.id, role: "user", content: "Research 3 bakeries in Austin.", createdBy: a.owner.id });
+  const firstContext: Context = { threadId: thread6.id, userId: a.owner.id, ownerText: first.content, requestMessageId: first.id, searchRequestId: first.id, v2: true, autonomous: false };
+  await runTool("set_brief", { goal: "Research 3 bakeries in Austin", leadTarget: 3, contact: false, channels: null, spendCapUsd: 0, timeLimitMinutes: null, done: "3 bakeries found" }, firstContext);
+  await runTool("finish_request", { summary: "Found the bakeries." }, firstContext);
+  const next = await addMessage({ threadId: thread6.id, role: "user", content: "Now find florists in Dallas.", createdBy: a.owner.id });
+  // The turn serves the chat's newest request (the ended one) until something records a new one.
+  const nextContext: Context = { ...firstContext, ownerText: next.content, requestMessageId: next.id, searchRequestId: first.id };
+  const newSearch = await runTool("find_leads", { what: "florists", where: "Dallas, TX" }, nextContext);
+  const nextObjective = await objectiveForRequest(next.id);
+  check("a search for a new ask after the request ended starts that new request (not refused by the ended one)", newSearch.ok && Boolean(nextObjective) && !nextObjective!.controls.continues && nextContext.searchRequestId === next.id, newSearch.summary.slice(0, 160));
   chatAnswers.length = 0;
 
   shared = { threadId: thread.id, requestId: request.id, personIds };

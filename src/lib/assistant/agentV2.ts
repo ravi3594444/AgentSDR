@@ -4,7 +4,7 @@ import { PAGE_STATE_TOOLS, type TranscriptMessage } from "./agent";
 import type { AutonomyCaps } from "./autonomy";
 import { briefLine, type Brief } from "./brief";
 import type { LeadFunnel } from "./leadFit";
-import { formatDuration, requestSpendLine, sourceLine, type ObjectiveControls, type SourceYield } from "./objective";
+import { formatDuration, sourceLine, type ObjectiveControls, type SourceYield } from "./objective";
 
 /**
  * Research agent v2, the pure parts (CONTEXT.md, Brief). The model plans a
@@ -42,13 +42,13 @@ export function withoutContactAfter(argumentsText: string): string {
 
 function sourcesText(features: FeatureState): string {
   return [
-    "- find_leads: businesses with a Google Maps listing in one city or district (about 20 per area; several cities are several searches), then each business's own website for its emails and phones. Free on the built-in scraper.",
+    "- find_leads: businesses with a Google Maps listing in one city or district (about 20 per area; several cities are several searches), then each business's own website for its emails and phones.",
     "- find_linkedin_leads: people on LinkedIn by role, kind of business and place, contacted on LinkedIn only (LinkedIn gives no email or phone). For an email request, read their company's site with read_webpage for an address, or use another source.",
     "- web_search and read_webpage: search the web and read a page (a directory, a company's team page, a lead's own site). Use them to check a lead's place or kind when the judge could not, and to find decision makers.",
     features.web_discovery ? "- find_customers_on_web: a web search for the businesses' own websites and directories in a place, then their published contacts." : null,
-    features.apify_discovery ? "- find_instagram_prospects (Instagram accounts posting under hashtags made from the kind and place) and find_social_leads (Facebook pages, LinkedIn companies or Instagram's own account search): paid from the owner's Apify account. Searching Instagram does not need an Instagram account linked; sending DMs does." : null,
-    features.brightdata ? "- research_social_sources: what people say on Reddit, X, Instagram and Facebook, metered from the owner's Bright Data account. Discussions are evidence of a need, not leads." : null,
-    features.treg ? "- treg_search / treg_call: paid lookups (a person's work email, checks) for a handful of named leads." : null,
+    features.apify_discovery ? "- find_instagram_prospects (Instagram accounts posting under hashtags made from the kind and place) and find_social_leads (Facebook pages, LinkedIn companies or Instagram's own account search), through Apify. Searching Instagram does not need an Instagram account linked; sending DMs does." : null,
+    features.brightdata ? "- research_social_sources: what people say on Reddit, X, Instagram and Facebook, through Bright Data. Discussions are evidence of a need, not leads." : null,
+    features.treg ? "- treg_search / treg_call: lookups (a person's work email, checks) for a handful of named leads." : null,
     "- add_contacts / add_instagram_contacts / use_existing_leads: people the owner gave you, or already saved.",
   ].filter(Boolean).join("\n");
 }
@@ -56,7 +56,7 @@ function sourcesText(features: FeatureState): string {
 export function v2AutonomousRules(caps: AutonomyCaps): string[] {
   return [
     "AUTONOMOUS MODE IS ON for this chat: work without asking permission.",
-    `- A plan you prepare starts by itself in Automatic replies, unless a cap stops it: up to ${caps.runsPerDay} plans and ${caps.leadsPerDay} leads a day started this way, and ${caps.searchesPerDay} searches a day. The TOOL and event lines say whether it started; never claim it did otherwise.`,
+    `- A plan you prepare starts by itself in Automatic replies, unless a cap stops it: up to ${caps.runsPerDay} plans and ${caps.leadsPerDay} leads a day started this way. The TOOL and event lines say whether it started; never claim it did otherwise.`,
     "- Do not ask whether to do the next step: decide, do it, and say in one or two sentences what you did and what happens next.",
     "- Keep to the brief: the owner's place, kind of customer, channels and limits. Widen nothing the owner named; ask only for facts you cannot find or infer.",
   ];
@@ -98,7 +98,9 @@ export function requestBlock(input: { ownerMessages: readonly string[]; brief: B
   const words = input.ownerMessages.map((text, index) => `  ${index + 1}. ${text.replace(/\s+/g, " ").trim().slice(0, 1_000)}`).join("\n");
   const brief = input.brief && input.controls
     ? `BRIEF (${input.status ?? "active"}): ${briefLine(input.brief, input.controls)}`
-    : "BRIEF: none yet. Call set_brief before the first search.";
+    : input.controls
+      ? `BRIEF: none yet (set_brief writes what the owner asked). The request runs for up to ${Math.round(input.controls.timeLimitMinutes)} min${input.controls.spendCapUsd <= 0 ? ", on free sources only" : ""}.`
+      : "BRIEF: none yet (set_brief writes what the owner asked; a search may come first).";
   return `REQUEST — the owner's messages since it began:\n${words}\n${brief}`;
 }
 
@@ -117,7 +119,8 @@ export function progressBlock(input: {
   const f = input.funnel;
   const lines = [
     `PROGRESS: ${f.found} found, ${f.contactable} contactable; ${f.qualified} match, ${f.unconfirmed} unconfirmed, ${f.notMatching} do not match, ${f.pending} not judged yet.`,
-    `Spend: ${requestSpendLine(input.spentUsd, input.spendCapUsd)}; ${formatDuration(input.msLeft)} left.`,
+    // Money is the server's; the model hears of it only as the owner's "free sources only".
+    `${input.spendCapUsd <= 0 ? "Free sources only (the owner's choice); " : ""}${formatDuration(input.msLeft)} left.`,
     input.searches.length
       ? `Searches so far (do not repeat): ${input.searches.map((search) => `${search.tool} “${search.what}” ${search.status}${search.found !== null ? `, ${search.found} found` : ""}${search.contactable !== null ? `, ${search.contactable} contactable` : ""}`).join("; ")}.`
       : "Searches so far: none.",
@@ -166,7 +169,8 @@ export function transcriptV2(messages: readonly TranscriptMessage[], maxChars = 
   return `${omitted ? "(earlier conversation omitted)\n" : ""}${lines.map((line) => line.text).join("\n")}`;
 }
 
-const RESULT_CLAIM = /\b(?:i|we)(?:'ve|’ve| have)?\s+(?:just\s+|now\s+|already\s+)?(?:found|prepared|sent|contacted|messaged|emailed|qualified)\b|\bfound\s+\d+\b/i;
+// "The Houston search found 50" reports a search on record, so only "I/we found…" counts.
+const RESULT_CLAIM = /\b(?:i|we)(?:'ve|’ve| have)?\s+(?:just\s+|now\s+|already\s+)?(?:found|prepared|sent|contacted|messaged|emailed|qualified)\b/i;
 
 /**
  * A message sent with searches it only starts, that already reports their

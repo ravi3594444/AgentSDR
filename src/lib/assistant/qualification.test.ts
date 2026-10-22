@@ -192,14 +192,14 @@ describe("answering inquiries is asked for explicitly and scoped", () => {
     expect(inquiryRepliesRequested("yes", "Shall I answer new Instagram inquiries for you?")).toBe(true);
     expect(inquiryRepliesRequested("How many inquiries did we get?")).toBe(false);
     expect(inquiryRepliesRequested("don't answer instagram messages")).toBe(false);
-    const problem = actionsProblem([{ tool: "prepare_inquiry_replies", args: {} }], { smallTalk: false, profile: {}, ownerCorpus: "", outreachRequested: true, inquiryRepliesRequested: false });
+    const problem = actionsProblem([{ tool: "prepare_inquiry_replies", args: {} }], { profile: {}, ownerCorpus: "", outreachRequested: true, inquiryRepliesRequested: false });
     expect(problem).toContain("not asked for their inquiries to be answered");
-    expect(actionsProblem([{ tool: "prepare_inquiry_replies", args: {} }], { smallTalk: false, profile: {}, ownerCorpus: "", outreachRequested: false, inquiryRepliesRequested: true })).toBeNull();
+    expect(actionsProblem([{ tool: "prepare_inquiry_replies", args: {} }], { profile: {}, ownerCorpus: "", outreachRequested: false, inquiryRepliesRequested: true })).toBeNull();
   });
 
   test("a web search that contacts people afterwards needs an outreach request like the other searches", () => {
-    expect(actionsProblem([{ tool: "find_customers_on_web", args: { contactAfter: true } }], { smallTalk: false, profile: {}, ownerCorpus: "", outreachRequested: false })).toContain("not asked to contact");
-    expect(actionsProblem([{ tool: "find_customers_on_web", args: {} }], { smallTalk: false, profile: {}, ownerCorpus: "", outreachRequested: false })).toBeNull();
+    expect(actionsProblem([{ tool: "find_customers_on_web", args: { contactAfter: true } }], { profile: {}, ownerCorpus: "", outreachRequested: false })).toContain("not asked to contact");
+    expect(actionsProblem([{ tool: "find_customers_on_web", args: {} }], { profile: {}, ownerCorpus: "", outreachRequested: false })).toBeNull();
   });
 
   test("an inquiry run needs both features and a connected account taking inquiries", () => {

@@ -216,7 +216,8 @@ async function runQualifyingStage(job: AssistantJob, heartbeat: () => Promise<vo
   const objective = await objectiveForJob(job);
   if (!objective) return finish(null);
   if (objective.status === "paused") return { next: "wait", delayMs: 60_000, progress: { stage: QUALIFYING, waiting: { kind: "paused", reason: "the owner paused this request's research; its leads are judged when resumed" } } };
-  if (objective.status === "stopped") return finish("Its leads were not judged against your request: the research stopped first.");
+  // Only the owner's cancel leaves them unjudged; after any other stop (finished, a limit) they are judged so a follow-up can plan them.
+  if (objective.status === "stopped" && objective.stopReason === "cancelled") return finish("Its leads were not judged against your request: the owner cancelled the research first.");
   try {
     // The count to judge is taken once, entering the stage: each step judges a batch of what is left.
     const recorded = Number((job.progress as { toJudge?: unknown } | null)?.toJudge);

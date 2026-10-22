@@ -11,7 +11,7 @@ import { TREG_LIMITS } from "@/lib/treg/catalog";
 import { featureState } from "@/lib/features/flags.server";
 import { startedNotFinishedClaim, systemPromptV2, transcriptV2, V2_AUTONOMOUS_MAX_STEPS, V2_MAX_STEPS } from "./agentV2";
 import { currentRequest, v2ContextText } from "./agentV2.server";
-import { actionsProblem, agentReplySchema, groundingCorpus, searchArgsKey, searchRequestFor, inquiryRepliesRequested, isSmallTalk, MAX_ACTIONS_PER_STEP, MAX_STEPS, DIRECT_CONTACT_TOOLS, nextAgentBatch, parseAgentReply, pendingOutreachRequestIndex, sameMessage, standingOutreachRequestIndex, transcriptText, unbackedClaim, type AgentReply } from "./agent";
+import { actionsProblem, agentReplySchema, groundingCorpus, searchArgsKey, searchRequestFor, inquiryRepliesRequested, MAX_ACTIONS_PER_STEP, MAX_STEPS, DIRECT_CONTACT_TOOLS, nextAgentBatch, parseAgentReply, pendingOutreachRequestIndex, sameMessage, standingOutreachRequestIndex, transcriptText, unbackedClaim, type AgentReply } from "./agent";
 import { AUTONOMOUS_MAX_STEPS, autonomousRules, SEARCH_TOOLS, searchCapProblem, type AutonomyCaps } from "./autonomy";
 import { autonomousSearchesToday, autonomyCaps, autoStartPlan, threadAutonomy } from "./autonomy.server";
 import { listAudiences } from "./audiences.server";
@@ -27,7 +27,6 @@ import { recordUsage } from "./usage.server";
 import { runTool, searchRequestId, setupSnapshot, toolCatalog, toolNamesFor, type ToolContext, type ToolResult } from "./tools.server";
 import { observationKey } from "./observation";
 import { closeBrowser } from "@/lib/browser/browser.server";
-import { instagramCapabilityProblem } from "./instagramContacts";
 
 /**
  * One turn of the owner's assistant. The model answers with a message and
@@ -254,9 +253,7 @@ export async function runAgentTurn(input: {
     const askedForOutreach = v2 || outreachRequest !== null;
     const askedForInquiryReplies = inquiryRepliesRequested(ownerText, lastAssistantText);
     const said: string[] = [];
-    // A greeting or thanks runs no tools (see actionsProblem).
-    const smallTalk = input.text !== null && !input.attachments?.length && isSmallTalk(input.text);
-    const documentsText = smallTalk ? "" : await ownerDocumentsText();
+    const documentsText = await ownerDocumentsText();
     const succeeded: string[] = [];
     const toolNames = toolNamesFor(features);
     const maxSteps = v2 ? (autonomy.on ? V2_AUTONOMOUS_MAX_STEPS : V2_MAX_STEPS) : autonomy.on ? AUTONOMOUS_MAX_STEPS : MAX_STEPS;
@@ -274,15 +271,15 @@ export async function runAgentTurn(input: {
       // What the owner wrote or attached: business information is saved only from it.
       const ownerCorpus = groundingCorpus(messages, documentsText);
       let reply: AgentReply | null = null;
+      // Earlier work on record backs a message that reports it ("the Houston search found 50"), not only this turn's tools.
+      const onRecord = messages.some((row) => row.role === "tool" && row.status === "ok");
       const validateBatch = (parsed: AgentReply) => {
-        const capabilityProblem = features.instagram ? instagramCapabilityProblem(parsed.message) : null;
-        if (capabilityProblem) throw new Error(capabilityProblem);
-        const refused = actionsProblem(parsed.actions, { smallTalk, profile, ownerCorpus, outreachRequested: askedForOutreach, inquiryRepliesRequested: askedForInquiryReplies });
+        const refused = actionsProblem(parsed.actions, { profile, ownerCorpus, outreachRequested: askedForOutreach, inquiryRepliesRequested: askedForInquiryReplies });
         if (refused) throw new Error(refused);
         // Completion messages stay held until the last batch. Re-check them
         // and every queued batch against the latest results and profile.
         const startsNow = autonomy.on && parsed.actions.some((action) => action.tool === "prepare_outreach");
-        const problem = unbackedClaim(parsed.message, parsed.actions.length ? ["(pending)"] : succeeded, outreachStarted || startsNow)
+        const problem = unbackedClaim(parsed.message, parsed.actions.length || succeeded.length || onRecord ? ["(record)"] : [], outreachStarted || startsNow)
           ?? (v2 ? startedNotFinishedClaim(parsed.message, parsed.actions, (tool) => SEARCH_TOOLS.has(tool)) : null);
         if (problem) throw new Error(problem);
       };
@@ -375,8 +372,8 @@ export async function runAgentTurn(input: {
       // and the next step explains what happened instead.
       let allOk = true;
       for (const action of actions) {
-        // Autonomous mode: searches it starts are capped per day (general.autonomousSearchesPerDay, no settings page).
-        const capped = autonomy.on && caps && SEARCH_TOOLS.has(action.tool) ? searchCapProblem(await autonomousSearchesToday(), caps) : null;
+        // The older agent's Autonomous mode capped searches per day; in v2 the request's spend cap and time limit bound them.
+        const capped = !v2 && autonomy.on && caps && SEARCH_TOOLS.has(action.tool) ? searchCapProblem(await autonomousSearchesToday(), caps) : null;
         if (capped) {
           await addMessage({ threadId: input.threadId, role: "tool", tool: action.tool, toolInput: action.args, status: "error", content: `Not run: ${capped}.`, toolResult: { summary: `Not run: ${capped}.` } });
           allOk = false;
@@ -393,7 +390,7 @@ export async function runAgentTurn(input: {
         if (action.tool === "prepare_outreach" && result.ok && !(await startedOnItsOwn(input.threadId, autonomy.on, result.data))) allOk = false;
         // Contacts the owner asked to reach get their plan straight away, as a "find and contact" search does.
         const audienceId = typeof result.data?.audienceId === "string" ? result.data.audienceId : null;
-        if (DIRECT_CONTACT_TOOLS.has(action.tool) && result.ok && action.args.contactAfter === true && askedForOutreach && audienceId && !actions.some((other) => other.tool === "prepare_outreach")) {
+        if (!v2 && DIRECT_CONTACT_TOOLS.has(action.tool) && result.ok && action.args.contactAfter === true && askedForOutreach && audienceId && !actions.some((other) => other.tool === "prepare_outreach")) {
           const channels = action.tool === "add_instagram_contacts" ? { channels: ["instagram"] } : Array.isArray(action.args.channels) ? { channels: action.args.channels } : {};
           const plan = await runToolInThread(context, "prepare_outreach", { audienceId, ...channels });
           if (plan.ok) succeeded.push("prepare_outreach");

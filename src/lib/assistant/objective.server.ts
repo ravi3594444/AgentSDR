@@ -14,6 +14,7 @@ import {
   judgeRequestText,
   formatDuration,
   limitReached,
+  type LimitFacts,
   objectiveReportKey,
   objectiveReportText,
   outcomeOf,
@@ -37,7 +38,7 @@ import {
 } from "./objective";
 import { assistantJobs, assistantMessages, assistantObjectives, leadAudiences, type ObjectiveProgress } from "./schema";
 import { addMessage } from "./threads.server";
-import type { Brief } from "./brief";
+import { readBrief, type Brief } from "./brief";
 import type { AssistantJob, StepOutcome } from "./worker";
 import { audienceFunnel } from "./qualify.server";
 import type { LeadFunnel } from "./leadFit";
@@ -854,17 +855,30 @@ export async function saveObjectiveProgress(objectiveId: string, patch: Partial<
   }).where(and(inOrg(assistantObjectives), eq(assistantObjectives.id, objectiveId)));
 }
 
-/** Why a new search may not start for the request now (paused, stopped, or at its target, spend cap or time), or null. */
+/**
+ * The limits that end a request in the one harness: its lead target only
+ * when the owner gave the number (otherwise the assistant decides when it is
+ * done), its time limit, and never a used spend cap: then paid starts are
+ * refused at their own reservation and free sources go on.
+ */
+export function requestLimits(objective: Pick<Objective, "controls">): Pick<LimitFacts, "targetNamed" | "budgetEnds"> {
+  const brief = readBrief(objective.controls.brief);
+  return { targetNamed: brief ? brief.leadTarget !== null : objective.controls.named?.target ?? true, budgetEnds: false };
+}
+
+/** Why a new search may not start for the request now (paused, stopped, at a target the owner named, or past its time), or null. */
 export async function objectiveStartProblem(requestId: string | null | undefined): Promise<string | null> {
   const objective = await objectiveForRequest(requestId);
   if (!objective) return null;
   if (objective.status === "paused") return "the research for this request is paused; it continues when the owner resumes it";
   if (objective.status === "stopped") return `the research for this request has stopped (${stopText(objective)}); a new request starts new research`;
-  // Research agent v2: the request's last turn (objective.ts nextDriverStep) plans from what matched and finishes.
-  if ((objective.progress as ObjectiveProgress).continuation?.final) return "this request is ending: its last turn prepares outreach from the leads that match and finishes, and no more searches start for it";
+  // The request's last turn at its target or time (objective.ts nextDriverStep) plans from what matched and finishes; one begun
+  // because no source seemed left may still search one the assistant finds.
+  const final = (objective.progress as ObjectiveProgress).continuation?.final;
+  if (final === "target_reached" || final === "time_limit") return "this request is ending: its last turn prepares outreach from the leads that match and finishes, and no more searches start for it";
   const children = await objectiveChildren(objective);
   const { leads } = await objectiveLeads(objective, children);
   const spend = await objectiveSpend(objective, db, children);
-  const limit = limitReached({ now: new Date(), deadline: objective.deadlineAt, leadTarget: objective.leadTarget, leads, spendCapUsd: objective.spendCapUsd, spentUsd: spend.settledUsd });
+  const limit = limitReached({ now: new Date(), deadline: objective.deadlineAt, leadTarget: objective.leadTarget, leads, spendCapUsd: objective.spendCapUsd, spentUsd: spend.settledUsd, ...requestLimits(objective) });
   return limit ? `this request has reached a limit (${limit.detail})` : null;
 }
