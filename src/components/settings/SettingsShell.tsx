@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { RiCloseLine, RiSettings3Line } from "@remixicon/react";
+import { RiArrowDownSLine, RiCloseLine, RiSettings3Line } from "@remixicon/react";
 import * as Modal from "@/components/alignui/modal";
 import type { FeatureState } from "@/lib/features/catalog";
 import { cn } from "@/utils/cn";
@@ -107,6 +107,10 @@ function SettingsFrame({ children, modal }: { children: React.ReactNode; modal: 
   const activeItem = items.find((item) => itemPages(item).some((page) => isActive(pathname, page.href)));
   const activeHref = activeItem?.href ?? "";
   const activePage = activeItem ? itemPages(activeItem).find((page) => isActive(pathname, page.href))?.href ?? "" : "";
+  const advancedId = useId();
+  const [advancedOpen, setAdvancedOpen] = useState<boolean | null>(null);
+  const advancedActive = nav.some((group) => group.label === "Advanced" && group.items.some((item) => item.href === activeHref));
+  const advancedExpanded = advancedOpen ?? advancedActive;
   const Title = modal ? Modal.Title : "h1";
   const Description = modal ? Modal.Description : "p";
   const stripRef = useRef<HTMLDivElement>(null);
@@ -137,8 +141,12 @@ function SettingsFrame({ children, modal }: { children: React.ReactNode; modal: 
         <nav aria-label="Settings sections" className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
           {nav.map((group, index) => (
             <div key={group.label} className={cn(index > 0 && "mt-4")}>
-              <p className="mb-1 px-2 text-paragraph-xs text-text-soft-400">{group.label}</p>
-              <ul className="space-y-0.5">
+              {group.label === "Advanced" ? (
+                <button type="button" aria-expanded={advancedExpanded} aria-controls={advancedId} onClick={() => setAdvancedOpen(!advancedExpanded)} className="mb-1 flex min-h-9 w-full items-center justify-between rounded-lg px-2 text-left text-paragraph-xs text-text-sub-600 outline-none hover:bg-bg-weak-50 focus-visible:ring-2 focus-visible:ring-primary-base">
+                  Advanced<RiArrowDownSLine aria-hidden="true" className={cn("size-4 transition-transform", advancedExpanded && "rotate-180")} />
+                </button>
+              ) : <p className="mb-1 px-2 text-paragraph-xs text-text-soft-400">{group.label}</p>}
+              <ul id={group.label === "Advanced" ? advancedId : undefined} hidden={group.label === "Advanced" && !advancedExpanded} className="space-y-0.5">
                 {group.items.map(({ href, label, icon: Icon }) => {
                   const active = href === activeHref;
                   return (

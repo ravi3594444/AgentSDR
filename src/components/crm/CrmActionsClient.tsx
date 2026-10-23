@@ -367,8 +367,8 @@ export function CrmActionsClient() {
     <ChannelChips value={filters.channel} onChange={(value) => setFilter("channel", value)} className="mt-4" />
 
     {view === "needs_you" && <>
-      <button type="button" aria-expanded={summaryExpanded} aria-controls={summaryId} onClick={() => setSummaryExpanded(value => !value)} className="mt-3 flex min-h-11 w-full items-center justify-between rounded-lg px-3 text-left text-paragraph-sm text-text-sub-600 ring-1 ring-inset ring-stroke-soft-200 sm:hidden"><span>Inbox summary</span><span className="text-label-xs">{summary?.drafts ?? "—"} drafts · {summary?.errors ?? "—"} errors</span></button>
-      <div id={summaryId} className={cn(summaryExpanded ? "block" : "hidden", "sm:block")}><WorkspaceStats items={[
+      <button type="button" aria-expanded={summaryExpanded} aria-controls={summaryId} onClick={() => setSummaryExpanded(value => !value)} className="mt-3 flex min-h-11 w-full flex-wrap items-center justify-between gap-2 rounded-lg px-3 text-left text-paragraph-sm text-text-sub-600 ring-1 ring-inset ring-stroke-soft-200"><span>All channels summary</span><span className="text-label-xs">{summary?.drafts ?? "—"} drafts · {summary?.followUpsDue ?? "—"} follow-ups · {summary?.errors ?? "—"} errors</span></button>
+      <div id={summaryId} className={summaryExpanded ? "block" : "hidden"}><WorkspaceStats items={[
         { label: "Drafts to review", value: summary?.drafts?.toLocaleString() ?? "—", detail: "Waiting for approval" },
         { label: "Follow-ups due", value: summary?.followUpsDue.toLocaleString() ?? "—", onSelect: () => setFilter("actionGroup", filters.actionGroup === "follow_up" ? "" : "follow_up"), selected: filters.actionGroup === "follow_up" },
         { label: "Errors", value: summary?.errors.toLocaleString() ?? "—", onSelect: () => setFilter("error", filters.error ? "" : "true"), selected: Boolean(filters.error) },
@@ -378,8 +378,8 @@ export function CrmActionsClient() {
 
     <Frame className="mt-5">
       <FrameHeader title={view === "all" ? "All conversations" : "Replies, drafts and follow-ups"} description={detail} actions={<div className="w-full min-w-0 sm:w-auto">
-          <Button.Root variant="neutral" mode="stroke" size="small" aria-expanded={filtersExpanded} aria-controls={filtersId} onClick={() => setFiltersExpanded(value => !value)} className="h-11 w-full sm:hidden"><Button.Icon as={RiEqualizer2Line} />Filters{activeFilterCount > 0 ? ` · ${activeFilterCount} active` : ""}</Button.Root>
-          <div id={filtersId} className={cn(filtersExpanded ? "flex" : "hidden", "mt-3 flex-wrap items-center gap-2 [&>button]:min-h-11 sm:mt-0 sm:flex sm:[&>button]:min-h-0")}>
+          <Button.Root variant="neutral" mode="stroke" size="small" aria-expanded={filtersExpanded} aria-controls={filtersId} onClick={() => setFiltersExpanded(value => !value)} className="h-11 w-full sm:h-9 sm:w-auto"><Button.Icon as={RiEqualizer2Line} />Filters{activeFilterCount > 0 ? ` · ${activeFilterCount} active` : ""}</Button.Root>
+          <div id={filtersId} className={cn(filtersExpanded ? "flex" : "hidden", "mt-3 flex-wrap items-center gap-2 [&>button]:min-h-11 sm:[&>button]:min-h-0")}>
           <CompactSelect label="Category" placeholder="All categories" value={filters.category} onChange={(value) => setFilter("category", value)}><Select.Item value="">All categories</Select.Item>{categoryItems()}</CompactSelect>
           <CompactSelect label="Action type" placeholder="All action types" value={filters.actionGroup} onChange={(value) => setFilter("actionGroup", value)}><Select.Item value="">All action types</Select.Item>{CRM_ACTION_GROUPS.map((group) => <Select.Item key={group} value={group}>{CRM_ACTION_GROUP_LABELS[group]}</Select.Item>)}</CompactSelect>
           <CompactSelect label="Due time" placeholder="Any due time" value={filters.due} onChange={(value) => setFilter("due", value)}><Select.Item value="">Any due time</Select.Item><Select.Item value="overdue">Overdue</Select.Item><Select.Item value="today">Due today</Select.Item><Select.Item value="upcoming">Upcoming</Select.Item></CompactSelect>
@@ -778,6 +778,7 @@ const TONE_LABEL: Record<Tone, string> = {
 type DraftState = { label: string; tone: Tone; icon: IconType; hint?: string };
 
 function draftStateOf({ editable, draftFull, status, dnc, sendable, actionText, apology = false }: { editable: boolean; draftFull: string; status: string; dnc: boolean; sendable: boolean; actionText: string; apology?: boolean }): DraftState {
+  if (status === "generating") return { label: "Writing a reply", tone: "info", icon: RiHourglass2Fill };
   if (editable) {
     if (status === "failed") return { label: "Draft failed", tone: "error", icon: RiErrorWarningFill, hint: "Edit it or regenerate" };
     if (dnc) return { label: "Do not contact", tone: "error", icon: RiForbid2Line, hint: "Sending is blocked" };
@@ -797,7 +798,7 @@ function draftStateOf({ editable, draftFull, status, dnc, sendable, actionText, 
     case "Human review": return { label: "Needs a reply", tone: "info", icon: RiReplyLine, hint: "No draft yet — write one on the record" };
     // The next actions the Needs you and All replies views name off the queue (conversationSummary.ts).
     case "Open conversation": return { label: "Open conversation", tone: "neutral", icon: RiCheckDoubleLine, hint: "Nothing is waiting on you here" };
-    case "Classifying their reply": return { label: "Classifying their reply", tone: "neutral", icon: RiHourglass2Fill };
+    case "Classifying their reply": return { label: "Preparing a reply", tone: "info", icon: RiHourglass2Fill };
     case "Do not contact": return { label: "Do not contact", tone: "error", icon: RiForbid2Line, hint: "Nothing is sent to this person again" };
     case "Wrong number — outreach stopped": return { label: "Wrong number", tone: "warning", icon: RiForbid2Line, hint: "Outreach to this route stopped" };
     default: return { label: actionText, tone: "neutral", icon: RiTimeLine };
@@ -1013,6 +1014,22 @@ function DraftStateLabel({ state, className }: { state: DraftState; className?: 
   </span>;
 }
 
+/** Existing saved state and update time, not an invented model duration or a liveness check. */
+function ReplyProcessingDetails({ row }: { row: Row }) {
+  const writing = row.draft.status === "generating";
+  const preparing = row.record.workflowState === "classifying";
+  const failed = row.draft.status === "failed" || row.classification.status === "failed" || row.record.workflowState === "error";
+  if (!writing && !preparing && !failed) return null;
+  const stage = writing ? "Writing a reply" : preparing ? "Preparing a reply" : "Needs your help";
+  const reason = writing || preparing ? "" : String(row.draft.status === "failed" ? row.draft.error || "" : row.classification.status === "failed" ? row.classification.reasoning || "" : "").trim();
+  const updatedAt = writing || row.draft.status === "failed" ? row.draft.updatedAt : row.record.updatedAt;
+  const hasTime = Boolean(updatedAt && Number.isFinite(new Date(String(updatedAt)).getTime()));
+  return <details data-row-tools className="mt-2 text-paragraph-xs text-text-sub-600">
+    <summary className="cursor-pointer rounded outline-none focus-visible:ring-2 focus-visible:ring-primary-base">{failed && !writing && !preparing ? "Why this needs you" : "Processing details"}{hasTime && <span className="text-text-soft-400"> · updated {timeAgo(updatedAt)}</span>}</summary>
+    <p className="mt-1.5 whitespace-pre-wrap break-words">{stage}. {reason || (failed ? "Open the conversation to read the error and choose the next step." : "No reply has been saved yet. You can open the conversation to read the thread.")}</p>
+  </details>;
+}
+
 /**
  * The draft column. With a draft: its opening words, then its state and the
  * sequence step. Without one: what is missing, and the one thing to do about it.
@@ -1134,6 +1151,7 @@ function ActionRow({ action, categories, busy, editing, pipeline, now, onOpen, o
         >
           <DraftSummary row={row} />
         </HoverPreview>
+        <ReplyProcessingDetails row={row} />
         {editable && !editing && <div data-row-tools className="pointer-events-none absolute right-2 top-1/2 flex -translate-y-1/2 items-center gap-1 rounded-lg bg-bg-white-0 p-1 opacity-0 shadow-regular-md ring-1 ring-inset ring-stroke-soft-200 transition-opacity group-hover/row:pointer-events-auto group-hover/row:opacity-100 group-focus-within/row:pointer-events-auto group-focus-within/row:opacity-100">
           <Button.Root variant="neutral" mode="ghost" size="xxsmall" onClick={onToggleEdit} aria-label={`Edit the draft to ${row.name}`} title="Edit the draft here"><Button.Icon as={RiPencilLine} /></Button.Root>
           <Button.Root variant="primary" mode="filled" size="xxsmall" disabled={!sendable} onClick={() => sendDraft(row, onMutate)} aria-label={`Send the draft to ${row.name}`} title={sendTitle}><Button.Icon as={RiSendPlaneFill} />Send</Button.Root>
@@ -1355,6 +1373,7 @@ export function ActionCard({ action, categories, now, busy, onOpen, onMutate, on
       </div>
     </div>
       : row.stage === "needs_action" && <div className="mt-3"><DraftSummary row={row} /></div>}
+    <ReplyProcessingDetails row={row} />
 
     <div className="mt-3 flex items-center justify-between gap-2 border-t border-stroke-soft-200 pt-3">
       <Badge.Root variant="lighter" size="medium" color={chipRow.dueColor} className="h-6 min-w-0 shrink gap-1 px-2" title={chipRow.dueLabel}>

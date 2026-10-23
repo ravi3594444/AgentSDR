@@ -17,6 +17,7 @@ import {
   RiFileList3Line,
   RiFileTextLine,
   RiHistoryLine,
+  RiInboxLine,
   RiLoader4Line,
   RiPauseLine,
   RiPlayLine,
@@ -38,7 +39,6 @@ import { planCounts, planOutcome } from "@/lib/activity/status";
 import { displayTime } from "@/lib/assistant/displayTime";
 import { formatChatDateTime, formatChatTime } from "@/lib/assistant/chatTime";
 import * as Button from "@/components/alignui/button";
-import NeedsYouList from "@/components/assistant/NeedsYouList";
 import { RequestBar, RequestPanel, useThreadRequest } from "@/components/assistant/RequestPanel";
 import { EventRow } from "@/components/assistant/EventRow";
 import { compactToolReport, reportAsOf } from "@/lib/assistant/chatEvents";
@@ -1355,10 +1355,13 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
           <Button.Root variant="neutral" mode="stroke" size="xsmall" onClick={() => void newThread()} disabled={sending} aria-label="New conversation" className="size-11 p-0 sm:h-9 sm:w-auto sm:px-2.5">
             <Button.Icon as={RiAddLine} /><span className="hidden sm:inline">New chat</span>
           </Button.Root>
+          <Link href="/inbox?view=needs_you" aria-label="Inbox: replies and decisions" title="Replies and decisions" className="inline-flex size-11 items-center justify-center gap-1.5 rounded-lg text-label-xs text-text-sub-600 hover:bg-bg-weak-50 sm:h-9 sm:w-auto sm:px-2.5">
+            <RiInboxLine className="size-4" aria-hidden="true" /><span className="hidden sm:inline">Inbox</span>
+          </Link>
           <Link href="/assistant/requests" aria-label="All requests" title="Every request and its progress" className="inline-flex size-11 items-center justify-center gap-1.5 rounded-lg text-label-xs text-text-sub-600 hover:bg-bg-weak-50 sm:h-9 sm:w-auto sm:px-2.5">
             <RiListCheck3 className="size-4" aria-hidden="true" /><span className="hidden sm:inline">Requests</span>
           </Link>
-          <Link href="/assistant/reports" aria-label="Reports" title="Outreach reports" className="inline-flex size-11 items-center justify-center gap-1.5 rounded-lg text-label-xs text-text-sub-600 hover:bg-bg-weak-50 sm:h-9 sm:w-auto sm:px-2.5">
+          <Link href="/assistant/reports" aria-label="Reports" title="Outreach reports" className="hidden h-9 items-center justify-center gap-1.5 rounded-lg px-2.5 text-label-xs text-text-sub-600 hover:bg-bg-weak-50 sm:inline-flex">
             <RiBarChartBoxLine className="size-4" aria-hidden="true" /><span className="hidden sm:inline">Reports</span>
           </Link>
         </div>
@@ -1372,10 +1375,6 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
       <div className="flex min-h-0 flex-1">
       <div className="relative flex min-w-0 flex-1 flex-col">
       <RequestBar state={request} labels={searchLabels} />
-      <div className="max-h-[min(24dvh,9rem)] shrink-0 overflow-y-auto px-3 pt-2 empty:hidden sm:max-h-none sm:overflow-visible sm:px-6 sm:pt-3">
-        <NeedsYouList initial={null} compact />
-      </div>
-
       <div ref={scroller} onScroll={updatePosition} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-4 sm:px-8 sm:py-6" aria-label="Assistant conversation">
         <div ref={content}>
         {empty ? (

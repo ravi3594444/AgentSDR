@@ -8,6 +8,8 @@
  * Import-free and client-safe.
  */
 export const RELEASE_FEATURES = {
+  /** Legacy per-channel inbox links. Messages and decisions use the unified Inbox. Routes stay available. */
+  channelInboxes: false,
   /** WhatsApp calls from the app: call campaigns, Call buttons, call history, the recorder extension, R2 recordings, transcription. */
   calling: false,
   /** Image-generating AI columns. */
