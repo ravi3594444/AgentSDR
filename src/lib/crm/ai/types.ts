@@ -1,4 +1,5 @@
 import type { OpenRouterModelSelection } from "@/lib/ai/openrouter-types";
+import type { CompletionBudget } from "@/lib/ai/server/structuredCompletion";
 import type { CrmCategoryKey, CrmChannel } from "../schema";
 import type { ClassificationApplicationDecision } from "../stateMachine";
 
@@ -154,6 +155,8 @@ export type ClassificationCompletionInput = {
   timeoutMs: number;
   maxOutputTokens: number;
   signal?: AbortSignal;
+  /** The reply job's shared budget, when this call runs inside one. */
+  budget?: CompletionBudget;
 };
 
 export type ClassificationCompletionResult = {

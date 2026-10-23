@@ -105,7 +105,32 @@ export type StructuredCompletionInput = {
   onRequest?: (request: Record<string, unknown>) => void;
   maxAttempts?: number;
   signal?: AbortSignal;
+  /**
+   * A shared spend limit spanning several calls (one CRM reply job's
+   * classify, draft, check and repair calls — see crm/ai/budget.ts). Counted
+   * per transport request, not per logical call: every attempt and the one
+   * AI/ML schema-format resend each ask beforeTransportRequest first, and no
+   * request starts once it answers false or the deadline has passed. The
+   * deadline also aborts an in-flight request (it is combined with `signal`).
+   * Absent, a call behaves exactly as before.
+   */
+  budget?: CompletionBudget;
 };
+
+export type CompletionBudget = {
+  /** Epoch milliseconds when the whole budget expires. */
+  deadlineAtMs: number;
+  /** Asked before every transport request; false spends nothing further. May persist the consumption. */
+  beforeTransportRequest: (nowMs: number) => boolean | Promise<boolean>;
+};
+
+/** The shared budget ran out: never retried, and not a provider failure. */
+export class StructuredBudgetExhaustedError extends Error {
+  constructor(schemaName: string) {
+    super(`${schemaName} stopped: the shared reply budget is exhausted`);
+    this.name = "StructuredBudgetExhaustedError";
+  }
+}
 
 export type StructuredCompletionResult = {
   /** The tool's arguments, verbatim JSON text. */
@@ -160,6 +185,25 @@ function isJsonObjectText(text: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** Whichever of the given signals fires first (the budget deadline first, so it wins where `any` is unavailable). */
+function combineSignals(...signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
+  const present = signals.filter((value): value is AbortSignal => Boolean(value));
+  if (present.length < 2) return present[0];
+  if (typeof AbortSignal.any === "function") return AbortSignal.any(present);
+  return present[0];
+}
+
+/** A provider's Retry-After, in milliseconds, when the error carries one in seconds. */
+function retryAfterMsOf(error: unknown): number | null {
+  const headers = (error as { headers?: unknown } | null)?.headers;
+  if (!headers || typeof headers !== "object") return null;
+  const raw = typeof (headers as { get?: unknown }).get === "function"
+    ? (headers as { get: (name: string) => string | null }).get("retry-after")
+    : (headers as Record<string, string>)["retry-after"] ?? (headers as Record<string, string>)["Retry-After"];
+  const seconds = Number(raw);
+  return raw != null && Number.isFinite(seconds) && seconds > 0 ? Math.floor(seconds * 1_000) : null;
 }
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -247,6 +291,12 @@ export async function completeStructured(
     input.requestedModel,
     input.timeoutMs,
   );
+  // The budget's deadline aborts in-flight work, not just later attempts:
+  // it is combined with the caller's signal wherever the signal is used.
+  const budgetSignal = input.budget
+    ? AbortSignal.timeout(Math.max(0, input.budget.deadlineAtMs - Date.now()))
+    : undefined;
+  const signal = combineSignals(budgetSignal, input.signal);
   // Switches once, json_schema to tool_call, and only on AI/ML API (see the top of this file).
   let mode = structuredOutput;
   const mayFallBack = providerKey === AIML_PROVIDER_KEY && structuredOutput === "json_schema" && functionCallFallback === true;
@@ -391,9 +441,15 @@ export async function completeStructured(
   }
 
   async function attempt(): Promise<Omit<StructuredCompletionResult, "attempts">> {
+    if (input.budget) {
+      const nowMs = Date.now();
+      if (nowMs >= input.budget.deadlineAtMs || !(await input.budget.beforeTransportRequest(nowMs))) {
+        throw new StructuredBudgetExhaustedError(input.schemaName);
+      }
+    }
     const request = buildRequest();
     input.onRequest?.(request);
-    const response: StructuredChatResponse = await client.chat.completions.create(request as never, { signal: input.signal });
+    const response: StructuredChatResponse = await client.chat.completions.create(request as never, { signal });
     const text = answerText(response);
     try {
       input.accept?.(text);
@@ -422,7 +478,7 @@ export async function completeStructured(
     try {
       return await attempt();
     } catch (error) {
-      if (!mayFallBack || mode !== "json_schema" || httpStatusOf(error) !== 400 || input.signal?.aborted) throw error;
+      if (!mayFallBack || mode !== "json_schema" || httpStatusOf(error) !== 400 || signal?.aborted) throw error;
       schemaRefusal = messageOf(error);
       mode = "tool_call";
       console.warn(`[ai/structured] ${input.schemaName}: ${selection.modelId} refused the json_schema request (${schemaRefusal}); asking once more as a function call`);
@@ -440,14 +496,21 @@ export async function completeStructured(
     if (index > 0) {
       // Lets the caller say it is retrying; a failure to say so never stops the retry.
       await Promise.resolve(input.onRetry?.({ attempt: index + 1, maxAttempts, reason: messageOf(lastError) })).catch(() => undefined);
-      await (dependencies.sleep ?? sleep)(RETRY_BACKOFF_MS[Math.min(index - 1, RETRY_BACKOFF_MS.length - 1)], input.signal);
+      // A provider's Retry-After outlasts the built-in backoff when it asks
+      // for longer; the combined signal still cuts the wait at the deadline.
+      const backoffMs = Math.max(
+        RETRY_BACKOFF_MS[Math.min(index - 1, RETRY_BACKOFF_MS.length - 1)],
+        retryAfterMsOf(lastError) ?? 0,
+      );
+      await (dependencies.sleep ?? sleep)(backoffMs, signal);
     }
     try {
       return { ...(await attemptOrFallBack()), attempts: index + 1 };
     } catch (error) {
+      if (error instanceof StructuredBudgetExhaustedError) throw error;
       lastError = error;
       const retryable = error instanceof RejectedAttemptError || (claudeCodeRetryable(error) ?? isRetryableOpenRouterError(error));
-      if (!retryable || input.signal?.aborted) {
+      if (!retryable || signal?.aborted) {
         if (!schemaRefusal) throw error;
         throw Object.assign(new Error(afterRefusal(messageOf(error)), { cause: error }), providerErrorFields(error));
       }

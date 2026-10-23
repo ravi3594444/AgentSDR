@@ -78,5 +78,7 @@ export async function handleAutoSendJob(job: CrmJob): Promise<void> {
   const revision = typeof job.payload.revision === "number" ? job.payload.revision : null;
   const readyAt = typeof job.payload.readyAt === "string" ? new Date(job.payload.readyAt) : null;
   const idempotencyKey = typeof job.payload.idempotencyKey === "string" ? job.payload.idempotencyKey : undefined;
-  await runAutopilotForDraft(job.entityId, { revision, readyAt, idempotencyKey });
+  const { replyBudgetForJob } = await import("@/lib/crm/ai/budget.server");
+  const budget = await replyBudgetForJob(job);
+  await runAutopilotForDraft(job.entityId, { revision, readyAt, idempotencyKey, budget });
 }

@@ -1,7 +1,7 @@
 import "server-only";
 
 import { db } from "@/lib/db";
-import { completeStructured } from "@/lib/ai/server/structuredCompletion";
+import { completeStructured, type CompletionBudget } from "@/lib/ai/server/structuredCompletion";
 import { retrieveKnowledge } from "@/lib/crm/knowledge";
 import type { ReplyConversationMessage } from "@/lib/crm/ai/replyConversation";
 import { buildReplyCheckPrompt, type ReplyCheckInput } from "./replyCheckPrompt";
@@ -78,11 +78,12 @@ export async function checkKnowledge(leadMessage: string, conversation: readonly
   return [profileKnowledgeText(profile), ...excerpts].filter(Boolean).join("\n\n");
 }
 
-export async function modelReplyCheck(input: ReplyCheckInput & { knowledge: string; runId: string | null }): Promise<ModelCheck> {
+export async function modelReplyCheck(input: ReplyCheckInput & { knowledge: string; runId: string | null; budget?: CompletionBudget }): Promise<ModelCheck> {
   let parsed: ModelCheck | null = null;
   const result = await completeStructured({
     timeoutMs: 60_000,
     maxOutputTokens: 1_500,
+    budget: input.budget,
     schemaName: "reply_check",
     schemaDescription: "Report what the lead asked and what the proposed reply claims and promises, with exact quotes.",
     jsonSchema: SCHEMA,

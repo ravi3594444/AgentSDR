@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { APIConnectionError, APIConnectionTimeoutError } from "openai";
-import { completeStructured, isStrictJsonSchema, type StructuredCompletionRuntime } from "./structuredCompletion";
+import { completeStructured, isStrictJsonSchema, StructuredBudgetExhaustedError, type StructuredCompletionRuntime } from "./structuredCompletion";
 import { actionsProblem, agentReplySchema, MAX_ACTIONS_PER_STEP, nextAgentBatch, outreachRequested, parseAgentReply, type AgentReply } from "@/lib/assistant/agent";
 import { parseWriterReply, writerReplyInstructions, WRITER_REPLY_SCHEMAS } from "@/lib/assistant/writerReply";
 import { aimlFunctionCallFallback, aimlStructuredMode } from "../aimlapi-types";
@@ -653,5 +653,49 @@ describe("isStrictJsonSchema", () => {
       required: ["a"],
       properties: { a: { type: "object", properties: { b: { type: "string" } }, required: ["b"] } },
     }), false);
+  });
+});
+
+describe("completeStructured with a shared budget", () => {
+  test("stops starting transport requests once the budget is spent", async () => {
+    const { runtime, requests } = scripted([
+      { content: "prose, not a call" },
+      { content: "prose again" },
+      { content: "prose a third time" },
+      { content: "prose a fourth time" },
+    ]);
+    let allowed = 2;
+    const budget = {
+      deadlineAtMs: Date.now() + 60_000,
+      beforeTransportRequest: () => (allowed-- > 0),
+    };
+    await assert.rejects(
+      completeStructured({ ...input, maxAttempts: 4, budget }, { runtime, sleep: noSleep }),
+      (error: unknown) => error instanceof StructuredBudgetExhaustedError,
+    );
+    assert.equal(requests.length, 2);
+  });
+
+  test("a budget whose deadline already passed starts no request at all", async () => {
+    const { runtime, requests } = scripted([{ toolArgs: '{"category":"a"}' }]);
+    const budget = { deadlineAtMs: Date.now() - 1, beforeTransportRequest: () => true };
+    await assert.rejects(
+      completeStructured({ ...input, budget }, { runtime, sleep: noSleep }),
+      (error: unknown) => error instanceof StructuredBudgetExhaustedError,
+    );
+    assert.equal(requests.length, 0);
+  });
+
+  test("a generous budget leaves a normal success untouched", async () => {
+    const { runtime, requests } = scripted([{ toolArgs: '{"category":"a"}' }]);
+    let calls = 0;
+    const budget = {
+      deadlineAtMs: Date.now() + 60_000,
+      beforeTransportRequest: () => { calls += 1; return true; },
+    };
+    const result = await completeStructured({ ...input, budget }, { runtime, sleep: noSleep });
+    assert.equal(result.text, '{"category":"a"}');
+    assert.equal(calls, 1);
+    assert.equal(requests.length, 1);
   });
 });

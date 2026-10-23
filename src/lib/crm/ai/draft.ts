@@ -1,7 +1,7 @@
 import "server-only";
 
 import type { OpenRouterModelSelection } from "@/lib/ai/openrouter-types";
-import { completeStructured } from "@/lib/ai/server/structuredCompletion";
+import { completeStructured, type CompletionBudget } from "@/lib/ai/server/structuredCompletion";
 import { crmChannelLabel } from "../channels";
 import type { CrmChannel } from "../schema";
 import { withAiInstructions } from "./instructions";
@@ -115,6 +115,8 @@ export type DraftCompletionInput = BuiltDraftPrompt & {
   timeoutMs: number;
   maxOutputTokens: number;
   signal?: AbortSignal;
+  /** The reply job's shared budget, when this call runs inside one. */
+  budget?: CompletionBudget;
 };
 
 export type DraftCompletionResult = {
@@ -534,12 +536,13 @@ export const completeDraftWithOpenRouter: DraftCompletion = async (input) => {
     schemaDescription: "Submit the drafted message. Call it exactly once; it is the only way to answer.",
     accept: input.accept,
     signal: input.signal,
+    budget: input.budget,
   });
 };
 
 export async function generateCrmDraft(
   input: GenerateCrmDraftInput,
-  dependencies: { complete?: DraftCompletion } = {},
+  dependencies: { complete?: DraftCompletion; budget?: CompletionBudget } = {},
 ): Promise<GeneratedCrmDraft> {
   const prompt = buildDraftPrompt(input);
   const timeoutMs = Math.floor(input.timeoutMs ?? DEFAULT_TIMEOUT_MS);
@@ -564,6 +567,7 @@ export async function generateCrmDraft(
     timeoutMs,
     maxOutputTokens,
     signal: input.signal,
+    budget: dependencies.budget,
   });
   if (input.requestedModel && (
     completion.provider !== input.requestedModel.provider

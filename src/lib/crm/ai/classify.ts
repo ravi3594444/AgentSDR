@@ -1,6 +1,6 @@
 import "server-only";
 
-import { completeStructured } from "@/lib/ai/server/structuredCompletion";
+import { completeStructured, type CompletionBudget } from "@/lib/ai/server/structuredCompletion";
 import { buildClassificationContext } from "../context";
 import { classificationApplicationDecision } from "../stateMachine";
 import { withAiInstructions } from "./instructions";
@@ -232,12 +232,13 @@ export const completeClassificationWithOpenRouter: ClassificationCompletion = as
     schemaDescription: "Submit the classification of the latest inbound reply. Call it exactly once; it is the only way to answer.",
     accept: input.accept,
     signal: input.signal,
+    budget: input.budget,
   });
 };
 
 export async function classifyCrmReply(
   input: ClassifyCrmReplyInput,
-  dependencies: { complete?: ClassificationCompletion } = {},
+  dependencies: { complete?: ClassificationCompletion; budget?: CompletionBudget } = {},
 ): Promise<CrmClassificationResult> {
   if (input.currentClassification.categoryLocked && input.currentClassification.categoryKey !== "customer") {
     throw new Error("Only Customer classifications may be locked");
@@ -269,6 +270,7 @@ export async function classifyCrmReply(
     timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     maxOutputTokens: input.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
     signal: input.signal,
+    budget: dependencies.budget,
   });
   const validated = validateClassifierOutput(completion.text, input);
   const decision = classificationApplicationDecision({

@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, inArray, lte, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { clippedString } from "@/lib/grid/sanitize";
+import { REPLY_BUDGET_PAYLOAD_KEY } from "./ai/budget";
 import { crmJobs, type CrmJobKind } from "./schema";
 import { CrmConflictError, type CrmTransaction } from "./repository";
 import { currentOrganizationId } from "@/lib/tenancy/scope";
@@ -320,14 +321,44 @@ export async function failCrmJob(
   return { willRetry, runAfter };
 }
 
+/**
+ * Replaces a running job's payload under the claim's ownership, so state a
+ * handler accumulates (the reply budget) survives the job being retried or
+ * the process restarting. A worker that lost its claim cannot write.
+ */
+export async function saveCrmJobPayload(job: CrmJob, payload: Record<string, unknown>): Promise<void> {
+  const updated = await db
+    .update(crmJobs)
+    .set({ payload, updatedAt: new Date() })
+    .where(and(
+      eq(crmJobs.id, job.id),
+      eq(crmJobs.status, "running"),
+      eq(crmJobs.lockedBy, claimOwner(job)),
+      eq(crmJobs.attempts, job.attempts),
+    ))
+    .returning({ id: crmJobs.id });
+  if (!updated.length) throw new CrmJobClaimLostError(job.id);
+}
+
 /** Requeues only a visible terminal failure; successful jobs stay immutable. */
 export async function requeueFailedCrmJob(jobId: string): Promise<CrmJob> {
   const now = new Date();
+  const [existing] = await db
+    .select({ payload: crmJobs.payload })
+    .from(crmJobs)
+    .where(and(eq(crmJobs.id, jobId), eq(crmJobs.status, "failed")))
+    .limit(1);
+  if (!existing) throw new CrmConflictError("Only a failed CRM job can be requeued");
+  // A manual requeue is new work: the spent reply budget does not carry over,
+  // or the fresh attempt would inherit an expired deadline and fail at once.
+  const payload = { ...(existing.payload ?? {}) };
+  delete payload[REPLY_BUDGET_PAYLOAD_KEY];
   const [job] = await db
     .update(crmJobs)
     .set({
       status: "queued",
       attempts: 0,
+      payload,
       runAfter: now,
       lockedAt: null,
       lockedBy: null,

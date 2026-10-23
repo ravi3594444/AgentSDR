@@ -5,6 +5,7 @@ import { formatAiInstructions } from "./ai/instructions";
 import { db } from "@/lib/db";
 import { companies, people } from "@/lib/leads/schema";
 import { generateCrmDraft, type DraftCompletion, type DraftRevisionRequest, type GenerateCrmDraftInput } from "./ai/draft";
+import type { CompletionBudget } from "@/lib/ai/server/structuredCompletion";
 import { loadCallContextMessages } from "./callHistory";
 import { appendCrmEvent } from "./events";
 import { retrieveKnowledge } from "./knowledge";
@@ -496,7 +497,7 @@ async function loadFallbackDraftContext(
  */
 export async function generateFallbackDraft(
   recordId: string,
-  dependencies: { complete?: DraftCompletion } = {},
+  dependencies: { complete?: DraftCompletion; budget?: CompletionBudget } = {},
   revision: DraftRevisionRequest | null = null,
 ): Promise<CrmDraft | null> {
   const prepared = await withCrmTransaction((tx) => loadFallbackDraftContext(tx, recordId));
@@ -512,7 +513,7 @@ export async function generateFallbackDraft(
 
 export async function generateDraftForStep(
   stepRunId: string,
-  dependencies: { complete?: DraftCompletion } = {},
+  dependencies: { complete?: DraftCompletion; budget?: CompletionBudget } = {},
   revision: DraftRevisionRequest | null = null,
   regenerating = false,
 ): Promise<CrmDraft> {
@@ -571,7 +572,7 @@ export async function updateDraft(input: {
  */
 export async function regenerateDraft(
   draftId: string,
-  dependencies: { complete?: DraftCompletion } = {},
+  dependencies: { complete?: DraftCompletion; budget?: CompletionBudget } = {},
   feedback: string | null = null,
 ): Promise<CrmDraft> {
   const [draft] = await db.select().from(crmDrafts)

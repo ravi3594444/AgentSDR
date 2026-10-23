@@ -10,6 +10,7 @@ import { appendCrmEvent } from "@/lib/crm/events";
 import { isPersonDoNotContact, setPersonDoNotContact } from "@/lib/crm/policies";
 import { enqueueCrmJobInTransaction } from "@/lib/crm/queue";
 import { regenerateDraft } from "@/lib/crm/drafts";
+import type { CompletionBudget } from "@/lib/ai/server/structuredCompletion";
 import { draftInOrg } from "@/lib/crm/records";
 import { withCrmTransaction, type CrmExecutor } from "@/lib/crm/repository";
 import {
@@ -72,6 +73,8 @@ export type AutopilotDependencies = {
   send?: CrmSendAdapter;
   /** Replaces the model half of the support check (tests). */
   check?: (input: ReplyCheckInput & { knowledge: string }) => Promise<ModelCheck>;
+  /** The auto-send job's shared reply budget. */
+  budget?: CompletionBudget;
   /** Write the owner's brief with the model (default: when the real model checks). */
   brief?: boolean;
   allowNonProduction?: boolean;
@@ -368,7 +371,7 @@ export async function runAutopilotForDraft(draftId: string, deps: AutopilotDepen
   try {
     model = deps.check
       ? await deps.check(checkInput)
-      : await modelReplyCheck({ ...checkInput, runId: state.membership.runId });
+      : await modelReplyCheck({ ...checkInput, runId: state.membership.runId, budget: deps.budget });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return handOff(state, { kind: "uncertain", reason: `The reply to ${state.leadName} could not be checked (${message.slice(0, 200)}).`, decision: "Read it in the Inbox (Needs you) and send it yourself if it is right.", holdReason: "the reply could not be checked" }, deps);
@@ -401,7 +404,7 @@ export async function runAutopilotForDraft(draftId: string, deps: AutopilotDepen
     if (feedback && (deps.rewrite ?? deps.check === undefined) && !(await alreadyRewritten(state.draft.id))) {
       try {
         await recordHold(state, `${SELF_REWRITE_REASON}to remove unsupported additions: ${verdict.check.problems.join("; ")}`, verdict.check);
-        const repaired = await regenerateDraft(state.draft.id, {}, feedback);
+        const repaired = await regenerateDraft(state.draft.id, { budget: deps.budget }, feedback);
         // This auto_send job still owns the queue row, so regenerating
         // cannot requeue it. Check the new revision here instead of losing it
         // when the current job completes. At most one repair in this call.

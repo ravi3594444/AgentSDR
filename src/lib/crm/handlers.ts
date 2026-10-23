@@ -37,6 +37,7 @@ import {
 } from "./schema";
 import { startSequenceRunInTransaction } from "./sequences";
 import { PermanentCrmJobError, registerCrmJobHandlers, RetryCrmJobLaterError, STALE_LOCK_MS } from "./worker";
+import { replyBudgetForJob } from "./ai/budget.server";
 import { claudeHoldUntil } from "@/lib/ai/claudeCode/runner.server";
 
 /** A held Claude Code login (usage limit) puts a classification back: looked at again at most this often, and for at most this long. */
@@ -405,9 +406,10 @@ export async function handleClassificationJob(
     // message, replies, tells the owner or stops, and records the
     // classification itself. Anything else — and every explicit opt-out —
     // goes through the classifier below, as before. REPLY_AGENT=off turns it off.
+    const budget = await replyBudgetForJob(job);
     if (agent && !context.dncIntent && process.env.REPLY_AGENT !== "off") {
       const { runReplyAgent } = await import("@/lib/assistant/replyAgent/agent.server");
-      const outcome = await runReplyAgent(job.entityId, agent);
+      const outcome = await runReplyAgent(job.entityId, { ...agent, budget });
       if (outcome) {
         await settleAfterReplyAgent(context.recordId, job.entityId, Boolean(outcome.answered));
         return;
@@ -437,7 +439,7 @@ export async function handleClassificationJob(
     }
     let result: Awaited<ReturnType<typeof classifyCrmReply>>;
     try {
-      result = await classifyCrmReply(context.input, dependencies);
+      result = await classifyCrmReply(context.input, { complete: dependencies.complete, budget });
     } catch (error) {
       // The model is held (Claude Code usage limit): an explicit opt-out is honoured now, not after the reset.
       if (claudeHoldUntil(error) && context.dncIntent) {
@@ -584,9 +586,10 @@ export async function handleClassificationJob(
 }
 
 export async function handleInitialDraftJob(job: CrmJob): Promise<void> {
+  const budget = await replyBudgetForJob(job);
   const stepRunId = typeof job.payload.stepRunId === "string" ? job.payload.stepRunId : null;
   if (stepRunId) {
-    await generateDraftForStep(stepRunId);
+    await generateDraftForStep(stepRunId, { budget });
     return;
   }
   const [scope] = await db.select({ stepRunId: crmSequenceStepRuns.id })
@@ -597,7 +600,7 @@ export async function handleInitialDraftJob(job: CrmJob): Promise<void> {
     .where(and(inOrg(crmSequenceRuns), eq(crmClassifications.id, job.entityId), eq(crmSequenceRuns.status, "active")))
     .orderBy(asc(crmSequenceSteps.position)).limit(1);
   if (scope) {
-    await generateDraftForStep(scope.stepRunId);
+    await generateDraftForStep(scope.stepRunId, { budget });
     return;
   }
   // No sequence covers this classification — draft from the thread instead.
@@ -614,7 +617,7 @@ export async function handleInitialDraftJob(job: CrmJob): Promise<void> {
   const [record] = await db.select({ latestInboundMessageId: crmRecords.latestInboundMessageId })
     .from(crmRecords).where(and(inOrg(crmRecords), eq(crmRecords.id, recordId))).limit(1);
   if (record?.latestInboundMessageId && await inboundAnsweredSince(db, recordId, record.latestInboundMessageId)) return;
-  await generateFallbackDraft(recordId);
+  await generateFallbackDraft(recordId, { budget });
 }
 
 export async function handleDueFollowupDraftJob(job: CrmJob): Promise<void> {
@@ -625,7 +628,8 @@ export async function handleDueFollowupDraftJob(job: CrmJob): Promise<void> {
   if (!scope) throw new PermanentCrmJobError("Due CRM sequence step was not found");
   if (scope.status !== "scheduled") return;
   if (scope.dueAt > new Date()) throw new CrmConflictError("Follow-up sequence step is not due yet");
-  await generateDraftForStep(job.entityId);
+  const budget = await replyBudgetForJob(job);
+  await generateDraftForStep(job.entityId, { budget });
 }
 
 let registered = false;

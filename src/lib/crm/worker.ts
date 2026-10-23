@@ -137,7 +137,10 @@ async function runJob(job: CrmJob): Promise<void> {
     if (error instanceof CrmJobClaimLostError) return;
     const message = savedErrorText(error, 2_000);
     const { willRetry } = await failCrmJob(job, message, {
-      permanent: error instanceof PermanentCrmJobError,
+      // A spent reply budget never refills for this job: retrying the claim
+      // would only fail at the first model call again.
+      permanent: error instanceof PermanentCrmJobError
+        || (error instanceof Error && error.name === "StructuredBudgetExhaustedError"),
       retryAt: error instanceof RetryCrmJobLaterError ? error.retryAt : undefined,
     });
     if (!willRetry) {

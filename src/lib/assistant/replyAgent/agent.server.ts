@@ -3,7 +3,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { and, asc, count, eq, gt, gte, inArray, lte, ne, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { completeStructured } from "@/lib/ai/server/structuredCompletion";
+import { completeStructured, type CompletionBudget } from "@/lib/ai/server/structuredCompletion";
 import { AUTOPILOT_ACTOR, AUTOPILOT_LIMITS } from "@/lib/crm/autopilot";
 import { runMembershipFor } from "@/lib/crm/autopilot.server";
 import { appendCrmEvent } from "@/lib/crm/events";
@@ -69,6 +69,8 @@ export type ReplyAgentDependencies = {
   allowNonProduction?: boolean;
   /** Write the owner's brief with the model after a card opens (default: with the real model). */
   brief?: boolean;
+  /** The classification job's shared reply budget, when run inside one. */
+  budget?: CompletionBudget;
 };
 
 export type ReplyAgentOutcome = {
@@ -399,6 +401,7 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
         timeoutMs: MODEL_TIMEOUT_MS,
         maxOutputTokens: 1_500,
         maxAttempts: 2,
+        budget: deps.budget,
         schemaName: "reply_decision",
         schemaDescription: "Your decision for the lead's latest message.",
         jsonSchema: DECISION_SCHEMA,
