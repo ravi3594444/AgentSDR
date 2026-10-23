@@ -6,6 +6,7 @@ import {
   toolCallSystemPrompt,
   type OpenRouterModelSelection,
 } from "@/lib/ai/openrouter-types";
+import { isPermanentProviderError, providerHttpStatus } from "@/lib/ai/providerErrors";
 import { AIML_PROVIDER_KEY } from "@/lib/ai/aimlapi-types";
 import { ENGINE_NAMES, type AiEngineKey, type AiRuntimePlan } from "@/lib/ai/runtimePlan";
 import { structuredRuntime } from "@/lib/ai/claudeCode/runtime.server";
@@ -150,9 +151,7 @@ export type StructuredCompletionResult = {
 class RejectedAttemptError extends Error {}
 
 function httpStatusOf(error: unknown): number | undefined {
-  const candidate = error as { status?: unknown; statusCode?: unknown } | null;
-  const status = Number(candidate?.status ?? candidate?.statusCode);
-  return Number.isFinite(status) && status > 0 ? status : undefined;
+  return providerHttpStatus(error);
 }
 
 /**
@@ -508,6 +507,17 @@ export async function completeStructured(
       return { ...(await attemptOrFallBack()), attempts: index + 1 };
     } catch (error) {
       if (error instanceof StructuredBudgetExhaustedError) throw error;
+      // Budget/claim failures are not provider failures: retrying inside
+      // this call cannot restore a lost claim or record a request the
+      // budget refused to authorize, and a permanent provider rejection
+      // (a nested cause can carry its status) fails identically on every
+      // attempt. Both propagate at once; the queue layer decides whether
+      // the job itself may be tried again later.
+      if (error instanceof Error && (error.name === "CrmJobClaimLostError" || error.name === "ReplyBudgetPersistenceError")) throw error;
+      if (isPermanentProviderError(error)) {
+        if (!schemaRefusal) throw error;
+        throw Object.assign(new Error(afterRefusal(messageOf(error)), { cause: error }), providerErrorFields(error));
+      }
       lastError = error;
       const retryable = error instanceof RejectedAttemptError || (claudeCodeRetryable(error) ?? isRetryableOpenRouterError(error));
       if (!retryable || signal?.aborted) {

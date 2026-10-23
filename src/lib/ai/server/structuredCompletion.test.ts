@@ -114,6 +114,31 @@ describe("completeStructured", () => {
     );
   });
 
+  test("a permanent failure carried in a nested cause is tried once, not per attempt (RR4)", async () => {
+    const rejected = Object.assign(new Error("Stand-in provider rejected the key"), { status: 401 });
+    const wrapped = () => new Error("provider call failed", { cause: rejected });
+    const permanent = scripted([{ throws: wrapped() }, { throws: wrapped() }, { throws: wrapped() }]);
+    await assert.rejects(
+      completeStructured(input, { runtime: permanent.runtime, sleep: noSleep }),
+      (error: unknown) => error === rejected || (error instanceof Error && error.cause === rejected),
+    );
+    assert.equal(permanent.requests.length, 1);
+  });
+
+  test("a claim lost while authorizing the budget is not retried as a provider failure (RR1)", async () => {
+    const claimLost = new Error("CRM job j-1 is no longer owned by this worker");
+    claimLost.name = "CrmJobClaimLostError";
+    const { runtime, requests } = scripted([{ toolArgs: '{"category":"a"}' }]);
+    await assert.rejects(
+      completeStructured({
+        ...input,
+        budget: { deadlineAtMs: Date.now() + 60_000, beforeTransportRequest: () => { throw claimLost; } },
+      }, { runtime, sleep: noSleep }),
+      (error: unknown) => error === claimLost,
+    );
+    assert.equal(requests.length, 0);
+  });
+
   test("retries a transient transport failure but not a routing failure", async () => {
     const transient = scripted([{ throws: Object.assign(new Error("overloaded"), { status: 503 }) }, { toolArgs: '{"category":"a"}' }]);
     assert.equal((await completeStructured(input, { runtime: transient.runtime, sleep: noSleep })).attempts, 2);

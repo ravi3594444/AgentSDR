@@ -22,6 +22,8 @@
  * out mid-chain, the last stage loses its tail retries and degrades to its
  * existing hold-for-review state — never to a canned message.
  */
+import type { CompletionBudget } from "@/lib/ai/server/structuredCompletion";
+
 export const REPLY_BUDGET_PAYLOAD_KEY = "replyBudget";
 export const REPLY_BUDGET_MAX_CALLS = 10;
 export const REPLY_BUDGET_TOTAL_MS = 180_000;
@@ -54,4 +56,49 @@ export function replyBudgetAllows(state: ReplyBudgetState, nowMs: number): boole
 
 export function replyBudgetRemainingMs(state: ReplyBudgetState, nowMs: number): number {
   return Math.max(0, state.deadlineAtMs - nowMs);
+}
+
+/**
+ * Recording a request against the budget failed for a reason other than a
+ * lost claim (which stays a CrmJobClaimLostError): a transient database
+ * error, say. The request is NOT authorized — the budget fails closed —
+ * and the job may be retried later, re-reading the last persisted state.
+ */
+export class ReplyBudgetPersistenceError extends Error {
+  constructor(cause: unknown) {
+    super("The reply budget could not be recorded, so no model request was authorized");
+    this.name = "ReplyBudgetPersistenceError";
+    this.cause = cause;
+  }
+}
+
+/**
+ * A budget whose every authorization is recorded before it is granted.
+ * `persist` must durably store the incremented state under the caller's
+ * ownership; if it throws, the request is refused by throwing — a claim
+ * loss propagates as-is, anything else becomes a
+ * ReplyBudgetPersistenceError — and the in-memory count is left unchanged,
+ * so a later attempt re-reads the same remaining allowance instead of
+ * spending an unrecorded one.
+ */
+export function createPersistedReplyBudget(
+  initial: ReplyBudgetState,
+  persist: (state: ReplyBudgetState) => Promise<void>,
+): CompletionBudget {
+  let state: ReplyBudgetState = { ...initial };
+  return {
+    deadlineAtMs: state.deadlineAtMs,
+    beforeTransportRequest: async (nowMs) => {
+      if (!replyBudgetAllows(state, nowMs)) return false;
+      const next = { ...state, callsUsed: state.callsUsed + 1 };
+      try {
+        await persist(next);
+      } catch (error) {
+        if (error instanceof Error && error.name === "CrmJobClaimLostError") throw error;
+        throw new ReplyBudgetPersistenceError(error);
+      }
+      state = next;
+      return true;
+    },
+  };
 }
