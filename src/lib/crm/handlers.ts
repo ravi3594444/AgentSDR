@@ -1,4 +1,4 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import { handleAutoSendJob, runMembershipFor } from "./autopilot.server";
 import { messageParticipants } from "./participants";
 import { formatAiInstructions } from "./ai/instructions";
@@ -38,6 +38,7 @@ import {
 import { startSequenceRunInTransaction } from "./sequences";
 import { PermanentCrmJobError, registerCrmJobHandlers, RetryCrmJobLaterError, STALE_LOCK_MS } from "./worker";
 import { replyBudgetForJob } from "./ai/budget.server";
+import { HISTORY_FETCH_LIMIT } from "./ai/replyConversation";
 import { claudeHoldUntil } from "@/lib/ai/claudeCode/runner.server";
 
 /** A held Claude Code login (usage limit) puts a classification back: looked at again at most this often, and for at most this long. */
@@ -149,9 +150,13 @@ async function classificationContext(messageId: string): Promise<{
     db.select().from(crmSubcategories)
       .where(and(eq(crmSubcategories.pipelineId, scope.record.pipelineId), eq(crmSubcategories.active, true)))
       .orderBy(asc(crmSubcategories.sortOrder)),
+    // Newest HISTORY_FETCH_LIMIT only: the context builder selects a
+    // character-capped newest-first prefix of these (see replyConversation.ts),
+    // so the thread's tail is all it can ever reach.
     db.select().from(crmConversationMessages)
       .where(eq(crmConversationMessages.conversationId, scope.conversation.id))
-      .orderBy(asc(crmConversationMessages.sentAt), asc(crmConversationMessages.id)),
+      .orderBy(desc(crmConversationMessages.sentAt), desc(crmConversationMessages.id))
+      .limit(HISTORY_FETCH_LIMIT),
     db.select().from(crmSettings).where(eq(crmSettings.pipelineId, scope.record.pipelineId)).limit(1),
     scope.record.subcategoryId
       ? db.select().from(crmSubcategories).where(eq(crmSubcategories.id, scope.record.subcategoryId)).limit(1)
@@ -173,6 +178,8 @@ async function classificationContext(messageId: string): Promise<{
       ? loadCallContextMessages(db, scope.record.personId)
       : Promise.resolve([]),
   ]);
+  // The fetch above is newest-first and bounded; consumers expect the thread chronologically.
+  messages.reverse();
   if (!profile[0]) throw new PermanentCrmJobError(`Person ${scope.record.personId} was not found`);
   const person = profile[0].person;
   const company = profile[0].company;

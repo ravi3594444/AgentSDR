@@ -8,6 +8,18 @@ const MAX_MESSAGES = 20;
 const MAX_MESSAGE_CHARS = 2_000;
 const MAX_CONVERSATION_CHARS = 12_000;
 
+/**
+ * How many messages a reply-path loader may fetch from one conversation,
+ * newest first, instead of the whole thread. Every consumer's effective
+ * window fits well inside it: this snapshot keeps 20, and the classification
+ * context (at most 32,000 tokens ≈ 128,000 characters, at least ~170
+ * characters per serialized message) can select at most ~750. The draft
+ * prompt and the grounding scan are the only consumers that read everything
+ * they are given; for them the limit preserves today's content on any
+ * thread up to 1,000 messages while ending unbounded loads.
+ */
+export const HISTORY_FETCH_LIMIT = 1_000;
+
 export function replyConversationSnapshot(value: unknown): ReplyConversationMessage[] {
   if (!Array.isArray(value)) return [];
   const messages: ReplyConversationMessage[] = [];

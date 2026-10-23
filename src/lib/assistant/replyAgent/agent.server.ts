@@ -1,7 +1,7 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import { and, asc, count, eq, gt, gte, inArray, lte, ne, sql } from "drizzle-orm";
+import { and, count, desc, eq, gt, gte, inArray, lte, ne, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { completeStructured, type CompletionBudget } from "@/lib/ai/server/structuredCompletion";
 import { AUTOPILOT_ACTOR, AUTOPILOT_LIMITS } from "@/lib/crm/autopilot";
@@ -382,10 +382,14 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
     }
 
     // Context: the conversation before this message, the business, the lead.
-    const history = await db.select({ direction: crmConversationMessages.direction, bodyText: crmConversationMessages.bodyText, channel: crmConversationMessages.channel })
+    // The agent keeps the newest twenty non-empty messages (the shaping
+    // below), so the fetch is bounded to exactly those: newest first, blank
+    // bodies excluded in the query, then restored to chronological order.
+    const history = (await db.select({ direction: crmConversationMessages.direction, bodyText: crmConversationMessages.bodyText, channel: crmConversationMessages.channel })
       .from(crmConversationMessages)
-      .where(and(eq(crmConversationMessages.conversationId, scope.conversationId), ne(crmConversationMessages.id, messageId), lte(crmConversationMessages.sentAt, scope.messageSentAt)))
-      .orderBy(asc(crmConversationMessages.sentAt), asc(crmConversationMessages.id));
+      .where(and(eq(crmConversationMessages.conversationId, scope.conversationId), ne(crmConversationMessages.id, messageId), lte(crmConversationMessages.sentAt, scope.messageSentAt), sql`${crmConversationMessages.bodyText} ~ '\\S'`))
+      .orderBy(desc(crmConversationMessages.sentAt), desc(crmConversationMessages.id))
+      .limit(20)).reverse();
     const conversation: ReplyConversationMessage[] = history
       .filter((message) => message.bodyText?.trim())
       .slice(-20)

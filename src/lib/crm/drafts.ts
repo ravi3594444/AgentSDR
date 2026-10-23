@@ -2,6 +2,7 @@ import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
 import { enqueueAutopilotInTransaction } from "./autopilot.server";
 import { messageParticipants } from "./participants";
 import { formatAiInstructions } from "./ai/instructions";
+import { HISTORY_FETCH_LIMIT } from "./ai/replyConversation";
 import { db } from "@/lib/db";
 import { companies, people } from "@/lib/leads/schema";
 import { generateCrmDraft, type DraftCompletion, type DraftRevisionRequest, type GenerateCrmDraftInput } from "./ai/draft";
@@ -71,13 +72,24 @@ async function loadDraftSubject(
     .limit(1);
   if (!profile) throw new CrmNotFoundError("Person", record.personId);
 
-  const messages = await tx
+  // The thread's first message (its channel decides the call context) and
+  // its newest HISTORY_FETCH_LIMIT messages, fetched separately: the whole
+  // thread used to be loaded here, though every consumer's window — the
+  // reply snapshot's twenty, the fetch limit's derivation — is far smaller.
+  const [firstMessage] = await tx
+    .select({ channel: crmConversationMessages.channel })
+    .from(crmConversationMessages)
+    .where(eq(crmConversationMessages.conversationId, conversationId))
+    .orderBy(asc(crmConversationMessages.sentAt), asc(crmConversationMessages.id))
+    .limit(1);
+  const messages = (await tx
     .select()
     .from(crmConversationMessages)
     .where(eq(crmConversationMessages.conversationId, conversationId))
-    .orderBy(asc(crmConversationMessages.sentAt), asc(crmConversationMessages.id));
+    .orderBy(desc(crmConversationMessages.sentAt), desc(crmConversationMessages.id))
+    .limit(HISTORY_FETCH_LIMIT)).reverse();
   // A WhatsApp conversation also gets the lead's recent call summaries.
-  const calls = messages[0]?.channel === "whatsapp"
+  const calls = firstMessage?.channel === "whatsapp"
     ? await loadCallContextMessages(tx, record.personId)
     : [];
 
