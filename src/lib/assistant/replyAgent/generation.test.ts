@@ -17,6 +17,40 @@ test("the screenshot's HTTP 400 stops after one rejected request, with no fabric
   expect(result.failureReason).toContain("1 attempt");
 });
 
+test("a claim lost while the model works stops the loop and throws (RR2)", async () => {
+  const claimLost = new Error("CRM job j-1 is no longer owned by this worker");
+  claimLost.name = "CrmJobClaimLostError";
+  let calls = 0;
+  await expect(runReplyGeneration({ context, systemPrompt: "Reply.", model: async () => {
+    calls++;
+    throw claimLost;
+  } })).rejects.toBe(claimLost);
+  expect(calls).toBe(1);
+});
+
+test("an aborted signal after the model returns discards its answer (RR2)", async () => {
+  const controller = new AbortController();
+  const lost = new Error("Reply agent claim lost: a newer attempt took over this message");
+  lost.name = "ReplyAgentClaimLostError";
+  await expect(runReplyGeneration({ context, systemPrompt: "Reply.", signal: controller.signal, model: async () => {
+    controller.abort(lost);
+    return { text: reply("Hi! How can I help?") };
+  } })).rejects.toBe(lost);
+});
+
+test("a spent budget ends the loop with no decision, in one turn (RR1/RR4)", async () => {
+  const exhausted = new Error("crm_reply_classification stopped: the shared reply budget is exhausted");
+  exhausted.name = "StructuredBudgetExhaustedError";
+  let calls = 0;
+  const result = await runReplyGeneration({ context, systemPrompt: "Reply.", model: async () => {
+    calls++;
+    throw exhausted;
+  } });
+  expect(calls).toBe(1);
+  expect(result.decision).toBeNull();
+  expect(result.turns).toHaveLength(1);
+});
+
 test("a healthy greeting uses the model's contextual answer", async () => {
   const result = await runReplyGeneration({ context, systemPrompt: "Reply naturally.", model: async () => ({ text: reply("Hi! How do you currently handle incoming calls?"), model: "deepseek/deepseek-chat" }) });
   expect(result.decision?.reply).toBe("Hi! How do you currently handle incoming calls?");

@@ -22,12 +22,26 @@ export function generationFailureReason(turns: ReplyAgentTurn[]): string {
   return `AI reply generation failed after ${turns.length} ${turns.length === 1 ? "attempt" : "attempts"}: ${reason || "no usable answer"}`;
 }
 
+/** Claim errors that end the loop by throwing: a displaced execution must not run the failure path's effects either. */
+const CLAIM_GENERATION_ERRORS = new Set([
+  "CrmJobClaimLostError",
+  "ReplyAgentClaimLostError",
+]);
+
+/** Budget errors that end the loop with no decision: the caller's failure path leaves the visible owner state. */
+const BUDGET_GENERATION_ERRORS = new Set([
+  "StructuredBudgetExhaustedError",
+  "ReplyBudgetPersistenceError",
+]);
+
 export async function runReplyGeneration(input: {
   systemPrompt: string;
   context: Omit<Parameters<typeof agentUserPrompt>[0], "problems" | "previousReply" | "turn">;
   model: AgentModel;
   /** Captures the requested model even when the provider rejects the call. */
   requestedModel?: () => string | null;
+  /** Aborted when this execution loses its claim: the loop stops instead of drafting or sending. */
+  signal?: AbortSignal;
 }) {
   const turns: ReplyAgentTurn[] = [];
   let decision: AgentDecision | null = null;
@@ -35,12 +49,24 @@ export async function runReplyGeneration(input: {
   let problems: string[] = [];
   let previousReply: string | null = null;
   for (let turn = 1; turn <= MAX_TURNS && !decision; turn++) {
+    if (input.signal?.aborted) {
+      throw input.signal.reason instanceof Error
+        ? input.signal.reason
+        : new Error("Reply generation was cancelled: this execution lost its claim");
+    }
     const began = Date.now();
     try {
       const result = await input.model({
         systemPrompt: input.systemPrompt,
         userPrompt: agentUserPrompt({ ...input.context, problems, previousReply, turn }),
       });
+      // The takeover landed while the model worked (a stand-in model may
+      // not honour the signal): its answer belongs to the replacement.
+      if (input.signal?.aborted) {
+        throw input.signal.reason instanceof Error
+          ? input.signal.reason
+          : new Error("Reply generation was cancelled: this execution lost its claim");
+      }
       lastResult = result;
       const parsed = parseAgentDecision(result.text);
       const found = parsed.action === "reply" ? replyProblems(parsed.reply, input.context.channel, input.context.knowledge) : [];
@@ -53,8 +79,11 @@ export async function runReplyGeneration(input: {
         decision = parsed;
       }
     } catch (error) {
+      if (input.signal?.aborted) throw error;
       const status = httpStatus(error);
       turns.push({ turn, ms: Date.now() - began, action: null, reply: null, problems: [], error: (error instanceof Error ? error.message : String(error)).slice(0, 2_000), ...(status === null ? {} : { httpStatus: status }) });
+      if (error instanceof Error && CLAIM_GENERATION_ERRORS.has(error.name)) throw error;
+      if (error instanceof Error && BUDGET_GENERATION_ERRORS.has(error.name)) break;
       // The transport already handles transient errors. An unchanged request
       // cannot repair an invalid schema, missing model, or rejected credentials.
       if (status !== null && status >= 400 && status < 500 && ![408, 409, 429].includes(status)) break;

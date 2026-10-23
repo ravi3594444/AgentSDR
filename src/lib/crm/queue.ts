@@ -3,7 +3,7 @@ import { db } from "@/lib/db";
 import { clippedString } from "@/lib/grid/sanitize";
 import { REPLY_BUDGET_PAYLOAD_KEY } from "./ai/budget";
 import { crmJobs, type CrmJobKind } from "./schema";
-import { CrmConflictError, type CrmTransaction } from "./repository";
+import { CrmConflictError, type CrmExecutor, type CrmTransaction } from "./repository";
 import { currentOrganizationId } from "@/lib/tenancy/scope";
 
 export type CrmJob = typeof crmJobs.$inferSelect;
@@ -221,6 +221,72 @@ export async function claimCrmJobs(
       .where(inArray(crmJobs.id, locked.map(({ id }) => id)))
       .returning();
   });
+}
+
+/**
+ * One execution of a claimed job, bound to the exact claim (worker +
+ * attempt) that started it. Handlers receive it from the worker — or make
+ * one from the claimed job when called directly — and check it at their
+ * effect boundaries: creating a draft, reserving a send, sending. Losing
+ * the claim aborts the signal, so model work that honours a signal stops
+ * too; the checks are what stop work that cannot be interrupted.
+ *
+ * A job that was never claimed (status is not "running", no lock owner —
+ * a person or a script invoking a handler directly) has no execution:
+ * there is no claim to lose, and the caller is the execution.
+ */
+export class CrmJobExecution {
+  private readonly controller = new AbortController();
+  private lost = false;
+
+  constructor(readonly job: CrmJob) {}
+
+  get signal(): AbortSignal {
+    return this.controller.signal;
+  }
+
+  get claimLost(): boolean {
+    return this.lost || this.controller.signal.aborted;
+  }
+
+  markClaimLost(reason?: unknown): void {
+    if (this.lost) return;
+    this.lost = true;
+    this.controller.abort(
+      reason instanceof Error ? reason : new CrmJobClaimLostError(this.job.id),
+    );
+  }
+
+  /**
+   * Throws CrmJobClaimLostError unless the database still shows this exact
+   * claim. Pass the transaction when the check must be atomic with the
+   * effect it guards (the draft/reservation insert in the same tx).
+   */
+  async assertOwned(executor: CrmExecutor = db): Promise<void> {
+    if (this.claimLost) {
+      this.markClaimLost();
+      throw new CrmJobClaimLostError(this.job.id);
+    }
+    const rows = await executor
+      .select({ id: crmJobs.id })
+      .from(crmJobs)
+      .where(and(
+        eq(crmJobs.id, this.job.id),
+        eq(crmJobs.status, "running"),
+        eq(crmJobs.lockedBy, claimOwner(this.job)),
+        eq(crmJobs.attempts, this.job.attempts),
+      ))
+      .limit(1);
+    if (!rows.length) {
+      this.markClaimLost();
+      throw new CrmJobClaimLostError(this.job.id);
+    }
+  }
+}
+
+/** The execution for a claimed job, or null when the job holds no claim. */
+export function crmJobExecutionFor(job: CrmJob): CrmJobExecution | null {
+  return job.status === "running" && job.lockedBy ? new CrmJobExecution(job) : null;
 }
 
 function claimOwner(job: CrmJob): string {

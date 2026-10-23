@@ -13,6 +13,7 @@ import { lockCrmRecord, recordAiClassificationInTransaction } from "@/lib/crm/re
 import { withCrmTransaction, type CrmExecutor } from "@/lib/crm/repository";
 import { crmConversationMessages, crmConversations, crmDrafts, crmRecords, crmSubcategories } from "@/lib/crm/schema";
 import { DeferredCrmSendError, sendDraft, type CrmSendAdapter } from "@/lib/crm/send";
+import type { CrmJobExecution } from "@/lib/crm/queue";
 import type { ReplyConversationMessage } from "@/lib/crm/ai/replyConversation";
 import { detectsOptOutWording, detectsWrongNumber } from "@/lib/crm/wrongNumber";
 import { closeWrongNumber, type CloseWrongNumberOutcome } from "@/lib/crm/wrongNumberAck.server";
@@ -71,7 +72,26 @@ export type ReplyAgentDependencies = {
   brief?: boolean;
   /** The classification job's shared reply budget, when run inside one. */
   budget?: CompletionBudget;
+  /**
+   * The parent CRM job's execution, when run inside one (RR3): losing the
+   * CRM claim stops this agent's effects too, independently of its own
+   * reply-agent claim, which can stay valid across a CRM takeover.
+   */
+  execution?: CrmJobExecution | null;
 };
+
+/**
+ * This execution no longer owns the message's reply-agent claim: a newer
+ * attempt took it over. Thrown at effect boundaries (never merely flagged)
+ * so a displaced execution cannot create drafts, record classifications or
+ * send on its way out.
+ */
+export class ReplyAgentClaimLostError extends Error {
+  constructor() {
+    super("Reply agent claim lost: a newer attempt took over this message");
+    this.name = "ReplyAgentClaimLostError";
+  }
+}
 
 export type ReplyAgentOutcome = {
   status: ReplyAgentStatus;
@@ -319,6 +339,54 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
   // landing and it stops instead of overwriting the replacement.
   const claimAttempts = claimed.attempts;
   let claimLost = false;
+  // Cancellation for in-flight model work: losing either claim (this
+  // message's, or the parent CRM job's) aborts the signal the model call
+  // and the generation loop honour. The heartbeat is only the messenger —
+  // effect boundaries re-check ownership in the database (below), so a
+  // takeover that lands between heartbeats still stops the effects.
+  const generationAbort = new AbortController();
+  const abortGeneration = (reason: unknown) => {
+    if (!generationAbort.signal.aborted) generationAbort.abort(reason);
+  };
+  if (deps.execution) {
+    if (deps.execution.claimLost) {
+      claimLost = true;
+      abortGeneration(deps.execution.signal.reason);
+    } else {
+      deps.execution.signal.addEventListener("abort", () => {
+        claimLost = true;
+        abortGeneration(deps.execution?.signal.reason);
+      }, { once: true });
+    }
+  }
+  /**
+   * The effect-boundary ownership check (RR2/RR3): both claims, read from
+   * the database through the given executor — pass the transaction when
+   * the check must be atomic with the effect it guards. A zero-row result
+   * throws; it is never a flag the caller can forget to read.
+   */
+  const assertStillOwned = async (executor: CrmExecutor): Promise<void> => {
+    if (deps.execution) {
+      try {
+        await deps.execution.assertOwned(executor);
+      } catch (error) {
+        abortGeneration(error);
+        throw error;
+      }
+    }
+    const rows = await executor.select({ id: replyAgentRuns.id }).from(replyAgentRuns)
+      .where(and(
+        eq(replyAgentRuns.id, runRowId),
+        eq(replyAgentRuns.attempts, claimAttempts),
+        eq(replyAgentRuns.status, "running"),
+      ))
+      .limit(1);
+    if (!rows.length) {
+      claimLost = true;
+      abortGeneration(new ReplyAgentClaimLostError());
+      throw new ReplyAgentClaimLostError();
+    }
+  };
   const heartbeat = setInterval(() => {
     void db.update(replyAgentRuns)
       .set({ updatedAt: new Date() })
@@ -331,6 +399,7 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
       .then((rows) => {
         if (!rows.length) {
           claimLost = true;
+          abortGeneration(new ReplyAgentClaimLostError());
           clearInterval(heartbeat);
         }
       })
@@ -406,6 +475,7 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
         maxOutputTokens: 1_500,
         maxAttempts: 2,
         budget: deps.budget,
+        signal: generationAbort.signal,
         schemaName: "reply_decision",
         schemaDescription: "Your decision for the lead's latest message.",
         jsonSchema: DECISION_SCHEMA,
@@ -423,6 +493,7 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
       context: { channel, profile, knowledge, lead, conversation, leadMessage: scope.leadMessage },
       model,
       requestedModel: () => requestedModel,
+      signal: generationAbort.signal,
     });
     let decision = generation.decision;
     const { turns, lastResult } = generation;
@@ -430,11 +501,20 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
     // A newer attempt took this message over while the model worked: stop
     // here — the row, the draft and the send all belong to the replacement.
     if (claimLost) return { status: "stopped", reason: "a newer attempt took over this message", reply: null, ms: 0 };
-    await db.update(replyAgentRuns).set({ turns, model: modelName, updatedAt: new Date() }).where(and(
+    // The turns write is the first effect boundary after the model: it is
+    // fenced on the claim, and a zero-row result is a lost claim — thrown,
+    // not ignored — so nothing below (classification, draft, send) can run
+    // for a displaced execution.
+    const turnRows = await db.update(replyAgentRuns).set({ turns, model: modelName, updatedAt: new Date() }).where(and(
       eq(replyAgentRuns.id, runRowId),
       eq(replyAgentRuns.attempts, claimAttempts),
       eq(replyAgentRuns.status, "running"),
-    ));
+    )).returning({ id: replyAgentRuns.id });
+    if (!turnRows.length) {
+      claimLost = true;
+      abortGeneration(new ReplyAgentClaimLostError());
+      throw new ReplyAgentClaimLostError();
+    }
 
     // No usable answer for a message that plainly says "wrong number": close
     // it with the fixed apology, never a holding line that promises more.
@@ -449,6 +529,7 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
       if (late) return { ...(await finishRun({ status: "stopped", reason: late.reason, turns, model: modelName })), ...(late.answered ? { answered: true } : {}) };
       const reason = generation.failureReason!;
       const current = await withCrmTransaction(async (tx) => {
+        await assertStillOwned(tx);
         const record = await lockCrmRecord(tx, scope.recordId);
         if (record.latestInboundMessageId !== messageId || record.contextVersion !== scope.contextVersion) return false;
         await tx.update(crmRecords).set({ workflowState: "error", nextActionAt: null, updatedAt: new Date() }).where(eq(crmRecords.id, record.id));
@@ -472,8 +553,12 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
     // A wrong number is filed as "Wrong Number" (other), never as a buyer's answer.
     const wrongNumberSubcategory = closing ? await wrongNumberSubcategoryId(scope.pipelineId) : null;
 
-    // The CRM's view of the reply: the agent's reading of it.
-    const classified = await withCrmTransaction((tx) => recordAiClassificationInTransaction(tx, {
+    // The CRM's view of the reply: the agent's reading of it. Ownership is
+    // re-checked inside the transaction, so a takeover that landed after
+    // the turns write still records nothing.
+    const classified = await withCrmTransaction(async (tx) => {
+      await assertStillOwned(tx);
+      return recordAiClassificationInTransaction(tx, {
       recordId: scope.recordId,
       messageId,
       expectedContextVersion: scope.contextVersion,
@@ -485,7 +570,8 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
       model: modelName ?? "reply-agent",
       request: { replyAgent: true, turns: turns.length },
       response: lastResult?.response && typeof lastResult.response === "object" ? lastResult.response as Record<string, unknown> : { text: lastResult?.text ?? null },
-    }));
+      });
+    });
     if (classified.stale) {
       const late = hardStop(await readFacts(db, scope, person?.email ?? null));
       return finishRun({ status: "stopped", reason: late?.reason ?? "the conversation changed while the assistant was answering", action: decision.action, category: decision.category, turns, model: modelName });
@@ -496,6 +582,7 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
       // Wrong number: the route is recorded and outreach to it stops first;
       // then the one closing apology is sent (Automatic) or drafted (Review),
       // unless an explicit opt-out, Do Not Contact or a takeover forbids it.
+      await assertStillOwned(db);
       const closed = await closeWrongNumber({
         messageId,
         source: "reply_agent",
@@ -527,8 +614,11 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
     }
 
     // reply: a draft (the record of what was written), then the send.
+    // Ownership is checked inside this transaction: the draft insert is
+    // the effect, so the check and the insert commit or abort together.
     const reply = decision.reply;
     const draft = await withCrmTransaction(async (tx) => {
+      await assertStillOwned(tx);
       const record = await lockCrmRecord(tx, scope.recordId);
       const now = new Date();
       const [row] = await tx.insert(crmDrafts).values({
@@ -577,7 +667,10 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
     if (claimLost) return { status: "stopped", reason: "a newer attempt took over this message", reply: null, ms: 0 };
 
     // Reserve under the organization's lock, after reading every rule again.
+    // The reservation is a send effect: ownership is re-checked inside
+    // this transaction before anything is reserved.
     const reservation = await db.transaction(async (tx) => {
+      await assertStillOwned(tx);
       await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`autopilot:${organizationId}`}, 0))`);
       const again = await readFacts(tx, scope, person?.email ?? null);
       const late = hardStop(again);
@@ -602,6 +695,9 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
       return finishRun({ ...base, status: reservation.tellOwner ? "told_owner" : "stopped", reason: reservation.held, reply, draftId: draft.id, decisionId });
     }
 
+    // Last gate before the provider call itself: a takeover that landed
+    // after the reservation must not ride it into a send.
+    await assertStillOwned(db);
     try {
       await sendDraft({
         draftId: draft.id,
