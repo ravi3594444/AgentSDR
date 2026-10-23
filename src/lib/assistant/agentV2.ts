@@ -5,6 +5,7 @@ import type { AutonomyCaps } from "./autonomy";
 import { briefLine, type Brief } from "./brief";
 import type { LeadFunnel } from "./leadFit";
 import { formatDuration, sourceLine, type ObjectiveControls, type SourceYield } from "./objective";
+import { DELIVERY_STATUS_GUIDANCE } from "./deliveryStatus";
 
 /**
  * Research agent v2, the pure parts (CONTEXT.md, Brief). The model plans a
@@ -85,7 +86,8 @@ export function systemPromptV2(input: { features: FeatureState; catalog: string;
     "SOURCES",
     sourcesText(input.features),
     "",
-    "STYLE: the owner's language, short sentences, no hype, no emojis, no markdown headings, no ids. suggestions: up to three short replies the owner might send next; none while a plan or decision card waits for a button.",
+    DELIVERY_STATUS_GUIDANCE,
+    "STYLE: the owner's language, short sentences, no hype, no emojis, no markdown headings, no ids. Leave message empty while running quick status tools; after their results give one concise answer, without repeating every card's figures. suggestions: up to three short replies the owner might send next; none while a plan or decision card waits for a button.",
     ...(input.autonomy ? ["", ...v2AutonomousRules(input.autonomy)] : []),
     "",
     "TOOLS",

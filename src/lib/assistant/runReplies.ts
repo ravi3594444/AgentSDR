@@ -11,6 +11,7 @@ export type ReplyRecord = {
   autoStatus: string | null;
   autoReason: string | null;
   jobStatus: string | null;
+  jobError?: string | null;
   sendAfter: string | null;
   receivedAt: string;
   /** The reply agent's outcome for this message (reply_agent_runs), when it handled it. */
@@ -19,6 +20,10 @@ export type ReplyRecord = {
   agentMs?: number | null;
   /** The agent's action (reply_agent_runs.action): "wrong_number" is shown as such, never as an answer. */
   agentAction?: string | null;
+  classificationStatus?: string | null;
+  classificationError?: string | null;
+  /** The account of this conversation, never another record with the same display number. */
+  senderStatus?: string | null;
 };
 
 export type ReplyState = {
@@ -58,6 +63,11 @@ function agentState(record: ReplyRecord): ReplyState | null {
     case "replied": return { tone: "done", text: `Answered automatically${seconds(record.agentMs)}${reason.includes("the owner was told") ? "; you were told in Needs you" : ""}` };
     case "drafted":
       if (record.draftStatus === "sent") return { tone: "done", text: "Answered" };
+      if (record.autoStatus === "failed") return { tone: "failed", text: `The queued answer failed${record.autoReason ? `: ${record.autoReason}` : ""}` };
+      if (record.autoStatus === "held" && record.autoReason && !record.autoReason.startsWith("Waiting for the sender's gap")) return { tone: "you", text: `Answer not sent: ${record.autoReason}` };
+      if (record.jobStatus === "queued" && record.sendAfter) return { tone: "waiting", text: "Answer written; waiting for the sender until", at: record.sendAfter };
+      if (record.jobStatus === "running") return { tone: "waiting", text: "Checking the queued answer before sending…" };
+      if (record.draftStatus === "stale" || record.draftStatus === "discarded") return { tone: "done", text: "This answer was set aside; it will not be sent" };
       return { tone: "you", text: reason.includes("Review mode") ? "Review mode: the answer waits for you in the Inbox (Needs you)" : `Answer written, not sent: ${reason}` };
     case "no_reply": return { tone: "done", text: `No answer needed${reason ? `: ${reason}` : ""}` };
     case "told_owner": return { tone: "you", text: `Waiting for you in Needs you${reason ? `: ${reason}` : ""}` };
@@ -71,7 +81,18 @@ function agentState(record: ReplyRecord): ReplyState | null {
 }
 
 export function replyState(record: ReplyRecord, automatic: boolean, now: Date = new Date()): ReplyState {
+  if (record.agentStatus !== "replied" && record.draftStatus !== "sent" && record.autoStatus !== "sent") {
+    if (record.jobStatus === "failed") return { tone: "failed", text: `Queued reply processing failed${record.jobError ? `: ${record.jobError}` : "; see the Inbox (Needs you)"}` };
+    if (record.classificationStatus === "failed") return { tone: "failed", text: `Reply processing failed${record.classificationError ? `: ${record.classificationError}` : "; see the Inbox (Needs you)"}` };
+    if (record.agentStatus === "failed" && (record.classificationStatus === "queued" || record.classificationStatus === "running")) {
+      return { tone: "waiting", text: "Retrying reply processing after an error…" };
+    }
+  }
   const agent = agentState(record);
+  if (agent?.tone === "done") return agent;
+  if (record.senderStatus && record.senderStatus !== "connected" && record.draftStatus !== "sent" && record.autoStatus !== "sent") {
+    return { tone: "failed", text: `The WhatsApp connection for this reply is recorded as ${record.senderStatus}; check this conversation's sender in the Inbox` };
+  }
   if (agent) return agent;
   const handover = record.autoReason?.startsWith("handover") ?? false;
   if (handover && (record.autoStatus === "sent" || (record.draftStatus === "sent" && record.autoStatus === "reserved"))) {
@@ -90,6 +111,7 @@ export function replyState(record: ReplyRecord, automatic: boolean, now: Date = 
       ? { tone: "waiting", text: "Answer written; it goes out at", at: record.sendAfter }
       : { tone: "waiting", text: "Checking the answer before it goes out…" };
   }
+  if (record.classificationStatus === "queued" || record.classificationStatus === "running") return { tone: "waiting", text: "The incoming reply is queued for processing…" };
   if (record.draftStatus === "generating" || (!record.draftStatus && now.getTime() - new Date(record.receivedAt).getTime() < READING_MS)) {
     return { tone: "waiting", text: "Reading the reply and writing an answer…" };
   }

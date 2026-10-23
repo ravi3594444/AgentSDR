@@ -5,7 +5,7 @@ import { db } from "@/lib/db";
 import { currentOrganizationId } from "@/lib/tenancy/scope";
 import { replyState, type ReplyState } from "./runReplies";
 
-export type RunReply = { id: string; conversationId: string; who: string; channel: string; receivedAt: string; preview: string; state: ReplyState };
+export type RunReply = { id: string; conversationId: string; who: string; channel: string; receivedAt: string; preview: string; accountRef: string; senderStatus: string | null; state: ReplyState };
 
 type Row = {
   runId: string;
@@ -20,11 +20,16 @@ type Row = {
   autoStatus: string | null;
   autoReason: string | null;
   jobStatus: string | null;
+  jobError: string | null;
   sendAfter: string | null;
   agentStatus: string | null;
   agentReason: string | null;
   agentMs: number | null;
   agentAction: string | null;
+  accountRef: string;
+  senderStatus: string | null;
+  classificationStatus: string | null;
+  classificationError: string | null;
 };
 
 /** The latest replies from each run's leads since it was approved, with what became of each. */
@@ -35,8 +40,13 @@ export async function runReplies(runIds: readonly string[], perRun = 5): Promise
     select l.run_id::text as "runId", m.id::text as "messageId", c.id::text as "conversationId", to_char(m.sent_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as "receivedAt",
       m.channel, left(m.body_text, 160) as "preview", coalesce(p.full_name, p.phone, p.email) as "who", r.autopilot,
       d.status as "draftStatus", a.status as "autoStatus", a.reason as "autoReason",
-      j.status as "jobStatus", to_char(j.run_after at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as "sendAfter",
-      g.status as "agentStatus", g.reason as "agentReason", g.total_ms as "agentMs", g.action as "agentAction"
+      j.status as "jobStatus", j.last_error as "jobError", to_char(j.run_after at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as "sendAfter",
+      g.status as "agentStatus", g.reason as "agentReason", g.total_ms as "agentMs", g.action as "agentAction",
+      c.account_ref as "accountRef",
+      case when c.channel = 'whatsapp' then
+        (select wa.status from whatsapp_accounts wa where wa.organization_id = l.organization_id and wa.unipile_account_id = c.account_ref limit 1)
+        else null end as "senderStatus",
+      cj.status as "classificationStatus", cj.last_error as "classificationError"
     from outreach_run_leads l
     join outreach_runs r on r.id = l.run_id and r.organization_id = l.organization_id
     join people p on p.id = l.person_id and p.organization_id = l.organization_id
@@ -45,7 +55,8 @@ export async function runReplies(runIds: readonly string[], perRun = 5): Promise
     left join reply_agent_runs g on g.message_id = m.id and g.organization_id = l.organization_id
     left join lateral (select id, status, revision from crm_drafts where reply_for_message_id = m.id order by created_at desc limit 1) d on true
     left join lateral (select status, reason from autopilot_replies where draft_id = d.id and revision = d.revision and organization_id = l.organization_id order by created_at desc limit 1) a on true
-    left join lateral (select status, run_after from crm_jobs where kind = 'auto_send' and entity_id = d.id and organization_id = l.organization_id order by created_at desc limit 1) j on true
+    left join lateral (select status, run_after, last_error from crm_jobs where kind = 'auto_send' and entity_id = d.id and organization_id = l.organization_id order by created_at desc limit 1) j on true
+    left join lateral (select status, last_error from crm_jobs where kind = 'classification' and entity_id = m.id and organization_id = l.organization_id order by created_at desc limit 1) cj on true
     where l.organization_id = ${organizationId}
       and l.run_id in (${sql.join(runIds.map((id) => sql`${id}::uuid`), sql`, `)})
     order by m.sent_at desc
@@ -62,6 +73,8 @@ export async function runReplies(runIds: readonly string[], perRun = 5): Promise
       channel: row.channel,
       receivedAt: row.receivedAt,
       preview: (row.preview ?? "").replace(/\s+/g, " ").trim(),
+      accountRef: row.accountRef,
+      senderStatus: row.senderStatus,
       state: replyState(row, row.autopilot),
     });
   }

@@ -5,6 +5,27 @@ const now = new Date("2026-10-15T10:00:00Z");
 const base: ReplyRecord = { draftStatus: null, autoStatus: null, autoReason: null, jobStatus: null, sendAfter: null, receivedAt: "2026-10-15T09:58:00Z" };
 
 describe("replyState", () => {
+  test("a reply waiting for sender spacing shows its queued time, not an owner decision", () => {
+    const state = replyState({ ...base, draftStatus: "awaiting_review", agentStatus: "drafted", agentReason: "Waiting between messages", jobStatus: "queued", sendAfter: "2026-10-15T10:00:25Z" }, true, now);
+    expect(state).toEqual({ tone: "waiting", text: "Answer written; waiting for the sender until", at: "2026-10-15T10:00:25Z" });
+    expect(replyState({ ...base, agentStatus: "drafted", draftStatus: "sent", jobStatus: "succeeded" }, true, now)).toMatchObject({ tone: "done", text: "Answered" });
+    expect(replyState({ ...base, agentStatus: "drafted", autoStatus: "held", autoReason: "outreach is paused", jobStatus: "succeeded" }, true, now)).toMatchObject({ tone: "you", text: "Answer not sent: outreach is paused" });
+  });
+
+  test("incoming processing failures and retries are not mistaken for a healthy sending queue", () => {
+    expect(replyState({ ...base, classificationStatus: "failed", classificationError: "AI unavailable" }, true, now)).toEqual({ tone: "failed", text: "Reply processing failed: AI unavailable" });
+    expect(replyState({ ...base, classificationStatus: "queued", agentStatus: "failed" }, true, now)).toMatchObject({ tone: "waiting", text: "Retrying reply processing after an error…" });
+    expect(replyState({ ...base, classificationStatus: "running" }, true, now).text).toContain("queued for processing");
+    expect(replyState({ ...base, classificationStatus: "failed", draftStatus: "sent" }, true, now)).toMatchObject({ tone: "done", text: "Answered" });
+    expect(replyState({ ...base, jobStatus: "failed", jobError: "worker stopped" }, true, now)).toEqual({ tone: "failed", text: "Queued reply processing failed: worker stopped" });
+  });
+
+  test("a disconnected sender applies only to this reply's account, and never erases a recorded answer", () => {
+    expect(replyState({ ...base, senderStatus: "disconnected" }, true, now)).toMatchObject({ tone: "failed" });
+    expect(replyState({ ...base, senderStatus: "connected" }, true, now)).toMatchObject({ tone: "waiting" });
+    expect(replyState({ ...base, senderStatus: "disconnected", agentStatus: "replied" }, true, now)).toMatchObject({ tone: "done" });
+    expect(replyState({ ...base, senderStatus: "disconnected", draftStatus: "sent" }, true, now)).toMatchObject({ tone: "done" });
+  });
   test("says what became of a reply, in order of what happened last", () => {
     expect(replyState({ ...base, draftStatus: "sent", autoStatus: "sent" }, true, now)).toMatchObject({ tone: "done", text: "Answered automatically" });
     expect(replyState({ ...base, draftStatus: "sent" }, false, now)).toMatchObject({ tone: "done", text: "Answered" });

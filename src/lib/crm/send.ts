@@ -167,6 +167,14 @@ export class DefiniteCrmSendError extends Error {
   }
 }
 
+/** A local pacing gate refused before provider submission; the same draft can wait safely. */
+export class DeferredCrmSendError extends DefiniteCrmSendError {
+  constructor(message: string, readonly retryAt: Date) {
+    super(message);
+    this.name = "DeferredCrmSendError";
+  }
+}
+
 function providerErrorIsDefinite(error: unknown): boolean {
   // Nothing was submitted: the platform was never connected.
   if (error instanceof DefiniteCrmSendError || isPlatformNotConnectedError(error)) return true;
@@ -262,7 +270,12 @@ export async function sendWhatsappThroughCrm(
       ...(input.wrongRouteAckId ? { wrongRouteAckId: input.wrongRouteAckId } : {}),
     });
   } catch (error) {
-    if (error instanceof WhatsappSendRefusedError) throw new DefiniteCrmSendError(error.message);
+    if (error instanceof WhatsappSendRefusedError) {
+      if (error.reason === "send_gap" && Number.isFinite(error.retryAfterSeconds) && error.retryAfterSeconds! > 0) {
+        throw new DeferredCrmSendError(error.message, new Date(Date.now() + Math.ceil(error.retryAfterSeconds!) * 1_000));
+      }
+      throw new DefiniteCrmSendError(error.message);
+    }
     throw error;
   }
   return {
@@ -723,6 +736,26 @@ async function finishFailedSend(prepared: PreparedSend, error: unknown, definite
       .where(and(draftInOrg(), eq(crmDrafts.id, prepared.draftId))).limit(1).for("update");
     if (!draft) throw new CrmNotFoundError("CRM draft", prepared.draftId);
     const record = await lockCrmRecord(tx, draft.crmRecordId);
+    // A normal sender gap is not a terminal failure. Keep the checked reply
+    // for the timed auto_send job, without reviving a draft another action staled.
+    // Wrong-number acknowledgements keep their one-attempt policy.
+    if (error instanceof DeferredCrmSendError && actorRef === AUTOPILOT_ACTOR && !prepared.request.wrongRouteAckId) {
+      const now = new Date();
+      await tx.update(crmSendAttempts).set({ status: "failed", error: message, updatedAt: now })
+        .where(eq(crmSendAttempts.id, attempt.id));
+      const current = draft.status === "sending" && record.contextVersion === draft.expectedContextVersion;
+      if (current) {
+        await tx.update(crmDrafts).set({ status: "awaiting_review", error: null, updatedAt: now })
+          .where(eq(crmDrafts.id, draft.id));
+      }
+      await appendCrmEvent(tx, {
+        personId: record.personId, crmRecordId: record.id, pipelineId: record.pipelineId,
+        eventType: "message.deferred", actorType: "ai", actorRef,
+        toData: { draftId: draft.id, sendAttemptId: attempt.id, retryAt: error.retryAt.toISOString() },
+        meta: { reason: message, current }, contextVersion: record.contextVersion,
+      });
+      return { ...attempt, status: "failed" as const, error: message };
+    }
     const attemptStatus = definite ? "failed" as const : "delivery_uncertain" as const;
     const draftStatus = definite ? "failed" as const : "delivery_uncertain" as const;
     const now = new Date();

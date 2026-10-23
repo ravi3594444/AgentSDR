@@ -12,7 +12,7 @@ import { inboundAnsweredSince, settleAnsweredRecordInTransaction } from "@/lib/c
 import { lockCrmRecord, recordAiClassificationInTransaction } from "@/lib/crm/records";
 import { withCrmTransaction, type CrmExecutor } from "@/lib/crm/repository";
 import { crmConversationMessages, crmConversations, crmDrafts, crmRecords, crmSubcategories } from "@/lib/crm/schema";
-import { sendDraft, type CrmSendAdapter } from "@/lib/crm/send";
+import { DeferredCrmSendError, sendDraft, type CrmSendAdapter } from "@/lib/crm/send";
 import type { ReplyConversationMessage } from "@/lib/crm/ai/replyConversation";
 import { detectsOptOutWording, detectsWrongNumber } from "@/lib/crm/wrongNumber";
 import { closeWrongNumber, type CloseWrongNumberOutcome } from "@/lib/crm/wrongNumberAck.server";
@@ -26,6 +26,7 @@ import { writeBrief } from "../handoff.server";
 import { checkKnowledge } from "../replyCheck.server";
 import { autopilotReplies, autopilotTakeovers, ownerDecisions, replyAgentRuns, type ReplyAgentStatus, type ReplyAgentTurn } from "../schema";
 import { recordUsage } from "../usage.server";
+import { deferReplySend, SENDER_GAP_WAIT } from "../deferredReply.server";
 import {
   agentSystemPrompt,
   DECISION_SCHEMA,
@@ -561,6 +562,11 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
       }, { send: deps.send });
       await db.update(autopilotReplies).set({ status: "sent", updatedAt: new Date() }).where(eq(autopilotReplies.id, reservation.id));
     } catch (error) {
+      if (error instanceof DeferredCrmSendError) {
+        await deferReplySend({ reservationId: reservation.id, draftId: draft.id, revision: draft.revision, readyAt: draft.createdAt, retryAt: error.retryAt, idempotencyKey: `autopilot:agent:${messageId}` });
+        const decisionId = note ? await tellOwner({ scope, facts, leadName, ...ownerNoteToDecision(note.kind), note: note.note, draftId: draft.id, told: false, brief }) : null;
+        return finish(runRowId, scope, startedAt, { ...base, status: "drafted", reason: SENDER_GAP_WAIT, reply, draftId: draft.id, decisionId });
+      }
       const text = errorText(error);
       await db.update(autopilotReplies).set({ status: "failed", reason: `the send failed: ${text}`.slice(0, 1_000), updatedAt: new Date() }).where(eq(autopilotReplies.id, reservation.id));
       const decisionId = await tellOwner({ scope, facts, leadName, kind: "uncertain", note: `the reply could not be sent (${text})`, decision: "Open the chat and send it yourself.", draftId: draft.id, told: false, brief });

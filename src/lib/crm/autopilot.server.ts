@@ -77,5 +77,6 @@ export async function handleAutoSendJob(job: CrmJob): Promise<void> {
   const { runAutopilotForDraft } = await import("@/lib/assistant/autopilotRun.server");
   const revision = typeof job.payload.revision === "number" ? job.payload.revision : null;
   const readyAt = typeof job.payload.readyAt === "string" ? new Date(job.payload.readyAt) : null;
-  await runAutopilotForDraft(job.entityId, { revision, readyAt });
+  const idempotencyKey = typeof job.payload.idempotencyKey === "string" ? job.payload.idempotencyKey : undefined;
+  await runAutopilotForDraft(job.entityId, { revision, readyAt, idempotencyKey });
 }

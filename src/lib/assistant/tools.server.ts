@@ -1477,8 +1477,8 @@ export const TOOLS: Record<string, Tool> = {
   },
 
   diagnose_delivery: {
-    description: "Explain queued email and Instagram outreach using recorded sender settings, active queues, campaign/run status, the daily lead limit, throttling, capacity and recent delivery failures (sending is always on: no sender has sending hours). Read-only; does not change limits, rebuild a queue, send messages or measure worker liveness. Use once when asked why messages are not sending; report unknowns instead of guessing.",
-    arguments: "runId (optional: diagnose a specific run; otherwise the organization's current senders and campaigns)",
+    description: "Check delivery and automatic replies from stored records. With runId, returns that plan's senders and its latest incoming message texts, reply outcomes, queued processing and errors. Use the specific run when asked why a lead has no reply. Distinct connections can share a display number: an older disconnected record must not override this plan's sender or its latest reply state. Earlier aggregate reply totals are not evidence that the latest message was answered. Read-only: never sends, retries, reconnects, or proves worker/provider liveness. Check once and report what is recorded, including unknowns.",
+    arguments: "runId (use for a specific plan's delivery or automatic replies; leave out only for an organization-wide account snapshot)",
     run: async (args) => {
       const diagnostics = await diagnoseDelivery(uuid(args, "runId", false));
       return { ok: true, summary: diagnostics.summary, data: diagnostics };

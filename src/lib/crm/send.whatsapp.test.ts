@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { WhatsappSendRefusedError, type DeliverWhatsappInput, type DeliverWhatsappResult } from "@/lib/whatsapp/delivery";
-import { DefiniteCrmSendError, sendWhatsappThroughCrm, type CrmSendAdapterInput } from "./send";
+import { DefiniteCrmSendError, DeferredCrmSendError, sendWhatsappThroughCrm, type CrmSendAdapterInput } from "./send";
 
 function request(overrides: Partial<CrmSendAdapterInput> = {}): CrmSendAdapterInput {
   return {
@@ -71,6 +71,30 @@ describe("CRM send over WhatsApp", () => {
     };
     const error = await sendWhatsappThroughCrm(request(), deliver).catch((caught: unknown) => caught);
     expect(error).toBe(network);
+  });
+
+  test("the local sender gap is a timed deferral, with no provider submission to reconcile", async () => {
+    const before = Date.now();
+    const deliver = async (): Promise<DeliverWhatsappResult> => {
+      throw new WhatsappSendRefusedError("Wait 25 seconds between sends", 429, 25, "send_gap");
+    };
+    const error = await sendWhatsappThroughCrm(request(), deliver).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(DeferredCrmSendError);
+    expect(error).toBeInstanceOf(DefiniteCrmSendError);
+    expect((error as DeferredCrmSendError).retryAt.getTime()).toBeGreaterThanOrEqual(before + 25_000);
+    expect((error as DeferredCrmSendError).retryAt.getTime()).toBeLessThanOrEqual(Date.now() + 25_000);
+  });
+
+  test("provider rate limits and disconnected accounts are not mistaken for a local spacing wait", async () => {
+    for (const refusal of [
+      new WhatsappSendRefusedError("Provider rate limit", 429, 60, "rate_limited"),
+      new WhatsappSendRefusedError("Not connected", 409, null, "not_connected"),
+      new WhatsappSendRefusedError("Invalid wait", 429, Number.NaN, "send_gap"),
+    ]) {
+      const error = await sendWhatsappThroughCrm(request(), async () => { throw refusal; }).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(DefiniteCrmSendError);
+      expect(error).not.toBeInstanceOf(DeferredCrmSendError);
+    }
   });
 
   test("refuses a non-WhatsApp request", async () => {

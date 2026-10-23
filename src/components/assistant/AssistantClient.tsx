@@ -41,13 +41,14 @@ import * as Button from "@/components/alignui/button";
 import NeedsYouList from "@/components/assistant/NeedsYouList";
 import { RequestBar, RequestPanel, useThreadRequest } from "@/components/assistant/RequestPanel";
 import { EventRow } from "@/components/assistant/EventRow";
-import { reportAsOf } from "@/lib/assistant/chatEvents";
+import { compactToolReport, reportAsOf } from "@/lib/assistant/chatEvents";
 import { hostOf, ProspectsList } from "@/components/assistant/ProspectsList";
 import { reportAudiences, reportLinks } from "@/lib/assistant/leadLists";
 import { useChatScroll } from "./useChatScroll";
 import { Mascot, type MascotMood } from "./Mascot";
 import { ResearchGroup } from "./ResearchGroup";
 import { RESEARCH_TOOLS, researchTitle } from "./researchView";
+import { COMPACT_TOOLS, groupChatActivity, type ChatActivityItem } from "./chatActivity";
 import { cn } from "@/utils/cn";
 
 /**
@@ -257,10 +258,10 @@ function AudienceSummary({ audience }: { audience: AudienceData }) {
 /** The lead lists a request's final report covers, one per search, with that search's contactable count when it is loaded. */
 function ReportLeadLists({ lists, timeZone }: { lists: ReturnType<typeof reportAudiences>; timeZone: string }) {
   return (
-    <section aria-label="Lead lists of this request" className="w-full max-w-2xl space-y-2 rounded-lg px-3 py-2.5 ring-1 ring-inset ring-stroke-soft-200">
-      <p className="text-label-xs text-text-sub-600">{lists.length === 1 ? "The lead list of this request" : `The ${lists.length} lead lists of this request`}</p>
-      {lists.map((list) => <ProspectsList key={list.audienceId} audienceId={list.audienceId} count={list.count} title={list.title} timeZone={timeZone} />)}
-    </section>
+    <details aria-label="Lead lists of this request" className="w-full max-w-2xl rounded-lg px-3 py-2.5 ring-1 ring-inset ring-stroke-soft-200">
+      <summary className="cursor-pointer text-label-xs text-text-sub-600">View saved leads · {lists.length} {lists.length === 1 ? "list" : "lists"}</summary>
+      <div className="mt-2 space-y-2">{lists.map((list) => <ProspectsList key={list.audienceId} audienceId={list.audienceId} count={list.count} title={list.title} timeZone={timeZone} />)}</div>
+    </details>
   );
 }
 
@@ -768,6 +769,8 @@ function AsOf({ message }: { message: Message }) {
 }
 
 function ReportCard({ message }: { message: Message }) {
+  const compact = compactToolReport(message);
+  if (compact) return <CompactReport message={message} />;
   const data = message.toolResult?.data as { results?: ResultsData; name?: string; status?: string; channels?: { channel: string; contacted: number; messagesSent: number | null; replied: number; finished: number; stopped: number }[] } | undefined;
   if (data?.results) {
     return (
@@ -791,6 +794,28 @@ function ReportCard({ message }: { message: Message }) {
           </tbody>
         </table>
       </div>
+      <AsOf message={message} />
+    </Card>
+  );
+}
+
+/** The result, then the history: technical reports remain available without filling the conversation. */
+function CompactReport({ message, onChanged }: { message: Message; onChanged?: () => void }) {
+  const compact = compactToolReport(message);
+  if (!compact) return <Card title={TOOL_TITLE[message.tool ?? ""] ?? "Report"} status={message.status}><p className="whitespace-pre-wrap text-paragraph-xs">{message.content}</p></Card>;
+  const replies = message.toolResult?.data?.replies;
+  return (
+    <Card title={compact.title} status={message.status}>
+      <dl className="grid grid-cols-2 gap-x-4 gap-y-3 sm:flex sm:flex-wrap sm:gap-x-7">
+        {compact.figures.map((figure) => <div key={figure.label}><dd className="text-xl font-semibold tabular-nums text-text-strong-950">{figure.value}</dd><dt className="mt-0.5 text-paragraph-xs text-text-sub-600">{figure.label}</dt></div>)}
+      </dl>
+      {compact.note && <p className="mt-3 text-paragraph-xs leading-relaxed text-text-sub-600">{compact.note}</p>}
+      {message.tool === "diagnose_delivery" && Array.isArray(replies) && replies.length > 0 && <RepliesList replies={replies as RunReply[]} onChanged={onChanged ?? (() => undefined)} />}
+      <details className="mt-3 border-t border-stroke-soft-200 pt-2 text-paragraph-xs text-text-sub-600">
+        <summary className="cursor-pointer text-label-xs">Details</summary>
+        <p className="mt-2 whitespace-pre-wrap leading-relaxed [overflow-wrap:anywhere]">{message.toolResult?.display ?? message.content}</p>
+      </details>
+      {(message.tool === "report" || message.tool === "daily_summary") && <Link href="/assistant/reports" className="mt-2 inline-flex items-center gap-1 text-label-xs text-primary-base hover:underline">Open Reports <RiExternalLinkLine className="size-3.5" /></Link>}
       <AsOf message={message} />
     </Card>
   );
@@ -867,14 +892,6 @@ function DecisionCard({ message, state, onChanged }: { message: Message; state: 
   );
 }
 
-/** Small, routine results shown as one quiet line instead of a card. */
-const COMPACT_TOOLS = new Set([
-  "check_setup", "save_business_info", "search_knowledge", "lead_search_status", "list_audiences", "list_runs",
-  "list_decisions", "pause_outreach", "resume_outreach", "stop_outreach", "switch_to_review", "answer_decision", "read_webpage", "list_inquiries",
-  "set_brief", "review_leads", "set_lead_fit", "finish_request", "control_research", "web_search", "diagnose_delivery",
-  "browser_open", "browser_read", "browser_click", "browser_fill", "browser_scroll", "browser_close",
-]);
-
 function ActivityRow({ message }: { message: Message }) {
   const title = TOOL_TITLE[message.tool ?? ""] ?? message.tool ?? "Action";
   const raw = message.status === "running" ? "" : message.toolResult?.display ?? message.content;
@@ -897,8 +914,10 @@ function ToolMessage({ message, jobs, runs, decisions, canManageAutopilot, lastR
   const data = message.toolResult?.data as Record<string, unknown> | undefined;
   if (message.tool === "owner_decision") return <DecisionCard message={message} state={decisions[String(data?.decisionId ?? "")]} onChanged={onChanged} />;
   if (message.tool === "daily_summary") {
-    return <Card title={`Daily summary · ${String(data?.day ?? "")}`} status={message.status}><p className="whitespace-pre-wrap text-paragraph-xs">{message.content.split("\n").slice(1).join("\n")}</p><AsOf message={message} /></Card>;
+    if (compactToolReport(message)) return <CompactReport message={message} />;
+    return <Card title={`Daily summary · ${String(data?.day ?? "")}`} status={message.status}><details className="text-paragraph-xs"><summary className="cursor-pointer">Details</summary><p className="mt-2 whitespace-pre-wrap">{message.content.split("\n").slice(1).join("\n")}</p></details><AsOf message={message} /></Card>;
   }
+  if (message.tool === "diagnose_delivery") return <CompactReport message={message} onChanged={onChanged} />;
   if (RESEARCH_TOOLS.has(message.tool ?? "")) return <ResearchGroup messages={[message]} jobs={jobs} timeZone={timeZone} />;
   if (message.tool === "prepare_outreach") return <ProposalCard message={message} run={runs[String(data?.runId ?? "")]} canManageAutopilot={canManageAutopilot} lastReplyMode={lastReplyMode} onChanged={onChanged} />;
   if (message.tool === "prepare_inquiry_replies") return <InquiryRunCard message={message} run={runs[String(data?.runId ?? "")]} canManageAutopilot={canManageAutopilot} onChanged={onChanged} />;
@@ -961,9 +980,11 @@ function AssistantAvatar({ size = "sm", mood = "idle" }: { size?: "sm" | "lg"; m
 }
 
 /** A turn's items with each run of consecutive searches gathered into one research card. */
-function researchRuns(items: Message[]): (Message | Message[])[] {
-  const out: (Message | Message[])[] = [];
-  for (const message of items) {
+function researchRuns(items: Message[]): (Message | Message[] | Extract<ChatActivityItem<Message>, { kind: "activity" }>)[] {
+  const out: (Message | Message[] | Extract<ChatActivityItem<Message>, { kind: "activity" }>)[] = [];
+  for (const item of groupChatActivity(items)) {
+    if (item.kind === "activity") { out.push(item); continue; }
+    const message = item.message;
     const research = message.role === "tool" && RESEARCH_TOOLS.has(message.tool ?? "");
     const last = out[out.length - 1];
     if (research && Array.isArray(last)) last.push(message);
@@ -1287,9 +1308,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
   const empty = state.messages.length === 0 && !showPending;
   const profile = (setup as (Setup & { profile?: BusinessProfileSummary }) | null)?.profile;
 
-  const assistantItems = (items: Message[]) => researchRuns(items).map((item) => {
-    if (Array.isArray(item)) return <ResearchGroup key={item[0]!.id} messages={item} jobs={state.jobs} timeZone={timeZone} />;
-    const message = item;
+  const renderMessage = (message: Message) => {
     if (message.role === "assistant") return <div key={message.id} className="assistant-message text-paragraph-sm text-text-strong-950"><RichText text={message.content} /></div>;
     if (message.role === "event") {
       // Only the newest event can offer Retry: an older failure was already followed by more work.
@@ -1306,6 +1325,17 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
       );
     }
     return <ToolMessage key={message.id} message={message} jobs={state.jobs} runs={state.runs} decisions={state.decisions ?? {}} canManageAutopilot={Boolean(setup?.canManageAutopilot)} lastReplyMode={state.lastReplyMode ?? null} onChanged={() => void refresh(true)} />;
+  };
+  const assistantItems = (items: Message[]) => researchRuns(items).map((item) => {
+    if (Array.isArray(item)) return <ResearchGroup key={item[0]!.id} messages={item} jobs={state.jobs} timeZone={timeZone} />;
+    if ("kind" in item) {
+      const running = item.messages.some((message) => message.status === "running");
+      return <details key={`activity-${item.messages[0]!.id}`} className="w-full max-w-2xl rounded-xl border border-stroke-soft-200 bg-bg-weak-50/50 px-3 py-2">
+        <summary className="flex cursor-pointer items-center gap-2 text-label-xs text-text-sub-600"><StatusIcon status={running ? "running" : "ok"} />{running ? "Working" : "Activity"} · {item.messages.length} {item.messages.length === 1 ? "step" : "steps"}</summary>
+        <div className="mt-3 space-y-3 border-t border-stroke-soft-200 pt-3">{item.messages.map(renderMessage)}</div>
+      </details>;
+    }
+    return renderMessage(item);
   });
 
   return (

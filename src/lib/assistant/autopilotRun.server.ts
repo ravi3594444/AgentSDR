@@ -20,7 +20,8 @@ import {
   crmRecords,
   crmSubcategories,
 } from "@/lib/crm/schema";
-import { sendDraft, type CrmSendAdapter } from "@/lib/crm/send";
+import { DeferredCrmSendError, sendDraft, type CrmSendAdapter } from "@/lib/crm/send";
+import { RetryCrmJobLaterError } from "@/lib/crm/worker";
 import { people } from "@/lib/leads/schema";
 import { isSuppressed } from "@/lib/outreach/suppression";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
@@ -31,6 +32,7 @@ import { judgeReply, selfFixableReply, type ModelCheck } from "./replyCheck";
 import { storedReplyConversation, type ReplyConversationMessage } from "@/lib/crm/ai/replyConversation";
 import { checkKnowledge, modelReplyCheck, type ReplyCheckInput } from "./replyCheck.server";
 import { autopilotReplies, autopilotTakeovers, outreachRunLeads, ownerDecisions, type OwnerDecisionKind, type ReplyCheck, type RunLeadChannel } from "./schema";
+import { deferReplySend, SENDER_GAP_WAIT } from "./deferredReply.server";
 
 /**
  * Runs the reply autopilot on one draft (the CRM's auto_send job):
@@ -65,6 +67,8 @@ export type AutopilotDependencies = {
   revision?: number | null;
   /** When the draft became ready; an outbound message after it means someone answered. */
   readyAt?: Date | null;
+  /** A definitely unsubmitted reply-agent send keeps the same durable attempt when it resumes. */
+  idempotencyKey?: string;
   send?: CrmSendAdapter;
   /** Replaces the model half of the support check (tests). */
   check?: (input: ReplyCheckInput & { knowledge: string }) => Promise<ModelCheck>;
@@ -457,13 +461,17 @@ export async function runAutopilotForDraft(draftId: string, deps: AutopilotDepen
     await sendDraft({
       draftId: state.draft.id,
       revision: state.draft.revision,
-      idempotencyKey: autopilotIdempotencyKey(state.draft.id, state.draft.revision),
+      idempotencyKey: deps.idempotencyKey ?? autopilotIdempotencyKey(state.draft.id, state.draft.revision),
       requestId: randomUUID(),
       actorRef: AUTOPILOT_ACTOR,
     }, { send: deps.send });
     await db.update(autopilotReplies).set({ status: "sent", updatedAt: new Date() }).where(eq(autopilotReplies.id, reservation.id));
     return { sent: true, reason: null };
   } catch (error) {
+    if (error instanceof DeferredCrmSendError) {
+      await deferReplySend({ reservationId: reservation.id, draftId: state.draft.id, revision: state.draft.revision, readyAt: deps.readyAt ?? state.draft.createdAt, retryAt: error.retryAt, jobAlreadyRunning: true });
+      throw new RetryCrmJobLaterError(SENDER_GAP_WAIT, error.retryAt);
+    }
     const message = error instanceof Error ? error.message : String(error);
     await db.update(autopilotReplies).set({ status: "failed", reason: message.slice(0, 1_000), updatedAt: new Date() }).where(eq(autopilotReplies.id, reservation.id));
     return { sent: false, reason: `the send failed: ${message}` };

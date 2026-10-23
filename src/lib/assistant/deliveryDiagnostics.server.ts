@@ -20,6 +20,7 @@ import { dailyAt, nextSlotAt } from "@/lib/scheduler/slots";
 import { displayTime } from "./displayTime";
 import { emailSenderStatus, linkedinSenderStatus, whatsappSenderStatus, type DailyLeadLimitHold, type SenderStatus } from "./runEvidence";
 import { outreachRuns } from "./schema";
+import { runReplies } from "./runReplies.server";
 
 /** How an Instagram account's gap between DMs starts; its end follows in the organization's zone. */
 const INSTAGRAM_GAP = "Pausing between DMs until ";
@@ -189,10 +190,18 @@ export async function diagnoseDelivery(runId?: string) {
     }),
   ];
   const day = describeLeadDay(leadDay);
+  // A delivery queue is not the reply pipeline. Give the assistant the
+  // actual latest messages and their recorded processing outcomes first.
+  const replies = run ? (await runReplies([run.id]))[run.id] ?? [] : [];
   const lines = [
     run
       ? `“${run.name}” is ${run.status}${run.error ? `: ${run.error}` : ""}.`
       : "Current delivery snapshot:",
+    ...(run ? [
+      replies.length ? "Latest incoming replies recorded since this plan started:" : "No incoming reply is recorded since this plan started. Earlier conversation totals do not establish that a new reply arrived or needs an answer.",
+      ...replies.map((reply) => `${reply.who} (${reply.channel}, ${reply.receivedAt}, conversation ${reply.conversationId}, sender account ${reply.accountRef}${reply.senderStatus ? ` stored as ${reply.senderStatus}` : ""}): ${JSON.stringify(reply.preview)} — ${reply.state.text}${reply.state.at ? ` ${reply.state.at}` : ""}.`),
+      "Use these message-level outcomes for missing replies. A campaign send queue, older reply totals, or another account's disconnected record cannot determine whether this message was answered. These are stored records, not a live provider connection check.",
+    ] : ["This is an organization-wide snapshot of distinct account records, including older disconnected connections. Use runId for the specific plan before attributing a blocker or diagnosing its automatic replies."]),
     `Daily lead limit: ${day.used}. ${day.resets}${leadLimit ? " First messages wait for the reset; follow-ups and replies are not held by it." : ""}`,
     ...email.map(
       (m) =>
@@ -222,6 +231,8 @@ export async function diagnoseDelivery(runId?: string) {
   if (!email.length && sendsOn("email")) lines.splice(1, 0, "No email mailbox is configured.");
   return {
     at: now.toISOString(),
+    scope: run ? { kind: "run" as const, runId: run.id, name: run.name } : { kind: "organization" as const },
+    replies,
     /** The zone the gates' and details' times are written in, for the panel to show its own times in too. */
     displayTimeZone,
     runStatus: run?.status ?? null,

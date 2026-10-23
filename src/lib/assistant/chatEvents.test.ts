@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { compactEvent, eventData, reportAsOf } from "./chatEvents";
+import { compactEvent, compactToolReport, eventData, reportAsOf } from "./chatEvents";
 
 // P04: a chat report is a snapshot. An early "0 contacted" must read as
 // historical: each says when it was written, in the organization's zone, and
@@ -40,6 +40,30 @@ describe("older chats render as they always did", () => {
 });
 
 describe("the compact line for each report", () => {
+  test("a request's existing structured final report is compact without claiming messages were delivered", () => {
+    const line = compactEvent({ toolResult: { reportKey: "objective:o:finished", data: { objective: { leads: 1, leadTarget: 1, named: { target: true }, stopReason: "finished" } } } });
+    expect(line).toMatchObject({ title: "Request finished", figures: [{ label: "matching leads", value: "1 of 1" }] });
+    expect(line?.note).toContain("Sending and reply status are on the plan card");
+  });
+
+  test("results show distinct people, not all historical messages as current replies", () => {
+    const line = compactToolReport({ tool: "report", toolResult: { data: { results: { period: { label: "all time" }, scope: { label: "this plan" }, outreach: { peopleContacted: 1, peopleReplied: 1, repliesReceived: 14, interested: 1 }, attention: { repliesWaiting: 0, openDecisions: 0 } } } } });
+    expect(line?.figures).toEqual([{ label: "contacted", value: "1" }, { label: "people replied", value: "1" }, { label: "interested", value: "1" }, { label: "need you", value: "0" }]);
+    expect(line?.note).toBe("this plan");
+  });
+
+  test("a plan's empty send queue is not represented as all replies answered", () => {
+    const line = compactToolReport({ tool: "diagnose_delivery", toolResult: { data: { scope: { kind: "run" }, senders: [{ account: "same-number", queued: 0, gates: [] }], replies: [{ preview: "hey", state: { tone: "failed" } }] } } });
+    expect(line?.title).toContain("This plan");
+    expect(line?.note).toContain("does not prove a reply was answered");
+    expect(line?.figures.at(-1)).toEqual({ label: "recent replies checked", value: "1" });
+  });
+
+  test("same display number on connected and disconnected records stays an organization snapshot", () => {
+    const line = compactToolReport({ tool: "diagnose_delivery", toolResult: { data: { senders: [{ account: "same-number", queued: 25, gates: ["disconnected"] }, { account: "same-number", queued: 0, gates: [] }] } } });
+    expect(line?.title).toContain("Sender accounts");
+    expect(line?.note).toContain("does not establish that a particular plan is blocked");
+  });
   test("a search: found, contactable, and the match when it was judged", () => {
     const line = compactEvent({ toolResult: { data: { event: { kind: "search_report", jobId: "j", ok: true, source: "Google Maps", found: 24, contactable: 18, matching: 9, judged: 18 } } } });
     expect(line).toEqual({ title: "Search finished · Google Maps", figures: [{ label: "found", value: "24" }, { label: "contactable", value: "18" }, { label: "match", value: "9 of 18" }], tone: "good", note: null });
