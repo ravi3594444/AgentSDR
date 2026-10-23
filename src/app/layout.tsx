@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { connection } from "next/server";
 import { Instrument_Serif } from "next/font/google";
 import AppShell from "@/components/AppShell";
@@ -16,6 +16,13 @@ const fontSerif = Instrument_Serif({
   style: ["normal", "italic"],
   variable: "--font-instrument-serif-next",
 });
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  interactiveWidget: "resizes-content",
+};
 
 export const metadata: Metadata = {
   // Pages name themselves ("Leads"); the brand follows, as in the section layouts.

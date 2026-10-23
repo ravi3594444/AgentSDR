@@ -78,7 +78,7 @@ function CloseButton({ className }: { className?: string }) {
     <Modal.Close
       aria-label="Close settings"
       className={cn(
-        "flex size-8 shrink-0 items-center justify-center rounded-lg text-text-soft-400 outline-none transition hover:bg-bg-weak-50 hover:text-text-strong-950 focus-visible:ring-2 focus-visible:ring-primary-base",
+        "flex size-11 shrink-0 items-center justify-center rounded-lg text-text-soft-400 outline-none transition hover:bg-bg-weak-50 hover:text-text-strong-950 focus-visible:ring-2 focus-visible:ring-primary-base sm:size-8",
         className,
       )}
     >
@@ -99,6 +99,7 @@ function CloseButton({ className }: { className?: string }) {
  */
 function SettingsFrame({ children, modal }: { children: React.ReactNode; modal: boolean }) {
   const pathname = usePathname();
+  const router = useRouter();
   const features = useFeatureState(pathname);
   const nav = useMemo(() => visibleSettingsNav(features), [features]);
   const items = useMemo(() => nav.flatMap((group) => group.items), [nav]);
@@ -162,7 +163,7 @@ function SettingsFrame({ children, modal }: { children: React.ReactNode; modal: 
       </aside>
 
       {/* Narrow screens: a top bar and a strip of sections. */}
-      <div className="shrink-0 border-b border-stroke-soft-200 lg:hidden">
+      <div className={cn("shrink-0 border-b border-stroke-soft-200 lg:hidden", modal && "pt-[env(safe-area-inset-top)] sm:pt-0")}>
         <div className="flex items-center justify-between gap-3 px-4 pb-2 pt-3 sm:px-6">
           <div className="flex min-w-0 items-center gap-2.5">
             <RiSettings3Line className="size-5 shrink-0 text-text-soft-400" aria-hidden="true" />
@@ -171,7 +172,14 @@ function SettingsFrame({ children, modal }: { children: React.ReactNode; modal: 
           </div>
           {modal && <CloseButton />}
         </div>
-        <nav aria-label="Settings sections">
+        <label className="block px-4 pb-3 sm:hidden">
+          <span className="sr-only">Settings section</span>
+          <select aria-label="Settings section" value={activeHref} onChange={(event) => router[modal ? "replace" : "push"](event.target.value, { scroll: false })} className="h-11 w-full min-w-0 rounded-xl bg-bg-white-0 px-3 text-[16px] text-text-strong-950 outline-none ring-1 ring-inset ring-stroke-soft-200 focus:ring-2 focus:ring-primary-base">
+            <option value="" disabled>Select a section</option>
+            {nav.map((group) => <optgroup key={group.label} label={group.label}>{group.items.map((item) => <option key={item.href} value={item.href}>{item.label}</option>)}</optgroup>)}
+          </select>
+        </label>
+        <nav aria-label="Settings sections" className="hidden sm:block">
           <div
             ref={stripRef}
             className="flex gap-1 overflow-x-auto px-3 pb-2.5 sm:px-5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
@@ -204,7 +212,7 @@ function SettingsFrame({ children, modal }: { children: React.ReactNode; modal: 
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         {modal && <CloseButton className="absolute right-4 top-4 z-10 hidden lg:flex" />}
         {activeItem?.tabs && <SectionTabs tabs={activeItem.tabs} activeHref={activePage} modal={modal} label={activeItem.label} />}
-        <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
+        <div ref={scrollRef} className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain pb-[env(safe-area-inset-bottom)]">
           {children}
         </div>
       </div>
@@ -234,7 +242,7 @@ export function SettingsModal({ children }: { children: React.ReactNode }) {
         className={cn(
           "max-h-none overflow-hidden",
           // Phones: a full-screen sheet. From sm: a centred box.
-          "max-sm:inset-0 max-sm:h-dvh max-sm:w-full max-sm:translate-x-0 max-sm:translate-y-0 max-sm:rounded-none max-sm:ring-0",
+          "max-sm:inset-0 max-sm:h-[var(--workspace-height,100dvh)] max-sm:w-full max-sm:translate-x-0 max-sm:translate-y-0 max-sm:rounded-none max-sm:ring-0",
           "sm:h-[min(880px,calc(100dvh-4rem))]",
         )}
       >

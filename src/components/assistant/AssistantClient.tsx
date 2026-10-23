@@ -1309,7 +1309,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
   const profile = (setup as (Setup & { profile?: BusinessProfileSummary }) | null)?.profile;
 
   const renderMessage = (message: Message) => {
-    if (message.role === "assistant") return <div key={message.id} className="assistant-message text-paragraph-sm text-text-strong-950"><RichText text={message.content} /></div>;
+    if (message.role === "assistant") return <div key={message.id} className="assistant-message min-w-0 text-paragraph-sm text-text-strong-950 [overflow-wrap:anywhere]"><RichText text={message.content} /></div>;
     if (message.role === "event") {
       // Only the newest event can offer Retry: an older failure was already followed by more work.
       const retry = message.toolResult?.data?.retry === true && message.id === shown.at(-1)?.id;
@@ -1341,28 +1341,28 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
   return (
     <DisplayTimeZone.Provider value={timeZone}>
     <div
-      className="assistant-workspace relative flex h-full min-h-0 flex-col bg-bg-white-0"
+      className="assistant-workspace relative flex h-full min-h-0 min-w-0 flex-col bg-bg-white-0"
       onDragOver={(event) => { if (event.dataTransfer.types.includes("Files")) { event.preventDefault(); setDragging(true); } }}
       onDragLeave={(event) => { if (event.currentTarget === event.target) setDragging(false); }}
       onDrop={(event) => { event.preventDefault(); setDragging(false); addFiles(Array.from(event.dataTransfer.files)); }}
     >
-      <header className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-3 border-b border-stroke-soft-200 px-4 py-3 sm:px-6">
-        <div className="flex min-w-0 flex-1 items-center gap-3">
+      <header className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-2 border-b border-stroke-soft-200 px-3 py-2 sm:gap-x-4 sm:gap-y-3 sm:px-6 sm:py-3">
+        <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
           <AssistantAvatar />
           <div className="min-w-0"><h1 className="text-label-md text-text-strong-950">Outreach</h1><p className="mt-0.5 truncate text-paragraph-xs text-text-soft-400">{displayThreadTitle(state.thread.title)}</p></div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5 sm:order-last">
-          <Button.Root variant="neutral" mode="stroke" size="xsmall" onClick={() => void newThread()} disabled={sending} aria-label="New conversation" className="h-9">
-            <Button.Icon as={RiAddLine} />New chat
+          <Button.Root variant="neutral" mode="stroke" size="xsmall" onClick={() => void newThread()} disabled={sending} aria-label="New conversation" className="size-11 p-0 sm:h-9 sm:w-auto sm:px-2.5">
+            <Button.Icon as={RiAddLine} /><span className="hidden sm:inline">New chat</span>
           </Button.Root>
-          <Link href="/assistant/requests" aria-label="All requests" title="Every request and its progress" className="inline-flex h-9 items-center gap-1.5 rounded-lg px-2.5 text-label-xs text-text-sub-600 hover:bg-bg-weak-50">
+          <Link href="/assistant/requests" aria-label="All requests" title="Every request and its progress" className="inline-flex size-11 items-center justify-center gap-1.5 rounded-lg text-label-xs text-text-sub-600 hover:bg-bg-weak-50 sm:h-9 sm:w-auto sm:px-2.5">
             <RiListCheck3 className="size-4" aria-hidden="true" /><span className="hidden sm:inline">Requests</span>
           </Link>
-          <Link href="/assistant/reports" aria-label="Reports" title="Outreach reports" className="inline-flex h-9 items-center gap-1.5 rounded-lg px-2.5 text-label-xs text-text-sub-600 hover:bg-bg-weak-50">
+          <Link href="/assistant/reports" aria-label="Reports" title="Outreach reports" className="inline-flex size-11 items-center justify-center gap-1.5 rounded-lg text-label-xs text-text-sub-600 hover:bg-bg-weak-50 sm:h-9 sm:w-auto sm:px-2.5">
             <RiBarChartBoxLine className="size-4" aria-hidden="true" /><span className="hidden sm:inline">Reports</span>
           </Link>
         </div>
-        <div className="flex w-full flex-wrap items-center gap-1.5 border-t border-stroke-soft-200 pt-2 sm:ml-auto sm:w-auto sm:border-0 sm:pt-0">
+        <div className="flex w-full items-center gap-1.5 overflow-x-auto border-t border-stroke-soft-200 pt-2 [scrollbar-width:none] [&>*]:shrink-0 [&_button]:min-h-10 sm:ml-auto sm:w-auto sm:flex-wrap sm:overflow-visible sm:border-0 sm:pt-0 sm:[&_button]:min-h-0">
           <ConversationMenu current={state.thread} threads={state.threads} onOpen={(id) => void openThread(id)} onNew={() => void newThread()} disabled={sending} />
           <AutonomousSwitch thread={state.thread} canManage={Boolean(setup?.canManageAutopilot)} onChanged={(next) => setState(next)} />
           <ReadinessMenu setup={setup} />
@@ -1372,16 +1372,16 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
       <div className="flex min-h-0 flex-1">
       <div className="relative flex min-w-0 flex-1 flex-col">
       <RequestBar state={request} labels={searchLabels} />
-      <div className="shrink-0 px-4 pt-3 empty:hidden sm:px-6">
+      <div className="max-h-[min(24dvh,9rem)] shrink-0 overflow-y-auto px-3 pt-2 empty:hidden sm:max-h-none sm:overflow-visible sm:px-6 sm:pt-3">
         <NeedsYouList initial={null} compact />
       </div>
 
-      <div ref={scroller} onScroll={updatePosition} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-6 sm:px-8" aria-label="Assistant conversation">
+      <div ref={scroller} onScroll={updatePosition} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-4 sm:px-8 sm:py-6" aria-label="Assistant conversation">
         <div ref={content}>
         {empty ? (
           <Welcome firstName={state.viewer?.firstName ?? null} profile={profile} onStarter={pickStarter} />
         ) : (
-          <div role="log" aria-live="polite" className="mx-auto flex max-w-3xl flex-col gap-8">
+          <div role="log" aria-live="polite" className="mx-auto flex max-w-3xl flex-col gap-6 sm:gap-8">
             {turns.map((turn, index) => (
               <div key={turn.owner?.id ?? `turn-${index}`} className="flex flex-col gap-3">
                 {turn.owner && (
@@ -1398,7 +1398,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
                 )}
                 {(turn.items.length > 0 || (thinking && index === turns.length - 1 && !showPending)) && (
                   <div className="flex gap-3">
-                    <AssistantAvatar mood={thinking && index === turns.length - 1 && !showPending ? "thinking" : "idle"} />
+                    <div className="hidden shrink-0 sm:block"><AssistantAvatar mood={thinking && index === turns.length - 1 && !showPending ? "thinking" : "idle"} /></div>
                     <div className="flex min-w-0 flex-1 flex-col gap-2.5 pt-1">
                       <span className="text-label-xs text-text-sub-600">Assistant</span>
                       {assistantItems(turn.items)}
@@ -1414,13 +1414,13 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
                   {pending.text && <div className="max-w-[min(36rem,90%)] whitespace-pre-wrap rounded-2xl rounded-br-md bg-bg-weak-50 px-4 py-3 text-paragraph-sm leading-6 text-text-strong-950 [overflow-wrap:anywhere]">{pending.text}</div>}
                   {pending.files.map((name) => <span key={name} className="text-paragraph-xs text-text-sub-600">{name}</span>)}
                 </div>
-                <div className="flex gap-3"><AssistantAvatar mood="thinking" /><div className="pt-2"><ThinkingIndicator label={pending.files.length ? "Reading your files…" : "Thinking…"} /></div></div>
+                <div className="flex gap-3"><div className="hidden sm:block"><AssistantAvatar mood="thinking" /></div><div className="pt-2"><ThinkingIndicator label={pending.files.length ? "Reading your files…" : "Thinking…"} /></div></div>
               </div>
             )}
             {suggestions.length > 0 && (
-              <div className="flex flex-wrap gap-2 pl-10">
+              <div className="flex flex-wrap gap-2 sm:pl-10">
                 {suggestions.map((suggestion) => (
-                  <button key={suggestion} type="button" onClick={() => void send(suggestion)} className="rounded-full px-3 py-1.5 text-label-xs text-text-strong-950 ring-1 ring-inset ring-stroke-soft-200 transition hover:bg-bg-weak-50 hover:ring-stroke-sub-300">
+                  <button key={suggestion} type="button" onClick={() => void send(suggestion)} className="min-h-11 rounded-xl px-3 py-2 text-left text-label-xs text-text-strong-950 ring-1 ring-inset ring-stroke-soft-200 transition hover:bg-bg-weak-50 hover:ring-stroke-sub-300 sm:min-h-0 sm:rounded-full sm:py-1.5">
                     {suggestion}
                   </button>
                 ))}
@@ -1466,28 +1466,29 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
               placeholder={empty ? "What would you like to work on?" : "Ask a follow-up, or give the next instruction…"}
               aria-label="Message the assistant"
               disabled={sending}
-              className="block max-h-52 min-h-[72px] w-full resize-none bg-transparent px-4 pb-2 pt-4 text-[16px] leading-6 text-text-strong-950 outline-none placeholder:text-text-soft-400 sm:text-paragraph-sm"
+              className="block max-h-52 min-h-14 w-full resize-none bg-transparent px-4 pb-2 pt-3 text-[16px] leading-6 text-text-strong-950 outline-none placeholder:text-text-soft-400 sm:min-h-[72px] sm:pt-4 sm:text-paragraph-sm"
             />
             <div className="flex items-center gap-2 px-2 pb-2">
               <input ref={fileInput} type="file" multiple accept={ACCEPT} className="hidden" onChange={(event) => {
                 addFiles(Array.from(event.target.files ?? []));
                 event.target.value = "";
               }} />
-              <button type="button" onClick={() => fileInput.current?.click()} disabled={sending} title="Attach a PDF, Word or text document, or a CSV/Excel contact list" className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-label-xs text-text-sub-600 hover:bg-bg-weak-50 disabled:opacity-50">
+              <button type="button" onClick={() => fileInput.current?.click()} disabled={sending} title="Attach a PDF, Word or text document, or a CSV/Excel contact list" className="inline-flex h-11 items-center gap-1.5 rounded-lg px-2 text-label-xs text-text-sub-600 hover:bg-bg-weak-50 disabled:opacity-50 sm:h-8">
                 <RiAttachment2 className="size-4" aria-hidden="true" /><span>Attach</span>
               </button>
               <span className="hidden flex-1 truncate text-[13px] text-text-soft-400 sm:block">Enter to send · Shift + Enter for a new line</span>
-              <Button.Root variant="primary" mode="filled" size="small" onClick={() => void send()} disabled={thinking || (!text.trim() && !files.length)} aria-label="Send" className="ml-auto size-9 rounded-xl p-0">
+              <Button.Root variant="primary" mode="filled" size="small" onClick={() => void send()} disabled={thinking || (!text.trim() && !files.length)} aria-label="Send" className="ml-auto size-11 rounded-xl p-0 sm:size-9">
                 {sending ? <Button.Icon as={RiLoader4Line} className="animate-spin" /> : <Button.Icon as={RiArrowUpLine} />}
               </Button.Root>
             </div>
           </div>
-          <p className="mt-2 text-center text-paragraph-xs text-text-soft-400">
+          <p className="mt-2 hidden text-center text-paragraph-xs text-text-soft-400 sm:block">
             {state.thread.autonomous
               ? `Autonomous: plans start on their own in Automatic mode, up to ${state.thread.autonomyCaps?.runsPerDay ?? "?"} plans and ${state.thread.autonomyCaps?.leadsPerDay ?? "?"} leads a day. Turn it off at the top to review each plan.`
               : "Nothing reaches your leads until you press Start on a plan."}
             <span className="hidden sm:inline"> Replies waiting for you are in the <Link href="/inbox?view=needs_you" className="underline underline-offset-2 hover:text-text-sub-600">Inbox</Link>.</span>
           </p>
+          <p className="mt-2 text-center text-[12px] text-text-sub-600 sm:hidden">{state.thread.autonomous ? "Autonomous on" : "Start a plan to send"} · <Link href="/inbox?view=needs_you" className="underline underline-offset-2">Replies in Inbox</Link></p>
         </div>
       </div>
 

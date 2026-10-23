@@ -166,7 +166,7 @@ export default function LeadsClient({ initialTab, initialRows, initialTotal }: P
       <PageContainer>
         <PageHeader
           title="Leads"
-          description="Every person and company you can reach, with their outreach and CRM state. Board shows the open ones by stage."
+          description="Your people, companies and their outreach progress."
           actions={isPeople && <Button.Root variant="primary" mode="filled" size="small" onClick={() => setShowImport(true)}><Button.Icon as={RiUpload2Line} />Import people</Button.Root>}
         />
 
@@ -179,7 +179,7 @@ export default function LeadsClient({ initialTab, initialRows, initialTotal }: P
             description={<span aria-live="polite">{data ? `${total.toLocaleString("en-US")} ${total === 1 ? (isPeople ? "person" : "company") : noun}${filtersOn || searching ? " match" : ""}` : `Loading ${noun}…`}</span>}
             actions={
               <>
-                <Input.Root size="small" className="w-40 sm:w-72">
+                <Input.Root size="small" className="min-w-0 flex-1 sm:w-72 sm:flex-none">
                   <Input.Wrapper>
                     <Input.Icon as={RiSearchLine} />
                     <Input.Input type="search" aria-label={`Search ${noun}`} placeholder={isPeople ? "Search people…" : "Search companies…"} value={state.query} onChange={(event) => patch({ query: event.target.value })} />

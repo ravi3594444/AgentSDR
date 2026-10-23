@@ -35,7 +35,7 @@ export function FrameHeader({ title, description, actions }: { title: React.Reac
         <h2 className="text-label-sm text-text-strong-950">{title}</h2>
         {description && <p className="mt-0.5 text-paragraph-xs text-text-sub-600">{description}</p>}
       </div>
-      {actions && <div className="flex min-w-0 flex-wrap items-center gap-2">{actions}</div>}
+      {actions && <div className="flex w-full min-w-0 flex-wrap items-center gap-2 sm:w-auto">{actions}</div>}
     </header>
   );
 }

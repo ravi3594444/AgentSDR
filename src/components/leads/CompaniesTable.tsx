@@ -10,6 +10,7 @@ import { cn } from "@/utils/cn";
 import { Bar, Blob, CampaignSummary, CompanyFavicon, LinkIcon, stop, TwoLine } from "./LeadCells";
 import { cellClass, fixedTableStyle, SortableHead } from "./SortableHead";
 import { linkedInCompanyHref, shortDate, type CompanyRow, type Direction } from "./leadTypes";
+import { MobileLeadCards } from "./MobileLeadCards";
 
 const rowCell = cn(cellClass, "h-14");
 
@@ -89,7 +90,8 @@ export function CompaniesTable({ rows, sort, direction, onSort, loading, onOpen,
   const head = { activeSort: sort, direction, onSort };
   return (
     <Tooltip.Provider delayDuration={250} skipDelayDuration={300} disableHoverableContent>
-      <Table.Root style={fixedTableStyle}>
+      <MobileLeadCards kind="companies" rows={rows} loading={loading} onOpen={onOpen} onResearch={onResearch} />
+      <Table.Root style={fixedTableStyle} className="hidden md:block">
         <Table.Header>
           <tr>
             <SortableHead label="Company" sortKey="name" className="w-[26%]" {...head} />

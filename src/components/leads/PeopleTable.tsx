@@ -13,6 +13,7 @@ import { cn } from "@/utils/cn";
 import { Bar, Blob, CampaignSummary, CompanyFavicon, CrmSummary, Empty, ReachIcons, stop, TwoLine } from "./LeadCells";
 import { cellClass, fixedTableStyle, SortableHead } from "./SortableHead";
 import { initials, linkedInPersonHref, type Direction, type PersonRow } from "./leadTypes";
+import { MobileLeadCards } from "./MobileLeadCards";
 
 const rowCell = cn(cellClass, "h-14");
 
@@ -102,7 +103,8 @@ export function PeopleTable({ rows, sort, direction, onSort, loading }: {
   const head = { activeSort: sort, direction, onSort };
   return (
     <Tooltip.Provider delayDuration={250} skipDelayDuration={300} disableHoverableContent>
-      <Table.Root style={fixedTableStyle}>
+      <MobileLeadCards kind="people" rows={rows} loading={loading} />
+      <Table.Root style={fixedTableStyle} className="hidden md:block">
         <Table.Header>
           <tr>
             <SortableHead label="Name" sortKey="name" className="w-[21%]" {...head} />

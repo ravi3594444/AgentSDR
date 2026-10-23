@@ -1249,3 +1249,11 @@ table td:nth-child(5) a[href*="linkedin.com/company/"]::after {
     --chart-muted-strong: #717784;
   }
 }
+
+/* Keep mobile form text readable without the browser zooming into a field.
+   The existing Manrope family and desktop type scale stay in place. */
+@media (max-width: 767px) {
+  :is(.app-workspace, [data-modal]) :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]), textarea, select) {
+    font-size: 16px;
+  }
+}

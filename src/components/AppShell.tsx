@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { RiMenuLine } from "@remixicon/react";
 
@@ -39,6 +39,23 @@ export function isChromeless(pathname: string) {
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const frame = useRef<HTMLDivElement>(null);
+  // Mobile keyboards resize the visual viewport on browsers that leave dvh
+  // unchanged. Keep the composer inside the visible frame without blocking zoom.
+  useEffect(() => {
+    const element = frame.current;
+    const viewport = window.visualViewport;
+    if (!element || !viewport) return;
+    const style = document.documentElement.style;
+    const resize = () => {
+      if (window.innerWidth >= 768) style.removeProperty("--workspace-height");
+      else if (viewport.scale === 1) style.setProperty("--workspace-height", `${viewport.height}px`);
+    };
+    resize();
+    viewport.addEventListener("resize", resize);
+    window.addEventListener("resize", resize);
+    return () => { viewport.removeEventListener("resize", resize); window.removeEventListener("resize", resize); style.removeProperty("--workspace-height"); };
+  }, [pathname]);
   // Close the drawer when a link in it navigates (derived during render, not in an effect).
   const [drawerPath, setDrawerPath] = useState(pathname);
   if (drawerPath !== pathname) {
@@ -50,14 +67,14 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <SessionGate>
-    <div className="app-workspace flex h-dvh min-h-0 flex-col overflow-hidden bg-bg-white-0">
+    <div ref={frame} style={{ height: "var(--workspace-height, 100dvh)" }} className="app-workspace flex min-h-0 flex-col overflow-hidden bg-bg-white-0">
     <DemoBanner />
     <div className="flex min-h-0 flex-1 flex-col md:flex-row">
       <div className="hidden h-full md:flex">
         <Sidebar />
       </div>
 
-      <header className="flex h-12 shrink-0 items-center justify-between border-b border-stroke-soft-200 bg-bg-white-0 px-4 md:hidden">
+      <header className="flex h-[calc(3.5rem+env(safe-area-inset-top))] shrink-0 items-center justify-between border-b border-stroke-soft-200 bg-bg-white-0 px-4 pt-[env(safe-area-inset-top)] md:hidden">
         <Link href="/assistant" aria-label={`${BRAND.name} home`}>
           <Logo className="text-text-strong-950" iconClassName="size-7" textClassName="text-[15px]" />
         </Link>
@@ -65,7 +82,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           type="button"
           onClick={() => setDrawerOpen(true)}
           aria-label="Open menu"
-          className="flex size-9 items-center justify-center rounded-lg text-text-sub-600 outline-none ring-1 ring-inset ring-stroke-soft-200 transition hover:bg-bg-weak-50 focus-visible:ring-2 focus-visible:ring-primary-base"
+          className="flex size-11 items-center justify-center rounded-lg text-text-sub-600 outline-none ring-1 ring-inset ring-stroke-soft-200 transition hover:bg-bg-weak-50 focus-visible:ring-2 focus-visible:ring-primary-base"
         >
           <RiMenuLine className="size-5" />
         </button>
@@ -76,7 +93,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           <Dialog.Overlay className="fixed inset-0 z-50 bg-overlay backdrop-blur-[2px] data-[state=open]:animate-in data-[state=open]:fade-in-0 md:hidden" />
           <Dialog.Content
             aria-describedby={undefined}
-            className="fixed inset-y-0 left-0 z-50 w-[288px] max-w-[85vw] shadow-regular-md outline-none data-[state=open]:animate-in data-[state=open]:slide-in-from-left md:hidden"
+            className="fixed inset-y-0 left-0 z-50 w-[288px] max-w-[85vw] bg-bg-white-0 pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] shadow-regular-md outline-none data-[state=open]:animate-in data-[state=open]:slide-in-from-left md:hidden"
           >
             <Dialog.Title className="sr-only">Navigation</Dialog.Title>
             <Sidebar mobile onClose={() => setDrawerOpen(false)} />

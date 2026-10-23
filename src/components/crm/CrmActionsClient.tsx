@@ -3,7 +3,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   RiAlarmWarningFill,
   RiArchiveStackFill,
@@ -191,6 +191,10 @@ function useQueueSummary() {
  * the URL, so a link or a redirected bookmark opens the same list.
  */
 export function CrmActionsClient() {
+  const [filtersExpanded, setFiltersExpanded] = useState(false);
+  const [summaryExpanded, setSummaryExpanded] = useState(false);
+  const filtersId = useId();
+  const summaryId = useId();
   const [actions, setActions] = useState<Action[]>([]);
   const [categories, setCategories] = useState<Data[]>([]);
   const [sequences, setSequences] = useState<Data[]>([]);
@@ -344,7 +348,7 @@ export function CrmActionsClient() {
   return <>
     <PageHeader
       title="Inbox"
-      description="Every reply across email, WhatsApp, LinkedIn and Instagram. Needs you holds what waits on a person; All conversations keeps every reply findable."
+      description="Replies and decisions across all your channels."
       actions={<Button.Root variant="neutral" mode="stroke" size="small" onClick={refresh} disabled={loading}>
         <Button.Icon as={RiRefreshLine} className={cn(loading && loaded && "animate-spin")} />Refresh
       </Button.Root>}
@@ -363,16 +367,19 @@ export function CrmActionsClient() {
     <ChannelChips value={filters.channel} onChange={(value) => setFilter("channel", value)} className="mt-4" />
 
     {view === "needs_you" && <>
-      <WorkspaceStats items={[
+      <button type="button" aria-expanded={summaryExpanded} aria-controls={summaryId} onClick={() => setSummaryExpanded(value => !value)} className="mt-3 flex min-h-11 w-full items-center justify-between rounded-lg px-3 text-left text-paragraph-sm text-text-sub-600 ring-1 ring-inset ring-stroke-soft-200 sm:hidden"><span>Inbox summary</span><span className="text-label-xs">{summary?.drafts ?? "—"} drafts · {summary?.errors ?? "—"} errors</span></button>
+      <div id={summaryId} className={cn(summaryExpanded ? "block" : "hidden", "sm:block")}><WorkspaceStats items={[
         { label: "Drafts to review", value: summary?.drafts?.toLocaleString() ?? "—", detail: "Waiting for approval" },
         { label: "Follow-ups due", value: summary?.followUpsDue.toLocaleString() ?? "—", onSelect: () => setFilter("actionGroup", filters.actionGroup === "follow_up" ? "" : "follow_up"), selected: filters.actionGroup === "follow_up" },
         { label: "Errors", value: summary?.errors.toLocaleString() ?? "—", onSelect: () => setFilter("error", filters.error ? "" : "true"), selected: Boolean(filters.error) },
-      ]} />
+      ]} /></div>
       <NeedsYouList key={decisionsKey} initial={null} inbox channel={filters.channel || undefined} onCount={setDecisionCount} onChanged={onMutated} />
     </>}
 
     <Frame className="mt-5">
-      <FrameHeader title={view === "all" ? "All conversations" : "Replies, drafts and follow-ups"} description={detail} actions={<>
+      <FrameHeader title={view === "all" ? "All conversations" : "Replies, drafts and follow-ups"} description={detail} actions={<div className="w-full min-w-0 sm:w-auto">
+          <Button.Root variant="neutral" mode="stroke" size="small" aria-expanded={filtersExpanded} aria-controls={filtersId} onClick={() => setFiltersExpanded(value => !value)} className="h-11 w-full sm:hidden"><Button.Icon as={RiEqualizer2Line} />Filters{activeFilterCount > 0 ? ` · ${activeFilterCount} active` : ""}</Button.Root>
+          <div id={filtersId} className={cn(filtersExpanded ? "flex" : "hidden", "mt-3 flex-wrap items-center gap-2 [&>button]:min-h-11 sm:mt-0 sm:flex sm:[&>button]:min-h-0")}>
           <CompactSelect label="Category" placeholder="All categories" value={filters.category} onChange={(value) => setFilter("category", value)}><Select.Item value="">All categories</Select.Item>{categoryItems()}</CompactSelect>
           <CompactSelect label="Action type" placeholder="All action types" value={filters.actionGroup} onChange={(value) => setFilter("actionGroup", value)}><Select.Item value="">All action types</Select.Item>{CRM_ACTION_GROUPS.map((group) => <Select.Item key={group} value={group}>{CRM_ACTION_GROUP_LABELS[group]}</Select.Item>)}</CompactSelect>
           <CompactSelect label="Due time" placeholder="Any due time" value={filters.due} onChange={(value) => setFilter("due", value)}><Select.Item value="">Any due time</Select.Item><Select.Item value="overdue">Overdue</Select.Item><Select.Item value="today">Due today</Select.Item><Select.Item value="upcoming">Upcoming</Select.Item></CompactSelect>
@@ -394,7 +401,8 @@ export function CrmActionsClient() {
             </Popover.Content>
           </Popover.Root>
           {activeFilterCount > 0 && <Button.Root variant="neutral" mode="ghost" size="xsmall" onClick={clearFilters}><Button.Icon as={RiCloseLine} />Clear {activeFilterCount === 1 ? "filter" : `${activeFilterCount} filters`}</Button.Root>}
-      </>} />
+          </div>
+      </div>} />
       <FramePanel className="overflow-hidden p-0 sm:p-0">
         {!loaded && loading ? <RowsSkeleton rows={8} />
           : error && !actions.length ? <div className="p-4"><ErrorState message={error} onRetry={() => void load(0)} /></div>
@@ -422,18 +430,21 @@ export function CrmActionsClient() {
 /** All channels, or one: the Inbox's channel filter as one row of chips. */
 function ChannelChips({ value, onChange, className }: { value: string; onChange: (value: string) => void; className?: string }) {
   const options = [{ key: "", label: "All channels" }, ...CHANNELS.map((key) => ({ key, label: CONVERSATION_CHANNEL_META[key].label }))];
-  return <div role="group" aria-label="Channel" className={cn("flex flex-wrap gap-2", className)}>
+  return <div className={className}>
+    <label className="block sm:hidden"><span className="sr-only">Channel</span><select value={value} onChange={event => onChange(event.target.value)} className="h-11 w-full rounded-xl bg-bg-white-0 px-3 text-[16px] text-text-strong-950 outline-none ring-1 ring-inset ring-stroke-soft-200 focus:ring-2 focus:ring-primary-base">{options.map(option => <option key={option.key || "all"} value={option.key}>{option.label}</option>)}</select></label>
+    <div role="group" aria-label="Channel" className="hidden flex-wrap gap-2 sm:flex">
     {options.map((option) => {
       const active = value === option.key;
       const meta = option.key ? CONVERSATION_CHANNEL_META[option.key as keyof typeof CONVERSATION_CHANNEL_META] : null;
       const Icon = meta?.icon;
       return <button key={option.key || "all"} type="button" aria-pressed={active} onClick={() => onChange(option.key)}
-        className={cn("inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-label-xs outline-none ring-1 ring-inset transition-colors focus-visible:ring-2 focus-visible:ring-primary-base",
+        className={cn("inline-flex min-h-10 items-center gap-1.5 rounded-full px-3 text-label-xs outline-none ring-1 ring-inset transition-colors focus-visible:ring-2 focus-visible:ring-primary-base sm:min-h-8",
           active ? "bg-bg-strong-950 text-text-white-0 ring-bg-strong-950" : "bg-bg-white-0 text-text-sub-600 ring-stroke-soft-200 hover:text-text-strong-950")}>
         {Icon && <span className="flex" style={{ color: active ? undefined : meta.color }}><Icon className="size-4" aria-hidden="true" /></span>}
         {option.label}
       </button>;
     })}
+    </div>
   </div>;
 }
 
@@ -1267,7 +1278,7 @@ export function ActionCard({ action, categories, now, busy, onOpen, onMutate, on
     onMouseEnter={arm}
     onMouseLeave={cancel}
     onFocus={arm}
-    className={cn("cursor-pointer rounded-xl bg-bg-white-0 p-3.5 shadow-regular-xs ring-1 ring-inset ring-stroke-soft-200 outline-none transition hover:ring-stroke-sub-300 focus-visible:ring-2 focus-visible:ring-primary-base", busy && "pointer-events-none opacity-60")}
+    className={cn("cursor-pointer rounded-xl bg-bg-white-0 p-4 shadow-regular-xs ring-1 ring-inset ring-stroke-soft-200 outline-none transition hover:ring-stroke-sub-300 focus-visible:ring-2 focus-visible:ring-primary-base max-sm:[&_[data-row-tools]_button]:min-h-10 max-sm:[&_[data-row-tools]_a]:min-h-10", busy && "pointer-events-none opacity-60")}
   >
     <div className="flex items-start gap-3">
       <ChannelAvatar src={row.avatarUrl} name={row.name} channel={row.channel} className="size-8" />
