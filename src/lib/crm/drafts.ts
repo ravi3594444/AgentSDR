@@ -34,6 +34,7 @@ import {
   crmSequenceSteps,
   crmSettings,
   crmSubcategories,
+  type CrmDraftStatus,
 } from "./schema";
 import { assertCurrentCrmContext } from "./stateMachine";
 import { inOrg } from "@/lib/tenancy/scope";
@@ -539,6 +540,18 @@ export async function generateDraftForStep(
   }
 }
 
+/**
+ * Which drafts a person may edit: one waiting for review, or one whose
+ * generation failed — the inbox already offers its editor for both, and a
+ * failed generation is recovered by the person writing the reply
+ * themselves. A draft whose delivery is uncertain is never editable back
+ * into a send: the reply may already have arrived, so it is reconciled from
+ * the record page instead of being resent blind.
+ */
+export function isDraftEditableStatus(status: CrmDraftStatus): boolean {
+  return status === "awaiting_review" || status === "failed";
+}
+
 export async function updateDraft(input: {
   draftId: string;
   revision: number;
@@ -553,19 +566,36 @@ export async function updateDraft(input: {
     const [draft] = await tx.select().from(crmDrafts)
       .where(and(draftInOrg(), eq(crmDrafts.id, input.draftId))).limit(1).for("update");
     if (!draft) throw new CrmNotFoundError("CRM draft", input.draftId);
-    if (draft.status !== "awaiting_review") throw new CrmConflictError("Only awaiting-review drafts can be edited");
+    if (!isDraftEditableStatus(draft.status)) throw new CrmConflictError(`A ${draft.status} draft cannot be edited`);
     if (draft.revision !== input.revision) throw new CrmConflictError("Draft revision is stale");
     const record = await lockCrmRecord(tx, draft.crmRecordId);
     assertCurrentCrmContext(record, { contextVersion: draft.expectedContextVersion });
     const subject = draft.channel === "email" ? input.subject?.trim() || draft.subject : null;
     if (draft.channel === "email" && !subject) throw new Error("Email subject is required");
+    // Saving a failed draft is a manual recovery, not a regeneration: the
+    // person's text becomes the draft awaiting review (the step and the
+    // record return to the states a generated draft leaves them in), the
+    // generation error is cleared, and nothing is queued to send — the
+    // autopilot is not re-armed, and sending stays the person's explicit
+    // action through the guarded send path.
+    const recovering = draft.status === "failed";
+    const now = new Date();
     const [updated] = await tx.update(crmDrafts).set({
       subject,
       editedBodyText: bodyText,
       editedBodyHtml: input.bodyHtml?.trim() || null,
       revision: draft.revision + 1,
-      updatedAt: new Date(),
+      ...(recovering ? { status: "awaiting_review" as const, error: null } : {}),
+      updatedAt: now,
     }).where(eq(crmDrafts.id, draft.id)).returning();
+    if (recovering) {
+      if (draft.sequenceStepRunId) {
+        await tx.update(crmSequenceStepRuns).set({ status: "awaiting_review", lastError: null, updatedAt: now })
+          .where(eq(crmSequenceStepRuns.id, draft.sequenceStepRunId));
+      }
+      await tx.update(crmRecords).set({ workflowState: "action_required", nextActionAt: now, updatedAt: now })
+        .where(eq(crmRecords.id, record.id));
+    }
     await appendCrmEvent(tx, {
       personId: record.personId, crmRecordId: record.id, pipelineId: record.pipelineId,
       eventType: "draft.edited", actorType: "authenticated_operator", actorRef: input.actorRef,
