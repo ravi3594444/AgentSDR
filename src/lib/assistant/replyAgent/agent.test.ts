@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { agentSystemPrompt, agentUserPrompt, hardStop, ownerNoteToDecision, parseAgentDecision, replyProblems, wrongNumberClosing } from "./agent";
+import { agentSystemPrompt, agentUserPrompt, hardStop, ownerNoteToDecision, parseAgentDecision, replyAgentClaimRenewIntervalMs, replyProblems, wrongNumberClosing } from "./agent";
 
 const knowledge = "Business: Bright Path\n\nOffer: Monthly maintenance plan: ₹2,499 per chair per month, includes two visits.\n\nService area: Pune.\n\nHow meetings are booked: https://cal.example.test/brightpath";
 
@@ -82,5 +82,14 @@ describe("a wrong number", () => {
     expect(wrongNumberClosing({ action: "stop_contact" }, "wrong number, unsubscribe")).toEqual({ optOut: true });
     expect(wrongNumberClosing({ action: "stop_contact" }, "unsubscribe")).toBeNull();
     expect(wrongNumberClosing({ action: "reply" }, "Wrong number")).toBeNull();
+  });
+});
+
+describe("the claim heartbeat", () => {
+  test("renews three times inside the stale window, capped at a minute", () => {
+    expect(replyAgentClaimRenewIntervalMs(3 * 60_000)).toBe(60_000);
+    expect(replyAgentClaimRenewIntervalMs(90_000)).toBe(30_000);
+    expect(replyAgentClaimRenewIntervalMs(3_000)).toBe(1_000);
+    expect(replyAgentClaimRenewIntervalMs(900)).toBe(300);
   });
 });

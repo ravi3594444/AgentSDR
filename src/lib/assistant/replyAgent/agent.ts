@@ -46,6 +46,16 @@ export type AgentDecision = {
 /** Maximum model/check turns before reporting a failure to the owner. */
 export const MAX_TURNS = 3;
 
+/**
+ * How often a claimed run renews its claim while it works: three renewals
+ * inside the stale-claim window, capped at a minute — the same rhythm the
+ * CRM job queue uses, so a live run is never taken over as if it had died.
+ */
+export function replyAgentClaimRenewIntervalMs(staleClaimMs: number): number {
+  const stale = Number.isFinite(staleClaimMs) ? Math.max(1, Math.floor(staleClaimMs)) : 1;
+  return Math.max(250, Math.min(60_000, Math.floor(stale / 3)));
+}
+
 export function parseAgentDecision(text: string): AgentDecision {
   const body = JSON.parse(text) as Partial<AgentDecision> & { ownerNote?: unknown };
   const action = (AGENT_ACTIONS as readonly string[]).includes(String(body.action)) ? (body.action as AgentAction) : null;

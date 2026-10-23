@@ -33,6 +33,7 @@ import {
   hardStop,
   ownerNoteToDecision,
   parseAgentDecision,
+  replyAgentClaimRenewIntervalMs,
   wrongNumberClosing,
   type AgentChannel,
   type HardFacts,
@@ -178,9 +179,12 @@ function leadFacts(person: typeof people.$inferSelect | undefined, company: type
   return facts;
 }
 
-async function finish(runRowId: string, scope: Scope, startedAt: number, values: { status: ReplyAgentStatus; reason?: string | null; action?: string | null; category?: string | null; reply?: string | null; turns?: ReplyAgentTurn[]; model?: string | null; draftId?: string | null; decisionId?: string | null }): Promise<ReplyAgentOutcome> {
+async function finish(runRowId: string, scope: Scope, startedAt: number, values: { status: ReplyAgentStatus; reason?: string | null; action?: string | null; category?: string | null; reply?: string | null; turns?: ReplyAgentTurn[]; model?: string | null; draftId?: string | null; decisionId?: string | null }, claimAttempts: number): Promise<ReplyAgentOutcome> {
   // From the message arriving here (stored), not from the provider's clock.
   const ms = Math.max(0, Date.now() - Math.min(startedAt, scope.messageCreatedAt.getTime()));
+  // Fenced on the claim's attempts: a takeover reuses this row with a higher
+  // attempts value, so an old execution's finish matches nothing and can
+  // never overwrite the replacement's result.
   await db.update(replyAgentRuns).set({
     status: values.status,
     reason: values.reason?.slice(0, 1_000) ?? null,
@@ -193,7 +197,11 @@ async function finish(runRowId: string, scope: Scope, startedAt: number, values:
     decisionId: values.decisionId ?? null,
     totalMs: ms,
     updatedAt: new Date(),
-  }).where(eq(replyAgentRuns.id, runRowId));
+  }).where(and(
+    eq(replyAgentRuns.id, runRowId),
+    eq(replyAgentRuns.attempts, claimAttempts),
+    eq(replyAgentRuns.status, "running"),
+  ));
   return { status: values.status, reason: values.reason ?? null, reply: values.reply ?? null, ms };
 }
 
@@ -298,9 +306,35 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
     target: replyAgentRuns.messageId,
     set: { status: "running", attempts: sql`${replyAgentRuns.attempts} + 1`, updatedAt: new Date() },
     setWhere: sql`${replyAgentRuns.organizationId} = ${organizationId} and (${replyAgentRuns.status} = 'failed' or (${replyAgentRuns.status} = 'running' and ${replyAgentRuns.updatedAt} < ${new Date(Date.now() - STALE_CLAIM_MS).toISOString()}::timestamptz))`,
-  }).returning({ id: replyAgentRuns.id });
+  }).returning({ id: replyAgentRuns.id, attempts: replyAgentRuns.attempts });
   if (!claimed) return { status: "stopped", reason: "this message is already being answered", reply: null, ms: 0 };
   const runRowId = claimed.id;
+  // Claim fencing: a takeover reuses this row and increments attempts, so the
+  // attempts value claimed here identifies this execution. A heartbeat keeps
+  // updatedAt inside the stale window while this execution works; every
+  // heartbeat (and finish) write carries the attempts predicate, so the
+  // moment a newer attempt owns the row, this execution's writes stop
+  // landing and it stops instead of overwriting the replacement.
+  const claimAttempts = claimed.attempts;
+  let claimLost = false;
+  const heartbeat = setInterval(() => {
+    void db.update(replyAgentRuns)
+      .set({ updatedAt: new Date() })
+      .where(and(
+        eq(replyAgentRuns.id, runRowId),
+        eq(replyAgentRuns.attempts, claimAttempts),
+        eq(replyAgentRuns.status, "running"),
+      ))
+      .returning({ id: replyAgentRuns.id })
+      .then((rows) => {
+        if (!rows.length) {
+          claimLost = true;
+          clearInterval(heartbeat);
+        }
+      })
+      .catch(() => undefined);
+  }, replyAgentClaimRenewIntervalMs(STALE_CLAIM_MS));
+  const finishRun = (values: Parameters<typeof finish>[3]) => finish(runRowId, scope, startedAt, values, claimAttempts);
   const leadName = leadFacts(person, profileRow?.company).name || person?.email || person?.phone || "the lead";
   const brief = deps.brief ?? !deps.model;
 
@@ -328,7 +362,7 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
           request: { replyAgent: true, turns: 0 },
           response: { hardStop: stop.reason },
         }));
-        if (classified.stale) return { ...(await finish(runRowId, scope, startedAt, { status: "stopped", reason: stop.reason, action: "wrong_number", category: "other" })), ...answered };
+        if (classified.stale) return { ...(await finishRun({ status: "stopped", reason: stop.reason, action: "wrong_number", category: "other" })), ...answered };
         const closed = await closeWrongNumber({
           messageId,
           source: "reply_agent",
@@ -337,12 +371,12 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
           reasoning,
           sendAllowed: sendingAllowed(deps),
         }, { send: deps.send });
-        return { ...(await finish(runRowId, scope, startedAt, wrongNumberResult(closed))), ...answered };
+        return { ...(await finishRun(wrongNumberResult(closed))), ...answered };
       }
       const decisionId = stop.tellOwner
         ? await tellOwner({ scope, facts, leadName, kind: "limit", note: stop.reason, decision: "Read the conversation and answer yourself.", draftId: null, told: false, brief })
         : null;
-      return { ...(await finish(runRowId, scope, startedAt, { status: stop.tellOwner ? "told_owner" : "stopped", reason: stop.reason, decisionId })), ...answered };
+      return { ...(await finishRun({ status: stop.tellOwner ? "told_owner" : "stopped", reason: stop.reason, decisionId })), ...answered };
     }
 
     // Context: the conversation before this message, the business, the lead.
@@ -386,7 +420,14 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
     let decision = generation.decision;
     const { turns, lastResult } = generation;
     const modelName = generation.model;
-    await db.update(replyAgentRuns).set({ turns, model: modelName, updatedAt: new Date() }).where(eq(replyAgentRuns.id, runRowId));
+    // A newer attempt took this message over while the model worked: stop
+    // here — the row, the draft and the send all belong to the replacement.
+    if (claimLost) return { status: "stopped", reason: "a newer attempt took over this message", reply: null, ms: 0 };
+    await db.update(replyAgentRuns).set({ turns, model: modelName, updatedAt: new Date() }).where(and(
+      eq(replyAgentRuns.id, runRowId),
+      eq(replyAgentRuns.attempts, claimAttempts),
+      eq(replyAgentRuns.status, "running"),
+    ));
 
     // No usable answer for a message that plainly says "wrong number": close
     // it with the fixed apology, never a holding line that promises more.
@@ -398,7 +439,7 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
     // promise or a successful reply. Wrong-number closure above is unchanged.
     if (!decision) {
       const late = hardStop(await readFacts(db, scope, person?.email ?? null));
-      if (late) return { ...(await finish(runRowId, scope, startedAt, { status: "stopped", reason: late.reason, turns, model: modelName })), ...(late.answered ? { answered: true } : {}) };
+      if (late) return { ...(await finishRun({ status: "stopped", reason: late.reason, turns, model: modelName })), ...(late.answered ? { answered: true } : {}) };
       const reason = generation.failureReason!;
       const current = await withCrmTransaction(async (tx) => {
         const record = await lockCrmRecord(tx, scope.recordId);
@@ -412,13 +453,13 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
         });
         return true;
       });
-      if (!current) return finish(runRowId, scope, startedAt, { status: "stopped", reason: "the conversation changed while the assistant was answering", turns, model: modelName });
+      if (!current) return finishRun({ status: "stopped", reason: "the conversation changed while the assistant was answering", turns, model: modelName });
       const decisionId = await tellOwner({
         scope, facts, leadName, kind: "uncertain", note: reason,
         decision: "The assistant has not answered this message. Check the AI provider error or answer from the conversation.",
         draftId: null, told: false, brief: false,
       });
-      return finish(runRowId, scope, startedAt, { status: "failed", reason, turns, model: modelName, decisionId });
+      return finishRun({ status: "failed", reason, turns, model: modelName, decisionId });
     }
     const closing = wrongNumberClosing(decision, scope.leadMessage);
     // A wrong number is filed as "Wrong Number" (other), never as a buyer's answer.
@@ -440,7 +481,7 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
     }));
     if (classified.stale) {
       const late = hardStop(await readFacts(db, scope, person?.email ?? null));
-      return finish(runRowId, scope, startedAt, { status: "stopped", reason: late?.reason ?? "the conversation changed while the assistant was answering", action: decision.action, category: decision.category, turns, model: modelName });
+      return finishRun({ status: "stopped", reason: late?.reason ?? "the conversation changed while the assistant was answering", action: decision.action, category: decision.category, turns, model: modelName });
     }
     const base = { action: decision.action, category: decision.category, turns, model: modelName };
 
@@ -458,24 +499,24 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
         provider: lastResult?.provider ?? "reply-agent",
         model: modelName ?? "reply-agent",
       }, { send: deps.send });
-      return finish(runRowId, scope, startedAt, { ...base, ...wrongNumberResult(closed) });
+      return finishRun({ ...base, ...wrongNumberResult(closed) });
     }
 
     if (decision.action === "stop_contact") {
       await setPersonDoNotContact({ personId: scope.personId, reason: `${decision.reasoning || "They asked not to be contacted"} (read in their reply)`.slice(0, 500), source: "inbound_request", actorType: "ai", actorRef: AUTOPILOT_ACTOR });
-      return finish(runRowId, scope, startedAt, { ...base, status: "stopped", reason: "they asked not to be contacted: all outreach to them stopped" });
+      return finishRun({ ...base, status: "stopped", reason: "they asked not to be contacted: all outreach to them stopped" });
     }
     if (decision.action === "no_reply") {
       // Nothing to do for anyone: the record leaves Action required.
       await db.update(crmRecords).set({ workflowState: "idle", nextActionAt: null, updatedAt: new Date() })
         .where(and(eq(crmRecords.id, scope.recordId), eq(crmRecords.contextVersion, classified.record.contextVersion)));
-      return finish(runRowId, scope, startedAt, { ...base, status: "no_reply", reason: decision.reasoning || "no answer needed" });
+      return finishRun({ ...base, status: "no_reply", reason: decision.reasoning || "no answer needed" });
     }
     if (decision.action === "tell_owner") {
       const note = decision.ownerNote ?? { kind: "other" as const, note: decision.reasoning || "the assistant could not answer this" };
       const mapped = ownerNoteToDecision(note.kind);
       const decisionId = await tellOwner({ scope, facts, leadName, kind: mapped.kind, note: note.note, decision: mapped.decision, draftId: null, told: false, brief });
-      return finish(runRowId, scope, startedAt, { ...base, status: "told_owner", reason: note.note, decisionId });
+      return finishRun({ ...base, status: "told_owner", reason: note.note, decisionId });
     }
 
     // reply: a draft (the record of what was written), then the send.
@@ -516,15 +557,17 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
     const note = decision.ownerNote;
     const sendNow = membership.automatic && sendingAllowed(deps);
     const answeredMeanwhile = async () => ({
-      ...(await finish(runRowId, scope, startedAt, { ...base, status: "stopped", reason: "it was already answered", reply, draftId: draft.id })),
+      ...(await finishRun({ ...base, status: "stopped", reason: "it was already answered", reply, draftId: draft.id })),
       answered: true,
     });
     if (!sendNow) {
       if (await setAsideIfAnswered(scope, draft.id)) return answeredMeanwhile();
       const reason = membership.automatic ? "the assistant only sends from a production server" : "the run is in Review mode: the reply waits for you in the Inbox (Needs you)";
       const decisionId = note ? await tellOwner({ scope, facts, leadName, ...ownerNoteToDecision(note.kind), note: note.note, draftId: draft.id, told: false, brief }) : null;
-      return finish(runRowId, scope, startedAt, { ...base, status: "drafted", reason, reply, draftId: draft.id, decisionId });
+      return finishRun({ ...base, status: "drafted", reason, reply, draftId: draft.id, decisionId });
     }
+
+    if (claimLost) return { status: "stopped", reason: "a newer attempt took over this message", reply: null, ms: 0 };
 
     // Reserve under the organization's lock, after reading every rule again.
     const reservation = await db.transaction(async (tx) => {
@@ -549,7 +592,7 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
       const decisionId = reservation.tellOwner
         ? await tellOwner({ scope, facts, leadName, kind: "limit", note: reservation.held, decision: "Read the conversation and answer yourself.", draftId: draft.id, told: false, brief })
         : null;
-      return finish(runRowId, scope, startedAt, { ...base, status: reservation.tellOwner ? "told_owner" : "stopped", reason: reservation.held, reply, draftId: draft.id, decisionId });
+      return finishRun({ ...base, status: reservation.tellOwner ? "told_owner" : "stopped", reason: reservation.held, reply, draftId: draft.id, decisionId });
     }
 
     try {
@@ -565,21 +608,28 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
       if (error instanceof DeferredCrmSendError) {
         await deferReplySend({ reservationId: reservation.id, draftId: draft.id, revision: draft.revision, readyAt: draft.createdAt, retryAt: error.retryAt, idempotencyKey: `autopilot:agent:${messageId}` });
         const decisionId = note ? await tellOwner({ scope, facts, leadName, ...ownerNoteToDecision(note.kind), note: note.note, draftId: draft.id, told: false, brief }) : null;
-        return finish(runRowId, scope, startedAt, { ...base, status: "drafted", reason: SENDER_GAP_WAIT, reply, draftId: draft.id, decisionId });
+        return finishRun({ ...base, status: "drafted", reason: SENDER_GAP_WAIT, reply, draftId: draft.id, decisionId });
       }
       const text = errorText(error);
       await db.update(autopilotReplies).set({ status: "failed", reason: `the send failed: ${text}`.slice(0, 1_000), updatedAt: new Date() }).where(eq(autopilotReplies.id, reservation.id));
       const decisionId = await tellOwner({ scope, facts, leadName, kind: "uncertain", note: `the reply could not be sent (${text})`, decision: "Open the chat and send it yourself.", draftId: draft.id, told: false, brief });
-      return finish(runRowId, scope, startedAt, { ...base, status: "failed", reason: `the send failed: ${text}`, reply, draftId: draft.id, decisionId });
+      return finishRun({ ...base, status: "failed", reason: `the send failed: ${text}`, reply, draftId: draft.id, decisionId });
     }
     // The reply went out; the owner hears about what needs them.
     const decisionId = note
       ? await tellOwner({ scope, facts, leadName, ...ownerNoteToDecision(note.kind), note: note.note, draftId: draft.id, told: note.kind === "ready" || note.kind === "person", brief })
       : null;
-    return finish(runRowId, scope, startedAt, { ...base, status: "replied", reason: note ? `sent; the owner was told: ${note.note}` : null, reply, draftId: draft.id, decisionId });
+    return finishRun({ ...base, status: "replied", reason: note ? `sent; the owner was told: ${note.note}` : null, reply, draftId: draft.id, decisionId });
   } catch (error) {
-    await db.update(replyAgentRuns).set({ status: "failed", reason: errorText(error), updatedAt: new Date() }).where(eq(replyAgentRuns.id, runRowId))
+    await db.update(replyAgentRuns).set({ status: "failed", reason: errorText(error), updatedAt: new Date() })
+      .where(and(
+        eq(replyAgentRuns.id, runRowId),
+        eq(replyAgentRuns.attempts, claimAttempts),
+        eq(replyAgentRuns.status, "running"),
+      ))
       .catch(() => undefined);
     throw error;
+  } finally {
+    clearInterval(heartbeat);
   }
 }

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  crmJobClaimRenewIntervalMs,
   crmJobIdentity,
   crmJobRetryDelayMs,
   shouldRetryCrmJob,
@@ -39,6 +40,20 @@ describe("CRM job retry policy", () => {
     assert.equal(shouldRetryCrmJob({ attempts: 1, maxAttempts: 3 }), true);
     assert.equal(shouldRetryCrmJob({ attempts: 3, maxAttempts: 3 }), false);
     assert.equal(shouldRetryCrmJob({ attempts: 1, maxAttempts: 3 }, true), false);
+  });
+});
+
+describe("CRM job claim renewal", () => {
+  it("renews three times inside the stale window, capped at a minute", () => {
+    assert.equal(crmJobClaimRenewIntervalMs(5 * 60 * 1_000), 60_000);
+    assert.equal(crmJobClaimRenewIntervalMs(90 * 1_000), 30_000);
+    assert.equal(crmJobClaimRenewIntervalMs(30 * 1_000), 10_000);
+    assert.equal(crmJobClaimRenewIntervalMs(3_000), 1_000);
+  });
+
+  it("stays inside tiny stale windows and survives bad input", () => {
+    assert.equal(crmJobClaimRenewIntervalMs(900), 300);
+    assert.equal(crmJobClaimRenewIntervalMs(Number.NaN), 60_000);
   });
 });
 

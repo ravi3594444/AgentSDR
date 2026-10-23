@@ -57,6 +57,18 @@ export function shouldRetryCrmJob(
   return !permanent && job.attempts < job.maxAttempts;
 }
 
+/**
+ * How often a running job renews its claim: three renewals inside the stale
+ * window, so live work is never mistaken for a dead worker, capped so renewal
+ * itself never becomes load.
+ */
+export function crmJobClaimRenewIntervalMs(staleLockMs: number): number {
+  const stale = Number.isFinite(staleLockMs)
+    ? Math.max(1, Math.floor(staleLockMs))
+    : DEFAULT_STALE_LOCK_MS;
+  return Math.max(250, Math.min(60_000, Math.floor(stale / 3)));
+}
+
 export type EnqueueCrmJobInput = {
   kind: CrmJobKind;
   entityId: string;
@@ -215,6 +227,28 @@ function claimOwner(job: CrmJob): string {
     throw new CrmJobClaimLostError(job.id);
   }
   return job.lockedBy;
+}
+
+/**
+ * Renews a running job's claim so the stale sweep only ever reclaims work
+ * whose worker actually stopped. Ownership is the claim predicate shared with
+ * completion and failure — same worker, same attempt — never the timestamp
+ * alone: a worker whose claim was reclaimed gets CrmJobClaimLostError and
+ * must stop renewing.
+ */
+export async function renewCrmJobClaim(job: CrmJob): Promise<void> {
+  const now = new Date();
+  const updated = await db
+    .update(crmJobs)
+    .set({ lockedAt: now, updatedAt: now })
+    .where(and(
+      eq(crmJobs.id, job.id),
+      eq(crmJobs.status, "running"),
+      eq(crmJobs.lockedBy, claimOwner(job)),
+      eq(crmJobs.attempts, job.attempts),
+    ))
+    .returning({ id: crmJobs.id });
+  if (!updated.length) throw new CrmJobClaimLostError(job.id);
 }
 
 export async function completeCrmJob(job: CrmJob): Promise<void> {

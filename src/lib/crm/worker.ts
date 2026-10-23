@@ -5,8 +5,10 @@ import {
   CrmJobClaimLostError,
   claimCrmJobs,
   completeCrmJob,
+  crmJobClaimRenewIntervalMs,
   failCrmJob,
   recoverStaleCrmJobs,
+  renewCrmJobClaim,
   type CrmJob,
 } from "./queue";
 
@@ -21,11 +23,17 @@ export function crmWorkerPositiveInteger(
 
 const POLL_INTERVAL_MS = crmWorkerPositiveInteger(process.env.CRM_WORKER_POLL_MS, 1_000, 100);
 const CONCURRENCY = crmWorkerPositiveInteger(process.env.CRM_WORKER_CONCURRENCY, 4, 1);
-/** How long a running job may go without finishing before it is taken for dead and requeued (there is no heartbeat). */
+/** How long a running job may go without renewing its claim before it is taken for dead and requeued. */
 export const STALE_LOCK_MS = crmWorkerPositiveInteger(
   process.env.CRM_WORKER_STALE_LOCK_MS,
   5 * 60 * 1_000,
   1_000,
+);
+/** How often a running job renews its claim; derived from the stale window unless set explicitly. */
+const CLAIM_RENEW_MS = crmWorkerPositiveInteger(
+  process.env.CRM_WORKER_CLAIM_RENEW_MS,
+  crmJobClaimRenewIntervalMs(STALE_LOCK_MS),
+  100,
 );
 const STALE_SWEEP_EVERY = 60;
 const WORKER_STATE_KEY = Symbol.for("agentsdr.crm-worker-state");
@@ -112,6 +120,15 @@ async function runJob(job: CrmJob): Promise<void> {
     return;
   }
 
+  // Renew the claim while the handler runs, so slow live work is never
+  // reclaimed as stale. Losing the claim stops renewal; completion and
+  // failure below re-check the same ownership, so a worker that lost its
+  // claim cannot overwrite the newer attempt's result.
+  const renewal = setInterval(() => {
+    void renewCrmJobClaim(job).catch((error) => {
+      if (error instanceof CrmJobClaimLostError) clearInterval(renewal);
+    });
+  }, CLAIM_RENEW_MS);
   try {
     // Jobs are claimed across organizations; each one runs as its own.
     await runInOrganization(job.organizationId, () => handler(job));
@@ -126,6 +143,8 @@ async function runJob(job: CrmJob): Promise<void> {
     if (!willRetry) {
       console.warn(`[crm/worker] ${job.kind} job ${job.id} failed: ${message}`);
     }
+  } finally {
+    clearInterval(renewal);
   }
 }
 
