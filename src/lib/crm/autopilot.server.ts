@@ -3,7 +3,12 @@ import "server-only";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { outreachRunLeads, outreachRuns, type OutreachPlan, type RunLeadChannel } from "@/lib/assistant/schema";
 import { inOrg } from "@/lib/tenancy/scope";
-import { enqueueCrmJobInTransaction, type CrmJob } from "./queue";
+import {
+  crmJobExecutionFor,
+  enqueueCrmJobInTransaction,
+  type CrmJob,
+  type CrmJobExecution,
+} from "./queue";
 import { crmConversations } from "./schema";
 import type { CrmExecutor, CrmTransaction } from "./repository";
 
@@ -72,13 +77,17 @@ export async function enqueueAutopilotInTransaction(tx: CrmTransaction, input: {
   });
 }
 
-export async function handleAutoSendJob(job: CrmJob): Promise<void> {
+export async function handleAutoSendJob(
+  job: CrmJob,
+  executionArg?: CrmJobExecution | null,
+): Promise<void> {
   // Loaded on use: the runner pulls in the assistant's AI and knowledge code.
   const { runAutopilotForDraft } = await import("@/lib/assistant/autopilotRun.server");
   const revision = typeof job.payload.revision === "number" ? job.payload.revision : null;
   const readyAt = typeof job.payload.readyAt === "string" ? new Date(job.payload.readyAt) : null;
   const idempotencyKey = typeof job.payload.idempotencyKey === "string" ? job.payload.idempotencyKey : undefined;
   const { replyBudgetForJob } = await import("@/lib/crm/ai/budget.server");
-  const budget = await replyBudgetForJob(job);
-  await runAutopilotForDraft(job.entityId, { revision, readyAt, idempotencyKey, budget });
+  const execution = executionArg ?? crmJobExecutionFor(job);
+  const budget = await replyBudgetForJob(job, execution);
+  await runAutopilotForDraft(job.entityId, { revision, readyAt, idempotencyKey, budget, execution });
 }

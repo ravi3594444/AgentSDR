@@ -16,7 +16,13 @@ import { loadCallContextMessages } from "./callHistory";
 import { appendCrmEvent } from "./events";
 import { inboundAnsweredSince, settleAnsweredRecordInTransaction } from "./manualOutbound";
 import { setPersonDoNotContactInTransaction } from "./policies";
-import { enqueueCrmJobInTransaction, type CrmJob } from "./queue";
+import {
+  CrmJobClaimLostError,
+  crmJobExecutionFor,
+  enqueueCrmJobInTransaction,
+  type CrmJob,
+  type CrmJobExecution,
+} from "./queue";
 import { CrmConflictError, withCrmTransaction } from "./repository";
 import { lockCrmRecord, recordAiClassificationInTransaction } from "./records";
 import {
@@ -389,7 +395,16 @@ export async function handleClassificationJob(
     /** The reply agent's stand-ins (tests); false skips it. A stand-in classifier alone skips it too. */
     replyAgent?: false | import("@/lib/assistant/replyAgent/agent.server").ReplyAgentDependencies;
   } = {},
+  executionArg?: CrmJobExecution | null,
 ): Promise<void> {
+  // The execution this handler's effects are bound to (RR3): the worker's
+  // when claimed by it, otherwise one made from the claimed job for direct
+  // callers, otherwise none (an unclaimed job has no claim to lose). Every
+  // effect below — classification writes, draft jobs, wrong-number sends,
+  // the reply agent — re-checks it, so a handler whose claim was taken
+  // over mid-flight stops before acting, even when its reply-agent claim
+  // is still valid.
+  const execution = executionArg ?? crmJobExecutionFor(job);
   let context: ClassificationContext;
   try {
     context = await classificationContext(job.entityId);
@@ -405,6 +420,7 @@ export async function handleClassificationJob(
       // Possibly still another worker's send: look again once its claim is past the lock window, never fail it for good.
       if (unfinished && "inFlightUntil" in unfinished) throw new RetryCrmJobLaterError("Classification job context is stale; its wrong-number apology is left to the worker that claimed it until its claim is stale", unfinished.inFlightUntil);
       if (!unfinished) throw new PermanentCrmJobError("Classification job context is stale");
+      await execution?.assertOwned();
       await closeWrongNumber({ messageId: job.entityId, source: unfinished.source, acknowledgement: null, optOut: unfinished.optOut, sendAllowed: sending.sendAllowed }, { send: sending.send });
       return;
     }
@@ -413,10 +429,10 @@ export async function handleClassificationJob(
     // message, replies, tells the owner or stops, and records the
     // classification itself. Anything else — and every explicit opt-out —
     // goes through the classifier below, as before. REPLY_AGENT=off turns it off.
-    const budget = await replyBudgetForJob(job);
+    const budget = await replyBudgetForJob(job, execution);
     if (agent && !context.dncIntent && process.env.REPLY_AGENT !== "off") {
       const { runReplyAgent } = await import("@/lib/assistant/replyAgent/agent.server");
-      const outcome = await runReplyAgent(job.entityId, { ...agent, budget });
+      const outcome = await runReplyAgent(job.entityId, { ...agent, budget, execution });
       if (outcome) {
         await settleAfterReplyAgent(context.recordId, job.entityId, Boolean(outcome.answered));
         return;
@@ -428,7 +444,9 @@ export async function handleClassificationJob(
     // apology is written (an explicit opt-out still goes the usual way; a
     // bare "Stop" makes it Do Not Contact and withdraws a waiting apology).
     if (context.routeWrong && !context.dncIntent) {
-      await withCrmTransaction((tx) => recordAiClassificationInTransaction(tx, {
+      await withCrmTransaction(async (tx) => {
+        await execution?.assertOwned(tx);
+        return recordAiClassificationInTransaction(tx, {
         recordId: context.recordId,
         messageId: job.entityId,
         expectedContextVersion: context.expectedContextVersion,
@@ -440,13 +458,18 @@ export async function handleClassificationJob(
         model: "wrong-route",
         request: { wrongRoute: true },
         response: { wrongRoute: true },
-      }));
+        });
+      });
+      await execution?.assertOwned();
       await closeWrongNumber({ messageId: job.entityId, source: "classifier", acknowledgement: null, optOut: context.optOutWords, sendAllowed: sending.sendAllowed }, { send: sending.send });
       return;
     }
     let result: Awaited<ReturnType<typeof classifyCrmReply>>;
     try {
-      result = await classifyCrmReply(context.input, { complete: dependencies.complete, budget });
+      result = await classifyCrmReply(
+        { ...context.input, signal: execution?.signal },
+        { complete: dependencies.complete, budget },
+      );
     } catch (error) {
       // The model is held (Claude Code usage limit): an explicit opt-out is honoured now, not after the reset.
       if (claudeHoldUntil(error) && context.dncIntent) {
@@ -461,6 +484,10 @@ export async function handleClassificationJob(
       throw error;
     }
     const closeAs = await withCrmTransaction(async (tx): Promise<{ optOut: boolean } | null> => {
+      // The classification, its DNC writes and the draft-job enqueue in
+      // this transaction are effects of this execution: check the claim
+      // inside the transaction before any of them.
+      await execution?.assertOwned(tx);
       // "Wrong number, stop messaging me" is Do Not Contact, filed as a wrong number rather than a buyer's no.
       const dncWrongNumber = context.dncIntent && context.wrongNumberWords;
       const appliedResult = await recordAiClassificationInTransaction(tx, {
@@ -566,6 +593,7 @@ export async function handleClassificationJob(
       return null;
     });
     if (closeAs) {
+      await execution?.assertOwned();
       await closeWrongNumber({
         messageId: job.entityId,
         source: "classifier",
@@ -587,16 +615,27 @@ export async function handleClassificationJob(
       throw new RetryCrmJobLaterError(`${error instanceof Error ? error.message : String(error)} Reply sorting is tried again after it resets.`, retryAt);
     }
     // Put back to wait for another worker's claim is not a failed classification: the record stays as it is.
-    if (!(error instanceof PermanentCrmJobError) && !(error instanceof RetryCrmJobLaterError)) await recordClassificationFailure(job.entityId, error);
+    // A displaced execution records nothing either: the failure state it
+    // would write belongs to the replacement's attempt, not to this one.
+    if (
+      !(error instanceof PermanentCrmJobError)
+      && !(error instanceof RetryCrmJobLaterError)
+      && !(error instanceof CrmJobClaimLostError)
+      && !execution?.claimLost
+    ) await recordClassificationFailure(job.entityId, error);
     throw error;
   }
 }
 
-export async function handleInitialDraftJob(job: CrmJob): Promise<void> {
-  const budget = await replyBudgetForJob(job);
+export async function handleInitialDraftJob(
+  job: CrmJob,
+  executionArg?: CrmJobExecution | null,
+): Promise<void> {
+  const execution = executionArg ?? crmJobExecutionFor(job);
+  const budget = await replyBudgetForJob(job, execution);
   const stepRunId = typeof job.payload.stepRunId === "string" ? job.payload.stepRunId : null;
   if (stepRunId) {
-    await generateDraftForStep(stepRunId, { budget });
+    await generateDraftForStep(stepRunId, { budget, execution });
     return;
   }
   const [scope] = await db.select({ stepRunId: crmSequenceStepRuns.id })
@@ -607,7 +646,7 @@ export async function handleInitialDraftJob(job: CrmJob): Promise<void> {
     .where(and(inOrg(crmSequenceRuns), eq(crmClassifications.id, job.entityId), eq(crmSequenceRuns.status, "active")))
     .orderBy(asc(crmSequenceSteps.position)).limit(1);
   if (scope) {
-    await generateDraftForStep(scope.stepRunId, { budget });
+    await generateDraftForStep(scope.stepRunId, { budget, execution });
     return;
   }
   // No sequence covers this classification — draft from the thread instead.
@@ -624,10 +663,14 @@ export async function handleInitialDraftJob(job: CrmJob): Promise<void> {
   const [record] = await db.select({ latestInboundMessageId: crmRecords.latestInboundMessageId })
     .from(crmRecords).where(and(inOrg(crmRecords), eq(crmRecords.id, recordId))).limit(1);
   if (record?.latestInboundMessageId && await inboundAnsweredSince(db, recordId, record.latestInboundMessageId)) return;
-  await generateFallbackDraft(recordId, { budget });
+  await generateFallbackDraft(recordId, { budget, execution });
 }
 
-export async function handleDueFollowupDraftJob(job: CrmJob): Promise<void> {
+export async function handleDueFollowupDraftJob(
+  job: CrmJob,
+  executionArg?: CrmJobExecution | null,
+): Promise<void> {
+  const execution = executionArg ?? crmJobExecutionFor(job);
   const [scope] = await db.select({ dueAt: crmSequenceStepRuns.dueAt, status: crmSequenceStepRuns.status })
     .from(crmSequenceStepRuns)
     .innerJoin(crmSequenceRuns, eq(crmSequenceRuns.id, crmSequenceStepRuns.sequenceRunId))
@@ -635,8 +678,8 @@ export async function handleDueFollowupDraftJob(job: CrmJob): Promise<void> {
   if (!scope) throw new PermanentCrmJobError("Due CRM sequence step was not found");
   if (scope.status !== "scheduled") return;
   if (scope.dueAt > new Date()) throw new CrmConflictError("Follow-up sequence step is not due yet");
-  const budget = await replyBudgetForJob(job);
-  await generateDraftForStep(job.entityId, { budget });
+  const budget = await replyBudgetForJob(job, execution);
+  await generateDraftForStep(job.entityId, { budget, execution });
 }
 
 let registered = false;
@@ -645,9 +688,9 @@ export function registerDefaultCrmJobHandlers(): void {
   if (registered) return;
   registered = true;
   registerCrmJobHandlers({
-    classification: handleClassificationJob,
-    initialDraft: handleInitialDraftJob,
-    dueFollowupDraft: handleDueFollowupDraftJob,
-    autoSend: handleAutoSendJob,
+    classification: (job, execution) => handleClassificationJob(job, {}, execution),
+    initialDraft: (job, execution) => handleInitialDraftJob(job, execution),
+    dueFollowupDraft: (job, execution) => handleDueFollowupDraftJob(job, execution),
+    autoSend: (job, execution) => handleAutoSendJob(job, execution),
   });
 }

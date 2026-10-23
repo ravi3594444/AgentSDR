@@ -37,9 +37,18 @@ import {
   type CrmDraftStatus,
 } from "./schema";
 import { assertCurrentCrmContext } from "./stateMachine";
+import { CrmJobClaimLostError, type CrmJobExecution } from "./queue";
 import { inOrg } from "@/lib/tenancy/scope";
 
 export type CrmDraft = typeof crmDrafts.$inferSelect;
+
+/** What a draft generation may draw on: a stand-in completion, the job's budget, and its execution claim (RR3). */
+export type DraftGenerationDependencies = {
+  complete?: DraftCompletion;
+  budget?: CompletionBudget;
+  /** The owning job's execution: finishing the draft re-checks it inside the write transaction. */
+  execution?: CrmJobExecution | null;
+};
 
 
 type PreparedDraft = {
@@ -295,8 +304,12 @@ async function loadDraftContext(
 async function finishGeneratedDraft(
   prepared: PreparedDraft,
   generated: Awaited<ReturnType<typeof generateCrmDraft>>,
+  execution?: CrmJobExecution | null,
 ): Promise<CrmDraft> {
   return withCrmTransaction(async (tx) => {
+    // The write is an effect of the job's execution: a displaced
+    // generation does not land its draft (RR3).
+    await execution?.assertOwned(tx);
     const [draft] = await tx.select().from(crmDrafts)
       .where(and(draftInOrg(), eq(crmDrafts.id, prepared.draft.id))).limit(1).for("update");
     if (!draft) throw new CrmNotFoundError("CRM draft", prepared.draft.id);
@@ -510,15 +523,18 @@ async function loadFallbackDraftContext(
  */
 export async function generateFallbackDraft(
   recordId: string,
-  dependencies: { complete?: DraftCompletion; budget?: CompletionBudget } = {},
+  dependencies: DraftGenerationDependencies = {},
   revision: DraftRevisionRequest | null = null,
 ): Promise<CrmDraft | null> {
   const prepared = await withCrmTransaction((tx) => loadFallbackDraftContext(tx, recordId));
   if (!prepared) return null;
   try {
     const generated = await generateCrmDraft({ ...prepared.promptInput, revision }, dependencies);
-    return await finishGeneratedDraft(prepared, generated);
+    return await finishGeneratedDraft(prepared, generated, dependencies.execution);
   } catch (error) {
+    // A displaced execution does not even mark the draft failed: that
+    // state belongs to the replacement's work.
+    if (error instanceof CrmJobClaimLostError || dependencies.execution?.claimLost) throw error;
     await failDraftGeneration(prepared.draft.id, error);
     throw error;
   }
@@ -526,15 +542,16 @@ export async function generateFallbackDraft(
 
 export async function generateDraftForStep(
   stepRunId: string,
-  dependencies: { complete?: DraftCompletion; budget?: CompletionBudget } = {},
+  dependencies: DraftGenerationDependencies = {},
   revision: DraftRevisionRequest | null = null,
   regenerating = false,
 ): Promise<CrmDraft> {
   const prepared = await withCrmTransaction((tx) => loadDraftContext(tx, stepRunId, regenerating));
   try {
     const generated = await generateCrmDraft({ ...prepared.promptInput, revision }, dependencies);
-    return await finishGeneratedDraft(prepared, generated);
+    return await finishGeneratedDraft(prepared, generated, dependencies.execution);
   } catch (error) {
+    if (error instanceof CrmJobClaimLostError || dependencies.execution?.claimLost) throw error;
     await failDraftGeneration(prepared.draft.id, error);
     throw error;
   }
@@ -614,7 +631,7 @@ export async function updateDraft(input: {
  */
 export async function regenerateDraft(
   draftId: string,
-  dependencies: { complete?: DraftCompletion; budget?: CompletionBudget } = {},
+  dependencies: DraftGenerationDependencies = {},
   feedback: string | null = null,
 ): Promise<CrmDraft> {
   const [draft] = await db.select().from(crmDrafts)

@@ -7,10 +7,12 @@ import {
   claimCrmJobs,
   completeCrmJob,
   crmJobClaimRenewIntervalMs,
+  crmJobExecutionFor,
   failCrmJob,
   recoverStaleCrmJobs,
   renewCrmJobClaim,
   type CrmJob,
+  type CrmJobExecution,
 } from "./queue";
 
 export function crmWorkerPositiveInteger(
@@ -36,11 +38,22 @@ const CLAIM_RENEW_MS = crmWorkerPositiveInteger(
   crmJobClaimRenewIntervalMs(STALE_LOCK_MS),
   100,
 );
+/**
+ * The longest one execution may keep renewing its claim. Past this the
+ * execution is treated as lost: renewal stops, its signal aborts, and the
+ * stale sweep can hand the job to a replacement instead of a hung or
+ * forgotten handler holding the claim alive forever (RR3).
+ */
+export const MAX_RUN_MS = crmWorkerPositiveInteger(
+  process.env.CRM_WORKER_MAX_RUN_MS,
+  15 * 60 * 1_000,
+  1_000,
+);
 const STALE_SWEEP_EVERY = 60;
 const WORKER_STATE_KEY = Symbol.for("agentsdr.crm-worker-state");
 const HANDLER_STATE_KEY = Symbol.for("agentsdr.crm-worker-handlers");
 
-export type CrmJobHandler = (job: CrmJob) => Promise<void>;
+export type CrmJobHandler = (job: CrmJob, execution?: CrmJobExecution | null) => Promise<void>;
 
 export class PermanentCrmJobError extends Error {
   constructor(message: string) {
@@ -138,20 +151,51 @@ async function runJob(job: CrmJob): Promise<void> {
   }
 
   // Renew the claim while the handler runs, so slow live work is never
-  // reclaimed as stale. Losing the claim stops renewal; completion and
-  // failure below re-check the same ownership, so a worker that lost its
-  // claim cannot overwrite the newer attempt's result.
-  const renewal = setInterval(() => {
-    void renewCrmJobClaim(job).catch((error) => {
-      if (error instanceof CrmJobClaimLostError) clearInterval(renewal);
-    });
-  }, CLAIM_RENEW_MS);
+  // reclaimed as stale. Renewals are SERIALIZED — each one is awaited
+  // before the next is scheduled, so a slow database write can never
+  // overlap the next renewal — and BOUNDED: past MAX_RUN_MS the execution
+  // is given up as lost. Losing the claim marks the execution lost, which
+  // aborts the signal handlers pass to their model work and arms the
+  // effect-boundary checks (RR3): a displaced handler stops before its
+  // next effect, and completion/failure below are fenced on the same
+  // ownership, so it can never overwrite or fail a replacement execution.
+  const execution = crmJobExecutionFor(job);
+  let renewalStopped = false;
+  let renewalTimer: ReturnType<typeof setTimeout> | undefined;
+  const renewalDeadline = Date.now() + MAX_RUN_MS;
+  const scheduleRenewal = () => {
+    if (renewalStopped) return;
+    renewalTimer = setTimeout(() => {
+      void (async () => {
+        if (renewalStopped) return;
+        if (Date.now() >= renewalDeadline) {
+          execution?.markClaimLost(new Error(
+            `CRM job ${job.id} exceeded the maximum execution window of ${MAX_RUN_MS}ms`,
+          ));
+          return;
+        }
+        try {
+          await renewCrmJobClaim(job);
+        } catch (error) {
+          if (error instanceof CrmJobClaimLostError) {
+            execution?.markClaimLost(error);
+            return;
+          }
+          // A transient renewal failure is not a lost claim: the stale
+          // window has room for missed renewals, so try again next tick.
+        }
+        scheduleRenewal();
+      })();
+    }, CLAIM_RENEW_MS);
+  };
+  scheduleRenewal();
   try {
     // Jobs are claimed across organizations; each one runs as its own.
-    await runInOrganization(job.organizationId, () => handler(job));
+    await runInOrganization(job.organizationId, () => handler(job, execution));
+    if (execution?.claimLost) return;
     await completeCrmJob(job);
   } catch (error) {
-    if (error instanceof CrmJobClaimLostError) return;
+    if (error instanceof CrmJobClaimLostError || execution?.claimLost) return;
     const message = savedErrorText(error, 2_000);
     const { willRetry } = await failCrmJob(job, message, {
       // A spent reply budget never refills for this job, and a permanent
@@ -164,7 +208,9 @@ async function runJob(job: CrmJob): Promise<void> {
       console.warn(`[crm/worker] ${job.kind} job ${job.id} failed: ${message}`);
     }
   } finally {
-    clearInterval(renewal);
+    // Timers are cleaned up on every exit: success, failure, claim loss.
+    renewalStopped = true;
+    if (renewalTimer) clearTimeout(renewalTimer);
   }
 }
 

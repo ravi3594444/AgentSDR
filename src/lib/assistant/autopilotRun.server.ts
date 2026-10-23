@@ -8,7 +8,7 @@ import { runMembershipFor } from "@/lib/crm/autopilot.server";
 import { effectiveBusinessProfile } from "./businessContext.server";
 import { appendCrmEvent } from "@/lib/crm/events";
 import { isPersonDoNotContact, setPersonDoNotContact } from "@/lib/crm/policies";
-import { enqueueCrmJobInTransaction } from "@/lib/crm/queue";
+import { enqueueCrmJobInTransaction, type CrmJobExecution } from "@/lib/crm/queue";
 import { regenerateDraft } from "@/lib/crm/drafts";
 import type { CompletionBudget } from "@/lib/ai/server/structuredCompletion";
 import { draftInOrg } from "@/lib/crm/records";
@@ -75,6 +75,8 @@ export type AutopilotDependencies = {
   check?: (input: ReplyCheckInput & { knowledge: string }) => Promise<ModelCheck>;
   /** The auto-send job's shared reply budget. */
   budget?: CompletionBudget;
+  /** The auto-send job's execution (RR3): losing the CRM claim stops this runner's sends, independently of any other claim. */
+  execution?: CrmJobExecution | null;
   /** Write the owner's brief with the model (default: when the real model checks). */
   brief?: boolean;
   allowNonProduction?: boolean;
@@ -254,6 +256,7 @@ async function sendHandover(state: State, decisionId: string, kind: OwnerDecisio
     subject: state.draft.subject,
   });
   const reserved = await db.transaction(async (tx) => {
+    await deps.execution?.assertOwned(tx);
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`autopilot:${organizationId}`}, 0))`);
     const [recent] = await tx.select({ id: ownerDecisions.id }).from(ownerDecisions)
       .where(and(inOrg(ownerDecisions), eq(ownerDecisions.conversationId, state.conversationId), gte(ownerDecisions.handoverSentAt, new Date(Date.now() - HANDOVER_INTERVAL_MS))))
@@ -286,6 +289,7 @@ async function sendHandover(state: State, decisionId: string, kind: OwnerDecisio
     return { id: rows[0]!.id, revision: draft.revision };
   });
   if (!reserved) return false;
+  await deps.execution?.assertOwned();
   try {
     await sendDraft({
       draftId: state.draft.id,
@@ -373,6 +377,9 @@ export async function runAutopilotForDraft(draftId: string, deps: AutopilotDepen
       ? await deps.check(checkInput)
       : await modelReplyCheck({ ...checkInput, runId: state.membership.runId, budget: deps.budget });
   } catch (error) {
+    // A lost claim is not an unchecked reply: the displaced execution
+    // stops instead of handing the conversation to the owner (RR3).
+    if ((error instanceof Error && error.name === "CrmJobClaimLostError") || deps.execution?.claimLost) throw error;
     const message = error instanceof Error ? error.message : String(error);
     return handOff(state, { kind: "uncertain", reason: `The reply to ${state.leadName} could not be checked (${message.slice(0, 200)}).`, decision: "Read it in the Inbox (Needs you) and send it yourself if it is right.", holdReason: "the reply could not be checked" }, deps);
   }
@@ -404,7 +411,7 @@ export async function runAutopilotForDraft(draftId: string, deps: AutopilotDepen
     if (feedback && (deps.rewrite ?? deps.check === undefined) && !(await alreadyRewritten(state.draft.id))) {
       try {
         await recordHold(state, `${SELF_REWRITE_REASON}to remove unsupported additions: ${verdict.check.problems.join("; ")}`, verdict.check);
-        const repaired = await regenerateDraft(state.draft.id, { budget: deps.budget }, feedback);
+        const repaired = await regenerateDraft(state.draft.id, { budget: deps.budget, execution: deps.execution }, feedback);
         // This auto_send job still owns the queue row, so regenerating
         // cannot requeue it. Check the new revision here instead of losing it
         // when the current job completes. At most one repair in this call.
@@ -421,6 +428,9 @@ export async function runAutopilotForDraft(draftId: string, deps: AutopilotDepen
   // 3. Reserve under the organization's lock, after reading everything again.
   const organizationId = currentOrganizationId();
   const reservation = await db.transaction(async (tx) => {
+    // The reservation is a send effect: the job's claim is re-checked
+    // inside this transaction before anything is reserved (RR3).
+    await deps.execution?.assertOwned(tx);
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`autopilot:${organizationId}`}, 0))`);
     const fresh = await loadState(tx, draftId, deps);
     if (!fresh || !fresh.membership) return { held: "the draft or its run disappeared" } as const;
@@ -459,7 +469,9 @@ export async function runAutopilotForDraft(draftId: string, deps: AutopilotDepen
     return recordHold(state, reservation.held ?? "held", verdict.check);
   }
 
-  // 4. Send, through the same path as a person's Approve & send.
+  // 4. Send, through the same path as a person's Approve & send. The
+  // claim is checked once more before the provider call itself.
+  await deps.execution?.assertOwned();
   try {
     await sendDraft({
       draftId: state.draft.id,
