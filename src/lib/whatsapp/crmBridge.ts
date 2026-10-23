@@ -21,9 +21,9 @@ import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
  * outbound, so the record knows the lead was answered.
  *
  * Called by src/lib/whatsapp/messages.ts after a message is stored in
- * whatsapp_messages (and by send.ts after an AgentSDR send). Never throws: a
- * CRM failure must not lose the message or fail Unipile's webhook; it is
- * logged, and the message stays in the Messages tab.
+ * whatsapp_messages (and by send.ts after an AgentSDR send). The message
+ * survives CRM failures. Inbound webhook processing requests strict errors
+ * so the durable delivery is marked failed and can be replayed.
  *
  * CRM identity: accountRef is the rep's Unipile account id, providerThreadId
  * the Unipile chat id, providerContactId "<digits>@s.whatsapp.net", and every
@@ -86,6 +86,7 @@ function auditPayload(input: WhatsappCrmMessageInput): Record<string, unknown> {
 /** A lead's reply → the CRM. Returns the CRM message id when it was recorded. */
 export async function forwardWhatsappInboundToCrm(
   input: WhatsappCrmMessageInput,
+  options: { throwOnError?: boolean } = {},
 ): Promise<{ crmConversationMessageId: string | null }> {
   const log = createStepLogger();
   const payload = auditPayload(input);
@@ -143,6 +144,7 @@ export async function forwardWhatsappInboundToCrm(
     log.error(message);
     log.finish("error");
     await finishAudit(eventId, log, message);
+    if (options.throwOnError) throw error;
     return { crmConversationMessageId: null };
   }
 }

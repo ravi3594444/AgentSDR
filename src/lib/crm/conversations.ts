@@ -1,6 +1,8 @@
 import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { leads as linkedinLeads } from "@/lib/linkedin/schema";
-import { whatsappCampaignLeads, whatsappCampaigns } from "@/lib/whatsapp/schema";
+import { whatsappAccounts, whatsappChats, whatsappCampaignLeads, whatsappCampaigns } from "@/lib/whatsapp/schema";
+import { sameWhatsappContact } from "@/lib/whatsapp/contactIdentity";
+import { people } from "@/lib/leads/schema";
 import { outreachCampaigns, outreachLeads, outreachMailboxQueue } from "@/lib/outreach/schema";
 import {
   crmConversationMessages,
@@ -44,6 +46,22 @@ export type UpsertConversationInput = {
   providerContactId?: string | null;
 };
 
+/** Other channels and genuinely different WhatsApp contacts keep the strict identity check. */
+async function contactIdentityAgrees(tx: CrmTransaction, input: UpsertConversationInput, existing: CrmConversation, incoming: string): Promise<boolean> {
+  if (!existing.providerContactId || existing.providerContactId === incoming) return true;
+  if (input.channel !== "whatsapp") return false;
+  if (sameWhatsappContact(existing.providerContactId, incoming)) return true;
+  const thread = optionalText(input.providerThreadId);
+  if (!thread || existing.providerThreadId !== thread) return false;
+  const [proof] = await tx.select({ personPhone: people.phone, chatPhone: whatsappChats.phone, chatProviderId: whatsappChats.providerId })
+    .from(whatsappChats)
+    .innerJoin(whatsappAccounts, eq(whatsappAccounts.id, whatsappChats.accountId))
+    .innerJoin(people, eq(people.id, whatsappChats.personId))
+    .where(and(inOrg(whatsappAccounts), inOrg(people), eq(whatsappAccounts.unipileAccountId, input.accountRef.trim()),
+      eq(whatsappChats.unipileChatId, thread), eq(whatsappChats.personId, input.personId))).limit(1);
+  return Boolean(proof && sameWhatsappContact(existing.providerContactId, incoming, proof));
+}
+
 /** App-level advisory locking also makes nullable-thread conversation identity idempotent. */
 export async function upsertConversationInTransaction(
   tx: CrmTransaction,
@@ -52,7 +70,7 @@ export async function upsertConversationInTransaction(
   const accountRef = requiredText(input.accountRef, "Conversation account reference");
   const providerThreadId = optionalText(input.providerThreadId);
   const providerContactId = optionalText(input.providerContactId);
-  const identity = providerContactId
+  const identity = input.channel === "whatsapp" && providerThreadId ? `thread:${providerThreadId}` : providerContactId
     ? `contact:${providerContactId}`
     : providerThreadId
       ? `thread:${providerThreadId}`
@@ -112,7 +130,7 @@ export async function upsertConversationInTransaction(
     if (
       existing.providerContactId
       && providerContactId
-      && existing.providerContactId !== providerContactId
+      && !(await contactIdentityAgrees(tx, input, existing, providerContactId))
     ) {
       throw new CrmConflictError("Provider thread and contact identities disagree");
     }
@@ -165,7 +183,7 @@ export async function upsertConversationInTransaction(
   if (
     winner.providerContactId
     && providerContactId
-    && winner.providerContactId !== providerContactId
+    && !(await contactIdentityAgrees(tx, input, winner, providerContactId))
   ) {
     throw new CrmConflictError("Provider thread and contact identities disagree");
   }

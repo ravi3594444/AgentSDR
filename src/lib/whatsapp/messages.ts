@@ -342,6 +342,42 @@ async function findMessageByUnipileId(unipileMessageId: string): Promise<Whatsap
   return row ?? null;
 }
 
+/**
+ * Finish a saved inbound's CRM handoff. Only the latest inbound in its
+ * conversation can be recovered: an old redelivery cannot become a new
+ * conversation turn. CRM ingestion itself owns job/send idempotency.
+ */
+export async function recoverWhatsappCrmHandoff(messageId: string): Promise<{ repaired: boolean; reason: string; crmMessageId?: string }> {
+  const [row] = await db.select({ message: whatsappMessages, chat: whatsappChats, account: whatsappAccounts })
+    .from(whatsappMessages)
+    .innerJoin(whatsappChats, eq(whatsappChats.id, whatsappMessages.chatId))
+    .innerJoin(whatsappAccounts, eq(whatsappAccounts.id, whatsappChats.accountId))
+    .where(and(inOrg(whatsappAccounts), eq(whatsappMessages.id, messageId))).limit(1);
+  if (!row) throw new WhatsappApiError(404, "WhatsApp message not found");
+  const { message, account } = row;
+  let chat = row.chat;
+  if (message.crmConversationMessageId) return { repaired: false, reason: "already linked", crmMessageId: message.crmConversationMessageId };
+  if (message.direction !== "inbound" || message.origin !== "lead" || !message.unipileMessageId) return { repaired: false, reason: "not an incoming lead message" };
+  const [newer] = await db.select({ id: whatsappMessages.id }).from(whatsappMessages)
+    .where(and(messageInOrg(), eq(whatsappMessages.chatId, chat.id), gt(whatsappMessages.sentAt, message.sentAt))).limit(1);
+  if (newer) return { repaired: false, reason: "a newer message supersedes this reply" };
+  if (!chat.personId) chat = await upsertWhatsappChat({ accountId: account.id, unipileChatId: chat.unipileChatId, providerId: chat.providerId, phone: chat.phone, name: chat.name });
+  if (!chat.personId) return { repaired: false, reason: "no saved contact matches this chat" };
+  const [newerCrmTurn] = await db.select({ id: crmRecords.id }).from(crmRecords)
+    .where(and(inOrg(crmRecords), eq(crmRecords.personId, chat.personId), gt(crmRecords.lastInboundAt, message.sentAt))).limit(1);
+  if (newerCrmTurn) return { repaired: false, reason: "a newer CRM reply supersedes this message" };
+  const result = await forwardWhatsappInboundToCrm({
+    personId: chat.personId, unipileAccountId: account.unipileAccountId,
+    unipileChatId: chat.unipileChatId, providerContactId: chat.providerId,
+    unipileMessageId: message.unipileMessageId, body: message.body,
+    sentAt: message.sentAt, raw: message.raw,
+  }, { throwOnError: true });
+  if (!result.crmConversationMessageId) throw new Error("The saved WhatsApp reply has no CRM message after handoff");
+  await db.update(whatsappMessages).set({ crmConversationMessageId: result.crmConversationMessageId })
+    .where(and(messageInOrg(), eq(whatsappMessages.id, message.id), isNull(whatsappMessages.crmConversationMessageId)));
+  return { repaired: true, reason: "reply queued through the CRM", crmMessageId: result.crmConversationMessageId };
+}
+
 // --- webhook ------------------------------------------------------------------------------
 
 export type WebhookLog = { level: "info" | "warn" | "error"; message: string; time: string }[];
@@ -402,6 +438,11 @@ async function ingestMessageEvent(
 
   const stored = await findMessageByUnipileId(event.unipileMessageId);
   if (stored) {
+    if (stored.origin === "lead" && !stored.crmConversationMessageId) {
+      const recovered = await recoverWhatsappCrmHandoff(stored.id);
+      log.info(`Stored inbound handoff: ${recovered.reason}`);
+      return recovered.repaired ? "ok" : "skipped";
+    }
     log.info(`Message ${event.unipileMessageId} already stored (${stored.origin}) — ${event.isSender ? "echo of a stored send" : "retried delivery"}, no-op`);
     return "skipped";
   }
@@ -447,6 +488,12 @@ async function ingestMessageEvent(
     raw,
   });
   if (!message) {
+    const concurrent = await findMessageByUnipileId(event.unipileMessageId);
+    if (concurrent?.origin === "lead" && !concurrent.crmConversationMessageId) {
+      const recovered = await recoverWhatsappCrmHandoff(concurrent.id);
+      log.info(`Concurrent inbound handoff: ${recovered.reason}`);
+      return recovered.repaired ? "ok" : "skipped";
+    }
     log.info(`Message ${event.unipileMessageId} stored concurrently — no-op`);
     return "skipped";
   }
@@ -471,7 +518,7 @@ async function ingestMessageEvent(
     raw,
   };
   const result = origin === "lead"
-    ? await forwardWhatsappInboundToCrm(crmInput)
+    ? await forwardWhatsappInboundToCrm(crmInput, { throwOnError: true })
     : await recordWhatsappOutboundInCrm({ ...crmInput, origin: "phone" });
   if (result.crmConversationMessageId) {
     await db

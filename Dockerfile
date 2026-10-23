@@ -20,6 +20,7 @@ COPY . .
 # each Node heap, not the whole build; leave room for native build memory.
 ARG NEXT_BUILD_HEAP_MB=4096
 RUN bun run package:recorder && \
+    bun build scripts/recover-whatsapp-reply.ts --target=bun --conditions=react-server --outfile=/app/recover-whatsapp-reply.bundle.js && \
     NODE_OPTIONS="--max-old-space-size=${NEXT_BUILD_HEAP_MB}" node node_modules/next/dist/bin/next build --webpack
 
 # Stage 3: Lean production image
@@ -65,6 +66,7 @@ RUN mkdir -p /var/lib/agentsdr/claude-code && chown nextjs:nodejs /var/lib/agent
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
+COPY --from=builder --chown=nextjs:nodejs /app/recover-whatsapp-reply.bundle.js ./scripts/recover-whatsapp-reply.bundle.js
 # Licenses of third-party code adapted into the app (OpenMausBot, Apache-2.0).
 COPY --from=builder /app/docs/third-party ./licenses/third-party
 # Fresh-install schema and its setup script (`bun scripts/db/setup.ts
