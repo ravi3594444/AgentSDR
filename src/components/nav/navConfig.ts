@@ -113,7 +113,7 @@ export const NAV_SECTIONS: NavSection[] = [
     entries: [
       // The chat, its requests and the reports; Activity and Overview were its old names.
       link("/assistant", "Outreach", RiRobot2Line, { match: ["/activity", "/analytics"] }),
-      link("/inbox", "Inbox", RiInboxLine, { badge: "inbox", match: ["/crm/actions"] }),
+      link("/inbox", "Inbox", RiInboxLine, { badge: "inbox", match: ["/crm/actions", "/outreach/inbox", "/linkedin/messages", "/calling/messages", "/instagram/messages"] }),
       link("/leads", "Leads", RiUserSearchLine, { match: ["/crm/records", "/crm/pipeline"] }),
     ],
   },
@@ -131,7 +131,7 @@ export const NAV_SECTIONS: NavSection[] = [
         color: HUE.orange,
         children: [
           link("/outreach/campaigns", "Campaigns", RiSendPlaneLine),
-          link("/outreach/inbox", "Inbox", RiInboxLine),
+          ...when(isReleased("channelInboxes"), link("/outreach/inbox", "Inbox", RiInboxLine)),
         ],
       },
       {
@@ -142,7 +142,7 @@ export const NAV_SECTIONS: NavSection[] = [
         color: HUE.blue,
         children: [
           link("/linkedin/campaigns", "Campaigns", RiMegaphoneLine),
-          link("/linkedin/messages", "Messages", RiChat3Line),
+          ...when(isReleased("channelInboxes"), link("/linkedin/messages", "Messages", RiChat3Line)),
           ...when(isReleased("linkedinSearch"), link("/linkedin/search", "Search", RiSearchLine)),
         ],
       },
@@ -155,10 +155,10 @@ export const NAV_SECTIONS: NavSection[] = [
         children: [
           link("/whatsapp/campaigns", isReleased("calling") ? "Message campaigns" : "Campaigns", RiChatSmile2Line, { match: ["/whatsapp/"] }),
           ...when(isReleased("calling"), link("/calling/campaigns", "Call campaigns", RiPhoneLine, { match: ["/calling/"] })),
-          link("/calling/messages", "Messages", RiChat3Line, { badge: "whatsappUnread" }),
+          ...when(isReleased("channelInboxes"), link("/calling/messages", "Messages", RiChat3Line, { badge: "whatsappUnread" })),
         ],
       },
-      {
+      ...when<NavEntry>(isReleased("channelInboxes"), {
         // Only for organizations that turned Instagram messages on.
         kind: "group",
         id: "instagram",
@@ -167,7 +167,7 @@ export const NAV_SECTIONS: NavSection[] = [
         color: HUE.pink,
         feature: "instagram",
         children: [link("/instagram/messages", "Messages", RiChat3Line)],
-      },
+      }),
       link("/crm/sequences", "Sequences", RiTimeLine),
       ...when<NavEntry>(isReleased("tables"), link("/tables", "Tables", RiGridLine)),
       ...when<NavEntry>(isReleased("prospecting"), {
