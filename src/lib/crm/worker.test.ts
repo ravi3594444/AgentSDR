@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  PermanentCrmJobError,
   crmWorkerPositiveInteger,
+  isTerminalCrmJobError,
   registerCrmJobHandler,
   registerCrmJobHandlers,
   registeredCrmJobKinds,
@@ -31,6 +33,26 @@ describe("CRM worker handler registry", () => {
     assert.deepEqual(registeredCrmJobKinds(), ["classification"]);
     unregisterNew();
     assert.deepEqual(registeredCrmJobKinds(), []);
+  });
+});
+
+describe("CRM worker terminal failures (RR4)", () => {
+  it("fails a rejected API key once, including when the status is on a nested cause", () => {
+    const rejected = Object.assign(new Error("Stand-in provider rejected the key"), { status: 401 });
+    assert.equal(isTerminalCrmJobError(rejected), true);
+    assert.equal(isTerminalCrmJobError(new Error("completion failed", { cause: rejected })), true);
+    assert.equal(isTerminalCrmJobError(Object.assign(new Error("forbidden"), { status: 403 })), true);
+  });
+
+  it("keeps transient failures retryable and permanent markers terminal", () => {
+    for (const status of [408, 409, 425, 429, 500, 503]) {
+      assert.equal(isTerminalCrmJobError(Object.assign(new Error("x"), { status })), false, `status ${status}`);
+    }
+    assert.equal(isTerminalCrmJobError(new Error("plain failure")), false);
+    assert.equal(isTerminalCrmJobError(new PermanentCrmJobError("no handler")), true);
+    const exhausted = new Error("budget exhausted");
+    exhausted.name = "StructuredBudgetExhaustedError";
+    assert.equal(isTerminalCrmJobError(exhausted), true);
   });
 });
 

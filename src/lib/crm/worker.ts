@@ -1,4 +1,5 @@
 import { runInOrganization } from "@/lib/tenancy/scope";
+import { isPermanentProviderError } from "@/lib/ai/providerErrors";
 import { savedErrorText } from "@/lib/grid/sanitize";
 import type { CrmJobKind } from "./schema";
 import {
@@ -46,6 +47,22 @@ export class PermanentCrmJobError extends Error {
     super(message);
     this.name = "PermanentCrmJobError";
   }
+}
+
+/**
+ * Whether re-claiming the job and running its handler again could ever
+ * help. Permanent means: the handler said so (PermanentCrmJobError), the
+ * shared reply budget is spent (it never refills for a job), or a provider
+ * rejected the request permanently — an HTTP 4xx such as a refused API key
+ * (401) or forbidden model (403), including when the status rides on a
+ * nested cause because an inner layer wrapped the provider's error (RR4).
+ * Transient failures (429, 5xx, timeouts, connection errors) are absent
+ * here on purpose: they keep the queue's bounded backoff.
+ */
+export function isTerminalCrmJobError(error: unknown): boolean {
+  if (error instanceof PermanentCrmJobError) return true;
+  if (error instanceof Error && error.name === "StructuredBudgetExhaustedError") return true;
+  return isPermanentProviderError(error);
 }
 
 /**
@@ -137,10 +154,10 @@ async function runJob(job: CrmJob): Promise<void> {
     if (error instanceof CrmJobClaimLostError) return;
     const message = savedErrorText(error, 2_000);
     const { willRetry } = await failCrmJob(job, message, {
-      // A spent reply budget never refills for this job: retrying the claim
-      // would only fail at the first model call again.
-      permanent: error instanceof PermanentCrmJobError
-        || (error instanceof Error && error.name === "StructuredBudgetExhaustedError"),
+      // A spent reply budget never refills for this job, and a permanent
+      // provider rejection fails identically with the same credentials:
+      // retrying the claim would only call the provider again.
+      permanent: isTerminalCrmJobError(error),
       retryAt: error instanceof RetryCrmJobLaterError ? error.retryAt : undefined,
     });
     if (!willRetry) {
