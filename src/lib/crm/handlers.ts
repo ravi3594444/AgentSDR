@@ -276,9 +276,10 @@ async function classificationContext(messageId: string): Promise<{
   };
 }
 
-async function recordClassificationFailure(messageId: string, error: unknown) {
+async function recordClassificationFailure(messageId: string, error: unknown, execution?: CrmJobExecution | null) {
   const message = error instanceof Error ? error.message : String(error);
   await withCrmTransaction(async (tx) => {
+    await execution?.assertOwned(tx);
     const [scope] = await tx.select({ message: crmConversationMessages, record: crmRecords })
       .from(crmConversationMessages)
       .innerJoin(crmConversations, eq(crmConversations.id, crmConversationMessages.conversationId))
@@ -621,8 +622,9 @@ export async function handleClassificationJob(
       !(error instanceof PermanentCrmJobError)
       && !(error instanceof RetryCrmJobLaterError)
       && !(error instanceof CrmJobClaimLostError)
+      && !(error instanceof Error && error.name === "ReplyAgentClaimLostError")
       && !execution?.claimLost
-    ) await recordClassificationFailure(job.entityId, error);
+    ) await recordClassificationFailure(job.entityId, error, execution);
     throw error;
   }
 }

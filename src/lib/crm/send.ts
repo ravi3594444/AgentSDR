@@ -443,7 +443,7 @@ async function prepareSend(tx: CrmTransaction, input: {
     ? resolveExtraRecipients(input, { recipient: person.email, mailbox: conversation.accountRef })
     : { cc: [], bcc: [] };
   for (const address of [...extras.cc, ...extras.bcc]) {
-    if (await isSuppressed(address)) throw new CrmConflictError(`${address} is on the suppression list; remove it from Cc/Bcc to send`);
+    if (await isSuppressed(address, tx)) throw new CrmConflictError(`${address} is on the suppression list; remove it from Cc/Bcc to send`);
     if (await isEmailDoNotContact(tx, address)) throw new CrmConflictError(`${address} is marked Do Not Contact; remove it from Cc/Bcc to send`);
   }
   const bodyText = draft.editedBodyText?.trim() || draft.aiBodyText?.trim() || "";

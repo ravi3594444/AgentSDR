@@ -6,8 +6,8 @@ import type { OutreachLeadStatus, SuppressionReason } from "./schema";
 import { currentOrganizationId, inOrg, runInOrganization } from "@/lib/tenancy/scope";
 import { leadsInOrg } from "./orgScope";
 
-export async function isSuppressed(email: string): Promise<boolean> {
-  const [row] = await db
+export async function isSuppressed(email: string, executor: Pick<typeof db, "select"> = db): Promise<boolean> {
+  const [row] = await executor
     .select({ email: suppressionList.email })
     .from(suppressionList)
     .where(and(inOrg(suppressionList), eq(suppressionList.email, email.trim().toLowerCase())))

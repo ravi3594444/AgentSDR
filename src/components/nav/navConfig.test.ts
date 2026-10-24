@@ -19,9 +19,12 @@ describe("navigation tied to optional features", () => {
     expect(hrefs(visibleNavSections(null))).not.toContain("/instagram/messages");
   });
 
-  test("with Instagram on, the sidebar has Instagram → Messages", () => {
-    const group = visibleNavSections(instagramOn).flatMap((section) => section.entries).find((entry) => entry.kind === "group" && entry.id === "instagram");
-    expect(group?.kind === "group" && group.children.map((child) => child.href)).toEqual(["/instagram/messages"]);
+  test("all channels share one Inbox destination, including when Instagram is enabled", () => {
+    for (const features of [null, defaultFeatureState(), instagramOn]) {
+      const links = hrefs(visibleNavSections(features));
+      expect(links.filter((href) => href === "/inbox")).toEqual(["/inbox"]);
+      for (const href of ["/outreach/inbox", "/linkedin/messages", "/calling/messages", "/instagram/messages"]) expect(links).not.toContain(href);
+    }
   });
 
   test("the settings rail shows the Instagram row only while the feature is on", () => {
@@ -37,7 +40,7 @@ describe("navigation tied to optional features", () => {
     expect(off).not.toContain("/settings/instagram-accounts");
     expect(paletteItems()).toEqual(paletteItems(defaultFeatureState()));
     const on = paletteItems(instagramOn).map((item) => item.href);
-    expect(on).toContain("/instagram/messages");
+    expect(on).not.toContain("/instagram/messages");
     expect(on).toContain("/settings/instagram-accounts");
   });
 });
@@ -55,9 +58,9 @@ test("three destinations come first: Outreach, Inbox with the one Needs you badg
   expect(NAV_FOOTER.map((entry) => (entry.kind === "link" ? entry.label : entry.id))).toEqual(["Getting started", "Settings"]);
 });
 
-test("every manual tool stays reachable under Advanced, and no page is listed twice", () => {
+test("manual campaign tools stay under Advanced without duplicate inbox destinations", () => {
   const all = hrefs(visibleNavSections(instagramOn));
-  for (const href of ["/outreach/campaigns", "/outreach/inbox", "/linkedin/campaigns", "/linkedin/messages", "/whatsapp/campaigns", "/calling/messages", "/instagram/messages", "/crm/sequences", "/linkedin/connections", "/linkedin/jobs", "/linkedin/webhooks"]) {
+  for (const href of ["/outreach/campaigns", "/linkedin/campaigns", "/whatsapp/campaigns", "/crm/sequences", "/linkedin/connections", "/linkedin/jobs", "/linkedin/webhooks"]) {
     expect(all).toContain(href);
   }
   expect(new Set(all).size).toBe(all.length);
@@ -77,7 +80,7 @@ test("old and new paths light up the destination they now belong to", () => {
   expect(activeHref("/leads/companies")).toBe("/leads");
   expect(activeHref("/crm/pipeline")).toBe("/leads");
   expect(activeHref("/crm/records/example")).toBe("/leads");
-  expect(activeHref("/outreach/inbox")).toBe("/outreach/inbox");
+  for (const path of ["/outreach/inbox", "/linkedin/messages", "/calling/messages", "/instagram/messages"]) expect(activeHref(path)).toBe("/inbox");
   expect(activeHref("/whatsapp/campaigns/abc")).toBe("/whatsapp/campaigns");
 });
 

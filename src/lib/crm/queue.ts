@@ -276,7 +276,8 @@ export class CrmJobExecution {
         eq(crmJobs.lockedBy, claimOwner(this.job)),
         eq(crmJobs.attempts, this.job.attempts),
       ))
-      .limit(1);
+      .limit(1)
+      .for("update");
     if (!rows.length) {
       this.markClaimLost();
       throw new CrmJobClaimLostError(this.job.id);

@@ -72,7 +72,7 @@ export type AutopilotDependencies = {
   idempotencyKey?: string;
   send?: CrmSendAdapter;
   /** Replaces the model half of the support check (tests). */
-  check?: (input: ReplyCheckInput & { knowledge: string }) => Promise<ModelCheck>;
+  check?: (input: ReplyCheckInput & { knowledge: string; signal?: AbortSignal }) => Promise<ModelCheck>;
   /** The auto-send job's shared reply budget. */
   budget?: CompletionBudget;
   /** The auto-send job's execution (RR3): losing the CRM claim stops this runner's sends, independently of any other claim. */
@@ -142,7 +142,7 @@ async function loadState(executor: CrmExecutor, draftId: string, deps: Autopilot
       answeredSinceDraft: Number(answered?.n ?? 0) > 0,
       newerInbound,
       doNotContact: await isPersonDoNotContact(executor, record.personId),
-      suppressed: conversation.channel === "email" && person?.email ? await isSuppressed(person.email) : false,
+      suppressed: conversation.channel === "email" && person?.email ? await isSuppressed(person.email, executor) : false,
       // A record a person keeps as a customer stays one, whatever a new reply proposes.
       classification: classification ? { status: classification.status, categoryKey: record.categoryKey === "customer" ? "customer" : classification.categoryKey ?? null, subcategoryKey: classification.subcategoryKey ?? null } : null,
     },
@@ -351,6 +351,7 @@ async function handOff(
 }
 
 export async function runAutopilotForDraft(draftId: string, deps: AutopilotDependencies = {}): Promise<AutopilotOutcome> {
+  await deps.execution?.assertOwned();
   let state = await loadState(db, draftId, deps);
   if (!state || !state.membership) return { sent: false, reason: "not part of an outreach run" };
   // A person who replied in this chat after a handoff settles it (the chat is theirs now).
@@ -370,16 +371,18 @@ export async function runAutopilotForDraft(draftId: string, deps: AutopilotDepen
   // 2. The support check.
   const reply = [state.draft.subject ? `Subject: ${state.draft.subject}` : null, (state.draft.editedBodyText?.trim() || state.draft.aiBodyText || "").trim()].filter(Boolean).join("\n");
   const knowledge = await checkKnowledge(state.leadMessage, state.conversation);
-  const checkInput = { leadMessage: state.leadMessage, reply, leadName: state.leadName, channel: state.channel, conversation: state.conversation, knowledge };
+  const checkInput = { leadMessage: state.leadMessage, reply, leadName: state.leadName, channel: state.channel, conversation: state.conversation, knowledge, signal: deps.execution?.signal };
   let model: ModelCheck;
   try {
     model = deps.check
       ? await deps.check(checkInput)
       : await modelReplyCheck({ ...checkInput, runId: state.membership.runId, budget: deps.budget });
+    await deps.execution?.assertOwned();
   } catch (error) {
     // A lost claim is not an unchecked reply: the displaced execution
     // stops instead of handing the conversation to the owner (RR3).
     if ((error instanceof Error && error.name === "CrmJobClaimLostError") || deps.execution?.claimLost) throw error;
+    await deps.execution?.assertOwned();
     const message = error instanceof Error ? error.message : String(error);
     return handOff(state, { kind: "uncertain", reason: `The reply to ${state.leadName} could not be checked (${message.slice(0, 200)}).`, decision: "Read it in the Inbox (Needs you) and send it yourself if it is right.", holdReason: "the reply could not be checked" }, deps);
   }
@@ -417,6 +420,7 @@ export async function runAutopilotForDraft(draftId: string, deps: AutopilotDepen
         // when the current job completes. At most one repair in this call.
         return runAutopilotForDraft(repaired.id, { ...deps, rewrite: false, revision: repaired.revision, readyAt: repaired.updatedAt });
       } catch (error) {
+        if ((error instanceof Error && error.name === "CrmJobClaimLostError") || deps.execution?.claimLost) throw error;
         console.error("[assistant/autopilot] repairing the unsupported reply failed:", error);
       }
     }

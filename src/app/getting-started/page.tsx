@@ -2,11 +2,12 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { RiArrowRightSLine } from "@remixicon/react";
 import * as Badge from "@/components/alignui/badge";
+import * as Button from "@/components/alignui/button";
 import { Frame, FrameHeader, FramePanel } from "@/components/analytics/kit/Frame";
 import { PageContainer, PageHeader } from "@/components/page/PageHeader";
 import { requirePageOrgContext } from "@/lib/auth/context";
 import { BRAND, brandTitle } from "@/lib/brand";
-import { READINESS_COLOR, READINESS_LABEL, isReady, type ReadinessItem, type ReadinessKey } from "@/lib/onboarding/readiness";
+import { READINESS_COLOR, READINESS_LABEL, type ReadinessItem, type ReadinessKey } from "@/lib/onboarding/readiness";
 import { loadReadiness } from "@/lib/onboarding/readiness.server";
 import { runInOrganization } from "@/lib/tenancy/scope";
 
@@ -27,34 +28,38 @@ export default async function GettingStartedPage() {
   const pick = (...keys: ReadinessKey[]) => keys.map((key) => byKey.get(key)).filter((item): item is ReadinessItem => Boolean(item));
   const channels = pick("email", "linkedin", "whatsapp", "instagram");
   const connectedChannels = channels.filter((item) => item.status === "connected").length;
-  const ready = items.filter((item) => isReady(item.status)).length;
+  const checks = pick("leads", "campaigns", "replySync", "replies");
+  const attention = checks.filter((item) => item.status === "needs_attention").length;
 
   return (
     <PageContainer>
       <PageHeader
         title="Getting started"
-        description={`Set up ${BRAND.name} one step at a time. Each status is read from what this workspace has saved; it updates when you come back.`}
+        description={`Add your business details, connect a sending account, then tell ${BRAND.name} who you want to reach.`}
         badge={
-          <Badge.Root variant="lighter" size="medium" color={ready === items.length ? "green" : "gray"}>
-            {ready} of {items.length} ready
+          <Badge.Root variant="lighter" size="medium" color={connectedChannels ? "green" : "gray"}>
+            {connectedChannels ? `${connectedChannels} ${connectedChannels === 1 ? "channel" : "channels"} connected` : "Connect your first account"}
           </Badge.Root>
         }
+        actions={<Button.Root variant="primary" mode="filled" size="small" asChild><Link href="/assistant">Open Outreach<RiArrowRightSLine className="size-4" aria-hidden="true" /></Link></Button.Root>}
       />
+      <p className="mt-3 text-paragraph-sm text-text-sub-600">You only need one sending account to start. <Link href="/settings/sending" className="text-primary-base hover:underline">Set your daily lead limit</Link>, then choose Review or Automatic replies on your plan.</p>
       <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-12 lg:gap-5">
-        <Section className="lg:col-span-12" title="Workspace" items={pick("workspace")} />
+        <Section className="lg:col-span-12" title="1. Your business & workspace" items={pick("workspace")} />
         <Section
           className="lg:col-span-12"
-          title="Channels"
-          description={`Connect at least one channel to send. ${connectedChannels} of ${channels.length} connected.`}
+          title="2. Connect a sending account"
+          description="Choose the channels your customers use. You can add more later."
           items={channels}
         />
-        <Section className="lg:col-span-12" title="AI" description="Optional for sending. It sorts replies and drafts answers; replies follow each plan's Review or Automatic mode." items={pick("ai")} />
-        <Section className="lg:col-span-12" title="Outreach" items={pick("leads", "campaigns", "replySync", "replies")} />
+        <Section className="lg:col-span-12" title="3. Check your reply assistant" description="AI sorts replies and writes answers; replies follow each plan's Review or Automatic mode." items={pick("ai")} />
+        <details open={attention > 0} className="rounded-xl border border-stroke-soft-200 bg-bg-white-0 lg:col-span-12">
+          <summary className="flex cursor-pointer items-center justify-between gap-3 px-4 py-4 text-label-sm text-text-strong-950 sm:px-5">Sending & reply checks<span className="text-paragraph-xs text-text-sub-600">{attention ? `${attention} need attention` : "View checks"}</span></summary>
+          <Section title="Outreach checks" items={checks} className="rounded-none border-0 border-t shadow-none" />
+        </details>
       </div>
       <p className="mt-4 max-w-3xl text-paragraph-xs text-text-sub-600">
-        Connected means the saved credentials passed a live check when they were saved and an account is linked. It does not prove
-        that a message was delivered or a reply received. Incoming replies is that proof: it turns done only once a real reply has
-        arrived in this workspace on each connected channel.
+        Confirm sending and replies with a recipient you control. A connected account alone does not confirm delivery.
       </p>
     </PageContainer>
   );
@@ -90,11 +95,11 @@ function Step({ item }: { item: ReadinessItem }) {
         </div>
         <p className="mt-1 text-paragraph-sm text-text-strong-950">{item.summary}</p>
         {item.details.length > 0 && (
-          <ul className="mt-1.5 space-y-0.5 text-paragraph-xs text-text-sub-600">
+          <details className="mt-2 text-paragraph-xs text-text-sub-600"><summary className="cursor-pointer rounded outline-none focus-visible:ring-2 focus-visible:ring-primary-base">Details</summary><ul className="mt-1.5 space-y-0.5">
             {item.details.map((detail) => (
               <li key={detail}>{detail}</li>
             ))}
-          </ul>
+          </ul></details>
         )}
         {item.next && (
           <p className="mt-2 flex items-start gap-1 text-paragraph-sm text-text-sub-600">

@@ -172,7 +172,7 @@ async function readFacts(executor: CrmExecutor, scope: Scope, email: string | nu
   return {
     membership,
     doNotContact: await isPersonDoNotContact(executor, scope.personId),
-    suppressed: scope.channel === "email" && email ? await isSuppressed(email) : false,
+    suppressed: scope.channel === "email" && email ? await isSuppressed(email, executor) : false,
     newerInbound: Boolean(record?.latestInboundMessageId && record.latestInboundMessageId !== scope.messageId),
     answeredAlready: Number(answered?.n ?? 0) > 0,
     runInactive: !membership || membership.runStatus !== "running" || membership.leadStatus !== "active",
@@ -380,7 +380,8 @@ export async function runReplyAgent(messageId: string, deps: ReplyAgentDependenc
         eq(replyAgentRuns.attempts, claimAttempts),
         eq(replyAgentRuns.status, "running"),
       ))
-      .limit(1);
+      .limit(1)
+      .for("update");
     if (!rows.length) {
       claimLost = true;
       abortGeneration(new ReplyAgentClaimLostError());

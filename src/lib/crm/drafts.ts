@@ -387,9 +387,10 @@ async function finishGeneratedDraft(
   });
 }
 
-async function failDraftGeneration(draftId: string, error: unknown): Promise<void> {
+async function failDraftGeneration(draftId: string, error: unknown, execution?: CrmJobExecution | null): Promise<void> {
   const message = error instanceof Error ? error.message : String(error);
   await withCrmTransaction(async (tx) => {
+    await execution?.assertOwned(tx);
     const [draft] = await tx.select().from(crmDrafts)
       .where(and(draftInOrg(), eq(crmDrafts.id, draftId))).limit(1).for("update");
     if (!draft || draft.status !== "generating") return;
@@ -526,16 +527,19 @@ export async function generateFallbackDraft(
   dependencies: DraftGenerationDependencies = {},
   revision: DraftRevisionRequest | null = null,
 ): Promise<CrmDraft | null> {
-  const prepared = await withCrmTransaction((tx) => loadFallbackDraftContext(tx, recordId));
+  const prepared = await withCrmTransaction(async (tx) => {
+    await dependencies.execution?.assertOwned(tx);
+    return loadFallbackDraftContext(tx, recordId);
+  });
   if (!prepared) return null;
   try {
-    const generated = await generateCrmDraft({ ...prepared.promptInput, revision }, dependencies);
+    const generated = await generateCrmDraft({ ...prepared.promptInput, revision, signal: dependencies.execution?.signal }, dependencies);
     return await finishGeneratedDraft(prepared, generated, dependencies.execution);
   } catch (error) {
     // A displaced execution does not even mark the draft failed: that
     // state belongs to the replacement's work.
     if (error instanceof CrmJobClaimLostError || dependencies.execution?.claimLost) throw error;
-    await failDraftGeneration(prepared.draft.id, error);
+    await failDraftGeneration(prepared.draft.id, error, dependencies.execution);
     throw error;
   }
 }
@@ -546,13 +550,16 @@ export async function generateDraftForStep(
   revision: DraftRevisionRequest | null = null,
   regenerating = false,
 ): Promise<CrmDraft> {
-  const prepared = await withCrmTransaction((tx) => loadDraftContext(tx, stepRunId, regenerating));
+  const prepared = await withCrmTransaction(async (tx) => {
+    await dependencies.execution?.assertOwned(tx);
+    return loadDraftContext(tx, stepRunId, regenerating);
+  });
   try {
-    const generated = await generateCrmDraft({ ...prepared.promptInput, revision }, dependencies);
+    const generated = await generateCrmDraft({ ...prepared.promptInput, revision, signal: dependencies.execution?.signal }, dependencies);
     return await finishGeneratedDraft(prepared, generated, dependencies.execution);
   } catch (error) {
     if (error instanceof CrmJobClaimLostError || dependencies.execution?.claimLost) throw error;
-    await failDraftGeneration(prepared.draft.id, error);
+    await failDraftGeneration(prepared.draft.id, error, dependencies.execution);
     throw error;
   }
 }

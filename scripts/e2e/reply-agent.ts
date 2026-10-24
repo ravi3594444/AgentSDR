@@ -753,10 +753,13 @@ await runInOrganization(org!.id, async () => {
   }
 
   // ------------------------------------------------------------ an unsure wrong number answered by hand: the same end whichever comes first
-  const handReply = (index: number, key: string) => withCrmTransaction(async (tx) => recordManualOutboundInTransaction(tx, {
-    recordId: (await recordOf(index))!.id, personId: W[index]!, channel: "whatsapp", accountRef: waAccount, providerThreadId: `wa-chat-${index}-${stamp}`, providerContactId: `${phoneOf(index).replace(/\D/g, "")}@s.whatsapp.net`,
+  const handReply = async (index: number, key: string) => {
+    const record = (await recordOf(index))!;
+    return withCrmTransaction(async (tx) => recordManualOutboundInTransaction(tx, {
+    recordId: record.id, personId: W[index]!, channel: "whatsapp", accountRef: waAccount, providerThreadId: `wa-chat-${index}-${stamp}`, providerContactId: `${phoneOf(index).replace(/\D/g, "")}@s.whatsapp.net`,
     idempotencyKey: `wa-by-hand-${key}-${stamp}`, bodyText: "Oh, sorry about that!", sentAt: new Date(), reason: "manual_outbound_whatsapp", actorType: "integration",
-  }));
+    }));
+  };
   const unsureFirstAnswered = await waInbound(34, "This is not Rahul's phone");
   await new Promise((resolve) => setTimeout(resolve, 10));
   await handReply(34, "unsure-first");
