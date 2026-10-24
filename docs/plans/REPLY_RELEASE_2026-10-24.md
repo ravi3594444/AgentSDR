@@ -27,7 +27,8 @@ unverified. Nothing was sent and no running VM was changed.
 The production compiler check uses Next's build-only Google Fonts fixtures:
 this environment blocks fonts.gstatic.com. Those fixtures are outside the
 repository and are not shipped. The VM deploy must still build with real fonts.
-Compiler check status: pending.
+Compiler check status: pass (exit 0), including TypeScript and page generation.
+The build used explicit local-only auth settings and the font fixtures above.
 
 No new migration. Deploy with the existing docker/deploy.sh workflow and its
 default migrations. Check the running revision after deployment; then use a
