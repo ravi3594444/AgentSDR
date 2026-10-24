@@ -363,8 +363,8 @@ export const CHANNEL_RULES = {
     {
       key: "objectiveSpendUsd",
       kind: "number",
-      label: "Spend a request may use",
-      help: "The most one request may spend on paid sources when it names no budget: Apify runs, Treg calls, browser minutes and AI web research (held at an estimate until the provider reports the cost). Tavily searches are counted in credits under your daily Tavily cap instead, and the AI model's own use for chat, judging the leads found and writing is not counted (your AI provider bills it). 0 keeps every request on free sources only: TinyFish, the built-in Google Maps scraper, LinkedIn search, Hacker News and Stack Exchange. Each provider's own budget still applies.",
+      label: "Legacy research allowance",
+      help: "Retained for compatibility with older settings. It does not limit new research requests; the assistant chooses connected sources unless the owner explicitly names a request budget.",
       unit: "USD",
       default: 5,
       min: 0,
@@ -407,8 +407,8 @@ export function rulesOf(channel: Channel): readonly Rule[] {
 export const GENERAL_RULE_PAGES = {
   sending: ["newLeadsPerDay"],
   business: ["timeZone", "dayStartsAt", "defaultPhoneCountry"],
-  research: ["objectiveLeadTarget", "objectiveHours", "objectiveSpendUsd"],
-  hidden: ["autonomousRunsPerDay", "autonomousLeadsPerDay", "autonomousSearchesPerDay"],
+  research: ["objectiveLeadTarget", "objectiveHours"],
+  hidden: ["autonomousRunsPerDay", "autonomousLeadsPerDay", "autonomousSearchesPerDay", "objectiveSpendUsd"],
 } as const satisfies Record<string, readonly (keyof ChannelRuleValues<"general">)[]>;
 
 /** The rules a form shows: all of the channel's, or only `keys`, in registry order. An unknown key throws. */

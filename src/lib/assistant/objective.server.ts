@@ -167,7 +167,7 @@ function waitingOf(objective: Pick<Objective, "status" | "progress">): string | 
 /** The organization's defaults (Settings → Lead research, the "general" Sending rules). */
 export async function objectiveDefaults(): Promise<ControlDefaults> {
   const rules = await channelRules("general");
-  return { leadTarget: rules.objectiveLeadTarget, hours: rules.objectiveHours, spendUsd: rules.objectiveSpendUsd };
+  return { leadTarget: rules.objectiveLeadTarget, hours: rules.objectiveHours };
 }
 
 /**
@@ -255,7 +255,8 @@ export async function setObjectiveBrief(input: { requestMessageId: string; threa
 export function controlsSentence(objective: Pick<Objective, "leadTarget" | "timeLimitMinutes" | "spendCapUsd" | "controls">): string {
   const named = objective.controls.named ?? { target: false, time: false, spend: false };
   const tag = (fromOwner: boolean) => (fromOwner ? "" : " (default)");
-  const spend = objective.spendCapUsd > 0
+  const spend = objective.spendCapUsd === null ? "using the sources the assistant selects"
+    : objective.spendCapUsd > 0
     ? `spending at most ${usd(objective.spendCapUsd)}${tag(named.spend)} on paid sources`
     : `on free sources only (a $0 spend cap${tag(named.spend)}: no Apify, Treg, browser, Tavily or AI web research)`;
   return `This request keeps searching on its own until it has ${objective.leadTarget} qualified leads${tag(named.target)}, for up to ${formatDuration(objective.timeLimitMinutes * 60_000)}${tag(named.time)}, ${spend}; the owner can name other limits in a request, or pause or cancel it, and gets one final report. ${SPEND_CAP_COVERS}`;
@@ -380,6 +381,7 @@ export async function objectiveSpendGuard(requestId: string | null | undefined):
     if (row.status === "paused") return { ok: false, wait: true, reason: "the owner paused this request's research" };
     if (row.status === "stopped") return { ok: false, wait: false, reason: `this request's research has stopped (${stopText(row)})` };
     if (Date.now() >= row.deadlineAt.getTime()) return { ok: false, wait: false, reason: "this request's time limit has passed" };
+    if (row.spendCapUsd === null) return { ok: true, maxUsd: Number.POSITIVE_INFINITY };
     if (options?.credits) return creditRoom(row.spendCapUsd);
     const spend = await objectiveSpend(row, tx);
     return spendRoom({ capUsd: row.spendCapUsd, settledUsd: spend.settledUsd, reservedUsd: spend.reservedUsd, wantUsd });
@@ -387,8 +389,8 @@ export async function objectiveSpendGuard(requestId: string | null | undefined):
 }
 
 /** Work priced in credits (Tavily): refused only by a free-only cap; the dollars cap does not measure it. */
-function creditRoom(capUsd: number): SpendRoom {
-  return capUsd > 0 ? { ok: true, maxUsd: Number.POSITIVE_INFINITY } : spendRoom({ capUsd, settledUsd: 0, reservedUsd: 0, wantUsd: 0 });
+function creditRoom(capUsd: number | null): SpendRoom {
+  return capUsd === null || capUsd > 0 ? { ok: true, maxUsd: Number.POSITIVE_INFINITY } : spendRoom({ capUsd, settledUsd: 0, reservedUsd: 0, wantUsd: 0 });
 }
 
 /** The owner message a request is, in this organization: its text and chat. */
@@ -400,8 +402,8 @@ async function requestMessage(requestId: string): Promise<{ content: string; thr
 
 /**
  * The request's spend cap: its objective's, else the budget its own words
- * name (parseObjectiveControls), else the organization's default. Null when
- * the id is not an owner message here.
+ * name (parseObjectiveControls). Null means no request-level budget (or no
+ * owner request); the provider's limits and ledgers still apply.
  */
 export async function requestSpendCap(requestId: string | null | undefined): Promise<number | null> {
   if (!requestId || !UUID.test(requestId)) return null;
@@ -415,7 +417,7 @@ export async function requestSpendCap(requestId: string | null | undefined): Pro
  * The spend guard of paid work a request's turn does itself (a Treg call,
  * the browser), which starts no search and so no objective: the
  * objective's guard when its research has one; otherwise the cap the
- * request names or the default, against the same ledgers, serialized by
+ * request names, against the same ledgers, serialized by
  * the same per-request lock. It creates nothing.
  */
 export async function requestSpendGuard(requestId: string | null | undefined): Promise<SpendGuard | undefined> {
@@ -569,7 +571,7 @@ export type ObjectiveView = {
   leads: number;
   remaining: number;
   routes: ContactRoutes;
-  spendCapUsd: number;
+  spendCapUsd: number | null;
   spentUsd: number;
   reservedUsd: number;
   tavilyCredits: number;

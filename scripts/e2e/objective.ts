@@ -310,8 +310,8 @@ await runInOrganization(a.org.id, async () => {
     const thread = await createThread(a.owner.id);
     const requestId = await ask(thread.id, "find 10 dentists in Pune", turn("", [{ tool: "find_leads", args: { what: "dentists", where: "Pune" } }]));
     const objective = await objectiveOf(requestId);
-    check("controls: the target named in the request, the organization's defaults for time and spend",
-      objective.leadTarget === 10 && objective.timeLimitMinutes === 240 && objective.spendCapUsd === 5 && objective.controls.named?.target === true && objective.controls.named?.time === false,
+    check("controls: the named target, default time, and no invented spending allowance",
+      objective.leadTarget === 10 && objective.timeLimitMinutes === 240 && objective.spendCapUsd === null && objective.controls.named?.target === true && objective.controls.named?.time === false,
       JSON.stringify({ target: objective.leadTarget, minutes: objective.timeLimitMinutes, spend: objective.spendCapUsd, named: objective.controls.named }));
     // The limits are not appended to the search's result: the model reads them in the REQUEST block of every step.
     const afterSearch = prompts.at(-1) ?? "";
@@ -356,7 +356,7 @@ await runInOrganization(a.org.id, async () => {
     check("target reached: stopped with that reason, and the driver finished", stopped.status === "stopped" && stopped.stopReason === "target_reached" && done.status === "succeeded", `${stopped.status} ${stopped.stopReason} ${done.status}`);
     check("one final report: sources, leads and contact routes, spend, what is left, and the stop reason",
       reports.length === 1 && /^Research finished: the target of 10 was reached/.test(reports[0]!.content) && /12 qualified leads \(contactable and matching your request\) of the 10 wanted\./.test(reports[0]!.content)
-        && /Their contact routes \(one person can have several\): 12 by email/.test(reports[0]!.content) && /Google Maps through the built-in scraper: 2 searches, 12 found, 12 can be contacted/.test(reports[0]!.content) && /Recorded spend: \$0\.00 of the \$5\.00 cap/.test(reports[0]!.content),
+        && /Their contact routes \(one person can have several\): 12 by email/.test(reports[0]!.content) && /Google Maps through the built-in scraper: 2 searches, 12 found, 12 can be contacted/.test(reports[0]!.content) && /Recorded spend: \$0\.00\./.test(reports[0]!.content) && !/\$5\.00 cap/.test(reports[0]!.content),
       reports.map((row) => row.content).join(" | "));
     const reportData = (reports[0]?.toolResult as { data?: { links?: { label: string; href: string }[]; audienceIds?: unknown[] } } | null)?.data;
     const links = reportData?.links ?? [];

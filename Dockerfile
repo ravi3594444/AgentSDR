@@ -98,6 +98,7 @@ COPY --from=builder --chown=nextjs:nodejs /app/scripts/add-research-agent-v2.ts 
 COPY --from=builder --chown=nextjs:nodejs /app/scripts/add-managed-saas.ts ./scripts/add-managed-saas.ts
 COPY --from=builder --chown=nextjs:nodejs /app/scripts/add-sender-pacing.ts ./scripts/add-sender-pacing.ts
 COPY --from=builder --chown=nextjs:nodejs /app/scripts/add-whatsapp-warmup-off.ts ./scripts/add-whatsapp-warmup-off.ts
+COPY --from=builder --chown=nextjs:nodejs /app/scripts/add-optional-research-budget.ts ./scripts/add-optional-research-budget.ts
 COPY --from=builder --chown=nextjs:nodejs /app/scripts/grant-platform-operator.ts ./scripts/grant-platform-operator.ts
 
 # Entrypoint: maps APP_URL, builds DATABASE_URL for the bundled database,

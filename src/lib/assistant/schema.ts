@@ -346,7 +346,8 @@ export const assistantObjectives = pgTable(
     leadTarget: integer("lead_target").notNull(),
     timeLimitMinutes: integer("time_limit_minutes").notNull(),
     deadlineAt: timestamp("deadline_at", { withTimezone: true }).notNull(),
-    spendCapUsd: doublePrecision("spend_cap_usd").notNull(),
+    /** No request cap unless the owner named one; 0 explicitly permits free sources only. */
+    spendCapUsd: doublePrecision("spend_cap_usd"),
     /** Which controls the owner named (the rest are the organization's defaults). */
     /** Which limits the owner named, and (research agent v2) the brief the assistant wrote (brief.ts). */
     controls: jsonb("controls").$type<{ named?: { target: boolean; time: boolean; spend: boolean }; brief?: Brief; continues?: string }>().notNull().default({}),

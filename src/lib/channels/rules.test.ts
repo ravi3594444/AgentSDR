@@ -194,8 +194,8 @@ describe("the general rules across settings pages", () => {
   test("Sending shows only the daily lead limit; the day and phone country are on Your business; the Autonomous caps are hidden", () => {
     expect(GENERAL_RULE_PAGES.sending).toEqual(["newLeadsPerDay"]);
     expect(GENERAL_RULE_PAGES.business).toEqual(["timeZone", "dayStartsAt", "defaultPhoneCountry"]);
-    expect(GENERAL_RULE_PAGES.research).toEqual(["objectiveLeadTarget", "objectiveHours", "objectiveSpendUsd"]);
-    expect(GENERAL_RULE_PAGES.hidden).toEqual(["autonomousRunsPerDay", "autonomousLeadsPerDay", "autonomousSearchesPerDay"]);
+    expect(GENERAL_RULE_PAGES.research).toEqual(["objectiveLeadTarget", "objectiveHours"]);
+    expect(GENERAL_RULE_PAGES.hidden).toEqual(["autonomousRunsPerDay", "autonomousLeadsPerDay", "autonomousSearchesPerDay", "objectiveSpendUsd"]);
   });
 
   test("every general rule is on exactly one page or hidden, in registry order", () => {

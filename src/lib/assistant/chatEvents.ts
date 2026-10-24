@@ -16,7 +16,7 @@ export type ChatEvent =
   | { kind: "plan_ready"; runId: string | null; leads: number; channels: Record<string, number>; waitingReason: string | null }
   /** A launch's `note`: it started, and its messages are not in the sending queue yet (the repair tops it up). */
   | { kind: "outreach_started"; runId: string | null; ok: boolean; launches: { channel: string; added: number; skipped: number; problem: string | null; note?: string | null }[]; automatic: boolean }
-  | { kind: "continuation"; n: number; leads: number; target: number; spentUsd: number; capUsd: number; minutesLeft: number };
+  | { kind: "continuation"; n: number; leads: number; target: number | null; spentUsd: number; capUsd: number | null; minutesLeft: number };
 
 /** The tool cards that are reports: their counts are a snapshot of when they were written. */
 const REPORT_TOOLS = new Set(["report", "daily_summary", "diagnose_delivery"]);
@@ -115,8 +115,8 @@ export function compactEvent(message: { toolResult?: unknown }): CompactEvent | 
       return {
         title: `Research continues · round ${num(event.n)}`,
         figures: [
-          { label: "leads", value: `${num(event.leads)} of ${num(event.target)}` },
-          { label: "spent", value: `${usd(num(event.spentUsd))} of ${usd(num(event.capUsd))}` },
+          { label: "leads", value: event.target === null ? String(num(event.leads)) : `${num(event.leads)} of ${num(event.target)}` },
+          { label: "spent", value: event.capUsd === null ? usd(num(event.spentUsd)) : `${usd(num(event.spentUsd))} of ${usd(num(event.capUsd))}` },
           { label: "left", value: `${Math.max(0, Math.round(num(event.minutesLeft)))} min` },
         ],
         tone: "neutral",

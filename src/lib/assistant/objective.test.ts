@@ -30,7 +30,7 @@ describe("controls: the owner's words, else the organization's defaults", () => 
     expect(parseObjectiveControls("find dentists in Pune and contact them", DEFAULTS)).toEqual({
       leadTarget: 25,
       timeLimitMinutes: 240,
-      spendCapUsd: 5,
+      spendCapUsd: null,
       named: { target: false, time: false, spend: false },
     });
   });
@@ -51,6 +51,12 @@ describe("controls: the owner's words, else the organization's defaults", () => 
     expect(parseObjectiveControls("find dentists in 3 cities of Maharashtra", DEFAULTS).named).toEqual({ target: false, time: false, spend: false });
     expect(parseObjectiveControls("find agencies that charge $500 a month for SEO", DEFAULTS).named.spend).toBe(false);
     expect(parseObjectiveControls("find clinics open 24 hours near MG Road", DEFAULTS).named.time).toBe(false);
+  });
+
+  test("no default research allowance, including a previously saved zero", () => {
+    for (const spendUsd of [0, 1, 5]) {
+      expect(parseObjectiveControls("Find business owners and ask what costs them the most money", { ...DEFAULTS, spendUsd })).toMatchObject({ spendCapUsd: null, named: { spend: false } });
+    }
   });
 
   test("named values are held inside hard bounds", () => {
@@ -93,6 +99,11 @@ describe("limits: the first of target, spend and time", () => {
 });
 
 describe("spend: reserve then settle, from the ledgers", () => {
+  test("an uncapped request permits metered sources regardless of prior request spend", () => {
+    expect(spendRoom({ capUsd: null, settledUsd: 100, reservedUsd: 20, wantUsd: 2 })).toEqual({ ok: true, maxUsd: Number.POSITIVE_INFINITY });
+    expect(requestSpendLine(0.25, null)).toBe("$0.25 spent");
+    expect(limitReached({ now: NOW, deadline: minutes(60), leadTarget: 25, leads: 1, spendCapUsd: null, spentUsd: 100 })).toBeNull();
+  });
   test("open Apify runs and Treg calls count at their reserved cap; finished ones at what was charged", () => {
     const spend = spendFromLedgers([
       { ledger: "apify", status: "running", usageUsd: null, maxChargeUsd: 2 },
@@ -353,6 +364,23 @@ describe("the driver: wait, continue or stop", () => {
     expect(nextDriverStep(facts({ waitingForOwner: true, leads: 0 })).kind).toBe("wait");
     // The time limit still ends it.
     expect(nextDriverStep(facts({ waitingForOwner: true, deadline: minutes(-1) }))).toMatchObject({ kind: "stop", reason: "time_limit" });
+  });
+
+  test("the owner's broad request precedes an assistant's invented narrow strategy", () => {
+    const owner = "Find successful business owners and DM them asking what costs them the most money";
+    const strategy = `Find real estate and cleaning agency owners in Mumbai ${"with evidence of automation needs ".repeat(20)}`;
+    const text = judgeRequestText(strategy, [owner]);
+    expect(text.slice(0, 600)).toContain(owner);
+    expect(text.indexOf(owner)).toBeLessThan(text.indexOf("Find real estate"));
+  });
+
+  test("bounded request context keeps the initial request and the newest clarification", () => {
+    const owner = "Find business owners wherever they operate";
+    const clarification = "Include manufacturers in Brazil too; the old niche is not a restriction";
+    const text = judgeRequestText("Find real estate owners in Mumbai", [owner, ...Array.from({ length: 20 }, () => "Earlier context. ".repeat(50)), clarification]);
+    expect(text.length).toBeLessThanOrEqual(4_000);
+    expect(text).toContain(owner);
+    expect(text).toContain(clarification);
   });
 
   test("paused: nothing new starts, but the time limit still ends it", () => {

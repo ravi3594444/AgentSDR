@@ -1040,7 +1040,7 @@ CREATE TABLE public.assistant_objectives (
     lead_target integer NOT NULL,
     time_limit_minutes integer NOT NULL,
     deadline_at timestamp with time zone NOT NULL,
-    spend_cap_usd double precision NOT NULL,
+    spend_cap_usd double precision,
     controls jsonb DEFAULT '{}'::jsonb NOT NULL,
     status text DEFAULT 'active'::text NOT NULL,
     stop_reason text,

@@ -204,7 +204,7 @@ async function continueRequest(objective: Objective, facts: ObjectiveFacts, step
         toolResult: {
           objectiveNote: noteKey,
           objectiveId: objective.id,
-          data: { event: { kind: "continuation", n: step.n, leads: facts.leads, target: objective.leadTarget, spentUsd: facts.spend.totalUsd, capUsd: objective.spendCapUsd, minutesLeft: (objective.deadlineAt.getTime() - Date.now()) / 60_000 } satisfies ChatEvent },
+          data: { event: { kind: "continuation", n: step.n, leads: facts.leads, target: requestLimits(objective).targetNamed ? objective.leadTarget : null, spentUsd: facts.spend.totalUsd, capUsd: objective.spendCapUsd, minutesLeft: (objective.deadlineAt.getTime() - Date.now()) / 60_000 } satisfies ChatEvent },
         },
       });
     }

@@ -55,6 +55,7 @@ scripts
 !scripts/add-managed-saas.ts
 !scripts/add-sender-pacing.ts
 !scripts/add-whatsapp-warmup-off.ts
+!scripts/add-optional-research-budget.ts
 !scripts/grant-platform-operator.ts
 !scripts/recover-whatsapp-reply.ts
 

@@ -80,7 +80,7 @@ const JOB_TITLES: Record<string, string> = {
 
 /** A lead request's spend against its cap ("$1.20 of $5.00 spent"), from its driver job's progress or result. */
 function spendOf(facts: { spentUsd?: unknown; spendCapUsd?: unknown }): string | null {
-  return typeof facts.spentUsd === "number" && typeof facts.spendCapUsd === "number" ? requestSpendLine(facts.spentUsd, facts.spendCapUsd) : null;
+  return typeof facts.spentUsd === "number" && (facts.spendCapUsd === null || typeof facts.spendCapUsd === "number") ? requestSpendLine(facts.spentUsd, facts.spendCapUsd) : null;
 }
 
 function iso(value: Date | null | undefined): string | null {

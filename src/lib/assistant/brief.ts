@@ -1,4 +1,4 @@
-import type { ControlDefaults, ObjectiveControls } from "./objective";
+import { parseObjectiveControls, type ControlDefaults, type ObjectiveControls } from "./objective";
 import type { AudienceChannel } from "./schema";
 
 /**
@@ -6,9 +6,9 @@ import type { AudienceChannel } from "./schema";
  * written down once by the model from every message the owner sent about it
  * (a clarification included), and read by every step after it — the lead
  * judge, the plan, the writer, the report. The model reads the owner's
- * words and sets the brief; this module only bounds money: a spend cap
- * above the organization's default must be an amount the owner actually
- * wrote. The lead target and the time are the model's.
+ * words and sets the brief; this module takes spending restrictions only
+ * from the owner's words. With no explicit budget, the model chooses its
+ * sources without a request-level dollar cap. The target and time are the model's.
  */
 
 export type Brief = {
@@ -100,10 +100,14 @@ export function checkBrief(raw: Record<string, unknown>, ownerWords: string, def
     return { ok: false, error: `leadTarget must be a whole number from 1 to ${MAX_TARGET}, or null when the owner named no number` };
   }
   // The lead target and the time limit are the model's to set ("all of them", "keep going"); only money above the default needs the owner's own number.
-  const spend = optionalNumber(raw, "spendCapUsd");
-  if (spend === undefined || (spend !== null && spend < 0)) return { ok: false, error: "spendCapUsd must be a number of dollars (0 for free sources only), or null when the owner said nothing about money" };
-  if (spend !== null && spend > defaults.spendUsd && !amountsIn(ownerWords).some((amount) => Math.abs(amount - spend) < 0.005)) {
-    return { ok: false, error: `the owner did not allow $${spend}; use an amount they wrote, 0 for free only, or null for the default of $${defaults.spendUsd}` };
+  const modelSpend = optionalNumber(raw, "spendCapUsd");
+  if (modelSpend === undefined || (modelSpend !== null && modelSpend < 0)) return { ok: false, error: "spendCapUsd must be a number of dollars (0 for free sources only), or null when the owner said nothing about money" };
+  // The model chooses the sources, not a budget the owner never gave.
+  // Parsing the owner's words also keeps an explicit cap when the model
+  // omits it, and prevents prices in the target market becoming a budget.
+  const spend = parseObjectiveControls(ownerWords, defaults).spendCapUsd;
+  if (spend !== null && modelSpend !== null && modelSpend > spend) {
+    return { ok: false, error: `the owner did not allow $${modelSpend}; keep their request's cap of $${spend}` };
   }
   const minutes = optionalNumber(raw, "timeLimitMinutes");
   if (minutes === undefined || (minutes !== null && (!Number.isInteger(minutes) || minutes < 5 || minutes > MAX_MINUTES))) {
@@ -132,7 +136,7 @@ export function checkBrief(raw: Record<string, unknown>, ownerWords: string, def
     controls: {
       leadTarget: target ?? defaults.leadTarget,
       timeLimitMinutes: minutes ?? Math.round(defaults.hours * 60),
-      spendCapUsd: spend ?? defaults.spendUsd,
+      spendCapUsd: spend,
       named: { target: target !== null, time: minutes !== null, spend: spend !== null },
     },
   };
@@ -141,7 +145,7 @@ export function checkBrief(raw: Record<string, unknown>, ownerWords: string, def
 /** The brief in a line, for the model's context and the tool result. */
 export function briefLine(brief: Brief, controls: Pick<ObjectiveControls, "leadTarget" | "timeLimitMinutes" | "spendCapUsd">): string {
   // Money is shown only as the owner put it ("free tools only", "up to $20"); the default cap is the server's business.
-  const spend = controls.spendCapUsd <= 0 ? "free sources only" : brief.spendCapUsd !== null ? `up to $${controls.spendCapUsd} on paid sources` : null;
+  const spend = controls.spendCapUsd === 0 ? "free sources only" : controls.spendCapUsd !== null ? `up to $${controls.spendCapUsd} on paid sources` : null;
   return [
     `Goal: ${brief.goal}`,
     `leads: ${brief.leadTarget ?? "no number named (as many as fit, until you judge it done)"}`,

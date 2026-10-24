@@ -67,7 +67,7 @@ import { createInstagramContactsAudience } from "./instagramContacts.server";
 import { withoutContactAfter } from "./agentV2";
 import { activeRequest, matchingLeadsAudience, objectiveBrief, ownerMessagesSince, reviewLeadsText, setLeadFit, type LeadPick, type ReviewFilter } from "./agentV2.server";
 import { briefLine, checkBrief } from "./brief";
-import { controlsSentence, ensureObjective, objectiveDefaults, objectiveFacts, objectiveForRequest, objectiveRequest, setObjectiveBrief, stopObjective, objectiveLine, objectiveStartProblem, requestHoldReason, requestSpendCap, requestSpendGuard, setObjectiveState, threadObjectives } from "./objective.server";
+import { controlsSentence, ensureObjective, objectiveDefaults, objectiveFacts, objectiveForRequest, objectiveJudgeRequest, setObjectiveBrief, stopObjective, objectiveLine, objectiveStartProblem, requestHoldReason, requestSpendCap, requestSpendGuard, setObjectiveState, threadObjectives } from "./objective.server";
 
 /**
  * What the assistant can do, and nothing else. Each tool is a call into an
@@ -533,7 +533,7 @@ async function prepareOutreachV2(args: Record<string, unknown>, context: ToolCon
       autopilot: args.autopilot as boolean | undefined,
       instructions: text(args, "instructions") ?? null,
       basedOnRunId: uuid(args, "basedOnRunId", false) ?? null,
-      ownerRequest: brief?.goal ?? await objectiveRequest(objective),
+      ownerRequest: await objectiveJudgeRequest(objective),
       requestId: objective.requestMessageId,
       // Who goes in is the model's choice: the sorter's "skip" does not drop anyone it picked.
       includeSkipped: true,
@@ -1276,7 +1276,7 @@ export const TOOLS: Record<string, Tool> = {
 
   set_brief: {
     available: (features) => features.research_agent_v2,
-    description: "Write down the lead request the owner made, before its first search and whenever they change it: what they want, how many leads, whether to contact them and on which channels, their budget and time, and what finished means. Every later step reads it: the lead judge, the plan, the writer and the final report. Use only what the owner said (their messages and answers); leave a field null when they said nothing. The server checks one thing: a spend cap above the organization's default must be an amount the owner wrote.",
+    description: "Write down the lead request the owner made, before its first search and whenever they change it: what they want, how many leads, whether to contact them and on which channels, an explicit budget if they gave one, their time, and what finished means. Every later step reads it. Choose sources yourself; a normal request has no request-level dollar cap and needs no paid/free choice. Leave spendCapUsd null unless the owner explicitly limited spending. The server reads that limit from their own words, never from an invented model allowance or another request.",
     arguments: "goal (the request in one or two sentences, from all of the owner's messages about it, e.g. 'Find 10 hair salons in Miami on Instagram and DM them'), leadTarget (the number of leads the owner asked for, or null), contact (true when the owner asked to contact, email, message or DM them; false for research only), channels (array of email|whatsapp|linkedin|instagram the owner allowed, or null when they named none), spendCapUsd (dollars the owner allows on paid sources; 0 when they said free tools only; null when they said nothing), timeLimitMinutes (minutes the owner allows, or null), done (what finished means, in a sentence), newRequest (true when this is a new, different request from the one in progress)",
     run: async (args, context) => {
       if (args.newRequest !== undefined && typeof args.newRequest !== "boolean") throw new ToolArgumentError("newRequest must be true or false");

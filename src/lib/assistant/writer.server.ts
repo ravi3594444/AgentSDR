@@ -342,7 +342,7 @@ export async function sortLeads(input: {
     userPrompt: [
       writerReplyInstructions("lead_sorting"),
       `THE OWNER'S BUSINESS:\n${input.context.slice(0, 2_500)}`,
-      `THE OWNER'S REQUEST: ${input.request?.replace(/\s+/g, " ").trim().slice(0, 600) || "(none given: judge against the business and offer)"}`,
+      `THE OWNER'S REQUEST: ${input.request?.trim().slice(0, 4_000) || "(none given: judge against the business and offer)"}`,
       "LEADS:",
       ...input.leads.map((lead) => `${lead.index}: ${JSON.stringify(lead.facts)}`),
     ].join("\n"),

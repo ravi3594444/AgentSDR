@@ -5,8 +5,8 @@ import type { LeadFunnel } from "./leadFit";
 
 /**
  * An objective (CONTEXT.md): one owner request pursued to an end. It owns a
- * lead target, a time limit and a spend cap — named in the request or the
- * organization's defaults (the "general" Sending rules) — and one final
+ * lead target, a time limit and an optional spend cap — only when the
+ * owner names one — and one final
  * report. Its searches are ordinary jobs carrying the request's id; when they
  * finish short of the target, with time and budget left, the work goes on
  * by itself: the driver job (objective.server.ts) resumes the request's chat
@@ -42,12 +42,13 @@ export function objectiveReportKey(objectiveId: string, reason: StopReason): str
 
 // ── Controls ─────────────────────────────────────────────────────────────────
 
-export type ControlDefaults = { leadTarget: number; hours: number; spendUsd: number };
+export type ControlDefaults = { leadTarget: number; hours: number; /** Legacy setting, ignored for new requests. */ spendUsd?: number };
 
 export type ObjectiveControls = {
   leadTarget: number;
   timeLimitMinutes: number;
-  spendCapUsd: number;
+  /** null: no request-level cap; 0: explicitly free-only; positive: the owner's cap. */
+  spendCapUsd: number | null;
   /** Which came from the owner's words (the rest are the organization's defaults). */
   named: { target: boolean; time: boolean; spend: boolean };
 };
@@ -77,7 +78,7 @@ const SPEND_PATTERNS = [
   /(?:\$|usd\s*)(\d+(?:\.\d{1,2})?)\s*(?:budget|cap|max(?:imum)?|limit|to\s+spend|of\s+spend)/i,
   /\b(\d+(?:\.\d{1,2})?)\s*(?:usd|dollars?)\s*(?:budget|cap|max(?:imum)?|limit)/i,
 ];
-const FREE_ONLY = /\b(?:free\s+sources\s+only|only\s+free\s+sources|free\s+only|no\s+paid\s+(?:sources|searches|tools)|don'?t\s+spend(?:\s+anything|\s+money)?|without\s+spending)\b/i;
+const FREE_ONLY = /\b(?:free\s+(?:sources|searches|tools)\s+only|only\s+free\s+(?:sources|searches|tools)|free\s+only|no\s+paid\s+(?:sources|searches|tools)|don'?t\s+spend(?:\s+anything|\s+money)?|without\s+spending)\b/i;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -111,7 +112,7 @@ function namedSpend(text: string): number | null {
 /**
  * The request's controls: what the owner's words name (a target, a time, a
  * budget), each held inside the Sending rules' hard bounds, and the
- * organization's defaults for the rest.
+ * organization's defaults for target and time. Spending has no default cap.
  */
 export function parseObjectiveControls(text: string, defaults: ControlDefaults): ObjectiveControls {
   const target = numberRule("general", "objectiveLeadTarget");
@@ -124,7 +125,9 @@ export function parseObjectiveControls(text: string, defaults: ControlDefaults):
   return {
     leadTarget: clamp(Math.round(leadTarget ?? defaults.leadTarget), target.min, target.max),
     timeLimitMinutes: minutes === null ? clamp(defaults.hours, hours.min, hours.max) * 60 : clamp(minutes, MIN_NAMED_MINUTES, hours.max * 60),
-    spendCapUsd: Math.round(clamp(spendUsd ?? defaults.spendUsd, spend.min, spend.max) * 100) / 100,
+    // Connected tools are available by default. Only the owner's own words
+    // impose a request cap; an old saved allowance is never a new budget.
+    spendCapUsd: spendUsd === null ? null : Math.round(clamp(spendUsd, spend.min, spend.max) * 100) / 100,
     named: { target: leadTarget !== null, time: minutes !== null, spend: spendUsd !== null },
   };
 }
@@ -286,8 +289,9 @@ const EPSILON = 0.000_001;
  * cap refuses; other paid work still holding part of it is a wait, since
  * what it does not use comes back when it settles.
  */
-export function spendRoom(input: { capUsd: number; settledUsd: number; reservedUsd: number; wantUsd: number }): SpendRoom {
+export function spendRoom(input: { capUsd: number | null; settledUsd: number; reservedUsd: number; wantUsd: number }): SpendRoom {
   const { capUsd, settledUsd, reservedUsd } = input;
+  if (capUsd === null) return { ok: true, maxUsd: Number.POSITIVE_INFINITY };
   if (capUsd <= 0) return { ok: false, wait: false, reason: "this request is limited to free sources (its spend cap is $0)" };
   if (settledUsd >= capUsd - EPSILON) return { ok: false, wait: false, reason: `this request's spend cap of ${usd(capUsd)} is used (${usd(settledUsd)} recorded)` };
   const left = capUsd - settledUsd - reservedUsd;
@@ -301,7 +305,7 @@ export function spendRoom(input: { capUsd: number; settledUsd: number; reservedU
 // ── Limits and the driver ────────────────────────────────────────────────────
 
 export type LimitFacts = {
-  now: Date; deadline: Date; leadTarget: number; leads: number; spendCapUsd: number; spentUsd: number;
+  now: Date; deadline: Date; leadTarget: number; leads: number; spendCapUsd: number | null; spentUsd: number;
   /** v2: the target ends the request only when the owner gave the number; otherwise the model decides when it is done. */
   targetNamed?: boolean;
   /** v2: a used spend cap does not end the request: paid sources are refused at their reservation, free ones go on. */
@@ -325,7 +329,7 @@ export type FinalReason = LimitReason | "sources_exhausted";
 
 export function limitReached(facts: LimitFacts): { reason: LimitReason; detail: string } | null {
   if (facts.targetNamed !== false && facts.leads >= facts.leadTarget) return { reason: "target_reached", detail: `${facts.leads} qualified leads found, the target was ${facts.leadTarget}` };
-  if (facts.budgetEnds !== false && facts.spendCapUsd > 0 && facts.spentUsd >= facts.spendCapUsd - EPSILON) return { reason: "budget_spent", detail: `${usd(facts.spentUsd)} of the ${usd(facts.spendCapUsd)} spend cap was used` };
+  if (facts.budgetEnds !== false && facts.spendCapUsd !== null && facts.spendCapUsd > 0 && facts.spentUsd >= facts.spendCapUsd - EPSILON) return { reason: "budget_spent", detail: `${usd(facts.spentUsd)} of the ${usd(facts.spendCapUsd)} spend cap was used` };
   if (facts.now.getTime() >= facts.deadline.getTime()) return { reason: "time_limit", detail: "the time limit passed" };
   return null;
 }
@@ -349,7 +353,12 @@ export function waitsForOwner(input: { lastWord: { role: string; content: string
 export function judgeRequestText(goal: string, ownerWords: readonly string[]): string {
   const words = ownerWords.map((text) => text.replace(/\s+/g, " ").trim()).filter(Boolean);
   if (!words.length || (words.length === 1 && words[0] === goal.trim())) return goal;
-  return `${goal}\nThe owner's own words for this request, in order (they decide where they disagree with the line above; a place only the line above names is the assistant's choice of where to search, not a requirement): ${words.map((text, index) => `(${index + 1}) ${text.slice(0, 500)}`).join(" ")}`;
+  // Put source instructions before the model's interpretation, so prompt
+  // trimming cannot leave only an invented niche or city. Keep the first
+  // request and the newest clarifications within the sorter's 4,000 chars.
+  const selected = [{ text: words[0]!, index: 0 }, ...words.slice(1).map((text, index) => ({ text, index: index + 1 })).slice(-5)];
+  const own = selected.map(({ text, index }) => `(${index + 1}) ${text.slice(0, index === 0 ? 600 : 400)}`).join(" ");
+  return `The owner's own words for this request, in order (they decide where they disagree with the assistant's summary below): ${own}\nAssistant's summary and search strategy (context, not extra requirements): ${goal.slice(0, 600)}\nOnly the owner's words impose audience requirements. A niche, city or pain point added by the assistant or saved profile is a search choice, not a reason to exclude other matching owners. Questions to ask after contact do not require the answer to be published before outreach.`;
 }
 
 /** How a continuation turn ended (agent.server.ts runAgentTurn). */
@@ -558,7 +567,7 @@ function sourcesText(sources: readonly SourceYield[], web: WebUse | null): strin
   return lines.join("; ") || "nothing yet";
 }
 
-function spendText(spend: SpendBreakdown, capUsd: number): string {
+function spendText(spend: SpendBreakdown, capUsd: number | null): string {
   const parts = [
     spend.apifyUsd ? `Apify ${usd(spend.apifyUsd)}` : null,
     spend.tregUsd ? `Treg ${usd(spend.tregUsd)}` : null,
@@ -569,7 +578,7 @@ function spendText(spend: SpendBreakdown, capUsd: number): string {
   const held = spend.reservedUsd ? `, ${usd(spend.reservedUsd)} of it held by paid work still open` : "";
   const uncertain = spend.uncertainUsd ? `, ${usd(spend.uncertainUsd)} counted at an estimate because the provider did not report the cost` : "";
   const tavily = spend.tavilyCredits ? `; ${plural(spend.tavilyCredits, "Tavily credit")}, limited by your daily Tavily cap rather than this one` : "";
-  const amount = capUsd > 0 ? `${usd(spend.totalUsd)} of the ${usd(capUsd)} cap` : `${spend.totalUsd > 0 ? usd(spend.totalUsd) : "nothing"} (free sources only)`;
+  const amount = capUsd === null ? usd(spend.totalUsd) : capUsd > 0 ? `${usd(spend.totalUsd)} of the ${usd(capUsd)} cap` : `${spend.totalUsd > 0 ? usd(spend.totalUsd) : "nothing"} (free sources only)`;
   return `${amount}${parts.length ? ` (${parts.join(", ")}${held}${uncertain})` : held || uncertain ? ` (${(held + uncertain).slice(2)})` : ""}${tavily}`;
 }
 
@@ -581,7 +590,8 @@ function spendText(spend: SpendBreakdown, capUsd: number): string {
 export const SPEND_CAP_COVERS = "It counts Apify runs, Treg calls, browser minutes, Bright Data records (at its list price per credit, estimated from the records delivered) and AI web research (held at an estimate until the provider reports its cost); Tavily searches are shown in credits and limited by your daily Tavily cap; the AI model's own use for chat, judging the leads found against your request, and writing is not counted (your AI provider bills it).";
 
 /** A request's spend for Activity and the chat: "$1.20 of $5.00 spent", or free sources only. */
-export function requestSpendLine(spentUsd: number, capUsd: number): string {
+export function requestSpendLine(spentUsd: number, capUsd: number | null): string {
+  if (capUsd === null) return `${usd(spentUsd)} spent`;
   if (capUsd <= 0) return spentUsd > 0 ? `${usd(spentUsd)} spent (free sources only)` : "free sources only, nothing spent";
   return `${usd(spentUsd)} of ${usd(capUsd)} spent`;
 }
@@ -597,7 +607,7 @@ export function continuationNote(input: {
   leads: number;
   leadTarget: number;
   spend: SpendBreakdown;
-  spendCapUsd: number;
+  spendCapUsd: number | null;
   msLeft: number;
   sources: readonly SourceYield[];
   web: WebUse | null;
@@ -624,7 +634,7 @@ export function continuationNote(input: {
   return [
     `Continuing your request “${request}” on its own (step ${input.n}): ${input.leads} of ${input.leadTarget} qualified leads so far (contactable and matching the request), ${Math.max(0, input.leadTarget - input.leads)} to go.`,
     input.funnel && input.funnel.found ? `${funnelText(input.funnel)}.` : null,
-    `Spent ${input.spendCapUsd > 0 ? `${usd(input.spend.totalUsd)} of ${usd(input.spendCapUsd)} on paid sources` : `${input.spend.totalUsd > 0 ? usd(input.spend.totalUsd) : "nothing"} (free sources only: no Apify, Treg, browser, Bright Data, Tavily or AI web research)`}${input.spend.tavilyCredits ? ` and ${plural(input.spend.tavilyCredits, "Tavily credit")}` : ""}; ${formatDuration(input.msLeft)} left.`,
+    `Spent ${input.spendCapUsd === null ? usd(input.spend.totalUsd) : input.spendCapUsd > 0 ? `${usd(input.spend.totalUsd)} of ${usd(input.spendCapUsd)} on paid sources` : `${input.spend.totalUsd > 0 ? usd(input.spend.totalUsd) : "nothing"} (free sources only: no Apify, Treg, browser, Bright Data, Tavily or AI web research)`}${input.spend.tavilyCredits ? ` and ${plural(input.spend.tavilyCredits, "Tavily credit")}` : ""}; ${formatDuration(input.msLeft)} left.`,
     `Searched so far — ${sourcesText(input.sources, input.web)}.`,
     "Next: another source or a different query, chosen by these yields and by why leads did not match (a place or kind of business to name in the query); a search that already ran is not repeated, and when nothing else fits the request the research stops here.",
   ].filter(Boolean).join(" ");
@@ -661,7 +671,7 @@ export function objectiveReportText(input: {
   leadTarget: number;
   routes: ContactRoutes;
   spend: SpendBreakdown;
-  spendCapUsd: number;
+  spendCapUsd: number | null;
   sources: readonly SourceYield[];
   web: WebUse | null;
   /** Searches still running when it stopped: their leads are saved as they finish. */

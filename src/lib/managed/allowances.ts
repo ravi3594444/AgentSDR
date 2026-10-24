@@ -15,9 +15,9 @@
  * use, so concurrent jobs cannot pass either limit. Months are calendar
  * months in UTC.
  *
- * The request research-spend cap (an objective's spendCapUsd, the Sending
- * rule objectiveSpendUsd) is separate and keeps its meaning: one request's
- * paid research, whoever's key pays for it.
+ * An optional request research-spend cap (an objective's spendCapUsd) is
+ * separate: only an owner's explicit budget restricts that request's paid
+ * research. No request-level cap replaces these Included-service limits.
  *
  * Client-safe: no database or server imports.
  */

@@ -23,16 +23,37 @@ describe("checkBrief", () => {
 
   test("nothing named: the defaults apply and are marked as defaults", () => {
     const checked = checkBrief({ ...base, leadTarget: null, spendCapUsd: null, timeLimitMinutes: null }, "Find salons", DEFAULTS);
-    expect(checked.ok && checked.controls).toEqual({ leadTarget: 25, timeLimitMinutes: 240, spendCapUsd: 5, named: { target: false, time: false, spend: false } });
+    expect(checked.ok && checked.controls).toEqual({ leadTarget: 25, timeLimitMinutes: 240, spendCapUsd: null, named: { target: false, time: false, spend: false } });
   });
 
-  test("only money above the default needs the owner's own number", () => {
-    expect(checkBrief({ ...base, spendCapUsd: 50 }, "Find salons in Miami", DEFAULTS)).toMatchObject({ ok: false, error: expect.stringContaining("did not allow $50") });
+  test("a model cannot invent a spending restriction when the owner named none", () => {
+    for (const spendCapUsd of [0, 1, 50]) {
+      const checked = checkBrief({ ...base, spendCapUsd }, "Find successful business owners and DM them asking what costs them the most money", DEFAULTS);
+      expect(checked.ok && checked.controls.spendCapUsd).toBeNull();
+      expect(checked.ok && checked.brief.spendCapUsd).toBeNull();
+      expect(checked.ok && checked.controls.named.spend).toBe(false);
+    }
     // The lead target and the time are the model's to set ("all of them", "keep going").
     expect(checkBrief({ ...base, leadTarget: 100 }, "Find salons in Miami", DEFAULTS).ok).toBe(true);
     expect(checkBrief({ ...base, timeLimitMinutes: 600 }, "Find salons in Miami", DEFAULTS).ok).toBe(true);
     // Written by the owner: allowed.
     expect(checkBrief({ ...base, leadTarget: 100, spendCapUsd: 50, timeLimitMinutes: 600 }, "Find 100 salons, spend up to $50, take 10 hours", DEFAULTS).ok).toBe(true);
+  });
+
+  test("saved search allowances never become an unnamed request's budget", () => {
+    for (const spendUsd of [0, 1, 5]) {
+      const checked = checkBrief({ ...base, spendCapUsd: null }, "Find owners and contact them", { ...DEFAULTS, spendUsd });
+      expect(checked.ok && checked.controls.spendCapUsd).toBeNull();
+      if (checked.ok) expect(briefLine(checked.brief, checked.controls)).not.toMatch(/free sources|paid sources|\$0/);
+    }
+  });
+
+  test("the owner's explicit free-only or dollar cap still applies when omitted by the model", () => {
+    const free = checkBrief({ ...base, spendCapUsd: null }, "Find salons. Use only free tools.", DEFAULTS);
+    expect(free.ok && free.controls.spendCapUsd).toBe(0);
+    const capped = checkBrief({ ...base, spendCapUsd: null }, "Find salons. Spend up to $3.", DEFAULTS);
+    expect(capped.ok && capped.controls.spendCapUsd).toBe(3);
+    expect(checkBrief({ ...base, spendCapUsd: 20 }, "Find salons. Use only free tools.", DEFAULTS)).toMatchObject({ ok: false });
   });
 
   test("bad values are refused with what to fix", () => {

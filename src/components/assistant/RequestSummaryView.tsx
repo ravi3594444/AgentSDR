@@ -234,7 +234,7 @@ export function RequestSummaryView({ summary, compact = false, onChanged, labels
               <span className="text-paragraph-xs text-text-soft-400 group-open:hidden">{objective.sources.length} {objective.sources.length === 1 ? "source" : "sources"}</span>
             </summary>
             <div className="space-y-3 border-t border-stroke-soft-200 px-3 py-3 text-paragraph-xs text-text-sub-600">
-              <p>{objective.leads} of {objective.leadTarget} leads found · {requestSpendLine(objective.spentUsd, objective.spendCapUsd)}{objective.status === "active" ? ` · ${Math.max(0, Math.round(objective.msLeft / 60_000))} min left` : ""}</p>
+              <p>{objective.leads}{objective.named.target ? ` of ${objective.leadTarget}` : ""} leads found · {requestSpendLine(objective.spentUsd, objective.spendCapUsd)}{objective.status === "active" ? ` · ${Math.max(0, Math.round(objective.msLeft / 60_000))} min left` : ""}</p>
               {objective.waiting && <p>Waiting: {objective.waiting}</p>}
               {objective.sources.length > 0 && <ul className="space-y-2.5">{objective.sources.map((source) => <SourceBar key={source.label} source={source} />)}</ul>}
               {objective.stopDetail && <p>Ended: {objective.stopDetail}</p>}
@@ -306,7 +306,7 @@ export function RequestSummaryView({ summary, compact = false, onChanged, labels
         <details className="rounded-xl ring-1 ring-inset ring-stroke-soft-200">
           <summary className="cursor-pointer px-3 py-2.5 text-label-xs text-text-strong-950">Research details</summary>
           <div className="space-y-2 border-t border-stroke-soft-200 px-3 py-3 text-paragraph-xs text-text-sub-600">
-            <p>{objective.leads} of {objective.leadTarget} leads found · {requestSpendLine(objective.spentUsd, objective.spendCapUsd)}{objective.status === "active" ? ` · ${Math.max(0, Math.round(objective.msLeft / 60_000))} min left` : ""}</p>
+            <p>{objective.leads}{objective.named.target ? ` of ${objective.leadTarget}` : ""} leads found · {requestSpendLine(objective.spentUsd, objective.spendCapUsd)}{objective.status === "active" ? ` · ${Math.max(0, Math.round(objective.msLeft / 60_000))} min left` : ""}</p>
             {objective.waiting && <p>Waiting: {objective.waiting}</p>}
             {objective.sources.length > 0 && (
               <ul className="space-y-1">

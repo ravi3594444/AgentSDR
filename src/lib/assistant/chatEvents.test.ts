@@ -104,4 +104,10 @@ describe("the compact line for each report", () => {
       { label: "left", value: "95 min" },
     ]);
   });
+
+  test("research without a budget shows recorded spend, never a fictitious $0 cap", () => {
+    const line = compactEvent({ toolResult: { data: { event: { kind: "continuation", n: 2, leads: 7, target: null, spentUsd: 1.234, capUsd: null, minutesLeft: 95.4 } } } });
+    expect(line?.figures.find(figure => figure.label === "spent")?.value).toBe("$1.23");
+    expect(line?.figures.find(figure => figure.label === "leads")?.value).toBe("7");
+  });
 });
