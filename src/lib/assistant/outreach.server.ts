@@ -36,6 +36,7 @@ import { effectiveBusinessProfile } from "./businessContext.server";
 import { activeInquiryRun, inquiryRunLockSql, inquiryRunMembers, inquiryRunReadiness } from "./inquiryRuns.server";
 import { missingForOutreach } from "./profile";
 import { PERSONALIZE_BATCH } from "./overlap";
+import { planPreparationKey } from "./planPreparation";
 import {
   assistantJobs,
   outreachRunLeads,
@@ -68,6 +69,13 @@ export class OutreachError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "OutreachError";
+  }
+}
+
+export class OutreachCoveredError extends OutreachError {
+  constructor(public runs: { runId: string; name: string; status: string; channel: AudienceChannel; personId: string }[]) {
+    super(`No new plan needed: these ${new Set(runs.map((run) => run.personId)).size} leads are already covered by ${[...new Set(runs.map((run) => `“${run.name}” (${run.status}, ${run.channel}, id ${run.runId})`))].join("; ")}. No new message or plan was created. Use the existing conversation and sending status.`);
+    this.name = "OutreachCoveredError";
   }
 }
 
@@ -190,7 +198,21 @@ export type Proposal = {
   name: string;
   audience: { id: string; name: string; eligible: number; total: number };
   plan: OutreachPlan;
+  reused?: boolean;
+  status?: string;
 };
+
+type RunRow = typeof outreachRuns.$inferSelect;
+async function existingProposal(run: RunRow): Promise<Proposal> {
+  const audience = await summarizeAudience(run.audienceId!);
+  if (!audience) throw new OutreachError("The existing plan's lead list is unavailable.");
+  return { runId: run.id, name: run.name, audience: { id: audience.id, name: audience.name, eligible: audience.eligible, total: audience.total }, plan: run.plan, reused: true, status: run.status };
+}
+
+function preparationWhere(key: string) {
+  return and(inOrg(outreachRuns), sql`${outreachRuns.plan} ->> 'preparationKey' = ${key}`,
+    inArray(outreachRuns.status, ["proposed", "starting", "running", "paused", "completed"]));
+}
 
 /** Writes the messages and plans the run. Creates no campaign and sends nothing. */
 export async function prepareOutreach(input: PrepareInput): Promise<Proposal> {
@@ -229,6 +251,38 @@ export async function prepareOutreach(input: PrepareInput): Promise<Proposal> {
   }
   if (!assignments.length) {
     throw new OutreachError(`No lead in this audience can be reached on ${usable.map((channel) => CHANNEL_NAMES[channel]).join(" or ")}: ${countReasons(unassigned).slice(0, 3).map((item) => `${item.count} ${item.reason}`).join("; ")}.`);
+  }
+
+  const preparationKey = planPreparationKey({ ...input, requestId: input.requestId ?? null, assignments });
+  if (preparationKey) {
+    const [existing] = await db.select().from(outreachRuns).where(preparationWhere(preparationKey)).limit(1);
+    if (existing) return existingProposal(existing);
+    // Proposals made before this fix have no key. Reuse an exact selection
+    // from this same request too, so continuing an old chat does not create
+    // one more duplicate just to adopt the new format. Prefer an active run.
+    const legacy = await db.select().from(outreachRuns).where(and(
+      inOrg(outreachRuns), sql`${outreachRuns.threadId} is not distinct from ${input.threadId}`,
+      sql`${outreachRuns.plan} ->> 'requestId' = ${input.requestId}`,
+      sql`${outreachRuns.plan} ->> 'preparationKey' is null`,
+      inArray(outreachRuns.status, ["proposed", "starting", "running", "paused", "completed"]),
+    )).orderBy(desc(outreachRuns.createdAt)).limit(100);
+    const matches = legacy.filter((run) => planPreparationKey({ ...input, requestId: input.requestId ?? null, assignments: run.plan.assignments, instructions: run.plan.instructions, basedOnRunId: run.plan.basedOnRunId }) === preparationKey);
+    const earlier = matches.find((run) => run.status !== "proposed") ?? matches[0];
+    if (earlier) return existingProposal(earlier);
+  }
+  // Start still checks overlap under its own lock. Catch an existing active
+  // conversation here too, before charging for another proposal the user
+  // could never start. This also works across new chats/owner requests.
+  const covered = await db.select({ runId: outreachRuns.id, name: outreachRuns.name, status: outreachRuns.status, channel: outreachRunLeads.channel, personId: outreachRunLeads.personId })
+    .from(outreachRunLeads).innerJoin(outreachRuns, eq(outreachRuns.id, outreachRunLeads.runId))
+    .where(and(inOrg(outreachRunLeads), inOrg(outreachRuns), inArray(outreachRunLeads.personId, assignments.map((item) => item.personId)), eq(outreachRunLeads.status, "active"), inArray(outreachRuns.status, ["starting", "running", "paused"])));
+  const coveredPeople = new Set(covered.map((row) => row.personId));
+  if (coveredPeople.size === assignments.length) throw new OutreachCoveredError(covered);
+  for (let index = assignments.length - 1; index >= 0; index--) {
+    if (coveredPeople.has(assignments[index]!.personId)) {
+      assignments.splice(index, 1);
+      unassigned.push("already covered by another active outreach plan; stays in its existing conversation");
+    }
   }
 
   const runId = randomUUID();
@@ -407,6 +461,7 @@ export async function prepareOutreach(input: PrepareInput): Promise<Proposal> {
   const personalizeCalls = Math.ceil(kept.filter((lead) => leadPlans[lead.assignment.personId]?.approach === "standard").length / PERSONALIZE_BATCH);
   const perCall = cost.usd !== null && cost.calls ? cost.usd / cost.calls : null;
   const plan: OutreachPlan = {
+    ...(preparationKey ? { preparationKey } : {}),
     assignments: finalAssignments,
     sequences,
     personalizationKey: key,
@@ -437,18 +492,29 @@ export async function prepareOutreach(input: PrepareInput): Promise<Proposal> {
     skipped,
   };
   const name = `${audience.name}`.slice(0, 120);
-  await db.insert(outreachRuns).values({
-    organizationId: currentOrganizationId(),
-    id: runId,
-    threadId: input.threadId,
-    audienceId: audience.id,
-    name,
-    status: "proposed",
-    channels,
-    plan,
-    autopilot: plan.autopilot,
-    createdBy: input.userId,
+  const existing = await db.transaction(async (tx) => {
+    if (preparationKey) {
+      // The second lookup closes a parallel-preparation race without holding a
+      // database transaction open during model calls.
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`prepare-plan:${currentOrganizationId()}:${preparationKey}`}, 0))`);
+      const [run] = await tx.select().from(outreachRuns).where(preparationWhere(preparationKey)).limit(1);
+      if (run) return run;
+    }
+    await tx.insert(outreachRuns).values({
+      organizationId: currentOrganizationId(),
+      id: runId,
+      threadId: input.threadId,
+      audienceId: audience.id,
+      name,
+      status: "proposed",
+      channels,
+      plan,
+      autopilot: plan.autopilot,
+      createdBy: input.userId,
+    });
+    return null;
   });
+  if (existing) return existingProposal(existing);
   return { runId, name, audience: { id: audience.id, name: audience.name, eligible: audience.eligible, total: audience.total }, plan };
 }
 

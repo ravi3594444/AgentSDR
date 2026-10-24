@@ -45,7 +45,7 @@ import { inOrg } from "@/lib/tenancy/scope";
 import { addAudienceMembers, createAudience, listAudiences, summarizeAudience } from "./audiences.server";
 import { inquiryRepliesRequested, outreachRequested, outreachRequestProblem, outreachRevoked } from "./agent";
 import { answerDecision, DecisionError, listOpenDecisions } from "./decisions.server";
-import { channelAvailability, listRuns, OutreachError, prepareOutreach, reportRun, setRunPaused, setRunReplyMode, stopRun } from "./outreach.server";
+import { channelAvailability, listRuns, OutreachCoveredError, OutreachError, prepareOutreach, reportRun, setRunPaused, setRunReplyMode, stopRun } from "./outreach.server";
 import { channelList, channelPolicy, planChannelsLine } from "./channelPolicy";
 import { typedByOwner } from "./leadFit";
 import { markGivenByOwner } from "./qualify.server";
@@ -462,6 +462,7 @@ function pageResult(page: { url: string; title: string; body: string; contacts: 
 /** What a prepared plan says to the model (both agents). */
 function planSummary(proposal: Awaited<ReturnType<typeof prepareOutreach>>, autonomous: boolean | undefined): string {
   const plan = proposal.plan;
+  if (proposal.reused) return `Existing plan ${proposal.runId} for “${proposal.name}” (${proposal.status}): ${planChannelsLine(plan)}. No new plan or messages were created. ${proposal.status === "proposed" ? "It still waits for Start; do not prepare it again." : "Use its existing status; do not start another outreach to these recipients."}`;
   const sorted = plan.groups?.length
     ? ` Sorted into ${plan.groups.map((group) => `“${group.label}” (${group.count})`).join(", ")}; ${plan.personal?.length ?? 0} written to individually; ${plan.skipped?.length ?? 0} left out${plan.skipped?.length ? ` (${[...new Set(plan.skipped.map((item) => item.reason))].slice(0, 3).join("; ")})` : ""}.`
     : "";
@@ -541,6 +542,7 @@ async function prepareOutreachV2(args: Record<string, unknown>, context: ToolCon
     });
     return { ok: true, summary: planSummary(proposal, context.autonomous), data: proposal as unknown as Record<string, unknown> };
   } catch (error) {
+    if (error instanceof OutreachCoveredError) return { ok: true, summary: error.message, display: "These leads already have active outreach. No new plan or message was created.", data: { covered: true, runs: error.runs } };
     if (error instanceof OutreachError) return { ok: false, summary: error.message };
     throw error;
   }
@@ -868,7 +870,7 @@ export const TOOLS: Record<string, Tool> = {
       let usernames: string[];
       try { usernames = parseInstagramContacts(args.usernames); }
       catch (error) { throw new ToolArgumentError(error instanceof Error ? error.message : String(error)); }
-      const saved = await createInstagramContactsAudience({ usernames, listName: text(args, "listName"), threadId: context.threadId, userId: context.userId });
+      const saved = await createInstagramContactsAudience({ usernames, listName: text(args, "listName"), threadId: context.threadId, userId: context.userId, requestId: searchRequestId(context), ownerText: context.ownerText ?? "" });
       const names = saved.usernames.map((username) => `@${username}`).join(", ");
       return {
         ok: true,
@@ -1419,6 +1421,7 @@ export const TOOLS: Record<string, Tool> = {
         });
         return { ok: true, summary: planSummary(proposal, context.autonomous), data: proposal as unknown as Record<string, unknown> };
       } catch (error) {
+        if (error instanceof OutreachCoveredError) return { ok: true, summary: error.message, display: "These leads already have active outreach. No new plan or message was created.", data: { covered: true, runs: error.runs } };
         if (error instanceof OutreachError) return { ok: false, summary: error.message };
         throw error;
       }

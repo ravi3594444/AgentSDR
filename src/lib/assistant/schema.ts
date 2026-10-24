@@ -381,6 +381,8 @@ export type PlannedStep = { subject: string | null; body: string; waitDays: numb
 
 /** What the owner approves: audience, channels, messages, limits and what it costs. */
 export type OutreachPlan = {
+  /** Stable identity of the request's selected recipients and preparation options. */
+  preparationKey?: string;
   /** Started on its own by a chat in Autonomous mode (counted against its daily caps). */
   autonomous?: boolean;
   /** Started on its own under another plan's request approval: that plan's id (requestApproval.server.ts), so the card can say so. */

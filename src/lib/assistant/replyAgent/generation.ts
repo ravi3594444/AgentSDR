@@ -1,6 +1,6 @@
 /** The worker's model/check/retry loop, independent of storage and sending. */
 import type { ReplyAgentTurn } from "../schema";
-import { agentUserPrompt, MAX_TURNS, parseAgentDecision, replyProblems, type AgentDecision } from "./agent";
+import { agentUserPrompt, MAX_TURNS, parseAgentDecision, replyProblems, speculativeQuestionNote, type AgentDecision } from "./agent";
 import { closingAcknowledgement } from "@/lib/crm/wrongNumber";
 
 export type AgentModelResult = { text: string; provider?: string; model?: string; request?: unknown; response?: unknown; usage?: { inputTokens?: number; outputTokens?: number } };
@@ -70,6 +70,9 @@ export async function runReplyGeneration(input: {
       lastResult = result;
       const parsed = parseAgentDecision(result.text);
       const found = parsed.action === "reply" ? replyProblems(parsed.reply, input.context.channel, input.context.knowledge) : [];
+      // Repair the note rather than deleting it: the same note could contain
+      // a real unanswered question alongside its speculative prediction.
+      if (speculativeQuestionNote(parsed.ownerNote)) found.push("The owner note predicts a possible future question. Remove that prediction. Keep a note only for an actual unanswered question the lead already asked or another real owner action; retain any genuine handoff. If the latest question is answered from the business information, ownerNote must be null.");
       const replaced = parsed.action === "wrong_number" ? closingAcknowledgement(parsed.reply, input.context.leadMessage, input.context.channel).problems : [];
       turns.push({ turn, ms: Date.now() - began, action: parsed.action, reply: parsed.reply || null, problems: [...found, ...replaced], error: null });
       if (found.length) {

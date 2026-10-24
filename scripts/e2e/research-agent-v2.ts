@@ -72,7 +72,7 @@ const { db } = await import("@/lib/db");
 const { organizations, users, members } = await import("@/lib/auth/schema");
 const { people } = await import("@/lib/leads/schema");
 const { mailboxes } = await import("@/lib/outreach/schema");
-const { assistantJobs, assistantMessages, leadAudienceMembers, outreachRuns } = await import("@/lib/assistant/schema");
+const { assistantJobs, assistantMessages, leadAudiences, leadAudienceMembers, outreachRunLeads, outreachRuns } = await import("@/lib/assistant/schema");
 const { setFeature, clearFeatureCache } = await import("@/lib/features/flags.server");
 const { runInOrganization } = await import("@/lib/tenancy/scope");
 const { updateBusinessProfile } = await import("@/lib/assistant/profile.server");
@@ -167,6 +167,58 @@ await runInOrganization(a.org.id, async () => {
   const names = assigned.map((item) => Object.entries(personIds).find(([, id]) => id === item.personId)?.[0]).sort();
   check("prepare_outreach makes one plan of matching leads only, up to the brief's target, on email only", plan.ok && assigned.length === 2 && assigned.every((item) => item.channel === "email") && !names.includes("Austin Dental Supply"), `${plan.summary.slice(0, 160)} | ${names.join(", ")}`);
   check("…and nothing is sent: the plan waits for Start", run?.status === "proposed", run?.status ?? "no run");
+
+  const beforeRepeat = writerCalls.length;
+  const listsBefore = await db.select({ id: leadAudiences.id }).from(leadAudiences).where(eq(leadAudiences.threadId, thread.id));
+  const repeated = await runTool("prepare_outreach", {}, context);
+  const listsAfter = await db.select({ id: leadAudiences.id }).from(leadAudiences).where(eq(leadAudiences.threadId, thread.id));
+  check("repeating preparation returns the same proposed run without writer calls", repeated.ok && repeated.data?.runId === runId && repeated.data?.reused === true && writerCalls.length === beforeRepeat, repeated.summary);
+  check("repeating preparation reuses its selection list", listsAfter.length === listsBefore.length, `${listsBefore.length} -> ${listsAfter.length}`);
+  const legacyPlan = { ...run!.plan };
+  delete legacyPlan.preparationKey;
+  await db.update(outreachRuns).set({ plan: legacyPlan }).where(eq(outreachRuns.id, runId!));
+  const legacyRepeat = await runTool("prepare_outreach", {}, context);
+  check("a proposal created before the fix is reused too, without charging for another writer", legacyRepeat.ok && legacyRepeat.data?.runId === runId && legacyRepeat.data?.reused === true && writerCalls.length === beforeRepeat, legacyRepeat.summary);
+  await db.update(outreachRuns).set({ plan: run!.plan }).where(eq(outreachRuns.id, runId!));
+  await db.update(outreachRuns).set({ status: "running" }).where(eq(outreachRuns.id, runId!));
+  const activeAgain = await runTool("prepare_outreach", {}, context);
+  check("an already active plan is returned with its actual status, never another proposed run", activeAgain.ok && activeAgain.data?.runId === runId && activeAgain.data?.status === "running", activeAgain.summary);
+  await db.insert(outreachRunLeads).values(assigned.map((item) => ({ organizationId: a.org.id, runId: runId!, personId: item.personId, channel: "email" as const })));
+  const retryThread = await createThread(a.owner.id);
+  const retryWords = `Contact these people: ${rows.filter((row) => assigned.some((item) => item.personId === row.id)).map((row) => row.email).join(", ")}`;
+  const retryRequest = await addMessage({ threadId: retryThread.id, role: "user", content: retryWords, createdBy: a.owner.id });
+  const retryContext = { ...context, threadId: retryThread.id, ownerText: retryWords, requestMessageId: retryRequest.id, searchRequestId: retryRequest.id };
+  await runTool("set_brief", { ...brief, goal: retryWords, leadTarget: 2 }, retryContext);
+  await runTool("add_contacts", { contacts: rows.filter((row) => assigned.some((item) => item.personId === row.id)).map((row) => ({ name: row.fullName, email: row.email })) }, retryContext);
+  const callsBeforeCovered = writerCalls.length;
+  const covered = await runTool("prepare_outreach", {}, retryContext);
+  check("a new chat reports existing active conversations without another proposal or writer call", covered.ok && covered.data?.covered === true && writerCalls.length === callsBeforeCovered && !covered.data?.runId, covered.summary);
+  await db.update(outreachRuns).set({ status: "paused" }).where(eq(outreachRuns.id, runId!));
+  const paused = await runTool("prepare_outreach", {}, retryContext);
+  check("preparation never resumes a paused conversation or proposes duplicate outreach", paused.ok && paused.data?.covered === true && writerCalls.length === callsBeforeCovered && paused.summary.includes("paused"), paused.summary);
+  await db.delete(outreachRunLeads).where(eq(outreachRunLeads.runId, runId!));
+  await db.update(outreachRuns).set({ status: "proposed" }).where(eq(outreachRuns.id, runId!));
+
+  // The live two-channel failure: Instagram was saved without a request id
+  // or an owner-selected fit, so the request planner could see only WhatsApp.
+  await setFeature("instagram", true, a.owner.id);
+  clearFeatureCache();
+  const mixedThread = await createThread(a.owner.id);
+  const mixedRequest = await addMessage({ threadId: mixedThread.id, role: "user", content: "Contact my Instagram @dev_ravi_test and WhatsApp +918084794983. These are my test accounts.", createdBy: a.owner.id });
+  const mixed: Context = { ...context, threadId: mixedThread.id, ownerText: mixedRequest.content, requestMessageId: mixedRequest.id, searchRequestId: mixedRequest.id };
+  await runTool("set_brief", { ...brief, goal: mixedRequest.content, channels: ["instagram", "whatsapp"], leadTarget: 2 }, mixed);
+  const instagram = await runTool("add_instagram_contacts", { usernames: ["dev_ravi_test"] }, mixed);
+  const whatsapp = await runTool("add_contacts", { contacts: [{ phone: "+918084794983" }] }, mixed);
+  const mixedReview = await runTool("review_leads", {}, mixed);
+  check("both owner-supplied channels belong to the same request and already match it", instagram.ok && whatsapp.ok && mixedReview.ok && mixedReview.summary.includes("2 match") && mixedReview.summary.includes("dev_ravi_test") && mixedReview.summary.includes("918084794983"), mixedReview.summary);
+  const { matchingLeadsAudience } = await import("@/lib/assistant/agentV2.server");
+  const mixedObjective = await objectiveForRequest(mixedRequest.id);
+  const selected = await matchingLeadsAudience({ objective: mixedObjective!, brief: null, threadId: mixedThread.id, userId: a.owner.id, max: 2 });
+  const selectedMembers = "audienceId" in selected ? await db.select().from(leadAudienceMembers).where(eq(leadAudienceMembers.audienceId, selected.audienceId)) : [];
+  check("the default combined selection includes Instagram and WhatsApp rather than dropping Instagram", selectedMembers.length === 2 && selectedMembers.some((member) => member.channels.includes("instagram")) && selectedMembers.some((member) => member.channels.includes("whatsapp")), JSON.stringify(selected));
+  const notGiven = await runTool("add_instagram_contacts", { usernames: ["not_supplied_by_owner"] }, mixed);
+  const unselected = await db.select({ fit: leadAudienceMembers.fit }).from(leadAudienceMembers).where(eq(leadAudienceMembers.audienceId, String(notGiven.data?.audienceId)));
+  check("a handle the owner did not supply is not automatically marked as their selected match", notGiven.ok && unselected[0]?.fit !== "match");
 
   // ---------------------------------------------------------- the request's last turn (its target, which the owner named, is reached)
   await saveObjectiveProgress(objective!.id, { continuation: { n: 3, attempt: 1, startedAt: new Date().toISOString(), endedAt: null, end: null, leadsAtStart: 2, judged: null, final: "target_reached", finalDetail: "3 qualified leads found, the target was 2" } });

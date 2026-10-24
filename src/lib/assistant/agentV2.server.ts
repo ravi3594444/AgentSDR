@@ -1,4 +1,5 @@
 import "server-only";
+import { createHash } from "node:crypto";
 
 import { and, asc, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
@@ -9,7 +10,7 @@ import { addAudienceMembers, createAudience, memberInsights } from "./audiences.
 import { readBrief, type Brief } from "./brief";
 import { personFit } from "./leadFit";
 import { continuedRequestIds, objectiveChildren, objectiveFacts, threadObjectives, type Objective } from "./objective.server";
-import { assistantMessages, leadAudienceMembers, outreachRuns } from "./schema";
+import { assistantMessages, leadAudiences, leadAudienceMembers, outreachRuns } from "./schema";
 
 /**
  * Research agent v2, the server half (agentV2.ts has the pure parts): which
@@ -214,7 +215,13 @@ export async function matchingLeadsAudience(input: { objective: Objective; brief
     return { problem: matches ? `the ${matches} matching ${matches === 1 ? "lead has" : "leads have"} no contact route yet` : "no lead of this request is judged a match; review_leads, then pass leads all or the personIds you want in the plan" };
   }
   const goal = input.brief?.goal ?? "this request";
-  const audienceId = await createAudience({ name: `${pick.kind === "match" ? "Matching leads" : "Leads"}: ${goal.slice(0, 120)}`, source: "list", criteria: { requestId: input.objective.requestMessageId, fromRequest: true }, threadId: input.threadId, userId: input.userId });
+  const selectionKey = createHash("sha256").update(JSON.stringify(chosen.map((member) => member.personId).sort())).digest("hex");
+  const [existing] = await db.select({ id: leadAudiences.id }).from(leadAudiences).where(and(
+    inOrg(leadAudiences), eq(leadAudiences.threadId, input.threadId),
+    sql`${leadAudiences.criteria} ->> 'requestId' = ${input.objective.requestMessageId}`,
+    sql`${leadAudiences.criteria} ->> 'selectionKey' = ${selectionKey}`,
+  )).limit(1);
+  const audienceId = existing?.id ?? await createAudience({ name: `${pick.kind === "match" ? "Matching leads" : "Leads"}: ${goal.slice(0, 120)}`, source: "list", criteria: { requestId: input.objective.requestMessageId, fromRequest: true, selectionKey }, threadId: input.threadId, userId: input.userId });
   // What each lead's search saw (its website's observations) comes along, so the plan preview and the writer still have it.
   const insights = await memberInsights(chosen.map((member) => member.id));
   await addAudienceMembers(audienceId, chosen.map((member) => ({

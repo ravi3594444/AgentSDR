@@ -4,6 +4,33 @@ import { runReplyGeneration, type AgentModel } from "./generation";
 const context = { channel: "whatsapp" as const, profile: {}, knowledge: "Business: 22nd X AI. AI automation and websites.", lead: {}, conversation: [], leadMessage: "Hello" };
 const reply = (text: string) => JSON.stringify({ action: "reply", reply: text, ownerNote: null, category: "other", confidence: 0.5, reasoning: "A greeting." });
 
+test("an already answered services question is not held for a pricing question that may follow", async () => {
+  let calls = 0;
+  const result = await runReplyGeneration({ context: { ...context, leadMessage: "So what items do you sell?" }, systemPrompt: "Reply.", model: async () => {
+    calls++;
+    if (calls > 1) return { text: reply("We build AI automation and websites. Which task would you like to automate?") };
+    return { text: JSON.stringify({ ...JSON.parse(reply("We build AI automation and websites. Which task would you like to automate?")), ownerNote: { kind: "question", note: "Lead's exact pricing question may follow, and pricing is per project only." } }) };
+  } });
+  expect(calls).toBe(2);
+  expect(result.decision?.action).toBe("reply");
+  expect(result.decision?.ownerNote).toBeNull();
+});
+
+test("repairing a speculative sentence must not silently delete a real owner handoff", async () => {
+  let calls = 0;
+  const result = await runReplyGeneration({ context: { ...context, leadMessage: "What is the exact price?" }, systemPrompt: "Reply.", model: async ({ userPrompt }) => {
+    if (++calls > 1) expect(userPrompt).toContain("retain any genuine handoff");
+    return { text: JSON.stringify({ ...JSON.parse(reply("The owner will confirm your quote.")), ownerNote: { kind: "question", note: calls === 1 ? "They asked for an exact price. A contract question may follow." : "They asked for an exact price; no fixed price is saved." } }) };
+  } });
+  expect(result.decision?.ownerNote?.note).toContain("exact price");
+  expect(result.turns).toHaveLength(2);
+});
+
+test("an actual unanswered pricing question still reaches the owner", async () => {
+  const result = await runReplyGeneration({ context: { ...context, leadMessage: "What is the exact price?" }, systemPrompt: "Reply.", model: async () => ({ text: JSON.stringify({ ...JSON.parse(reply("The owner will confirm a quote for your project.")), ownerNote: { kind: "question", note: "They asked for the exact project price; no fixed price is saved." } }) }) });
+  expect(result.decision?.ownerNote?.kind).toBe("question");
+});
+
 test("the screenshot's HTTP 400 stops after one rejected request, with no fabricated decision", async () => {
   let calls = 0;
   const result = await runReplyGeneration({ context, systemPrompt: "Reply naturally.", requestedModel: () => "deepseek/deepseek-chat", model: async () => {

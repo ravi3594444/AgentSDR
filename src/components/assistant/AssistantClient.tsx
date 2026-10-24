@@ -48,7 +48,7 @@ import { useChatScroll } from "./useChatScroll";
 import { Mascot, type MascotMood } from "./Mascot";
 import { ResearchGroup } from "./ResearchGroup";
 import { RESEARCH_TOOLS, researchTitle } from "./researchView";
-import { COMPACT_TOOLS, groupChatActivity, type ChatActivityItem } from "./chatActivity";
+import { COMPACT_TOOLS, groupChatActivity, visibleChatMessages, type ChatActivityItem } from "./chatActivity";
 import { cn } from "@/utils/cn";
 
 /**
@@ -919,7 +919,7 @@ function ToolMessage({ message, jobs, runs, decisions, canManageAutopilot, lastR
   }
   if (message.tool === "diagnose_delivery") return <CompactReport message={message} onChanged={onChanged} />;
   if (RESEARCH_TOOLS.has(message.tool ?? "")) return <ResearchGroup messages={[message]} jobs={jobs} timeZone={timeZone} />;
-  if (message.tool === "prepare_outreach") return <ProposalCard message={message} run={runs[String(data?.runId ?? "")]} canManageAutopilot={canManageAutopilot} lastReplyMode={lastReplyMode} onChanged={onChanged} />;
+  if (message.tool === "prepare_outreach") return data?.covered === true ? <ActivityRow message={message} /> : <ProposalCard message={message} run={runs[String(data?.runId ?? "")]} canManageAutopilot={canManageAutopilot} lastReplyMode={lastReplyMode} onChanged={onChanged} />;
   if (message.tool === "prepare_inquiry_replies") return <InquiryRunCard message={message} run={runs[String(data?.runId ?? "")]} canManageAutopilot={canManageAutopilot} onChanged={onChanged} />;
   if (message.tool === "report") return <ReportCard message={message} />;
   if (COMPACT_TOOLS.has(message.tool ?? "")) return <ActivityRow message={message} />;
@@ -1298,7 +1298,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
   }
 
   // Calls the server refused before doing anything are the model's own mistakes: kept for it, not shown.
-  const shown = useMemo(() => state.messages.filter((message) => !message.toolResult?.hidden), [state.messages]);
+  const shown = useMemo(() => visibleChatMessages(state.messages), [state.messages]);
   const turns = useMemo(() => groupTurns(shown), [shown]);
   const last = shown[shown.length - 1];
   const thinking = sending || state.busy;

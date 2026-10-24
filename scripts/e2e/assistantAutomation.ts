@@ -40,6 +40,7 @@ export async function runAutomationChecks(input: {
   const { ensureCrmDefaults } = await import("@/lib/crm/defaults");
   const { isPersonDoNotContact } = await import("@/lib/crm/policies");
   const { runAutopilotForDraft } = await import("@/lib/assistant/autopilotRun.server");
+  const { AUTOPILOT_LIMITS } = await import("@/lib/crm/autopilot");
   const { answerDecision, listOpenDecisions, takeOverConversation } = await import("@/lib/assistant/decisions.server");
   const { setRunPaused, stopRun } = await import("@/lib/assistant/outreach.server");
   const { results } = await import("@/lib/assistant/results.server");
@@ -318,7 +319,7 @@ export async function runAutomationChecks(input: {
   check("an 'ok, thanks' after an answer gets no reply (the chat ends there)", thanksAnswered.sent && !okOutcome.sent && /^no answer needed/.test(okOutcome.reason ?? "") && sent() === beforeOk, `${thanksAnswered.reason} | ${okOutcome.reason}`);
 
   const chatty = await reply(H[2]!, "How much is the maintenance plan?", answer, { thread: "limit" });
-  // Older than a day: they count toward this conversation's total, not toward today's 40.
+  // Older than a day: they count toward this conversation, not the daily allowance.
   const limitFillers = await db.insert(schema.autopilotReplies).values(Array.from({ length: 30 }, () => ({
     organizationId: orgId, draftId: crypto.randomUUID(), revision: 1, conversationId: chatty.conversationId, status: "sent" as const, reason: "conversation-limit filler", createdAt: new Date(Date.now() - 2 * 24 * 3_600_000),
   }))).returning({ id: schema.autopilotReplies.id });
@@ -331,7 +332,7 @@ export async function runAutomationChecks(input: {
   await db.delete(schema.autopilotReplies).where(inArray(schema.autopilotReplies.id, limitFillers.map((row) => row.id)));
 
   // ------------------------------------------------------------ the 24-hour limit under concurrent jobs
-  const fill = 40 - Number((await db.select({ n: count() }).from(schema.autopilotReplies).where(and(eq(schema.autopilotReplies.organizationId, orgId), inArray(schema.autopilotReplies.status, ["reserved", "sent", "failed"]))))[0]?.n ?? 0) - 2;
+  const fill = AUTOPILOT_LIMITS.perDay - Number((await db.select({ n: count() }).from(schema.autopilotReplies).where(and(eq(schema.autopilotReplies.organizationId, orgId), inArray(schema.autopilotReplies.status, ["reserved", "sent", "failed"]))))[0]?.n ?? 0) - 2;
   const fillers = await db.insert(schema.autopilotReplies).values(Array.from({ length: fill }, () => ({
     organizationId: orgId, draftId: crypto.randomUUID(), revision: 1, conversationId: crypto.randomUUID(), status: "sent" as const, reason: "limit-check filler",
   }))).returning({ id: schema.autopilotReplies.id });
@@ -399,7 +400,7 @@ export async function runAutomationChecks(input: {
       && today.outreach.emailsSent === Number(emailCount?.n ?? 0)
       && today.attention.openDecisions === openDecisions.length
       && today.stopped.optedOut === 2
-      && today.limits.automaticRepliesLeft24h === 40 - Number(autoSends?.n ?? 0),
+      && today.limits.automaticRepliesLeft24h === AUTOPILOT_LIMITS.perDay - Number(autoSends?.n ?? 0),
     JSON.stringify({ auto: [today.outreach.automaticReplies, autoSends?.n], inbound: [today.outreach.repliesReceived, inboundCount?.n], emails: [today.outreach.emailsSent, emailCount?.n], decisions: [today.attention.openDecisions, openDecisions.length], optedOut: today.stopped.optedOut }));
   check("people contacted stay counted after they opt out (counted from send records)", today.outreach.peopleContacted >= (Number(emailCount?.n ?? 0) > 0 ? 1 : 0));
   check("WhatsApp new chats left is shown as not measured, not as a number", today.limits.whatsappNewChatsLeftToday === null);

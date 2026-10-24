@@ -1,6 +1,8 @@
 import "server-only";
 import { db } from "@/lib/db";
 import { upsertInstagramProspect } from "@/lib/instagram/prospects.server";
+import { markGivenByOwner } from "./qualify.server";
+import { ungroundedInstagramContacts } from "./instagramContacts";
 import {
   addAudienceMembers,
   createAudience,
@@ -13,6 +15,8 @@ export async function createInstagramContactsAudience(input: {
   listName?: string;
   threadId: string;
   userId: string | null;
+  requestId?: string | null;
+  ownerText?: string;
 }) {
   const members = await db.transaction(async (tx) => {
     const found = [];
@@ -36,6 +40,7 @@ export async function createInstagramContactsAudience(input: {
     source: "list",
     criteria: {
       source: "chat",
+      requestId: input.requestId ?? null,
       instagramUsernames: input.usernames,
       preferredChannels: ["instagram"],
     },
@@ -60,6 +65,8 @@ export async function createInstagramContactsAudience(input: {
       matchReason: "The owner selected this Instagram recipient",
     })),
   );
+  const notGiven = new Set(ungroundedInstagramContacts(input.usernames, input.ownerText ?? ""));
+  await markGivenByOwner(audienceId, members.filter((member) => !notGiven.has(member.username)).map((member) => member.personId), input.requestId ?? null);
   return {
     audienceId,
     audience: await summarizeAudience(audienceId),

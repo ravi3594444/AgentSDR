@@ -471,6 +471,8 @@ async function ownerMessageInThread(threadId: string, messageId: string): Promis
 /** In Autonomous mode, starts the plan a tool just prepared; true when it started (or the chat is not autonomous). */
 async function startedOnItsOwn(threadId: string, autonomous: boolean, data: Record<string, unknown> | undefined): Promise<boolean> {
   if (!autonomous) return true;
+  if (data?.covered === true) return true;
+  if (data?.reused === true && ["starting", "running", "paused", "completed"].includes(String(data.status))) return true;
   const runId = typeof data?.runId === "string" ? data.runId : null;
   if (!runId) return false;
   const outcome = await autoStartPlan(threadId, runId);
