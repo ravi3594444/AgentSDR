@@ -1,9 +1,17 @@
 import { describe, expect, test } from "bun:test";
-import { groupChatActivity, visibleChatMessages } from "./chatActivity";
+import { activityPresentation, groupChatActivity, visibleChatMessages } from "./chatActivity";
 
 const row = (id: string, role = "tool", tool: string | null = null, status: string | null = "ok", retry = false) => ({ id, role, tool, status, toolResult: retry ? { data: { retry: true } } : null });
 
 describe("the chat's activity log", () => {
+  test("an interrupted tool is not live work merely because its stored status says running", () => {
+    expect(activityPresentation([{ status: "running" }], false)).toEqual({ label: "Step interrupted", status: "error" });
+    expect(activityPresentation([{ status: "running" }], true)).toEqual({ label: "Working", status: "running" });
+    expect(activityPresentation([{ status: "ok" }], false)).toEqual({ label: "Activity", status: "ok" });
+  });
+  test("an unavailable status does not assert work is still running or safely completed", () => {
+    expect(activityPresentation([{ status: "running" }], true, false)).toEqual({ label: "Status unavailable", status: "error" });
+  });
   test("repeated checking narration and routine tools collapse, while the answer stays visible", () => {
     const messages = [row("checking", "assistant"), row("runs", "tool", "list_runs"), row("checking-again", "assistant"), row("decisions", "tool", "list_decisions"), row("answer", "assistant")];
     const items = groupChatActivity(messages);

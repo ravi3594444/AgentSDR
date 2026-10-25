@@ -127,10 +127,15 @@ describe("the research card's header", () => {
   });
 
   test("when they end it adds up what they found", () => {
-    expect(researchHeadline(researchSummary([done, failed]))).toEqual({ title: "Research finished, 1 failed", detail: "10 found · 4 contactable · 3 match" });
+    expect(researchHeadline(researchSummary([done, failed]))).toEqual({ title: "Searches finished, 1 failed", detail: "10 found · 4 contactable · 3 match" });
   });
 
   test("when every search failed it says research stopped", () => {
-    expect(researchHeadline(researchSummary([failed])).title).toBe("Research stopped");
+    expect(researchHeadline(researchSummary([failed])).title).toBe("Search failed");
   });
+});
+
+ test("a refused source is not labelled completed research", () => {
+  const skipped = { ...researchRow({id:"not-searched", tool:"find_leads", status:"ok", toolResult:{data:{notSearched:true}}}, undefined), state: "skipped" as const };
+  expect(researchHeadline(researchSummary([skipped])).title).toBe("Source not searched");
 });

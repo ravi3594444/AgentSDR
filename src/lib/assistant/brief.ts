@@ -99,7 +99,7 @@ export function checkBrief(raw: Record<string, unknown>, ownerWords: string, def
   if (target === undefined || (target !== null && (!Number.isInteger(target) || target < 1 || target > MAX_TARGET))) {
     return { ok: false, error: `leadTarget must be a whole number from 1 to ${MAX_TARGET}, or null when the owner named no number` };
   }
-  // The lead target and the time limit are the model's to set ("all of them", "keep going"); only money above the default needs the owner's own number.
+  // The target and time are the model's to set; spending restrictions come only from the owner.
   const modelSpend = optionalNumber(raw, "spendCapUsd");
   if (modelSpend === undefined || (modelSpend !== null && modelSpend < 0)) return { ok: false, error: "spendCapUsd must be a number of dollars (0 for free sources only), or null when the owner said nothing about money" };
   // The model chooses the sources, not a budget the owner never gave.
@@ -144,7 +144,7 @@ export function checkBrief(raw: Record<string, unknown>, ownerWords: string, def
 
 /** The brief in a line, for the model's context and the tool result. */
 export function briefLine(brief: Brief, controls: Pick<ObjectiveControls, "leadTarget" | "timeLimitMinutes" | "spendCapUsd">): string {
-  // Money is shown only as the owner put it ("free tools only", "up to $20"); the default cap is the server's business.
+  // Show a spending restriction only when the owner supplied it.
   const spend = controls.spendCapUsd === 0 ? "free sources only" : controls.spendCapUsd !== null ? `up to $${controls.spendCapUsd} on paid sources` : null;
   return [
     `Goal: ${brief.goal}`,

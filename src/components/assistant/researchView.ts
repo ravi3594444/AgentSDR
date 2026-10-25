@@ -189,7 +189,7 @@ export function researchRow(message: ResearchMessage, job: ResearchJob | undefin
   return { ...base, state: "done", step: "Done", stats: facts.stats, details: facts.details, audienceId: job.audienceId, contactable: num(r.eligible), excluded: num(r.excluded) };
 }
 
-export type ResearchSummary = { total: number; running: number; done: number; failed: number; found: number; contactable: number; match: number | null };
+export type ResearchSummary = { total: number; running: number; done: number; skipped: number; failed: number; found: number; contactable: number; match: number | null };
 
 /** The group's header: how many searches are where, and what the finished ones found together. */
 export function researchSummary(rows: ResearchRow[]): ResearchSummary {
@@ -199,6 +199,7 @@ export function researchSummary(rows: ResearchRow[]): ResearchSummary {
     total: rows.length,
     running: rows.filter((row) => row.state === "running" || row.state === "starting" || row.state === "waiting").length,
     done: rows.filter((row) => row.state === "done" || row.state === "skipped").length,
+    skipped: rows.filter((row) => row.state === "skipped").length,
     failed: rows.filter((row) => row.state === "failed" || row.state === "cancelled").length,
     found: rows.reduce((total, row) => total + (row.stats[0]?.value ?? 0), 0),
     contactable: sum("contactable"),
@@ -213,7 +214,8 @@ export function researchHeadline(summary: ResearchSummary): { title: string; det
     const finished = summary.done + summary.failed;
     return { title: `Researching ${sources}`, detail: finished ? `${summary.done} done${summary.failed ? `, ${summary.failed} failed` : ""}, ${summary.running} still going` : "Results appear here as each one finishes" };
   }
-  if (summary.done === 0 && summary.failed > 0) return { title: "Research stopped", detail: `${summary.failed === 1 ? "The search" : `All ${summary.failed} searches`} failed` };
+  if (summary.done === 0 && summary.failed > 0) return { title: summary.failed === 1 ? "Search failed" : "Searches failed", detail: `${summary.failed === 1 ? "The search" : `All ${summary.failed} searches`} failed` };
+  if (summary.skipped === summary.total && summary.total > 0) return { title: summary.total === 1 ? "Source not searched" : "Sources not searched", detail: "See the reason below" };
   const found = [`${summary.found} found`, `${summary.contactable} contactable`, summary.match !== null ? `${summary.match} match` : null].filter(Boolean).join(" · ");
-  return { title: summary.failed ? `Research finished, ${summary.failed} failed` : "Research finished", detail: found };
+  return { title: summary.failed ? `Searches finished, ${summary.failed} failed` : summary.total === 1 ? "Search finished" : "Searches finished", detail: found };
 }

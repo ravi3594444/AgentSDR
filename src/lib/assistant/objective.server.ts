@@ -474,7 +474,8 @@ function childLabel(job: ObjectiveChild): string {
   }
   if (job.kind === "web_discovery") return `Websites and directories through ${webProviderName(payload.searchProvider)}`;
   const source = payload.target === "facebook" ? "Facebook" : payload.target === "linkedin" ? "LinkedIn" : payload.target === "instagram" ? "Instagram" : "Google Maps";
-  const provider = result.provider === "apify" || result.provider === "scraper" ? result.provider : payload.provider;
+  const progress = (job.progress ?? {}) as { source?: unknown; provider?: unknown };
+  const provider = result.provider === "apify" || result.provider === "scraper" ? result.provider : progress.provider === "scraper" ? "scraper" : payload.provider;
   return provider === "apify" ? `${source} through Apify` : provider === "scraper" ? `${source} through the built-in scraper` : source;
 }
 

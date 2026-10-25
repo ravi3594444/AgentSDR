@@ -12,7 +12,7 @@
 import { formatChatDateTime } from "./chatTime";
 
 export type ChatEvent =
-  | { kind: "search_report"; jobId: string; ok: boolean; source: string | null; found: number; contactable: number; matching: number | null; judged: number | null; error?: string | null }
+  | { kind: "search_report"; jobId: string; ok: boolean; notSearched?: boolean; source: string | null; found: number; contactable: number; matching: number | null; judged: number | null; error?: string | null }
   | { kind: "plan_ready"; runId: string | null; leads: number; channels: Record<string, number>; waitingReason: string | null }
   /** A launch's `note`: it started, and its messages are not in the sending queue yet (the repair tops it up). */
   | { kind: "outreach_started"; runId: string | null; ok: boolean; launches: { channel: string; added: number; skipped: number; problem: string | null; note?: string | null }[]; automatic: boolean }
@@ -82,6 +82,7 @@ export function compactEvent(message: { toolResult?: unknown }): CompactEvent | 
   switch (event.kind) {
     case "search_report": {
       if (!event.ok) return { title: `Search failed${event.source ? ` · ${event.source}` : ""}`, figures: [], tone: "bad", note: event.error ?? null };
+      if (event.notSearched) return { title: `Source not searched${event.source ? ` · ${event.source}` : ""}`, figures: [], tone: "warning", note: null };
       const figures: CompactFigure[] = [
         { label: "found", value: String(num(event.found)) },
         { label: "contactable", value: String(num(event.contactable)) },

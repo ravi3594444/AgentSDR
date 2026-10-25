@@ -84,7 +84,13 @@ export async function addMessage(input: {
 }
 
 export async function updateMessage(id: string, patch: { status?: AssistantToolStatus; toolResult?: Record<string, unknown>; content?: string }) {
-  await db.update(assistantMessages).set(patch).where(and(inOrg(assistantMessages), eq(assistantMessages.id, id)));
+  // Updates have the same Postgres text/JSON boundary as inserts. Tool
+  // previews may end inside an emoji even when the source was valid.
+  await db.update(assistantMessages).set({
+    ...patch,
+    ...(patch.content !== undefined ? { content: cleanString(patch.content) } : {}),
+    ...(patch.toolResult !== undefined ? { toolResult: cleanJson(patch.toolResult) } : {}),
+  }).where(and(inOrg(assistantMessages), eq(assistantMessages.id, id)));
 }
 
 /** Takes the thread for one turn; false when another turn is still working on it. */

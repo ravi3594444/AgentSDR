@@ -111,3 +111,7 @@ describe("the compact line for each report", () => {
     expect(line?.figures.find(figure => figure.label === "leads")?.value).toBe("7");
   });
 });
+
+ test("a refused or handed-off source did not complete an empty search", () => {
+  expect(compactEvent({toolResult:{data:{event:{kind:"search_report",jobId:"hand-off",ok:true,notSearched:true,source:"Google Maps",found:0,contactable:0,matching:null,judged:null}}}})).toMatchObject({title:"Source not searched · Google Maps",figures:[],tone:"warning"});
+});

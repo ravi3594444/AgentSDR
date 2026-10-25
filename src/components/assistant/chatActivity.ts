@@ -36,6 +36,13 @@ export function visibleChatMessages<T extends ActivityMessage & {
 
 export type ChatActivityItem<T> = { kind: "message"; message: T } | { kind: "activity"; messages: T[] };
 
+export function activityPresentation(messages: readonly { status: string | null }[], active: boolean, statusKnown = true): { label: string; status: "running" | "ok" | "error" } {
+  const running = messages.some(message => message.status === "running");
+  if (!running) return { label: "Activity", status: "ok" };
+  if (!statusKnown) return { label: "Status unavailable", status: "error" };
+  return active ? { label: "Working", status: "running" } : { label: "Step interrupted", status: "error" };
+}
+
 /** Nothing is deleted or rewritten, and errors, decisions, plans and research cards never disappear into the log. */
 export function groupChatActivity<T extends ActivityMessage>(messages: readonly T[]): ChatActivityItem<T>[] {
   const lastAnswer = messages.findLastIndex((message) => message.role === "assistant");

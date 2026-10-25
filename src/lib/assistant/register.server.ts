@@ -145,12 +145,14 @@ function reportEvent(job: AssistantJob, search: boolean): ChatEvent {
     : job.kind === "web_discovery" ? "websites and directories"
     : job.kind === "apify_instagram" ? "Instagram"
     : job.kind === "social_research" ? socialSourceLabel(job)
+    : typeof job.progress?.source === "string" ? job.progress.source
     : sourceLabel(target, (result.provider === "apify" || result.provider === "scraper" ? result.provider : payload.provider) ?? null);
   const fit = result.fit && result.fit.contactable ? result.fit : null;
   return {
     kind: "search_report",
     jobId: job.id,
     ok: job.status === "succeeded",
+    notSearched: result.notSearched === true,
     source,
     found: Number(result.found ?? 0) || 0,
     contactable: Number(result.eligible ?? 0) || 0,

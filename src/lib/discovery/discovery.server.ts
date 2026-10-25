@@ -843,7 +843,12 @@ async function startScraper(job: AssistantJob, notes: string[]): Promise<StepOut
     };
   } catch (error) {
     if (error instanceof MapsScraperError) {
-      return (await apifyMapsFallback(job, notes, `the built-in Google Maps scraper failed (${error.message})`)) ?? { next: "failed", error: error.message };
+      const why = `The built-in Google Maps scraper failed (${error.message}).`;
+      const apify = await apifyMapsFallback(job, notes, why);
+      if (apify) return apify;
+      const fallback = await handOffToWebsite(job, [...notes, why]);
+      // An earlier Apify refusal must not label this failed scraper call.
+      return { ...fallback, progress: { ...fallback.progress, provider: "scraper", source: sourceLabel("maps", "scraper") } };
     }
     throw error;
   }

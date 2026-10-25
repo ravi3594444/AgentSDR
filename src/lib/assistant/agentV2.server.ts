@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 
 import { and, asc, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
+import { clippedString } from "@/lib/grid/sanitize";
 import { featureEnabled } from "@/lib/features/flags.server";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { progressBlock, requestBlock, type ProgressSearch } from "./agentV2";
@@ -122,11 +123,11 @@ export async function reviewLeadsText(input: { objective: Objective; audienceId:
     const verdict = personFit(rows.map((row) => row.fit));
     const first = rows[0]!;
     const reason = rows.find((row) => row.fitReason)?.fitReason ?? "";
-    const facts = Object.entries(first.facts ?? {}).filter(([, value]) => value).map(([key, value]) => `${key}: ${String(value).replace(/\s+/g, " ").slice(0, 160)}`).join("; ");
+    const facts = Object.entries(first.facts ?? {}).filter(([, value]) => value).map(([key, value]) => `${key}: ${clippedString(String(value).replace(/\s+/g, " "), 160)}`).join("; ");
     const why = insights.get(first.id)?.matchReason ?? "";
     lines.push({
       verdict,
-      text: `- person ${personId} “${first.name}” — ${verdict === "pending" ? "not judged yet" : verdict}${reason ? ` (${reason.slice(0, 200)})` : ""}; ${first.status === "eligible" ? `reachable by ${first.channels.join(", ") || "nothing"}` : `not contactable: ${first.reason ?? "no route"}`}; ${facts || "no facts"}${why ? `; found: ${why.slice(0, 200)}` : ""}${first.sourceUrl ? `; source ${first.sourceUrl}` : ""}`,
+      text: `- person ${personId} “${first.name}” — ${verdict === "pending" ? "not judged yet" : verdict}${reason ? ` (${clippedString(reason, 200)})` : ""}; ${first.status === "eligible" ? `reachable by ${first.channels.join(", ") || "nothing"}` : `not contactable: ${first.reason ?? "no route"}`}; ${facts || "no facts"}${why ? `; found: ${clippedString(why, 200)}` : ""}${first.sourceUrl ? `; source ${first.sourceUrl}` : ""}`,
     });
   }
   for (const member of unsaved) {

@@ -48,7 +48,7 @@ import { useChatScroll } from "./useChatScroll";
 import { Mascot, type MascotMood } from "./Mascot";
 import { ResearchGroup } from "./ResearchGroup";
 import { RESEARCH_TOOLS, researchTitle } from "./researchView";
-import { COMPACT_TOOLS, groupChatActivity, visibleChatMessages, type ChatActivityItem } from "./chatActivity";
+import { activityPresentation, COMPACT_TOOLS, groupChatActivity, visibleChatMessages, type ChatActivityItem } from "./chatActivity";
 import { cn } from "@/utils/cn";
 
 /**
@@ -1302,7 +1302,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
   const turns = useMemo(() => groupTurns(shown), [shown]);
   const last = shown[shown.length - 1];
   const thinking = sending || state.busy;
-  const runningTool = [...shown].reverse().find((message) => message.role === "tool" && message.status === "running");
+  const runningTool = state.busy ? turns.at(-1)?.items.findLast((message) => message.role === "tool" && message.status === "running") : null;
   const thinkingLabel = runningTool ? `${TOOL_TITLE[runningTool.tool ?? ""] ?? "Working"}…` : "Thinking…";
   const suggestions = !thinking && last?.role === "assistant" ? last.toolResult?.suggestions ?? [] : [];
   const empty = state.messages.length === 0 && !showPending;
@@ -1326,13 +1326,17 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
     }
     return <ToolMessage key={message.id} message={message} jobs={state.jobs} runs={state.runs} decisions={state.decisions ?? {}} canManageAutopilot={Boolean(setup?.canManageAutopilot)} lastReplyMode={state.lastReplyMode ?? null} onChanged={() => void refresh(true)} />;
   };
-  const assistantItems = (items: Message[]) => researchRuns(items).map((item) => {
+  const assistantItems = (items: Message[], active: boolean, statusKnown: boolean) => researchRuns(items).map((item) => {
     if (Array.isArray(item)) return <ResearchGroup key={item[0]!.id} messages={item} jobs={state.jobs} timeZone={timeZone} />;
     if ("kind" in item) {
-      const running = item.messages.some((message) => message.status === "running");
+      const presentation = activityPresentation(item.messages, active, statusKnown);
       return <details key={`activity-${item.messages[0]!.id}`} className="w-full max-w-2xl rounded-xl border border-stroke-soft-200 bg-bg-weak-50/50 px-3 py-2">
-        <summary className="flex cursor-pointer items-center gap-2 text-label-xs text-text-sub-600"><StatusIcon status={running ? "running" : "ok"} />{running ? "Working" : "Activity"} · {item.messages.length} {item.messages.length === 1 ? "step" : "steps"}</summary>
-        <div className="mt-3 space-y-3 border-t border-stroke-soft-200 pt-3">{item.messages.map(renderMessage)}</div>
+        <summary className="flex cursor-pointer items-center gap-2 text-label-xs text-text-sub-600"><StatusIcon status={presentation.status} />{presentation.label} · {item.messages.length} {item.messages.length === 1 ? "step" : "steps"}</summary>
+        <div className="mt-3 space-y-3 border-t border-stroke-soft-200 pt-3">{item.messages.map((message) => {
+          if (message.status !== "running" || presentation.status === "running") return renderMessage(message);
+          const note = presentation.label === "Status unavailable" ? "The latest step status could not be loaded. Check the saved results before retrying." : "This step ended before its result was recorded. Saved work may still exist.";
+          return renderMessage({ ...message, status: "error", content: note, toolResult: { ...message.toolResult, summary: note, display: note } });
+        })}</div>
       </details>;
     }
     return renderMessage(item);
@@ -1400,7 +1404,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
                     <div className="hidden shrink-0 sm:block"><AssistantAvatar mood={thinking && index === turns.length - 1 && !showPending ? "thinking" : "idle"} /></div>
                     <div className="flex min-w-0 flex-1 flex-col gap-2.5 pt-1">
                       <span className="text-label-xs text-text-sub-600">Assistant</span>
-                      {assistantItems(turn.items)}
+                      {assistantItems(turn.items, state.busy && index === turns.length - 1, index !== turns.length - 1 || error === null)}
                       {thinking && index === turns.length - 1 && !showPending && <ThinkingIndicator label={thinkingLabel} />}
                     </div>
                   </div>

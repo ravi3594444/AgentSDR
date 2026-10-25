@@ -55,10 +55,11 @@ previously stored no-match verdicts are not silently changed.
 
 - Seven budget checks failed before the change and pass after it. Two more
   request-context checks reproduced summary precedence and truncation.
-- Application/scripts unit tests: 2,241 pass, zero failures.
+- Application/scripts unit tests under TZ=UTC: 2,245 pass, zero failures.
 - Deploy tests, including migration packaging: 25 pass, zero failures.
 - Disposable PGlite with one connection and fake providers: research-budget
-  16, objective 98 and research-agent-v2 44 checks pass.
+  16, objective 98, research-agent-v2 44, assistant 73, chat-unicode 7
+  and discovery-errors 7 checks pass (245 checks total across the runs).
 - The budget suite applies the real migration twice over an older NOT NULL
   column and verifies preservation, uncapped reservations, explicit caps,
   credits, individual tools, Pause/Resume/Stop, deadlines and isolation.
@@ -84,10 +85,40 @@ deploy is running. The three safety findings in the break-test report are
 separate pending work.
 
 The later “have done?” follow-up returned HTTP 500 after research had
-already stopped. A busy thread is explicitly handled as HTTP 409, so this
-is not established as ordinary ongoing work. The browser connection had
-no enabled tab, and the server error was not supplied. This incident is
-recorded as unresolved; this patch is not claimed to fix its unknown cause.
+already stopped. The uploaded SQL log shows a lead-review save containing
+an invalid half-emoji (a lone surrogate). PostgreSQL rejects the same input
+with 22P02 in the regression check. Inserts cleaned their strings and JSON,
+but updates did not. Updates now use the same sanitizer, and review text
+uses Unicode-safe clipping. Seven checks cover rejection of the original
+input, a successful completed update, valid emoji, nested keys/values,
+status-only updates and organization isolation.
+
+If the builtin Maps scraper fails and the approved Apify fallback cannot
+run, an available website search now takes over with the same request,
+customer type and location. A retried handoff reuses the saved child job.
+The seven discovery-errors checks verify these paths and honest failures
+when no fallback is available. Actual Docker DNS remains a VM check.
+
+Search cards now say Search finished, Search failed or Source not searched
+rather than implying the whole request has stopped or finished. Provider
+labels use the backend actually attempted. An orphaned tool row is no
+longer shown as live work: the current turn and busy state decide whether
+it says Working, Step interrupted or Status unavailable. No old tool is
+automatically replayed, and a tool step never proves a DM was sent.
+
+The model is instructed to send discovered social URLs through an
+available collector after a login-blocked direct read, rather than
+repeating the blocked page read. Its real source choices remain a live
+check. Earlier no-match reasons in the supplied log also confirm that some
+leads were judged against old niches; this does not establish that every
+contactable lead should match, and no verdict was automatically reversed.
+
+Double-check on 25 October: an inherited local timezone reproduced two
+unrelated date-test failures on both this branch and its unchanged base.
+The full suite passes under the test environment's TZ=UTC; product code
+was not changed for those tests. The GitHub snapshot had also dropped the
+deploy script's executable bit. That is corrected and all 25 deployment
+tests pass; the final source publisher preserves file modes.
 
 The AST graph was rebuilt locally. Its ~18 MB graph.json exceeds the
 connector's snapshot limit; the generated graph pair remains local and can

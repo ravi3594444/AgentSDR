@@ -485,8 +485,11 @@ stop a plan.
 A request whose turn starts a lead search becomes an objective
 (`src/lib/assistant/objective*.ts`, table `assistant_objectives`, unique per
 organization and request message): a lead target, a time limit and a spend
-cap, from the owner's words or the "general" Sending rules
-`objectiveLeadTarget` / `objectiveHours` / `objectiveSpendUsd`. Its searches
+cap. Target and time come from the owner's words or the "general" Sending
+rules `objectiveLeadTarget` / `objectiveHours`. The spend cap comes only
+from an explicit owner instruction: null means no request-level cap, zero
+means explicitly free-only, and a positive amount is the owner's budget.
+The legacy `objectiveSpendUsd` rule does not restrict new requests. Its searches
 stay ordinary jobs carrying the request's id; an `objective` job (the
 driver, `objectiveDriver.server.ts`) waits while they run and, when they end
 short of the target with time and budget left, resumes the request's turn
@@ -528,7 +531,7 @@ request or a rule that second-guesses the model. What stays code is only
 what protects people, money and the truth: Start (or Autonomous mode's
 caps, which need the owner's words asking for contact) before anything is
 sent, Do Not Contact and suppression, sending limits and readiness, the
-spend cap (above the default only when the owner wrote the amount) and its
+optional spend cap (only when the owner explicitly supplied one) and its
 reservations, no double sends, tenancy, and claims checked against the
 record.
 
