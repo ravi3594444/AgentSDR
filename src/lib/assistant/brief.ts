@@ -14,6 +14,8 @@ import type { AudienceChannel } from "./schema";
 export type Brief = {
   /** The request in one or two sentences, from all of the owner's messages about it. */
   goal: string;
+  /** The assistant's provisional research choices; never extra requirements from the owner. */
+  approach?: string;
   /** How many leads the owner asked for; null when they named no number. */
   leadTarget: number | null;
   /** The owner asked to contact the leads (email, message, DM, call…), not only to find them. */
@@ -93,6 +95,10 @@ export function checkBrief(raw: Record<string, unknown>, ownerWords: string, def
   if (!goal) return { ok: false, error: "goal is required: the owner's request in one or two sentences, from all their messages about it" };
   // With no done of its own, the request is done when its goal is.
   const done = (typeof raw.done === "string" ? raw.done.replace(/\s+/g, " ").trim() : "") || goal;
+  if (raw.approach !== undefined && raw.approach !== null && typeof raw.approach !== "string") {
+    return { ok: false, error: "approach must be text describing your provisional search strategy, separate from the owner's goal" };
+  }
+  const approach = typeof raw.approach === "string" ? raw.approach.replace(/\s+/g, " ").trim().slice(0, 600) : "";
   if (raw.contact !== undefined && typeof raw.contact !== "boolean") return { ok: false, error: "contact must be true or false" };
 
   const target = optionalNumber(raw, "leadTarget");
@@ -123,6 +129,7 @@ export function checkBrief(raw: Record<string, unknown>, ownerWords: string, def
   }
   const brief: Brief = {
     goal: goal.slice(0, 600),
+    ...(approach ? { approach } : {}),
     leadTarget: target,
     contact: raw.contact === true,
     channels,
@@ -163,5 +170,6 @@ export function readBrief(value: unknown): Brief | null {
   if (typeof raw.goal !== "string" || typeof raw.done !== "string" || typeof raw.contact !== "boolean") return null;
   const channels = Array.isArray(raw.channels) ? raw.channels.filter((channel): channel is AudienceChannel => BRIEF_CHANNELS.includes(channel as AudienceChannel)) : null;
   const number = (key: string) => (typeof raw[key] === "number" && Number.isFinite(raw[key]) ? raw[key] as number : null);
-  return { goal: raw.goal, done: raw.done, contact: raw.contact, channels: channels?.length ? channels : null, leadTarget: number("leadTarget"), spendCapUsd: number("spendCapUsd"), timeLimitMinutes: number("timeLimitMinutes") };
+  const approach = typeof raw.approach === "string" ? raw.approach.trim().slice(0, 600) : "";
+  return { goal: raw.goal, ...(approach ? { approach } : {}), done: raw.done, contact: raw.contact, channels: channels?.length ? channels : null, leadTarget: number("leadTarget"), spendCapUsd: number("spendCapUsd"), timeLimitMinutes: number("timeLimitMinutes") };
 }

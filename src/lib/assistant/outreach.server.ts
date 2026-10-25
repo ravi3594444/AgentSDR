@@ -360,6 +360,7 @@ export async function prepareOutreach(input: PrepareInput): Promise<Proposal> {
     const written = toWrite.length ? await writeSequences({
       profile,
       context,
+      ownerRequest: input.ownerRequest,
       channels: toWrite,
       personalizationKey: key,
       signatureAppended: availability.signatureAppended,
@@ -386,6 +387,7 @@ export async function prepareOutreach(input: PrepareInput): Promise<Proposal> {
     const written = await writePersonalMessages({
       context,
       profile,
+      ownerRequest: input.ownerRequest,
       signatureAppended: availability.signatureAppended,
       instructions,
       leads: batch.map((lead, offset) => {
@@ -417,6 +419,7 @@ export async function prepareOutreach(input: PrepareInput): Promise<Proposal> {
   })).slice(0, 6);
   const lines = await writePersonalLines({
     context,
+    ownerRequest: input.ownerRequest,
     leads: sampleLeads.map((sample, index) => ({
       index,
       facts: { ...sample.lead.facts, name: nameOf(sample.lead.assignment.personId) },
@@ -659,6 +662,7 @@ async function writeLines(runId: string, key: string, personIds: string[], start
   const cost: WriterCost = { calls: 0, usd: null, runId };
   const lines = await writePersonalLines({
     context: await businessContext(await getBusinessProfile()),
+    ownerRequest: run.plan.ownerRequest,
     leads: todo.map(({ personId, index }) => {
       const channel = run.plan.assignments.find((item) => item.personId === personId)?.channel;
       return {
@@ -700,6 +704,7 @@ async function writeLeadTexts(run: NonNullable<Awaited<ReturnType<typeof getRun>
   const cost: WriterCost = { calls: 0, usd: null, runId: run.id };
   const lines = await writePersonalLines({
     context: await businessContext(await getBusinessProfile()),
+    ownerRequest: plan.ownerRequest,
     leads: standard.map((personId, index) => {
       const channel = plan.assignments.find((item) => item.personId === personId)?.channel;
       const group = plan.groups?.find((item) => item.id === plan.leadPlans?.[personId]?.groupId) ?? plan.groups?.[0];

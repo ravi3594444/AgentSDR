@@ -73,4 +73,29 @@ describe("checkBrief", () => {
     expect(readBrief({ goal: "x" })).toBeNull();
     expect(briefLine(checked.brief, checked.controls)).toContain("contact them only by instagram");
   });
+
+  test("the assistant's approach survives storage without becoming the owner's goal", () => {
+    const goal = "Find established businesses and ask which services cost them the most";
+    const approach = "Compare retail owners found on LinkedIn and business directories; change sources if evidence is weak";
+    const checked = checkBrief({ goal, contact: true, done: "A plan asking about their largest expenses", approach }, goal, DEFAULTS);
+    if (!checked.ok) throw new Error(checked.error);
+    expect(checked.brief.goal).toBe(goal);
+    expect(checked.brief.approach).toBe(approach);
+    expect(checked.brief.done).toBe("A plan asking about their largest expenses");
+    expect(readBrief(JSON.parse(JSON.stringify(checked.brief)))).toEqual(checked.brief);
+    expect(briefLine(checked.brief, checked.controls)).not.toContain(approach);
+    expect(checked.controls.spendCapUsd).toBeNull();
+  });
+
+  test("approach is optional for old briefs and validates without changing the goal", () => {
+    for (const approach of [undefined, null, "   "]) {
+      const checked = checkBrief({ ...base, approach }, "Find salons", DEFAULTS);
+      if (!checked.ok) throw new Error(checked.error);
+      expect(checked.brief).not.toHaveProperty("approach");
+      expect(readBrief(checked.brief)).toEqual(checked.brief);
+    }
+    expect(checkBrief({ ...base, approach: { city: "Mumbai" } }, "Find businesses", DEFAULTS).ok).toBe(false);
+    const checked = checkBrief({ ...base, approach: ` \n ${"x".repeat(900)} ` }, "Find salons", DEFAULTS);
+    expect(checked.ok && checked.brief.approach?.length).toBe(600);
+  });
 });

@@ -67,6 +67,7 @@ import { createInstagramContactsAudience } from "./instagramContacts.server";
 import { withoutContactAfter } from "./agentV2";
 import { activeRequest, matchingLeadsAudience, objectiveBrief, ownerMessagesSince, reviewLeadsText, setLeadFit, type LeadPick, type ReviewFilter } from "./agentV2.server";
 import { briefLine, checkBrief } from "./brief";
+import { researchOptionsText } from "./researchContext";
 import { controlsSentence, ensureObjective, objectiveDefaults, objectiveFacts, objectiveForRequest, objectiveJudgeRequest, setObjectiveBrief, stopObjective, objectiveLine, objectiveStartProblem, requestHoldReason, requestSpendCap, requestSpendGuard, setObjectiveState, threadObjectives } from "./objective.server";
 
 /**
@@ -294,14 +295,6 @@ async function setupSnapshot() {
 }
 
 const AUDIENCE_SOURCE_WORD: Record<string, string> = { discovery: "found", list: "uploaded" };
-
-/** Website and directory search's readiness, in a sentence for check_setup. */
-function webDiscoveryLine(web: { enabled: boolean; available: boolean; provider: string | null; model: string | null; reason: string | null }): string {
-  if (!web.enabled) return "Website and directory search: off (an owner or admin can turn it on in Settings → Providers & features).";
-  return web.available
-    ? `Website and directory search: ready (${webSearchProviderName(web.provider)}, ${web.model}).`
-    : `Website and directory search: not ready — ${web.reason}`;
-}
 
 /** What a website and directory search is doing, for lead_search_status. */
 function webDiscoveryProgress(job: typeof assistantJobs.$inferSelect): string {
@@ -559,14 +552,14 @@ export const TOOLS: Record<string, Tool> = {
         .join("; ");
       return {
         ok: true,
-        summary: `${channelLine}. Lead discovery: ${setup.leadDiscovery.available ? "Google Maps ready" : setup.leadDiscovery.reason}. ${webDiscoveryLine(setup.webDiscovery)} AI: ${setup.ai.connected ? "connected" : "not connected"}. Runs answering replies automatically: ${setup.automaticRuns}. Profile missing for discovery: ${setup.missingForDiscovery.join(", ") || "nothing"}; for outreach: ${setup.missingForOutreach.join(", ") || "nothing"}. Known elsewhere: ${setup.knownElsewhere}. Optional features on: ${Object.entries(setup.features).filter(([, on]) => on).map(([key]) => key).join(", ") || "none"}.${setup.features.instagram || setup.features.inquiry_intake ? ` Answering new inquiries: ${setup.inquiryReplies.problem ?? "ready"}.` : ""}`,
+        summary: `${channelLine}.\n${researchOptionsText(setup)}\nAI: ${setup.ai.connected ? "connected" : "not connected"}. Runs answering replies automatically: ${setup.automaticRuns}. Profile missing for discovery: ${setup.missingForDiscovery.join(", ") || "nothing"}; for outreach: ${setup.missingForOutreach.join(", ") || "nothing"}. Known elsewhere: ${setup.knownElsewhere}. Optional features on: ${Object.entries(setup.features).filter(([, on]) => on).map(([key]) => key).join(", ") || "none"}.${setup.features.instagram || setup.features.inquiry_intake ? ` Answering new inquiries: ${setup.inquiryReplies.problem ?? "ready"}.` : ""}`,
         data: setup as unknown as Record<string, unknown>,
       };
     },
   },
 
   save_business_info: {
-    description: "Remember what the owner said about the business, customers, places, offer, sender or preferences. Saved for every later conversation and used by every message the AI writes. Call it as soon as the owner gives such information.",
+    description: "Remember lasting business facts and preferences the owner provides as information about their business, offer or sender. Saved for later conversations. A one-off request's audience, place or question is not a permanent preference: keep those in that request's brief unless the owner asks to save them for future work.",
     arguments: "any of: businessName, website, offer, problemsSolved (the problems the offer solves and how), nextStep (what an interested lead is offered next: a call, a visit, a quote), prices (prices, packages or rates as the owner gave them), targetCustomers, locations, outreachInstructions, senderName, senderRole, bookingDetails, language (two letters), notes (all text); preferredChannels (array of email|whatsapp|linkedin|instagram). An empty string clears a field.",
     run: async (args, context) => {
       const current = await getBusinessProfile();
@@ -600,7 +593,7 @@ export const TOOLS: Record<string, Tool> = {
   },
 
   find_leads: {
-    description: "Search public Google Maps business listings for leads matching the owner's target customers, then read each business's own website for published contact details. Takes a few minutes and runs in the background; the chat shows its progress and announces the result. It runs on the built-in Google Maps scraper (no cost per search). With provider 'apify' it runs on Apify's Google Maps Actor instead (the owner's Apify account, within their Apify budget): one run covers a city, a region or a whole country. Apify also takes the search when the built-in scraper is not set up or fails and Apify can run it; with neither, website search takes it when that is on. The result names the source and provider, and the reason. Google Maps is one source however many cities or providers search it. Only businesses with a public listing are found.",
+    description: "Search public Google Maps listings for businesses of the kind and place chosen for the current request, then read each business's own website for published contact details. Takes a few minutes and runs in the background; the chat shows its progress and announces the result. It runs on the built-in Google Maps scraper (no cost per search). With provider 'apify' it runs on Apify's Google Maps Actor instead (the owner's Apify account, within their Apify budget): one run covers a city, a region or a whole country. Apify also takes the search when the built-in scraper is not set up or fails and Apify can run it; with neither, website search takes it when that is on. The result names the source and provider, and the reason. Google Maps is one source however many cities or providers search it. Only businesses with a public listing are found.",
     arguments: `what (kind of business, e.g. 'dental clinics'), where (a city or district; with provider 'apify' also a region or a whole country), maxResults (default 50; the built-in scraper returns about 20 per area, up to 9 areas, at most ${MAX_DISCOVERY_RESULTS}; with provider 'apify', up to the owner's Apify results per run), language (two letters, optional), provider (optional: 'apify' for Apify's Google Maps Actor; leave it out for the built-in scraper), contactAfter (true only when the owner asked to contact, email or message the leads found: the outreach plan is then prepared automatically when the search finishes), channels (optional, with contactAfter: array of email|whatsapp|linkedin|instagram, only when the owner's own words named how to contact them; otherwise leave it out and each lead gets its best ready route)`,
     run: async (args, context) => {
       if (args.provider !== undefined && args.provider !== null && args.provider !== "apify") throw new ToolArgumentError("provider may only be 'apify'; leave it out for the built-in scraper");
@@ -801,7 +794,7 @@ export const TOOLS: Record<string, Tool> = {
 
   treg_search: {
     available: (features) => features.treg,
-    description: "Find the right paid tool in Treg's catalog (treg.to; beta) for a lookup the other tools cannot do: a person's work email from their name and company domain, verifying an email, a phone number, enriching a person or company, a public social profile. Free. Returns endpoint ids with their price per unit and parameters (* = required); call one with treg_call.",
+    description: "Find a lookup tool in Treg's catalog (treg.to; beta): a person's work email from their name and company domain, verifying an email, a phone number, enriching a person or company, a public social profile. Free. Returns endpoint ids with their price per unit and parameters (* = required); call one with treg_call.",
     arguments: "task (what you need, in plain words, e.g. 'find work email from full name and company domain')",
     run: async (args) => {
       const task = text(args, "task", true)!;
@@ -1276,8 +1269,8 @@ export const TOOLS: Record<string, Tool> = {
 
   set_brief: {
     available: (features) => features.research_agent_v2,
-    description: "Write down the lead request the owner made, before its first search and whenever they change it: what they want, how many leads, whether to contact them and on which channels, an explicit budget if they gave one, their time, and what finished means. Every later step reads it. Choose sources yourself; a normal request has no request-level dollar cap and needs no paid/free choice. Leave spendCapUsd null unless the owner explicitly limited spending. The server reads that limit from their own words, never from an invented model allowance or another request.",
-    arguments: "goal (the request in one or two sentences, from all of the owner's messages about it, e.g. 'Find 10 hair salons in Miami on Instagram and DM them'), leadTarget (the number of leads the owner asked for, or null), contact (true when the owner asked to contact, email, message or DM them; false for research only), channels (array of email|whatsapp|linkedin|instagram the owner allowed, or null when they named none), spendCapUsd (dollars the owner allows on paid sources; 0 when they said free tools only; null when they said nothing), timeLimitMinutes (minutes the owner allows, or null), done (what finished means, in a sentence), newRequest (true when this is a new, different request from the one in progress)",
+    description: "Understand and write down the current request before searching. Keep the owner's requested audience, purpose and outcome in goal and done; do not add saved products, audiences, locations or a sales pitch. Put your provisional search choices and rationale in approach, separate from the owner's requirements. Record how many leads, whether to contact them and on which channels, an explicit budget if they gave one, their time, and what finished means. Every later step reads it. Choose sources yourself; a normal request has no request-level dollar cap and needs no paid/free choice. Leave spendCapUsd null unless the owner explicitly limited spending. The server reads that limit from their own words, never from an invented model allowance or another request.",
+    arguments: "goal (only the owner's requested audience, message purpose and outcome, in one or two sentences), approach (optional: your provisional segments, locations, sources and why they fit this request; not extra owner requirements), leadTarget (the number of leads the owner asked for, or null), contact (true when the owner asked to contact, email, message or DM them; false for research only), channels (array of email|whatsapp|linkedin|instagram the owner allowed, or null when they named none), spendCapUsd (dollars the owner allows on paid sources; 0 when they said free tools only; null when they said nothing), timeLimitMinutes (minutes the owner allows, or null), done (what finished means, in a sentence), newRequest (true when this is a new, different request from the one in progress)",
     run: async (args, context) => {
       if (args.newRequest !== undefined && typeof args.newRequest !== "boolean") throw new ToolArgumentError("newRequest must be true or false");
       // The request this turn serves: the one review_leads, prepare_outreach and finish_request read.
@@ -1619,7 +1612,7 @@ export const TOOL_NAMES = Object.keys(TOOLS);
 
 /** The tools offered to the model: a tool of an optional feature that is off is left out entirely. */
 export function toolNamesFor(features: FeatureState): string[] {
-  return Object.entries(TOOLS).filter(([, tool]) => !tool.available || tool.available(features)).map(([name]) => name);
+  return Object.entries(TOOLS).filter(([, tool]) => !tool.available || tool.available(features)).map(([name]) => name).sort();
 }
 
 /** Runs one tool; argument problems come back as a failed result the model can correct. */

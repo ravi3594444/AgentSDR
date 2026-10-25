@@ -39,13 +39,17 @@ process.env.GEOCODER_URL = "off";
 // ------------------------------------------------------------ stand-ins
 type Input = { userPrompt: string; systemPrompt?: string; schemaName?: string; accept: (text: string) => void };
 const writerCalls: string[] = [];
+const chatPrompts: string[] = [];
+const modelInputs: Input[] = [];
 // The chat model's answers, in order, for the turn checked below.
 const chatAnswers: string[] = [];
 mock.module(join(root, "src/lib/ai/server/structuredCompletion.ts"), () => ({
   completeStructured: async (input: Input) => {
+    modelInputs.push(input);
     writerCalls.push(input.schemaName ?? "?");
     let text: string;
     if (input.schemaName === "assistant_reply" && chatAnswers.length) {
+      chatPrompts.push(input.userPrompt);
       text = chatAnswers.shift()!;
     } else if (input.schemaName === "outreach_sequences") {
       const key = `${input.systemPrompt ?? ""}\n${input.userPrompt}`.match(/\{\{(p_[0-9a-f]+)\}\}/)?.[1];
@@ -115,7 +119,7 @@ await runInOrganization(a.org.id, async () => {
   const thread = await createThread(a.owner.id);
   const request = await addMessage({ threadId: thread.id, role: "user", content: "Find 2 dentists in Austin and email them. Use only free tools.", createdBy: a.owner.id });
   const context: Context = { threadId: thread.id, userId: a.owner.id, ownerText: request.content, requestMessageId: request.id, searchRequestId: request.id, v2: true, autonomous: false };
-  const brief = { goal: "Find 2 dentists in Austin and email them, free tools only", contact: true, channels: ["email"], spendCapUsd: 0, timeLimitMinutes: null, done: "2 Austin dentists found and an email plan ready" };
+  const brief = { goal: "Find 2 dentists in Austin and email them, free tools only", approach: "Compare dental directories with Maps; change source if contact evidence is weak", contact: true, channels: ["email"], spendCapUsd: 0, timeLimitMinutes: null, done: "2 Austin dentists found and an email plan ready" };
 
   // ---------------------------------------------------------- the brief
   const beforeBrief = await runTool("find_leads", { what: "dentists", where: "Austin, TX" }, context);
@@ -129,6 +133,7 @@ await runInOrganization(a.org.id, async () => {
   const objective = await objectiveForRequest(request.id);
   check("a valid brief becomes the request's objective, with the owner's limits", saved.ok && objective?.leadTarget === 2 && objective.spendCapUsd === 0 && objective.controls.named?.target === true, saved.summary);
   check("…and its goal is the request text the judge and the plan read", objective ? (await objectiveRequest(objective)) === brief.goal : false);
+  check("the search approach survives the database round-trip without entering the judged goal", objective?.controls.brief?.approach === brief.approach && !(await objectiveRequest(objective!)).includes(brief.approach));
 
   // ---------------------------------------------------------- the request's leads, as a finished search left them
   const audienceId = await createAudience({ name: "dentists in Austin", source: "discovery", threadId: thread.id, userId: a.owner.id });
@@ -167,6 +172,14 @@ await runInOrganization(a.org.id, async () => {
   const names = assigned.map((item) => Object.entries(personIds).find(([, id]) => id === item.personId)?.[0]).sort();
   check("prepare_outreach makes one plan of matching leads only, up to the brief's target, on email only", plan.ok && assigned.length === 2 && assigned.every((item) => item.channel === "email") && !names.includes("Austin Dental Supply"), `${plan.summary.slice(0, 160)} | ${names.join(", ")}`);
   check("…and nothing is sent: the plan waits for Start", run?.status === "proposed", run?.status ?? "no run");
+  for (const schema of ["outreach_sequences", "first_message_review", "opening_lines"]) {
+    const calls = modelInputs.filter((item) => item.schemaName === schema);
+    check(`the actual ${schema} call receives the owner's request as well as business facts`, calls.length > 0 && calls.every((item) => item.userPrompt.includes(request.content) && item.userPrompt.includes("CURRENT OWNER REQUEST:")));
+  }
+
+  const { writePersonalMessages } = await import("@/lib/assistant/writer.server");
+  await writePersonalMessages({ context: "We build reminder tools.", profile: await (await import("@/lib/assistant/profile.server")).getBusinessProfile(), signatureAppended: false, instructions: null, ownerRequest: request.content, leads: [{ index: 0, channel: "email", facts: { businessName: "Barton Creek Dental" }, groupMessage: "Do missed appointments cost you bookings?" }], cost: { calls: 0, usd: null } });
+  check("personal messages also receive the current purpose rather than only the sales profile", modelInputs.filter((item) => item.schemaName === "personal_messages").at(-1)?.userPrompt.includes(request.content) === true);
 
   const beforeRepeat = writerCalls.length;
   const listsBefore = await db.select({ id: leadAudiences.id }).from(leadAudiences).where(eq(leadAudiences.threadId, thread.id));
@@ -284,11 +297,15 @@ await runInOrganization(a.org.id, async () => {
     JSON.stringify({ message: "The search is still running. Nothing has been found yet.", actions: [], suggestions: [] }),
   );
   const chatCallsBefore = writerCalls.filter((name) => name === "assistant_reply").length;
+  const promptsBefore = chatPrompts.length;
   await runAgentTurn({ threadId: thread4.id, userId: a.owner.id, text: florists });
   const chatCalls = writerCalls.filter((name) => name === "assistant_reply").length - chatCallsBefore;
   const said = await db.select({ content: assistantMessages.content }).from(assistantMessages).where(and(eq(assistantMessages.threadId, thread4.id), eq(assistantMessages.role, "assistant")));
   const [florJob] = await db.select({ id: assistantJobs.id }).from(assistantJobs).where(and(eq(assistantJobs.threadId, thread4.id), eq(assistantJobs.kind, "discovery")));
   check("a step that only writes the brief and starts searches ends the turn: one model call, one message", chatCalls === 1 && said.length === 1 && Boolean(florJob) && chatAnswers.length === 1, `${chatCalls} call(s); ${said.map((row) => row.content).join(" | ")}`);
+  const firstPrompt = chatPrompts[promptsBefore] ?? "";
+  check("the real turn gives the model the owner's request before its saved business profile", firstPrompt.startsWith("REQUEST") && firstPrompt.indexOf(florists) >= 0 && firstPrompt.indexOf(florists) < firstPrompt.indexOf("BUSINESS PROFILE:"));
+  check("the same turn describes all configured research options, with no Maps-first setup headline", firstPrompt.includes("RESEARCH AVAILABILITY") && firstPrompt.includes("Apify social searches:") && firstPrompt.includes("Bright Data social research:") && !firstPrompt.includes("Lead search — ready (Google Maps)"));
   chatAnswers.length = 0;
 
   // ---------------------------------------------------------- "outreach them all" after a research-only request ended (live, 22 Oct)

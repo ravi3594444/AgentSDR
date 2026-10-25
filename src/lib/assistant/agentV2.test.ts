@@ -112,6 +112,8 @@ describe("the tools as v2 reads them", () => {
   test("every tool its features allow is offered (describe_audience too), described by what it does, not steered away from", async () => {
     const { toolCatalog } = await import("./tools.server");
     const catalog = toolCatalog({ ...defaultFeatureState(), research_agent_v2: true, brightdata: true, apify_discovery: true, web_discovery: true });
+    const names = catalog.split("\n").map((line) => line.match(/^- ([a-z_]+):/)?.[1]);
+    expect(names).toEqual([...names].sort());
     expect(catalog).toContain("- describe_audience:");
     expect(catalog).not.toContain("stop when a few searches find nothing new");
     expect(catalog).not.toContain("other networks are not supported");

@@ -244,8 +244,8 @@ await runInOrganization(org!.id, async () => {
   try {
     // ------------------------------------------------------------ setup and profile tools
     const setup = await runTool("check_setup", {}, context);
-    check("check_setup reports email and WhatsApp ready, lead search ready, and what the profile lacks",
-      setup.ok && /email: ready/.test(setup.summary) && /whatsapp: ready/.test(setup.summary) && /Google Maps ready/.test(setup.summary) && /who your customers are/.test(setup.summary),
+    check("check_setup reports senders, neutral research availability and what the profile lacks",
+      setup.ok && /email: ready/.test(setup.summary) && /whatsapp: ready/.test(setup.summary) && /Google Maps built-in scraper: configured/.test(setup.summary) && /Apify social searches:/.test(setup.summary) && /Bright Data social research:/.test(setup.summary) && /who your customers are/.test(setup.summary),
       setup.summary);
 
     const badSave = await runTool("save_business_info", { language: "English", favouriteColour: "blue" }, context);

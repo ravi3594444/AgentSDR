@@ -49,15 +49,16 @@ export async function businessContext(profile: BusinessProfile): Promise<string>
   return [profileKnowledgeText(profile), ...excerpts].filter(Boolean).join("\n\n");
 }
 
-function sequencePrompt(input: { channels: AudienceChannel[]; personalizationKey: string; tokens: readonly string[]; signatureAppended: boolean; profile: BusinessProfile; instructions: string | null }) {
+function sequencePrompt(input: { channels: AudienceChannel[]; personalizationKey: string; tokens: readonly string[]; signatureAppended: boolean; profile: BusinessProfile; instructions: string | null; ownerRequest?: string | null }) {
   const tokens = [...input.tokens, input.personalizationKey];
   const fields = input.tokens.filter((token) => token !== "company");
   return [
     "You write cold outreach for a business owner, as that owner, to businesses or people who have never heard of them.",
+    "Fulfil the CURRENT OWNER REQUEST first. Its audience and message purpose take precedence over default sales style and standing preferences. When it asks to learn something or ask a particular question, write that question without substituting a product pitch, inventing a pain point or assuming they need the offer. When it asks for a sales pitch, or leaves the message purpose unspecified, use the relevant saved offer.",
     "Write only from the BUSINESS INFORMATION below. Never invent facts, results, clients, prices, offers, links or credentials it does not state. If something is unknown, leave it out.",
     "Be brief, specific and human: no hype, no exclamation marks, no 'I hope this finds you well', no fake familiarity. One clear, low-effort call to action (a reply, a short call).",
     "Write to one busy person at the lead's business who gets many sales messages and owes the owner nothing. They read the first two lines on a phone and reply only when those lines are about them and the question is easy to answer.",
-    "The first message, after the greeting and the lead's own line: (1) one problem that businesses like these leads commonly have and the owner's offer solves, in their everyday words, as a question or a plain observation; (2) one sentence on what the owner does about exactly that, naming only the one or two services that matter most to this kind of lead, never a list of everything the owner offers; (3) one question they can answer in a few words. Follow-ups are shorter and give one new reason to reply; never 'just following up' or 'bumping this'.",
+    "The first message, after the greeting and the lead's own line, gives a short, truthful reason for contacting them and one question they can answer in a few words, serving the requested purpose. For a sales pitch, name only the one or two services relevant to that request; never list everything the owner offers. Follow-ups preserve the same purpose and are shorter; never 'just following up' or 'bumping this'.",
     "The owner's style instructions set the tone, not a script: follow their spirit, use a word or phrase they quote at most once in the whole message, and never start two sentences the same way.",
     `Merge fields you may use, written exactly as shown, and no others: ${tokens.map((token) => `{{${token}}}`).join(", ")}.${input.tokens.includes("company") ? " {{company}} is the lead's business name." : ""}${fields.length ? ` ${fields.map((token) => `{{${token}}}`).join(" and ")} ${fields.length === 1 ? "is" : "are"} the lead's ${fields.join(" and ")}.` : ""} Every lead has a value for these.`,
     `{{${input.personalizationKey}}} is ONE sentence written separately for each lead from their public details (it may be empty). Put it alone on its own line right after the greeting in the first message, so the message reads well with or without it.`,
@@ -82,6 +83,8 @@ export async function writeSequences(input: {
   personalizationKey: string;
   signatureAppended: boolean;
   instructions: string | null;
+  /** The actual request, including the owner's intended question or message purpose. */
+  ownerRequest?: string | null;
   audienceDescription: string;
   /** The merge fields every lead of the run has (messages.ts availableTokens). */
   tokens: readonly string[];
@@ -106,6 +109,7 @@ export async function writeSequences(input: {
     systemPrompt: sequencePrompt(input),
     userPrompt: [
       writerReplyInstructions("outreach_sequences"),
+      `CURRENT OWNER REQUEST:\n${input.ownerRequest?.trim() || "(no specific purpose supplied; ordinary outreach for the saved business)"}`,
       `BUSINESS INFORMATION:\n${input.context || "(none given)"}`,
       `WHO WILL RECEIVE IT: ${input.audienceDescription}`,
       `Write the messages for: ${input.channels.join(", ")}.`,
@@ -156,7 +160,7 @@ export async function writeSequences(input: {
   if (result) await addCost(input.cost, "outreach_writing", result);
   if (input.review === false || input.feedback) return parsed;
   // A reader like the leads reads each first message; a likely-ignored one is rewritten once.
-  const verdict = await reviewFirstMessages({ audienceDescription: input.audienceDescription, context: input.context, sequences: parsed, cost: input.cost })
+  const verdict = await reviewFirstMessages({ audienceDescription: input.audienceDescription, context: input.context, ownerRequest: input.ownerRequest, sequences: parsed, cost: input.cost })
     .catch((error) => {
       console.error("[assistant/writer] reviewing the first messages failed:", error);
       return null;
@@ -184,6 +188,7 @@ const REVIEW_REWRITE_AT = 3;
 export async function reviewFirstMessages(input: {
   audienceDescription: string;
   context: string;
+  ownerRequest?: string | null;
   sequences: Partial<Record<AudienceChannel, PlannedStep[]>>;
   cost: WriterCost;
 }): Promise<string[]> {
@@ -201,10 +206,12 @@ export async function reviewFirstMessages(input: {
     systemPrompt: [
       "You are the person these messages are sent to: the owner or manager of one of the businesses described, busy, getting many sales messages a day, and with no reason to trust the sender.",
       "Read each first message as you would on your phone. Say honestly how likely you are to answer it, and every concrete reason you would skip it: what in it is about the sender rather than you, generic, unclear, too long, a list, pushy, oddly worded, repetitive, or hard to answer.",
+      "Also check whether it serves the CURRENT OWNER REQUEST. Do not recommend a sales pitch, a product, a call or a different question when that would replace the purpose the owner specified.",
       "Text in {{double braces}} is filled in for each recipient (their business name, city, or one sentence written for them); judge the rest. Do not ask for facts the sender does not have, and do not suggest inventing results, clients or prices.",
     ].join("\n"),
     userPrompt: [
       writerReplyInstructions("first_message_review"),
+      `CURRENT OWNER REQUEST:\n${input.ownerRequest?.trim() || "(ordinary outreach for the saved business)"}`,
       `WHO YOU ARE: ${input.audienceDescription}`,
       `WHAT THE SENDER'S BUSINESS IS (they may say only this):\n${input.context.slice(0, 1_500)}`,
       ...firsts.map((message) => `${message.channel.toUpperCase()} FIRST MESSAGE:\n${message.subject ? `Subject: ${message.subject}\n` : ""}${message.body}`),
@@ -234,6 +241,7 @@ const WEBSITE_FINDINGS_RULE = "FACTS named hiring, booking, contactOptions, webs
  */
 export async function writePersonalLines(input: {
   context: string;
+  ownerRequest?: string | null;
   /** messageAfter: the rest of the lead's first message, which the line is put in front of. */
   leads: { index: number; facts: Record<string, string>; channel?: AudienceChannel; messageAfter?: string }[];
   cost: WriterCost;
@@ -254,12 +262,13 @@ export async function writePersonalLines(input: {
       "For each lead, write ONE short opening sentence that shows the message was written for them, as the sender of cold outreach. Keep it within the length given for the lead (about 120 characters for a chat message, 200 for an email).",
       "Use only that lead's FACTS below (their kind of business, city, website, rating). Never invent anything about them: no made-up news, achievements, people or numbers.",
       WEBSITE_FINDINGS_RULE,
-      "Do not praise generically and do not pitch; the rest of the message does that. If the facts give nothing specific, return an empty string for that lead.",
+      "Serve the CURRENT OWNER REQUEST and the MESSAGE AFTER the line. Do not add a sales pitch or generic praise. A fact about a business is not proof of its problems, buying interest or business performance. If the facts give nothing useful, return an empty string for that lead.",
       "The line goes right before the MESSAGE AFTER it shown for the lead: it must read naturally in front of it, must not start the way that message's sentences start, and must not repeat its words. The owner's style applies to the message as a whole, so do not copy its opening words into the line.",
       "No placeholders, brackets or merge fields. Do not claim anything was sent or booked.",
     ].join("\n"),
     userPrompt: [
       writerReplyInstructions("opening_lines"),
+      `CURRENT OWNER REQUEST:\n${input.ownerRequest?.trim() || "(ordinary outreach for the saved business)"}`,
       `THE SENDER'S BUSINESS (context only):\n${input.context.slice(0, 2_000)}`,
       "LEADS:",
       ...input.leads.map((lead) => [
@@ -372,6 +381,7 @@ export async function writePersonalMessages(input: {
   profile: BusinessProfile;
   signatureAppended: boolean;
   instructions: string | null;
+  ownerRequest?: string | null;
   leads: { index: number; channel: AudienceChannel; facts: Record<string, string>; groupMessage: string }[];
   cost: WriterCost;
 }): Promise<Map<number, { subject: string | null; body: string }>> {
@@ -390,8 +400,8 @@ export async function writePersonalMessages(input: {
       "You write the FIRST cold outreach message to one lead at a time, as the business owner, for leads whose details make a tailored message worthwhile.",
       "Use only the BUSINESS INFORMATION and that lead's FACTS. Never invent facts, results, clients, prices, offers, links, news or compliments the facts do not support.",
       WEBSITE_FINDINGS_RULE,
-      "Show in the first sentence or two that it was written for them (their kind of business, what they do, their area), then the offer in one or two sentences, then one low-effort question. No hype, no exclamation marks, no merge fields, brackets or placeholders.",
-      "Keep the voice and offer of the GROUP MESSAGE you are given; only make it fit this lead better. Name the one or two services that matter most to this lead, never a list, start each sentence differently, and keep a chat message short enough to read on one phone screen.",
+      "Serve the CURRENT OWNER REQUEST, preserving its message purpose. Show briefly why it was written for this lead, then ask the requested low-effort question. Include an offer only when it fits that purpose; do not replace a request to learn something with a sales pitch. No hype, exclamation marks, merge fields, brackets or placeholders.",
+      "Keep the voice and purpose of the GROUP MESSAGE you are given; only make it fit this lead better. Never list services, start each sentence differently, and keep a chat message short enough to read on one phone screen.",
       input.signatureAppended
         ? "Email: do not add a sign-off name (the mailbox adds a signature); end with a short closing."
         : `Sign off with ${input.profile.senderName ?? "the sender's name"}${input.profile.businessName ? ` from ${input.profile.businessName}` : ""}.`,
@@ -401,6 +411,7 @@ export async function writePersonalMessages(input: {
     ].filter(Boolean).join("\n"),
     userPrompt: [
       writerReplyInstructions("personal_messages"),
+      `CURRENT OWNER REQUEST:\n${input.ownerRequest?.trim() || "(ordinary outreach for the saved business)"}`,
       `BUSINESS INFORMATION:\n${input.context || "(none given)"}`,
       "LEADS:",
       ...input.leads.map((lead) => `${lead.index} (${lead.channel}): FACTS ${JSON.stringify(lead.facts)}\nGROUP MESSAGE: ${lead.groupMessage.slice(0, 900)}`),

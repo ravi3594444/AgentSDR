@@ -27,6 +27,7 @@ import { recordUsage } from "./usage.server";
 import { DELIVERY_STATUS_GUIDANCE } from "./deliveryStatus";
 import { runTool, searchRequestId, setupSnapshot, toolCatalog, toolNamesFor, type ToolContext, type ToolResult } from "./tools.server";
 import { observationKey } from "./observation";
+import { requestFirstContext, researchOptionsText } from "./researchContext";
 import { closeBrowser } from "@/lib/browser/browser.server";
 
 /**
@@ -103,9 +104,10 @@ async function contextBlock(threadId: string | null = null): Promise<{ text: str
     // The business's own day (Settings → Your business time zone), the one report's "today" counts.
     `TODAY: ${localDate(timeZone)} (${timeZone})`,
     `BUSINESS PROFILE: ${JSON.stringify(setup.profile)}`,
-    `SETUP: channels — ${channels}. Lead search — ${setup.leadDiscovery.available ? "ready (Google Maps)" : setup.leadDiscovery.reason}. AI — ${setup.ai.connected ? "connected" : "not set up on this server"}. Runs answering replies automatically — ${setup.automaticRuns}.`,
+    `SETUP: channels — ${channels}. AI — ${setup.ai.connected ? "connected" : "not set up on this server"}. Runs answering replies automatically — ${setup.automaticRuns}.`,
+    researchOptionsText(setup),
     `ALREADY KNOWN ELSEWHERE: ${setup.knownElsewhere}.`,
-    `STILL MISSING: for a lead search ${setup.missingForDiscovery.join(", ") || "nothing"}; for outreach ${setup.missingForOutreach.join(", ") || "nothing"}${setup.optionalToAsk.length ? `; worth asking once (never blocking): ${setup.optionalToAsk.join(", ")}` : ""}.`,
+    `SAVED PROFILE GAPS (not request requirements; an open audience or place can be researched): ${setup.missingForDiscovery.join(", ") || "nothing"}; for outreach ${setup.missingForOutreach.join(", ") || "nothing"}${setup.optionalToAsk.length ? `; worth asking once (never blocking): ${setup.optionalToAsk.join(", ")}` : ""}.`,
     `LEAD LISTS: ${audiences.map((a) => `${a.id} “${a.name}” ${a.eligible}/${a.total} contactable`).join("; ") || "none"}`,
     `OUTREACH RUNS: ${runs.map((r) => `${r.id} “${r.name}” ${r.status}, ${r.autopilot ? "Automatic" : "Review"} replies`).join("; ") || "none"}`,
     `OPEN DECISIONS: ${decisions.map((d) => `${d.id} [${d.kind}] ${d.reason} — asks: ${d.decision}`).join("; ") || "none"}`,
@@ -318,7 +320,8 @@ export async function runAgentTurn(input: {
             schemaDescription: "Your message to the owner and the tools to run now.",
             jsonSchema: agentReplySchema(toolNames),
             systemPrompt: v2 ? systemPromptV2({ features, catalog: toolCatalog(features), autonomy: caps }) : systemPrompt(features, caps),
-            userPrompt: `${setupText}${v2 ? `\n\n${await v2ContextText({ threadId: input.threadId, requestMessageId: context.searchRequestId ?? null })}` : ""}\n\nCONVERSATION (newest last):\n${v2 ? transcriptV2(messages) : transcriptText(messages)}${replanReason ? `\n\nRe-plan the remaining work: ${replanReason.slice(0, 600)}. Use the latest TOOL results and do not repeat successful actions.` : ""}\n\nYour turn.`,
+            userPrompt: v2 ? requestFirstContext({ request: await v2ContextText({ threadId: input.threadId, requestMessageId: context.searchRequestId ?? null }), setup: setupText, conversation: transcriptV2(messages), replanReason })
+              : `${setupText}\n\nCONVERSATION (newest last):\n${transcriptText(messages)}${replanReason ? `\n\nRe-plan the remaining work: ${replanReason.slice(0, 600)}. Use the latest TOOL results and do not repeat successful actions.` : ""}\n\nYour turn.`,
             accept: (text) => {
               const parsed = parseAgentReply(text, toolNames, { allowEmpty: step > 0 });
               validateBatch(nextAgentBatch(parsed).batch);
