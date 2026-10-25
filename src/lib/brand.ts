@@ -15,14 +15,14 @@
  */
 export const BRAND = {
   /** Full product name: page titles, auth pages, auth email. */
-  name: "22nd X AI Outreach",
+  name: "22nd x ai",
   /** Short form for running copy, e.g. "Not in 22nd X AI". */
-  shortName: "22nd X AI",
+  shortName: "22nd x ai",
   /** The text wordmark: `mark` set strong, `suffix` beneath it, quieter. */
-  wordmark: { mark: "22nd X AI", suffix: "Outreach" },
+  wordmark: { mark: "22nd x ai", suffix: "Outreach" },
   /** Letters on the app tile and favicon. */
   monogram: "22X",
-  description: "Lead and outreach workspace: email, LinkedIn and WhatsApp outreach with AI-sorted replies.",
+  description: "Research relevant leads, prepare email, LinkedIn, WhatsApp and Instagram outreach, and keep replies in one workspace.",
   /**
    * Where an invite-only sign-in page's "Need access?" link writes to. Null
    * shows the hint without a link: people ask whoever runs this workspace.

@@ -342,7 +342,7 @@ export function CrmActionsClient() {
     ? { icon: RiCheckDoubleLine, title: channelLabel ? `No ${channelLabel} replies yet` : "No replies yet", detail: "Every reply a lead sends shows up here, answered or not." }
     : decisionCount
     ? { icon: RiCheckDoubleLine, title: "No replies or drafts wait for you", detail: "Only the decisions above need you right now." }
-    : { icon: RiCheckDoubleLine, title: "You're all caught up", detail: "New replies, drafts to approve, decisions and due follow-ups will show up here." };
+    : { icon: RiCheckDoubleLine, title: channelLabel ? `You're caught up on ${channelLabel}` : "You're all caught up", detail: "New replies, drafts to approve, decisions and due follow-ups will show up here." };
   const needsYouCount = scopeCounts ? scopeCounts.attention + decisionCount : undefined;
 
   return <>
@@ -622,8 +622,8 @@ export function NoticeBar({ notice, onDismiss, className }: { notice: Notice | n
   if (!notice) return null;
   return <div role="status" className={cn("flex items-center gap-2 px-4 py-2 text-paragraph-sm", notice.tone === "error" ? "bg-error-lighter text-error-dark" : "bg-success-lighter text-success-dark", className)}>
     {notice.tone === "error" ? <RiCloseLine className="size-4 shrink-0" aria-hidden="true" /> : <RiCheckLine className="size-4 shrink-0" aria-hidden="true" />}
-    <span className="min-w-0 flex-1 truncate">{notice.text}</span>
-    <button type="button" onClick={onDismiss} className="text-label-xs opacity-70 hover:opacity-100">Dismiss</button>
+    <span className="min-w-0 flex-1 whitespace-pre-wrap [overflow-wrap:anywhere]">{notice.text}</span>
+    <button type="button" onClick={onDismiss} className="min-h-11 shrink-0 px-1 text-label-xs opacity-70 hover:opacity-100 sm:min-h-8">Dismiss</button>
   </div>;
 }
 

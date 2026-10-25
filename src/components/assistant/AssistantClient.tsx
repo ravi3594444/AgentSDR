@@ -19,6 +19,7 @@ import {
   RiHistoryLine,
   RiInboxLine,
   RiLoader4Line,
+  RiMoreLine,
   RiPauseLine,
   RiPlayLine,
   RiRobot2Line,
@@ -49,6 +50,7 @@ import { Mascot, type MascotMood } from "./Mascot";
 import { ResearchGroup } from "./ResearchGroup";
 import { RESEARCH_TOOLS, researchTitle } from "./researchView";
 import { activityPresentation, COMPACT_TOOLS, groupChatActivity, visibleChatMessages, type ChatActivityItem } from "./chatActivity";
+import { createResponseGate } from "@/components/crm/responseGate";
 import { cn } from "@/utils/cn";
 
 /**
@@ -185,6 +187,24 @@ const TOOL_TITLE: Record<string, string> = {
   browser_scroll: "Scrolled the page",
   browser_close: "Closed the browser",
   diagnose_delivery: "Checked delivery",
+};
+
+/** Current work uses present tense; completed cards keep their own titles. */
+const WORKING_TITLE: Record<string, string> = {
+  check_setup: "Checking connections",
+  save_business_info: "Saving business information",
+  search_knowledge: "Reading your saved information",
+  set_brief: "Preparing the request",
+  review_leads: "Reviewing the leads",
+  set_lead_fit: "Checking a lead",
+  finish_request: "Preparing the final report",
+  web_search: "Searching the web",
+  read_webpage: "Reading a web page",
+  read_document: "Reading the document",
+  prepare_outreach: "Preparing an outreach plan",
+  diagnose_delivery: "Checking delivery",
+  report: "Preparing the results",
+  list_runs: "Checking outreach runs",
 };
 
 async function readJson<T>(response: Response): Promise<T> {
@@ -1140,6 +1160,9 @@ function groupTurns(messages: Message[]): { owner: Message | null; items: Messag
 
 export default function AssistantClient({ initial }: { initial: AssistantStatePayload }) {
   const [state, setState] = useState(initial);
+  const [navigationResponses] = useState(createResponseGate);
+  const activeThread = useRef(initial.thread.id);
+  const [switchingThread, setSwitchingThread] = useState(false);
   const [setup, setSetup] = useState<Setup | null>(initial.setup);
   // Every time shown is written in the organization's zone, on the server and in the browser alike.
   const timeZone = state.timeZone ?? "UTC";
@@ -1155,14 +1178,19 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
   const threadId = state.thread.id;
 
   const refresh = useCallback(async (withSetup = false) => {
+    const ticket = navigationResponses.follow();
+    if (ticket === null || activeThread.current !== threadId) return false;
     try {
       const next = await readJson<AssistantStatePayload>(await fetch(`/api/assistant?threadId=${threadId}${withSetup ? "&setup=1" : ""}`, { cache: "no-store" }));
+      if (!navigationResponses.isCurrent(ticket) || activeThread.current !== threadId) return false;
       setState(next);
       if (next.setup) setSetup(next.setup);
+      return true;
     } catch {
       // A failed poll is retried by the next one.
+      return false;
     }
-  }, [threadId]);
+  }, [threadId, navigationResponses]);
 
   const openJob = (job: Job) => job.status === "queued" || job.status === "running";
   // A request's research (an "objective" job) can stay open for hours between its searches: it is polled like a live run, not as active work.
@@ -1209,7 +1237,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
 
   async function send(value = text) {
     const message = value.trim();
-    if ((!message && !files.length) || sending || state.busy) return;
+    if ((!message && !files.length) || sending || state.busy || switchingThread || navigationResponses.follow() === null) return;
     const submittedFiles = files;
     jumpToLatest();
     setSending(true);
@@ -1223,6 +1251,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
     setFiles([]);
     try {
       const response = await fetch("/api/assistant/messages", { method: "POST", body: form });
+      if (activeThread.current !== threadId) return;
       if (response.status === 409) {
         // A background turn can claim the thread between polling and Send.
         // Keep the unsent draft; a busy thread is ordinary progress.
@@ -1233,10 +1262,12 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
         return;
       }
       const next = await readJson<AssistantStatePayload>(response);
-      setState((previous) => ({ ...next, setup: previous.setup }));
+      if (next.thread.id === activeThread.current) setState((previous) => ({ ...next, setup: previous.setup }));
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-      await refresh(false);
+      if (activeThread.current === threadId) {
+        setError(cause instanceof Error ? cause.message : String(cause));
+        await refresh(false);
+      }
     } finally {
       setPending(null);
       setSending(false);
@@ -1246,22 +1277,25 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
 
   /** Takes the turn again for the owner's latest request after the model could not finish it. */
   async function retryTurn() {
-    if (sending || state.busy) return;
+    if (sending || state.busy || switchingThread || navigationResponses.follow() === null) return;
     jumpToLatest();
     setSending(true);
     setError(null);
     try {
       const response = await fetch("/api/assistant/threads/retry", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ threadId }) });
+      if (activeThread.current !== threadId) return;
       if (response.status === 409) {
         setState((previous) => ({ ...previous, busy: true }));
         await refresh(false);
         return;
       }
       const next = await readJson<AssistantStatePayload>(response);
-      setState((previous) => ({ ...next, setup: previous.setup }));
+      if (next.thread.id === activeThread.current) setState((previous) => ({ ...next, setup: previous.setup }));
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-      await refresh(false);
+      if (activeThread.current === threadId) {
+        setError(cause instanceof Error ? cause.message : String(cause));
+        await refresh(false);
+      }
     } finally {
       setSending(false);
     }
@@ -1285,16 +1319,38 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
   }
 
   async function newThread() {
-    const created = await readJson<{ threadId: string }>(await fetch("/api/assistant/threads", { method: "POST" }));
-    const next = await readJson<AssistantStatePayload>(await fetch(`/api/assistant?threadId=${created.threadId}`, { cache: "no-store" }));
-    setState(next);
-    setText("");
-    input.current?.focus();
+    if (sending || navigationResponses.follow() === null) return;
+    const ticket = navigationResponses.restart();
+    setSwitchingThread(true);
+    try {
+      const created = await readJson<{ threadId: string }>(await fetch("/api/assistant/threads", { method: "POST" }));
+      const next = await readJson<AssistantStatePayload>(await fetch(`/api/assistant?threadId=${created.threadId}`, { cache: "no-store" }));
+      if (!navigationResponses.isCurrent(ticket)) return;
+      activeThread.current = next.thread.id;
+      setState(next);
+      setText(""); setFiles([]); setPending(null); setError(null);
+      input.current?.focus();
+    } catch (cause) {
+      if (navigationResponses.isCurrent(ticket)) setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      if (navigationResponses.isCurrent(ticket)) { navigationResponses.land(ticket); setSwitchingThread(false); }
+    }
   }
 
   async function openThread(id: string) {
-    const next = await readJson<AssistantStatePayload>(await fetch(`/api/assistant?threadId=${id}`, { cache: "no-store" }));
-    setState(next);
+    if (sending || id === activeThread.current || navigationResponses.follow() === null) return;
+    const ticket = navigationResponses.restart();
+    setSwitchingThread(true);
+    try {
+      const next = await readJson<AssistantStatePayload>(await fetch(`/api/assistant?threadId=${id}`, { cache: "no-store" }));
+      if (!navigationResponses.isCurrent(ticket)) return;
+      activeThread.current = next.thread.id;
+      setState(next); setPending(null); setError(null);
+    } catch (cause) {
+      if (navigationResponses.isCurrent(ticket)) setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      if (navigationResponses.isCurrent(ticket)) { navigationResponses.land(ticket); setSwitchingThread(false); }
+    }
   }
 
   // Calls the server refused before doing anything are the model's own mistakes: kept for it, not shown.
@@ -1303,8 +1359,8 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
   const last = shown[shown.length - 1];
   const thinking = sending || state.busy;
   const runningTool = state.busy ? turns.at(-1)?.items.findLast((message) => message.role === "tool" && message.status === "running") : null;
-  const thinkingLabel = runningTool ? `${TOOL_TITLE[runningTool.tool ?? ""] ?? "Working"}…` : "Thinking…";
-  const suggestions = !thinking && last?.role === "assistant" ? last.toolResult?.suggestions ?? [] : [];
+  const thinkingLabel = runningTool ? `${WORKING_TITLE[runningTool.tool ?? ""] ?? TOOL_TITLE[runningTool.tool ?? ""] ?? "Working"}…` : "Thinking…";
+  const suggestions = !thinking && !switchingThread && last?.role === "assistant" ? last.toolResult?.suggestions ?? [] : [];
   const empty = state.messages.length === 0 && !showPending;
   const profile = (setup as (Setup & { profile?: BusinessProfileSummary }) | null)?.profile;
 
@@ -1330,8 +1386,9 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
     if (Array.isArray(item)) return <ResearchGroup key={item[0]!.id} messages={item} jobs={state.jobs} timeZone={timeZone} />;
     if ("kind" in item) {
       const presentation = activityPresentation(item.messages, active, statusKnown);
+      const activeStep = presentation.status === "running" ? item.messages.findLast(message => message.role === "tool" && message.status === "running") : null;
       return <details key={`activity-${item.messages[0]!.id}`} className="w-full max-w-2xl rounded-xl border border-stroke-soft-200 bg-bg-weak-50/50 px-3 py-2">
-        <summary className="flex cursor-pointer items-center gap-2 text-label-xs text-text-sub-600"><StatusIcon status={presentation.status} />{presentation.label} · {item.messages.length} {item.messages.length === 1 ? "step" : "steps"}</summary>
+        <summary className="flex min-h-9 cursor-pointer items-center gap-2 text-label-xs text-text-sub-600"><StatusIcon status={presentation.status} /><span className="shrink-0">{presentation.label}</span>{activeStep && <span className="min-w-0 truncate text-text-strong-950">· {WORKING_TITLE[activeStep.tool ?? ""] ?? TOOL_TITLE[activeStep.tool ?? ""] ?? "Working on this request"}</span>}<span className="ml-auto shrink-0 text-text-soft-400">{item.messages.length} {item.messages.length === 1 ? "step" : "steps"}</span><RiArrowDownSLine className="size-4 shrink-0" aria-hidden="true" /></summary>
         <div className="mt-3 space-y-3 border-t border-stroke-soft-200 pt-3">{item.messages.map((message) => {
           if (message.status !== "running" || presentation.status === "running") return renderMessage(message);
           const note = presentation.label === "Status unavailable" ? "The latest step status could not be loaded. Check the saved results before retrying." : "This step ended before its result was recorded. Saved work may still exist.";
@@ -1353,30 +1410,31 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
       <header className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-2 border-b border-stroke-soft-200 px-3 py-2 sm:gap-x-4 sm:gap-y-3 sm:px-6 sm:py-3">
         <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
           <AssistantAvatar />
-          <div className="min-w-0"><h1 className="text-label-md text-text-strong-950">Outreach</h1><p className="mt-0.5 truncate text-paragraph-xs text-text-soft-400">{displayThreadTitle(state.thread.title)}</p></div>
+          <div className="min-w-0"><h1 className="text-label-md text-text-strong-950">Outreach</h1><p className="mt-0.5 truncate text-paragraph-xs text-text-sub-600" role={switchingThread ? "status" : undefined}>{switchingThread ? "Opening conversation…" : displayThreadTitle(state.thread.title)}</p></div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5 sm:order-last">
-          <Button.Root variant="neutral" mode="stroke" size="xsmall" onClick={() => void newThread()} disabled={sending} aria-label="New conversation" className="size-11 p-0 sm:h-9 sm:w-auto sm:px-2.5">
+          <Button.Root variant="neutral" mode="stroke" size="xsmall" onClick={() => void newThread()} disabled={sending || switchingThread} aria-label="New conversation" className="size-11 p-0 sm:h-9 sm:w-auto sm:px-2.5">
             <Button.Icon as={RiAddLine} /><span className="hidden sm:inline">New chat</span>
           </Button.Root>
           <Link href="/inbox?view=needs_you" aria-label="Inbox: replies and decisions" title="Replies and decisions" className="inline-flex size-11 items-center justify-center gap-1.5 rounded-lg text-label-xs text-text-sub-600 hover:bg-bg-weak-50 sm:h-9 sm:w-auto sm:px-2.5">
             <RiInboxLine className="size-4" aria-hidden="true" /><span className="hidden sm:inline">Inbox</span>
           </Link>
-          <Link href="/assistant/requests" aria-label="All requests" title="Every request and its progress" className="inline-flex size-11 items-center justify-center gap-1.5 rounded-lg text-label-xs text-text-sub-600 hover:bg-bg-weak-50 sm:h-9 sm:w-auto sm:px-2.5">
-            <RiListCheck3 className="size-4" aria-hidden="true" /><span className="hidden sm:inline">Requests</span>
-          </Link>
-          <Link href="/assistant/reports" aria-label="Reports" title="Outreach reports" className="hidden h-9 items-center justify-center gap-1.5 rounded-lg px-2.5 text-label-xs text-text-sub-600 hover:bg-bg-weak-50 sm:inline-flex">
-            <RiBarChartBoxLine className="size-4" aria-hidden="true" /><span className="hidden sm:inline">Reports</span>
-          </Link>
+          <Dropdown.Root>
+            <Dropdown.Trigger asChild><button type="button" aria-label="More outreach pages" title="Requests and reports" className="inline-flex size-11 items-center justify-center gap-1.5 rounded-lg text-label-xs text-text-sub-600 outline-none hover:bg-bg-weak-50 focus-visible:ring-2 focus-visible:ring-primary-base sm:h-9 sm:w-auto sm:px-2.5"><RiMoreLine className="size-4" aria-hidden="true" /><span className="hidden sm:inline">More</span></button></Dropdown.Trigger>
+            <Dropdown.Content align="end" className="w-60 max-w-[calc(100vw-2rem)]">
+              <Dropdown.Item asChild><Link href="/assistant/requests"><Dropdown.ItemIcon as={RiListCheck3} />Requests and progress</Link></Dropdown.Item>
+              <Dropdown.Item asChild><Link href="/assistant/reports"><Dropdown.ItemIcon as={RiBarChartBoxLine} />Outreach reports</Link></Dropdown.Item>
+            </Dropdown.Content>
+          </Dropdown.Root>
         </div>
         <div className="flex w-full items-center gap-1.5 overflow-x-auto border-t border-stroke-soft-200 pt-2 [scrollbar-width:none] [&>*]:shrink-0 [&_button]:min-h-10 sm:ml-auto sm:w-auto sm:flex-wrap sm:overflow-visible sm:border-0 sm:pt-0 sm:[&_button]:min-h-0">
-          <ConversationMenu current={state.thread} threads={state.threads} onOpen={(id) => void openThread(id)} onNew={() => void newThread()} disabled={sending} />
-          <AutonomousSwitch thread={state.thread} canManage={Boolean(setup?.canManageAutopilot)} onChanged={(next) => setState(next)} />
+          <ConversationMenu current={state.thread} threads={state.threads} onOpen={(id) => void openThread(id)} onNew={() => void newThread()} disabled={sending || switchingThread} />
+          <AutonomousSwitch thread={state.thread} canManage={Boolean(setup?.canManageAutopilot)} onChanged={(next) => { if (next.thread.id === activeThread.current) setState(next); }} />
           <ReadinessMenu setup={setup} />
         </div>
       </header>
 
-      <div className="flex min-h-0 flex-1">
+      <div className={cn("flex min-h-0 flex-1 transition-opacity", switchingThread && "opacity-60")} aria-busy={switchingThread || undefined} inert={switchingThread}>
       <div className="relative flex min-w-0 flex-1 flex-col">
       <RequestBar state={request} labels={searchLabels} />
       <div ref={scroller} onScroll={updatePosition} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-4 sm:px-8 sm:py-6" aria-label="Assistant conversation">
@@ -1437,7 +1495,10 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
       <div className="relative shrink-0 px-3 pb-[max(12px,env(safe-area-inset-bottom))] pt-3 sm:px-6 sm:pb-4">
         {showLatest && <button type="button" onClick={jumpToLatest} className="absolute -top-11 left-1/2 inline-flex -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded-full border border-stroke-soft-200 bg-bg-white-0 px-3.5 py-2 text-label-xs text-text-strong-950 shadow-regular-sm outline-none hover:bg-bg-weak-50 focus-visible:ring-2 focus-visible:ring-primary-base"><RiArrowDownLine className="size-4" aria-hidden="true" />Jump to latest</button>}
         <div className="mx-auto max-w-3xl">
-          {error && <p role="alert" className="mb-2 text-paragraph-xs text-error-base">{error}</p>}
+          {error && <div role="alert" className="mb-3 rounded-xl border border-error-light bg-bg-white-0 px-3 py-3 text-paragraph-xs">
+            <div className="flex items-start gap-2"><RiErrorWarningFill className="mt-0.5 size-4 shrink-0 text-error-base" aria-hidden="true" /><div className="min-w-0 flex-1"><p className="text-label-xs text-text-strong-950">The latest update couldn’t be confirmed</p><p className="mt-1 leading-5 text-text-sub-600">Saved work may still be available. Refresh the status before trying again.</p></div><button type="button" aria-label="Dismiss this notice" onClick={() => setError(null)} className="-mr-1 -mt-1 flex size-9 shrink-0 items-center justify-center rounded-lg text-text-sub-600 hover:bg-bg-weak-50"><RiCloseLine className="size-4" aria-hidden="true" /></button></div>
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2 pl-6"><details className="min-w-0 max-w-full text-text-sub-600"><summary className="cursor-pointer">Error details</summary><p className="mt-2 max-h-28 overflow-y-auto whitespace-pre-wrap leading-5 [overflow-wrap:anywhere]">{error}</p></details><button type="button" onClick={async () => { if (await refresh(true)) setError(null); }} className="min-h-10 rounded-lg px-3 text-label-xs text-text-strong-950 ring-1 ring-inset ring-stroke-soft-200 hover:bg-bg-weak-50">Refresh status</button></div>
+          </div>}
           {state.busy && !sending && <p role="status" className="mb-2 text-paragraph-xs text-text-sub-600">Working on the previous step. You can draft your next message here.</p>}
           <div className="rounded-[20px] bg-bg-white-0 shadow-[0_4px_24px_-10px_rgba(0,0,0,0.15)] ring-1 ring-inset ring-stroke-sub-300 transition focus-within:ring-primary-base">
             {files.length > 0 && (
@@ -1480,16 +1541,14 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
                 <RiAttachment2 className="size-4" aria-hidden="true" /><span>Attach</span>
               </button>
               <span className="hidden flex-1 truncate text-[13px] text-text-soft-400 sm:block">Enter to send · Shift + Enter for a new line</span>
-              <Button.Root variant="primary" mode="filled" size="small" onClick={() => void send()} disabled={thinking || (!text.trim() && !files.length)} aria-label="Send" className="ml-auto size-11 rounded-xl p-0 sm:size-9">
+              <Button.Root variant="primary" mode="filled" size="small" onClick={() => void send()} disabled={thinking || switchingThread || (!text.trim() && !files.length)} aria-label="Send" className="ml-auto size-11 rounded-xl p-0 sm:size-9">
                 {sending ? <Button.Icon as={RiLoader4Line} className="animate-spin" /> : <Button.Icon as={RiArrowUpLine} />}
               </Button.Root>
             </div>
           </div>
-          <p className="mt-2 hidden text-center text-paragraph-xs text-text-soft-400 sm:block">
-            {state.thread.autonomous
-              ? `Autonomous: plans start on their own in Automatic mode, up to ${state.thread.autonomyCaps?.runsPerDay ?? "?"} plans and ${state.thread.autonomyCaps?.leadsPerDay ?? "?"} leads a day. Turn it off at the top to review each plan.`
-              : "Nothing reaches your leads until you press Start on a plan."}
-            <span className="hidden sm:inline"> Replies waiting for you are in the <Link href="/inbox?view=needs_you" className="underline underline-offset-2 hover:text-text-sub-600">Inbox</Link>.</span>
+          <p className="mt-2 hidden text-center text-paragraph-xs text-text-sub-600 sm:block">
+            {state.thread.autonomous ? "Autonomous on · Plans start automatically" : "Plans start when you press Start"}
+            <span> · Replies in <Link href="/inbox?view=needs_you" className="underline underline-offset-2 hover:text-text-strong-950">Inbox</Link></span>
           </p>
           <p className="mt-2 text-center text-[12px] text-text-sub-600 sm:hidden">{state.thread.autonomous ? "Autonomous on" : "Start a plan to send"} · <Link href="/inbox?view=needs_you" className="underline underline-offset-2">Replies in Inbox</Link></p>
         </div>

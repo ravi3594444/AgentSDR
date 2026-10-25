@@ -51,20 +51,20 @@ export function useMediaQuery(query: string): boolean {
 
 function readPinned(): boolean {
   try {
-    return window.localStorage.getItem(STORAGE_KEY) !== "0";
+    return window.localStorage.getItem(STORAGE_KEY) === "1";
   } catch {
-    return true;
+    return false;
   }
 }
 
 /**
  * Open/closed state of the details column for the conversation `key`.
- * Wide: pinned open unless the user closed it. Narrow: an overlay, closed by
+ * Wide: closed until opened, with an existing saved choice kept. Narrow: an overlay, closed by
  * default and on every conversation change.
  */
 export function useDetailsPanel(key: string | null) {
   const wide = useMediaQuery(WIDE_QUERY);
-  const [pinned, setPinned] = useState(true);
+  const [pinned, setPinned] = useState(false);
   const [overlayFor, setOverlayFor] = useState<string | null>(null);
 
   useEffect(() => {
