@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { RiArrowDownSLine, RiChat3Line, RiListCheck3, RiRefreshLine } from "@remixicon/react";
-import type { RequestRow, RequestSummary } from "@/lib/assistant/requests.server";
+import type { RequestRow } from "@/lib/assistant/requests.server";
 import { formatChatDateTime } from "@/lib/assistant/chatTime";
 import { CONVERSATION_CHANNEL_META } from "@/components/analytics/theme";
 import { Badge, ErrorState, LoadingRows, secondaryButtonClass } from "@/components/crm/CrmLayout";
@@ -14,7 +14,8 @@ import { WorkspaceNavigation } from "@/components/page/WorkspaceNavigation";
 import { chatHref, WORK_TONE } from "@/components/activity/WorkRow";
 import { useVisiblePolling } from "@/components/whatsapp/usePolling";
 import { cn } from "@/utils/cn";
-import { fetchRequestSummary, RequestSummaryView } from "./RequestSummaryView";
+import { parseRequestSummary, RequestSummaryView } from "./RequestSummaryView";
+import { useRequestRead } from "./useRequestRead";
 import type { WorkState } from "@/lib/activity/status";
 
 /**
@@ -30,6 +31,14 @@ type Channel = "" | "email" | "whatsapp" | "linkedin" | "instagram";
 type StateFilter = "" | "open" | "done";
 const CHANNELS: Channel[] = ["", "email", "whatsapp", "linkedin", "instagram"];
 const POLL_MS = 15_000;
+
+type RequestList = { requests: RequestRow[]; manualCampaigns: RequestRow[]; timeZone: string };
+
+function parseRequestList(value: unknown): RequestList {
+  const body = value as Partial<RequestList> | null;
+  if (!body || !Array.isArray(body.requests) || !Array.isArray(body.manualCampaigns) || typeof body.timeZone !== "string") throw new Error("The saved request list could not be read. Try again.");
+  return body as RequestList;
+}
 
 function tone(row: RequestRow): "neutral" | "success" | "info" | "danger" | "warning" {
   return (WORK_TONE as Record<string, "neutral" | "success" | "info" | "danger" | "warning">)[row.state as WorkState] ?? (row.open ? "info" : "neutral");
@@ -49,19 +58,8 @@ function Chips<T extends string>({ label, value, options, onChange }: { label: s
 }
 
 function RequestItem({ row, timeZone, expanded, onToggle }: { row: RequestRow; timeZone: string; expanded: boolean; onToggle: () => void }) {
-  const [summary, setSummary] = useState<RequestSummary | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const load = useCallback(async () => {
-    try {
-      setSummary(await fetchRequestSummary(row.key));
-      setError(null);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    }
-  }, [row.key]);
-  // Opening a request reads its summary; it refreshes with the list while open.
-  // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => { if (expanded) void load(); }, [expanded, load, row.stateLabel, row.counts?.contacted, row.counts?.replied]);
+  const { data: summary, error, pending, reload } = useRequestRead(expanded ? `/api/assistant/requests/${encodeURIComponent(row.key)}` : null, parseRequestSummary);
+  useVisiblePolling(() => void reload(true), POLL_MS, expanded);
   const counts = row.counts ? `${row.counts.leads} ${row.counts.leads === 1 ? "lead" : "leads"} · ${row.counts.contacted} contacted · ${row.counts.replied} replied${row.counts.failed ? ` · ${row.counts.failed} failed` : ""}` : null;
   const parts = [row.searches ? `${row.searches} ${row.searches === 1 ? "search" : "searches"}` : null, row.plans ? `${row.plans} ${row.plans === 1 ? "plan" : "plans"}` : null].filter(Boolean).join(" · ");
   return (
@@ -93,8 +91,8 @@ function RequestItem({ row, timeZone, expanded, onToggle }: { row: RequestRow; t
               <RiChat3Line className="size-3.5" aria-hidden="true" />{row.threadTitle ?? "Open the chat"}
             </Link>
           )}
-          {error && <ErrorState message={error} onRetry={() => void load()} />}
-          {summary ? <RequestSummaryView summary={summary} onChanged={() => void load()} /> : !error && <LoadingRows />}
+          {error && <ErrorState message={error} onRetry={() => void reload()} />}
+          {summary ? <RequestSummaryView summary={summary} onChanged={() => void reload()} /> : !error && pending && <LoadingRows />}
         </div>
       )}
     </li>
@@ -104,8 +102,6 @@ function RequestItem({ row, timeZone, expanded, onToggle }: { row: RequestRow; t
 export function RequestsClient() {
   const [channel, setChannel] = useState<Channel>("");
   const [state, setState] = useState<StateFilter>("");
-  const [data, setData] = useState<{ requests: RequestRow[]; manualCampaigns: RequestRow[]; timeZone: string } | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
 
   // Filters and the open request live in the URL, so a link opens the same view.
@@ -126,23 +122,11 @@ export function RequestsClient() {
     if (url.href !== window.location.href) window.history.replaceState(window.history.state, "", url);
   }, [channel, state, expanded]);
 
-  const load = useCallback(async () => {
-    try {
-      const query = new URLSearchParams();
-      if (channel) query.set("channel", channel);
-      if (state) query.set("state", state);
-      const response = await fetch(`/api/assistant/requests?${query}`, { cache: "no-store" });
-      const body = (await response.json().catch(() => ({}))) as { requests?: RequestRow[]; manualCampaigns?: RequestRow[]; timeZone?: string; error?: string };
-      if (!response.ok) throw new Error(body.error ?? `Request failed (HTTP ${response.status})`);
-      setData({ requests: body.requests ?? [], manualCampaigns: body.manualCampaigns ?? [], timeZone: body.timeZone ?? "UTC" });
-      setError(null);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    }
-  }, [channel, state]);
-  // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => { void load(); }, [load]);
-  useVisiblePolling(() => void load(), POLL_MS);
+  const query = new URLSearchParams();
+  if (channel) query.set("channel", channel);
+  if (state) query.set("state", state);
+  const { data, error, pending, reload } = useRequestRead(`/api/assistant/requests?${query}`, parseRequestList);
+  useVisiblePolling(() => void reload(true), POLL_MS);
 
   const toggle = (key: string) => setExpanded((current) => (current === key ? null : key));
   const list = (rows: RequestRow[], timeZone: string) => (
@@ -156,15 +140,16 @@ export function RequestsClient() {
       <PageHeader
         title="Requests"
         description="Everything you asked the assistant to do, with its searches and plans, what it has done so far and what comes next."
-        actions={<button type="button" className={secondaryButtonClass} onClick={() => void load()}><RiRefreshLine className="size-4" aria-hidden="true" />Refresh</button>}
+        actions={<button type="button" className={secondaryButtonClass} disabled={pending} onClick={() => void reload()}><RiRefreshLine className="size-4" aria-hidden="true" />{pending ? "Loading…" : "Refresh"}</button>}
       />
       <WorkspaceNavigation area="outreach" active="/assistant/requests" />
       <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
         <Chips label="Channel" value={channel} onChange={setChannel} options={CHANNELS.map((value) => ({ value, label: value ? CONVERSATION_CHANNEL_META[value].label : "All channels" }))} />
         <Chips label="State" value={state} onChange={setState} options={[{ value: "" as StateFilter, label: "All" }, { value: "open" as StateFilter, label: "In progress" }, { value: "done" as StateFilter, label: "Finished" }]} />
       </div>
-      {error && <ErrorState message={error} onRetry={() => void load()} />}
-      {data === null ? <LoadingRows /> : (
+      {error && <ErrorState message={error} onRetry={() => void reload()} />}
+      {error && data && <p className="text-paragraph-xs text-text-sub-600">Showing the last loaded results; status may be out of date.</p>}
+      {data === null ? !error && <LoadingRows /> : (
         <>
           {data.requests.length ? list(data.requests, data.timeZone) : (
             <EmptyState icon={RiListCheck3} title={channel || state ? "Nothing matches these filters" : "No requests yet"} description="Ask the assistant for leads or outreach in the chat; each request shows here with its progress for 30 days, and for as long as it is still open." />

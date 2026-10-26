@@ -11,6 +11,7 @@ import type { RequestSummary } from "@/lib/assistant/requests.server";
 import { requestSpendLine } from "@/lib/assistant/objective";
 import { CONVERSATION_CHANNEL_META } from "@/components/analytics/theme";
 import { ErrorState, primaryButtonClass } from "@/components/crm/CrmLayout";
+import { readRequestJson } from "./requestRead";
 import { WorkRow } from "@/components/activity/WorkRow";
 import { cn } from "@/utils/cn";
 
@@ -27,8 +28,14 @@ async function readJson<T>(response: Response): Promise<T> {
   return body;
 }
 
+export function parseRequestSummary(value: unknown): RequestSummary {
+  const body = value as Partial<RequestSummary> | null;
+  if (!body || !body.numbers || !body.children || !body.nextAction || typeof body.stateLabel !== "string") throw new Error("The saved request details could not be read. Try again.");
+  return body as RequestSummary;
+}
+
 export async function fetchRequestSummary(key: string): Promise<RequestSummary> {
-  return readJson<RequestSummary>(await fetch(`/api/assistant/requests/${encodeURIComponent(key)}`, { cache: "no-store" }));
+  return readRequestJson(`/api/assistant/requests/${encodeURIComponent(key)}`, parseRequestSummary);
 }
 
 function Figure({ label, value, detail }: { label: string; value: string; detail?: string | null }) {

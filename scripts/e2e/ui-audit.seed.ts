@@ -1,0 +1,20 @@
+export {};
+/** This fixture is only for the disposable local browser checks. */
+if (!/^postgres(?:ql)?:\/\/[^/]+@(localhost|127\.0\.0\.1):55479\/agentsdr_review$/.test(process.env.DATABASE_URL ?? "")) throw new Error("Requires the disposable agentsdr_review database on port 55479");
+const { hashPassword } = await import("better-auth/crypto");
+const { db } = await import("@/lib/db");
+const { users, accounts, organizations, members } = await import("@/lib/auth/schema");
+const { assistantThreads, assistantMessages, assistantJobs } = await import("@/lib/assistant/schema");
+const { writeFileSync } = await import("node:fs");
+const email = `ui-audit-${Date.now()}@example.test`;
+const password = "Local-browser-test-only-123!";
+const [user] = await db.insert(users).values({ name: "UI audit owner", email, emailVerified: true }).returning();
+const [org] = await db.insert(organizations).values({ name: "UI audit workspace", slug: `ui-audit-${Date.now()}` }).returning();
+await db.insert(members).values({ organizationId: org!.id, userId: user!.id, role: "owner" });
+await db.insert(accounts).values({ userId: user!.id, accountId: user!.id, providerId: "credential", password: await hashPassword(password) });
+const [thread] = await db.insert(assistantThreads).values({ organizationId: org!.id, title: "Requests browser check", createdBy: user!.id }).returning();
+const [message] = await db.insert(assistantMessages).values({ organizationId: org!.id, threadId: thread!.id, role: "user", content: "Research dentists without sending" }).returning();
+await db.insert(assistantJobs).values({ organizationId: org!.id, threadId: thread!.id, kind: "discovery", status: "succeeded", stage: "done", payload: { requestMessageId: message!.id, phrase: "Dentists" }, result: { found: 3, eligible: 2 } });
+writeFileSync(process.env.UI_AUDIT_FIXTURE ?? "/tmp/agentsdr-ui-audit-fixture.json", JSON.stringify({ email, password, organizationId: org!.id, userId: user!.id, threadId: thread!.id, requestId: message!.id }));
+console.log("Local UI owner and saved request seeded");
+process.exit(0);
