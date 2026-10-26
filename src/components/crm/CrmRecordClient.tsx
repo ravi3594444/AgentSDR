@@ -1,6 +1,7 @@
 "use client";
 /* eslint-disable react-hooks/set-state-in-effect */
 
+import { classificationProposalChoices } from "@/lib/crm/classificationProposal";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   RiArrowDownSLine,
@@ -779,7 +780,7 @@ function ClassificationSelect({ record, categories, onAction }: { record: Data; 
         categoryKey={categoryKey}
         subcategoryId={subcategoryId}
         subcategoryName={record.subcategory ? String(record.subcategory) : null}
-        title="Fix classification — the AI misread this reply"
+        title="Change classification"
         onChange={(chosen) => void onAction(`/records/${String(record.id)}/classification`, {
           ...chosen,
           expectedContextVersion: record.contextVersion,
@@ -808,6 +809,7 @@ function ProposedClassificationNotice({ record, categories, onAction }: { record
   const currentCategoryKey = String(record.categoryKey ?? "other");
   const currentSubcategoryId = record.subcategoryId ? String(record.subcategoryId) : null;
   const currentLabel = record.subcategory ? String(record.subcategory) : humanize(currentCategoryKey);
+  const choices = classificationProposalChoices({ currentCategoryKey, currentSubcategoryId, proposedCategoryKey, proposedSubcategoryId });
   const respond = (choice: { categoryKey: string; subcategoryId: string | null }) => void onAction(`/records/${String(record.id)}/classification`, {
     ...choice,
     expectedContextVersion: record.contextVersion,
@@ -815,12 +817,12 @@ function ProposedClassificationNotice({ record, categories, onAction }: { record
   }, "PATCH", "Classification updated");
 
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-lg bg-warning-lighter px-3 py-2 text-paragraph-xs text-warning-dark ring-1 ring-inset ring-warning-light">
+    <div className={cn("flex flex-wrap items-center gap-2 rounded-lg px-3 py-2 text-paragraph-xs ring-1 ring-inset", choices.sameChoice ? "bg-bg-weak-50 text-text-sub-600 ring-stroke-soft-200" : "bg-warning-lighter text-warning-dark ring-warning-light")}>
       <RiSparklingLine className="size-3.5 shrink-0" aria-hidden="true" />
-      <span className="min-w-0 flex-1">AI suggests: <strong className="font-medium">{proposedLabel}</strong> — held for review, since it isn&apos;t a forward move.</span>
+      <span className="min-w-0 flex-1">{choices.sameChoice && record.categoryKey && proposedCategoryKey ? "AI agrees with the current classification:" : proposedCategoryKey ? "AI suggests:" : "Current classification:"} <strong className="font-medium">{proposedCategoryKey ? proposedLabel : currentLabel}</strong>{!choices.sameChoice && " — review this change before applying it."}</span>
       <div className="flex shrink-0 gap-1.5">
-        <button type="button" className="rounded-md bg-bg-white-0 px-2 py-1 text-label-xs text-warning-dark ring-1 ring-inset ring-warning-light transition hover:brightness-95" onClick={() => respond(proposedCategoryKey ? { categoryKey: proposedCategoryKey, subcategoryId: proposedSubcategoryId } : { categoryKey: currentCategoryKey, subcategoryId: currentSubcategoryId })}>Accept</button>
-        <button type="button" className="rounded-md px-2 py-1 text-label-xs text-warning-dark transition hover:bg-bg-white-0" onClick={() => respond({ categoryKey: currentCategoryKey, subcategoryId: currentSubcategoryId })}>Keep {currentLabel}</button>
+        <button type="button" className="rounded-md bg-bg-white-0 px-2 py-1 text-label-xs text-warning-dark ring-1 ring-inset ring-warning-light transition hover:brightness-95" onClick={() => respond(choices.accept)}>{choices.sameChoice ? `Confirm ${proposedCategoryKey ? proposedLabel : currentLabel}` : "Accept"}</button>
+        {!choices.sameChoice && <button type="button" className="rounded-md px-2 py-1 text-label-xs text-warning-dark transition hover:bg-bg-white-0" onClick={() => respond(choices.keep)}>Keep {currentLabel}</button>}
       </div>
     </div>
   );

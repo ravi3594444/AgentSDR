@@ -22,7 +22,13 @@ Verification: all 38 onboarding unit checks pass, including three new cases for 
 
 An older local Bun 1.3.14 standalone run produced hydration errors; the same build passed with Bun 1.4.4 (the VM runtime) and Node 24. No runtime or Docker change was made to hide that result.
 
-## 5. Classification controls — pending
+## 5. Classification controls — verified
+
+A held proposal now compares the two actual choices, including subcategory IDs. When Accept and Keep would send the same payload, the record and both Inbox layouts show one confirmation. A real category or subcategory change retains both explicit choices. An actual agreement is described neutrally; an absent proposed category is not described as AI agreement. The manual classification picker remains available.
+
+No classification is silently applied. The existing guarded classification API, context/revision checks and downstream behavior are unchanged.
+
+Verification: five choice tests pass; all 107 workspace reply/replay checks pass. Twelve browser checks pass on Bun 1.4.4: real Inbox data, the single confirmation, genuine changes retaining both controls, a real confirmation request persisted as accepted without changing Other, and desktop/phone layouts, with no browser errors. Type checking, changed-file lint and the production build pass. Fixtures and providers were disposable/fake; no real message was sent.
 
 ## 6. Chat and email clutter — pending
 

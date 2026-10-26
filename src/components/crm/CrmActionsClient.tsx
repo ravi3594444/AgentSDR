@@ -1,6 +1,7 @@
 "use client";
 /* eslint-disable react-hooks/set-state-in-effect */
 
+import { classificationProposalChoices } from "@/lib/crm/classificationProposal";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
@@ -824,9 +825,10 @@ export function describeAction(action: Action, categories: Data[], pipeline: boo
   const proposedSubcategoryName = proposedSubcategoryId
     ? categories.flatMap((item) => asList<Data>(item.subcategories)).find((entry) => String(entry.id) === proposedSubcategoryId)?.name
     : null;
-  const proposedLabel = proposedSubcategoryName ? String(proposedSubcategoryName) : humanize(proposedCategoryKey);
+  const proposedLabel = proposedSubcategoryName ? String(proposedSubcategoryName) : humanize(proposedCategoryKey ?? String(record.categoryKey ?? classification.category ?? "other"));
   const keepCategoryKey = String(record.categoryKey ?? classification.category ?? "other");
   const keepSubcategoryId = record.subcategoryId ? String(record.subcategoryId) : null;
+  const proposalChoices = classificationProposalChoices({ currentCategoryKey: keepCategoryKey, currentSubcategoryId: keepSubcategoryId, proposedCategoryKey, proposedSubcategoryId });
   const id = actionId(action);
   const href = id ? `/crm/records/${id}` : "/inbox";
   const category = actionCategory(action);
@@ -914,7 +916,7 @@ export function describeAction(action: Action, categories: Data[], pipeline: boo
   return {
     answerLabel, headline, openConversation, replyRun, dncReview,
     id, href, record, person, activeRun, inbound, subcategory, classification, category, channel, stage,
-    proposedCategoryKey, proposedSubcategoryId, proposedLabel, keepCategoryKey, keepSubcategoryId,
+    proposedCategoryKey, proposedSubcategoryId, proposedLabel, keepCategoryKey, keepSubcategoryId, proposalChoices,
     dueLabel, dueDetail, dueColor, dueIcon, actionText, name, companyDomain, companyLabel,
     latestReplyFull, latestReply, draft, draftFull, draftReply, editable, repliedAt, sequenceLabel, stepLabel, sendableDraft, draftState,
     avatarUrl: person.profilePictureUrl ? String(person.profilePictureUrl) : null,
@@ -941,23 +943,23 @@ export function useRecordPrefetch(id: string, href: string) {
 }
 
 /**
- * The AI's held proposal as one compact pill: what it suggests, then Accept
+ * The AI's held proposal as one compact pill: one confirmation when the choices agree, otherwise Accept
  * (✓) and Keep current (✕) as labelled icon buttons, so the decision fits on
  * the line under the classification instead of stacking three.
  */
-export function ProposalInline({ label, busy, onAccept, onKeep, className }: { label: string; busy: boolean; onAccept: () => void; onKeep: () => void; className?: string }) {
+export function ProposalInline({ label, sameChoice = false, busy, onAccept, onKeep, className }: { label: string; sameChoice?: boolean; busy: boolean; onAccept: () => void; onKeep: () => void; className?: string }) {
   const button = "flex h-full w-6 shrink-0 items-center justify-center transition hover:bg-bg-white-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-stroke-strong-950 disabled:opacity-60";
-  return <div className={cn("inline-flex h-6 max-w-full items-stretch overflow-hidden rounded-md bg-warning-lighter text-warning-dark ring-1 ring-inset ring-warning-light", className)}>
-    <span className="flex min-w-0 items-center gap-1 pl-1.5 pr-1.5 text-label-xs" title={`AI suggests: ${label}`}>
+  return <div className={cn("inline-flex h-6 max-w-full items-stretch overflow-hidden rounded-md ring-1 ring-inset", sameChoice ? "bg-bg-weak-50 text-text-sub-600 ring-stroke-soft-200" : "bg-warning-lighter text-warning-dark ring-warning-light", className)}>
+    <span className="flex min-w-0 items-center gap-1 pl-1.5 pr-1.5 text-label-xs" title={sameChoice ? `Confirm classification: ${label}` : `AI suggests: ${label}`}>
       <RiSparklingFill className="size-3 shrink-0" aria-hidden="true" />
-      <span className="truncate"><span className="sr-only">AI suggests </span>{label}</span>
+      <span className="truncate"><span className="sr-only">{sameChoice ? "Classification " : "AI suggests "}</span>{label}</span>
     </span>
-    <button type="button" disabled={busy} onClick={onAccept} aria-label={`Accept AI suggestion: ${label}`} title={`Accept: move to ${label}`} className={cn(button, "border-l border-warning-light")}>
+    <button type="button" disabled={busy} onClick={onAccept} aria-label={sameChoice ? `Confirm classification: ${label}` : `Accept AI suggestion: ${label}`} title={sameChoice ? `Confirm ${label}` : `Accept: move to ${label}`} className={cn(button, "border-l border-warning-light")}>
       <RiCheckLine className="size-3.5" aria-hidden="true" />
     </button>
-    <button type="button" disabled={busy} onClick={onKeep} aria-label="Keep the current classification" title="Keep current classification" className={cn(button, "border-l border-warning-light")}>
+    {!sameChoice && <button type="button" disabled={busy} onClick={onKeep} aria-label="Keep the current classification" title="Keep current classification" className={cn(button, "border-l border-warning-light")}>
       <RiCloseLine className="size-3.5" aria-hidden="true" />
-    </button>
+    </button>}
   </div>;
 }
 
@@ -974,15 +976,16 @@ function ClassificationCell({ row, categories, busy, onClassify }: { row: Row; c
       subcategoryId={row.record.subcategoryId ? String(row.record.subcategoryId) : null}
       subcategoryName={subcategoryName}
       disabled={busy}
-      title="Fix classification — the AI misread this reply"
+      title="Change classification"
       onChange={(choice) => void onClassify(choice)}
     />
     {row.classification.status === "proposed" && <ProposalInline
         className="mt-1"
         label={row.proposedLabel}
+        sameChoice={row.proposalChoices.sameChoice}
         busy={busy}
-        onAccept={() => void onClassify(row.proposedCategoryKey ? { categoryKey: row.proposedCategoryKey, subcategoryId: row.proposedSubcategoryId } : { categoryKey: row.keepCategoryKey, subcategoryId: row.keepSubcategoryId })}
-        onKeep={() => void onClassify({ categoryKey: row.keepCategoryKey, subcategoryId: row.keepSubcategoryId })}
+        onAccept={() => void onClassify(row.proposalChoices.accept)}
+        onKeep={() => void onClassify(row.proposalChoices.keep)}
       />}
   </div>;
 }
@@ -1336,14 +1339,15 @@ export function ActionCard({ action, categories, now, busy, onOpen, onMutate, on
         subcategoryId={record.subcategoryId ? String(record.subcategoryId) : null}
         subcategoryName={row.subcategory.name ? String(row.subcategory.name) : null}
         disabled={busy}
-        title="Fix classification — the AI misread this reply"
+        title="Change classification"
         onChange={(choice) => void onClassify(choice)}
       />
       {row.classification.status === "proposed" && <ProposalInline
         label={row.proposedLabel}
+        sameChoice={row.proposalChoices.sameChoice}
         busy={busy}
-        onAccept={() => void onClassify(row.proposedCategoryKey ? { categoryKey: row.proposedCategoryKey, subcategoryId: row.proposedSubcategoryId } : { categoryKey: row.keepCategoryKey, subcategoryId: row.keepSubcategoryId })}
-        onKeep={() => void onClassify({ categoryKey: row.keepCategoryKey, subcategoryId: row.keepSubcategoryId })}
+        onAccept={() => void onClassify(row.proposalChoices.accept)}
+        onKeep={() => void onClassify(row.proposalChoices.keep)}
       />}
     </div>
 

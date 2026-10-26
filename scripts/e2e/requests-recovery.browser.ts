@@ -9,9 +9,10 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const base = "http://127.0.0.1:3101";
 const fixturePath = `/tmp/agentsdr-ui-audit-${process.pid}.json`;
 const env = { ...process.env, BETTER_AUTH_URL: base, NEXT_PUBLIC_APP_URL: base, BETTER_AUTH_SECRET: "local-ui-browser-fixture-only-8f3b49fd", UI_AUDIT_FIXTURE: fixturePath, INTERNAL_SCHEDULER: "false", NEXT_TELEMETRY_DISABLED: "1" };
-const seed = spawn(process.env.BUN_EXECUTABLE ?? "bun", ["--conditions=react-server", "scripts/e2e/ui-audit.seed.ts"], { cwd: root, env, stdio: "inherit" });
+console.log("Starting local browser fixture");
+const seed = spawn(process.env.BUN_EXECUTABLE ?? "bun", ["--conditions=react-server", "scripts/e2e/ui-audit.seed.ts"], { cwd: root, env, stdio: "inherit", timeout: 60_000 });
 if (await new Promise(resolve => seed.on("exit", resolve)) !== 0) throw new Error("Seed failed");
-const fixture = JSON.parse(readFileSync(fixturePath, "utf8")) as { email: string; password: string; organizationId: string; threadId: string; requestId: string };
+const fixture = JSON.parse(readFileSync(fixturePath, "utf8")) as { email: string; password: string; organizationId: string; threadId: string; requestId: string; classificationRecords: string[] };
 const log = openSync(process.env.UI_AUDIT_SERVER_LOG ?? "/tmp/agentsdr-ui-audit-server.log", "w");
 const standalone = process.env.UI_AUDIT_SERVER_RUNTIME === "bun";
 if (standalone) {
@@ -51,6 +52,32 @@ try {
     await page.goto(`${base}/getting-started`, { waitUntil: "networkidle" });
     check("setup fits a phone viewport", await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
     console.log("Setup counts browser checks passed");
+  } else if (process.env.UI_AUDIT_PHASE === "classification") {
+    await page.goto(`${base}/inbox?view=replies`, { waitUntil: "networkidle" });
+    await page.getByRole("link", { name: "Same classification prospect", exact: true }).first().waitFor();
+    check("Inbox offers one confirmation for the identical classification", await page.getByRole("button", { name: "Confirm classification: Other", exact: true }).count() === 1);
+    check("Inbox preserves both choices for an actual classification change", await page.getByRole("button", { name: "Accept AI suggestion: Other", exact: true }).count() === 1 && await page.getByRole("button", { name: "Keep the current classification", exact: true }).count() === 1);
+    await page.goto(`${base}/crm/records/${fixture.classificationRecords[0]}`, { waitUntil: "networkidle" });
+    await page.getByRole("button", { name: "Confirm Other", exact: true }).waitFor();
+    check("the record has one confirmation and no duplicate Keep Other", await page.getByRole("button", { name: "Keep Other", exact: true }).count() === 0 && await page.getByRole("button", { name: "Accept", exact: true }).count() === 0);
+    check("agreement is described without pretending the AI moved the record", await page.getByText("AI agrees with the current classification:", { exact: false }).count() === 1);
+    const [confirmed] = await Promise.all([
+      page.waitForResponse(response => response.request().method() === "PATCH" && response.url().endsWith(`/records/${fixture.classificationRecords[0]}/classification`)),
+      page.getByRole("button", { name: "Confirm Other", exact: true }).click(),
+    ]);
+    check("the explicit confirmation reaches the existing guarded API", confirmed.ok());
+    await page.getByRole("button", { name: "Confirm Other", exact: true }).waitFor({ state: "hidden" });
+    const saved = await (await context.request.get(`${base}/api/crm/records/${fixture.classificationRecords[0]}`)).json();
+    check("confirmation persists without changing the category", saved.categoryKey === "other" && saved.classification.status === "accepted");
+    await page.goto(`${base}/crm/records/${fixture.classificationRecords[1]}`, { waitUntil: "networkidle" });
+    await page.getByRole("button", { name: "Accept", exact: true }).waitFor();
+    check("a different classification retains Accept and Keep Interested", await page.getByRole("button", { name: "Keep Interested", exact: true }).count() === 1);
+    await page.setViewportSize({ width: 390, height: 844 });
+    check("classification controls fit a phone viewport", await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
+    await page.goto(`${base}/inbox?view=replies`, { waitUntil: "networkidle" });
+    await page.getByRole("link", { name: "Changed classification prospect", exact: true }).first().waitFor();
+    check("mobile Inbox keeps the genuine change and hides the resolved duplicate", await page.getByRole("button", { name: "Accept AI suggestion: Other", exact: true }).count() === 1 && await page.getByRole("button", { name: "Keep the current classification", exact: true }).count() === 1 && await page.getByRole("button", { name: "Confirm classification: Other", exact: true }).count() === 0);
+    console.log("Classification controls browser checks passed");
   } else {
   await page.goto(`${base}/assistant/requests`, { waitUntil: "domcontentloaded", timeout: 120_000 });
   await page.getByTestId("request-row").first().waitFor({ timeout: 60_000 });
@@ -115,7 +142,7 @@ try {
   }
   if (pageErrors.length) console.error("Browser runtime errors:", pageErrors);
   check("no browser runtime errors", pageErrors.length === 0);
-  console.log(process.env.UI_AUDIT_PHASE === "setup" ? "Setup verification complete" : "Requests recovery browser checks passed");
+  console.log(`${process.env.UI_AUDIT_PHASE ?? "requests"} verification complete`);
 } catch (cause) {
   const failedPage = browser?.contexts()[0]?.pages()[0];
   if (failedPage) console.error("Browser failure state:", (await failedPage.locator("body").innerText()).slice(-6500));
