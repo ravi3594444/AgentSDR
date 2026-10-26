@@ -27,7 +27,7 @@ export default async function GettingStartedPage() {
   const byKey = new Map(items.map((item) => [item.key, item]));
   const pick = (...keys: ReadinessKey[]) => keys.map((key) => byKey.get(key)).filter((item): item is ReadinessItem => Boolean(item));
   const channels = pick("email", "linkedin", "whatsapp", "instagram");
-  const connectedChannels = channels.filter((item) => item.status === "connected").length;
+  const connectedChannels = channels.filter((item) => (item.connectedSenders ?? 0) > 0).length;
   const checks = pick("leads", "campaigns", "replySync", "replies");
   const attention = checks.filter((item) => item.status === "needs_attention").length;
 
@@ -93,6 +93,7 @@ function Step({ item }: { item: ReadinessItem }) {
             {READINESS_LABEL[item.status]}
           </Badge.Root>
         </div>
+        {item.connectedSenders !== undefined && item.connectedSenders > 0 && item.status !== "connected" && <p className="mt-1 text-paragraph-sm text-text-strong-950">{item.connectedSenders} connected {item.connectedSenders === 1 ? "account" : "accounts"}; check the setup note below.</p>}
         <p className="mt-1 text-paragraph-sm text-text-strong-950">{item.summary}</p>
         {item.details.length > 0 && (
           <details className="mt-2 text-paragraph-xs text-text-sub-600"><summary className="cursor-pointer rounded outline-none focus-visible:ring-2 focus-visible:ring-primary-base">Details</summary><ul className="mt-1.5 space-y-0.5">

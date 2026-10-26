@@ -51,6 +51,8 @@ export type ReadinessItem = {
   status: ReadinessStatus;
   /** One line: what is true now. */
   summary: string;
+  /** Connected sending accounts, separate from reply/setup warnings. Channel items only. */
+  connectedSenders?: number;
   /** Supporting facts: counts, dates. */
   details: string[];
   /** The next thing to do, or null when there is nothing. */
@@ -667,12 +669,24 @@ export function replySyncReadiness(facts: ReadinessFacts, channels: Record<Reply
   };
 }
 
+/** Count connected senders without treating optional accounts or reply-sync warnings as missing channels. */
+export function connectedSenderCounts(facts: ReadinessFacts): Record<"email" | "linkedin" | "whatsapp" | "instagram", number> {
+  const unipileMailboxes = facts.mailboxes.unipileConnected ?? 0;
+  return {
+    email: (facts.google.connected ? Math.max(0, facts.mailboxes.connected - unipileMailboxes) : 0) + (facts.unipile.connected ? unipileMailboxes : 0),
+    linkedin: facts.unipile.connected ? facts.linkedinAccounts.connected : 0,
+    whatsapp: facts.unipile.connected ? facts.whatsappAccounts.connected : 0,
+    instagram: facts.unipile.connected && facts.instagram?.ready ? facts.instagram.connected : 0,
+  };
+}
+
 /** Every step, in the order a new owner takes them. */
 export function buildReadiness(facts: ReadinessFacts): ReadinessItem[] {
   const email = emailReadiness(facts);
   const linkedin = linkedinReadiness(facts);
   const whatsapp = whatsappReadiness(facts);
-  return [
+  const senders = connectedSenderCounts(facts);
+  const items: ReadinessItem[] = [
     workspaceReadiness(facts),
     email,
     linkedin,
@@ -684,4 +698,5 @@ export function buildReadiness(facts: ReadinessFacts): ReadinessItem[] {
     replySyncReadiness(facts, { email, linkedin, whatsapp }),
     repliesReadiness(facts),
   ];
+  return items.map(item => item.key in senders ? { ...item, connectedSenders: senders[item.key as keyof typeof senders] } : item);
 }

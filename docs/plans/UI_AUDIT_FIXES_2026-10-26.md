@@ -12,7 +12,15 @@ Verification on the production build: 13 browser checks passed (real sign-in and
 
 The database was a fresh PGlite instance with serialized protocol cycles for browser clients. These UI checks do not prove native PostgreSQL locking or provider delivery. No live provider was called and no outreach was sent. The exact cause of the original VM's blank page was not established; this change addresses the identified missing recovery paths.
 
-## 4. Setup counts — next
+## 4. Setup counts — verified
+
+Getting started now counts connected senders separately from setup/reply warnings. For example, two connected mailboxes plus one failed mailbox still count as an email channel; one disconnected older WhatsApp or Instagram account does not erase the connected account. The warnings remain visible with a connected-account count. Included Unipile resolves through the same connection check the sender uses instead of requiring a workspace-owned credential row.
+
+The chat badge shows connected channels, Set up AI, or Connect a sender. Optional channels and the built-in Maps scraper no longer add to a misleading “N to set up” total. The menu explains that one sending channel is enough.
+
+Verification: all 38 onboarding unit checks pass, including three new cases for mixed account states, preserved reply-sync warnings and missing integrations/migrations. Browser checks passed against the production build for both own and Included credentials, on Bun 1.4.4, through real sign-in, saved account rows and the real settings/chat pages, at desktop and phone widths. Type checking, changed-file lint, the organization-scope contract and the production build pass. No provider calls or sends.
+
+An older local Bun 1.3.14 standalone run produced hydration errors; the same build passed with Bun 1.4.4 (the VM runtime) and Node 24. No runtime or Docker change was made to hide that result.
 
 ## 5. Classification controls — pending
 

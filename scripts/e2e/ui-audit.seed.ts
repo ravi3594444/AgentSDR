@@ -15,6 +15,30 @@ await db.insert(accounts).values({ userId: user!.id, accountId: user!.id, provid
 const [thread] = await db.insert(assistantThreads).values({ organizationId: org!.id, title: "Requests browser check", createdBy: user!.id }).returning();
 const [message] = await db.insert(assistantMessages).values({ organizationId: org!.id, threadId: thread!.id, role: "user", content: "Research dentists without sending" }).returning();
 await db.insert(assistantJobs).values({ organizationId: org!.id, threadId: thread!.id, kind: "discovery", status: "succeeded", stage: "done", payload: { requestMessageId: message!.id, phrase: "Dentists" }, result: { found: 3, eligible: 2 } });
+if (process.env.UI_AUDIT_PHASE === "setup") {
+  const { gridProviders, gridProviderCredentials } = await import("@/lib/grid/schema");
+  const { mailboxes } = await import("@/lib/outreach/schema");
+  const { whatsappAccounts } = await import("@/lib/whatsapp/schema");
+  const { instagramAccounts } = await import("@/lib/instagram/schema");
+  const { organizationFeatures } = await import("@/lib/features/schema");
+  const { encryptIntegrationCredentials } = await import("@/lib/integrations/credentials");
+  const organizationId = org!.id;
+  const stamp = Date.now();
+  const providerValues = { baseUrl: "https://unipile-fixture.invalid", apiKey: "local-ui-test-only", notifySecret: "local-ui-test-only" };
+  if (process.env.UI_AUDIT_PROVIDER_MODE === "included") {
+    const { platformCredentials } = await import("@/lib/managed/schema");
+    await db.insert(platformCredentials).values({ provider: "unipile", encryptedPayload: encryptIntegrationCredentials(providerValues), fingerprint: "local-ui-test-only", config: { verifiedAt: new Date().toISOString() } });
+  } else {
+    const [platform] = await db.insert(gridProviders).values({ organizationId, key: "platform-unipile", name: "Local UI provider", config: { platformKey: "unipile", values: { baseUrl: providerValues.baseUrl }, secretsSet: ["apiKey"], verifiedAt: new Date().toISOString(), webhooks: { status: "registered", items: [{ key: "unipile-email" }] } } }).returning();
+    await db.insert(gridProviderCredentials).values({ providerId: platform!.id, encryptedPayload: encryptIntegrationCredentials(providerValues) });
+  }
+  await db.insert(mailboxes).values([0, 1, 2].map(n => ({ organizationId, provider: "unipile" as const, emailAddress: `sender-${n}-${stamp}@example.test`, unipileAccountId: `ui-email-${stamp}-${n}`, status: n < 2 ? "connected" as const : "failed" as const })));
+  await db.insert(whatsappAccounts).values([0, 1].map(n => ({ organizationId, unipileAccountId: `ui-wa-${stamp}-${n}`, name: `Test number ${n}`, status: n === 0 ? "connected" as const : "disconnected" as const, connectedAt: new Date(Date.now() - 86_400_000) })));
+  await db.insert(organizationFeatures).values({ organizationId, key: "instagram", enabled: true });
+  await db.insert(instagramAccounts).values([0, 1].map(n => ({ organizationId, unipileAccountId: `ui-ig-${stamp}-${n}`, username: `test_${n}`, status: n === 0 ? "connected" as const : "disconnected" as const })));
+  const [ai] = await db.insert(gridProviders).values({ organizationId, key: `ai-ui-${stamp}`, name: "Local UI AI fixture", config: { aiProviderKey: "aimlapi", verification: { status: "verified", verifiedAt: new Date().toISOString() } } }).returning();
+  await db.insert(gridProviders).values({ organizationId, key: "openrouter-byok-settings", name: "Local UI AI selection", config: { connectionId: ai!.id, providers: ["aimlapi"], modelsByProvider: { aimlapi: ["fixture-model"] }, defaultModel: { provider: "aimlapi", modelId: "fixture-model" } } });
+}
 writeFileSync(process.env.UI_AUDIT_FIXTURE ?? "/tmp/agentsdr-ui-audit-fixture.json", JSON.stringify({ email, password, organizationId: org!.id, userId: user!.id, threadId: thread!.id, requestId: message!.id }));
 console.log("Local UI owner and saved request seeded");
 process.exit(0);

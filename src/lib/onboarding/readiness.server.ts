@@ -14,7 +14,7 @@ import { orgLeadIds } from "@/lib/outreach/orgScope";
 import { chatInOrg } from "@/lib/whatsapp/messages";
 import { loadNavBadges } from "@/lib/nav/badges.server";
 import { mailboxes, outreachCampaigns, outreachEmails } from "@/lib/outreach/schema";
-import { listPlatformStatus } from "@/lib/platform/credentials";
+import { isPlatformConnected, listPlatformStatus } from "@/lib/platform/credentials";
 import { inOrg } from "@/lib/tenancy/scope";
 import { whatsappAccounts, whatsappCampaigns, whatsappChats, whatsappMessages } from "@/lib/whatsapp/schema";
 import { instagramAccounts } from "@/lib/instagram/schema";
@@ -76,6 +76,8 @@ export async function loadReadinessFacts(ctx: OrgContext): Promise<ReadinessFact
   // One query at a time: the pool is small and shared (DB_POOL_MAX), and this
   // page is opened rarely, so it should not hold several connections at once.
   const platforms = await listPlatformStatus();
+  // Included Unipile has no workspace-owned credential row. Resolve it the same way as senders do.
+  const unipileConnected = await isPlatformConnected("unipile");
   const mailboxRows = await db.select({ status: mailboxes.status, n: count() }).from(mailboxes).where(inOrg(mailboxes)).groupBy(mailboxes.status);
   const [{ n: unipileMailboxes }] = await db
     .select({ n: count() })
@@ -166,7 +168,7 @@ export async function loadReadinessFacts(ctx: OrgContext): Promise<ReadinessFact
       unipileConnected: Number(unipileMailboxes),
     },
     unipile: {
-      connected: Boolean(unipile?.connected),
+      connected: unipileConnected,
       verifiedAt: unipile?.verifiedAt ?? null,
       webhooks: unipile?.webhooks ? { status: unipile.webhooks.status, message: unipile.webhooks.message } : null,
       emailWebhook: Boolean(unipile?.webhooks?.items?.some((item) => item.key === "unipile-email")),

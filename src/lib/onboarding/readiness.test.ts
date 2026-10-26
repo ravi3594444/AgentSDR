@@ -5,6 +5,7 @@ import {
   aiReadiness,
   buildReadiness,
   campaignsReadiness,
+  connectedSenderCounts,
   emailReadiness,
   linkedinReadiness,
   repliesReadiness,
@@ -394,5 +395,31 @@ describe("Instagram in Getting started", () => {
   test("it sits with the other channels, after WhatsApp", () => {
     const keys = buildReadiness(fresh({ instagram: { ready: true, connected: 1, notConnected: 0 } })).map((item) => item.key);
     expect(keys.indexOf("instagram")).toBe(keys.indexOf("whatsapp") + 1);
+  });
+});
+
+
+describe("connected channels and setup warnings", () => {
+  test("counts three usable channels despite old disconnected accounts", () => {
+    const facts = fresh({ unipile: { ...unipileOn, emailWebhook: true }, mailboxes: { connected: 2, connecting: 0, failed: 1, disabled: 0, unipileConnected: 2 }, linkedinAccounts: { connected: 0, disconnected: 1 }, whatsappAccounts: { connected: 1, notConnected: 1 }, instagram: { ready: true, connected: 1, notConnected: 1 } });
+    expect(connectedSenderCounts(facts)).toEqual({ email: 2, whatsapp: 1, instagram: 1, linkedin: 0 });
+    const channels = buildReadiness(facts).filter(item => item.connectedSenders !== undefined);
+    expect(channels.filter(item => (item.connectedSenders ?? 0) > 0)).toHaveLength(3);
+    expect(channels.filter(item => (item.connectedSenders ?? 0) > 0).every(item => item.status === "needs_attention")).toBe(true);
+  });
+
+  test("keeps real reply-sync warnings without erasing connected accounts", () => {
+    const facts = fresh({ unipile: { ...unipileOn, webhooks: { status: "failed", message: "Fixture webhook failure" } }, whatsappAccounts: { connected: 1, notConnected: 0 } });
+    const item = buildReadiness(facts).find(item => item.key === "whatsapp")!;
+    expect(item.connectedSenders).toBe(1);
+    expect(item.status).toBe("needs_attention");
+    expect(item.details).toContain("Fixture webhook failure");
+  });
+
+  test("a missing integration or Instagram migration never counts as a ready sender", () => {
+    const facts = fresh({ mailboxes: { connected: 2, unipileConnected: 1, connecting: 0, failed: 0, disabled: 0 }, linkedinAccounts: { connected: 1, disconnected: 0 }, whatsappAccounts: { connected: 1, notConnected: 0 }, instagram: { ready: true, connected: 1, notConnected: 0 } });
+    expect(Object.values(connectedSenderCounts(facts))).toEqual([0, 0, 0, 0]);
+    expect(connectedSenderCounts({ ...facts, google: googleOn }).email).toBe(1);
+    expect(connectedSenderCounts({ ...facts, unipile: unipileOn, instagram: { ...facts.instagram!, ready: false } }).instagram).toBe(0);
   });
 });

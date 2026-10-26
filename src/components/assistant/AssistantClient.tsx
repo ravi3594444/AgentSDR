@@ -1029,7 +1029,7 @@ type SetupItem = { label: string; ok: boolean; detail: string; href: string; ope
 function setupItems(setup: Setup): SetupItem[] {
   return [
     { label: "AI", ok: setup.ai.connected, detail: setup.ai.connected ? "Connected" : "Not set up on this server yet", href: "/settings/ai", operator: true },
-    { label: "Lead search", ok: setup.leadDiscovery.available, detail: setup.leadDiscovery.available ? "Google Maps ready" : "Not enabled on this server; contact lists still work", href: "/getting-started", operator: true },
+    { label: "Google Maps (optional)", ok: setup.leadDiscovery.available, detail: setup.leadDiscovery.available ? "Google Maps ready" : "Not enabled on this server; contact lists still work", href: "/getting-started", operator: true },
     ...(["email", "whatsapp", "linkedin", ...(setup.features?.instagram ? ["instagram" as const] : [])] as const).map((channel) => ({
       label: CHANNEL_LABEL[channel]!,
       ok: setup.channels[channel].available,
@@ -1043,17 +1043,19 @@ function setupItems(setup: Setup): SetupItem[] {
 function ReadinessMenu({ setup }: { setup: Setup | null }) {
   if (!setup) return null;
   const items = setupItems(setup);
-  const missing = items.filter((item) => !item.ok).length;
+  const connected = items.filter((item) => !item.operator && item.ok).length;
+  const ready = setup.ai.connected && connected > 0;
   return (
     <Popover.Root>
       <Popover.Trigger asChild>
         <button type="button" className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 text-label-xs text-text-sub-600 ring-1 ring-inset ring-stroke-soft-200 hover:bg-bg-weak-50">
-          <span className={cn("size-2 rounded-full", missing ? "bg-warning-base" : "bg-success-base")} aria-hidden="true" />
-          {missing ? `${missing} to set up` : "Setup ready"}
+          <span className={cn("size-2 rounded-full", ready ? "bg-success-base" : "bg-warning-base")} aria-hidden="true" />
+          {!setup.ai.connected ? "Set up AI" : connected ? `${connected} ${connected === 1 ? "channel" : "channels"} connected` : "Connect a sender"}
         </button>
       </Popover.Trigger>
       <Popover.Content align="end" showArrow={false} sideOffset={8} className="w-80 max-w-[calc(100vw-2rem)] p-3">
         <p className="text-label-sm text-text-strong-950">What the assistant can use</p>
+        <p className="mt-1 text-paragraph-xs text-text-sub-600">One sending channel is enough to start. Other channels and Google Maps are optional.</p>
         <ul className="mt-2 space-y-1.5">
           {items.map((item) => (
             <li key={item.label} className="flex items-start gap-2 text-paragraph-xs">

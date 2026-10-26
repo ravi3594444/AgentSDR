@@ -1,6 +1,6 @@
 /** Real local production server, auth, API and disposable DB. Injected read failures only; never providers or sends. */
 import { spawn } from "node:child_process";
-import { readFileSync, openSync, unlinkSync } from "node:fs";
+import { readFileSync, openSync, unlinkSync, cpSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
@@ -13,7 +13,12 @@ const seed = spawn(process.env.BUN_EXECUTABLE ?? "bun", ["--conditions=react-ser
 if (await new Promise(resolve => seed.on("exit", resolve)) !== 0) throw new Error("Seed failed");
 const fixture = JSON.parse(readFileSync(fixturePath, "utf8")) as { email: string; password: string; organizationId: string; threadId: string; requestId: string };
 const log = openSync(process.env.UI_AUDIT_SERVER_LOG ?? "/tmp/agentsdr-ui-audit-server.log", "w");
-const server = spawn("node", ["node_modules/next/dist/bin/next", "start", "--hostname", "127.0.0.1", "--port", "3101"], { cwd: root, env, stdio: ["ignore", log, log], detached: true });
+const standalone = process.env.UI_AUDIT_SERVER_RUNTIME === "bun";
+if (standalone) {
+  cpSync(join(root, ".next/static"), join(root, ".next/standalone/.next/static"), { recursive: true });
+  cpSync(join(root, "public"), join(root, ".next/standalone/public"), { recursive: true });
+}
+const server = spawn(standalone ? process.env.UI_AUDIT_BUN_SERVER_PATH ?? process.env.BUN_EXECUTABLE ?? "bun" : "node", standalone ? [".next/standalone/server.js"] : ["node_modules/next/dist/bin/next", "start", "--hostname", "127.0.0.1", "--port", "3101"], { cwd: root, env: { ...env, PORT: "3101", HOSTNAME: "127.0.0.1" }, stdio: ["ignore", log, log], detached: true });
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 const check = (name: string, value: boolean) => { if (!value) throw new Error(`FAIL ${name}`); console.log(`PASS ${name}`); };
 try {
@@ -30,7 +35,23 @@ try {
   check("real workspace selection succeeds", active.ok());
   const page = await context.newPage();
   const pageErrors: string[] = [];
-  page.on("pageerror", error => pageErrors.push(error.message));
+  page.on("pageerror", error => pageErrors.push(`${page.url()} ${error.stack ?? error.message}`));
+  if (process.env.UI_AUDIT_PHASE === "setup") {
+    await page.goto(`${base}/getting-started`, { waitUntil: "networkidle" });
+    await page.getByText("3 channels connected", { exact: true }).waitFor();
+    check("Getting started counts connected channels from real saved accounts", true);
+    check("a failed mailbox stays visible without erasing the two connected mailboxes", await page.getByText("2 connected accounts; check the setup note below.", { exact: true }).count() === 1 && await page.getByText("1 mailbox failed the last check.", { exact: true }).count() === 1);
+    check("an old disconnected WhatsApp account does not erase the connected account", await page.getByText("1 connected account; check the setup note below.", { exact: true }).count() === 2 && await page.getByText("1 WhatsApp number not connected.", { exact: true }).count() === 1);
+    await page.goto(`${base}/assistant?thread=${fixture.threadId}`, { waitUntil: "networkidle" });
+    await page.getByRole("button", { name: "3 channels connected", exact: true }).click();
+    await page.getByText("One sending channel is enough to start. Other channels and Google Maps are optional.", { exact: true }).waitFor();
+    check("chat shows connected channels rather than counting optional setup gaps", await page.getByText(/\d+ to set up/, { exact: true }).count() === 0);
+    check("a disconnected optional channel still has a connection link", await page.getByText("What the assistant can use", { exact: true }).count() === 1 && await page.getByRole("link", { name: "Set up", exact: true }).count() > 0);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${base}/getting-started`, { waitUntil: "networkidle" });
+    check("setup fits a phone viewport", await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
+    console.log("Setup counts browser checks passed");
+  } else {
   await page.goto(`${base}/assistant/requests`, { waitUntil: "domcontentloaded", timeout: 120_000 });
   await page.getByTestId("request-row").first().waitFor({ timeout: 60_000 });
   check("browser renders the request from the real API and database", await page.getByText("Research dentists without sending", { exact: true }).count() > 0);
@@ -91,8 +112,10 @@ try {
   await page.getByText("Research dentists without sending", { exact: true }).waitFor();
   await page.setViewportSize({ width: 390, height: 844 });
   check("Requests fits a phone viewport", await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
+  }
+  if (pageErrors.length) console.error("Browser runtime errors:", pageErrors);
   check("no browser runtime errors", pageErrors.length === 0);
-  console.log("Requests recovery browser checks passed");
+  console.log(process.env.UI_AUDIT_PHASE === "setup" ? "Setup verification complete" : "Requests recovery browser checks passed");
 } catch (cause) {
   const failedPage = browser?.contexts()[0]?.pages()[0];
   if (failedPage) console.error("Browser failure state:", (await failedPage.locator("body").innerText()).slice(-6500));
