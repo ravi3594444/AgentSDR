@@ -207,9 +207,11 @@ cron secrets and tuning knobs. Two deliberate exceptions:
 `scripts/migrate-env-to-integrations.ts` copied an existing env setup into
 the store once (verifying each); keep it as the record of that move.
 
-## Claude Code engine (owner-only pilot)
+## Claude Code engine (private account pilot)
 
-An owner of the operator organization can sign Anthropic's unmodified
+An owner of the operator organization, or an exact workspace/owner pair
+privately admitted in the GLOBAL `platform_settings` key
+`claude-private-pilots`, can sign Anthropic's unmodified
 `claude` CLI in with their own Claude account (Settings → AI provider →
 Claude Code) and run the organization's `completeStructured` calls on it
 (`src/lib/ai/claudeCode/`, docs/plans/CLAUDE_CODE_LOGIN.md). Rules that
@@ -218,11 +220,20 @@ keep it within Anthropic's conditions:
 - Never patch the binary, remove one of its sign-in methods, build an OAuth
   client, or read its credential files. The code Anthropic's page shows goes
   once to the waiting CLI process and is never stored or logged.
-- The CLI gets the allowlisted environment from `cli.server.ts`, its own
+- Structured AI steps get the allowlisted environment from `cli.server.ts`, their own
   per-account `CLAUDE_CONFIG_DIR` and `HOME`, `--tools ""`, the deny rules in
   `GENERATION_SETTINGS` (without them a prompt's `@path` makes the CLI read
   files, credentials included, even with no tools) and an empty working
-  directory. Do not give it tools, MCP servers or the server's env.
+  directory. Do not give structured AI steps tools, MCP servers or the server's env.
+- A personally selected Claude login uses the native assistant runtime
+  (`nativeAssistant.server.ts`) for chat/research orchestration. It gets only
+  the ephemeral, authenticated loopback `agentsdr` MCP server, `--restricted`,
+  the same file-read denials, and an explicit session per account/chat/request.
+  Tools execute through `runToolInThread` with fresh grounding and existing
+  autonomy, spend, DNC and send checks. Never add arbitrary MCP configs or
+  host filesystem/shell tools to it. Normal API providers, shared private-test
+  logins and CRM structured steps keep their existing paths. See
+  `docs/plans/CLAUDE_NATIVE_HARNESS_2026-10-27.md` for the pilot boundary and tests.
 - Selected-but-failing never falls back to an API provider. One person's
   login answers only their own organization's work, and only while they are
   its only member.

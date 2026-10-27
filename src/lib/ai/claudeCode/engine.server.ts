@@ -12,6 +12,7 @@ import { isClaudeCodeModel, type ClaudeCodeModel, type ClaudeCodeModelCheck, typ
 import { loginController } from "./login.server";
 import { accountUsage, ClaudeCodeError, runGeneration, runningOn } from "./runner.server";
 import { sharedClaudeBinding, sharedClaudeSourceApproved, sharedClaudeAccountPublished } from "./shared.server";
+import { privateClaudePilot } from "./pilotAccess.server";
 
 /**
  * Whether an organization's AI steps run on Claude Code, and on whose login.
@@ -120,10 +121,10 @@ async function operatorOrganization(): Promise<string | null> {
 }
 
 /** The pilot gate for one person in their active organization. */
-export async function claudeCodeAccess(ctx: { organizationId: string; roles: readonly OrgRole[] }): Promise<{ allowed: boolean; reason?: string }> {
+export async function claudeCodeAccess(ctx: { organizationId: string; userId?: string; roles: readonly OrgRole[] }): Promise<{ allowed: boolean; reason?: string }> {
   if (!ctx.roles.includes("owner")) return { allowed: false, reason: "Only an owner can connect Claude Code." };
   if (ctx.organizationId !== (await operatorOrganization())) {
-    return { allowed: false, reason: "Claude Code is a pilot for the organization that runs this server; each person uses their own Claude account." };
+    if (!ctx.userId || !await privateClaudePilot(ctx.organizationId, ctx.userId)) return { allowed: false, reason: "Claude Code is a private pilot. The server operator must approve this workspace and your account first; each pilot uses their own Claude login." };
   }
   return { allowed: true };
 }
@@ -162,8 +163,8 @@ export async function claudeCodeBinding(): Promise<{ account: ClaudeAccount; mod
   const engine = await getClaudeEngine();
   if (!engine.selected || !engine.ownerUserId) return null;
   const organizationId = currentOrganizationId();
-  if (organizationId !== (await operatorOrganization())) {
-    throw new ClaudeCodeError("error", "Claude Code is selected, but it is a pilot for the organization that runs this server only. Choose an AI provider in Settings → AI provider.");
+  if (organizationId !== (await operatorOrganization()) && !await privateClaudePilot(organizationId, engine.ownerUserId)) {
+    throw new ClaudeCodeError("error", "Claude Code is selected, but this workspace and owner are not approved for the private pilot. Choose an AI provider in Settings → AI provider.");
   }
   if (!(await isOrganizationOwner(organizationId, engine.ownerUserId))) {
     throw new ClaudeCodeError("not_signed_in", "Claude Code is selected, but the person whose Claude login it uses is no longer an owner here. An owner must sign in with their own account or choose another AI provider in Settings → AI provider.");

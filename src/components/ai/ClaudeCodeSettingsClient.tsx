@@ -129,6 +129,7 @@ export default function ClaudeCodeSettingsClient({ onChanged }: { onChanged?: ()
       <Callout tone="info">
         Runs Anthropic&apos;s own Claude Code program on this server, signed in with your own account. This organization&apos;s AI steps (the assistant, lead judging, outreach writing, reply sorting, drafts and the reply agent) then run on that account: with a Claude subscription they use your plan&apos;s usage limits; with an Anthropic Console account Anthropic bills each use to that account. When a limit is reached or the login expires, those steps fail with the reason and nothing moves to an API key. If your Claude account has extra usage turned on, at most one AI step can be billed as extra usage; Claude Code then holds until the plan&apos;s window resets. Table AI columns saved for an API model, AI web search and call transcription keep using the API provider above.
       </Callout>
+      {!engine.sharedTest && <p className="max-w-xl text-paragraph-sm text-text-sub-600">When selected, your assistant uses Claude&apos;s native agent loop with the app&apos;s connected tools and a separate session for each request. Lead judging, outreach writing and lead replies keep their existing checks. API providers keep the standard app engine.</p>}
       {error && <Callout tone="error">{error}</Callout>}
       {engine.blocked && <Callout tone="warning" title="Claude Code cannot run for this organization">{engine.blocked}</Callout>}
 

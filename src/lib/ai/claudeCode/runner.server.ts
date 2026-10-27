@@ -3,9 +3,12 @@ import "server-only";
 import type { ChildProcess } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { accountEnvironment, accountKey, accountPaths, hasOwnLogin, scratchDirectory, spawnCli, stopCli, type ClaudeAccount } from "./cli.server";
-import { foreignKeySource, generationArgs, readGeneration, windowName, type ClaudeFailure } from "./cliOutput";
+import { foreignKeySource, generationArgs, limitRefusal, readGeneration, windowName, type ClaudeFailure } from "./cliOutput";
 import type { ClaudeCodeLimit, ClaudeCodeModel, ClaudeCodeWindow } from "./contract";
+import { nativeFlags } from "./nativeProtocol";
+import { nativeToolParent } from "./nativeToolScope.server";
 
 /**
  * One structured generation on an account's own Claude login: the CLI runs
@@ -80,7 +83,7 @@ const FOREIGN_KEY_HOLD_MS = 15 * 60_000;
 const SLOT_WAIT_MS = 30_000;
 const ALL = "*";
 
-type SlotWaiter = { key: string; wake: () => void };
+type SlotWaiter = { key: string; reentrant: boolean; native: boolean; wake: () => void };
 type RunnerState = { active: number; activeAccounts: Set<string>; waiting: SlotWaiter[]; accounts: Map<string, AccountState> };
 const globalRunner = globalThis as typeof globalThis & { __agentsdrClaudeRunner?: RunnerState };
 function runner(): RunnerState {
@@ -144,24 +147,30 @@ function busy(): ClaudeCodeError {
   return new ClaudeCodeError("busy", `Claude Code is busy on this server (${max} AI ${max === 1 ? "step" : "steps"} at a time) and this one could not start in time.`);
 }
 
-async function acquireSlot(account: ClaudeAccount, deadline: number, signal?: AbortSignal): Promise<() => void> {
+async function acquireSlot(account: ClaudeAccount, deadline: number, signal?: AbortSignal, native = false): Promise<() => void> {
   const state = runner();
   const key = accountKey(account);
+  const reentrant = Boolean(nativeToolParent(account));
+  // A native parent waits while an app tool's structured writer runs.
+  // Leave one physical slot available so two parents cannot occupy every slot.
+  const canAdmit = (entry: { key: string; reentrant: boolean; native: boolean }) => state.active < maxProcesses()
+    && (!entry.native || state.active < Math.max(1, maxProcesses() - 1))
+    && (entry.reentrant || !state.activeAccounts.has(entry.key));
   let released = false;
   const release = () => {
     if (released) return;
     released = true;
     state.active -= 1;
-    state.activeAccounts.delete(key);
+    if (!reentrant) state.activeAccounts.delete(key);
     while (state.active < maxProcesses()) {
-      const index = state.waiting.findIndex((entry) => !state.activeAccounts.has(entry.key));
+      const index = state.waiting.findIndex(canAdmit);
       if (index < 0) break;
       state.waiting[index].wake();
     }
   };
-  if (state.active < maxProcesses() && !state.activeAccounts.has(key)) {
+  if (canAdmit({ key, reentrant, native })) {
     state.active += 1;
-    state.activeAccounts.add(key);
+    if (!reentrant) state.activeAccounts.add(key);
     return release;
   }
   await new Promise<void>((resolveSlot, rejectSlot) => {
@@ -173,7 +182,7 @@ async function acquireSlot(account: ClaudeAccount, deadline: number, signal?: Ab
     const wake = () => {
       cleanup();
       state.active += 1;
-      state.activeAccounts.add(key);
+      if (!reentrant) state.activeAccounts.add(key);
       resolveSlot();
     };
     const onAbort = () => {
@@ -183,7 +192,7 @@ async function acquireSlot(account: ClaudeAccount, deadline: number, signal?: Ab
     const timer = setTimeout(() => { cleanup(); rejectSlot(busy()); }, Math.max(0, Math.min(deadline, Date.now() + SLOT_WAIT_MS) - Date.now()));
     timer.unref();
     signal?.addEventListener("abort", onAbort, { once: true });
-    state.waiting.push({ key, wake });
+    state.waiting.push({ key, reentrant, native, wake });
     if (signal?.aborted) onAbort();
   });
   return release;
@@ -202,6 +211,14 @@ export type GenerationInput = {
   ignoreHolds?: boolean;
   /** Recheck a shared workspace's approval after waiting and before starting the CLI. */
   authorize?: () => Promise<void>;
+  /** Internal native assistant path only. Ordinary structured calls keep their no-tools contract. */
+  native?: {
+    session: { cwd: string; sessionId: string; resume: boolean };
+    mcpConfig: Record<string, unknown>;
+    maxTurns: number;
+    onFrame: (frame: Record<string, unknown>) => void;
+    onFailure: (error: Error) => void;
+  };
 };
 
 export type GenerationResult = { text: string; modelId: string | null; usage: { inputTokens?: number; outputTokens?: number } };
@@ -217,6 +234,11 @@ function hold(state: AccountState, limit: ClaudeCodeLimit, model: ClaudeCodeMode
 
 /** Runs one generation; throws ClaudeCodeError for every way it can fail. */
 export async function runGeneration(input: GenerationInput): Promise<GenerationResult> {
+  const parent = nativeToolParent(input.account);
+  if (parent) {
+    if (maxProcesses() < 2) throw new ClaudeCodeError("busy", "Native Claude plan writing needs two CLI slots (the waiting agent and its writer). Increase AGENTSDR_CLAUDE_CODE_MAX_PROCESSES to at least 2, or select the API engine.");
+    input = { ...input, signal: input.signal ? AbortSignal.any([input.signal, parent.signal]) : parent.signal };
+  }
   if (input.signal?.aborted) throw input.signal.reason;
   const paths = accountPaths(input.account);
   if (!hasOwnLogin(paths)) throw new ClaudeCodeError("not_signed_in", "Claude Code is not signed in for this account. Sign in again in Settings → AI provider.");
@@ -231,7 +253,7 @@ export async function runGeneration(input: GenerationInput): Promise<GenerationR
   let scratch: { cwd: string; remove: () => void } | null = null;
   const proc: { child: ChildProcess | null } = { child: null };
   try {
-    release = await acquireSlot(input.account, deadline, input.signal);
+    release = await acquireSlot(input.account, deadline, input.signal, Boolean(input.native));
     if (input.signal?.aborted) throw input.signal.reason;
     if (Date.now() >= deadline) throw new ClaudeCodeError("timeout", "Claude Code could not start before this AI step timed out.");
     // A preceding workspace may have hit a limit or signed out while this
@@ -243,10 +265,17 @@ export async function runGeneration(input: GenerationInput): Promise<GenerationR
     scratch = scratchDirectory(paths);
     const systemPromptFile = join(scratch.cwd, "system-prompt.txt");
     writeFileSync(systemPromptFile, input.systemPrompt, { mode: 0o600 });
-    const cwd = scratch.cwd;
+    const cwd = input.native?.session.cwd ?? scratch.cwd;
+    let args = generationArgs({ model: input.model, systemPromptFile, jsonSchema: input.jsonSchema });
+    if (input.native) {
+      const mcpConfigFile = join(scratch.cwd, "mcp.json");
+      writeFileSync(mcpConfigFile, JSON.stringify(input.native.mcpConfig), { mode: 0o600 });
+      args = args.filter((arg) => arg !== "--no-session-persistence");
+      args.push(...nativeFlags({ ...input.native.session, maxTurns: input.native.maxTurns, mcpConfigFile }));
+    }
     const lines = await new Promise<string[]>((resolveRun, rejectRun) => {
       try {
-        proc.child = spawnCli(generationArgs({ model: input.model, systemPromptFile, jsonSchema: input.jsonSchema }), { env: accountEnvironment(paths), cwd });
+        proc.child = spawnCli(args, { env: accountEnvironment(paths, input.native ? { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1", ENABLE_TOOL_SEARCH: "false" } : {}), cwd });
       } catch {
         rejectRun(new ClaudeCodeError("error", "Claude Code could not start on this server. Check that it is installed."));
         return;
@@ -258,25 +287,68 @@ export async function runGeneration(input: GenerationInput): Promise<GenerationR
       let stdout = "";
       let overflow = false;
       let timedOut = false;
+      let frameError: Error | null = null;
+      const decoder = new StringDecoder("utf8");
+      let pending = "";
       running.stdout?.on("data", (chunk: Buffer) => {
-        if (stdout.length + chunk.length > MAX_STDOUT) { overflow = true; return; }
-        stdout += chunk.toString("utf8");
+        if (stdout.length + chunk.length > MAX_STDOUT) {
+          overflow = true;
+          if (input.native) { input.native.onFailure(new Error("Claude returned too much output; saved work is kept.")); void stopCli(running); }
+          return;
+        }
+        const text = decoder.write(chunk);
+        stdout += text;
         sawInit ||= stdout.includes('"subtype":"init"');
+        if (input.native && !frameError) {
+          pending += text;
+          const lines = pending.split("\n");
+          pending = lines.pop() ?? "";
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            try {
+              const frame = JSON.parse(line) as Record<string, unknown>;
+              if (frame.type === "rate_limit_event") {
+                const update = readGeneration([line], input.timeZone);
+                if (update.windows.length) { state.windows = update.windows; state.windowsAt = new Date().toISOString(); }
+                const limited = limitRefusal(frame.rate_limit_info, input.timeZone);
+                if (limited) throw hold(state, limited, input.model);
+                if (update.overage) {
+                  const message = "Claude reported extra usage. This native turn stopped immediately; the account stays held until the reported window resets.";
+                  const until = setHold(state, ALL, { window: "overage", resetsAt: update.overage.resetsAt, modelSpecific: false, message }, update.overage.resetsAt ? Date.parse(update.overage.resetsAt) : Date.now() + UNKNOWN_RESET_HOLD_MS);
+                  throw new ClaudeCodeError("overage", message, new Date(until));
+                }
+              }
+              input.native.onFrame(frame);
+            }
+            catch (error) {
+              frameError = error instanceof SyntaxError ? new Error("Claude returned an invalid stream frame.") : error instanceof Error ? error : new Error("Claude returned an invalid frame.");
+              input.native.onFailure(frameError);
+              void stopCli(running);
+              break;
+            }
+          }
+        }
       });
       // Not logged: it can echo the prompt.
       running.stderr?.on("data", () => {});
-      const timer = setTimeout(() => { timedOut = true; void stopCli(running); }, Math.max(1_000, deadline - Date.now()));
+      const timer = setTimeout(() => {
+        timedOut = true;
+        input.native?.onFailure(new ClaudeCodeError("timeout", "This Claude turn reached its time limit. Saved work is kept."));
+        void stopCli(running);
+      }, Math.max(1_000, deadline - Date.now()));
       timer.unref();
       const abort = () => { void stopCli(running); };
       input.signal?.addEventListener("abort", abort, { once: true });
       if (input.signal?.aborted) abort();
       running.once("error", (error: NodeJS.ErrnoException) => {
         clearTimeout(timer);
+        input.signal?.removeEventListener("abort", abort);
         rejectRun(new ClaudeCodeError("error", error.code === "ENOENT" ? "Claude Code is not installed on this server." : "Claude Code could not start on this server."));
       });
       running.once("close", (code) => {
         clearTimeout(timer);
         input.signal?.removeEventListener("abort", abort);
+        if (frameError) return rejectRun(frameError);
         if (input.signal?.aborted) return rejectRun(input.signal.reason);
         if (timedOut) return rejectRun(new ClaudeCodeError("timeout", `Claude Code did not answer within ${Math.round(input.timeoutMs / 1000)} s.`));
         if (overflow) return rejectRun(new ClaudeCodeError("error", "Claude Code returned more output than an answer can be."));

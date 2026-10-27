@@ -1647,11 +1647,16 @@ const V2_TOOL_TEXT: Record<string, { description: string; arguments: string }> =
 
 /** The tools as the model reads them, only those `features` allow. */
 export function toolCatalog(features: FeatureState): string {
+  return toolDescriptionsFor(features).map(({ name, description, arguments: args }) => `- ${name}: ${description} Arguments: ${args}.`).join("\n");
+}
+
+/** Shared reference for the JSON harness and native MCP; no separate provider/tool priority list. */
+export function toolDescriptionsFor(features: FeatureState): Array<{ name: string; description: string; arguments: string }> {
   return toolNamesFor(features).map((name) => {
     const v2 = features.research_agent_v2 ? V2_TOOL_TEXT[name] : undefined;
     const args = v2?.arguments ?? (features.research_agent_v2 && FOLLOW_UP_TOOLS.has(name) ? withoutContactAfter(TOOLS[name]!.arguments) : TOOLS[name]!.arguments);
-    return `- ${name}: ${v2?.description ?? TOOLS[name]!.description} Arguments: ${args}.`;
-  }).join("\n");
+    return { name, description: v2?.description ?? TOOLS[name]!.description, arguments: args };
+  });
 }
 
 export { setupSnapshot };

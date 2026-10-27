@@ -1,11 +1,16 @@
 import "server-only";
 
 import { and, desc, eq, inArray, ne } from "drizzle-orm";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { db } from "@/lib/db";
 import { completeStructured } from "@/lib/ai/server/structuredCompletion";
+import { claudeCodeBinding, getClaudeEngine } from "@/lib/ai/claudeCode/engine.server";
+import { accountKey } from "@/lib/ai/claudeCode/cli.server";
+import { runNativeAssistant } from "@/lib/ai/claudeCode/nativeAssistant.server";
+import { ClaudeCodeError } from "@/lib/ai/claudeCode/runner.server";
 import { crmKnowledgeDocuments, crmKnowledgeDocumentVersions } from "@/lib/crm/schema";
 import { BRAND } from "@/lib/brand";
-import { inOrg } from "@/lib/tenancy/scope";
+import { currentOrganizationId, inOrg, runInOrganization } from "@/lib/tenancy/scope";
 import type { FeatureState } from "@/lib/features/catalog";
 import { TREG_LIMITS } from "@/lib/treg/catalog";
 import { featureState } from "@/lib/features/flags.server";
@@ -22,10 +27,10 @@ import { organizationTimeZone } from "./results.server";
 import type { TurnEnd } from "./objective";
 import { continuedRequestIds, objectiveForRequest } from "./objective.server";
 import { assistantJobs, assistantMessages, type AssistantAttachment, type BusinessProfile } from "./schema";
-import { addMessage, claimThread, listMessages, releaseThread, touchThread, updateMessage } from "./threads.server";
+import { addMessage, claimThread, getThread, listMessages, releaseThread, touchThread, updateMessage } from "./threads.server";
 import { recordUsage } from "./usage.server";
 import { DELIVERY_STATUS_GUIDANCE } from "./deliveryStatus";
-import { runTool, searchRequestId, setupSnapshot, toolCatalog, toolNamesFor, type ToolContext, type ToolResult } from "./tools.server";
+import { runTool, searchRequestId as toolRequestId, setupSnapshot, toolCatalog, toolDescriptionsFor, toolNamesFor, type ToolContext, type ToolResult } from "./tools.server";
 import { observationKey } from "./observation";
 import { requestFirstContext, researchOptionsText } from "./researchContext";
 import { closeBrowser } from "@/lib/browser/browser.server";
@@ -135,7 +140,7 @@ async function ownerDocumentsText(maxChars = 60_000): Promise<string> {
  * The transcript alone did not stop a repeat across turns (pilot fix F08).
  */
 async function repeatedSearch(context: ToolContext, tool: string, args: Record<string, unknown>): Promise<ToolResult | null> {
-  const requestId = searchRequestId(context);
+  const requestId = toolRequestId(context);
   if (!SEARCH_TOOLS.has(tool) || !requestId || !context.threadId) return null;
   // A request that continues an ended one also counts that one's searches as already done.
   const served = await objectiveForRequest(requestId);
@@ -164,7 +169,7 @@ export async function runToolInThread(context: ToolContext, tool: string, args: 
   // v2: once set_brief has recorded the request (a new one, or one continuing an ended one), the rest of the turn serves it.
   if (tool === "set_brief" && result.ok && typeof result.data?.requestId === "string") context.searchRequestId = result.data.requestId;
   // The request the tool served, so what the assistant did for a request is counted by its id (coverage.server.ts webToolUse).
-  const requestId = searchRequestId(context);
+  const requestId = toolRequestId(context);
   await updateMessage(row.id, {
     status: result.ok ? "ok" : "error",
     content: result.summary,
@@ -275,6 +280,69 @@ export async function runAgentTurn(input: {
     const observations = new Map<string, ToolResult>();
     // A long turn keeps the thread claimed: one step (writing a plan) can take minutes.
     heartbeat = setInterval(() => void touchThread(input.threadId).catch(() => undefined), 60_000);
+    // Only an explicitly selected personal login uses the native tool loop.
+    // Included/shared credentials and all API models keep the existing harness.
+    const ownClaude = v2 && (await getClaudeEngine()).selected;
+    if (ownClaude) {
+      try {
+        const binding = await claudeCodeBinding();
+        const thread = await getThread(input.threadId);
+        const actorId = input.userId ?? thread?.createdBy;
+        if (binding && !binding.shared && binding.account.organizationId === currentOrganizationId() && binding.account.userId === actorId) {
+          const organizationId = currentOrganizationId();
+          const { text: setupText } = await contextBlock(input.threadId);
+          const recent = await listMessages(input.threadId, GROUNDING_MESSAGES);
+          const succeeded: string[] = [];
+          const invoked: string[] = [];
+          const native = await runNativeAssistant({
+            binding,
+            threadId: input.threadId,
+            requestId: context.searchRequestId ?? context.requestMessageId!,
+            systemPrompt: systemPromptV2({ features, catalog: toolCatalog(features), autonomy: caps, nativeTools: true }),
+            userPrompt: requestFirstContext({ request: await v2ContextText({ threadId: input.threadId, requestMessageId: context.searchRequestId ?? null }), setup: setupText, conversation: transcriptV2(recent.slice(-TRANSCRIPT_MESSAGES)), replanReason: null }),
+            tools: toolDescriptionsFor(features).map((tool) => ({ name: tool.name, description: `${tool.description} Arguments: ${tool.arguments}.`, inputSchema: { type: "object", properties: {}, additionalProperties: true } })),
+            maxTurns: maxSteps,
+            maxCalls: maxSteps * MAX_ACTIONS_PER_STEP,
+            timeoutMs: 15 * 60_000,
+            authorize: () => runInOrganization(organizationId, async () => {
+              const current = await claudeCodeBinding();
+              if (!current || current.shared || current.model !== binding.model || accountKey(current.account) !== accountKey(binding.account)) throw new Error("The selected Claude account changed. Saved work is kept; retry with the current selection.");
+            }),
+            execute: (name, args) => runInOrganization(organizationId, async (): Promise<CallToolResult> => {
+              if (!toolNamesFor(await featureState()).includes(name)) return { isError: true, content: [{ type: "text", text: "This tool is no longer enabled." }] };
+              const { profile } = await contextBlock(input.threadId);
+              const messages = await listMessages(input.threadId, GROUNDING_MESSAGES);
+              const problem = actionsProblem([{ tool: name, args }], { profile, ownerCorpus: groundingCorpus(messages, documentsText), outreachRequested: askedForOutreach, inquiryRepliesRequested: askedForInquiryReplies });
+              if (problem) return { isError: true, content: [{ type: "text", text: problem }] };
+              invoked.push(name);
+              const result = await runToolInThread(context, name, args);
+              if (result.ok) succeeded.push(name);
+              let started = true;
+              if (name === "prepare_outreach" && result.ok) started = await startedOnItsOwn(input.threadId, autonomy.on, result.data);
+              // A native call sees fresh request state after its predecessor committed.
+              const progress = await v2ContextText({ threadId: input.threadId, requestMessageId: toolRequestId(context) });
+              return { isError: !result.ok, content: [{ type: "text", text: `${result.summary}${started ? "" : "\nThe plan did not start automatically; check its recorded status."}\n\n${progress}` }], structuredContent: { ok: result.ok, ...(result.data ? { data: result.data } : {}) } };
+            }),
+          });
+          await recordUsage("assistant", { model: native.modelId ?? binding.model, usage: native.usage });
+          const { outreachStarted } = await contextBlock(input.threadId);
+          const allMessages = await listMessages(input.threadId, GROUNDING_MESSAGES);
+          const searched = allMessages.some((row) => row.role === "tool" && row.status === "ok" && SEARCH_TOOLS.has(row.tool ?? ""));
+          const claimProblem = unbackedClaim(native.answer.message, succeeded, outreachStarted, searched)
+            ?? startedNotFinishedClaim(native.answer.message, invoked.map((tool) => ({ tool })), (tool) => SEARCH_TOOLS.has(tool));
+          if (claimProblem) throw new Error(claimProblem);
+          if (native.answer.message) await addMessage({ threadId: input.threadId, role: "assistant", content: native.answer.message, toolResult: { engine: "claude-native", ...(native.answer.suggestions.length ? { suggestions: native.answer.suggestions } : {}) } });
+          end = "done";
+          return end;
+        }
+      } catch (error) {
+        console.warn("[assistant/claude-native] turn stopped:", error instanceof Error ? error.message : "Unknown native engine failure");
+        const reason = error instanceof ClaudeCodeError ? ` ${error.message}` : "";
+        await addMessage({ threadId: input.threadId, role: "event", content: `Claude could not finish this turn.${reason} Saved results are kept. Press Retry to continue the request; no API fallback was used.`, toolResult: { data: { retry: true }, engine: "claude-native" } });
+        end = "failed";
+        return end;
+      }
+    }
     for (let step = 0; step < maxSteps; step += 1) {
       const { text: setupText, outreachStarted, profile } = await contextBlock(v2 ? input.threadId : null);
       // The conversation the model reads, and a longer stretch of it for grounding: a contact read on a page early in a long research turn still backs add_contacts.

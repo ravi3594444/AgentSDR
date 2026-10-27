@@ -1,5 +1,11 @@
 # Claude Code login (owner-only pilot)
 
+**27 October update:** the private native assistant prototype is documented in
+[CLAUDE_NATIVE_HARNESS_2026-10-27.md](CLAUDE_NATIVE_HARNESS_2026-10-27.md).
+It gives personally selected logins the app's MCP tools and request sessions.
+The historical structured AI path described below stays tool-free; API
+providers and shared private-test logins retain their existing harness.
+
 Branch `claude/mausbot-claude-login`, based on `f25af920441ef344b8d1a81f0343cbeb446272af`
 (`claude/pilot-merge-20261021`, the latest verified integration commit). Not
 merged and not deployed: it waits for review, separate from the UI release.

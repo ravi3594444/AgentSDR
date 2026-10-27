@@ -31,6 +31,8 @@ type Scenario = {
   /** auth login never prints its link. */
   noLink?: boolean;
   slowMs?: number;
+  nativeSteps?: Array<{ name: string; args?: Record<string, unknown>; copyPrevious?: boolean }>;
+  nativeInitTools?: string[];
 };
 
 const config = process.env.CLAUDE_CONFIG_DIR ?? "";
@@ -111,7 +113,24 @@ async function generate() {
     process.exit(1);
   }
   if (outcome === "slow") await sleep(current.slowMs ?? 10_000);
-  emit({ type: "system", subtype: "init", model, apiKeySource: keySource, tools: ["StructuredOutput"] });
+  const mcpIndex = args.indexOf("--mcp-config");
+  let nativeRpc: ((method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>) | null = null;
+  let nativeTools: string[] = [];
+  if (mcpIndex >= 0) {
+    const mcp = JSON.parse(readFileSync(args[mcpIndex + 1], "utf8")).mcpServers.agentsdr;
+    let id = 0;
+    nativeRpc = async (method, params = {}) => {
+      const response = await fetch(mcp.url, { method: "POST", headers: { ...mcp.headers, "Content-Type": "application/json", Accept: "application/json, text/event-stream", "MCP-Protocol-Version": "2025-11-25" }, body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params }) });
+      if (!response.ok) throw new Error(`Fake native MCP refused (${response.status})`);
+      const body = await response.json() as { result?: Record<string, unknown>; error?: unknown };
+      if (body.error) throw new Error("Fake native MCP error");
+      return body.result ?? {};
+    };
+    await nativeRpc("initialize", { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "fake-claude", version: "1.0.0" } });
+    const list = await nativeRpc("tools/list");
+    nativeTools = (list.tools as Array<{ name: string }>).map((tool) => `mcp__agentsdr__${tool.name}`);
+  }
+  emit({ type: "system", subtype: "init", model, apiKeySource: keySource, tools: current.nativeInitTools ?? ["StructuredOutput", ...nativeTools] });
   const resetsAt = Math.floor(Date.now() / 1000) + 3_600;
   if (outcome === "opus_limit") {
     emit({ type: "rate_limit_event", rate_limit_info: { status: "rejected", resetsAt: resetsAt + 86_400, rateLimitType: "seven_day_opus", isUsingOverage: false } });
@@ -148,6 +167,12 @@ async function generate() {
   } else if (outcome === "prose") {
     emit({ type: "result", subtype: "success", is_error: false, result: "I think the answer is fine.", usage: { input_tokens: 40, output_tokens: 8 } });
   } else {
+    let previous: Record<string, unknown> = {};
+    for (const step of nativeRpc ? current.nativeSteps ?? [] : []) {
+      if (!nativeRpc) throw new Error("Native tools were requested without an MCP connection");
+      const result = await nativeRpc("tools/call", { name: step.name, arguments: { ...(step.copyPrevious ? previous : {}), ...step.args } });
+      previous = ((result.structuredContent as { data?: Record<string, unknown> } | undefined)?.data) ?? {};
+    }
     const answer = current.answer ?? example(schema);
     emit({ type: "result", subtype: "success", is_error: false, result: JSON.stringify(answer), structured_output: answer, usage: { input_tokens: 120, output_tokens: 30 }, total_cost_usd: 0.0004 });
   }
