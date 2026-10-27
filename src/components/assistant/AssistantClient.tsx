@@ -917,12 +917,16 @@ function ActivityRow({ message }: { message: Message }) {
   const raw = message.status === "running" ? "" : message.toolResult?.display ?? message.content;
   // "Brief · Brief: …" says it twice: the line already carries the title.
   const detail = raw.toLowerCase().startsWith(`${title.toLowerCase()}:`) ? raw.slice(title.length + 1).trim() : raw;
+  const shortDetail = detail.replace(/\s+/g, " ").trim();
+  const preview = message.tool === "set_brief" && message.status === "ok" ? "Request saved"
+    : message.status === "error" ? detail
+    : shortDetail.length > 160 ? `${shortDetail.slice(0, 157)}…` : shortDetail;
   return (
     <details className="group w-full max-w-2xl text-paragraph-xs text-text-sub-600">
       <summary className="flex cursor-pointer list-none items-center gap-2 rounded-lg py-1 hover:text-text-strong-950 [&::-webkit-details-marker]:hidden">
         <StatusIcon status={message.status} />
         <span className={cn("text-label-xs", message.status === "error" ? "text-error-base" : "text-text-sub-600")}>{title}</span>
-        {detail && <span className="min-w-0 flex-1 truncate text-text-soft-400 group-open:hidden">· {detail}</span>}
+        {detail && <span className="min-w-0 flex-1 truncate text-text-soft-400 group-open:hidden">· {preview}</span>}
       </summary>
       {detail && <p className={cn("ml-6 mt-0.5 whitespace-pre-wrap", message.status === "error" && "text-error-base")}>{detail}</p>}
     </details>

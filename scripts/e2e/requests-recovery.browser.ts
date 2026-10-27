@@ -1,25 +1,29 @@
 /** Real local production server, auth, API and disposable DB. Injected read failures only; never providers or sends. */
 import { spawn } from "node:child_process";
-import { readFileSync, openSync, unlinkSync, cpSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readFileSync, openSync, unlinkSync, cpSync, existsSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 if (!/^postgres(?:ql)?:\/\/[^/]+@(localhost|127\.0\.0\.1):55479\/agentsdr_review$/.test(process.env.DATABASE_URL ?? "")) throw new Error("Requires disposable local database on 55479");
 const root = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const base = "http://127.0.0.1:3101";
+const preload = process.env.UI_AUDIT_LOCAL_ONLY === "1" ? ["--preload", join(root, "scripts/e2e/localOnlyNetwork.ts")] : [];
+if (process.env.UI_AUDIT_PHASE === "isolation" && !preload.length) throw new Error("The broad isolation walk requires the local-only network guard");
 const fixturePath = `/tmp/agentsdr-ui-audit-${process.pid}.json`;
-const env = { ...process.env, BETTER_AUTH_URL: base, NEXT_PUBLIC_APP_URL: base, BETTER_AUTH_SECRET: "local-ui-browser-fixture-only-8f3b49fd", UI_AUDIT_FIXTURE: fixturePath, INTERNAL_SCHEDULER: "false", NEXT_TELEMETRY_DISABLED: "1" };
+const env = { ...process.env, BETTER_AUTH_URL: base, NEXT_PUBLIC_APP_URL: base, BETTER_AUTH_SECRET: "local-ui-browser-fixture-only-8f3b49fd", UI_AUDIT_FIXTURE: fixturePath, INTERNAL_SCHEDULER: "false", ...(process.env.UI_AUDIT_PHASE === "isolation" ? { AUTH_SIGNUP: "open" } : {}), NEXT_TELEMETRY_DISABLED: "1" };
 console.log("Starting local browser fixture");
-const seed = spawn(process.env.BUN_EXECUTABLE ?? "bun", ["--conditions=react-server", "scripts/e2e/ui-audit.seed.ts"], { cwd: root, env, stdio: "inherit", timeout: 60_000 });
+const seed = spawn(process.env.BUN_EXECUTABLE ?? "bun", [...preload, "--conditions=react-server", "scripts/e2e/ui-audit.seed.ts"], { cwd: root, env, stdio: "inherit", timeout: 60_000 });
 if (await new Promise(resolve => seed.on("exit", resolve)) !== 0) throw new Error("Seed failed");
-const fixture = JSON.parse(readFileSync(fixturePath, "utf8")) as { email: string; password: string; organizationId: string; threadId: string; requestId: string; classificationRecords: string[] };
+const fixture = JSON.parse(readFileSync(fixturePath, "utf8")) as { email: string; password: string; organizationId: string; threadId: string; requestId: string; classificationRecords: string[]; emailRecordId: string | null; briefText: string };
 const log = openSync(process.env.UI_AUDIT_SERVER_LOG ?? "/tmp/agentsdr-ui-audit-server.log", "w");
 const standalone = process.env.UI_AUDIT_SERVER_RUNTIME === "bun";
+// A parent lockfile can make Next nest standalone output under the project name.
+const standaloneRoot = existsSync(join(root, ".next/standalone/server.js")) ? join(root, ".next/standalone") : join(root, ".next/standalone", basename(root));
 if (standalone) {
-  cpSync(join(root, ".next/static"), join(root, ".next/standalone/.next/static"), { recursive: true });
-  cpSync(join(root, "public"), join(root, ".next/standalone/public"), { recursive: true });
+  cpSync(join(root, ".next/static"), join(standaloneRoot, ".next/static"), { recursive: true });
+  cpSync(join(root, "public"), join(standaloneRoot, "public"), { recursive: true });
 }
-const server = spawn(standalone ? process.env.UI_AUDIT_BUN_SERVER_PATH ?? process.env.BUN_EXECUTABLE ?? "bun" : "node", standalone ? [".next/standalone/server.js"] : ["node_modules/next/dist/bin/next", "start", "--hostname", "127.0.0.1", "--port", "3101"], { cwd: root, env: { ...env, PORT: "3101", HOSTNAME: "127.0.0.1" }, stdio: ["ignore", log, log], detached: true });
+const server = spawn(standalone ? process.env.UI_AUDIT_BUN_SERVER_PATH ?? process.env.BUN_EXECUTABLE ?? "bun" : "node", standalone ? [...preload, join(standaloneRoot, "server.js")] : [...(preload.length ? ["--import", preload[1]!] : []), "node_modules/next/dist/bin/next", "start", "--hostname", "127.0.0.1", "--port", "3101"], { cwd: root, env: { ...env, PORT: "3101", HOSTNAME: "127.0.0.1" }, stdio: ["ignore", log, log], detached: true });
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 const check = (name: string, value: boolean) => { if (!value) throw new Error(`FAIL ${name}`); console.log(`PASS ${name}`); };
 try {
@@ -30,14 +34,41 @@ try {
   }
   browser = await chromium.launch({ executablePath: process.env.BROWSER_EXECUTABLE_PATH, headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--no-zygote"] });
   const context = await browser.newContext();
-  const login = await context.request.post(`${base}/api/auth/sign-in/email`, { headers: { origin: base }, data: { email: fixture.email, password: fixture.password } });
-  check(`real sign-in succeeds (HTTP ${login.status()})`, login.ok());
-  const active = await context.request.post(`${base}/api/auth/organization/set-active`, { headers: { origin: base }, data: { organizationId: fixture.organizationId } });
-  check("real workspace selection succeeds", active.ok());
+  if (process.env.UI_AUDIT_PHASE !== "isolation") {
+    const login = await context.request.post(`${base}/api/auth/sign-in/email`, { headers: { origin: base }, data: { email: fixture.email, password: fixture.password } });
+    check(`real sign-in succeeds (HTTP ${login.status()})`, login.ok());
+    const active = await context.request.post(`${base}/api/auth/organization/set-active`, { headers: { origin: base }, data: { organizationId: fixture.organizationId } });
+    check("real workspace selection succeeds", active.ok());
+  }
   const page = await context.newPage();
   const pageErrors: string[] = [];
   page.on("pageerror", error => pageErrors.push(`${page.url()} ${error.stack ?? error.message}`));
-  if (process.env.UI_AUDIT_PHASE === "setup") {
+  if (process.env.UI_AUDIT_PHASE === "isolation") {
+    const probe = spawn(process.env.BUN_EXECUTABLE ?? "bun", [...preload, "--conditions=react-server", "scripts/e2e/tenancy-isolation.ts"], { cwd: root, env: { ...env, BASE_URL: base, INITIAL_OWNER_EMAIL: fixture.email, INITIAL_OWNER_PASSWORD: fixture.password }, stdio: "inherit", timeout: 600_000 });
+    check("HTTP tenant-isolation walk passes", await new Promise(resolve => probe.on("exit", resolve)) === 0);
+  } else if (process.env.UI_AUDIT_PHASE === "clutter") {
+    await page.goto(`${base}/assistant?thread=${fixture.threadId}`, { waitUntil: "networkidle" });
+    check("the final answer is visible before expanding activity", await page.getByText("Research is ready for your review.", { exact: true }).isVisible());
+    check("an earlier question remains visible", await page.getByText("Which offer should I mention?", { exact: true }).isVisible());
+    check("a failed tool remains visible", await page.getByText(/Fixture source unavailable/).first().isVisible());
+    const activity = page.locator("details").filter({ has: page.locator("summary").filter({ hasText: /Activity/ }) }).first();
+    await activity.locator("summary").first().click();
+    const brief = activity.locator("details").filter({ has: page.locator("summary").filter({ hasText: /Brief/ }) }).first();
+    check("the collapsed brief is compact", (await brief.locator("summary").innerText()).includes("Request saved") && !(await brief.locator("summary").innerText()).includes(fixture.briefText));
+    await brief.locator("summary").click();
+    check("the full brief is available exactly once", await page.getByText(fixture.briefText, { exact: true }).count() === 1 && await page.getByText(fixture.briefText, { exact: true }).isVisible());
+    await page.goto(`${base}/inbox?view=replies`, { waitUntil: "networkidle" });
+    await page.getByRole("link", { name: "Email preview prospect", exact: true }).first().waitFor();
+    const newReplyVisible = async () => (await Promise.all((await page.getByText("hi bro", { exact: true }).all()).map(message => message.isVisible()))).some(Boolean);
+    check("Inbox preview shows the new email text", await newReplyVisible());
+    check("quoted history is absent from the visible Inbox preview", !(await page.locator("body").innerText()).includes("OLDER_QUOTED_THREAD_ONLY"));
+    const record = await context.request.get(`${base}/api/crm/records/${fixture.emailRecordId}`);
+    check("the record still keeps the complete email", record.ok() && (await record.text()).includes("OLDER_QUOTED_THREAD_ONLY"));
+    await page.setViewportSize({ width: 390, height: 844 });
+    check("the new reply is visible on phones", await newReplyVisible());
+    check("quoted history is absent from the phone Inbox preview", !(await page.locator("body").innerText()).includes("OLDER_QUOTED_THREAD_ONLY"));
+    check("Inbox fits a phone viewport", await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
+  } else if (process.env.UI_AUDIT_PHASE === "setup") {
     await page.goto(`${base}/getting-started`, { waitUntil: "networkidle" });
     await page.getByText("3 channels connected", { exact: true }).waitFor();
     check("Getting started counts connected channels from real saved accounts", true);

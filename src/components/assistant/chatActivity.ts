@@ -8,9 +8,10 @@ export const COMPACT_TOOLS = new Set([
 
 type ActivityMessage = {
   role: string;
+  content?: string;
   tool: string | null;
   status: string | null;
-  toolResult: { data?: Record<string, unknown> } | null;
+  toolResult: { data?: Record<string, unknown>; suggestions?: unknown[]; display?: string; summary?: string } | null;
 };
 
 /** One live card per run. Retries remain in server history, not duplicate Start buttons. */
@@ -27,10 +28,16 @@ export function visibleChatMessages<T extends ActivityMessage & {
     if (message.toolResult?.hidden) return false;
     const id = message.toolResult?.data?.runId;
     if (message.tool === "prepare_outreach" && message.status === "ok" && typeof id === "string" && lastPlan.get(id) !== message) return false;
-    if (message.role !== "assistant" || message.toolResult?.suggestions?.length) return true;
-    const previous = messages[index - 1];
-    if (previous?.role !== "tool" || previous.status !== "ok") return true;
-    return ![previous.content, previous.toolResult?.display, previous.toolResult?.summary].some((text) => text?.trim() === message.content.trim());
+    if (message.role !== "assistant" || message.status === "error" || message.toolResult?.suggestions?.length || message.content.includes("?")) return true;
+    const text = message.content.replace(/\s+/g, " ").trim();
+    for (let previousIndex = index - 1; previousIndex >= 0; previousIndex--) {
+      const previous = messages[previousIndex]!;
+      if (previous.role === "user" || previous.role === "assistant") break;
+      if (previous.role !== "tool" || previous.status !== "ok") continue;
+      if (previousIndex !== index - 1 && !COMPACT_TOOLS.has(previous.tool ?? "")) continue;
+      if ([previous.content, previous.toolResult?.display, previous.toolResult?.summary].some((value) => typeof value === "string" && value.replace(/\s+/g, " ").trim() === text)) return false;
+    }
+    return true;
   });
 }
 
@@ -49,7 +56,8 @@ export function groupChatActivity<T extends ActivityMessage>(messages: readonly 
   const out: ChatActivityItem<T>[] = [];
   let activity: Extract<ChatActivityItem<T>, { kind: "activity" }> | null = null;
   messages.forEach((message, index) => {
-    const routine = (message.role === "assistant" && index !== lastAnswer)
+    const question = message.content?.includes("?") || Boolean(message.toolResult?.suggestions?.length);
+    const routine = (message.role === "assistant" && index !== lastAnswer && message.status !== "error" && !question)
       || (message.role === "tool" && message.status !== "error" && (COMPACT_TOOLS.has(message.tool ?? "") || (message.tool === "prepare_outreach" && message.toolResult?.data?.covered === true)))
       || (message.role === "event" && message.toolResult?.data?.retry === true && index < messages.length - 1);
     if (routine) {

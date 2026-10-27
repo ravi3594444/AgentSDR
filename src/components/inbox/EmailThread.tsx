@@ -4,6 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { RiMailLine, RiMoreLine, RiStarFill, RiStarLine } from "@remixicon/react";
 import { EmptyState } from "@/components/page/EmptyState";
 import { cn } from "@/utils/cn";
+import { splitQuoted } from "@/lib/inbox/emailText";
+export { splitQuoted } from "@/lib/inbox/emailText";
 import type { EmailAddress, MessageRecipients } from "@/lib/email/recipients";
 import { InboxAvatar, fullTime } from "./shell/InboxShell";
 
@@ -46,50 +48,6 @@ function formatTimestamp(iso: string | null): string {
 /** "Re: Fwd: Hello" → "Hello". */
 export function threadSubject(subject: string | null | undefined): string {
   return (subject ?? "").replace(/^\s*((re|fwd?|aw|sv)\s*(\[\d+\])?\s*:\s*)+/i, "").trim();
-}
-
-const ATTRIBUTION = /^\s*On\b.{4,200}\bwrote:\s*$/i;
-const ATTRIBUTION_START = /^\s*On\b.{4,200}$/i;
-const WROTE_LINE = /^\s*(.{0,80}\s)?wrote:\s*$/i;
-const FORWARD_MARK = /^\s*(-{2,}\s*(original message|forwarded message)\s*-{2,}|_{5,})\s*$/i;
-const OUTLOOK_HEADER = /^\s*From:\s.+$/i;
-
-/**
- * Splits an email body into what was written and the quoted history under
- * it: from an "On … wrote:" attribution (also wrapped over two lines), a
- * "----- Original Message -----" mark, an Outlook "From:/Sent:" block, or a
- * trailing run of "> " lines.
- */
-export function splitQuoted(body: string): { main: string; quoted: string } {
-  const lines = body.replace(/\r\n?/g, "\n").split("\n");
-  let cut = -1;
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i];
-    if (ATTRIBUTION.test(line) || FORWARD_MARK.test(line)) {
-      cut = i;
-      break;
-    }
-    if (ATTRIBUTION_START.test(line) && WROTE_LINE.test(lines[i + 1] ?? "")) {
-      cut = i;
-      break;
-    }
-    if (OUTLOOK_HEADER.test(line) && /^\s*(Sent|Date):\s/i.test(lines[i + 1] ?? "")) {
-      cut = i;
-      break;
-    }
-  }
-  if (cut < 0) {
-    // A trailing block where every non-empty line is quoted.
-    let start = lines.length;
-    for (let i = lines.length - 1; i >= 0; i--) {
-      const line = lines[i].trim();
-      if (!line || line.startsWith(">")) start = i;
-      else break;
-    }
-    if (start < lines.length && lines.slice(start).some((line) => line.trim().startsWith(">"))) cut = start;
-  }
-  if (cut <= 0) return { main: body.trim(), quoted: "" };
-  return { main: lines.slice(0, cut).join("\n").trim(), quoted: lines.slice(cut).join("\n").trim() };
 }
 
 const LONG_BODY = 1400;

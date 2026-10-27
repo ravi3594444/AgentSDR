@@ -53,4 +53,29 @@ describe("the chat's activity log", () => {
     expect(visibleChatMessages([brief, echo, answer]).map((message) => message.id)).toEqual(["brief", "answer"]);
     expect(visibleChatMessages([brief, { ...echo, toolResult: { suggestions: ["View plans"] } }])).toHaveLength(2);
   });
+  test("a brief echo across routine events is removed without removing tool history", () => {
+    const brief = { ...row("brief", "tool", "set_brief"), content: "Brief saved", toolResult: { display: "Noted the request" } };
+    const event = { ...row("event", "event", null, null, true), content: "Progress updated" };
+    const setup = { ...row("setup", "tool", "check_setup"), content: "Connections checked" };
+    const echo = { ...row("echo", "assistant"), content: "Noted  the request" };
+    expect(visibleChatMessages([brief, event, setup, echo]).map(message => message.id)).toEqual(["brief", "event", "setup"]);
+  });
+  test("a new owner turn keeps the same acknowledgement", () => {
+    const brief = { ...row("brief", "tool", "set_brief"), content: "Request saved" };
+    const user = { ...row("user", "user"), content: "Save it again" };
+    const answer = { ...row("answer", "assistant"), content: "Request saved" };
+    expect(visibleChatMessages([brief, user, answer])).toHaveLength(3);
+  });
+  test("questions and assistant errors stay visible before the final answer", () => {
+    const question = { ...row("question", "assistant"), content: "Which offer should I mention?" };
+    const error = { ...row("error", "assistant", null, "error"), content: "Source unavailable" };
+    const answer = { ...row("answer", "assistant"), content: "Ready for review" };
+    expect(groupChatActivity([question, error, answer]).map(item => item.kind)).toEqual(["message", "message", "message"]);
+  });
+  test("a question matching a successful tool is still visible", () => {
+    const tool = { ...row("tool", "tool", "check_setup"), content: "Which sender?" };
+    const question = { ...row("question", "assistant"), content: "Which sender?" };
+    expect(visibleChatMessages([tool, question])).toHaveLength(2);
+  });
+
 });

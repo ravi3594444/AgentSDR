@@ -1,6 +1,7 @@
 "use client";
 /* eslint-disable react-hooks/set-state-in-effect */
 
+import { splitQuoted } from "@/lib/inbox/emailText";
 import { classificationProposalChoices } from "@/lib/crm/classificationProposal";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -875,8 +876,9 @@ export function describeAction(action: Action, categories: Data[], pipeline: boo
   const companyDomain = company.domain ? String(company.domain)
     : person.email ? String(person.email).split("@")[1] ?? "" : "";
   const companyLabel = companyDomain || (company.name ? String(company.name) : "");
-  const latestReplyFull = String(inbound.bodyText ?? action.latestInboundExcerpt ?? "").trim();
-  const latestReply = String(action.latestInboundExcerpt ?? "").replace(/\s+/g, " ").trim();
+  const replyBody = String(inbound.bodyText ?? action.latestInboundExcerpt ?? "").trim();
+  const latestReplyFull = channel === "email" ? splitQuoted(replyBody).main : replyBody;
+  const latestReply = (channel === "email" ? latestReplyFull : String(action.latestInboundExcerpt ?? "")).replace(/\s+/g, " ").trim();
   // The draft is the thing a reviewer actually opens the row for, so it
   // takes the column the action type used to hold — the action type only
   // fills in for the rows that have no draft waiting.
