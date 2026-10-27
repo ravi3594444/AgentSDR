@@ -321,7 +321,9 @@ export async function runAgentTurn(input: {
               if (name === "prepare_outreach" && result.ok) started = await startedOnItsOwn(input.threadId, autonomy.on, result.data);
               // A native call sees fresh request state after its predecessor committed.
               const progress = await v2ContextText({ threadId: input.threadId, requestMessageId: toolRequestId(context) });
-              return { isError: !result.ok, content: [{ type: "text", text: `${result.summary}${started ? "" : "\nThe plan did not start automatically; check its recorded status."}\n\n${progress}` }], structuredContent: { ok: result.ok, ...(result.data ? { data: result.data } : {}) } };
+              const text = `${result.summary}${started ? "" : "\nThe plan did not start automatically; check its recorded status."}\n\n${progress}`;
+              // Claude Code shows the model a result's structuredContent instead of its text when both are present, so the text is in both.
+              return { isError: !result.ok, content: [{ type: "text", text }], structuredContent: { ok: result.ok, result: text, ...(result.data ? { data: result.data } : {}) } };
             }),
           });
           await recordUsage("assistant", { model: native.modelId ?? binding.model, usage: native.usage });
