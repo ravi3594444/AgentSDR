@@ -147,6 +147,8 @@ const OWNED_TABLES = [
   "provider_quota_state",
   "provider_usage",
   "browser_sessions",
+  "browser_connections",
+  "browser_commands",
   "activity_seen",
   "research_settings",
   "platform_operators",

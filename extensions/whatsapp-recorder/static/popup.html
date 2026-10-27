@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AgentSDR</title>
+<style>
+  :root { color-scheme: light dark; --bg: #fff; --ink: #12151c; --muted: #5d6472; --line: #e3e6ec; --accent: #335cff; --error: #c0392b; --ok: #16794a; --warn: #8a5a00; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #151922; --ink: #eef0f5; --muted: #a3aab8; --line: #262c38; --accent: #7d95ff; --error: #f08a7d; --ok: #4cc98a; --warn: #f0c26b; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; width: 320px; background: var(--bg); color: var(--ink); font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; padding: 14px; display: grid; gap: 10px; }
+  h1 { font-size: 15px; margin: 0; }
+  p { margin: 0; color: var(--muted); }
+  #state { font-weight: 600; color: var(--ink); }
+  #state.ok { color: var(--ok); }
+  #state.warn { color: var(--warn); }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; }
+  button { flex: 1; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: var(--ink); font: inherit; font-weight: 600; cursor: pointer; min-height: 36px; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  ul { margin: 0; padding-left: 18px; color: var(--muted); }
+  #error { color: var(--error); min-height: 0; }
+</style>
+</head>
+<body>
+  <h1>AgentSDR research</h1>
+  <p id="state">…</p>
+  <p id="detail"></p>
+  <ul id="shared"></ul>
+  <div class="row" id="actions"></div>
+  <p id="error" role="status" aria-live="polite"></p>
+  <p><a href="options.html" target="_blank" rel="noopener">Call recorder options</a></p>
+<script src="popup.js"></script>
+</body>
+</html>

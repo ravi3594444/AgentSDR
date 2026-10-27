@@ -2,6 +2,7 @@ import "server-only";
 import { db } from "@/lib/db";
 import { upsertInstagramProspect } from "@/lib/instagram/prospects.server";
 import { markGivenByOwner } from "./qualify.server";
+import { evidenceRecords, type PageEvidence } from "./pageEvidence.server";
 import { ungroundedInstagramContacts } from "./instagramContacts";
 import {
   addAudienceMembers,
@@ -17,6 +18,8 @@ export async function createInstagramContactsAudience(input: {
   userId: string | null;
   requestId?: string | null;
   ownerText?: string;
+  /** Accounts found on a page read in the chat: where, when and how (pageEvidence). */
+  found?: ReadonlyMap<string, PageEvidence>;
 }) {
   const members = await db.transaction(async (tx) => {
     const found = [];
@@ -49,21 +52,35 @@ export async function createInstagramContactsAudience(input: {
   });
   await addAudienceMembers(
     audienceId,
-    members.map((member) => ({
-      personId: member.personId,
-      source: "list",
-      sourceUrl: member.profileUrl,
-      evidence: [
-        {
-          kind: "instagram" as const,
-          value: member.username,
-          sourceUrl: null,
-          source:
-            "Provided by the owner in chat; messaging availability not yet verified",
-        },
-      ],
-      matchReason: "The owner selected this Instagram recipient",
-    })),
+    members.map((member) => {
+      const page = input.found?.get(member.username);
+      if (page) {
+        const records = evidenceRecords(page, [{ kind: "instagram", value: member.username }]);
+        return {
+          personId: member.personId,
+          source: "list",
+          sourceUrl: page.sourceUrl,
+          evidence: records.evidence.map((item) => ({ ...item, source: `${item.source}; messaging availability not yet verified` })),
+          signals: records.signals,
+          matchReason: "Found by the assistant on a page it read",
+        };
+      }
+      return {
+        personId: member.personId,
+        source: "list",
+        sourceUrl: member.profileUrl,
+        evidence: [
+          {
+            kind: "instagram" as const,
+            value: member.username,
+            sourceUrl: null,
+            source:
+              "Provided by the owner in chat; messaging availability not yet verified",
+          },
+        ],
+        matchReason: "The owner selected this Instagram recipient",
+      };
+    }),
   );
   const notGiven = new Set(ungroundedInstagramContacts(input.usernames, input.ownerText ?? ""));
   await markGivenByOwner(audienceId, members.filter((member) => !notGiven.has(member.username)).map((member) => member.personId), input.requestId ?? null);

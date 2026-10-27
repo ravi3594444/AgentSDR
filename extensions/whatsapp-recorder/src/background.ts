@@ -28,6 +28,7 @@ import {
   type WaRecordingPortMessage,
 } from "./messages";
 import { allowedOrigins, customOrigins, isCustomOriginsChange, originPattern } from "./origins";
+import { beginPairing, disconnectFrom } from "./research";
 import { callApi, getCallStatus, uploadRecording } from "./upload";
 
 const ACTIVE_CALL_KEY = "activeCall";
@@ -142,6 +143,9 @@ chrome.runtime.onMessage.addListener((message: BackgroundMessage, sender, sendRe
     case "bridge":
       void handleBridge(message.request, sender).then(sendResponse);
       return true; // answers asynchronously
+    case "browser-bridge":
+      void handleBrowserBridge(message.request, sender).then(sendResponse);
+      return true;
     case "wa:hello":
       void callForTab(sender.tab?.id).then(sendResponse);
       return true;
@@ -245,6 +249,25 @@ async function handleBridge(
     return { ok: false, error: "A call must report back to the page that placed it" };
   }
   return startCall(request, digits, sender.tab?.id);
+}
+
+/**
+ * Connected-browser research from an AgentSDR page (research.ts). The pairing
+ * belongs to the page's own origin, checked here against the allowed ones,
+ * never to an address the page names.
+ */
+async function handleBrowserBridge(
+  request: Extract<BackgroundMessage, { type: "browser-bridge" }>["request"],
+  sender: chrome.runtime.MessageSender,
+): Promise<BridgeResult> {
+  const senderOrigin = sender.origin ?? (sender.url ? new URL(sender.url).origin : null);
+  const origins = await allowedOrigins();
+  if (!senderOrigin || !origins.includes(senderOrigin)) {
+    return { ok: false, error: `Requests are only accepted from ${origins.join(" or ")}. Add your AgentSDR address in the extension's Options.` };
+  }
+  if (request.type === "browser:disconnect") return disconnectFrom(senderOrigin);
+  if (request.apiBase !== senderOrigin) return { ok: false, error: "The browser can only connect to the page that asked." };
+  return beginPairing(request.code, senderOrigin);
 }
 
 /**

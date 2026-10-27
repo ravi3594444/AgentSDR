@@ -45,6 +45,11 @@ const PUBLIC = [
   // under this prefix authenticates itself with authorizeRecorder() (see
   // src/lib/calls/sessions.ts) — never add a route here that doesn't.
   "/api/call-recorder/",
+  // Called by the same extension's service worker for connected-browser
+  // research. Pairing authenticates with its one-time code; every other
+  // route starts with withBrowserDevice() (src/lib/browser/connected/
+  // connections.server.ts) — never add a route here that doesn't.
+  "/api/browser-bridge/",
 ];
 
 /**

@@ -8,6 +8,8 @@ type ResearchSetup = {
   webAccess: { tinyfish: boolean; searchProvider: string | null; browserMinutesPerDay: number };
   channels: { linkedin: Readiness };
   features: Pick<FeatureState, "apify_discovery" | "brightdata" | "treg">;
+  /** The owner's own connected Chrome, in one sentence (browser_connection); absent outside a chat. */
+  connectedBrowser?: string | null;
 };
 
 /** Configuration facts, not a preferred route. A configured tool can still fail at runtime. */
@@ -17,6 +19,7 @@ export function researchOptionsText(setup: ResearchSetup): string {
     `Apify social searches: ${feature(setup.features.apify_discovery)}`,
     `Bright Data social research: ${feature(setup.features.brightdata)}`,
     `Browser: ${setup.webAccess.tinyfish ? `configured (${setup.webAccess.browserMinutesPerDay} minutes per day)` : "not configured"}`,
+    ...(setup.connectedBrowser ? [`Connected browser (the owner's own Chrome, browser_tab tools): ${setup.connectedBrowser}`] : []),
     `Google Maps built-in scraper: ${setup.leadDiscovery.available ? "configured" : setup.leadDiscovery.reason ?? "not configured"}`,
     `LinkedIn people search: ${setup.channels.linkedin.available ? "connected account available" : setup.channels.linkedin.reason ?? "no ready account"}`,
     `Treg lookups: ${feature(setup.features.treg)}`,

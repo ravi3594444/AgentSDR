@@ -30,7 +30,7 @@ import { assistantJobs, assistantMessages, type AssistantAttachment, type Busine
 import { addMessage, claimThread, getThread, listMessages, releaseThread, touchThread, updateMessage } from "./threads.server";
 import { recordUsage } from "./usage.server";
 import { DELIVERY_STATUS_GUIDANCE } from "./deliveryStatus";
-import { runTool, searchRequestId as toolRequestId, setupSnapshot, toolCatalog, toolDescriptionsFor, toolNamesFor, type ToolContext, type ToolResult } from "./tools.server";
+import { connectedBrowserFact, releaseConnectedBrowser, runTool, searchRequestId as toolRequestId, setupSnapshot, toolCatalog, toolDescriptionsFor, toolNamesFor, type ToolContext, type ToolResult } from "./tools.server";
 import { observationKey } from "./observation";
 import { requestFirstContext, researchOptionsText } from "./researchContext";
 import { closeBrowser } from "@/lib/browser/browser.server";
@@ -93,8 +93,9 @@ const TRANSCRIPT_MESSAGES = 80;
 const GROUNDING_MESSAGES = 200;
 
 /** The setup the model reads first. `threadId` (research agent v2): lists, runs and jobs of this chat only, not the whole organization's. */
-async function contextBlock(threadId: string | null = null): Promise<{ text: string; outreachStarted: boolean; profile: BusinessProfile }> {
+async function contextBlock(threadId: string | null = null, userId: string | null = null): Promise<{ text: string; outreachStarted: boolean; profile: BusinessProfile }> {
   const setup = await setupSnapshot();
+  const connectedBrowser = threadId ? await connectedBrowserFact(threadId, userId).catch(() => null) : null;
   const [audiences, runs, jobs, decisions, timeZone] = await Promise.all([
     listAudiences(8, threadId),
     listRuns(8, threadId),
@@ -110,7 +111,7 @@ async function contextBlock(threadId: string | null = null): Promise<{ text: str
     `TODAY: ${localDate(timeZone)} (${timeZone})`,
     `BUSINESS PROFILE: ${JSON.stringify(setup.profile)}`,
     `SETUP: channels — ${channels}. AI — ${setup.ai.connected ? "connected" : "not set up on this server"}. Runs answering replies automatically — ${setup.automaticRuns}.`,
-    researchOptionsText(setup),
+    researchOptionsText({ ...setup, connectedBrowser }),
     `ALREADY KNOWN ELSEWHERE: ${setup.knownElsewhere}.`,
     `SAVED PROFILE GAPS (not request requirements; an open audience or place can be researched): ${setup.missingForDiscovery.join(", ") || "nothing"}; for outreach ${setup.missingForOutreach.join(", ") || "nothing"}${setup.optionalToAsk.length ? `; worth asking once (never blocking): ${setup.optionalToAsk.join(", ")}` : ""}.`,
     `LEAD LISTS: ${audiences.map((a) => `${a.id} “${a.name}” ${a.eligible}/${a.total} contactable`).join("; ") || "none"}`,
@@ -211,6 +212,8 @@ export async function runAgentTurn(input: {
 }): Promise<TurnEnd> {
   if (!input.continuation && !(await claimThread(input.threadId))) throw new AssistantBusyError();
   let heartbeat: ReturnType<typeof setInterval> | null = null;
+  // The turn's tool context, once known: its request's tabs in the owner's browser close when it ends.
+  let toolContext: ToolContext | null = null;
   // How the turn ended; an error that escapes it leaves "failed".
   let end: TurnEnd = "failed";
   try {
@@ -264,6 +267,7 @@ export async function runAgentTurn(input: {
       outreachResearchStopped: outreachResearch?.status === "stopped",
     });
     const context: ToolContext = { threadId: input.threadId, userId: input.userId, ownerText, lastAssistantText, outreachRequest, outreachRequestId, autonomous: autonomy.on, requestMessageId, searchRequestId, v2 };
+    toolContext = context;
     // v2: whether to contact is the brief's, and preparing a plan sends nothing (prepare_outreach checks the owner's words where a plan would start on its own).
     const askedForOutreach = v2 || outreachRequest !== null;
     const askedForInquiryReplies = inquiryRepliesRequested(ownerText, lastAssistantText);
@@ -290,7 +294,7 @@ export async function runAgentTurn(input: {
         const actorId = input.userId ?? thread?.createdBy;
         if (binding && !binding.shared && binding.account.organizationId === currentOrganizationId() && binding.account.userId === actorId) {
           const organizationId = currentOrganizationId();
-          const { text: setupText } = await contextBlock(input.threadId);
+          const { text: setupText } = await contextBlock(input.threadId, input.userId);
           const recent = await listMessages(input.threadId, GROUNDING_MESSAGES);
           const succeeded: string[] = [];
           const invoked: string[] = [];
@@ -346,7 +350,7 @@ export async function runAgentTurn(input: {
       }
     }
     for (let step = 0; step < maxSteps; step += 1) {
-      const { text: setupText, outreachStarted, profile } = await contextBlock(v2 ? input.threadId : null);
+      const { text: setupText, outreachStarted, profile } = await contextBlock(v2 ? input.threadId : null, input.userId);
       // The conversation the model reads, and a longer stretch of it for grounding: a contact read on a page early in a long research turn still backs add_contacts.
       const recent = await listMessages(input.threadId, GROUNDING_MESSAGES);
       const messages = recent.slice(-TRANSCRIPT_MESSAGES);
@@ -527,6 +531,7 @@ export async function runAgentTurn(input: {
     if (heartbeat) clearInterval(heartbeat);
     // A browser the turn opened stops billing when the turn ends.
     await closeBrowser(input.threadId).catch((error: unknown) => console.warn("[assistant] closing the browser failed:", error));
+    if (toolContext) await releaseConnectedBrowser(toolContext).catch((error: unknown) => console.warn("[assistant] releasing the connected browser's tabs failed:", error));
     // A continuation records how it ended while it still holds the chat: a free chat without that record means its process stopped.
     if (input.continuation) await input.continuation.onEnd(end).catch((error: unknown) => console.error("[assistant] recording a continuation's end failed:", error));
     await releaseThread(input.threadId);

@@ -48,6 +48,7 @@ import { reportAudiences, reportLinks } from "@/lib/assistant/leadLists";
 import { useChatScroll } from "./useChatScroll";
 import { Mascot, type MascotMood } from "./Mascot";
 import { ResearchGroup } from "./ResearchGroup";
+import { BrowserConnection } from "./BrowserConnection";
 import { RESEARCH_TOOLS, researchTitle } from "./researchView";
 import { activityPresentation, COMPACT_TOOLS, groupChatActivity, visibleChatMessages, type ChatActivityItem } from "./chatActivity";
 import { createResponseGate } from "@/components/crm/responseGate";
@@ -186,6 +187,13 @@ const TOOL_TITLE: Record<string, string> = {
   browser_fill: "Filled in the page",
   browser_scroll: "Scrolled the page",
   browser_close: "Closed the browser",
+  browser_connection: "Checked your browser",
+  browser_tab_open: "Opened a page in your browser",
+  browser_tab_read: "Read a page in your browser",
+  browser_tab_click: "Clicked in your browser",
+  browser_tab_scroll: "Scrolled in your browser",
+  browser_tab_search: "Searched in your browser",
+  browser_tab_close: "Closed research tabs",
   diagnose_delivery: "Checked delivery",
 };
 
@@ -1437,6 +1445,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
           <ConversationMenu current={state.thread} threads={state.threads} onOpen={(id) => void openThread(id)} onNew={() => void newThread()} disabled={sending || switchingThread} />
           <AutonomousSwitch thread={state.thread} canManage={Boolean(setup?.canManageAutopilot)} onChanged={(next) => { if (next.thread.id === activeThread.current) setState(next); }} />
           <ReadinessMenu setup={setup} />
+          <BrowserConnection />
         </div>
       </header>
 

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "AgentSDR Call Recorder",
-  "version": "0.15.0",
-  "description": "Places WhatsApp Web calls from AgentSDR, records them from pickup to hang-up (your microphone left, the lead right), and uploads them.",
+  "version": "0.16.0",
+  "description": "Places WhatsApp Web calls from AgentSDR and records them; when you connect it, lets AgentSDR's assistant research the sites you enable in background tabs.",
   "icons": {
     "16": "icon-16.png",
     "32": "icon-32.png",
@@ -12,7 +12,10 @@
   "minimum_chrome_version": "116",
   "permissions": [
     "storage",
-    "scripting"
+    "scripting",
+    "alarms",
+    "tabGroups",
+    "activeTab"
   ],
   "host_permissions": [
     "https://app.agentsdr.ai/*",
@@ -26,6 +29,7 @@
   },
   "action": {
     "default_title": "AgentSDR Call Recorder",
+    "default_popup": "popup.html",
     "default_icon": {
       "16": "icon-16.png",
       "32": "icon-32.png"

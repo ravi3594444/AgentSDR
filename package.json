@@ -40,7 +40,7 @@
     "export:people-reconciliation": "bun --conditions=react-server scripts/export-people-migration-reconciliation.ts",
     "rotate:integration-credentials": "bun scripts/rotate-integration-credentials.ts",
     "test:integrations:live": "bun --conditions=react-server scripts/test-integrations-live.ts",
-    "build:recorder": "rm -rf extensions/whatsapp-recorder/dist && bun build extensions/whatsapp-recorder/src/background.ts extensions/whatsapp-recorder/src/wa-hook.ts extensions/whatsapp-recorder/src/wa-agent.ts extensions/whatsapp-recorder/src/bridge.ts extensions/whatsapp-recorder/src/options.ts extensions/whatsapp-recorder/src/update.ts --outdir extensions/whatsapp-recorder/dist --target browser --format iife && cp extensions/whatsapp-recorder/static/* extensions/whatsapp-recorder/dist/",
+    "build:recorder": "rm -rf extensions/whatsapp-recorder/dist && bun build extensions/whatsapp-recorder/src/background.ts extensions/whatsapp-recorder/src/wa-hook.ts extensions/whatsapp-recorder/src/wa-agent.ts extensions/whatsapp-recorder/src/bridge.ts extensions/whatsapp-recorder/src/options.ts extensions/whatsapp-recorder/src/update.ts extensions/whatsapp-recorder/src/connect.ts extensions/whatsapp-recorder/src/popup.ts --outdir extensions/whatsapp-recorder/dist --target browser --format iife && cp extensions/whatsapp-recorder/static/* extensions/whatsapp-recorder/dist/",
     "package:recorder": "bun run build:recorder && bun extensions/whatsapp-recorder/package.ts",
     "release:prepare": "bun scripts/release/prepare-public-repo.ts"
   },

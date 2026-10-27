@@ -99,6 +99,8 @@ export const SCOPED_TABLES: readonly ScopedTable[] = [
   snake("tinyfish_settings"),
   snake("provider_usage"),
   snake("browser_sessions"),
+  snake("browser_connections"),
+  snake("browser_commands"),
   snake("activity_seen"),
   snake("research_settings"),
   // Included service or My own provider, per service (src/lib/managed/)

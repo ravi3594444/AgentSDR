@@ -9,6 +9,7 @@
  */
 
 import type { RecorderBridgeRequest, RecorderCallPhase, RecorderLead } from "../../../src/lib/calls/contract";
+import type { BrowserBridgeRequest, ResearchSiteKey } from "../../../src/lib/browser/connected/contract";
 
 /** A call placed from the app, which the next recording belongs to. */
 export type ActiveCall = {
@@ -65,6 +66,8 @@ export type BridgeCommand =
 
 export type BackgroundMessage =
   | { target: "background"; type: "bridge"; request: RecorderBridgeRequest }
+  /** Connected-browser research from an AgentSDR page: connect (with its pairing code) or disconnect. */
+  | { target: "background"; type: "browser-bridge"; request: BrowserBridgeRequest }
   // From wa-agent on web.whatsapp.com, about the call in its own tab:
   | { target: "background"; type: "wa:hello" }
   /** `pressed`: the extension pressed Voice call itself (false: the rep has to). */
@@ -88,6 +91,46 @@ export type BackgroundMessage =
   | { target: "background"; type: "wa:phase"; callId: string; phase: RecorderCallPhase }
   /** A timed step of a call, for the timing table printed in the AgentSDR tab's console. */
   | { target: "background"; type: "wa:trace"; callId: string; step: string };
+
+/**
+ * From the extension's own pages (Connect, the toolbar popup) to the service
+ * worker, about connected-browser research (research.ts). The worker accepts
+ * them only from those pages, never from a content script.
+ */
+export type ResearchMessage =
+  /** The Connect page asks what it was opened for: the app and the sites already enabled. */
+  | { target: "research"; type: "pairing"; nonce: string | null }
+  /** Pair with the app's code (the page asked Chrome for the sites' permissions first). */
+  | { target: "research"; type: "pair"; nonce: string; sites: ResearchSiteKey[] }
+  /** Change the enabled sites of the current connection. */
+  | { target: "research"; type: "set-sites"; sites: ResearchSiteKey[] }
+  | { target: "research"; type: "status" }
+  /** Stop (or resume) research in this browser; stopping closes its tabs. */
+  | { target: "research"; type: "pause"; paused: boolean }
+  | { target: "research"; type: "share-tab"; tabId: number }
+  | { target: "research"; type: "unshare-tab"; tabId: number }
+  | { target: "research"; type: "disconnect" };
+
+/** What the popup and the Connect page show. */
+export type ResearchStatus = {
+  connected: boolean;
+  apiBase: string | null;
+  organizationName: string | null;
+  userEmail: string | null;
+  sites: ResearchSiteKey[];
+  paused: boolean;
+  /** A command is running now. */
+  busy: boolean;
+  openTabs: number;
+  sharedTabs: { tabId: number; title: string; url: string }[];
+  /** The last page that needs the owner, if any. */
+  attention: { detail: string; url: string; tabId: number } | null;
+  /** Epoch ms of the last answer from the app. */
+  lastContactAt: number | null;
+  lastError: string | null;
+};
+
+export type ResearchPairing = { apiBase: string; sites: ResearchSiteKey[]; connected: boolean; organizationName: string | null };
 
 /** The "wa-recording" port: wa-agent streams the file to the service worker. */
 export const WA_RECORDING_PORT = "wa-recording";

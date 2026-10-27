@@ -222,12 +222,15 @@ export type TranscriptMessage = {
   attachments: { name: string }[];
 };
 
+/** The owner's connected browser (browser_tab_*): each returns a page the next step reads. */
+export const CONNECTED_PAGE_TOOLS = ["browser_tab_open", "browser_tab_read", "browser_tab_click", "browser_tab_scroll", "browser_tab_search"] as const;
+
 /** The conversation as the model reads it: newest last, tool results by their summary. */
 /** Tools whose result the model reads at length (the rest are cut to 1,500 characters). */
-const LONG_RESULT_TOOLS = new Set(["read_webpage", "web_search", "treg_search", "treg_call", "browser_open", "browser_read", "browser_click", "browser_fill", "browser_scroll"]);
+const LONG_RESULT_TOOLS = new Set(["read_webpage", "web_search", "treg_search", "treg_call", "browser_open", "browser_read", "browser_click", "browser_fill", "browser_scroll", ...CONNECTED_PAGE_TOOLS]);
 
 /** Tools whose result the next action depends on (a page read, a browser step): the batch ends after them. */
-export const PAGE_STATE_TOOLS = new Set(["read_webpage", "browser_open", "browser_read", "browser_click", "browser_fill", "browser_scroll"]);
+export const PAGE_STATE_TOOLS = new Set(["read_webpage", "browser_open", "browser_read", "browser_click", "browser_fill", "browser_scroll", ...CONNECTED_PAGE_TOOLS]);
 
 export function transcriptText(messages: readonly TranscriptMessage[], maxChars = 24_000): string {
   const lines = messages.map((message) => {

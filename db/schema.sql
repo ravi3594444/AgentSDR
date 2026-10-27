@@ -1154,6 +1154,55 @@ CREATE TABLE public.brightdata_settings (
 );
 
 --
+-- Name: browser_commands; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.browser_commands (
+    organization_id uuid NOT NULL,
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    connection_id uuid NOT NULL,
+    seq bigint NOT NULL,
+    thread_id uuid,
+    request_id uuid NOT NULL,
+    action jsonb NOT NULL,
+    status text DEFAULT 'pending'::text NOT NULL,
+    result jsonb,
+    error text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    delivered_at timestamp with time zone,
+    finished_at timestamp with time zone,
+    expires_at timestamp with time zone NOT NULL,
+    CONSTRAINT browser_commands_status_chk CHECK ((status = ANY (ARRAY['pending'::text, 'delivered'::text, 'done'::text, 'failed'::text, 'expired'::text])))
+);
+
+--
+-- Name: browser_connections; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.browser_connections (
+    organization_id uuid NOT NULL,
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    status text DEFAULT 'pending'::text NOT NULL,
+    pairing_code_hash text,
+    pairing_expires_at timestamp with time zone,
+    token_hash text,
+    device_id text,
+    device_label text,
+    extension_version text,
+    sites text[] DEFAULT ARRAY[]::text[] NOT NULL,
+    shared_tabs jsonb DEFAULT '[]'::jsonb NOT NULL,
+    attention jsonb,
+    paused boolean DEFAULT false NOT NULL,
+    command_seq bigint DEFAULT 0 NOT NULL,
+    last_seen_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    paired_at timestamp with time zone,
+    revoked_at timestamp with time zone,
+    CONSTRAINT browser_connections_status_chk CHECK ((status = ANY (ARRAY['pending'::text, 'active'::text, 'revoked'::text])))
+);
+
+--
 -- Name: browser_sessions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3626,6 +3675,20 @@ ALTER TABLE ONLY public.brightdata_settings
     ADD CONSTRAINT brightdata_settings_pkey PRIMARY KEY (organization_id);
 
 --
+-- Name: browser_commands browser_commands_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.browser_commands
+    ADD CONSTRAINT browser_commands_pkey PRIMARY KEY (id);
+
+--
+-- Name: browser_connections browser_connections_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.browser_connections
+    ADD CONSTRAINT browser_connections_pkey PRIMARY KEY (id);
+
+--
 -- Name: browser_sessions browser_sessions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4927,6 +4990,42 @@ CREATE UNIQUE INDEX autopilot_takeovers_conversation_uq ON public.autopilot_take
 --
 
 CREATE INDEX autopilot_takeovers_organization_idx ON public.autopilot_takeovers USING btree (organization_id);
+
+--
+-- Name: browser_commands_connection_seq_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX browser_commands_connection_seq_uq ON public.browser_commands USING btree (connection_id, seq);
+
+--
+-- Name: browser_commands_connection_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX browser_commands_connection_status_idx ON public.browser_commands USING btree (connection_id, status, seq);
+
+--
+-- Name: browser_commands_org_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX browser_commands_org_idx ON public.browser_commands USING btree (organization_id, created_at);
+
+--
+-- Name: browser_connections_org_user_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX browser_connections_org_user_idx ON public.browser_connections USING btree (organization_id, user_id, status);
+
+--
+-- Name: browser_connections_pairing_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX browser_connections_pairing_uq ON public.browser_connections USING btree (pairing_code_hash) WHERE (pairing_code_hash IS NOT NULL);
+
+--
+-- Name: browser_connections_token_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX browser_connections_token_uq ON public.browser_connections USING btree (token_hash) WHERE (token_hash IS NOT NULL);
 
 --
 -- Name: browser_sessions_org_status_idx; Type: INDEX; Schema: public; Owner: -
@@ -6462,6 +6561,34 @@ ALTER TABLE ONLY public.autopilot_takeovers
 
 ALTER TABLE ONLY public.brightdata_settings
     ADD CONSTRAINT brightdata_settings_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
+
+--
+-- Name: browser_commands browser_commands_connection_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.browser_commands
+    ADD CONSTRAINT browser_commands_connection_id_fkey FOREIGN KEY (connection_id) REFERENCES public.browser_connections(id) ON DELETE CASCADE;
+
+--
+-- Name: browser_commands browser_commands_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.browser_commands
+    ADD CONSTRAINT browser_commands_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
+
+--
+-- Name: browser_connections browser_connections_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.browser_connections
+    ADD CONSTRAINT browser_connections_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
+
+--
+-- Name: browser_connections browser_connections_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.browser_connections
+    ADD CONSTRAINT browser_connections_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
 
 --
 -- Name: browser_sessions browser_sessions_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -

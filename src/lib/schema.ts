@@ -36,6 +36,8 @@ export * from "./brightdata/schema";
 export * from "./tinyfish/schema";
 export * from "./quota/schema";
 export * from "./browser/schema";
+// Connected-browser research: a person's own Chrome and the commands queued for it.
+export * from "./browser/connected/schema";
 export * from "./activity/schema";
 
 // Web research about imported companies (src/lib/research/).

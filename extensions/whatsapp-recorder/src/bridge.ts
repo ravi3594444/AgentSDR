@@ -20,6 +20,7 @@ import {
   type RecorderBridgeRequest,
   type RecorderCallUpdate,
 } from "../../../src/lib/calls/contract";
+import type { BrowserBridgeReply, BrowserBridgeRequest } from "../../../src/lib/browser/connected/contract";
 import type { BackgroundMessage, BridgeCommand, BridgeResult } from "./messages";
 
 // Injected both by the manifest and, after an update, by the service worker:
@@ -58,9 +59,10 @@ function extensionAlive(): boolean {
 
 function onMessage(event: MessageEvent): void {
   if (event.source !== window || event.origin !== location.origin) return;
-  const data = event.data as Partial<RecorderBridgeRequest> | null;
+  const data = event.data as Partial<RecorderBridgeRequest> | Partial<BrowserBridgeRequest> | null;
   if (data?.source !== "agentsdr-app" || !data.requestId) return;
-  if (data.type !== "call:start" && data.type !== "message:open" && data.type !== "call:end" && data.type !== "recorder:update") return;
+  const browser = data.type === "browser:connect" || data.type === "browser:disconnect";
+  if (!browser && data.type !== "call:start" && data.type !== "message:open" && data.type !== "call:end" && data.type !== "recorder:update") return;
 
   // An orphaned copy cannot reach the extension. Answering would race the
   // fresh copy's reply with an error, so it goes quiet instead.
@@ -69,6 +71,10 @@ function onMessage(event: MessageEvent): void {
     return;
   }
 
+  if (browser) {
+    relayBrowser(data as BrowserBridgeRequest);
+    return;
+  }
   const request = data as RecorderBridgeRequest;
   const message: BackgroundMessage = { target: "background", type: "bridge", request };
   try {
@@ -107,4 +113,23 @@ function reply(request: RecorderBridgeRequest, result: BridgeResult): void {
     ? { source: "agentsdr-recorder", requestId, type: accepted[request.type] }
     : { source: "agentsdr-recorder", requestId, type: rejected[request.type], error: result.error };
   window.postMessage(message, location.origin);
+}
+
+/** Connected-browser research requests (contract.ts in src/lib/browser/connected): connect and disconnect. */
+function relayBrowser(request: BrowserBridgeRequest): void {
+  const message: BackgroundMessage = { target: "background", type: "browser-bridge", request };
+  const answer = (result: BridgeResult) => {
+    const reply: BrowserBridgeReply = result.ok
+      ? { source: "agentsdr-recorder", requestId: request.requestId, type: request.type === "browser:connect" ? "browser:connect-opened" : "browser:disconnected" }
+      : { source: "agentsdr-recorder", requestId: request.requestId, type: request.type === "browser:connect" ? "browser:connect-rejected" : "browser:disconnect-rejected", error: result.error };
+    window.postMessage(reply, location.origin);
+  };
+  try {
+    chrome.runtime
+      .sendMessage<BackgroundMessage, BridgeResult>(message)
+      .then((result) => answer(result ?? { ok: false, error: "This extension is too old for browser research. Update it from AgentSDR's Settings." }))
+      .catch((error: unknown) => answer({ ok: false, error: error instanceof Error ? error.message : String(error) }));
+  } catch {
+    window.removeEventListener("message", onMessage);
+  }
 }

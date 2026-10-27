@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import { clippedString } from "@/lib/grid/sanitize";
 import { featureEnabled } from "@/lib/features/flags.server";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
+import { CONNECTED_PAGE_TOOLS } from "./agent";
 import { progressBlock, requestBlock, type ProgressSearch } from "./agentV2";
 import { addAudienceMembers, createAudience, memberInsights } from "./audiences.server";
 import { readBrief, type Brief } from "./brief";
@@ -163,7 +164,7 @@ async function quoteFound(threadId: string, rows: readonly RequestMember[], quot
   const wanted = norm(quote);
   if (rows.some((row) => norm(`${JSON.stringify(row.facts ?? {})} ${JSON.stringify(row.evidence ?? [])} ${row.name}`).includes(wanted))) return true;
   const reads = await db.select({ content: assistantMessages.content, toolResult: assistantMessages.toolResult }).from(assistantMessages)
-    .where(and(inOrg(assistantMessages), eq(assistantMessages.threadId, threadId), eq(assistantMessages.role, "tool"), eq(assistantMessages.status, "ok"), inArray(assistantMessages.tool, ["read_webpage", "web_search", "browser_open", "browser_read", "browser_click", "browser_fill", "browser_scroll", "treg_call"])))
+    .where(and(inOrg(assistantMessages), eq(assistantMessages.threadId, threadId), eq(assistantMessages.role, "tool"), eq(assistantMessages.status, "ok"), inArray(assistantMessages.tool, ["read_webpage", "web_search", "browser_open", "browser_read", "browser_click", "browser_fill", "browser_scroll", ...CONNECTED_PAGE_TOOLS, "treg_call"])))
     .orderBy(desc(assistantMessages.createdAt)).limit(60);
   return reads.some((row) => norm(`${row.content} ${JSON.stringify(row.toolResult ?? {})}`).includes(wanted));
 }

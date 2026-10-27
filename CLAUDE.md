@@ -45,6 +45,9 @@ Drizzle table definitions live in domain-scoped files, not one central schema:
 - `src/lib/calls/schema.ts` — WhatsApp calls placed from the app (`call_sessions`)
 - `src/lib/scheduler/schema.ts` — the in-process scheduler's slot claims
   (`scheduled_job_runs`, platform-wide; see `src/lib/scheduler/`)
+- `src/lib/browser/connected/schema.ts` — connected-browser research: each
+  person's paired Chrome (`browser_connections`) and the commands queued for
+  it (`browser_commands`)
 - `src/lib/auth/schema.ts` — Better Auth: users, sessions, accounts,
   verifications, organizations, members, invitations, teams, team_members
 - `src/lib/managed/schema.ts` — platform operators, the platform's
@@ -456,6 +459,53 @@ chosen in Settings → AI provider (stored as `transcriptionModel` in the BYOK
 settings; null means transcription is off). Gemini merges audio channels, so the stereo
 recording does not give speaker labels for free there; rep/lead is inferred.
 
+
+## Connected-browser research (the owner's own Chrome)
+
+The recorder extension also lets the assistant research in the person's own
+Chrome, signed in as them, on the sites they enabled ("Other public
+websites", LinkedIn, X, Reddit, Instagram, Facebook). Shapes and pure rules
+are in `src/lib/browser/connected/contract.ts` (import-free: the extension
+bundles it, and its `pageScript` runs inside pages through
+`chrome.scripting.executeScript`, so it may use nothing outside its body);
+the queue is `connections.server.ts`; the worker side is
+`extensions/whatsapp-recorder/src/research.ts`. Report and test evidence:
+`docs/plans/BROWSER_RESEARCH_REPORT_2026-10-27.md`.
+
+- **Pairing.** The chat's Connect browser mints a one-time code for the
+  signed-in person and workspace (`POST /api/browser-connections`), hands it
+  to the extension over the bridge, and the extension's Connect page asks
+  Chrome for the chosen sites once, then pairs (`/api/browser-bridge/pair`).
+  The device token is stored hashed, accepted only beside its device id and
+  only while the person is still a member. One active connection per person
+  and workspace; a new pairing replaces it.
+- **Commands.** The `browser_connection` / `browser_tab_*` tools (one
+  registry, so the JSON harness and native Claude over MCP both get them)
+  queue a command on the acting person's connection for the turn's request
+  and wait; the extension long-polls `/api/browser-bridge/poll` and answers
+  each once at `/api/browser-bridge/commands/:id`. A command is delivered
+  once and never resent: a lost or late one expires and the model decides.
+  The extension refuses replayed sequence numbers and expired commands, and
+  tabs belong to the request that opened them. `/api/browser-bridge/` is
+  public in `proxy.ts`; every route but pairing starts with
+  `withBrowserDevice()`.
+- **It reads; sending stays in approved outreach.** Typing only into search
+  fields; clicks on controls that send, post, follow, connect, buy or delete
+  are refused by the server and again in the page. Only https public hosts,
+  on enabled sites (a social site needs its own switch); private and local
+  names are refused, and "web" hosts are resolved server-side
+  (`BROWSER_RESEARCH_ALLOW_PRIVATE=true` only for local fixtures). Page text
+  is untrusted content; a sign-in, CAPTCHA or blank page is reported as
+  needing the owner and grounds nothing. Never add an evaluate, form-fill or
+  submit command, and never send a cookie, password or the site's session to
+  the server.
+- **Evidence.** `add_contacts` (`sourceUrl`, `quote` per contact) and
+  `add_instagram_contacts` (`sources`) keep the page, read time and quote,
+  checked against what this chat actually read (`pageEvidence.server.ts`);
+  a quote is an observation, never buying interest.
+- **The native harness keeps `--no-chrome`.** Anthropic's Claude in Chrome
+  binds to the claude.ai account, not this workspace, and exposes write
+  tools; it is not used (see the report).
 
 ## The reply agent
 
