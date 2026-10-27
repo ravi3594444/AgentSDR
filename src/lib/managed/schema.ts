@@ -45,7 +45,7 @@ export const platformCredentials = pgTable(
   (table) => [
     check(
       "platform_credentials_provider_chk",
-      sql`${table.provider} IN ('unipile', 'openrouter', 'aimlapi', 'anthropic', 'tinyfish', 'tavily', 'brightdata', 'apify')`,
+      sql`${table.provider} IN ('unipile', 'openrouter', 'aimlapi', 'anthropic', 'tinyfish', 'tavily', 'brightdata', 'apify', 'exa')`,
     ),
   ],
 );

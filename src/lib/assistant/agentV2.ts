@@ -47,6 +47,7 @@ function sourcesText(features: FeatureState): string {
     `- find_leads: businesses with a Google Maps listing, then each business's own website for its emails and phones. The built-in scraper covers one city or district per search (about 20 per area; several cities are several searches)${features.apify_discovery ? "; with provider 'apify', one Apify run covers a city, a region or a whole country" : ""}.`,
     "- find_linkedin_leads: people on LinkedIn by role, kind of business and place, contacted on LinkedIn only (LinkedIn gives no email or phone). For an email request, read their company's site with read_webpage for an address, or use another source.",
     "- web_search, read_webpage and the browser_* tools: search the web, read any public page, and work pages that need clicks or typing (directories, member and exhibitor lists, company team pages, a lead's own site). Use them for anything the request needs: finding leads yourself (save the people and businesses a page publishes with add_contacts), choosing a niche or place, checking a lead's place or kind, and finding decision makers and their published contacts.",
+    "- exa_search and exa_read: optional Exa search by natural-language description and public page text, when the operator has connected Exa. Useful for companies, people and descriptive research. Save only the contacts its source results publish with add_contacts. Choose it on the request's merits alongside the other sources; no city, saved niche or provider priority is assumed. No default Exa request budget is imposed; an explicit owner budget or free-only request still applies.",
     features.web_discovery ? "- find_customers_on_web: a background web search (your own queries, or ones built from the kind and an optional place) for businesses' own websites and directories, then the contacts they publish." : null,
     features.apify_discovery ? "- find_instagram_prospects (Instagram accounts posting under hashtags you choose, plus ones made from the kind and place) and find_social_leads (Facebook pages, LinkedIn companies or Instagram's own account search, by keyword in a city, region or country, or with no place at all), through Apify. Searching Instagram does not need an Instagram account linked; sending DMs does." : null,
     features.brightdata ? "- research_social_sources: Reddit, X, Instagram and Facebook through Bright Data: people by what they post (need), or the customers' own pages and profiles (leave need out). Someone is contactable only through what their profile, page or its website publishes." : null,
@@ -158,8 +159,9 @@ export function transcriptV2(messages: readonly TranscriptMessage[], maxChars = 
     if (message.role === "event") return { owner: false, text: `EVENT: ${message.content}` };
     const summary = typeof message.toolResult?.summary === "string" ? message.toolResult.summary : message.content;
     const args = message.toolInput && Object.keys(message.toolInput).length ? JSON.stringify(message.toolInput).slice(0, 300) : "";
-    const page = PAGE_STATE_TOOLS.has(message.tool ?? "") || message.tool === "web_search";
-    const limit = page ? (keepWhole.has(index) || message.tool === "web_search" ? PAGE_RESULT_CHARS : OLD_PAGE_CHARS) : TOOL_RESULT_CHARS;
+    const search = message.tool === "web_search" || message.tool === "exa_search";
+    const page = PAGE_STATE_TOOLS.has(message.tool ?? "") || search;
+    const limit = page ? (keepWhole.has(index) || search ? PAGE_RESULT_CHARS : OLD_PAGE_CHARS) : TOOL_RESULT_CHARS;
     const body = summary.length > limit ? `${summary.slice(0, limit)}… (cut)` : summary;
     return { owner: false, text: `TOOL ${message.tool}(${args}) → ${message.status ?? "?"}: ${body}` };
   });

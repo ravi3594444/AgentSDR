@@ -224,10 +224,10 @@ export type TranscriptMessage = {
 
 /** The conversation as the model reads it: newest last, tool results by their summary. */
 /** Tools whose result the model reads at length (the rest are cut to 1,500 characters). */
-const LONG_RESULT_TOOLS = new Set(["read_webpage", "web_search", "treg_search", "treg_call", "browser_open", "browser_read", "browser_click", "browser_fill", "browser_scroll"]);
+const LONG_RESULT_TOOLS = new Set(["read_webpage", "web_search", "exa_search", "exa_read", "treg_search", "treg_call", "browser_open", "browser_read", "browser_click", "browser_fill", "browser_scroll"]);
 
 /** Tools whose result the next action depends on (a page read, a browser step): the batch ends after them. */
-export const PAGE_STATE_TOOLS = new Set(["read_webpage", "browser_open", "browser_read", "browser_click", "browser_fill", "browser_scroll"]);
+export const PAGE_STATE_TOOLS = new Set(["read_webpage", "exa_read", "browser_open", "browser_read", "browser_click", "browser_fill", "browser_scroll"]);
 
 export function transcriptText(messages: readonly TranscriptMessage[], maxChars = 24_000): string {
   const lines = messages.map((message) => {
@@ -704,7 +704,7 @@ export function ungroundedContacts(contacts: unknown, corpus: string): string[] 
 /** Tools whose successful result is a source: a page read, a search's results, a Treg answer, a browser page. */
 function isSourceTool(tool: string | null): boolean {
   // review_leads (research agent v2) shows the request's leads as the server stored them: their sites and profiles may be opened.
-  return tool === "read_webpage" || tool === "web_search" || tool === "treg_call" || tool === "review_leads" || Boolean(tool?.startsWith("browser_"));
+  return tool === "read_webpage" || tool === "web_search" || tool === "exa_search" || tool === "exa_read" || tool === "treg_call" || tool === "review_leads" || Boolean(tool?.startsWith("browser_"));
 }
 
 function parsedLink(value: string): URL | null {
@@ -822,7 +822,7 @@ export function groundingCorpus(messages: readonly (Pick<TranscriptMessage, "rol
 
 /** One source's text for the corpus: a search's results, a page with what the model wrote into its address taken out, or the message itself. */
 function sourceText(message: Pick<TranscriptMessage, "tool" | "content" | "toolResult"> & { toolInput?: Record<string, unknown> | null }, known: string): string {
-  if (message.tool === "web_search") {
+  if (message.tool === "web_search" || message.tool === "exa_search") {
     const results = (message.toolResult?.data as { results?: unknown } | undefined)?.results;
     return (Array.isArray(results) ? results : [])
       .map((hit) => (hit && typeof hit === "object" ? hit as Record<string, unknown> : {}))
@@ -830,6 +830,13 @@ function sourceText(message: Pick<TranscriptMessage, "tool" | "content" | "toolR
       .join("\n");
   }
   const summary = typeof message.toolResult?.summary === "string" ? message.toolResult.summary : "";
+  if (message.tool === "exa_read") {
+    const pages = (message.toolResult?.data as { pages?: unknown } | undefined)?.pages;
+    return (Array.isArray(pages) ? pages : []).map((value) => {
+      const page = value && typeof value === "object" ? value as Record<string, unknown> : {};
+      return pageSourceText([page.title, page.body].filter((part) => typeof part === "string").join("\n"), [page.url], known);
+    }).join("\n");
+  }
   const text = `${message.content} ${summary}`;
   if (message.tool === "read_webpage" || message.tool?.startsWith("browser_")) {
     // The address the page was read at: its data, or where the summary names it ("Read <url>", "Page: <url>").

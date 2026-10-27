@@ -349,7 +349,7 @@ export async function objectiveSpend(objective: Pick<Objective, "requestMessageI
   const treg = await executor.select({ status: tregCalls.status, costUsd: tregCalls.costUsd, ceilingUsd: tregCalls.ceilingUsd }).from(tregCalls)
     .where(and(inOrg(tregCalls), eq(tregCalls.requestId, requestId)));
   for (const row of treg) rows.push({ ledger: "treg", ...row });
-  const usage = await executor.select({ provider: providerUsage.provider, product: providerUsage.product, status: providerUsage.status, units: providerUsage.units, usedUnits: providerUsage.usedUnits }).from(providerUsage)
+  const usage = await executor.select({ provider: providerUsage.provider, product: providerUsage.product, status: providerUsage.status, units: providerUsage.units, usedUnits: providerUsage.usedUnits, costUsd: providerUsage.costUsd }).from(providerUsage)
     .where(and(inOrg(providerUsage), or(sql`${providerUsage.detail} ->> 'requestId' = ${requestId}`, ids.length ? inArray(providerUsage.jobId, ids) : undefined)));
   for (const row of usage) rows.push({ ledger: "usage", ...row });
   for (const job of children) {

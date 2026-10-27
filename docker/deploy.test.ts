@@ -29,6 +29,7 @@ const MIGRATIONS = [
   "add-sender-pacing",
   "add-whatsapp-warmup-off",
   "add-optional-research-budget",
+  "add-exa",
 ];
 const DEFAULT_FILES = "-f docker-compose.yml -f docker-compose.build.yml -f docker-compose.discovery.yml";
 const ENOUGH_MEMORY = "MemTotal: 8000000 kB\nMemAvailable: 4000000 kB\nSwapTotal: 4194300 kB\nSwapFree: 4194300 kB\n";

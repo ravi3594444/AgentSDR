@@ -152,7 +152,7 @@ function usdExact(value: number): string {
 export type LedgerRow =
   | { ledger: "apify"; status: string; usageUsd: number | null; maxChargeUsd: number }
   | { ledger: "treg"; status: string; costUsd: number | null; ceilingUsd: number }
-  | { ledger: "usage"; provider: string; product: string; status: string; units: number; usedUnits: number | null }
+  | { ledger: "usage"; provider: string; product: string; status: string; units: number; usedUnits: number | null; costUsd?: number | string | null }
   /** AI web research: its reported cost, or its estimate while it is under way ("open") or when its cost never came back ("uncertain"). */
   | { ledger: "ai_search"; costUsd: number; state?: "open" | "uncertain" }
   | { ledger: "tavily_job"; credits: number };
@@ -201,6 +201,8 @@ export type SpendBreakdown = {
   tregUsd: number;
   browserUsd: number;
   aiSearchUsd: number;
+  /** Exa's reported estimate, or the reserved list-price ceiling when the answer is lost. */
+  exaUsd: number;
   /** Held by paid work still open (an Apify run, a Treg call, a browser session): counted until it settles. */
   reservedUsd: number;
   /** Kept counted because the provider's answer was lost; never refunded or retried. */
@@ -224,7 +226,7 @@ const UNIT_PRICES: Record<string, number> = {
 const round6 = (value: number) => Math.round(value * 1_000_000) / 1_000_000;
 
 export function spendFromLedgers(rows: readonly LedgerRow[]): SpendBreakdown {
-  const spend = { apifyUsd: 0, tregUsd: 0, browserUsd: 0, aiSearchUsd: 0, reservedUsd: 0, uncertainUsd: 0, tavilyCredits: 0, brightdataUsd: 0, brightdataCredits: 0 };
+  const spend = { apifyUsd: 0, tregUsd: 0, browserUsd: 0, aiSearchUsd: 0, exaUsd: 0, reservedUsd: 0, uncertainUsd: 0, tavilyCredits: 0, brightdataUsd: 0, brightdataCredits: 0 };
   for (const row of rows) {
     if (row.ledger === "apify") {
       const open = row.status === "starting" || row.status === "running";
@@ -237,6 +239,13 @@ export function spendFromLedgers(rows: readonly LedgerRow[]): SpendBreakdown {
       spend.tregUsd += amount;
       if (open) spend.reservedUsd += amount;
     } else if (row.ledger === "usage") {
+      if (row.provider === "exa") {
+        const amount = Math.max(0, Number(row.costUsd) || 0);
+        spend.exaUsd += amount;
+        if (row.status === "reserved") spend.reservedUsd += amount;
+        if (row.status === "uncertain") spend.uncertainUsd += amount;
+        continue;
+      }
       const key = `${row.provider}:${row.product}`;
       // Reserved and uncertain rows keep every reserved unit counted; settled ones what was used.
       const units = row.status === "reserved" || row.status === "uncertain" ? row.units : row.usedUnits ?? row.units;
@@ -263,12 +272,13 @@ export function spendFromLedgers(rows: readonly LedgerRow[]): SpendBreakdown {
       spend.tavilyCredits += row.credits;
     }
   }
-  const totalUsd = spend.apifyUsd + spend.tregUsd + spend.browserUsd + spend.aiSearchUsd + spend.brightdataUsd;
+  const totalUsd = spend.apifyUsd + spend.tregUsd + spend.browserUsd + spend.aiSearchUsd + spend.brightdataUsd + spend.exaUsd;
   return {
     apifyUsd: round6(spend.apifyUsd),
     tregUsd: round6(spend.tregUsd),
     browserUsd: round6(spend.browserUsd),
     aiSearchUsd: round6(spend.aiSearchUsd),
+    exaUsd: round6(spend.exaUsd),
     reservedUsd: round6(spend.reservedUsd),
     uncertainUsd: round6(spend.uncertainUsd),
     tavilyCredits: spend.tavilyCredits,
@@ -573,6 +583,7 @@ function spendText(spend: SpendBreakdown, capUsd: number | null): string {
     spend.tregUsd ? `Treg ${usd(spend.tregUsd)}` : null,
     spend.browserUsd ? `browser ${usd(spend.browserUsd)}` : null,
     spend.aiSearchUsd ? `AI web research ${usd(spend.aiSearchUsd)}` : null,
+    spend.exaUsd ? `Exa ${usd(spend.exaUsd)} (estimated)` : null,
     spend.brightdataCredits ? `Bright Data ${usd(spend.brightdataUsd)} (${plural(spend.brightdataCredits, "credit")}, estimated from delivered records)` : null,
   ].filter(Boolean);
   const held = spend.reservedUsd ? `, ${usd(spend.reservedUsd)} of it held by paid work still open` : "";

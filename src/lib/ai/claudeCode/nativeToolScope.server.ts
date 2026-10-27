@@ -13,3 +13,6 @@ export function nativeToolParent(account: ClaudeAccount) {
   const parent = scope.getStore();
   return parent?.account === accountKey(account) ? parent : null;
 }
+
+/** Tool transports can abort promptly when their native turn is revoked or cancelled. */
+export function nativeToolSignal(): AbortSignal | undefined { return scope.getStore()?.signal; }
