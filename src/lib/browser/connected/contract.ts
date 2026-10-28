@@ -368,8 +368,9 @@ export async function pageScript(config: PageScriptConfig, op: PageOp): Promise<
     config.maxLabelChars,
   );
   // A form a search may submit: GET, and nothing in it that sends or signs in (a message box, a password, a file).
+  const sending = "textarea, [contenteditable]:not([contenteditable=false]), input[type=password], input[type=file]";
   const safeForm = (form: HTMLFormElement) => (form.getAttribute("method") || "get").toLowerCase() === "get"
-    && !form.querySelector("textarea, [contenteditable]:not([contenteditable=false]), input[type=password], input[type=file]");
+    && !form.querySelector(sending) && !Array.from(form.elements).some((field) => field.matches(sending));
   const isSearch = (el: Element) => {
     if (el.tagName !== "INPUT" || el.closest("[contenteditable]:not([contenteditable=false])")) return false;
     const form = (el as HTMLInputElement).form;
@@ -390,11 +391,17 @@ export async function pageScript(config: PageScriptConfig, op: PageOp): Promise<
   const isWrite = (el: Element, label: string) => {
     if (navigates(el)) return false;
     if (write.test(label) || el.hasAttribute("aria-pressed")) return true;
+    // A button submits (or resets) its form whatever its role or label says: <button> without a type submits,
+    // and form= ties it to a form elsewhere. Only a search form's own submit is a read.
+    const type = (el.getAttribute("type") || "").toLowerCase();
+    const submits = el.tagName === "BUTTON" ? type !== "button" : el.tagName === "INPUT" && ["submit", "image", "reset"].includes(type);
+    const form = submits ? (el as HTMLButtonElement).form : null;
+    if (form) {
+      const method = (el.getAttribute("formmethod") || form.getAttribute("method") || "get").toLowerCase();
+      return type === "reset" || method !== "get" || !safeForm(form) || !Array.from(form.elements).some(isSearch);
+    }
     if ((el.getAttribute("role") || "").toLowerCase() === "tab" || el.tagName === "SUMMARY" || el.hasAttribute("aria-expanded")) return false;
     if ((el.getAttribute("rel") || "").split(/\s+/).some((rel) => rel === "next" || rel === "prev")) return false;
-    const form = el.closest("form");
-    const submits = el.tagName === "BUTTON" ? (el.getAttribute("type") || "submit").toLowerCase() === "submit" : el.tagName === "INPUT" && (el.getAttribute("type") || "").toLowerCase() === "submit";
-    if (form && submits && safeForm(form) && Array.from(form.querySelectorAll("input")).some(isSearch)) return false;
     return !reads.test(label);
   };
   const kindOf = (el: Element): ResearchElementKind => {

@@ -494,7 +494,9 @@ the queue is `connections.server.ts`; the worker side is
   tabs, disclosures, pagination, a GET search form's button, and controls
   labelled "more"/"next" (`READ_CONTROL_PATTERN`); everything else, toggles
   (`aria-pressed`) and English write verbs included, is refused by the server
-  and again in the page. Typing only into search fields whose form is GET and
+  and again in the page. A button that would submit or reset a form (a
+  `<button>` without `type="button"`, `form=` included) is refused whatever
+  its role or label, unless it is a GET search form's own submit. Typing only into search fields whose form is GET and
   holds no message, password or file field. Only https public hosts,
   on enabled sites (a social site needs its own switch); private and local
   names are refused, and "web" hosts are resolved server-side

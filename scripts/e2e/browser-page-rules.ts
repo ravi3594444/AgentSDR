@@ -96,6 +96,23 @@ try {
   const sendButton = await click(page, await load(page, `<form method="post" action="/send-message"><input type="search" name="q" aria-label="Search"><textarea name="message"></textarea><button data-effect>Send</button></form>`), "Send");
   check("that form's Send button is refused", sendButton.element.write && !sendButton.page.ok && sendButton.effects === 0, sendButton);
 
+  // A button submits its form unless typed otherwise, whatever its role or label: inside a message form it is refused.
+  const messageForm = (button: string, outside = "") => `<form id="composer" method="post" action="/send-message"><textarea name="message">The owner's draft</textarea>${button}</form>${outside}`;
+  for (const [name, html, label] of [
+    ["a More options disclosure that would submit a message draft", messageForm(`<button aria-expanded="false">More options</button>`), "More options"],
+    ["a tab that would submit a message draft", messageForm(`<button role="tab">Posts</button>`), "Posts"],
+    ["a Next button that would submit a message draft", messageForm(`<button>Next</button>`), "Next"],
+    ["a disclosure tied to the message form by form=", messageForm("", `<button form="composer" aria-expanded="false">More options</button>`), "More options"],
+    ["a reset that would clear the draft", messageForm(`<button type="reset">More</button>`), "More"],
+    ["a search form's button that posts (formmethod)", `<form action="/buscar"><input type="search" name="q" aria-label="Search"><button formmethod="post">Buscar</button></form>`, "Buscar"],
+    ["a search form's button with a message box tied by form=", `<form id="s" action="/buscar"><input type="search" name="q" aria-label="Search"><button>Buscar</button></form><textarea form="s" name="message">Hi</textarea>`, "Buscar"],
+  ] as const) {
+    const result = await click(page, await load(page, html), label);
+    check(`${name}: refused by the server and in the page, and nothing was submitted`, result.element.write && result.server !== null && !result.page.ok && result.effects === 0, result);
+  }
+  const plainDisclosure = await click(page, await load(page, messageForm(`<button type="button" aria-expanded="false" data-effect>More options</button>`)), "More options");
+  check("a type=button disclosure in a message form is clicked and submits nothing", !plainDisclosure.element.write && plainDisclosure.page.ok && plainDisclosure.effects === 1, plainDisclosure);
+
   console.log(`Page rules in Chromium ${browser.version()}: ${checks} passed. Real DOM, no network.`);
 } catch (error) {
   console.error(error);

@@ -115,7 +115,7 @@ each has its own commit on this branch, and the review's scripts in
 | --- | --- | --- |
 | BR1 | The upgrade path never created the tables | Script allowed into the image, copied into the runner, last in `DEFAULT_MIGRATIONS`; the packaging test now also checks the Dockerfile copies every default migration. Replayed twice. |
 | BR2 | A long poll that answered after a reconnect advanced the new connection's sequence and answered with its token | A poll's answer runs only while the connection that fetched it is still stored; sequence, execution and answer fenced on its token; a stale 401 removes only that same connection, atomically. |
-| BR3 | Non-English write buttons passed; a search could submit a message form | Clicks allowed by what a control is, not a verb list; unknown languages are refused, not allowed. Search only in GET forms with no message/password/file field. Checked on real DOM in Chromium (`scripts/e2e/browser-page-rules.ts`, 22 checks, counting the page's own handlers). |
+| BR3 | Non-English write buttons passed; a search could submit a message form | Clicks allowed by what a control is, not a verb list; unknown languages are refused, not allowed. Search only in GET forms with no message/password/file field. Checked on real DOM in Chromium (`scripts/e2e/browser-page-rules.ts`, 22 checks, counting the page's own handlers). Re-review follow-up: a tab, disclosure or "More"/"Next" `<button>` without `type="button"` submits its form, so a control that would submit or reset a form (its real owner, `form=` and `formmethod` honoured) is now refused unless it is a GET search form's own submit; a search form with a message box tied by `form=` is not safe either. `scripts/review/browser-form-submission.ts` 4/4; page rules 30. |
 | BR4 | Evidence could name a page the contact is not on, or "quote" words only in the address | Each reading of the named page is checked on its own: the contact is grounded in that reading by the harness's own grounding functions, the quote must be in its page text. |
 | BR5 | A native turn's cancel did not reach queued browser steps | `nativeToolSignal()` passed to every queued step; a step waiting expires undelivered, one asked after the cancel is never queued. |
 | BR6 | Exa's `pages[]` reads could not be evidence | Readings with several pages are taken page by page (address, text, read time); verified on a local trial merge with `codex/exa-discovery-20261027`. |
@@ -138,7 +138,8 @@ order of the two migrations does not matter (both additive).
 | New unit tests (`contract.test.ts`, native ordering) | 15 + 2 pass |
 | Full unit suite | 2,329 pass, 0 fail (run alone; see the ordering fix above) |
 | `scripts/e2e/browser-research.ts` (real database, bridge routes, stand-in browser) | 69 pass (65 + wrong-page evidence, address-only quote, two cancellation cases) |
-| `scripts/e2e/browser-page-rules.ts` (page script on real DOM in Chromium) | 22 pass |
+| `scripts/e2e/browser-page-rules.ts` (page script on real DOM in Chromium) | 30 pass (22 + 8 form-submission cases) |
+| `scripts/review/browser-form-submission.ts` (Happy DOM) | 4/4 (was 1/4) |
 | Review probes: `browser-research-regressions.ts` / `browser-extension-connection-race.ts` (and `--same-connection`) / `browser-page-read-only.ts` (Happy DOM) | 8/8 (9/9 merged with Exa) / pass (control pass) / 4/4 |
 | `scripts/e2e/browser-research.live.ts` (real extension 0.16.0 in Chromium 153, real local Next server, fixture sites) | 45 pass, on `next dev` and on the production build |
 | Same, with `LIVE_REAL_CLAUDE=1` (real Claude Code CLI, this container's login), after the review fixes | 47 pass on the production build |
