@@ -17,10 +17,16 @@ Object.assign(globalThis, { chrome: {
   tabs: { onRemoved: event, onUpdated: event },
   action: { async getBadgeText() { return ""; }, async setBadgeText() {}, async setBadgeBackgroundColor() {}, async setTitle() {} },
   alarms: { onAlarm: event, async create() {}, async clear() {} },
+  debugger: { onDetach: event },
 } });
-const source = readFileSync(`${repo}/extensions/whatsapp-recorder/src/research.ts`, "utf8")
-  .replace('"../../../src/lib/browser/connected/contract"', `"${repo}/src/lib/browser/connected/contract.ts"`);
 const transpiler = new Bun.Transpiler({ loader: "ts", target: "bun" });
+// research.ts imports its screen-control module (0.17.0); it is loaded the same way, its contract import made absolute.
+const screenSource = readFileSync(`${repo}/extensions/whatsapp-recorder/src/screen.ts`, "utf8")
+  .replace('"../../../src/lib/browser/connected/contract"', `"${repo}/src/lib/browser/connected/contract.ts"`);
+const screenModule = `data:text/javascript;base64,${Buffer.from(transpiler.transformSync(screenSource)).toString("base64")}`;
+const source = readFileSync(`${repo}/extensions/whatsapp-recorder/src/research.ts`, "utf8")
+  .replace('"../../../src/lib/browser/connected/contract"', `"${repo}/src/lib/browser/connected/contract.ts"`)
+  .replace('"./screen"', `"${screenModule}"`);
 const moduleText = transpiler.transformSync(`${source}\nexport { pollLoop };\n`);
 const extensionRuntime = await import(`data:text/javascript;base64,${Buffer.from(moduleText).toString("base64")}`) as { pollLoop(): Promise<void> };
 await new Promise((done) => setTimeout(done, 0));

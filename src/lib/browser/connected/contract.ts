@@ -199,17 +199,22 @@ export const READ_CONTROL_PATTERN = "^(?:(?:show|see|view|load|read|display)\\s+
 export const SEARCH_FIELD_PATTERN = "\\b(?:search|query|find|keywords?|lookup)\\b";
 
 /**
- * Controls a task never uses, whatever the owner asked: they send, publish
- * or connect for the owner (contacting people goes through AgentSDR's
- * tracked outreach, never through a second, untracked sender), in a few
- * languages. On social sites SOCIAL_CONTACT_PATTERN refuses more, and so
- * does structure (pageScript taskRefusal): a form or control around a
- * message box with text in it.
+ * Controls a task never uses, whatever the owner asked: they contact people
+ * for the owner (contacting people goes through AgentSDR's tracked
+ * outreach, never through a second, untracked sender), in a few languages.
+ * "Send" words are refused where a message is written on the page or on a
+ * social site (SEND_CONTROL_PATTERN); elsewhere "Enviar" or "Senden" is
+ * most often a form's submit button, which an owner's form task needs.
+ * On social sites SOCIAL_CONTACT_PATTERN refuses more, and so does
+ * structure (pageScript taskRefusal): a control beside a written message.
  */
-export const CONTACT_CONTROL_PATTERN = "(?<![\\p{L}\\p{N}])(?:send|reply|reply all|forward|message|invite|dm|tweet|repost|retweet"
-  + "|enviar|responder|reenviar|mensaje|invitar|mensagem|convidar|envoyer|r[ée]pondre|transf[ée]rer|inviter"
-  + "|senden|absenden|antworten|weiterleiten|nachricht|einladen|invia|inviare|rispondi|inoltra|messaggio|invita"
-  + "|भेजें|भेजो|जवाब दें|आमंत्रित करें)(?![\\p{L}\\p{N}])";
+export const CONTACT_CONTROL_PATTERN = "(?<![\\p{L}\\p{N}])(?:reply|reply all|forward|message|invite|dm|tweet|repost|retweet"
+  + "|responder|reenviar|mensaje|invitar|mensagem|convidar|r[ée]pondre|transf[ée]rer|inviter"
+  + "|antworten|weiterleiten|nachricht|einladen|rispondi|inoltra|messaggio|invita"
+  + "|जवाब दें|आमंत्रित करें)(?![\\p{L}\\p{N}])";
+
+/** "Send", refused beside a written message (or on a social site). */
+export const SEND_CONTROL_PATTERN = "(?<![\\p{L}\\p{N}])(?:send|send now|enviar|envoyer|senden|absenden|invia|inviare|भेजें|भेजो)(?![\\p{L}\\p{N}])";
 
 /** On social sites, also what publishes or connects in the owner's name (a CRM's "Add comment" or "Follow-up" stays usable elsewhere). */
 export const SOCIAL_CONTACT_PATTERN = "(?<![\\p{L}\\p{N}])(?:post|publish|comment|share|connect|follow(?![\\s-]?up)|subscribe|join"
@@ -222,11 +227,15 @@ export const PAYMENT_CONTROL_PATTERN = "(?<![\\p{L}\\p{N}])(?:buy|pay|purchase|c
   + "|comprar|pagar|finalizar compra|acheter|payer|commander|kaufen|bezahlen|zur kasse|acquista|paga|खरीदें|भुगतान करें)(?![\\p{L}\\p{N}])";
 
 /** Why a task may not do `op` with `element` of a reading, or null; the page checks again on the live element. */
-export function taskActProblem(element: ResearchElement | undefined, op: TaskOp, value: string | null, social: boolean): string | null {
+export function taskActProblem(element: ResearchElement | undefined, op: TaskOp, value: string | null, page: { social: boolean; elements: readonly ResearchElement[] }): string | null {
   if (!element) return "there is no such element in the latest reading of that tab; read it again for the current numbers";
   const label = element.label || element.kind;
+  const { social } = page;
+  // A message written on the page (a message box or editor with text): its "Send" would send it.
+  const draft = page.elements.some((item) => (item.field?.type === "textarea" || item.field?.type === "editor") && item.field.value.trim() !== "");
   if (op === "click" || op === "press") {
-    if (new RegExp(CONTACT_CONTROL_PATTERN, "iu").test(element.label) || (social && new RegExp(SOCIAL_CONTACT_PATTERN, "iu").test(element.label))) {
+    if (new RegExp(CONTACT_CONTROL_PATTERN, "iu").test(element.label) || ((social || draft) && new RegExp(SEND_CONTROL_PATTERN, "iu").test(element.label))
+      || (social && new RegExp(SOCIAL_CONTACT_PATTERN, "iu").test(element.label))) {
       return `“${label}” sends, publishes or connects for the owner: contacting people goes through AgentSDR's outreach (prepare_outreach), never the browser`;
     }
     if (new RegExp(PAYMENT_CONTROL_PATTERN, "iu").test(element.label)) return `“${label}” pays or orders: payments stay with the owner`;
@@ -499,6 +508,7 @@ export type PageScriptConfig = {
   readPattern: string;
   searchPattern: string;
   contactPattern: string;
+  sendPattern: string;
   socialContactPattern: string;
   paymentPattern: string;
 };
@@ -512,6 +522,7 @@ export const pageScriptConfig: PageScriptConfig = {
   readPattern: READ_CONTROL_PATTERN,
   searchPattern: SEARCH_FIELD_PATTERN,
   contactPattern: CONTACT_CONTROL_PATTERN,
+  sendPattern: SEND_CONTROL_PATTERN,
   socialContactPattern: SOCIAL_CONTACT_PATTERN,
   paymentPattern: PAYMENT_CONTROL_PATTERN,
 };
@@ -633,6 +644,7 @@ export async function pageScript(config: PageScriptConfig, op: PageOp): Promise<
 
   // --- Tasks: what the owner asked for, never contacting people or paying ---
   const contact = new RegExp(config.contactPattern, "iu");
+  const sends = new RegExp(config.sendPattern, "iu");
   const socialContact = new RegExp(config.socialContactPattern, "iu");
   const payment = new RegExp(config.paymentPattern, "iu");
   const composers = "textarea, [contenteditable]:not([contenteditable=false])";
@@ -646,9 +658,10 @@ export async function pageScript(config: PageScriptConfig, op: PageOp): Promise<
     }
     return false;
   };
+  const draftOnPage = () => Array.from(document.querySelectorAll(composers)).some(hasText);
   const taskRefusal = (el: Element, label: string, social: boolean): string | null => {
     const name = label || el.tagName.toLowerCase();
-    if (contact.test(label) || (social && socialContact.test(label))) return `“${name}” sends, publishes or connects for the owner: contacting people goes through AgentSDR's outreach, never the browser`;
+    if (contact.test(label) || (social && socialContact.test(label)) || (sends.test(label) && (social || draftOnPage()))) return `“${name}” sends, publishes or connects for the owner: contacting people goes through AgentSDR's outreach, never the browser`;
     if (payment.test(label)) return `“${name}” pays or orders: payments stay with the owner`;
     if (social && !isComposer(el) && isWrite(el, label) && nearDraft(el)) return `on a social site “${name}” sits beside a written message and may send it: contacting people goes through AgentSDR's outreach, never the browser`;
     return null;

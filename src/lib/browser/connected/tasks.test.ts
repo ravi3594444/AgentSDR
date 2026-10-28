@@ -18,7 +18,7 @@ describe("whose words start a browser task", () => {
     for (const research of ["Research the marketing agencies in Pune", "find founders and check their login page", "Look up the bookmark manager's pricing", "Find Mark and his company", "Read the types of plans they offer"]) {
       expect(asksForChange(research)).toBe(false);
     }
-    for (const change of ["Add these 12 leads to my HubSpot", "Fill in the signup form on acme-events.com", "update the deal stage", "Book a meeting room", "Mark them as contacted in Pipedrive",
+    for (const change of ["Add these 12 leads to my HubSpot", "Fill in the signup form on acme-events.com", "update the deal stage", "Book a meeting room", "Mark them as contacted in Pipedrive", "Draw a line between the two dots on the board", "Click Approve on the invoice",
       "Añade estos contactos a mi CRM", "Bitte trage die Kontakte in Salesforce ein", "Remplissez le formulaire", "Aggiorna il record", "लीड्स को CRM में जोड़ें"]) {
       expect(asksForChange(change)).toBe(true);
     }

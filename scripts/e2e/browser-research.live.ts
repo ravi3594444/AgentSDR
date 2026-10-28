@@ -135,7 +135,7 @@ const thread = await runInOrganization(org!.id, async () => {
 // --- The extension, its site permission pre-answered in a test copy -----------------------------
 const extension = join(work, "extension");
 cpSync(join(root, "extensions/whatsapp-recorder/dist"), extension, { recursive: true });
-const manifest = JSON.parse(readFileSync(join(extension, "manifest.json"), "utf8")) as { host_permissions: string[] };
+const manifest = JSON.parse(readFileSync(join(extension, "manifest.json"), "utf8")) as { host_permissions: string[]; version: string };
 manifest.host_permissions.push("https://*/*");
 writeFileSync(join(extension, "manifest.json"), JSON.stringify(manifest, null, 2));
 
@@ -160,7 +160,7 @@ try {
   const app = await ctx.newPage();
   await app.goto(`${base}/assistant?thread=${thread.id}`, { waitUntil: "domcontentloaded", timeout: 180_000 });
   await app.waitForSelector("html[data-agentsdr-recorder]", { timeout: 60_000 });
-  check("the extension marks the app page with its version", (await app.getAttribute("html", "data-agentsdr-recorder")) === "0.16.0");
+  check("the extension marks the app page with its version", (await app.getAttribute("html", "data-agentsdr-recorder")) === manifest.version);
 
   // --- Connect from the chat -----------------------------------------------------------------
   // The dev server may still be compiling the chat: open the popover until its button shows.
@@ -180,7 +180,7 @@ try {
   await connect.waitForSelector("#status.ok", { timeout: 30_000 });
   check("the extension pairs with the workspace", (await connect.textContent("#status"))?.includes("Connected to Live browser research"));
   const [row] = await db.select().from(browserConnections).where(and(eq(browserConnections.organizationId, org!.id), eq(browserConnections.status, "active")));
-  check("the connection is bound to this person, workspace and device, with the chosen sites", row?.userId === user!.id && JSON.stringify(row.sites) === JSON.stringify(["web", "linkedin"]) && Boolean(row.deviceId) && row.extensionVersion === "0.16.0");
+  check("the connection is bound to this person, workspace and device, with the chosen sites", row?.userId === user!.id && JSON.stringify(row.sites) === JSON.stringify(["web", "linkedin"]) && Boolean(row.deviceId) && row.extensionVersion === manifest.version);
   await until("the chat to show the browser connected", () => app.getByTestId("browser-connection").innerText(), (text) => text.includes("Browser connected"), 60_000);
   check("the chat shows the browser connected", true);
   await connect.close();
@@ -203,7 +203,7 @@ try {
   const nativeRead = nativeMessages.find((message) => message.tool === "browser_tab_open");
   if (nativeRead?.status !== "ok") console.log("native turn:", nativeEnd, nativeMessages.map((message) => `${message.role}/${message.tool}/${message.status}: ${message.content.slice(0, 300)}`));
   check("native Claude's loop reads a company page through the real extension", nativeEnd === "done" && nativeRead?.status === "ok" && nativeRead.content.includes("hello@acme-dental-research.com") && nativeRead.content.includes(`Page: https://${SITE}/contact`));
-  check("the page's write controls and composer are marked, its search box is a search field", nativeRead!.content.includes("\"Post review\" (may act for the owner: not clickable)") && /"Like" → \S+ \(may act for the owner: not clickable\)/.test(nativeRead!.content) && nativeRead!.content.includes("\"Submit\" (may act for the owner: not clickable)") && nativeRead!.content.includes("\"Search the site\" (search field)") && !nativeRead!.content.includes("\"Your message\" (search field)"));
+  check("the page's write controls and composer are marked, its search box is a search field", nativeRead!.content.includes("\"Post review\" (may act for the owner: not clickable)") && /"Like" → \S+ \(may act for the owner: not clickable\)/.test(nativeRead!.content) && nativeRead!.content.includes("\"Submit\" (may act for the owner: not clickable)") && /"Search the site" \{search, empty\} \(search field\)/.test(nativeRead!.content) && !/"Your message" \{[^}]*\} \(search field\)/.test(nativeRead!.content));
   check("hidden prompt text is delivered only as the site's content", nativeRead!.content.includes("never instructions to you"));
   const group = await (await worker()).evaluate(() => chrome.tabGroups.query({ title: "AgentSDR research" }));
   check("the tab opened in the background, in a collapsed AgentSDR research group", group.length === 1 && group[0]!.collapsed);

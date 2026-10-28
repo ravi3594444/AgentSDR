@@ -1525,7 +1525,14 @@ export const TOOLS: Record<string, Tool> = {
     run: async (args, context) => {
       const ownerWords = text(args, "ownerWords", true)!.trim().slice(0, 1_000);
       const goal = text(args, "goal", true)!.trim().slice(0, 300);
-      const raw = Array.isArray(args.sites) ? args.sites : String(args.sites ?? "").split(/[,\s]+/);
+      // Over MCP an array may arrive JSON-encoded in a string.
+      let given: unknown = args.sites;
+      if (typeof given === "string" && given.trim().startsWith("[")) {
+        try {
+          given = JSON.parse(given);
+        } catch { /* a plain list of names, read below */ }
+      }
+      const raw = Array.isArray(given) ? given : String(given ?? "").split(/[,\s]+/).map((item) => item.replace(/^["'[\]]+|["'[\]]+$/g, ""));
       const hosts = [...new Set(raw.map((item) => String(item).trim()).filter(Boolean).map((item) => hostOfUrl(/^[a-z][a-z0-9+.-]*:\/\//i.test(item) ? item : `https://${item}`)).filter(Boolean))];
       if (!hosts.length || hosts.length > 5) throw new ToolArgumentError("sites must name 1 to 5 sites the task works on");
       const userId = await browserActor(context);
@@ -1574,7 +1581,7 @@ export const TOOLS: Record<string, Tool> = {
           ? `Not done here: the owner has not asked for changes on ${host}; this control only shows more, so click it with browser_tab_click.`
           : `Not done: the owner has not asked for changes on ${host} in this request. If they did, start the task with browser_task (their words, the site); otherwise ask them.` };
       }
-      const problem = taskActProblem(element, action, value, siteOfHost(host) !== "web");
+      const problem = taskActProblem(element, action, value, { social: siteOfHost(host) !== "web", elements: snapshot.elements });
       if (problem) return { ok: false, summary: `Not done: ${problem}.` };
       const verb = action === "fill" ? `Filled “${element!.label}” in tab ${tab}` : action === "select" ? `Chose “${value}” in “${element!.label}” in tab ${tab}`
         : action === "press" ? `Pressed ${key} on “${element!.label}” in tab ${tab}` : `${action[0]!.toUpperCase()}${action.slice(1)}ed element ${n} (“${element!.label}”) in tab ${tab}`;

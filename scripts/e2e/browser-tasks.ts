@@ -113,6 +113,8 @@ const crm = (url: string): Snapshot => ({
     { n: 3, kind: "button", label: "Save contact", href: null, write: true, search: false },
     { n: 4, kind: "input", label: "Password", href: null, write: false, search: false, field: { type: "password", value: "", sensitive: true } },
     { n: 5, kind: "button", label: "Show more", href: null, write: false, search: false },
+    // A message written beside Send: its Send would send it.
+    { n: 6, kind: "input", label: "Email body", href: null, write: false, search: false, field: { type: "editor", value: "Hi Priya, following up." } },
   ],
 });
 // A real (1×1) JPEG, base64: what a screenshot carries.
@@ -161,6 +163,9 @@ try {
     const granted = await tool("browser_task", { ownerWords: "add them to my HubSpot as new contacts", sites: ["https://app.hubspot.com/contacts"], goal: "Add the 3 clinics as contacts" });
     const grant = (granted.data as { grant?: { hosts: string[]; requestKey: string } } | undefined)?.grant;
     check("the owner's own words, asking for a change on a site they named, start the task for this request", granted.ok && grant?.hosts.join() === "hubspot.com" && grant.requestKey === ask.id, granted);
+    // Native Claude over MCP sent the list JSON-encoded in a string (seen live, 28 Oct 2026).
+    const encoded = await tool("browser_task", { ownerWords: "add them to my HubSpot as new contacts", sites: "[\"app.hubspot.com\"]", goal: "Add the 3 clinics as contacts" });
+    check("a site list sent as a JSON string is read the same", encoded.ok && (encoded.data as { grant?: { hosts: string[] } }).grant?.hosts.join() === "hubspot.com", encoded.summary);
 
     // --- What a task does, and still refuses --------------------------------------------
     const before = browser.delivered.length;

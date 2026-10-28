@@ -48,10 +48,11 @@ function send<T>(tabId: number, method: string, params: Record<string, unknown> 
   ]);
 }
 
-async function attach(tabId: number): Promise<void> {
+/** Attaches to the tab (once); true when this call attached it. */
+async function attach(tabId: number): Promise<boolean> {
   if (attached.has(tabId)) {
     attached.set(tabId, Date.now());
-    return;
+    return false;
   }
   try {
     await chrome.debugger.attach({ tabId }, PROTOCOL);
@@ -63,6 +64,7 @@ async function attach(tabId: number): Promise<void> {
     if (!target?.attached || target.extensionId !== chrome.runtime.id) throw new Error("another debugger (DevTools, or another extension) is attached to that tab; the owner has to close it first");
   }
   attached.set(tabId, Date.now());
+  return true;
 }
 
 export async function release(tabId: number): Promise<void> {
@@ -137,9 +139,26 @@ function jpegSize(base64: string): { width: number; height: number } | null {
   return null;
 }
 
+/**
+ * The viewport once it holds still: attaching makes Chrome show its
+ * "started debugging" bar a moment later, which shortens the page, so a
+ * screenshot taken before that would be stale at once.
+ */
+async function settledMetrics(tabId: number): Promise<ScreenMetrics> {
+  if (await attach(tabId)) await new Promise((done) => setTimeout(done, 600));
+  let previous = await metrics(tabId);
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    await new Promise((done) => setTimeout(done, 150));
+    const current = await metrics(tabId);
+    if (sameView(current, previous)) return current;
+    previous = current;
+  }
+  return previous;
+}
+
 /** The tab's visible part, at most SCREENSHOT_MAX_SIDE a side. */
 export async function capture(tabId: number): Promise<Omit<BrowserScreenshot, "id" | "url" | "title" | "takenAt">> {
-  const view = await metrics(tabId);
+  const view = await settledMetrics(tabId);
   const [frame] = await chrome.scripting.executeScript({ target: { tabId }, func: () => devicePixelRatio });
   const devicePixels = typeof frame?.result === "number" && frame.result > 0 ? frame.result : 1;
   const screenFactor = devicePixels / (view.zoom || 1);

@@ -158,7 +158,8 @@ try {
 
   for (const [name, html, label, social] of [
     ["Send, in a mail composer", `<div><textarea>Hi Priya</textarea><button data-effect>Send</button></div>`, "Send", false],
-    ["Spanish Enviar", `<button data-effect>Enviar</button>`, "Enviar", false],
+    ["Spanish Enviar beside a written message", `<div contenteditable="true">Hola Priya</div><button data-effect>Enviar</button>`, "Enviar", false],
+    ["Senden on a social site", `<button data-effect>Senden</button>`, "Senden", true],
     ["Reply all", `<button data-effect>Reply all</button>`, "Reply all", false],
     ["Buy now", `<button data-effect>Buy now</button>`, "Buy now", false],
     ["Post on a social site", `<button data-effect>Post</button>`, "Post", true],
@@ -169,6 +170,9 @@ try {
     const result = await act(label, "click", { social });
     check(`a task still never clicks ${name}`, !result.page.ok && result.effects === 0, result);
   }
+  await load(page, `<form method="post" action="/registro"><input aria-label="Nombre"><input type="email" aria-label="Correo electrónico"><button>Enviar inscripción</button></form>`);
+  const registration = await act("Enviar inscripción", "click");
+  check("a registration form's “Enviar inscripción” (no message written) is the task's to submit", registration.page.ok && registration.effects === 1, registration);
   await load(page, `<button data-effect>Post</button>`);
   const blogPost = await act("Post", "click");
   check("Post on the owner's own (non-social) site is the task's to click", blogPost.page.ok && blogPost.effects === 1, blogPost);
@@ -183,9 +187,9 @@ try {
   await load(page, `<textarea aria-label="Message" onkeydown="window.effects++">Hi</textarea>`);
   const enterTextarea = await act("Message", "press", { key: enter });
   check("Enter is never pressed in a message box (chats send on Enter)", !enterTextarea.page.ok && enterTextarea.effects === 0, enterTextarea);
-  await load(page, `<form method="post"><input aria-label="Subject"><button>Send</button></form>`);
+  await load(page, `<form method="post"><input aria-label="Subject"><textarea aria-label="Body">Hi Priya</textarea><button>Send</button></form>`);
   const enterSend = await act("Subject", "press", { key: enter });
-  check("Enter is refused where it would submit through a Send button", !enterSend.page.ok && enterSend.effects === 0, enterSend);
+  check("Enter is refused where it would submit a written message through a Send button", !enterSend.page.ok && enterSend.effects === 0, enterSend);
   await load(page, `<input aria-label="Tags" onkeydown="if (event.key === 'ArrowDown' && event.shiftKey) window.effects++">`);
   const arrow = await act("Tags", "press", { key: { key: "ArrowDown", modifiers: ["Shift"] } });
   check("other keys reach the page's handlers with their modifiers", arrow.page.ok && arrow.effects === 1, arrow);

@@ -174,34 +174,44 @@ describe("browser tasks: what a grant allows and never allows", () => {
     expect(commandProblem(command({ action: { ...visual, op: "scroll", deltaY: -400, grant: null } }), now)).toBeNull();
   });
 
-  test("never sends, publishes, connects or pays, in several languages; social sites refuse more", () => {
-    for (const label of ["Send", "Reply all", "Enviar", "Senden", "Invia", "Message", "Invite teammates", "भेजें"]) {
-      expect(taskActProblem(element({ label }), "click", null, false)).toContain("outreach");
+  const web = { social: false, elements: [] };
+  const social = { social: true, elements: [] };
+  const drafted = { social: false, elements: [element({ n: 9, kind: "input", label: "Body", field: { type: "editor", value: "Hi Priya, …" } })] };
+
+  test("never contacts people, publishes, connects or pays, in several languages; social sites refuse more", () => {
+    for (const label of ["Reply all", "Forward", "Message", "Invite teammates", "Responder", "Nachricht", "Invita"]) {
+      expect(taskActProblem(element({ label }), "click", null, web)).toContain("outreach");
+    }
+    for (const label of ["Send", "Enviar", "Senden", "Invia", "भेजें"]) {
+      expect(taskActProblem(element({ label }), "click", null, drafted)).toContain("outreach");
+      expect(taskActProblem(element({ label }), "click", null, social)).toContain("outreach");
+      // With no message written, it is a form's submit button (a registration's "Enviar").
+      expect(taskActProblem(element({ label }), "click", null, web)).toBeNull();
     }
     for (const label of ["Post", "Comment", "Seguir", "Connect", "Follow"]) {
-      expect(taskActProblem(element({ label }), "click", null, true)).toContain("outreach");
-      expect(taskActProblem(element({ label }), "click", null, false)).toBeNull();
+      expect(taskActProblem(element({ label }), "click", null, social)).toContain("outreach");
+      expect(taskActProblem(element({ label }), "click", null, web)).toBeNull();
     }
-    expect(taskActProblem(element({ label: "Create follow-up task" }), "click", null, true)).toBeNull();
-    expect(taskActProblem(element({ label: "Add comment" }), "click", null, false)).toBeNull();
+    expect(taskActProblem(element({ label: "Create follow-up task" }), "click", null, social)).toBeNull();
+    expect(taskActProblem(element({ label: "Add comment" }), "click", null, web)).toBeNull();
     for (const label of ["Buy now", "Pay", "Place order", "Comprar", "Bezahlen"]) {
-      expect(taskActProblem(element({ label }), "click", null, false)).toContain("payments");
+      expect(taskActProblem(element({ label }), "click", null, web)).toContain("payments");
     }
-    expect(taskActProblem(element({ label: "Save contact" }), "click", null, false)).toBeNull();
+    expect(taskActProblem(element({ label: "Save contact" }), "click", null, drafted)).toBeNull();
   });
 
   test("fields: never a password, card or code; the right action for each kind", () => {
-    expect(taskActProblem(field({ field: { type: "password", value: "", sensitive: true } }), "fill", "x", false)).toContain("password");
-    expect(taskActProblem(field(), "fill", null, false)).toContain("value");
-    expect(taskActProblem(field(), "fill", "a@b.co", false)).toBeNull();
-    expect(taskActProblem(field({}, "checkbox"), "fill", "x", false)).toContain("not a text field");
-    expect(taskActProblem(field({}, "checkbox"), "check", null, false)).toBeNull();
-    expect(taskActProblem(field(), "check", null, false)).toContain("not a checkbox");
-    expect(taskActProblem(field({ kind: "select" }, "select"), "select", "Q4", false)).toBeNull();
-    expect(taskActProblem(field(), "select", "Q4", false)).toContain("not a dropdown");
-    expect(taskActProblem(element({ label: "Save" }), "fill", "x", false)).toContain("not a field");
-    expect(taskActProblem(field({ field: { type: "text", value: "", disabled: true } }), "fill", "x", false)).toContain("disabled");
-    expect(taskActProblem(undefined, "click", null, false)).toContain("read it again");
+    expect(taskActProblem(field({ field: { type: "password", value: "", sensitive: true } }), "fill", "x", web)).toContain("password");
+    expect(taskActProblem(field(), "fill", null, web)).toContain("value");
+    expect(taskActProblem(field(), "fill", "a@b.co", web)).toBeNull();
+    expect(taskActProblem(field({}, "checkbox"), "fill", "x", web)).toContain("not a text field");
+    expect(taskActProblem(field({}, "checkbox"), "check", null, web)).toBeNull();
+    expect(taskActProblem(field(), "check", null, web)).toContain("not a checkbox");
+    expect(taskActProblem(field({ kind: "select" }, "select"), "select", "Q4", web)).toBeNull();
+    expect(taskActProblem(field(), "select", "Q4", web)).toContain("not a dropdown");
+    expect(taskActProblem(element({ label: "Save" }), "fill", "x", web)).toContain("not a field");
+    expect(taskActProblem(field({ field: { type: "text", value: "", disabled: true } }), "fill", "x", web)).toContain("disabled");
+    expect(taskActProblem(undefined, "click", null, web)).toContain("read it again");
   });
 
   test("a reading shows each field's type and state, and never a sensitive value", () => {
