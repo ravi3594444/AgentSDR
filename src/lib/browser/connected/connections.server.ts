@@ -444,6 +444,7 @@ export async function runBrowserAction(input: {
   if (!connection) throw new BrowserConnectionError("none", "No browser is connected: the owner presses Connect browser in the chat once (the AgentSDR extension must be installed in Chrome).");
   if (state === "offline") throw new BrowserConnectionError("offline", `The owner's browser is offline (${minutesAgo(connection.lastSeenAt, now)}): Chrome is closed or asleep, or the extension stopped. Nothing was opened.`);
   if (state === "paused") throw new BrowserConnectionError("paused", "The owner pressed Stop in their browser's extension: nothing runs there until they resume it.");
+  if (input.signal?.aborted) throw new BrowserConnectionError("cancelled", "This turn was cancelled; nothing was sent to the browser.");
   const expiresAt = new Date(now.getTime() + input.timeoutMs);
   const command = await db.transaction(async (tx) => {
     const [next] = await tx.update(browserConnections).set({ commandSeq: sql`${browserConnections.commandSeq} + 1` })

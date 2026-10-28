@@ -4,6 +4,7 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { getByokSettings, isManagedAiConnectionId } from "@/lib/ai/byok";
 import { claudeCodeBinding } from "@/lib/ai/claudeCode/engine.server";
+import { nativeToolSignal } from "@/lib/ai/claudeCode/nativeToolScope.server";
 import { getAiConnection } from "@/lib/ai/connections";
 import { retrieveKnowledge } from "@/lib/crm/knowledge";
 import { discoveryAvailability, DiscoveryUnavailableError, MAX_DISCOVERY_RESULTS, normalizeCriteria, sourceLabel, startDiscovery, startInstagramProspects, startSocialProspects } from "@/lib/discovery/discovery.server";
@@ -472,7 +473,8 @@ async function connectedStep(context: ToolContext, verb: string, action: Browser
   const userId = actor ?? await browserActor(context);
   if (!userId) return { ok: false, summary: `${verb}: no person is attached to this chat, so no connected browser can be used.` };
   try {
-    return connectedResult(verb, await runBrowserAction({ userId, threadId: context.threadId, requestId: browserRequestKey(context), action, timeoutMs }));
+    // A native turn's cancellation reaches the queue: an undelivered step expires instead of running later.
+    return connectedResult(verb, await runBrowserAction({ userId, threadId: context.threadId, requestId: browserRequestKey(context), action, timeoutMs, signal: nativeToolSignal() }));
   } catch (error) {
     if (error instanceof BrowserConnectionError) return { ok: false, summary: `${verb}: ${error.message}` };
     throw error;
@@ -1316,7 +1318,7 @@ export const TOOLS: Record<string, Tool> = {
       let tabs = "";
       if (view.state === "connected" || view.state === "needs_attention") {
         try {
-          const result = await runBrowserAction({ userId, threadId: context.threadId, requestId: browserRequestKey(context), action: { kind: "tabs" }, timeoutMs: CONNECTED_TABS_MS });
+          const result = await runBrowserAction({ userId, threadId: context.threadId, requestId: browserRequestKey(context), action: { kind: "tabs" }, timeoutMs: CONNECTED_TABS_MS, signal: nativeToolSignal() });
           tabs = result.ok ? tabsLine(result.tabs ?? []) : `Its tabs could not be listed: ${result.error}.`;
         } catch (error) {
           if (!(error instanceof BrowserConnectionError)) throw error;

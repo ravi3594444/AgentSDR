@@ -56,6 +56,7 @@ const pollRoute = await import("@/app/api/browser-bridge/poll/route");
 const commandRoute = await import("@/app/api/browser-bridge/commands/[id]/route");
 const disconnectRoute = await import("@/app/api/browser-bridge/disconnect/route");
 const cli = await import("@/lib/ai/claudeCode/cli.server");
+const { inNativeTool } = await import("@/lib/ai/claudeCode/nativeToolScope.server");
 const engine = await import("@/lib/ai/claudeCode/engine.server");
 const { resetRunnerForTests } = await import("@/lib/ai/claudeCode/runner.server");
 type Contract = typeof import("@/lib/browser/connected/contract");
@@ -290,6 +291,19 @@ try {
     check("a late answer is refused", (await answer(tokenA, deviceA, taken[0]!, { ok: true, tabs: [] })).status === 409);
     const again = ((await (await poll(tokenA, deviceA)).json()) as { commands: Command[] }).commands;
     check("it is not delivered again", !again.some((command) => command.id === taken[0]!.id));
+
+    // A native turn cancelled while its step waits: the step expires undelivered; one asked after is never queued.
+    const turn = new AbortController();
+    const account = { organizationId: a.org.id, userId: a.user.id };
+    const cancelled = inNativeTool(account, turn.signal, () => runToolInThread({ threadId: threadA, userId: a.user.id, ownerText: "x", v2: true }, "browser_tab_read", { tab: 100 }));
+    await new Promise((done) => setTimeout(done, 300));
+    turn.abort(new Error("The owner cancelled the turn"));
+    const cancelledResult = await cancelled;
+    const after = ((await (await poll(tokenA, deviceA)).json()) as { commands: Command[] }).commands;
+    check("a cancelled native turn's waiting step is not delivered afterwards", !cancelledResult.ok && cancelledResult.summary.includes("cancelled") && after.length === 0);
+    const queuedBefore = (await db.select().from(browserCommands).where(eq(browserCommands.connectionId, paired.body.connectionId))).length;
+    const late = await inNativeTool(account, turn.signal, () => runToolInThread({ threadId: threadA, userId: a.user.id, ownerText: "x", v2: true }, "browser_tab_read", { tab: 100 }));
+    check("a step asked for after the cancel is never queued", !late.ok && (await db.select().from(browserCommands).where(eq(browserCommands.connectionId, paired.body.connectionId))).length === queuedBefore);
 
     // Never picked up (asleep).
     const asleep = await connections.runBrowserAction({ userId: a.user.id, threadId: threadA, requestId: threadA, action: { kind: "tabs" }, timeoutMs: 1_000 }).catch((failure: unknown) => failure);
