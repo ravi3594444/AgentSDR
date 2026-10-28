@@ -93,25 +93,58 @@ real Claude saw "8 elements" and no page text. The text is now in both.
   replayed, expired or malformed commands and saves the sequence before
   running. Tabs belong to the request that opened them; the owner's own tabs
   are untouched unless shared from the toolbar, and shared tabs are read only.
-- Reads only: typing only into search fields; write controls refused in the
-  server and again in the page; links followed only to enabled sites; https
-  public hosts only. Page text is labelled as the site's content. No
-  evaluate, form fill, upload or submit command exists.
+- Reads only: clicks allowed by structure (links by address, tabs,
+  disclosures, pagination, a GET search form's button, "more"/"next"
+  controls); everything else refused in the server and again on the live
+  element. Typing only into search boxes whose form is GET with no message,
+  password or file field. Links followed only to enabled sites; https public
+  hosts only. Page text is labelled as the site's content. No evaluate, form
+  fill, upload or submit command exists.
 - Practical, not obstructive: one Chrome permission request at Connect, then
   no per-page confirmation; no quotas, caps, deadlines or source priorities
   were added. Existing DNC, grounding, Start/Autonomous, spend and duplicate
   rules are unchanged; outreach still goes only through prepared plans.
 
+## 3a. Fixes after the 28 October review
+
+`docs/plans/BROWSER_RESEARCH_REVIEW_2026-10-28.md` reproduced six problems;
+each has its own commit on this branch, and the review's scripts in
+`scripts/review/` now pass.
+
+| | Problem | Fix |
+| --- | --- | --- |
+| BR1 | The upgrade path never created the tables | Script allowed into the image, copied into the runner, last in `DEFAULT_MIGRATIONS`; the packaging test now also checks the Dockerfile copies every default migration. Replayed twice. |
+| BR2 | A long poll that answered after a reconnect advanced the new connection's sequence and answered with its token | A poll's answer runs only while the connection that fetched it is still stored; sequence, execution and answer fenced on its token; a stale 401 removes only that same connection, atomically. |
+| BR3 | Non-English write buttons passed; a search could submit a message form | Clicks allowed by what a control is, not a verb list; unknown languages are refused, not allowed. Search only in GET forms with no message/password/file field. Checked on real DOM in Chromium (`scripts/e2e/browser-page-rules.ts`, 22 checks, counting the page's own handlers). |
+| BR4 | Evidence could name a page the contact is not on, or "quote" words only in the address | Each reading of the named page is checked on its own: the contact is grounded in that reading by the harness's own grounding functions, the quote must be in its page text. |
+| BR5 | A native turn's cancel did not reach queued browser steps | `nativeToolSignal()` passed to every queued step; a step waiting expires undelivered, one asked after the cancel is never queued. |
+| BR6 | Exa's `pages[]` reads could not be evidence | Readings with several pages are taken page by page (address, text, read time); verified on a local trial merge with `codex/exa-discovery-20261027`. |
+
+Found while verifying, also fixed: under load the native host could read
+Claude's first tool call before its `init` line (two pipes, no order) and
+refused it, ending the turn — the flake the review saw (1 in 6 runs with a
+typecheck alongside). The call now waits up to 5 s for `init` and still runs
+only once it verified; 0 in 12 runs after, and a test forces both orders.
+
+Merging with Exa: five files conflict, all two lists both branches append
+to (`.dockerignore`, `Dockerfile`, `deploy.sh`, `deploy.test.ts`,
+`agent.ts`'s long-result and page-state sets). Keep both entries; the
+order of the two migrations does not matter (both additive).
+
 ## 4. Evidence
 
 | Check | Result |
 | --- | --- |
-| New unit tests (`contract.test.ts`) | 15 pass |
-| Full unit suite | 2,329 pass, 0 fail |
-| `scripts/e2e/browser-research.ts` (real database, bridge routes, stand-in browser) | 65 pass |
+| New unit tests (`contract.test.ts`, native ordering) | 15 + 2 pass |
+| Full unit suite | 2,329 pass, 0 fail (run alone; see the ordering fix above) |
+| `scripts/e2e/browser-research.ts` (real database, bridge routes, stand-in browser) | 69 pass (65 + wrong-page evidence, address-only quote, two cancellation cases) |
+| `scripts/e2e/browser-page-rules.ts` (page script on real DOM in Chromium) | 22 pass |
+| Review probes: `browser-research-regressions.ts` / `browser-extension-connection-race.ts` (and `--same-connection`) / `browser-page-read-only.ts` (Happy DOM) | 8/8 (9/9 merged with Exa) / pass (control pass) / 4/4 |
 | `scripts/e2e/browser-research.live.ts` (real extension 0.16.0 in Chromium 153, real local Next server, fixture sites) | 45 pass, on `next dev` and on the production build |
-| Same, with `LIVE_REAL_CLAUDE=1` (real Claude Code CLI, this container's login) | 47 pass |
+| Same, with `LIVE_REAL_CLAUDE=1` (real Claude Code CLI, this container's login), after the review fixes | 47 pass on the production build |
 | Existing `scripts/e2e/claude-native-harness.ts` | 27 pass |
+| Trial merge with `codex/exa-discovery-20261027` (local, not pushed) | typecheck pass; 2,340 unit; Exa 30, browser 69, native 27, review probe 9/9 |
+| Deploy packaging test (`docker/deploy.test.ts`) | 25 pass |
 | Organization-scope contract | pass |
 | Typecheck; ESLint on changed files | pass |
 | Production build (Turbopack) and extension packaging | pass; the zip holds 17 files; 76 trace warnings, none naming the new files |
@@ -164,10 +197,12 @@ was saved or sent.
 5. **Chrome's permission prompt.** Pre-answered in the test build (the
    manifest copy requires `https://*/*`); the shipped extension asks at
    Connect.
-6. **Limits as built.** The write-control guard reads English labels (typing
-   is search-only regardless); one connection per person and workspace, one
-   workspace per extension at a time; the seven tools are offered in every
-   chat, connected or not.
+6. **Limits as built.** Clicks are allowed by structure, so a site that
+   marks a write control as a tab or disclosure would be clicked (a page
+   acting against its own signed-in user); a "more"/"next" label in a
+   language not listed is refused rather than allowed. One connection per
+   person and workspace, one workspace per extension at a time; the seven
+   tools are offered in every chat, connected or not.
 7. **Site terms.** LinkedIn, X, Reddit, Instagram and Facebook restrict
    automated access; the assistant browses as the owner, so a site may limit
    their account. The Connect page says so. Reddit through the owner's own
