@@ -437,7 +437,7 @@ export function PlatformAdminClient() {
           {!overview && !error && <p className="text-paragraph-sm text-text-sub-600">Loading…</p>}
           {overview && byService.map(({ service, keys }) => (
             <section key={service} className="mb-2">
-              <h3 className="pt-3 text-label-xs uppercase tracking-wide text-text-sub-600">{MANAGED_SERVICE_INFO[service].label}</h3>
+              <h3 className="pt-3 text-label-xs uppercase tracking-wide text-text-sub-600">{service === "exa" ? "Exa web research" : MANAGED_SERVICE_INFO[service].label}</h3>
               <ul>
                 {keys.map((key) => {
                   const status = overview.credentials.find((c) => c.key === key);

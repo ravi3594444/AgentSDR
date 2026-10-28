@@ -75,6 +75,7 @@ async function ownValues(key: PlatformCredentialKey): Promise<{ values: Record<s
       return { values: key === "openrouter" ? { apiKey: credentials.apiKey, managementKey: credentials.managementKey ?? "" } : { apiKey: credentials.apiKey }, ai: settings };
     }
     case "anthropic":
+    case "exa":
       return null;
     case "tinyfish": {
       const [row] = await db.select({ encryptedKey: tinyfishSettings.encryptedKey }).from(tinyfishSettings).where(eq(tinyfishSettings.organizationId, currentOrganizationId())).limit(1);

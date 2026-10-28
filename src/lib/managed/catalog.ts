@@ -26,9 +26,9 @@ export const SERVICE_MODE_LABEL: Record<ServiceMode, string> = {
 };
 
 /** One stored platform credential. AI has three: the operator picks which engine Included workspaces use. */
-export type PlatformCredentialKey = "unipile" | "openrouter" | "aimlapi" | "anthropic" | "tinyfish" | "tavily" | "brightdata" | "apify";
+export type PlatformCredentialKey = "unipile" | "openrouter" | "aimlapi" | "anthropic" | "tinyfish" | "tavily" | "brightdata" | "apify" | "exa";
 
-export const PLATFORM_CREDENTIAL_KEYS: readonly PlatformCredentialKey[] = ["unipile", "openrouter", "aimlapi", "anthropic", "tinyfish", "tavily", "brightdata", "apify"];
+export const PLATFORM_CREDENTIAL_KEYS: readonly PlatformCredentialKey[] = ["unipile", "openrouter", "aimlapi", "anthropic", "tinyfish", "tavily", "brightdata", "apify", "exa"];
 
 export function isPlatformCredentialKey(value: unknown): value is PlatformCredentialKey {
   return typeof value === "string" && (PLATFORM_CREDENTIAL_KEYS as readonly string[]).includes(value);
@@ -101,12 +101,19 @@ export type PlatformCredentialField = {
 
 export type PlatformCredentialInfo = {
   label: string;
-  service: ManagedService;
+  /** Exa is supplied by the operator only; no additional customer setup screen. */
+  service: ManagedService | "exa";
   fields: PlatformCredentialField[];
   docsUrl: string;
 };
 
 export const PLATFORM_CREDENTIAL_INFO: Record<PlatformCredentialKey, PlatformCredentialInfo> = {
+  exa: {
+    label: "Exa",
+    service: "exa",
+    docsUrl: "https://exa.ai/docs/reference/search",
+    fields: [{ key: "apiKey", label: "API key", secret: true, required: true, help: "Makes Exa search and page reading available to both agent harnesses. Saving checks the key with one small metered search. No default request spending cap is added." }],
+  },
   unipile: {
     label: "Unipile",
     service: "unipile",

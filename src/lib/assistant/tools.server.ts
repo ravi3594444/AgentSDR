@@ -59,6 +59,8 @@ import { mergeProfile, PROFILE_LABELS, profileChanges } from "./profile";
 import { businessContext } from "./businessContext";
 import { businessSources } from "./businessContext.server";
 import { getBusinessProfile, updateBusinessProfile } from "./profile.server";
+import { ExaUnavailableError, readWithExa, searchWithExa } from "@/lib/exa/exa.server";
+import { EXA_READ_BATCH, ExaError, exaSearchInput } from "@/services/exa";
 import { ORGANIZATION_SCOPE, PERIOD_KINDS, RESULTS_SCOPE_KINDS, scopeIsEmpty, type PeriodKind, type ResultsScopeKind } from "./results";
 import { requestScope, results, resultsText, runScope, threadScope } from "./results.server";
 import { assistantJobs, leadAudiences, outreachRuns, type AudienceChannel } from "./schema";
@@ -1123,6 +1125,68 @@ export const TOOLS: Record<string, Tool> = {
         };
       } catch (error) {
         if (error instanceof InquiryRunError) return { ok: false, summary: error.message };
+        throw error;
+      }
+    },
+  },
+
+  exa_search: {
+    description: "Search the web with Exa using a natural-language description of the people, businesses or information needed. Returns URLs, titles and source highlights. Useful for descriptive company/person discovery and research beyond map listings; no city or niche is assumed. Requires the operator's Exa key. Search matches are candidates, not proof of interest. Read promising pages with exa_read or read_webpage, then save only published contacts with add_contacts. Uses metered Exa credits; only an explicit owner budget limits this request.",
+    arguments: "query (natural-language description), numResults (optional 1–100, default 10), includeDomains (optional array of domains), excludeDomains (optional array of domains)",
+    run: async (args, context) => {
+      let input;
+      try { input = exaSearchInput({ query: text(args, "query", true)!, numResults: args.numResults as number | undefined, includeDomains: args.includeDomains as string[] | undefined, excludeDomains: args.excludeDomains as string[] | undefined }); }
+      catch (error) { throw new ToolArgumentError(error instanceof Error ? error.message : "Invalid Exa search arguments"); }
+      try {
+        const result = await searchWithExa(input, { threadId: context.threadId, requestId: searchRequestId(context) });
+        const lines = result.results.map((hit, index) => `${index + 1}. ${hit.title || "(no title)"} — ${hit.url}${hit.snippet ? ` — ${hit.snippet}` : ""}`);
+        return {
+          ok: true,
+          summary: `Exa for “${input.query}”: ${result.results.length} results. Estimated source cost $${result.estimatedCostUsd.toFixed(4)}.\n${lines.join("\n")}${result.notices.length ? `\nExa notices: ${result.notices.join("\n")}` : ""}`,
+          display: `Searched the web (Exa): ${result.results.length} results`,
+          data: { provider: "exa", query: input.query, results: result.results, estimatedCostUsd: result.estimatedCostUsd },
+        };
+      } catch (error) {
+        if (error instanceof ExaUnavailableError || error instanceof ExaError) return { ok: false, summary: error.message };
+        throw error;
+      }
+    },
+  },
+
+  exa_read: {
+    description: "Read public web pages through Exa Contents, returning text, source URLs and the contact details each page actually publishes. Requires the operator's Exa key. Works with ordinary public websites; social login walls and Reddit's separate approval are not bypassed. Uses metered Exa credits and the owner's explicit request budget. Each batch reads up to 10 pages; call again for more.",
+    arguments: "urls (array of 1–10 public page URLs)",
+    run: async (args, context) => {
+      if (!Array.isArray(args.urls) || !args.urls.length || args.urls.length > EXA_READ_BATCH || args.urls.some((url) => typeof url !== "string" || url.length > 2048)) throw new ToolArgumentError(`urls must contain 1–${EXA_READ_BATCH} page URLs`);
+      const urls: string[] = [];
+      for (const raw of args.urls as string[]) {
+        let url: URL;
+        try { url = new URL(raw); } catch { throw new ToolArgumentError(`Invalid page URL: ${raw.slice(0, 100)}`); }
+        if (LOGIN_WALLED.test(url.hostname) || isRedditHost(url.hostname)) return { ok: false, summary: `Exa cannot be used to bypass ${url.hostname}'s access rules. ${SOCIAL_TOOLS_NOTE}` };
+        await assertPublicPageUrl(url.href);
+        urls.push(url.href);
+      }
+      try {
+        const result = await readWithExa([...new Set(urls)], { threadId: context.threadId, requestId: searchRequestId(context) });
+        const allowedHosts = new Set(urls.map((url) => new URL(url).hostname));
+        const pages = [];
+        for (const page of result.results) {
+          const url = new URL(page.url);
+          // Do not turn cross-host redirects, login pages or private destinations into contact evidence.
+          if (!allowedHosts.has(url.hostname) || LOGIN_WALLED.test(url.hostname) || isRedditHost(url.hostname)) continue;
+          await assertPublicPageUrl(page.url);
+          if (!page.text.trim()) continue;
+          const contacts = extractContacts(page.text, page.url).slice(0, PAGE_CONTACTS);
+          pages.push({ url: page.url, title: page.title, body: page.text, contacts, links: publicLinks(page.text, page.url), via: "Exa" });
+        }
+        return {
+          ok: pages.length > 0,
+          summary: `${pages.length} of ${urls.length} pages read via Exa. Estimated source cost $${result.estimatedCostUsd.toFixed(4)}.\n${pages.map((page) => pageResult(page).summary).join("\n\n")}${result.notices.length ? `\nExa notices: ${result.notices.join("\n")}` : ""}${pages.length < urls.length ? "\nSome pages returned no usable text or an unsupported destination. No contacts were inferred for them." : ""}`,
+          display: `Read ${pages.length} page${pages.length === 1 ? "" : "s"} (Exa)`,
+          data: { provider: "exa", pages, estimatedCostUsd: result.estimatedCostUsd },
+        };
+      } catch (error) {
+        if (error instanceof ExaUnavailableError || error instanceof ExaError) return { ok: false, summary: error.message };
         throw error;
       }
     },
