@@ -91,16 +91,25 @@ async function connection(): Promise<Connection | null> {
 
 // Writes to the connection run one at a time (each reads, changes a field and writes back).
 let writes: Promise<unknown> = Promise.resolve();
-function updateConnection(patch: Partial<Connection>): Promise<Connection | null> {
-  const next = writes.then(async () => {
+function serialized<T>(write: () => Promise<T>): Promise<T> {
+  const next = writes.then(write);
+  writes = next.catch(() => {});
+  return next;
+}
+
+/**
+ * Changes the stored connection; with `token`, only while that is still the
+ * stored connection. Work that began on one connection (a poll answer, a
+ * 401) must never touch a newer pairing that replaced it meanwhile.
+ */
+function updateConnection(patch: Partial<Connection>, token?: string): Promise<Connection | null> {
+  return serialized(async () => {
     const current = await connection();
-    if (!current) return null;
+    if (!current || (token !== undefined && current.token !== token)) return null;
     const updated = { ...current, ...patch };
     await chrome.storage.local.set({ [CONNECTION_KEY]: updated });
     return updated;
   });
-  writes = next.catch(() => {});
-  return next;
 }
 
 async function deviceId(): Promise<string> {
@@ -213,7 +222,7 @@ async function pollLoop(): Promise<void> {
         if (error instanceof BridgeHttpError && error.status === 401) {
           // Disconnected from the app, or its person left the workspace; a newer pairing made meanwhile stays.
           lastError = error.message;
-          if ((await connection())?.token === conn.token) await forget();
+          await forget(conn.token);
           continue;
         }
         lastError = error instanceof Error ? error.message : String(error);
@@ -227,7 +236,8 @@ async function pollLoop(): Promise<void> {
       lastContactAt = Date.now();
       const serverTime = Date.parse(answer.serverTime);
       if (Number.isFinite(serverTime)) clockOffset = serverTime - Date.now();
-      for (const command of answer.commands) await runCommand(command);
+      // The answer belongs to the connection that asked; once that one is replaced, the rest is dropped.
+      for (const command of answer.commands) if (!(await runCommand(conn, command))) break;
       if (conn.paused) await sleep(5_000);
     }
   } finally {
@@ -236,14 +246,21 @@ async function pollLoop(): Promise<void> {
   }
 }
 
-async function runCommand(command: BrowserResearchCommand): Promise<void> {
-  const conn = await connection();
-  if (!conn) return;
-  const problem = commandProblem(command, { lastSeq: conn.lastSeq, now: Date.now() + clockOffset });
+/**
+ * Runs one command a poll of `fetchedWith` returned. False when that
+ * connection is no longer the stored one (the owner reconnected or switched
+ * workspace while the poll waited): nothing is run, recorded or answered,
+ * and the newer connection's sequence and token are left alone.
+ */
+async function runCommand(fetchedWith: Connection, command: BrowserResearchCommand): Promise<boolean> {
+  const current = await connection();
+  if (current?.token !== fetchedWith.token) return false;
+  const problem = commandProblem(command, { lastSeq: current.lastSeq, now: Date.now() + clockOffset });
   // Already run, or past its deadline: the app has its answer or gave up; answering again changes nothing.
-  if (problem && (command.seq <= conn.lastSeq || /expired/.test(problem))) return;
-  // Saved before it runs: a restart part-way never runs it twice.
-  await updateConnection({ lastSeq: Math.max(conn.lastSeq, command.seq) });
+  if (problem && (command.seq <= current.lastSeq || /expired/.test(problem))) return true;
+  // Saved before it runs, and only on its own connection: a restart part-way never runs it twice.
+  const conn = await updateConnection({ lastSeq: Math.max(current.lastSeq, command.seq) }, fetchedWith.token);
+  if (!conn) return false;
   let result: BrowserResearchResult;
   if (problem) {
     result = { ok: false, error: `refused by the extension: ${problem}` };
@@ -260,10 +277,12 @@ async function runCommand(command: BrowserResearchCommand): Promise<void> {
       busy = false;
     }
   }
+  // Answered with the token of the connection it came to, whatever is stored by now.
   await bridgeFetch(conn, `/api/browser-bridge/commands/${command.id}`, { seq: command.seq, result }).catch((error: unknown) => {
     lastError = error instanceof Error ? error.message : String(error);
   });
   await researchBadge();
+  return true;
 }
 
 // --- Commands -----------------------------------------------------------------
@@ -496,19 +515,35 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   void pollLoop();
 });
 
-/** Forgets the connection here and closes every research tab (the app side was already revoked, or is told). */
-async function forget(): Promise<void> {
-  await chrome.storage.local.remove(CONNECTION_KEY);
+/** Closes every research tab and forgets the shared ones. */
+async function clearTabs(): Promise<void> {
   await closeTabs(Object.keys(await tabsRegistry()).map(Number));
   await setSharedTabs([]);
+}
+
+/**
+ * Forgets the connection here and closes every research tab (the app side
+ * was already revoked, or is told). With `token`, only if that connection is
+ * still the stored one, checked and removed in one step.
+ */
+async function forget(token?: string): Promise<void> {
+  const removed = await serialized(async () => {
+    const current = await connection();
+    if (!current || (token !== undefined && current.token !== token)) return false;
+    await chrome.storage.local.remove(CONNECTION_KEY);
+    return true;
+  });
+  if (!removed) return;
+  await clearTabs();
   await chrome.alarms.clear(ALARM);
   await researchBadge();
 }
 
 export async function disconnectResearch(): Promise<void> {
   const conn = await connection();
-  if (conn) await bridgeFetch(conn, "/api/browser-bridge/disconnect", {}).catch(() => undefined);
-  await forget();
+  if (!conn) return;
+  await bridgeFetch(conn, "/api/browser-bridge/disconnect", {}).catch(() => undefined);
+  await forget(conn.token);
 }
 
 /** The app's Disconnect: only the app this browser is connected to may ask. */
@@ -557,11 +592,11 @@ async function pair(nonce: string, sites: ResearchSiteKey[]): Promise<BridgeResu
       sites: chosen,
     });
     await chrome.storage.session.remove(`${PAIRING_PREFIX}${nonce}`);
-    // A new pairing (another workspace or app) replaces the old one: its tabs close, its token is dropped.
-    if (previous) await disconnectResearch();
-    await chrome.storage.local.set({
-      [CONNECTION_KEY]: { apiBase: pairing.apiBase, token: paired.token, connectionId: paired.connectionId, organizationName: paired.organizationName, userEmail: paired.userEmail, sites: chosen, lastSeq: 0, paused: false } satisfies Connection,
-    });
+    // A new pairing (another workspace or app) replaces the old one: its token is dropped, its tabs close.
+    if (previous) await bridgeFetch(previous, "/api/browser-bridge/disconnect", {}).catch(() => undefined);
+    const next: Connection = { apiBase: pairing.apiBase, token: paired.token, connectionId: paired.connectionId, organizationName: paired.organizationName, userEmail: paired.userEmail, sites: chosen, lastSeq: 0, paused: false };
+    await serialized(() => chrome.storage.local.set({ [CONNECTION_KEY]: next }));
+    if (previous) await clearTabs();
     startResearch();
     await researchBadge();
     return { ok: true, organizationName: paired.organizationName };
