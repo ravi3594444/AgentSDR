@@ -502,9 +502,28 @@ the queue is `connections.server.ts`; the worker side is
   names are refused, and "web" hosts are resolved server-side
   (`BROWSER_RESEARCH_ALLOW_PRIVATE=true` only for local fixtures). Page text
   is untrusted content; a sign-in, CAPTCHA or blank page is reported as
-  needing the owner and grounds nothing. Never add an evaluate, form-fill or
-  submit command, and never send a cookie, password or the site's session to
-  the server.
+  needing the owner and grounds nothing. Never add an evaluate (arbitrary
+  JavaScript) or raw debugger command, never a change outside an owner's
+  task grant (below), and never send a cookie, password or the site's
+  session to the server.
+- **Tasks the owner asked for** (extension 0.17.0,
+  `docs/plans/INTERACTIVE_BROWSER_REPORT_2026-10-28.md`). `browser_task`
+  starts one only from the owner's own words in this request, copied
+  exactly, asking for a change and naming each site (`tasks.ts`); the grant
+  is the chat's own `browser_task` tool record and travels with every
+  change (`grantCovers` in the extension too). Then `browser_tab_act`
+  (fill, select, check, press, click by element number) and
+  `browser_tab_screenshot` / `browser_tab_visual`: the tab is moved into an
+  unfocused AgentSDR task window and worked through `chrome.debugger`
+  (`extensions/whatsapp-recorder/src/screen.ts`); points are image pixels of
+  the tab's latest screenshot, refused once it navigated, scrolled, resized
+  or zoomed. A grant never contacts people (reply, message, invite;
+  "Send" beside a written message or on a social site), never publishes
+  or connects on a social site, never pays, never presses Enter in a
+  message box, never reads or types a password, card or code. A screenshot
+  reaches the model as an image (MCP image block; API image parts only when
+  `structuredVision()` says the model takes images, otherwise the tool says
+  so), is never stored, and grounds nothing.
 - **Evidence.** `add_contacts` (`sourceUrl`, `quote` per contact) and
   `add_instagram_contacts` (`sources`) keep the page, read time and quote,
   checked against what this chat actually read (`pageEvidence.server.ts`);
