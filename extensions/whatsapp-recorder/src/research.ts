@@ -88,7 +88,9 @@ const GROUPS_KEY = "researchGroups";
 const SHOTS_KEY = "researchShots";
 const PAIRING_PREFIX = "researchPairing:";
 const ALARM = "research-poll";
-const GROUP_TITLE = "AgentSDR research";
+/** The tab group research and task tabs live in, in the owner's window and in the task window. */
+const BRAND = "22nd x ai Browser Assistant";
+const GROUP_TITLE = "22nd x ai Browser Assistant";
 const POLL_TIMEOUT_MS = 35_000;
 const LOAD_TIMEOUT_MS = 30_000;
 const PAGE_TIMEOUT_MS = 20_000;
@@ -258,7 +260,7 @@ async function researchBadge(): Promise<void> {
   await chrome.action.setBadgeText({ text });
   await chrome.action.setBadgeBackgroundColor({ color: attention ? "#d97706" : "#6d28d9" });
   await chrome.action.setTitle({
-    title: !conn ? "AgentSDR" : conn.paused ? "AgentSDR research is stopped — click to resume" : attention ? "AgentSDR research: a page needs you" : busy ? "AgentSDR is researching in this browser" : `AgentSDR research connected (${conn.organizationName})`,
+    title: !conn ? BRAND : conn.paused ? `${BRAND} is stopped — click to resume` : attention ? `${BRAND}: a page needs you` : busy ? `${BRAND} is working in this browser` : `${BRAND}: connected to ${conn.organizationName}`,
   });
 }
 
@@ -782,7 +784,7 @@ function deviceLabel(): string {
 
 async function pair(nonce: string, sites: ResearchSiteKey[], domains: string[]): Promise<BridgeResult & { organizationName?: string }> {
   const pairing = await pairingFor(nonce);
-  if (!pairing) return { ok: false, error: "This connect link expired. Press Connect browser in AgentSDR again." };
+  if (!pairing) return { ok: false, error: "This connect link expired. Press Connect browser in the app again." };
   const chosen = researchSites(sites);
   const websites = accessDomains(domains);
   if (!chosen.length && !websites.length) return { ok: false, error: "Choose at least one website." };

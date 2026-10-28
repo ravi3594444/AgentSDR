@@ -104,7 +104,7 @@ export async function showInTaskWindow(tabId: number): Promise<number> {
     return existing.id;
   }
   const created = await chrome.windows.create({ tabId, focused: false, state: "normal", width: 1200, height: 860 });
-  if (created?.id === undefined) throw new Error("Chrome did not open the AgentSDR task window");
+  if (created?.id === undefined) throw new Error("Chrome did not open the 22nd x ai task window");
   await chrome.storage.session.set({ [TASK_WINDOW_KEY]: created.id });
   return created.id;
 }

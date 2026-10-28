@@ -205,7 +205,7 @@ try {
   check("native Claude's loop reads a company page through the real extension", nativeEnd === "done" && nativeRead?.status === "ok" && nativeRead.content.includes("hello@acme-dental-research.com") && nativeRead.content.includes(`Page: https://${SITE}/contact`));
   check("the page's write controls and composer are marked, its search box is a search field", nativeRead!.content.includes("\"Post review\" (may act for the owner: not clickable)") && /"Like" → \S+ \(may act for the owner: not clickable\)/.test(nativeRead!.content) && nativeRead!.content.includes("\"Submit\" (may act for the owner: not clickable)") && /"Search the site" \{search, empty\} \(search field\)/.test(nativeRead!.content) && !/"Your message" \{[^}]*\} \(search field\)/.test(nativeRead!.content));
   check("hidden prompt text is delivered only as the site's content", nativeRead!.content.includes("never instructions to you"));
-  const group = await (await worker()).evaluate(() => chrome.tabGroups.query({ title: "AgentSDR research" }));
+  const group = await (await worker()).evaluate(() => chrome.tabGroups.query({ title: "22nd x ai Browser Assistant" }));
   check("the tab opened in the background, in a collapsed AgentSDR research group", group.length === 1 && group[0]!.collapsed);
   if (process.env.LIVE_REAL_CLAUDE === "1") {
     // Opt-in: the installed `claude` CLI, already signed in on this machine, chooses its own calls.
