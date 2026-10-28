@@ -977,7 +977,7 @@ export const TOOLS: Record<string, Tool> = {
         const username = instagramContactUsername(source.username);
         if (!username || !usernames.includes(username)) throw new ToolArgumentError("each source names one of the usernames being saved");
         if (typeof source.sourceUrl !== "string" || !source.sourceUrl.trim()) throw new ToolArgumentError(`the source of @${username} needs its sourceUrl`);
-        const evidence = await pageEvidence(context.threadId, source.sourceUrl.trim(), typeof source.quote === "string" ? source.quote : null);
+        const evidence = await pageEvidence(context.threadId, source.sourceUrl.trim(), typeof source.quote === "string" ? source.quote : null, { instagram: [username] });
         if ("problem" in evidence) throw new ToolArgumentError(`@${username}: ${evidence.problem}`);
         found.set(username, evidence);
       }
@@ -1006,7 +1006,8 @@ export const TOOLS: Record<string, Tool> = {
         const field = (key: string) => (typeof contact[key] === "string" && contact[key].trim() ? contact[key].trim() : null);
         const sourceUrl = field("sourceUrl");
         if (sourceUrl) {
-          const evidence = await pageEvidence(context.threadId, sourceUrl, field("quote"));
+          // The contact itself must be on that page as it was read, not merely somewhere in the chat.
+          const evidence = await pageEvidence(context.threadId, sourceUrl, field("quote"), { contacts: [{ email: field("email"), phone: field("phone"), linkedinUrl: field("linkedinUrl") }] });
           if ("problem" in evidence) throw new ToolArgumentError(`contact ${index + 1}: ${evidence.problem}`);
           found.set(index + 1, evidence);
         }

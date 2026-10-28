@@ -153,6 +153,7 @@ try {
       { n: 5, kind: "input", label: "Your message", href: null, write: false, search: false },
     ] }),
     "https://www.instagram.com/acme.dental.pune/": page("https://www.instagram.com/acme.dental.pune/", "acme.dental.pune · Acme Dental Pune · Family dentistry in Kothrud, booking via DM", { title: "Acme Dental (@acme.dental.pune) • Instagram" }),
+    "https://beta-cleaning.in/about?ref=hello%40acme-dental.in&fact=voted+best+clinic": page("https://beta-cleaning.in/about?ref=hello%40acme-dental.in&fact=voted+best+clinic", "Bob runs Beta Cleaning. Contact bob@beta-cleaning.in."),
     "https://login-wall.in/members": page("https://login-wall.in/members", "Sign in to continue", { attention: { kind: "login", detail: "the site asks the owner to sign in" } }),
   };
   let nextTab = 100;
@@ -214,6 +215,13 @@ try {
     check("a quote that is not on the page is refused", !wrongQuote.ok && wrongQuote.summary.includes("quote"));
     const unreadPage = await runToolInThread({ ...context }, "add_contacts", { contacts: [{ name: "Acme Dental", email: "hello@acme-dental.in", sourceUrl: "https://acme-dental.in/about" }] });
     check("a source page not read in the chat is refused", !unreadPage.ok && unreadPage.summary.includes("was not read"));
+    // Another page, read in the same chat, whose address carries the first page's email and a made-up claim.
+    const beta = "https://beta-cleaning.in/about?ref=hello%40acme-dental.in&fact=voted+best+clinic";
+    await runToolInThread({ ...context }, "browser_tab_open", { url: beta });
+    const misattributed = await runToolInThread({ ...context }, "add_contacts", { contacts: [{ name: "Acme Dental", email: "hello@acme-dental.in", sourceUrl: beta, quote: "Bob runs Beta Cleaning." }] });
+    check("a contact is not attributed to a page it is not on, even one read in the chat", !misattributed.ok && misattributed.summary.includes("does not appear on"));
+    const echoed = await runToolInThread({ ...context }, "add_contacts", { contacts: [{ name: "Bob", email: "bob@beta-cleaning.in", sourceUrl: beta, quote: "voted best clinic" }] });
+    check("words only in the page's address are not a quote from it", !echoed.ok && echoed.summary.includes("not in the text"));
     const saved = await runToolInThread({ ...context }, "add_contacts", { contacts: [{ name: "Acme Dental", email: "hello@acme-dental.in", phone: "+91 98220 11111", sourceUrl: "https://acme-dental.in/contact", quote: "We are hiring a front-desk manager" }] });
     check("a contact read in the owner's browser is saved", saved.ok);
     const audienceId = (saved.data as { audienceId: string }).audienceId;
