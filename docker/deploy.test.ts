@@ -29,6 +29,7 @@ const MIGRATIONS = [
   "add-sender-pacing",
   "add-whatsapp-warmup-off",
   "add-optional-research-budget",
+  "create-browser-research-tables",
 ];
 const DEFAULT_FILES = "-f docker-compose.yml -f docker-compose.build.yml -f docker-compose.discovery.yml";
 const ENOUGH_MEMORY = "MemTotal: 8000000 kB\nMemAvailable: 4000000 kB\nSwapTotal: 4194300 kB\nSwapFree: 4194300 kB\n";
@@ -447,6 +448,9 @@ test("every default migration reaches the image: deploy.sh's list is the tested 
   expect(defaults).toEqual(MIGRATIONS);
   const allowed = new Set(readFileSync(join(import.meta.dir, "..", ".dockerignore"), "utf8").split("\n").map((line) => line.trim()));
   expect(defaults.filter((name) => !allowed.has(`!scripts/${name}.ts`))).toEqual([]);
+  // …and the Dockerfile copies each into the runner image, where deploy.sh runs it.
+  const dockerfile = readFileSync(join(import.meta.dir, "..", "Dockerfile"), "utf8");
+  expect(defaults.filter((name) => !dockerfile.includes(`/app/scripts/${name}.ts ./scripts/${name}.ts`))).toEqual([]);
 });
 
 test("a CHECK rewritten by several default migrations allows the same values in each, and in db/schema.sql", () => {
