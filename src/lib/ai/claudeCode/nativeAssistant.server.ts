@@ -8,6 +8,9 @@ import { inNativeTool } from "./nativeToolScope.server";
 import { startToolBridge, type NativeTool } from "./toolBridge.server";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
+/** How long a tool call read before the CLI's init frame waits for it. */
+const INIT_WAIT_MS = 5_000;
+
 /**
  * The CLI drives the complete tool loop in one process. All effects go back
  * through the host's existing handlers; there is no transport retry here.
@@ -35,6 +38,9 @@ export async function runNativeAssistant(input: {
   input.signal?.addEventListener("abort", abort, { once: true });
   if (input.signal?.aborted) abort();
   let initialized = false;
+  // The CLI prints init before its first call, but this process can read that call first (two pipes, no order between them).
+  let verified: () => void = () => {};
+  const initFrame = new Promise<void>((resolve) => { verified = resolve; });
   let checking = false;
   const check = async () => {
     if (controller.signal.aborted) throw controller.signal.reason;
@@ -50,6 +56,8 @@ export async function runNativeAssistant(input: {
     signal: controller.signal,
     maxCalls: input.maxCalls,
     execute: async (name, args) => {
+      // A call read before the init frame waits for it (briefly); nothing runs until the login and tools are verified.
+      if (!initialized) await Promise.race([initFrame, new Promise((resolve) => { setTimeout(resolve, INIT_WAIT_MS).unref(); controller.signal.addEventListener("abort", resolve, { once: true }); })]);
       if (!initialized) throw new Error("Claude's login and tool configuration have not been verified.");
       try { await check(); }
       catch (error) { controller.abort(error); throw error; }
@@ -92,6 +100,7 @@ export async function runNativeAssistant(input: {
             const problem = nativeInitProblem(frame);
             if (problem) throw new Error(problem);
             initialized = true;
+            verified();
           }
         },
       },

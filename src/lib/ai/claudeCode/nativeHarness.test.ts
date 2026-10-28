@@ -62,6 +62,23 @@ test("init must confirm the own login, app tools and no built-in or foreign tool
   expect(nativeInitProblem({ ...init, tools: [...init.tools, "mcp__other__send"] })).not.toBeNull();
 });
 
+test("a tool call read before the CLI's init frame waits for it, and runs only after it", async () => {
+  const owner = account();
+  scenario(owner, { nativeCallBeforeInit: true, nativeSteps: [{ name: "set_brief", args: { goal: "clinics" } }] });
+  const seen: string[] = [];
+  const result = await turn(owner, { execute: async (name) => { seen.push(name); return { content: [{ type: "text", text: "ok" }] }; } });
+  expect(result.answer).toEqual(answer);
+  expect(seen).toEqual(["set_brief"]);
+});
+
+test("a call whose init frame never verifies is refused, not run", async () => {
+  const owner = account();
+  scenario(owner, { nativeCallBeforeInit: true, nativeInitTools: ["StructuredOutput", "mcp__agentsdr__set_brief", "Bash"], nativeSteps: [{ name: "set_brief", args: { goal: "clinics" } }] });
+  const seen: string[] = [];
+  await expect(turn(owner, { execute: async (name) => { seen.push(name); return { content: [{ type: "text", text: "ok" }] }; } })).rejects.toThrow();
+  expect(seen).toEqual([]);
+});
+
 test("one native process receives a tool result and uses it in its next call", async () => {
   const owner = account();
   scenario(owner, { nativeSteps: [{ name: "set_brief", args: { goal: "clinics" } }, { name: "web_search", copyPrevious: true }] });

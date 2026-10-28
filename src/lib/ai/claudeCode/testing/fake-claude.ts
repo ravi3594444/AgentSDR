@@ -33,6 +33,8 @@ type Scenario = {
   slowMs?: number;
   nativeSteps?: Array<{ name: string; args?: Record<string, unknown>; copyPrevious?: boolean }>;
   nativeInitTools?: string[];
+  /** Sends the first native tool call before printing init, as a host under load may read them in that order. */
+  nativeCallBeforeInit?: boolean;
 };
 
 const config = process.env.CLAUDE_CONFIG_DIR ?? "";
@@ -130,6 +132,8 @@ async function generate() {
     const list = await nativeRpc("tools/list");
     nativeTools = (list.tools as Array<{ name: string }>).map((tool) => `mcp__agentsdr__${tool.name}`);
   }
+  const first = current.nativeSteps?.[0];
+  const early = current.nativeCallBeforeInit && nativeRpc && first ? nativeRpc("tools/call", { name: first.name, arguments: first.args ?? {} }) : null;
   emit({ type: "system", subtype: "init", model, apiKeySource: keySource, tools: current.nativeInitTools ?? ["StructuredOutput", ...nativeTools] });
   const resetsAt = Math.floor(Date.now() / 1000) + 3_600;
   if (outcome === "opus_limit") {
@@ -168,9 +172,9 @@ async function generate() {
     emit({ type: "result", subtype: "success", is_error: false, result: "I think the answer is fine.", usage: { input_tokens: 40, output_tokens: 8 } });
   } else {
     let previous: Record<string, unknown> = {};
-    for (const step of nativeRpc ? current.nativeSteps ?? [] : []) {
+    for (const [index, step] of (nativeRpc ? current.nativeSteps ?? [] : []).entries()) {
       if (!nativeRpc) throw new Error("Native tools were requested without an MCP connection");
-      const result = await nativeRpc("tools/call", { name: step.name, arguments: { ...(step.copyPrevious ? previous : {}), ...step.args } });
+      const result = index === 0 && early ? await early : await nativeRpc("tools/call", { name: step.name, arguments: { ...(step.copyPrevious ? previous : {}), ...step.args } });
       previous = ((result.structuredContent as { data?: Record<string, unknown> } | undefined)?.data) ?? {};
     }
     const answer = current.answer ?? example(schema);
