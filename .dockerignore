@@ -57,6 +57,7 @@ scripts
 !scripts/add-whatsapp-warmup-off.ts
 !scripts/add-optional-research-budget.ts
 !scripts/create-browser-research-tables.ts
+!scripts/add-exa.ts
 !scripts/grant-platform-operator.ts
 !scripts/recover-whatsapp-reply.ts
 

@@ -8,6 +8,7 @@ import { ApifyError, verifyApifyToken } from "@/services/apify";
 import { BrightdataError, verifyBrightdataKey } from "@/services/brightdata";
 import { getTavilyUsage, TavilyError } from "@/services/tavily";
 import { TinyfishError, tinyfishSearch } from "@/services/tinyfish";
+import { exaSearch } from "@/services/exa";
 import type { PlatformCredentialKey } from "./catalog";
 
 /**
@@ -21,6 +22,9 @@ import type { PlatformCredentialKey } from "./catalog";
  */
 export async function verifyPlatformCredential(key: PlatformCredentialKey, values: Record<string, string>): Promise<Record<string, string> | void> {
   switch (key) {
+    case "exa":
+      await exaSearch(values.apiKey ?? "", { query: "Exa search documentation", numResults: 1 });
+      return;
     case "unipile": {
       const normalized = normalizeUnipileCredentials(values);
       await verifyPlatformCredentials("unipile", normalized);

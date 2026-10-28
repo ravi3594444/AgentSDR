@@ -2991,7 +2991,7 @@ CREATE TABLE public.platform_credentials (
     updated_by uuid,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT platform_credentials_provider_chk CHECK ((provider = ANY (ARRAY['unipile'::text, 'openrouter'::text, 'aimlapi'::text, 'anthropic'::text, 'tinyfish'::text, 'tavily'::text, 'brightdata'::text, 'apify'::text])))
+    CONSTRAINT platform_credentials_provider_chk CHECK ((provider = ANY (ARRAY['unipile'::text, 'openrouter'::text, 'aimlapi'::text, 'anthropic'::text, 'tinyfish'::text, 'tavily'::text, 'brightdata'::text, 'apify'::text, 'exa'::text])))
 );
 
 --
