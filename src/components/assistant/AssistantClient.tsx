@@ -194,6 +194,10 @@ const TOOL_TITLE: Record<string, string> = {
   browser_tab_scroll: "Scrolled in your browser",
   browser_tab_search: "Searched in your browser",
   browser_tab_close: "Closed research tabs",
+  browser_task: "Started a browser task",
+  browser_tab_act: "Worked in your browser",
+  browser_tab_screenshot: "Looked at a page in your browser",
+  browser_tab_visual: "Worked on screen in your browser",
   diagnose_delivery: "Checked delivery",
 };
 

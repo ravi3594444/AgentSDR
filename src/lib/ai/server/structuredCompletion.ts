@@ -100,6 +100,12 @@ export type StructuredCompletionInput = {
   accept?: (text: string) => void;
   /** Called before each retry (attempt 2, 3, …), e.g. to tell the owner the model is being asked again. */
   onRetry?: (info: { attempt: number; maxAttempts: number; reason: string }) => void | Promise<void>;
+  /**
+   * Images the model must see with the user prompt (a screenshot), sent as
+   * image parts. Only for a model that takes images (vision.server.ts); a
+   * runtime that cannot send one refuses the call rather than drop it.
+   */
+  images?: Array<{ mediaType: "image/jpeg" | "image/png"; data: string }>;
   /** OpenRouter plugins, e.g. `[{ id: "web" }]` for grounded answers. */
   plugins?: Array<Record<string, unknown>>;
   /** Sees each request before it is sent, so a caller can audit one that fails. */
@@ -310,7 +316,7 @@ export async function completeStructured(
   // When `accept` rejects an answer, the next attempt is told why and shown
   // what it wrote; repeating the identical request mostly repeats the answer.
   let rejected: { text: string; reason: string } | null = null;
-  const userContent = () => rejected
+  const userText = () => rejected
     ? [
         input.userPrompt,
         `Your previous answer was rejected: ${rejected.reason}`,
@@ -318,6 +324,9 @@ export async function completeStructured(
         "Answer again, fixing exactly that.",
       ].join("\n\n")
     : input.userPrompt;
+  const userContent = () => input.images?.length
+    ? [{ type: "text" as const, text: userText() }, ...input.images.map((image) => ({ type: "image_url" as const, image_url: { url: `data:${image.mediaType};base64,${image.data}` } }))]
+    : userText();
 
   function buildRequest() {
     const base = {

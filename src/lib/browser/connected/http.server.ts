@@ -6,12 +6,14 @@ import { BrowserBridgeError } from "./connections.server";
 
 /** Bridge bodies are small: a pairing, a heartbeat, one page reading. */
 const MAX_BODY_BYTES = 512 * 1024;
+/** A command's answer may carry one screenshot (connections.server.ts bounds the image itself). */
+export const MAX_RESULT_BYTES = 4 * 1024 * 1024;
 
-export async function readBridgeJson(request: Request): Promise<unknown> {
+export async function readBridgeJson(request: Request, maxBytes = MAX_BODY_BYTES): Promise<unknown> {
   const declared = Number(request.headers.get("content-length") ?? "0");
-  if (declared > MAX_BODY_BYTES) throw new BrowserBridgeError(413, "Too large.");
+  if (declared > maxBytes) throw new BrowserBridgeError(413, "Too large.");
   const raw = await request.text();
-  if (raw.length > MAX_BODY_BYTES) throw new BrowserBridgeError(413, "Too large.");
+  if (raw.length > maxBytes) throw new BrowserBridgeError(413, "Too large.");
   try {
     return JSON.parse(raw);
   } catch {

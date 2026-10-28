@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "AgentSDR Call Recorder",
-  "version": "0.16.0",
-  "description": "Places WhatsApp Web calls from AgentSDR and records them; when you connect it, lets AgentSDR's assistant research the sites you enable in background tabs.",
+  "version": "0.17.0",
+  "description": "Places WhatsApp Web calls from AgentSDR and records them; when you connect it, lets AgentSDR's assistant research the sites you enable and carry out the browser tasks you ask for there.",
   "icons": {
     "16": "icon-16.png",
     "32": "icon-32.png",
@@ -15,7 +15,8 @@
     "scripting",
     "alarms",
     "tabGroups",
-    "activeTab"
+    "activeTab",
+    "debugger"
   ],
   "host_permissions": [
     "https://app.agentsdr.ai/*",

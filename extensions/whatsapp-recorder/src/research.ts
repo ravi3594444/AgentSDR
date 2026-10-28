@@ -16,19 +16,32 @@
  *   window, each belonging to the request that opened it; a command for
  *   another request cannot touch them. The owner's own tabs are never read
  *   unless they shared one from the toolbar (that page, read only).
- * - It reads; it does not act for the owner. Clicks on controls that send,
- *   post, follow, connect and the like are refused in the page, and only
- *   search fields take text.
+ * - Research reads; it does not act for the owner. Clicks on controls that
+ *   send, post, follow, connect and the like are refused in the page, and
+ *   only search fields take text.
+ * - A task the owner asked for (the server checked their words, tasks.ts)
+ *   comes with its grant: fields, selects, checkboxes, keys and clicks
+ *   ("act"), and screen steps ("visual", screen.ts), only on pages of the
+ *   grant's sites before it expires. Even then nothing sends, publishes,
+ *   connects or pays, and no password, card or code is read or typed.
+ *   A visual step points into the tab's latest screenshot and is refused
+ *   once the tab navigated, scrolled or resized since; a fresh screenshot
+ *   comes back after it.
  */
 
 import {
   commandProblem,
+  grantCovers,
   pageScript,
   pageScriptConfig,
   RESEARCH_LIMITS,
   researchSites,
   researchUrlProblem,
+  parseTaskKey,
+  siteOfHost,
   BROWSER_DEVICE_HEADER,
+  READ_VISUAL_OPS,
+  SCREENSHOT_TTL_MS,
   type BrowserPairResponse,
   type BrowserPollRequest,
   type BrowserPollResponse,
@@ -40,8 +53,10 @@ import {
   type PageScriptResult,
   type ResearchAttention,
   type ResearchSiteKey,
+  type BrowserScreenshotFacts,
 } from "../../../src/lib/browser/connected/contract";
 import type { BridgeResult, ResearchMessage, ResearchPairing, ResearchStatus } from "./messages";
+import * as screen from "./screen";
 
 type Connection = {
   apiBase: string;
@@ -64,6 +79,8 @@ const DEVICE_KEY = "researchDeviceId";
 const TABS_KEY = "researchTabs";
 const SHARED_KEY = "researchSharedTabs";
 const GROUPS_KEY = "researchGroups";
+/** Per tab, its latest screenshot: the only one a visual step may point into. */
+const SHOTS_KEY = "researchShots";
 const PAIRING_PREFIX = "researchPairing:";
 const ALARM = "research-poll";
 const GROUP_TITLE = "AgentSDR research";
@@ -135,6 +152,30 @@ function changeTabs(change: (tabs: Record<string, ResearchTab>) => void): Promis
   });
   tabWrites = next.catch(() => {});
   return next;
+}
+
+type Shot = BrowserScreenshotFacts & { tabId: number };
+
+async function shots(): Promise<Record<string, Shot>> {
+  return ((await chrome.storage.session.get(SHOTS_KEY))[SHOTS_KEY] as Record<string, Shot> | undefined) ?? {};
+}
+
+let shotWrites: Promise<unknown> = Promise.resolve();
+function changeShots(change: (all: Record<string, Shot>) => void): Promise<void> {
+  const next = shotWrites.then(async () => {
+    const all = await shots();
+    change(all);
+    await chrome.storage.session.set({ [SHOTS_KEY]: all });
+  });
+  shotWrites = next.catch(() => {});
+  return next;
+}
+
+/** After anything that may change the page, its old screenshot is no target any more. */
+function forgetShot(tabId: number): Promise<void> {
+  return changeShots((all) => {
+    delete all[String(tabId)];
+  });
 }
 
 async function sharedTabs(): Promise<SharedTabEntry[]> {
@@ -440,7 +481,8 @@ async function execute(conn: Connection, command: BrowserResearchCommand): Promi
       return readTab(conn, action.tabId, action.kind === "read" ? { op: "snapshot" } : { op: "scroll", direction: action.direction });
     }
     case "click":
-    case "search": {
+    case "search":
+    case "act": {
       if (!(await ownTab(command, action.tabId))) {
         return { ok: false, error: (await shared(action.tabId)) ? "a tab the owner shared is read only: open its address in a new tab to work it" : `tab ${action.tabId} is not one of this request's tabs` };
       }
@@ -448,10 +490,22 @@ async function execute(conn: Connection, command: BrowserResearchCommand): Promi
       if (!before) return { ok: false, error: "that tab is closed", tabId: action.tabId };
       const refusal = await urlRefusal(conn, before);
       if (refusal) return { ok: false, error: refusal.error, tabId: action.tabId, attention: refusal.attention ?? null };
-      const page = await inPage(action.tabId, action.kind === "click" ? { op: "click", n: action.n, label: action.label } : { op: "search", n: action.n, label: action.label, text: action.text });
+      let op: PageOp;
+      if (action.kind === "act") {
+        const host = new URL(before).hostname;
+        // The grant travels with the change: a page off the owner's named sites is never changed, whatever the model asked.
+        if (!grantCovers(action.grant, host, Date.now() + clockOffset)) return { ok: false, error: `the owner's request covers ${action.grant.hosts.join(", ")}, not ${host} (or it expired); nothing was changed`, tabId: action.tabId };
+        const key = action.key === null ? null : parseTaskKey(action.key);
+        op = { op: "act", n: action.n, label: action.label, action: action.op, value: action.value, key, social: siteOfHost(host) !== "web" };
+      } else {
+        op = action.kind === "click" ? { op: "click", n: action.n, label: action.label } : { op: "search", n: action.n, label: action.label, text: action.text };
+      }
+      await forgetShot(action.tabId);
+      const page = await inPage(action.tabId, op);
       // No answer at all: the page navigated away while the script returned, which is the action working.
       if (!page.ok && page.error !== NO_ANSWER) return { ok: false, error: page.error, tabId: action.tabId, attention: page.attention ?? null };
       if (page.ok && "navigate" in page) return navigate(conn, action.tabId, page.navigate);
+      const note = page.ok && "acted" in page ? page.note : undefined;
       // A button or a search may have navigated: read only where the enabled sites allow.
       await waitForLoad(action.tabId);
       const after = (await chrome.tabs.get(action.tabId).catch(() => null))?.url;
@@ -459,8 +513,16 @@ async function execute(conn: Connection, command: BrowserResearchCommand): Promi
         await chrome.tabs.goBack(action.tabId).catch(() => undefined);
         return { ok: false, error: `that led to ${new URL(after).hostname}, which is not enabled for research; went back and read nothing`, tabId: action.tabId };
       }
-      return readTab(conn, action.tabId);
+      const read = await readTab(conn, action.tabId);
+      return note && read.ok ? { ...read, note } : read;
     }
+    case "screenshot": {
+      if (!(await ownTab(command, action.tabId))) return { ok: false, error: (await shared(action.tabId)) ? "a tab the owner shared is not pictured: open its address in a new tab" : `tab ${action.tabId} is not one of this request's tabs` };
+      return screenshot(conn, action.tabId);
+    }
+    case "visual":
+      if (!(await ownTab(command, action.tabId))) return { ok: false, error: (await shared(action.tabId)) ? "a tab the owner shared is read only: open its address in a new tab to work it" : `tab ${action.tabId} is not one of this request's tabs` };
+      return visual(conn, action);
     case "tabs": {
       const list: BrowserResearchTab[] = [];
       for (const [id, entry] of Object.entries(await tabsRegistry())) {
@@ -484,6 +546,99 @@ async function execute(conn: Connection, command: BrowserResearchCommand): Promi
   }
 }
 
+// --- Screen steps (screen.ts) --------------------------------------------------------
+
+/** The tab, shown in the task window, as an image; it becomes the tab's only screenshot a visual step may use. */
+async function screenshot(conn: Connection, tabId: number): Promise<BrowserResearchResult> {
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!tab?.url) return { ok: false, error: "that tab is closed", tabId };
+  const refusal = await urlRefusal(conn, tab.url);
+  if (refusal) return { ok: false, error: `the tab is on ${new URL(tab.url).hostname}: ${refusal.error}; nothing was captured`, tabId, attention: refusal.attention ?? null };
+  try {
+    const windowId = await screen.showInTaskWindow(tabId);
+    await addToGroup(tabId, windowId).catch(() => undefined);
+    // A tab just made visible draws its next frame first.
+    await sleep(300);
+    const image = await screen.capture(tabId);
+    const current = await chrome.tabs.get(tabId);
+    const shot: BrowserScreenshotFacts = { id: crypto.randomUUID(), url: current.url ?? tab.url, title: current.title ?? "", width: image.width, height: image.height, scale: image.scale, viewport: image.viewport, takenAt: new Date(Date.now() + clockOffset).toISOString() };
+    await changeShots((all) => {
+      all[String(tabId)] = { ...shot, tabId };
+    });
+    await touch(tabId, null);
+    return { ok: true, tabId, screenshot: { ...shot, mediaType: image.mediaType, data: image.data } };
+  } catch (error) {
+    await forgetShot(tabId);
+    return { ok: false, error: `no screenshot: ${error instanceof Error ? error.message : String(error)}`, tabId };
+  }
+}
+
+/**
+ * A pointer or keyboard step into the tab's latest screenshot. Refused when
+ * that screenshot is not the one named, is old, or the tab has since moved
+ * (a navigation, a scroll, a resize, a zoom): the same point would land on
+ * something else. Steps that may change things need the grant (a click
+ * without one only lands where a research click could); what is under the
+ * point, or has the keyboard, is checked in the page first.
+ */
+async function visual(conn: Connection, action: Extract<BrowserResearchAction, { kind: "visual" }>): Promise<BrowserResearchResult> {
+  const tabId = action.tabId;
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!tab?.url) return { ok: false, error: "that tab is closed", tabId };
+  const refusal = await urlRefusal(conn, tab.url);
+  if (refusal) return { ok: false, error: refusal.error, tabId, attention: refusal.attention ?? null };
+  const host = new URL(tab.url).hostname;
+  const acting = !READ_VISUAL_OPS.includes(action.op);
+  if (action.grant && !grantCovers(action.grant, host, Date.now() + clockOffset)) return { ok: false, error: `the owner's request covers ${action.grant.hosts.join(", ")}, not ${host} (or it expired); nothing was done`, tabId };
+  if (acting && !action.grant && action.op !== "click") return { ok: false, error: `${action.op} may change things, and the owner has not asked for changes on ${host}; nothing was done`, tabId };
+  const shot = (await shots())[String(tabId)];
+  const stale = (why: string): BrowserResearchResult => ({ ok: false, error: `that screenshot is no longer a valid target (${why}); take a new one with browser_tab_screenshot. Nothing was done`, tabId });
+  if (!shot || shot.id !== action.shotId) return stale("it is not this tab's latest screenshot");
+  if (Date.now() + clockOffset - Date.parse(shot.takenAt) > SCREENSHOT_TTL_MS) return stale("it is more than 10 minutes old");
+  if (tab.url !== shot.url) return stale("the tab went to another page since");
+  const points = [[action.x, action.y], ...(action.toX !== null && action.toY !== null ? [[action.toX, action.toY]] : [])];
+  if (points.some(([x, y]) => x! > shot.width || y! > shot.height)) return { ok: false, error: `a point is outside the ${shot.width}×${shot.height} screenshot; nothing was done`, tabId };
+  try {
+    const live = await screen.metrics(tabId);
+    if (!screen.sameView(live, shot.viewport)) return stale("the tab scrolled, resized or zoomed since");
+    const css = (value: number) => value / shot.scale;
+    const key = action.key === null ? null : parseTaskKey(action.key);
+    const social = siteOfHost(host) !== "web";
+    if (action.op !== "scroll") {
+      const probe = await inPage(tabId, action.op === "type" || action.op === "key"
+        ? { op: "probe", x: 0, y: 0, target: "focus", key, social, readOnly: !action.grant }
+        : { op: "probe", x: css(action.x), y: css(action.y), target: "point", key: null, social, readOnly: !action.grant });
+      if (!probe.ok) return { ok: false, error: `${probe.error}; nothing was done`, tabId, attention: probe.attention ?? null };
+    }
+    await forgetShot(tabId);
+    await screen.input(tabId, {
+      op: action.op,
+      x: css(action.x),
+      y: css(action.y),
+      toX: action.toX === null ? null : css(action.toX),
+      toY: action.toY === null ? null : css(action.toY),
+      deltaX: action.deltaX === null ? null : css(action.deltaX),
+      deltaY: action.deltaY === null ? null : css(action.deltaY),
+      text: action.text,
+      key,
+    });
+  } catch (error) {
+    await forgetShot(tabId);
+    // The step may or may not have reached the page: said so, and never repeated here.
+    return { ok: false, error: `screen control failed part-way, so the step may or may not have happened: ${error instanceof Error ? error.message : String(error)}`, tabId };
+  }
+  await sleep(700);
+  const loading = (await chrome.tabs.get(tabId).catch(() => null))?.status === "loading";
+  if (loading) await waitForLoad(tabId);
+  const after = (await chrome.tabs.get(tabId).catch(() => null))?.url;
+  if (after && after !== tab.url && (await urlRefusal(conn, after))) {
+    await chrome.tabs.goBack(tabId).catch(() => undefined);
+    return { ok: false, error: `that led to ${new URL(after).hostname}, which is not enabled; went back`, tabId };
+  }
+  const next = await screenshot(conn, tabId);
+  return next.ok ? { ...next, note: `${action.op.replace("_", " ")} done${after && after !== tab.url ? `; the tab is now on ${after}` : ""}` } : next;
+}
+
 // --- Housekeeping -----------------------------------------------------------------
 
 /** Tabs a request left unused close; the owner's closing a tab or leaving a shared page ends it here too. */
@@ -491,18 +646,30 @@ async function sweep(): Promise<void> {
   const now = Date.now();
   const stale = Object.entries(await tabsRegistry()).filter(([, tab]) => now - tab.lastUsedAt > (tab.attention ? 4 : 1) * RESEARCH_LIMITS.idleTabMinutes * 60_000);
   if (stale.length) await closeTabs(stale.map(([id]) => Number(id)));
+  await screen.releaseIdle(now);
 }
+
+// The owner's Cancel on Chrome's "started debugging" bar is their Stop: research pauses until they resume.
+screen.watchDetach(() => {
+  void updateConnection({ paused: true }).then(async (conn) => {
+    if (conn) await closeTabs(Object.keys(await tabsRegistry()).map(Number));
+    await researchBadge();
+    void pollLoop();
+  });
+});
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   void changeTabs((tabs) => {
     delete tabs[String(tabId)];
   }).then(() => researchBadge());
+  void forgetShot(tabId);
   void sharedTabs().then((list) => setSharedTabs(list.filter((tab) => tab.tabId !== tabId)));
 });
 
 chrome.tabs.onUpdated.addListener((tabId, change) => {
   // Sharing was for that page: the owner moving on ends it.
   if (!change.url) return;
+  void shots().then((all) => (all[String(tabId)] && all[String(tabId)]!.url !== change.url ? forgetShot(tabId) : undefined));
   void sharedTabs().then((list) => {
     const entry = list.find((tab) => tab.tabId === tabId);
     if (entry && entry.url !== change.url) return setSharedTabs(list.filter((tab) => tab.tabId !== tabId));

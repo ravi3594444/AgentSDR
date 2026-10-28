@@ -37,7 +37,14 @@ type JsonSchemaRequest = {
 };
 
 function messageText(request: JsonSchemaRequest, role: "system" | "user"): string {
-  return (request.messages ?? []).filter((message) => message.role === role).map((message) => typeof message.content === "string" ? message.content : "").join("\n\n");
+  return (request.messages ?? []).filter((message) => message.role === role).map((message) => {
+    if (typeof message.content === "string") return message.content;
+    // A structured CLI generation takes text only: an image is refused here, never dropped silently.
+    if (Array.isArray(message.content) && message.content.some((part) => (part as { type?: unknown } | null)?.type !== "text")) {
+      throw new ClaudeCodeError("error", "Claude Code's structured answers here take text only, so an image cannot be given to it. No API was used instead.");
+    }
+    return Array.isArray(message.content) ? message.content.map((part) => String((part as { text?: unknown }).text ?? "")).join("") : "";
+  }).join("\n\n");
 }
 
 export function claudeCodeRuntime(

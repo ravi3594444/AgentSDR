@@ -109,6 +109,17 @@ function text(content: unknown): string {
   return "";
 }
 
+/** A message's images (OpenAI image_url parts with a base64 data URL) as Messages image blocks: never dropped on the way. */
+function images(content: unknown): Anthropic.Beta.BetaImageBlockParam[] {
+  if (!Array.isArray(content)) return [];
+  return content.flatMap((part): Anthropic.Beta.BetaImageBlockParam[] => {
+    const url = (part as { type?: unknown; image_url?: { url?: unknown } } | null)?.type === "image_url" ? (part as { image_url?: { url?: unknown } }).image_url?.url : null;
+    const match = typeof url === "string" ? /^data:(image\/(?:jpeg|png|gif|webp));base64,([A-Za-z0-9+/]+=*)$/.exec(url) : null;
+    if (!match && (part as { type?: unknown } | null)?.type === "image_url") throw new Error("Only inline base64 images can be sent to the Anthropic engine");
+    return match ? [{ type: "image", source: { type: "base64", media_type: match[1] as "image/jpeg" | "image/png" | "image/gif" | "image/webp", data: match[2]! } }] : [];
+  });
+}
+
 /** The Messages request for one OpenAI-shaped request. Exported for tests. */
 export function anthropicRequestFrom(raw: CompatRequest): Anthropic.Beta.MessageCreateParamsNonStreaming {
   if (raw.plugins) throw new Error("Web search plugins are not offered by the Anthropic engine");
@@ -117,7 +128,7 @@ export function anthropicRequestFrom(raw: CompatRequest): Anthropic.Beta.Message
   const system = (raw.messages ?? []).filter((message) => message.role === "system").map((message) => text(message.content)).filter(Boolean).join("\n\n");
   const messages: Anthropic.Beta.BetaMessageParam[] = (raw.messages ?? [])
     .filter((message) => message.role === "user" || message.role === "assistant")
-    .map((message) => ({ role: message.role as "user" | "assistant", content: text(message.content) }));
+    .map((message) => ({ role: message.role as "user" | "assistant", content: images(message.content).length ? [{ type: "text" as const, text: text(message.content) }, ...images(message.content)] : text(message.content) }));
   if (!messages.length || messages[0]!.role !== "user") messages.unshift({ role: "user", content: "Answer as instructed." });
   const requested = Number(raw.max_tokens ?? raw.max_completion_tokens);
   const maxTokens = Math.min(Math.max(Number.isFinite(requested) && requested > 0 ? Math.floor(requested) : MIN_MAX_TOKENS, MIN_MAX_TOKENS), MAX_MAX_TOKENS);

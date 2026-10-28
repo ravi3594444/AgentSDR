@@ -5,6 +5,7 @@ export const COMPACT_TOOLS = new Set([
   "set_brief", "review_leads", "set_lead_fit", "finish_request", "control_research", "web_search",
   "browser_open", "browser_read", "browser_click", "browser_fill", "browser_scroll", "browser_close",
   "browser_connection", "browser_tab_open", "browser_tab_read", "browser_tab_click", "browser_tab_scroll", "browser_tab_search", "browser_tab_close",
+  "browser_tab_act", "browser_tab_screenshot", "browser_tab_visual",
 ]);
 
 type ActivityMessage = {

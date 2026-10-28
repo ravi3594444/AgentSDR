@@ -26,7 +26,7 @@ export function createOpenRouterClient(apiKey: string, timeout = 30_000) {
   });
 }
 
-export type OpenRouterModel = { id: string; canonical_slug?: string; name: string; description?: string; context_length?: number; architecture?: { output_modalities?: string[] }; pricing?: { prompt?: string; completion?: string }; supported_parameters?: string[] };
+export type OpenRouterModel = { id: string; canonical_slug?: string; name: string; description?: string; context_length?: number; architecture?: { input_modalities?: string[]; output_modalities?: string[] }; pricing?: { prompt?: string; completion?: string }; supported_parameters?: string[] };
 export type OpenRouterByokCredential = {
   id: string;
   provider: string;
@@ -51,6 +51,21 @@ async function openRouterJson<T>(path: string, apiKey?: string): Promise<T> {
   }
   if (!body) throw new Error("OpenRouter returned an empty response");
   return body;
+}
+
+let inputsCache: { value: Promise<Map<string, string[]>>; expires: number } | null = null;
+
+/** What a model takes as input ("text", "image", …) by its id, from OpenRouter's public catalog (cached 10 minutes); null when it is not listed. */
+export async function openRouterModelInputs(modelId: string): Promise<string[] | null> {
+  if (!inputsCache || inputsCache.expires < Date.now()) {
+    const value = openRouterJson<{ data?: OpenRouterModel[] }>("/models?limit=1000&output_modalities=all")
+      .then((body) => new Map((body.data ?? []).flatMap((model) => [[model.id, model.architecture?.input_modalities ?? ["text"]], ...(model.canonical_slug ? [[model.canonical_slug, model.architecture?.input_modalities ?? ["text"]] as [string, string[]]] : [])])));
+    inputsCache = { value, expires: Date.now() + 10 * 60_000 };
+    value.catch(() => {
+      if (inputsCache?.value === value) inputsCache = null;
+    });
+  }
+  return (await inputsCache.value).get(modelId) ?? null;
 }
 
 export async function verifyOpenRouterInferenceKey(apiKey: string): Promise<void> {

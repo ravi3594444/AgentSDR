@@ -20,8 +20,11 @@ import {
   type BrowserResearchAction,
   type BrowserResearchCommand,
   type BrowserResearchResult,
+  type BrowserScreenshot,
+  type BrowserScreenshotFacts,
   type ResearchAttention,
   type ResearchElement,
+  type ResearchField,
   type ResearchSnapshot,
   type SharedTab,
 } from "./contract";
@@ -296,6 +299,49 @@ function attentionOf(value: unknown): ResearchAttention | null {
     : null;
 }
 
+function fieldOf(value: unknown): ResearchField | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const field = value as Record<string, unknown>;
+  if (typeof field.type !== "string") return undefined;
+  const sensitive = field.sensitive === true;
+  return {
+    type: clip(field.type, 30),
+    // A sensitive field's value is never kept, whatever the extension sent.
+    value: sensitive ? "" : clip(field.value, 300),
+    ...(typeof field.checked === "boolean" ? { checked: field.checked } : {}),
+    ...(Array.isArray(field.options) ? { options: field.options.slice(0, 30).map((option) => clip(option, 80)) } : {}),
+    ...(field.disabled === true ? { disabled: true } : {}),
+    ...(field.required === true ? { required: true } : {}),
+    ...(sensitive ? { sensitive: true } : {}),
+  };
+}
+
+const SCREENSHOT_MAX_BASE64 = 3_500_000;
+
+function screenshotOf(value: unknown): BrowserScreenshot | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const shot = value as Record<string, unknown>;
+  const viewport = (shot.viewport && typeof shot.viewport === "object" ? shot.viewport : {}) as Record<string, unknown>;
+  const positive = (item: unknown, max: number) => typeof item === "number" && Number.isFinite(item) && item > 0 && item <= max;
+  const finite = (item: unknown) => (typeof item === "number" && Number.isFinite(item) ? item : 0);
+  if (typeof shot.id !== "string" || !/^[0-9a-f-]{36}$/i.test(shot.id)) return undefined;
+  if (shot.mediaType !== "image/jpeg" && shot.mediaType !== "image/png") return undefined;
+  if (typeof shot.data !== "string" || !shot.data || shot.data.length > SCREENSHOT_MAX_BASE64 || !/^[A-Za-z0-9+/]+={0,2}$/.test(shot.data)) return undefined;
+  if (!positive(shot.width, 4_096) || !positive(shot.height, 4_096) || !positive(shot.scale, 4) || !positive(viewport.width, 20_000) || !positive(viewport.height, 20_000)) return undefined;
+  return {
+    id: shot.id,
+    url: clip(shot.url, 2_000),
+    title: clip(shot.title, 300),
+    mediaType: shot.mediaType,
+    data: shot.data,
+    width: Math.round(shot.width as number),
+    height: Math.round(shot.height as number),
+    scale: shot.scale as number,
+    viewport: { width: viewport.width as number, height: viewport.height as number, scrollX: finite(viewport.scrollX), scrollY: finite(viewport.scrollY), zoom: positive(viewport.zoom, 10) ? viewport.zoom as number : 1 },
+    takenAt: typeof shot.takenAt === "string" && Number.isFinite(Date.parse(shot.takenAt)) ? new Date(shot.takenAt).toISOString() : new Date().toISOString(),
+  };
+}
+
 function snapshotOf(value: unknown): ResearchSnapshot | undefined {
   if (!value || typeof value !== "object") return undefined;
   const page = value as Record<string, unknown>;
@@ -306,7 +352,8 @@ function snapshotOf(value: unknown): ResearchSnapshot | undefined {
     if (typeof element.n !== "number" || !Number.isSafeInteger(element.n)) return [];
     const kind = ["link", "button", "input", "select", "tab", "other"].includes(String(element.kind)) ? element.kind as ResearchElement["kind"] : "other";
     const href = typeof element.href === "string" && /^https?:\/\//i.test(element.href) ? element.href.slice(0, 2_000) : null;
-    return [{ n: element.n, kind, label: clip(element.label, RESEARCH_LIMITS.maxLabelChars), href, write: element.write === true, search: element.search === true }];
+    const field = fieldOf(element.field);
+    return [{ n: element.n, kind, label: clip(element.label, RESEARCH_LIMITS.maxLabelChars), href, write: element.write === true, search: element.search === true, ...(field ? { field } : {}) }];
   });
   return {
     url: clip(page.url, 2_000),
@@ -344,6 +391,8 @@ export function parseResultRequest(value: unknown): BrowserCommandResultRequest 
       ...(result.snapshot ? { snapshot: snapshotOf(result.snapshot) } : {}),
       ...(tabs ? { tabs } : {}),
       ...(typeof result.closed === "number" && Number.isSafeInteger(result.closed) ? { closed: result.closed } : {}),
+      ...(screenshotOf(result.screenshot) ? { screenshot: screenshotOf(result.screenshot) } : {}),
+      ...(typeof result.note === "string" && result.note ? { note: clip(result.note, 500) } : {}),
     },
   };
 }
@@ -478,12 +527,12 @@ export async function runBrowserAction(input: {
     const [row] = await db.select({ status: browserCommands.status, result: browserCommands.result, error: browserCommands.error, deliveredAt: browserCommands.deliveredAt })
       .from(browserCommands).where(and(inOrg(browserCommands), eq(browserCommands.id, command.id))).limit(1);
     if (row?.status === "done" || row?.status === "failed") return row.result ?? { ok: false, error: row.error ?? "the browser could not do it" };
-    if (input.signal?.aborted) throw new BrowserConnectionError("cancelled", "This turn was cancelled before the browser answered.");
+    if (input.signal?.aborted) throw new BrowserConnectionError("cancelled", row?.deliveredAt ? "This turn was cancelled after the browser took the step, before it answered." : "This turn was cancelled before the browser took the step; it was not run.");
     throw new BrowserConnectionError("timeout", row?.deliveredAt
       ? "The owner's browser took the step but did not answer in time (the page may be frozen, or Chrome suspended the extension); it was not repeated."
       : "The owner's browser did not pick the step up in time (asleep, or the extension stopped); it was not run.");
   }
-  if (input.signal?.aborted) throw new BrowserConnectionError("cancelled", "This turn was cancelled before the browser answered.");
+  if (input.signal?.aborted) throw new BrowserConnectionError("cancelled", ended.deliveredAt ? "This turn was cancelled after the browser took the step, before it answered." : "This turn was cancelled before the browser took the step; it was not run.");
   throw new BrowserConnectionError("timeout", ended.deliveredAt
     ? "The owner's browser took the step but did not answer in time (the page may be frozen, or Chrome suspended the extension); it was not repeated."
     : "The owner's browser did not pick the step up in time (asleep, or the extension stopped); it was not run.");
@@ -494,10 +543,33 @@ export async function latestTabSnapshot(userId: string, requestId: string, tabId
   const connection = await activeConnection(userId);
   if (!connection) return null;
   const rows = await db.select({ result: browserCommands.result }).from(browserCommands)
-    .where(and(inOrg(browserCommands), eq(browserCommands.connectionId, connection.id), eq(browserCommands.requestId, requestId), eq(browserCommands.status, "done"), sql`(${browserCommands.result}->>'tabId')::bigint = ${tabId}`))
+    .where(and(inOrg(browserCommands), eq(browserCommands.connectionId, connection.id), eq(browserCommands.requestId, requestId), eq(browserCommands.status, "done"), sql`(${browserCommands.result}->>'tabId')::bigint = ${tabId}`, sql`${browserCommands.result} ? 'snapshot'`))
     .orderBy(desc(browserCommands.seq)).limit(1);
   const result = rows[0]?.result;
   return result?.ok ? result.snapshot ?? null : null;
+}
+
+/**
+ * The latest screenshot of `tabId` this request got, without its image: a
+ * visual step must point into it. Null when a later step on that tab that
+ * may have changed it (anything but a read) came after, or none was taken.
+ */
+export async function latestTabScreenshot(userId: string, requestId: string, tabId: number): Promise<BrowserScreenshotFacts | null> {
+  const connection = await activeConnection(userId);
+  if (!connection) return null;
+  const rows = await db.select({ action: browserCommands.action, shot: sql<BrowserScreenshotFacts | null>`(${browserCommands.result}->'screenshot') - 'data'::text` }).from(browserCommands)
+    .where(and(inOrg(browserCommands), eq(browserCommands.connectionId, connection.id), eq(browserCommands.requestId, requestId), sql`${browserCommands.action}->>'tabId' = ${String(tabId)}`, ne(sql`${browserCommands.action}->>'kind'`, "read")))
+    .orderBy(desc(browserCommands.seq)).limit(1);
+  const latest = rows[0];
+  return latest && (latest.action.kind === "screenshot" || latest.action.kind === "visual") ? latest.shot ?? null : null;
+}
+
+/** A screenshot's image is passed to the model once; the row keeps what it was, not the picture of the owner's page. */
+export async function dropScreenshotImage(userId: string, requestId: string, shotId: string): Promise<void> {
+  const connection = await activeConnection(userId);
+  if (!connection) return;
+  await db.update(browserCommands).set({ result: sql`jsonb_set(${browserCommands.result}, '{screenshot,data}', '""'::jsonb)` })
+    .where(and(inOrg(browserCommands), eq(browserCommands.connectionId, connection.id), eq(browserCommands.requestId, requestId), sql`${browserCommands.result}->'screenshot'->>'id' = ${shotId}`));
 }
 
 /**

@@ -348,6 +348,15 @@ describe("structured answers through completeStructured (fake CLI)", () => {
     accept,
   }, { runtime, sleep: async () => {} });
 
+  test("an image is refused, never dropped: a structured generation here takes text only", async () => {
+    const { target, runtime } = await bound({ answer: { verdict: "match", reason: "In Miami." } });
+    await expect(completeStructured({
+      timeoutMs: 20_000, systemPrompt: "Judge.", userPrompt: "Look.", maxOutputTokens: 400, jsonSchema: SCHEMA, schemaName: "judge_lead",
+      images: [{ mediaType: "image/png", data: "iVBORw0KGgo=" }],
+    }, { runtime, sleep: async () => {} })).rejects.toThrow("text only");
+    expect(generations(target)).toHaveLength(0);
+  });
+
   test("a valid answer passes the caller's schema validation unchanged", async () => {
     const { runtime } = await bound({ answer: { verdict: "no_match", reason: "Not in Miami." } });
     const result = await ask(runtime, (text) => { if (!["match", "no_match"].includes(JSON.parse(text).verdict)) throw new Error("bad verdict"); });

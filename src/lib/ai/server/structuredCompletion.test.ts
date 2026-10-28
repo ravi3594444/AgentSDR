@@ -68,6 +68,17 @@ describe("completeStructured", () => {
     assert.match(retry, /"name":"set_brief"/);
   });
 
+  test("images go with the user prompt as image parts, on every attempt", async () => {
+    const { runtime, requests } = scripted([{ content: "prose" }, { toolArgs: '{"category":"a"}' }]);
+    await completeStructured({ ...input, images: [{ mediaType: "image/jpeg", data: "/9j/4AAQ" }] }, { runtime, sleep: noSleep });
+    assert.equal(requests.length, 2);
+    for (const request of requests) {
+      const user = (request as { messages: Array<{ role: string; content: unknown }> }).messages.find((message) => message.role === "user")!.content as Array<Record<string, unknown>>;
+      assert.equal(user[0]!.type, "text");
+      assert.deepEqual(user[1], { type: "image_url", image_url: { url: "data:image/jpeg;base64,/9j/4AAQ" } });
+    }
+  });
+
   test("asks for the answer as a tool call, never as a response_format", async () => {
     const { runtime, requests } = scripted([{ toolArgs: '{"category":"a"}' }]);
     const result = await completeStructured(input, { runtime, sleep: noSleep });

@@ -36,6 +36,11 @@ describe("Anthropic engine: the OpenAI-shaped request as a Messages request", ()
     expect(anthropicRequestFrom(toolRequest)).toMatchObject({ fallbacks: "default", betas: ["server-side-fallback-2026-07-01"] });
     expect(anthropicRequestFrom({ ...toolRequest, model: "claude-haiku-5-5" })).not.toHaveProperty("fallbacks");
   });
+  test("an image part becomes an image block beside the text, never dropped", () => {
+    const request = anthropicRequestFrom({ ...toolRequest, messages: [{ role: "system", content: "Look." }, { role: "user", content: [{ type: "text", text: "The screenshot:" }, { type: "image_url", image_url: { url: "data:image/jpeg;base64,/9j/4AAQ" } }] }] });
+    expect(request.messages).toEqual([{ role: "user", content: [{ type: "text", text: "The screenshot:" }, { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "/9j/4AAQ" } }] }]);
+    expect(() => anthropicRequestFrom({ ...toolRequest, messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: "https://example.org/shot.png" } }] }] })).toThrow("base64");
+  });
   test("a web plugin is refused rather than answered from memory", () => {
     expect(() => anthropicRequestFrom({ ...toolRequest, plugins: [{ id: "web" }] })).toThrow("Web search");
   });
