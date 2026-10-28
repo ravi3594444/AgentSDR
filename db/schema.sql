@@ -1199,6 +1199,7 @@ CREATE TABLE public.browser_connections (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     paired_at timestamp with time zone,
     revoked_at timestamp with time zone,
+    domains text[] DEFAULT ARRAY[]::text[] NOT NULL,
     CONSTRAINT browser_connections_status_chk CHECK ((status = ANY (ARRAY['pending'::text, 'active'::text, 'revoked'::text])))
 );
 

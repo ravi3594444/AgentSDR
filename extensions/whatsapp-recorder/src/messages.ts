@@ -9,7 +9,7 @@
  */
 
 import type { RecorderBridgeRequest, RecorderCallPhase, RecorderLead } from "../../../src/lib/calls/contract";
-import type { BrowserBridgeRequest, ResearchSiteKey } from "../../../src/lib/browser/connected/contract";
+import type { BrowserAccessMode, BrowserBridgeRequest, ResearchSiteKey } from "../../../src/lib/browser/connected/contract";
 
 /** A call placed from the app, which the next recording belongs to. */
 export type ActiveCall = {
@@ -101,9 +101,9 @@ export type ResearchMessage =
   /** The Connect page asks what it was opened for: the app and the sites already enabled. */
   | { target: "research"; type: "pairing"; nonce: string | null }
   /** Pair with the app's code (the page asked Chrome for the sites' permissions first). */
-  | { target: "research"; type: "pair"; nonce: string; sites: ResearchSiteKey[] }
-  /** Change the enabled sites of the current connection. */
-  | { target: "research"; type: "set-sites"; sites: ResearchSiteKey[] }
+  | { target: "research"; type: "pair"; nonce: string; sites: ResearchSiteKey[]; domains?: string[] }
+  /** Change the website access of the current connection (all sites, or the ticked ones and specific websites). */
+  | { target: "research"; type: "set-sites"; sites: ResearchSiteKey[]; domains?: string[] }
   | { target: "research"; type: "status" }
   /** Stop (or resume) research in this browser; stopping closes its tabs. */
   | { target: "research"; type: "pause"; paused: boolean }
@@ -118,6 +118,14 @@ export type ResearchStatus = {
   organizationName: string | null;
   userEmail: string | null;
   sites: ResearchSiteKey[];
+  /** Specific websites (selected-sites access). */
+  domains: string[];
+  /** All websites, or selected sites. */
+  access: BrowserAccessMode;
+  /** What the assistant is doing in this browser now, in a few words, and since when (epoch ms). */
+  activity: { label: string; since: number } | null;
+  /** The last thing it did, and whether it worked. */
+  lastActivity: { label: string; at: number; ok: boolean } | null;
   paused: boolean;
   /** A command is running now. */
   busy: boolean;
@@ -130,7 +138,7 @@ export type ResearchStatus = {
   lastError: string | null;
 };
 
-export type ResearchPairing = { apiBase: string; sites: ResearchSiteKey[]; connected: boolean; organizationName: string | null };
+export type ResearchPairing = { apiBase: string; sites: ResearchSiteKey[]; domains: string[]; connected: boolean; organizationName: string | null };
 
 /** The "wa-recording" port: wa-agent streams the file to the service worker. */
 export const WA_RECORDING_PORT = "wa-recording";

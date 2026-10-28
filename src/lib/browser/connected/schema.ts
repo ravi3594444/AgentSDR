@@ -42,6 +42,8 @@ export const browserConnections = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     pairedAt: timestamp("paired_at", { withTimezone: true }),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    /** Specific websites a selected-sites connection lists, by domain (scripts/add-browser-access.ts). */
+    domains: text("domains").array().$type<string[]>().notNull().default(sql`ARRAY[]::text[]`),
   },
   (table) => [
     index("browser_connections_org_user_idx").on(table.organizationId, table.userId, table.status),

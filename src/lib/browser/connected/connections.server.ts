@@ -7,6 +7,7 @@ import { db } from "@/lib/db";
 import { members, organizations, users } from "@/lib/auth/schema";
 import { currentOrganizationId, inOrg, runInOrganization } from "@/lib/tenancy/scope";
 import {
+  accessDomains,
   BROWSER_DEVICE_HEADER,
   RESEARCH_LIMITS,
   researchSites,
@@ -139,6 +140,7 @@ export function parsePairRequest(value: unknown): BrowserPairRequest {
     deviceLabel: text(body.deviceLabel, "deviceLabel", 80),
     extensionVersion: text(body.extensionVersion, "extensionVersion", 20, VERSION),
     sites: researchSites(body.sites),
+    domains: accessDomains(body.domains),
   };
 }
 
@@ -160,6 +162,7 @@ export async function pairDevice(input: BrowserPairRequest, now = new Date()): P
     deviceLabel: input.deviceLabel,
     extensionVersion: input.extensionVersion,
     sites: input.sites,
+    domains: input.domains ?? [],
     pairedAt: now,
     lastSeenAt: now,
   }).where(and(eq(browserConnections.pairingCodeHash, hash(input.code)), eq(browserConnections.status, "pending"), gt(browserConnections.pairingExpiresAt, now))).returning();
@@ -248,6 +251,7 @@ export function parsePollRequest(value: unknown): BrowserPollRequest {
   return {
     extensionVersion: text(body.extensionVersion, "extensionVersion", 20, VERSION),
     sites: researchSites(body.sites),
+    domains: accessDomains(body.domains),
     sharedTabs: sharedTabs(body.sharedTabs),
     lastSeq: typeof body.lastSeq === "number" && Number.isSafeInteger(body.lastSeq) && body.lastSeq >= 0 ? body.lastSeq : 0,
     paused: body.paused === true,
@@ -273,7 +277,7 @@ async function expireOverdue(connectionId: string, now: Date): Promise<void> {
  */
 export async function pollCommands(row: BrowserConnectionRow, body: BrowserPollRequest, signal?: AbortSignal): Promise<BrowserPollResponse> {
   const now = new Date();
-  await db.update(browserConnections).set({ lastSeenAt: now, extensionVersion: body.extensionVersion, sites: body.sites, sharedTabs: body.sharedTabs, paused: body.paused })
+  await db.update(browserConnections).set({ lastSeenAt: now, extensionVersion: body.extensionVersion, sites: body.sites, domains: body.domains ?? [], sharedTabs: body.sharedTabs, paused: body.paused })
     .where(and(inOrg(browserConnections), eq(browserConnections.id, row.id), eq(browserConnections.status, "active")));
   await expireOverdue(row.id, now);
   const deadline = Date.now() + POLL_WAIT_MS;
@@ -455,6 +459,7 @@ export async function browserConnectionView(userId: string, now = new Date()): P
     connectionId: row?.id ?? null,
     deviceLabel: row?.deviceLabel ?? null,
     sites: row?.sites ?? [],
+    domains: row?.domains ?? [],
     lastSeenAt: row?.lastSeenAt?.toISOString() ?? null,
     attention: state === "needs_attention" ? row!.attention : null,
     extensionVersion: row?.extensionVersion ?? null,

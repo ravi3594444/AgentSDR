@@ -87,12 +87,69 @@ export function privateHostProblem(hostname: string): string | null {
   return null;
 }
 
+// --- Website access: what the owner let the extension reach ----------------------
+
+/**
+ * Website access is chosen once, when the owner connects: "all" (every
+ * public https website: every site key) or "selected" (the social sites they
+ * tick, plus specific websites by domain). Access is only where the
+ * assistant may go; what it may do there is the owner's request (tasks.ts).
+ */
+export type BrowserAccessMode = "all" | "selected";
+
+/** The most specific websites a selected-sites connection lists. */
+export const MAX_ACCESS_DOMAINS = 50;
+
+export function accessModeOf(sites: readonly ResearchSiteKey[]): BrowserAccessMode {
+  return RESEARCH_SITE_KEYS.every((key) => sites.includes(key)) ? "all" : "selected";
+}
+
+/** A website as the owner typed it ("app.hubspot.com", "https://www.acme.in/x") as its domain, or null when it is not a public website. */
+export function accessDomain(value: string): string | null {
+  const raw = value.trim().toLowerCase();
+  if (!raw) return null;
+  let host: string;
+  try {
+    host = new URL(/^[a-z][a-z0-9+.-]*:\/\//.test(raw) ? raw : `https://${raw}`).hostname;
+  } catch {
+    return null;
+  }
+  host = host.replace(/\.$/, "").replace(/^www\./, "");
+  if (!/^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/.test(host) || privateHostProblem(host)) return null;
+  return host;
+}
+
+/** The specific websites in `value`, deduplicated, at most MAX_ACCESS_DOMAINS; anything else is dropped. */
+export function accessDomains(value: unknown): string[] {
+  const list = Array.isArray(value) ? value : [];
+  return [...new Set(list.flatMap((item) => (typeof item === "string" && accessDomain(item) ? [accessDomain(item)!] : [])))].slice(0, MAX_ACCESS_DOMAINS);
+}
+
+/** Chrome match patterns for the access chosen: every https site, or the ticked sites and the listed websites (with their subdomains). */
+export function accessOrigins(sites: readonly ResearchSiteKey[], domains: readonly string[]): string[] {
+  return [...new Set([...sites.flatMap((key) => [...RESEARCH_SITES[key].origins]), ...domains.flatMap((domain) => [`https://${domain}/*`, `https://*.${domain}/*`])])];
+}
+
+/** Whether `host` is one of the specific websites (or a subdomain of one). */
+export function inAccessDomains(host: string, domains: readonly string[]): boolean {
+  const name = host.toLowerCase().replace(/\.$/, "").replace(/^www\./, "");
+  return domains.some((domain) => name === domain || name.endsWith(`.${domain}`));
+}
+
+/** The access in a few words, for the model, the popup and the chat. */
+export function accessSentence(sites: readonly ResearchSiteKey[], domains: readonly string[]): string {
+  if (accessModeOf(sites) === "all") return "all websites";
+  const parts = [...sites.map((key) => RESEARCH_SITES[key].label), ...domains];
+  return parts.length ? `selected sites: ${parts.join(", ")}` : "no websites";
+}
+
 /**
  * Why `raw` may not be opened in the owner's browser, or null: only https
- * public pages, on a site the owner enabled. A social site needs its own
- * switch; "Other public websites" does not include them.
+ * public pages, within the website access the owner chose. A social site
+ * needs its own switch; "Other public websites" does not include them; a
+ * specific website covers its subdomains.
  */
-export function researchUrlProblem(raw: string, enabled: readonly ResearchSiteKey[]): string | null {
+export function researchUrlProblem(raw: string, enabled: readonly ResearchSiteKey[], domains: readonly string[] = []): string | null {
   let url: URL;
   try {
     url = new URL(raw);
@@ -105,8 +162,8 @@ export function researchUrlProblem(raw: string, enabled: readonly ResearchSiteKe
   const host = privateHostProblem(url.hostname);
   if (host) return host;
   const site = siteOfHost(url.hostname);
-  if (!enabled.includes(site)) {
-    return `${RESEARCH_SITES[site].label} is not enabled for research in the owner's browser (enabled: ${enabled.map((key) => RESEARCH_SITES[key].label).join(", ") || "none"}); the owner turns it on from the extension's Connect page`;
+  if (!enabled.includes(site) && !inAccessDomains(url.hostname, domains)) {
+    return `${site === "web" ? url.hostname : RESEARCH_SITES[site].label} is outside the website access the owner gave this browser (${accessSentence(enabled, domains)}); the owner can add it from the extension's Connect page`;
   }
   return null;
 }
@@ -438,14 +495,15 @@ function grantRef(value: unknown): value is BrowserTaskGrantRef {
 // --- Bridge API (device token, called by the extension's service worker) ----
 
 /** POST /api/browser-bridge/pair */
-export type BrowserPairRequest = { code: string; deviceId: string; deviceLabel: string; extensionVersion: string; sites: ResearchSiteKey[] };
+/** `domains`: specific websites (selected-sites access); an extension before 0.18.0 sends none. */
+export type BrowserPairRequest = { code: string; deviceId: string; deviceLabel: string; extensionVersion: string; sites: ResearchSiteKey[]; domains?: string[] };
 export type BrowserPairResponse = { connectionId: string; token: string; organizationName: string; userEmail: string };
 
 /** A tab the owner shared, as the extension reports it. */
 export type SharedTab = { tabId: number; url: string; title: string };
 
 /** POST /api/browser-bridge/poll — a heartbeat that waits up to `waitMs` for commands. */
-export type BrowserPollRequest = { extensionVersion: string; sites: ResearchSiteKey[]; sharedTabs: SharedTab[]; lastSeq: number; paused: boolean };
+export type BrowserPollRequest = { extensionVersion: string; sites: ResearchSiteKey[]; domains?: string[]; sharedTabs: SharedTab[]; lastSeq: number; paused: boolean };
 export type BrowserPollResponse = { commands: BrowserResearchCommand[]; serverTime: string };
 
 /** POST /api/browser-bridge/commands/:id */
@@ -475,6 +533,8 @@ export type BrowserConnectionView = {
   connectionId: string | null;
   deviceLabel: string | null;
   sites: ResearchSiteKey[];
+  /** Specific websites a selected-sites connection lists (all websites: none). */
+  domains: string[];
   lastSeenAt: string | null;
   attention: (ResearchAttention & { host: string | null; at: string }) | null;
   extensionVersion: string | null;

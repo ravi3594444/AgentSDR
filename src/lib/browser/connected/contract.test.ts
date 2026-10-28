@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { actionsProblem, groundingCorpus, nextAgentBatch } from "@/lib/assistant/agent";
-import { clickProblem, commandProblem, grantCovers, parseTaskKey, privateHostProblem, researchSites, researchUrlProblem, searchProblem, siteOfHost, taskActProblem, type BrowserResearchCommand, type ResearchElement, type ResearchSnapshot } from "./contract";
+import { accessDomains, accessModeOf, accessOrigins, clickProblem, commandProblem, grantCovers, parseTaskKey, privateHostProblem, researchSites, researchUrlProblem, searchProblem, siteOfHost, taskActProblem, type BrowserResearchCommand, type ResearchElement, type ResearchSnapshot } from "./contract";
 import { attentionSummary, connectionSentence, formatResearchSnapshot, screenshotSummary } from "./format";
 
 const command = (patch: Partial<BrowserResearchCommand> = {}): BrowserResearchCommand => ({
@@ -27,9 +27,16 @@ describe("sites the owner enabled", () => {
   });
 
   test("a social site needs its own switch; other public websites do not include them", () => {
-    expect(researchUrlProblem("https://www.linkedin.com/in/someone", ["web"])).toContain("LinkedIn is not enabled");
+    expect(researchUrlProblem("https://www.linkedin.com/in/someone", ["web"])).toContain("LinkedIn is outside the website access");
     expect(researchUrlProblem("https://www.linkedin.com/in/someone", ["linkedin"])).toBeNull();
-    expect(researchUrlProblem("https://acme.example.org/team", ["linkedin"])).toContain("Other public websites is not enabled");
+    expect(researchUrlProblem("https://acme.example.org/team", ["linkedin"])).toContain("acme.example.org is outside the website access");
+    // A specific website covers itself and its subdomains, not look-alikes.
+    expect(researchUrlProblem("https://app.hubspot.com/contacts", ["linkedin"], ["hubspot.com"])).toBeNull();
+    expect(researchUrlProblem("https://hubspot.com.evil.io/", ["linkedin"], ["hubspot.com"])).toContain("outside the website access");
+    expect(accessDomains(["https://www.App.HubSpot.com/x", "localhost", "10.0.0.1", "eventos-pune.com", "eventos-pune.com"])).toEqual(["app.hubspot.com", "eventos-pune.com"]);
+    expect(accessModeOf(["web", "linkedin", "x", "reddit", "instagram", "facebook"])).toBe("all");
+    expect(accessModeOf(["web"])).toBe("selected");
+    expect(accessOrigins(["linkedin"], ["acme.in"])).toEqual(["https://*.linkedin.com/*", "https://acme.in/*", "https://*.acme.in/*"]);
     expect(researchUrlProblem("https://acme-dental.in/contact", ["web"])).toBeNull();
   });
 
@@ -132,7 +139,8 @@ describe("a reading as the model and grounding see it", () => {
   });
 
   test("the connection in one sentence", () => {
-    expect(connectionSentence({ state: "connected", sites: ["web", "linkedin"], deviceLabel: "Chrome on macOS", attention: null, lastSeenAt: null })).toBe("The owner's browser (Chrome on macOS) is connected. Sites enabled for research: Other public websites, LinkedIn.");
+    expect(connectionSentence({ state: "connected", sites: ["web", "linkedin"], deviceLabel: "Chrome on macOS", attention: null, lastSeenAt: null })).toBe("The owner's browser (Chrome on macOS) is connected. Website access: selected sites: Other public websites, LinkedIn.");
+    expect(connectionSentence({ state: "connected", sites: ["web", "linkedin", "x", "reddit", "instagram", "facebook"], deviceLabel: null, attention: null, lastSeenAt: null })).toBe("The owner's browser is connected. Website access: all websites.");
     expect(connectionSentence({ state: "none", sites: [], deviceLabel: null, attention: null, lastSeenAt: null })).toContain("Connect browser");
   });
 });

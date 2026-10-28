@@ -5,7 +5,7 @@
  * the page shows may be saved and one the model wrote into the address may not.
  */
 
-import { RESEARCH_SITES, type BrowserResearchTab, type BrowserConnectionView, type BrowserScreenshotFacts, type ResearchElement, type ResearchField, type ResearchSnapshot } from "./contract";
+import { accessSentence, type BrowserResearchTab, type BrowserConnectionView, type BrowserScreenshotFacts, type ResearchElement, type ResearchField, type ResearchSnapshot } from "./contract";
 
 /** A field's type and state, for tasks: "text = …", "checkbox ✓", "select = … of [a | b]". */
 function fieldNote(field: ResearchField): string {
@@ -72,13 +72,13 @@ export function tabsLine(tabs: readonly BrowserResearchTab[]): string {
 }
 
 /** The connection in one sentence, for the model and the chat. */
-export function connectionSentence(view: Pick<BrowserConnectionView, "state" | "sites" | "deviceLabel" | "attention" | "lastSeenAt">): string {
-  const sites = view.sites.map((key) => RESEARCH_SITES[key].label).join(", ") || "no sites";
+export function connectionSentence(view: Pick<BrowserConnectionView, "state" | "sites" | "deviceLabel" | "attention" | "lastSeenAt"> & { domains?: string[] }): string {
+  const sites = accessSentence(view.sites, view.domains ?? []);
   switch (view.state) {
     case "none": return "No browser is connected: the owner can press Connect browser in the chat (the AgentSDR extension in Chrome).";
-    case "offline": return `The owner's browser${view.deviceLabel ? ` (${view.deviceLabel})` : ""} is offline: Chrome is closed or asleep. Sites enabled: ${sites}.`;
-    case "paused": return `The owner pressed Stop in their browser${view.deviceLabel ? ` (${view.deviceLabel})` : ""}: nothing runs there until they resume. Sites enabled: ${sites}.`;
-    case "needs_attention": return `The owner's browser${view.deviceLabel ? ` (${view.deviceLabel})` : ""} is connected but needs them: ${view.attention?.detail ?? "a page needs them"}${view.attention?.host ? ` on ${view.attention.host}` : ""}. Sites enabled: ${sites}.`;
-    case "connected": return `The owner's browser${view.deviceLabel ? ` (${view.deviceLabel})` : ""} is connected. Sites enabled for research: ${sites}.`;
+    case "offline": return `The owner's browser${view.deviceLabel ? ` (${view.deviceLabel})` : ""} is offline: Chrome is closed or asleep. Website access: ${sites}.`;
+    case "paused": return `The owner pressed Stop in their browser${view.deviceLabel ? ` (${view.deviceLabel})` : ""}: nothing runs there until they resume. Website access: ${sites}.`;
+    case "needs_attention": return `The owner's browser${view.deviceLabel ? ` (${view.deviceLabel})` : ""} is connected but needs them: ${view.attention?.detail ?? "a page needs them"}${view.attention?.host ? ` on ${view.attention.host}` : ""}. Website access: ${sites}.`;
+    case "connected": return `The owner's browser${view.deviceLabel ? ` (${view.deviceLabel})` : ""} is connected. Website access: ${sites}.`;
   }
 }

@@ -525,8 +525,8 @@ async function connectedShot(context: ToolContext, userId: string, verb: string,
 }
 
 /** Why the owner's browser may not open `url`: a site they did not enable, or not a public website. */
-async function connectedUrlProblem(url: string, sites: Parameters<typeof researchUrlProblem>[1]): Promise<string | null> {
-  const problem = researchUrlProblem(url, sites);
+async function connectedUrlProblem(url: string, access: { sites: Parameters<typeof researchUrlProblem>[1]; domains?: string[] | null }): Promise<string | null> {
+  const problem = researchUrlProblem(url, access.sites, access.domains ?? []);
   if (problem) return problem;
   if (siteOfHost(new URL(url).hostname) !== "web" || process.env.BROWSER_RESEARCH_ALLOW_PRIVATE === "true") return null;
   try {
@@ -1511,7 +1511,7 @@ export const TOOLS: Record<string, Tool> = {
       if (!userId) return { ok: false, summary: "Not opened: no person is attached to this chat, so no connected browser can be used." };
       const { row } = await browserConnection(userId);
       if (!row) return { ok: false, summary: `Not opened: ${connectionSentence({ state: "none", sites: [], deviceLabel: null, attention: null, lastSeenAt: null })}` };
-      const problem = await connectedUrlProblem(url.toString(), row.sites);
+      const problem = await connectedUrlProblem(url.toString(), row);
       if (problem) return { ok: false, summary: `Not opened: ${problem}.` };
       return connectedStep(context, tab === null ? "Opened in the owner's browser" : `Opened in tab ${tab}`, { kind: "open", url: url.toString(), tabId: tab }, CONNECTED_OPEN_MS, userId);
     },
@@ -1540,7 +1540,7 @@ export const TOOLS: Record<string, Tool> = {
       if (problem) return { ok: false, summary: `Not clicked: ${problem}.` };
       const { row } = await browserConnection(userId);
       if (read.element!.href && row) {
-        const blocked = await connectedUrlProblem(read.element!.href, row.sites);
+        const blocked = await connectedUrlProblem(read.element!.href, row);
         if (blocked) return { ok: false, summary: `Not clicked: that link leads to ${read.element!.href}, and ${blocked}.` };
       }
       return connectedStep(context, `Clicked element ${n} in tab ${tab}`, { kind: "click", tabId: tab, n, label: read.element!.label }, CONNECTED_STEP_MS, userId);
@@ -1605,7 +1605,7 @@ export const TOOLS: Record<string, Tool> = {
       const outdated = taskVersionProblem(row);
       if (outdated) return { ok: false, summary: `No task started: ${outdated}.` };
       for (const host of hosts) {
-        const problem = await connectedUrlProblem(`https://${host}/`, row!.sites);
+        const problem = await connectedUrlProblem(`https://${host}/`, row!);
         if (problem) return { ok: false, summary: `No task started: ${problem}.` };
       }
       const problem = taskGrantProblem({ ownerWords, ownerTexts: await requestOwnerTexts(context, userId), hosts });

@@ -30,8 +30,11 @@
  */
 
 import {
+  accessDomains,
+  accessModeOf,
   commandProblem,
   grantCovers,
+  RESEARCH_SITE_KEYS,
   pageScript,
   pageScriptConfig,
   RESEARCH_LIMITS,
@@ -65,6 +68,8 @@ type Connection = {
   organizationName: string;
   userEmail: string;
   sites: ResearchSiteKey[];
+  /** Specific websites a selected-sites connection lists (0.18.0; older stored connections have none). */
+  domains?: string[];
   /** The last command run (or refused): nothing at or below it runs again. */
   lastSeq: number;
   paused: boolean;
@@ -92,6 +97,32 @@ const NO_ANSWER = "the page could not be read";
 
 let polling = false;
 let busy = false;
+/** The command running now and the last one, in a few words, for the popup. */
+let running: { label: string; since: number } | null = null;
+let lastActivity: { label: string; at: number; ok: boolean } | null = null;
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "a page";
+  }
+}
+
+/** The command for the owner's eyes; housekeeping (listing, closing, releasing tabs) is not shown. */
+function activityLabel(action: BrowserResearchAction): string | null {
+  switch (action.kind) {
+    case "open": return `Opening ${hostOf(action.url)}`;
+    case "read": return "Reading a page";
+    case "scroll": return "Scrolling a page";
+    case "click": return "Clicking on a page";
+    case "search": return `Searching “${action.text.slice(0, 40)}”`;
+    case "act": return action.op === "fill" ? "Filling in a field" : action.op === "click" ? "Clicking on a page" : "Working on a page";
+    case "screenshot": return "Looking at a page";
+    case "visual": return "Working on screen";
+    default: return null;
+  }
+}
 let lastContactAt: number | null = null;
 let lastError: string | null = null;
 /** Server time minus this browser's clock, from the last poll: deadlines are the server's. */
@@ -252,6 +283,7 @@ async function pollLoop(): Promise<void> {
       const body: BrowserPollRequest = {
         extensionVersion: chrome.runtime.getManifest().version,
         sites: conn.sites,
+        domains: conn.domains ?? [],
         sharedTabs: (await sharedTabs()).map(({ tabId, url, title }) => ({ tabId, url, title })),
         lastSeq: conn.lastSeq,
         paused: conn.paused,
@@ -309,6 +341,8 @@ async function runCommand(fetchedWith: Connection, command: BrowserResearchComma
     result = { ok: false, error: "the owner stopped research in this browser" };
   } else {
     busy = true;
+    const label = activityLabel(command.action);
+    if (label) running = { label, since: Date.now() };
     void researchBadge();
     try {
       result = await execute(conn, command);
@@ -316,7 +350,9 @@ async function runCommand(fetchedWith: Connection, command: BrowserResearchComma
       result = { ok: false, error: error instanceof Error ? error.message : String(error) };
     } finally {
       busy = false;
+      running = null;
     }
+    if (label) lastActivity = { label, at: Date.now(), ok: result.ok };
   }
   // Answered with the token of the connection it came to, whatever is stored by now.
   await bridgeFetch(conn, `/api/browser-bridge/commands/${command.id}`, { seq: command.seq, result }).catch((error: unknown) => {
@@ -335,7 +371,7 @@ function originPattern(url: string): string {
 
 /** Why this browser may not open or read `url` for research, or null. */
 async function urlRefusal(conn: Connection, url: string): Promise<{ error: string; attention?: ResearchAttention } | null> {
-  const problem = researchUrlProblem(url, conn.sites);
+  const problem = researchUrlProblem(url, conn.sites, conn.domains ?? []);
   if (problem) return { error: problem };
   if (!(await chrome.permissions.contains({ origins: [originPattern(url)] }))) {
     return { error: `Chrome does not let the extension read ${new URL(url).hostname}`, attention: { kind: "permission", detail: "the owner has to allow that site again from the extension's Connect page" } };
@@ -744,11 +780,12 @@ function deviceLabel(): string {
   return `${browser} on ${brand?.platform || navigator.platform || "this computer"}`.slice(0, 80);
 }
 
-async function pair(nonce: string, sites: ResearchSiteKey[]): Promise<BridgeResult & { organizationName?: string }> {
+async function pair(nonce: string, sites: ResearchSiteKey[], domains: string[]): Promise<BridgeResult & { organizationName?: string }> {
   const pairing = await pairingFor(nonce);
   if (!pairing) return { ok: false, error: "This connect link expired. Press Connect browser in AgentSDR again." };
   const chosen = researchSites(sites);
-  if (!chosen.length) return { ok: false, error: "Choose at least one kind of site to research." };
+  const websites = accessDomains(domains);
+  if (!chosen.length && !websites.length) return { ok: false, error: "Choose at least one website." };
   try {
     const previous = await connection();
     const paired = await bridgeFetch<BrowserPairResponse>({ apiBase: pairing.apiBase, token: null }, "/api/browser-bridge/pair", {
@@ -757,11 +794,12 @@ async function pair(nonce: string, sites: ResearchSiteKey[]): Promise<BridgeResu
       deviceLabel: deviceLabel(),
       extensionVersion: chrome.runtime.getManifest().version,
       sites: chosen,
+      domains: websites,
     });
     await chrome.storage.session.remove(`${PAIRING_PREFIX}${nonce}`);
     // A new pairing (another workspace or app) replaces the old one: its token is dropped, its tabs close.
     if (previous) await bridgeFetch(previous, "/api/browser-bridge/disconnect", {}).catch(() => undefined);
-    const next: Connection = { apiBase: pairing.apiBase, token: paired.token, connectionId: paired.connectionId, organizationName: paired.organizationName, userEmail: paired.userEmail, sites: chosen, lastSeq: 0, paused: false };
+    const next: Connection = { apiBase: pairing.apiBase, token: paired.token, connectionId: paired.connectionId, organizationName: paired.organizationName, userEmail: paired.userEmail, sites: chosen, domains: websites, lastSeq: 0, paused: false };
     await serialized(() => chrome.storage.local.set({ [CONNECTION_KEY]: next }));
     if (previous) await clearTabs();
     startResearch();
@@ -787,6 +825,10 @@ async function status(): Promise<ResearchStatus> {
     organizationName: conn?.organizationName ?? null,
     userEmail: conn?.userEmail ?? null,
     sites: conn?.sites ?? [],
+    domains: conn?.domains ?? [],
+    access: accessModeOf(conn?.sites ?? []),
+    activity: running,
+    lastActivity,
     paused: conn?.paused ?? false,
     busy,
     openTabs: Object.keys(tabs).length,
@@ -808,16 +850,20 @@ async function handle(message: ResearchMessage): Promise<unknown> {
       const conn = await connection();
       const pairing = message.nonce ? await pairingFor(message.nonce) : null;
       const answer: ResearchPairing | null = pairing || conn
-        ? { apiBase: pairing?.apiBase ?? conn!.apiBase, sites: conn?.sites ?? ["web"], connected: Boolean(conn) && !pairing, organizationName: conn?.organizationName ?? null }
+        ? { apiBase: pairing?.apiBase ?? conn!.apiBase, sites: conn?.sites ?? [...RESEARCH_SITE_KEYS], domains: conn?.domains ?? [], connected: Boolean(conn) && !pairing, organizationName: conn?.organizationName ?? null }
         : null;
       return answer;
     }
     case "pair":
-      return pair(message.nonce, message.sites);
+      return pair(message.nonce, message.sites, message.domains ?? []);
     case "set-sites": {
       const sites = researchSites(message.sites);
-      if (!sites.length) return { ok: false, error: "Choose at least one kind of site to research." } satisfies BridgeResult;
-      return (await updateConnection({ sites })) ? { ok: true } : { ok: false, error: "This browser is not connected." };
+      const domains = accessDomains(message.domains ?? []);
+      if (!sites.length && !domains.length) return { ok: false, error: "Choose at least one website." } satisfies BridgeResult;
+      const saved = await updateConnection({ sites, domains });
+      // Tell the app at once rather than at the next poll.
+      if (saved) void pollLoop();
+      return saved ? { ok: true } : { ok: false, error: "This browser is not connected." };
     }
     case "status":
       return status();
