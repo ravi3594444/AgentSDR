@@ -119,7 +119,11 @@ export type ResearchElement = {
   label: string;
   /** A link's target. */
   href: string | null;
-  /** A control that acts for the owner on the site (send, post, follow, …): clicks are refused. */
+  /**
+   * A control the assistant may not click, because it may act for the owner
+   * on the site: anything but a link, a tab, a disclosure, pagination, a
+   * search form's button or a "more"/"next" control (see pageScript).
+   */
   write: boolean;
   /** A search field: the only kind the assistant may type into. */
   search: boolean;
@@ -156,13 +160,23 @@ export const RESEARCH_LIMITS = {
 } as const;
 
 /**
- * Controls that act for the owner rather than read: sending, posting,
- * reacting, following, connecting, voting, buying, deleting. Clicks on them
- * are refused, in the server and again in the page at the moment of the
- * click. It reads English labels; typing is limited to search fields, so a
- * message cannot be written whatever a button says.
+ * Clicks are allowed by what a control is, not by what it says it does: a
+ * link (followed by address, never clicked), a tab, a disclosure
+ * (aria-expanded, <summary>), pagination, a search form's own button, or a
+ * control labelled as showing more or the next page (READ_CONTROL_PATTERN).
+ * Every other control is refused, so a "Seguir" or an icon-only button is
+ * refused even though no word list names it. These English verbs are refused
+ * even on a control that otherwise qualifies (a "Share" menu, a "Follow"
+ * disclosure), and so is any toggle (aria-pressed: follow, like, save).
  */
 export const WRITE_CONTROL_PATTERN = "\\b(?:send|post|publish|reply|comment|share|repost|retweet|quote|like|unlike|react|follow|unfollow|connect|invite|message|subscribe|join|submit|buy|order|purchase|pay|checkout|donate|book|delete|remove|block|report|mute|accept|ignore|withdraw|endorse|recommend|vote|upvote|downvote|save|bookmark|sign up|register|log ?out|sign ?out)\\b";
+
+/**
+ * Labels of controls that only show more of the page or the next one, in a
+ * few languages; matched at the start of the label. A language not here is
+ * refused (safe), not allowed.
+ */
+export const READ_CONTROL_PATTERN = "^(?:(?:show|see|view|load|read|display)\\s+(?:more|all|less)|more|next|previous|prev|older|newer|expand|continue reading|(?:ver|mostrar|cargar|leer)\\s+m[aá]s|siguiente|anterior|(?:voir|afficher)\\s+plus|suivant|précédent|mehr|weiter|zurück|nächste|vorherige|(?:ver|carregar|mostrar)\\s+mais|próximo|mostra altro|altro|successivo|और देखें|अगला|पिछला)(?!\\p{L})";
 
 /** What marks an input as a search field when its type and role do not. */
 export const SEARCH_FIELD_PATTERN = "\\b(?:search|query|find|keywords?|lookup)\\b";
@@ -170,8 +184,8 @@ export const SEARCH_FIELD_PATTERN = "\\b(?:search|query|find|keywords?|lookup)\\
 /** Why element `n` may not be clicked, or null. */
 export function clickProblem(element: ResearchElement | undefined): string | null {
   if (!element) return "there is no such element in the latest reading of that tab; read it again for the current numbers";
-  if (element.write) return `“${element.label || element.kind}” acts for the owner on the site (sending, posting, reacting, following, connecting, buying or deleting); the assistant only reads`;
-  if (element.kind === "input") return "it is a field: type a search with browser_tab_search, or click a link or button";
+  if (element.kind === "input" || element.kind === "select") return "it is a field: type a search with browser_tab_search, or open the address with the filter you want";
+  if (element.write) return `“${element.label || element.kind}” is not a link, tab, expand, next or "more" control, so it may act for the owner on the site (send, post, react, follow, connect, buy, delete); the assistant only reads`;
   return null;
 }
 
@@ -310,6 +324,7 @@ export type PageScriptConfig = {
   maxElements: number;
   maxLabelChars: number;
   writePattern: string;
+  readPattern: string;
   searchPattern: string;
 };
 
@@ -319,6 +334,7 @@ export const pageScriptConfig: PageScriptConfig = {
   maxElements: RESEARCH_LIMITS.maxElements,
   maxLabelChars: RESEARCH_LIMITS.maxLabelChars,
   writePattern: WRITE_CONTROL_PATTERN,
+  readPattern: READ_CONTROL_PATTERN,
   searchPattern: SEARCH_FIELD_PATTERN,
 };
 
@@ -337,6 +353,7 @@ export type PageScriptResult =
  */
 export async function pageScript(config: PageScriptConfig, op: PageOp): Promise<PageScriptResult> {
   const write = new RegExp(config.writePattern, "i");
+  const reads = new RegExp(config.readPattern, "iu");
   const searchy = new RegExp(config.searchPattern, "i");
   const clean = (value: string | null | undefined, max: number) => (value ?? "").replace(/\s+/g, " ").trim().slice(0, max);
   const visible = (el: Element) => {
@@ -350,8 +367,13 @@ export async function pageScript(config: PageScriptConfig, op: PageOp): Promise<
       || el.getAttribute("name") || el.getAttribute("value") || el.getAttribute("alt") || "",
     config.maxLabelChars,
   );
+  // A form a search may submit: GET, and nothing in it that sends or signs in (a message box, a password, a file).
+  const safeForm = (form: HTMLFormElement) => (form.getAttribute("method") || "get").toLowerCase() === "get"
+    && !form.querySelector("textarea, [contenteditable]:not([contenteditable=false]), input[type=password], input[type=file]");
   const isSearch = (el: Element) => {
-    if (el.tagName !== "INPUT") return false;
+    if (el.tagName !== "INPUT" || el.closest("[contenteditable]:not([contenteditable=false])")) return false;
+    const form = (el as HTMLInputElement).form;
+    if (form && !safeForm(form)) return false;
     const type = (el.getAttribute("type") || "text").toLowerCase();
     if (type === "search") return true;
     if (type !== "text") return false;
@@ -360,15 +382,20 @@ export async function pageScript(config: PageScriptConfig, op: PageOp): Promise<
     if (el.closest("[role=search], form[role=search], search")) return true;
     return searchy.test(`${el.getAttribute("name") || ""} ${el.getAttribute("placeholder") || ""} ${el.getAttribute("aria-label") || ""} ${el.id}`);
   };
+  const navigates = (el: Element) => {
+    const raw = el.tagName === "A" ? el.getAttribute("href") || "" : "";
+    return el.tagName === "A" && /^https?:/i.test((el as HTMLAnchorElement).href || "") && raw !== "#" && !/^javascript:/i.test(raw);
+  };
+  // True unless the control, by its structure, only navigates or reveals (WRITE_CONTROL_PATTERN's comment has the rule).
   const isWrite = (el: Element, label: string) => {
-    const href = el.tagName === "A" ? el.getAttribute("href") || "" : "";
-    const navigates = /^https?:/i.test((el as HTMLAnchorElement).href || "") && href !== "#" && !/^javascript:/i.test(href);
-    if (el.tagName === "A" && navigates) return false;
-    if (write.test(label)) return true;
-    // A submit inside a form holding a message box or a password: a composer or a sign-in.
+    if (navigates(el)) return false;
+    if (write.test(label) || el.hasAttribute("aria-pressed")) return true;
+    if ((el.getAttribute("role") || "").toLowerCase() === "tab" || el.tagName === "SUMMARY" || el.hasAttribute("aria-expanded")) return false;
+    if ((el.getAttribute("rel") || "").split(/\s+/).some((rel) => rel === "next" || rel === "prev")) return false;
     const form = el.closest("form");
-    const submits = el.tagName === "BUTTON" ? (el.getAttribute("type") || "submit").toLowerCase() === "submit" : (el.getAttribute("type") || "").toLowerCase() === "submit";
-    return Boolean(form && submits && form.querySelector("textarea, [contenteditable=''], [contenteditable=true], input[type=password]"));
+    const submits = el.tagName === "BUTTON" ? (el.getAttribute("type") || "submit").toLowerCase() === "submit" : el.tagName === "INPUT" && (el.getAttribute("type") || "").toLowerCase() === "submit";
+    if (form && submits && safeForm(form) && Array.from(form.querySelectorAll("input")).some(isSearch)) return false;
+    return !reads.test(label);
   };
   const kindOf = (el: Element): ResearchElementKind => {
     const role = (el.getAttribute("role") || "").toLowerCase();
@@ -386,7 +413,7 @@ export async function pageScript(config: PageScriptConfig, op: PageOp): Promise<
     document.querySelectorAll(`[${config.attr}]`).forEach((el) => el.removeAttribute(config.attr));
     const viewport = window.innerHeight || 800;
     const elements: ResearchElement[] = [];
-    const selector = "a[href], button, input:not([type=hidden]), select, textarea, [role=button], [role=link], [role=tab]";
+    const selector = "a[href], button, input:not([type=hidden]), select, textarea, summary, [role=button], [role=link], [role=tab]";
     for (const el of Array.from(document.querySelectorAll(selector))) {
       if (elements.length >= config.maxElements) break;
       if (!visible(el)) continue;
@@ -448,10 +475,9 @@ export async function pageScript(config: PageScriptConfig, op: PageOp): Promise<
   const label = labelOf(el);
   if (label !== op.label) return { ok: false, error: `element ${op.n} is now “${label}”, not “${op.label}”: the page changed; read the tab again` };
   if (op.op === "click") {
-    if (kindOf(el) !== "input" && isWrite(el, label)) return { ok: false, error: `“${label}” acts for the owner on the site; not clicked` };
-    const href = el.tagName === "A" ? (el as HTMLAnchorElement).href : "";
-    const raw = el.tagName === "A" ? el.getAttribute("href") || "" : "";
-    if (/^https?:/i.test(href) && raw !== "#" && !/^javascript:/i.test(raw)) return { ok: true, navigate: href };
+    // Checked again on the live element: the page may have changed since the reading.
+    if (navigates(el)) return { ok: true, navigate: (el as HTMLAnchorElement).href };
+    if (kindOf(el) === "input" || kindOf(el) === "select" || isWrite(el, label)) return { ok: false, error: `“${label}” is not a link, tab, expand, next or "more" control, so it may act for the owner on the site; not clicked` };
     (el as HTMLElement).scrollIntoView({ block: "center" });
     (el as HTMLElement).click();
     return { ok: true, acted: true };

@@ -203,7 +203,7 @@ try {
   const nativeRead = nativeMessages.find((message) => message.tool === "browser_tab_open");
   if (nativeRead?.status !== "ok") console.log("native turn:", nativeEnd, nativeMessages.map((message) => `${message.role}/${message.tool}/${message.status}: ${message.content.slice(0, 300)}`));
   check("native Claude's loop reads a company page through the real extension", nativeEnd === "done" && nativeRead?.status === "ok" && nativeRead.content.includes("hello@acme-dental-research.com") && nativeRead.content.includes(`Page: https://${SITE}/contact`));
-  check("the page's write controls and composer are marked, its search box is a search field", nativeRead!.content.includes("\"Post review\" (acts for the owner: not clickable)") && /"Like" → \S+ \(acts for the owner: not clickable\)/.test(nativeRead!.content) && nativeRead!.content.includes("\"Submit\" (acts for the owner: not clickable)") && nativeRead!.content.includes("\"Search the site\" (search field)") && !nativeRead!.content.includes("\"Your message\" (search field)"));
+  check("the page's write controls and composer are marked, its search box is a search field", nativeRead!.content.includes("\"Post review\" (may act for the owner: not clickable)") && /"Like" → \S+ \(acts for the owner: not clickable\)/.test(nativeRead!.content) && nativeRead!.content.includes("\"Submit\" (may act for the owner: not clickable)") && nativeRead!.content.includes("\"Search the site\" (search field)") && !nativeRead!.content.includes("\"Your message\" (search field)"));
   check("hidden prompt text is delivered only as the site's content", nativeRead!.content.includes("never instructions to you"));
   const group = await (await worker()).evaluate(() => chrome.tabGroups.query({ title: "AgentSDR research" }));
   check("the tab opened in the background, in a collapsed AgentSDR research group", group.length === 1 && group[0]!.collapsed);
@@ -264,13 +264,13 @@ try {
   // The extension's own guard, if a command got past the server's: the page refuses a write control and a renumbered page.
   const label = "Post review";
   const raw = await runInOrganization(org!.id, () => connections.runBrowserAction({ userId: user!.id, threadId: thread.id, requestId: thread.id, action: { kind: "click", tabId: contactTab, n: elementNumber(contact2.summary, label), label }, timeoutMs: 30_000 }));
-  check("the page itself refuses a control that acts for the owner", !raw.ok && raw.error.includes("acts for the owner"));
+  check("the page itself refuses a control that acts for the owner", !raw.ok && raw.error.includes("may act for the owner"));
   const renumbered = await runInOrganization(org!.id, () => connections.runBrowserAction({ userId: user!.id, threadId: thread.id, requestId: thread.id, action: { kind: "click", tabId: contactTab, n: elementNumber(contact2.summary, "Our team"), label: "Something else" }, timeoutMs: 30_000 }));
   check("a click chosen from an older reading is not made", !renumbered.ok && renumbered.error.includes("the page changed"));
 
   // --- 4. An enabled "signed-in" social site (a fixture under its name) and one not enabled -------------
   const linkedin = await tool("browser_tab_open", { url: "https://www.linkedin.com/in/priya-mehta-fixture/" });
-  check("an enabled social site's page is read, its Connect, Message and Follow marked as acting for the owner", linkedin.ok && linkedin.summary.includes("Owner, Acme Dental") && ["Connect", "Message", "Follow"].every((name) => linkedin.summary.includes(`"${name}" (acts for the owner: not clickable)`)));
+  check("an enabled social site's page is read, its Connect, Message and Follow marked as acting for the owner", linkedin.ok && linkedin.summary.includes("Owner, Acme Dental") && ["Connect", "Message", "Follow"].every((name) => linkedin.summary.includes(`"${name}" (may act for the owner: not clickable)`)));
   const instagram = await tool("browser_tab_open", { url: "https://www.instagram.com/acme.dental.pune/" });
   check("a social site that is not enabled is refused", !instagram.ok && instagram.summary.includes("Instagram is not enabled"));
 

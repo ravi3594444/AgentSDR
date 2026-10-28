@@ -1358,7 +1358,7 @@ export const TOOLS: Record<string, Tool> = {
   },
 
   browser_tab_click: {
-    description: "Click a link, tab, filter, \"next\" or \"show more\" control in one of this request's tabs, by its number from the latest reading of that tab. A link opens in the same tab, on the enabled sites only. Controls that send, post, reply, react, follow, connect, vote, subscribe, buy or delete are refused: the assistant reads, it never acts for the owner on a site. Returns the page afterwards.",
+    description: "Click in one of this request's tabs, by the element's number in the latest reading of that tab: a link (followed by its address, on the enabled sites only), a tab, an expand or \"show more\" control, a next or previous page control, or a search form's button. Any other control is refused (the reading marks them \"may act for the owner\"): the assistant reads, it never sends, posts, reacts, follows, connects, buys or deletes on a site. Filters a site keeps in its address are set by opening that address. Returns the page afterwards.",
     arguments: "tab (tab id), n (element number)",
     run: async (args, context) => {
       const tab = tabNumber(args, true)!;

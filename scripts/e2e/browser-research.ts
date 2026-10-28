@@ -190,7 +190,7 @@ try {
     check("a social site the owner did not enable is refused", !linkedin.ok && linkedin.summary.includes("LinkedIn is not enabled"));
     check("a private address is refused", !(await runToolInThread({ ...context }, "browser_tab_open", { url: "https://192.168.1.1/admin" })).ok);
     const write = await runToolInThread({ ...context }, "browser_tab_click", { tab, n: 2 });
-    check("a control that acts for the owner is refused", !write.ok && write.summary.includes("acts for the owner"));
+    check("a control that acts for the owner is refused", !write.ok && write.summary.includes("may act for the owner"));
     const off = await runToolInThread({ ...context }, "browser_tab_click", { tab, n: 3 });
     check("a link to a site that is not enabled is refused", !off.ok && off.summary.includes("LinkedIn is not enabled"));
     const message = await runToolInThread({ ...context }, "browser_tab_search", { tab, n: 5, text: "hello there" });

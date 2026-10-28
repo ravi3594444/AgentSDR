@@ -489,9 +489,13 @@ the queue is `connections.server.ts`; the worker side is
   tabs belong to the request that opened them. `/api/browser-bridge/` is
   public in `proxy.ts`; every route but pairing starts with
   `withBrowserDevice()`.
-- **It reads; sending stays in approved outreach.** Typing only into search
-  fields; clicks on controls that send, post, follow, connect, buy or delete
-  are refused by the server and again in the page. Only https public hosts,
+- **It reads; sending stays in approved outreach.** Clicks are allowed by
+  what a control is, never by its label alone: links (followed by address),
+  tabs, disclosures, pagination, a GET search form's button, and controls
+  labelled "more"/"next" (`READ_CONTROL_PATTERN`); everything else, toggles
+  (`aria-pressed`) and English write verbs included, is refused by the server
+  and again in the page. Typing only into search fields whose form is GET and
+  holds no message, password or file field. Only https public hosts,
   on enabled sites (a social site needs its own switch); private and local
   names are refused, and "web" hosts are resolved server-side
   (`BROWSER_RESEARCH_ALLOW_PRIVATE=true` only for local fixtures). Page text

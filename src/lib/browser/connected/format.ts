@@ -8,7 +8,7 @@
 import { RESEARCH_SITES, type BrowserResearchTab, type BrowserConnectionView, type ResearchElement, type ResearchSnapshot } from "./contract";
 
 function elementLine(element: ResearchElement): string {
-  const note = element.write ? " (acts for the owner: not clickable)" : element.search ? " (search field)" : "";
+  const note = element.write ? " (may act for the owner: not clickable)" : element.search ? " (search field)" : "";
   return `[${element.n}] ${element.kind} "${element.label || "(no label)"}"${element.href ? ` → ${element.href}` : ""}${note}`;
 }
 

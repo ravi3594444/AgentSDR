@@ -29,7 +29,8 @@ try {
     win.document.querySelector("form")!.addEventListener("submit", (event) => { event.preventDefault(); submissions++; });
     const state = await pageScript(pageScriptConfig, { op: "snapshot" });
     if (!state.ok || !("snapshot" in state)) throw new Error("No search snapshot");
-    const input = state.snapshot.elements.find((entry) => entry.search)!;
+    // A box inside a sending form is no longer classed as a search field at all; the assertion below still decides.
+    const input = (state.snapshot.elements.find((entry) => entry.search) ?? state.snapshot.elements.find((entry) => entry.kind === "input"))!;
     const refused = searchProblem(input, "business owners");
     const searched = await pageScript(pageScriptConfig, { op: "search", n: input.n, label: input.label, text: "business owners" });
     check(composer ? "a search cannot submit a message-composer form" : "control: an ordinary search form still works", composer ? submissions === 0 : refused === null && searched.ok && submissions === 1, { refused, searched, sideEffects: submissions });
