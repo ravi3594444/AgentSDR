@@ -99,6 +99,9 @@ function WebsiteFindings({ prospect, website, timeZone }: { prospect: ProspectVi
   );
 }
 
+/** Leads listed before "Show all". */
+const PROSPECTS_SHOWN = 10;
+
 const PROSPECT_COLOR: Record<ProspectView["status"], "gray" | "green" | "blue" | "orange"> = { potential_match: "gray", inquired: "blue", replied: "orange", interested: "green", excluded: "gray" };
 
 export function ProspectsList({ audienceId, count = null, excluded = null, title = null, timeZone }: {
@@ -126,6 +129,35 @@ export function ProspectsList({ audienceId, count = null, excluded = null, title
       setLoading(false);
     }
   }
+  // No scroll box inside the chat: the first ones, then the rest under Show all.
+  const item = (prospect: ProspectView, index: number) => (
+    <li key={`${prospect.personId ?? prospect.name}-${index}`} className="rounded-lg bg-bg-weak-50 px-2.5 py-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="min-w-0 flex-1 truncate text-label-xs text-text-strong-950">{prospect.name}</p>
+        <Badge.Root variant="lighter" size="small" color={PROSPECT_COLOR[prospect.status]}>{prospect.statusLabel}</Badge.Root>
+      </div>
+      <p className="mt-0.5 text-text-sub-600">
+        {prospect.source.url ? <a href={prospect.source.url} target="_blank" rel="noopener noreferrer" className="text-primary-base hover:underline">{prospect.source.label} ({hostOf(prospect.source.url)})</a> : prospect.source.label}
+        {" · "}{formatChatDate(prospect.foundAt, timeZone)}
+      </p>
+      <p className="mt-0.5 text-text-sub-600">Why: {prospect.matchReason}</p>
+      {prospect.excludedReason && <p className="mt-0.5 text-text-sub-600">Left out: {prospect.excludedReason}</p>}
+      {prospect.routes.length > 0 ? prospect.routes.map((route) => (
+        <p key={`${route.channel}:${route.value}`} className="mt-0.5 truncate text-text-sub-600">
+          {route.channel}: {route.value} · {route.sourceUrl ? <a href={route.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-primary-base hover:underline">{route.note} ({hostOf(route.sourceUrl)})</a> : route.note}
+        </p>
+      )) : <p className="mt-0.5 text-text-sub-600">Contact: Unknown</p>}
+      {prospect.needEvidence.map((signal, signalIndex) => (
+        <p key={`need-${signalIndex}`} className="mt-0.5 border-l-2 border-stroke-sub-300 pl-2 text-text-sub-600">
+          “{signal.text}” <span className="text-text-soft-400">— {signal.sourceUrl ? <a href={signal.sourceUrl} target="_blank" rel="noopener noreferrer" className="hover:underline">{signal.source}</a> : signal.source}{signal.at ? `, ${formatChatDate(signal.at, timeZone)}` : ""}</span>
+        </p>
+      ))}
+      {prospect.engagement.length > 0 && <p className="mt-0.5 text-text-soft-400">{prospect.engagement.length} like{prospect.engagement.length === 1 ? "" : "s"}, follow{prospect.engagement.length === 1 ? "" : "s"} or generic comment{prospect.engagement.length === 1 ? "" : "s"} (not counted as interest)</p>}
+      {!prospect.needEvidence.length && prospect.status === "potential_match" && <p className="mt-0.5 text-text-soft-400">No evidence of a need found.</p>}
+      {prospect.website && <WebsiteFindings prospect={prospect} website={prospect.website} timeZone={timeZone} />}
+      <p className="mt-0.5 text-text-soft-400">Location: {prospect.location} · Budget: {prospect.budget}</p>
+    </li>
+  );
   const counts = data?.counts;
   const note = [title, "source, why they match, evidence", excluded ? `${excluded} left out` : null].filter(Boolean).join(" · ");
   return (
@@ -141,40 +173,21 @@ export function ProspectsList({ audienceId, count = null, excluded = null, title
       {error && <p role="alert" className="mt-1.5 text-error-base">{error}</p>}
       {counts && (
         <p className="mt-1.5 text-text-sub-600">
-          {counts.potential_match ?? 0} potential match{counts.potential_match === 1 ? "" : "es"} · {counts.inquired ?? 0} inquired · {counts.replied ?? 0} replied · {counts.interested ?? 0} interested · {counts.withNeedEvidence ?? 0} with their own words showing a need. A potential match is not an interested customer.
+          {counts.potential_match ?? 0} potential match{counts.potential_match === 1 ? "" : "es"} · {counts.inquired ?? 0} inquired · {counts.replied ?? 0} Replied · {counts.interested ?? 0} Interested · {counts.withNeedEvidence ?? 0} with their own words showing a need. A potential match is not an interested customer.
         </p>
       )}
       {data && (
-        <ul className="mt-1.5 max-h-96 space-y-1.5 overflow-y-auto">
-          {data.prospects.map((prospect, index) => (
-            <li key={`${prospect.personId ?? prospect.name}-${index}`} className="rounded-lg bg-bg-weak-50 px-2.5 py-2">
-              <div className="flex flex-wrap items-center gap-2">
-                <p className="min-w-0 flex-1 truncate text-label-xs text-text-strong-950">{prospect.name}</p>
-                <Badge.Root variant="lighter" size="small" color={PROSPECT_COLOR[prospect.status]}>{prospect.statusLabel}</Badge.Root>
-              </div>
-              <p className="mt-0.5 text-text-sub-600">
-                {prospect.source.url ? <a href={prospect.source.url} target="_blank" rel="noopener noreferrer" className="text-primary-base hover:underline">{prospect.source.label} ({hostOf(prospect.source.url)})</a> : prospect.source.label}
-                {" · "}{formatChatDate(prospect.foundAt, timeZone)}
-              </p>
-              <p className="mt-0.5 text-text-sub-600">Why: {prospect.matchReason}</p>
-              {prospect.excludedReason && <p className="mt-0.5 text-text-sub-600">Left out: {prospect.excludedReason}</p>}
-              {prospect.routes.length > 0 ? prospect.routes.map((route) => (
-                <p key={`${route.channel}:${route.value}`} className="mt-0.5 truncate text-text-sub-600">
-                  {route.channel}: {route.value} · {route.sourceUrl ? <a href={route.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-primary-base hover:underline">{route.note} ({hostOf(route.sourceUrl)})</a> : route.note}
-                </p>
-              )) : <p className="mt-0.5 text-text-sub-600">Contact: Unknown</p>}
-              {prospect.needEvidence.map((signal, signalIndex) => (
-                <p key={`need-${signalIndex}`} className="mt-0.5 border-l-2 border-stroke-sub-300 pl-2 text-text-sub-600">
-                  “{signal.text}” <span className="text-text-soft-400">— {signal.sourceUrl ? <a href={signal.sourceUrl} target="_blank" rel="noopener noreferrer" className="hover:underline">{signal.source}</a> : signal.source}{signal.at ? `, ${formatChatDate(signal.at, timeZone)}` : ""}</span>
-                </p>
-              ))}
-              {prospect.engagement.length > 0 && <p className="mt-0.5 text-text-soft-400">{prospect.engagement.length} like{prospect.engagement.length === 1 ? "" : "s"}, follow{prospect.engagement.length === 1 ? "" : "s"} or generic comment{prospect.engagement.length === 1 ? "" : "s"} (not counted as interest)</p>}
-              {!prospect.needEvidence.length && prospect.status === "potential_match" && <p className="mt-0.5 text-text-soft-400">No evidence of a need found.</p>}
-              {prospect.website && <WebsiteFindings prospect={prospect} website={prospect.website} timeZone={timeZone} />}
-              <p className="mt-0.5 text-text-soft-400">Location: {prospect.location} · Budget: {prospect.budget}</p>
-            </li>
-          ))}
+        <ul className="mt-1.5 space-y-1.5">
+          {data.prospects.slice(0, PROSPECTS_SHOWN).map(item)}
         </ul>
+      )}
+      {data && data.prospects.length > PROSPECTS_SHOWN && (
+        <details className="group/more mt-1.5">
+          <summary className="inline-flex min-h-9 cursor-pointer list-none items-center rounded-md text-label-xs text-primary-base outline-none hover:underline focus-visible:ring-2 focus-visible:ring-primary-base [&::-webkit-details-marker]:hidden">
+            <span className="group-open/more:hidden">Show all {data.prospects.length}</span><span className="hidden group-open/more:inline">Showing all {data.prospects.length}</span>
+          </summary>
+          <ul className="mt-1.5 space-y-1.5">{data.prospects.slice(PROSPECTS_SHOWN).map((prospect, index) => item(prospect, index + PROSPECTS_SHOWN))}</ul>
+        </details>
       )}
     </details>
   );

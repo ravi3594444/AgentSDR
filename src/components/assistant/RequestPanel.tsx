@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
-import { RiArrowDownSLine, RiArrowLeftSLine, RiArrowRightSLine, RiListCheck3 } from "@remixicon/react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { RiCloseLine, RiListCheck3 } from "@remixicon/react";
 import type { RequestSummary } from "@/lib/assistant/requests.server";
 import { useVisiblePolling } from "@/components/whatsapp/usePolling";
 import { cn } from "@/utils/cn";
@@ -13,9 +13,9 @@ import { fetchRequestSummary, RequestSummaryView } from "./RequestSummaryView";
 /**
  * The request beside the chat: the newest one this chat started (or the one
  * picked when it started several), with its figures, blocker, next step and
- * the searches and plans underneath. A column on wide screens; on a phone a
- * one-line bar above the conversation that opens into the same view. Shows
- * nothing until the chat has started something. `refreshKey` changes when
+ * the searches and plans underneath. Closed by default; the header's "This
+ * request" button opens it as a column on wide screens and a sheet on a
+ * phone. Shows nothing until the chat has started something. `refreshKey` changes when
  * the chat sees new activity, so the panel follows it without its own fast poll.
  */
 
@@ -86,14 +86,26 @@ function Picker({ requests, value, onPick }: { requests: ThreadRequest[]; value:
   );
 }
 
-const COLLAPSED_KEY = "agentsdr-request-panel-collapsed";
+const OPEN_KEY = "agentsdr-request-panel-open";
 
-function readCollapsed(): boolean {
-  try { return window.localStorage.getItem(COLLAPSED_KEY) === "true"; } catch { return false; }
-}
-
-function writeCollapsed(value: boolean) {
-  try { window.localStorage.setItem(COLLAPSED_KEY, String(value)); } catch { /* blocked storage: the choice lasts this visit */ }
+/**
+ * Whether the request panel is open: closed unless the person opened it on
+ * this browser (remembered; read after mount, so the server and the first
+ * client render agree).
+ */
+export function useRequestPanelOpen(): [boolean, (open: boolean) => void] {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      try { setOpen(window.localStorage.getItem(OPEN_KEY) === "true"); } catch { /* blocked storage: closed */ }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+  const change = useCallback((next: boolean) => {
+    setOpen(next);
+    try { window.localStorage.setItem(OPEN_KEY, String(next)); } catch { /* blocked storage: the choice lasts this visit */ }
+  }, []);
+  return [open, change];
 }
 
 /** The mascot looks around while the request's searches run, and rests otherwise. */
@@ -101,7 +113,7 @@ function moodOf(summary: RequestSummary | null) {
   return summary?.open && summary.children.searches.some((item) => item.open && item.kind !== "objective") ? "searching" as const : "idle" as const;
 }
 
-const railButton = "flex size-8 items-center justify-center rounded-lg text-text-soft-400 outline-none transition hover:bg-bg-weak-50 hover:text-text-strong-950 focus-visible:ring-2 focus-visible:ring-primary-base";
+const iconButton = "flex size-9 items-center justify-center rounded-lg text-text-sub-600 outline-none transition hover:bg-bg-weak-50 hover:text-text-strong-950 focus-visible:ring-2 focus-visible:ring-primary-base";
 
 function RequestStatusError({ error, stale, onRetry }: { error: string; stale: boolean; onRetry: () => void }) {
   return <div role="alert" className="mb-3 rounded-lg border border-warning-light bg-bg-white-0 px-3 py-2 text-paragraph-xs text-text-sub-600">
@@ -110,89 +122,88 @@ function RequestStatusError({ error, stale, onRetry }: { error: string; stale: b
   </div>;
 }
 
+export const REQUEST_PANEL_ID = "request-panel";
+
+function focusToggle() {
+  document.querySelector<HTMLElement>(`[aria-controls="${REQUEST_PANEL_ID}"]`)?.focus();
+}
+
 /**
- * The request column beside the chat, collapsible to a narrow rail (like the
- * left sidebar) so the conversation can take the full width. The choice is
- * remembered on this browser; it loads after mount, so the server and the
- * first client render agree.
+ * The header button that opens and closes the request panel: named for
+ * screen readers on every width, its state in aria-expanded, a dot while the
+ * request is still going. Nothing until the chat has started a request.
  */
-export function RequestPanel({ state, labels }: { state: ReturnType<typeof useThreadRequest>; labels?: Record<string, string> }) {
-  const { requests, key, pick, summary, error, reload } = state;
-  const [collapsed, setCollapsed] = useState(false);
-  useEffect(() => {
-    const frame = window.requestAnimationFrame(() => setCollapsed(readCollapsed()));
-    return () => window.cancelAnimationFrame(frame);
-  }, []);
-  const toggle = () => setCollapsed((value) => { writeCollapsed(!value); return !value; });
-  if (!requests.length && !error) return null;
-  if (collapsed) {
-    return (
-      <aside aria-label="This request (collapsed)" data-testid="request-panel" data-collapsed="true" className="hidden w-12 shrink-0 flex-col items-center gap-2 border-l border-stroke-soft-200 bg-bg-white-0 py-3 lg:flex">
-        <button type="button" onClick={toggle} aria-label="Show this request" aria-expanded={false} title="Show this request" className={railButton}>
-          <RiArrowLeftSLine className="size-5" aria-hidden="true" />
-        </button>
-        <span className={railButton} aria-hidden="true"><RiListCheck3 className="size-4" /></span>
-        {summary?.open && <span className="size-2 rounded-full bg-primary-base" title={summary.stateLabel} />}
-      </aside>
-    );
-  }
+export function RequestPanelToggle({ state, open, onToggle }: { state: ReturnType<typeof useThreadRequest>; open: boolean; onToggle: () => void }) {
+  if (!state.requests.length && !state.error) return null;
   return (
-    <aside aria-label="This request" data-testid="request-panel" data-collapsed="false" className="hidden w-[300px] shrink-0 flex-col overflow-y-auto border-l border-stroke-soft-200 bg-bg-white-0 lg:flex xl:w-[360px]">
-      <div className="border-b border-stroke-soft-200 px-4 py-3">
-        <div className="flex items-center justify-between gap-2">
-          <h2 className="text-label-sm text-text-strong-950">This request</h2>
-          <div className="flex items-center gap-1">
-            <Link href="/assistant/requests" className="rounded-md px-1.5 py-1 text-label-xs text-text-sub-600 hover:text-text-strong-950">All requests</Link>
-            <button type="button" onClick={toggle} aria-label="Hide this request" aria-expanded title="Hide this request" className={railButton}>
-              <RiArrowRightSLine className="size-5" aria-hidden="true" />
-            </button>
-          </div>
-        </div>
-        <div className="mt-2 flex items-start gap-3">
-          <span className="flex size-11 shrink-0 items-center justify-center rounded-2xl bg-bg-weak-50"><Mascot mood={moodOf(summary)} className="size-9" /></span>
-          <div className="min-w-0 flex-1">
-            <p className="line-clamp-2 text-paragraph-sm text-text-strong-950">{summary?.title ?? requests.find((request) => request.key === key)?.title}</p>
-            {summary && (
-              <p className="mt-1 inline-flex items-center gap-1.5 text-paragraph-xs text-text-sub-600">
-                <span className={cn("size-1.5 rounded-full", summary.open ? "bg-success-base" : "bg-text-soft-400")} aria-hidden="true" />{summary.stateLabel}
-              </p>
-            )}
-          </div>
-        </div>
-        <Picker requests={requests} value={key} onPick={pick} />
-      </div>
-      <div className="px-4 py-4">
-        {error && <RequestStatusError error={error} stale={Boolean(summary)} onRetry={reload} />}
-        {summary ? <RequestSummaryView summary={summary} compact onChanged={reload} labels={labels} /> : !error && <p className="text-paragraph-xs text-text-soft-400">Loading…</p>}
-      </div>
-    </aside>
+    <button type="button" onClick={onToggle} aria-expanded={open} aria-controls={REQUEST_PANEL_ID} aria-label="This request" title={open ? "Hide this request" : "Show this request"} data-testid="request-panel-toggle"
+      className={cn("relative inline-flex size-11 items-center justify-center gap-1.5 rounded-lg text-label-xs text-text-sub-600 outline-none hover:bg-bg-weak-50 focus-visible:ring-2 focus-visible:ring-primary-base sm:size-9 2xl:w-auto 2xl:px-2.5", open && "bg-bg-weak-50 text-text-strong-950")}>
+      <RiListCheck3 className="size-4" aria-hidden="true" /><span className="hidden 2xl:inline">This request</span>
+      {state.summary?.open && <span className="absolute right-2 top-2 size-2 rounded-full bg-primary-base 2xl:static" aria-hidden="true" />}
+    </button>
   );
 }
 
-/** The phone version: one line above the conversation, opening into the summary. */
-export function RequestBar({ state, labels }: { state: ReturnType<typeof useThreadRequest>; labels?: Record<string, string> }) {
+/**
+ * The request beside the chat, closed by default and opened from the
+ * header's "This request" button: a column on wide screens, a sheet over the
+ * chat on a phone (the conversation keeps its one scroll; the panel scrolls
+ * on its own surface). Escape or the close button closes it and returns
+ * focus to the toggle.
+ */
+export function RequestPanel({ state, labels, open, onClose }: { state: ReturnType<typeof useThreadRequest>; labels?: Record<string, string>; open: boolean; onClose: () => void }) {
   const { requests, key, pick, summary, error, reload } = state;
-  const [open, setOpen] = useState(false);
-  if (!requests.length || !summary) return error ? <div className="shrink-0 px-3 pt-2 lg:hidden"><RequestStatusError error={error} stale={false} onRetry={reload} /></div> : null;
-  const n = summary.numbers;
+  const close = useRef<HTMLButtonElement>(null);
+  const visible = open && (requests.length > 0 || Boolean(error));
+  useEffect(() => {
+    if (!visible) return;
+    close.current?.focus({ preventScroll: true });
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      onClose();
+      focusToggle();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [visible, onClose]);
+  if (!visible) return null;
+  const dismiss = () => {
+    onClose();
+    focusToggle();
+  };
   return (
-    <div className="shrink-0 border-b border-stroke-soft-200 bg-bg-white-0 lg:hidden" data-testid="request-bar">
-      <button type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)} className="flex min-h-14 w-full items-center gap-2 px-4 py-2.5 text-left">
-        <Mascot mood={moodOf(summary)} className="size-7" />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-label-xs text-text-strong-950">{summary.title}</span>
-          <span className="block truncate text-paragraph-xs text-text-sub-600">{error ? "Status may be out of date" : summary.stateLabel} · {n.matching !== null ? `${n.matching} matching · ` : ""}{n.contacted} contacted · {n.replied} replied</span>
-        </span>
-        <RiArrowDownSLine className={cn("size-4 shrink-0 text-text-soft-400 transition-transform", open && "rotate-180")} aria-hidden="true" />
-      </button>
-      {open && (
-        <div className="max-h-[60vh] overflow-y-auto border-t border-stroke-soft-200 px-4 py-3">
-          {error && <RequestStatusError error={error} stale onRetry={reload} />}
-          <p className="mb-3 line-clamp-2 text-paragraph-xs text-text-sub-600">{summary.title}</p>
+    <>
+      <div className="fixed inset-0 z-30 bg-static-black/30 lg:hidden" aria-hidden="true" onClick={dismiss} />
+      <aside id={REQUEST_PANEL_ID} aria-label="This request" data-testid="request-panel"
+        className="fixed inset-y-0 right-0 z-40 flex w-full max-w-sm flex-col overflow-y-auto overscroll-contain border-l border-stroke-soft-200 bg-bg-white-0 shadow-regular-md lg:static lg:z-auto lg:w-[320px] lg:max-w-none lg:shrink-0 lg:shadow-none xl:w-[360px]">
+        <div className="border-b border-stroke-soft-200 px-4 py-3">
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-label-sm text-text-strong-950">This request</h2>
+            <div className="flex items-center gap-1">
+              <Link href="/assistant/requests" className="rounded-md px-1.5 py-1 text-label-xs text-text-sub-600 hover:text-text-strong-950">All requests</Link>
+              <button ref={close} type="button" onClick={dismiss} aria-label="Close this request" title="Close" className={iconButton}>
+                <RiCloseLine className="size-5" aria-hidden="true" />
+              </button>
+            </div>
+          </div>
+          <div className="mt-2 flex items-start gap-3">
+            <span className="flex size-11 shrink-0 items-center justify-center rounded-2xl bg-bg-weak-50"><Mascot mood={moodOf(summary)} className="size-9" /></span>
+            <div className="min-w-0 flex-1">
+              <p className="line-clamp-2 text-paragraph-sm text-text-strong-950">{summary?.title ?? requests.find((request) => request.key === key)?.title}</p>
+              {summary && (
+                <p className="mt-1 inline-flex items-center gap-1.5 text-paragraph-xs text-text-sub-600">
+                  <span className={cn("size-1.5 rounded-full", summary.open ? "bg-success-base" : "bg-text-soft-400")} aria-hidden="true" />{summary.stateLabel}
+                </p>
+              )}
+            </div>
+          </div>
           <Picker requests={requests} value={key} onPick={pick} />
-          <div className="mt-3"><RequestSummaryView summary={summary} compact onChanged={reload} labels={labels} /></div>
         </div>
-      )}
-    </div>
+        <div className="px-4 py-4">
+          {error && <RequestStatusError error={error} stale={Boolean(summary)} onRetry={reload} />}
+          {summary ? <RequestSummaryView summary={summary} compact onChanged={reload} labels={labels} /> : !error && <p className="text-paragraph-xs text-text-soft-400">Loading…</p>}
+        </div>
+      </aside>
+    </>
   );
 }

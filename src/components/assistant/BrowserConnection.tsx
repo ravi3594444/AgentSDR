@@ -33,7 +33,8 @@ const readOnServer = () => undefined;
 
 const LABELS: Record<BrowserConnectionView["state"], string> = {
   none: "Connect browser",
-  connected: "Browser connected",
+  // Available to use, not a claim that anything ran there: each search in the chat names what it ran through.
+  connected: "Chrome available",
   offline: "Browser offline",
   paused: "Browser stopped",
   needs_attention: "Browser needs you",
@@ -126,6 +127,7 @@ export function BrowserConnection() {
               {state === "paused" && "You pressed Stop in the extension. Resume it from the extension's toolbar button."}
               {state === "needs_attention" && `${view?.attention?.detail ?? "A page needs you"}${view?.attention?.host ? ` on ${view.attention.host}` : ""}. Open the “${RECORDER_EXTENSION_NAME}” tab group in Chrome to deal with it.`}
             </p>
+            {state === "connected" && <p className="text-paragraph-xs text-text-sub-600">The assistant uses it only when a request needs it; each search in the chat shows what it actually ran through, and “Your Chrome” appears there only when it was used.</p>}
             <p className="text-paragraph-xs text-text-soft-400">Stop, website access and Settings are on the extension&apos;s toolbar button ({RECORDER_EXTENSION_NAME}).</p>
             <button type="button" onClick={() => void disconnect()} disabled={busy} className="inline-flex h-8 items-center rounded-lg px-3 text-label-xs text-text-sub-600 ring-1 ring-inset ring-stroke-soft-200 hover:bg-bg-weak-50 disabled:opacity-60">Disconnect</button>
           </>

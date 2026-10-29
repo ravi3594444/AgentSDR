@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { activityPresentation, groupChatActivity, visibleChatMessages } from "./chatActivity";
+import { activityPresentation, splitTurn, visibleChatMessages } from "./chatActivity";
 
 const row = (id: string, role = "tool", tool: string | null = null, status: string | null = "ok", retry = false) => ({ id, role, tool, status, toolResult: retry ? { data: { retry: true } } : null });
 
@@ -12,32 +12,47 @@ describe("the chat's activity log", () => {
   test("an unavailable status does not assert work is still running or safely completed", () => {
     expect(activityPresentation([{ status: "running" }], true, false)).toEqual({ label: "Status unavailable", status: "error" });
   });
-  test("repeated checking narration and routine tools collapse, while the answer stays visible", () => {
+  test("repeated checking narration and routine tools go behind Details, while the answer stays visible", () => {
     const messages = [row("checking", "assistant"), row("runs", "tool", "list_runs"), row("checking-again", "assistant"), row("decisions", "tool", "list_decisions"), row("answer", "assistant")];
-    const items = groupChatActivity(messages);
-    expect(items).toHaveLength(2);
-    expect(items[0]).toEqual({ kind: "activity", messages: messages.slice(0, 4) });
-    expect(items[1]).toEqual({ kind: "message", message: messages[4] });
+    const turn = splitTurn(messages, "answer");
+    expect(turn.details.map((item) => item.id)).toEqual(["checking", "runs", "checking-again", "decisions"]);
+    expect(turn.visible.map((item) => item.id)).toEqual(["answer"]);
+    expect(turn.research).toEqual([]);
   });
 
-  test("delivery checks, research, plans, owner decisions and failures remain visible", () => {
-    const messages = [row("brief", "tool", "set_brief"), row("search", "tool", "find_leads"), row("plan", "tool", "prepare_outreach"), row("delivery", "tool", "diagnose_delivery"), row("decision", "tool", "owner_decision"), row("failed", "tool", "web_search", "error")];
-    const items = groupChatActivity(messages);
-    expect(items.filter((item) => item.kind === "message").map((item) => item.message.id)).toEqual(["search", "plan", "delivery", "decision", "failed"]);
-    expect(items.flatMap((item) => item.kind === "activity" ? item.messages : [item.message])).toEqual(messages);
+  test("searches become the request card's rows; plans, delivery checks and decisions stay; a failed technical step goes behind Details", () => {
+    const messages = [row("brief", "tool", "set_brief"), row("search", "tool", "find_leads"), row("web", "tool", "find_customers_on_web"), row("plan", "tool", "prepare_outreach"), row("delivery", "tool", "diagnose_delivery"), row("decision", "tool", "owner_decision"), row("failed", "tool", "web_search", "error"), row("exa", "tool", "exa_search")];
+    const turn = splitTurn(messages, null);
+    expect(turn.research.map((item) => item.id)).toEqual(["search", "web"]);
+    expect(turn.visible.map((item) => item.id)).toEqual(["plan", "delivery", "decision"]);
+    expect(turn.details.map((item) => item.id)).toEqual(["brief", "failed", "exa"]);
+    // Every message lands in exactly one place.
+    expect([...turn.research, ...turn.visible, ...turn.details]).toHaveLength(messages.length);
   });
 
-  test("only the latest retry failure stays outside the activity log", () => {
+  test("only the newest Retry stays in the conversation; earlier retries and retry notices go behind Details", () => {
     const previous = row("old", "event", null, null, true);
     const latest = row("latest", "event", null, null, true);
-    expect(groupChatActivity([previous, latest])).toEqual([{ kind: "activity", messages: [previous] }, { kind: "message", message: latest }]);
+    const note = { ...row("note", "event", null, null), toolResult: { transient: true } };
+    expect(splitTurn([previous, note, latest], "latest")).toEqual({ research: [], visible: [latest], details: [previous, note] });
+    expect(splitTurn([previous, latest], "later-message").visible).toEqual([]);
   });
 
-  test("a turn has one activity log even when plan cards separate its steps", () => {
+  test("progress reports update the card in place; the request's final report and other notices stay", () => {
+    const report = (id: string, kind: string) => ({ ...row(id, "event", null, null), toolResult: { reportKey: `job:${id}`, data: { event: { kind } } } });
+    const continuation = { ...row("round", "event", null, null), toolResult: { data: { event: { kind: "continuation" } } } };
+    const final = { ...row("final", "event", null, null), toolResult: { reportKey: "objective:o", data: { objective: { leads: 3 } } } };
+    const notice = { ...row("notice", "event", null, null), toolResult: null };
+    const turn = splitTurn([report("done", "search_report"), continuation, report("ready", "plan_ready"), notice, final], null);
+    expect(turn.details.map((item) => item.id)).toEqual(["done", "round", "ready"]);
+    expect(turn.visible.map((item) => item.id)).toEqual(["notice", "final"]);
+  });
+
+  test("a turn keeps its plan card and answer visible around the routine steps", () => {
     const messages = [row("brief", "tool", "set_brief"), row("plan", "tool", "prepare_outreach"), row("review", "tool", "review_leads"), row("answer", "assistant")];
-    const items = groupChatActivity(messages);
-    expect(items.filter((item) => item.kind === "activity")).toEqual([{ kind: "activity", messages: [messages[0], messages[2]] }]);
-    expect(items.filter((item) => item.kind === "message").map((item) => item.message.id)).toEqual(["plan", "answer"]);
+    const turn = splitTurn(messages, "answer");
+    expect(turn.details.map((item) => item.id)).toEqual(["brief", "review"]);
+    expect(turn.visible.map((item) => item.id)).toEqual(["plan", "answer"]);
   });
 
   test("repeated successful cards for one run have one Start button; failures and different plans stay", () => {
@@ -70,7 +85,7 @@ describe("the chat's activity log", () => {
     const question = { ...row("question", "assistant"), content: "Which offer should I mention?" };
     const error = { ...row("error", "assistant", null, "error"), content: "Source unavailable" };
     const answer = { ...row("answer", "assistant"), content: "Ready for review" };
-    expect(groupChatActivity([question, error, answer]).map(item => item.kind)).toEqual(["message", "message", "message"]);
+    expect(splitTurn([question, error, answer], "answer").visible.map((item) => item.id)).toEqual(["question", "error", "answer"]);
   });
   test("a question matching a successful tool is still visible", () => {
     const tool = { ...row("tool", "tool", "check_setup"), content: "Which sender?" };
