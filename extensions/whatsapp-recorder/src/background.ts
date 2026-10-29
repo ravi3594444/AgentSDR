@@ -33,7 +33,7 @@ import { callApi, getCallStatus, uploadRecording } from "./upload";
 
 const ACTIVE_CALL_KEY = "activeCall";
 /** The toolbar icon's tooltip between calls. */
-const IDLE_TITLE = "AgentSDR Call Recorder";
+const IDLE_TITLE = "22nd x ai Browser Assistant";
 const RECENT_CALLS_KEY = "recentCalls";
 /** How long the WhatsApp tab can keep asking about a finished call. */
 const RECENT_CALL_TTL_MS = 2 * 60 * 60 * 1000;
@@ -224,7 +224,7 @@ async function handleBridge(
   const senderOrigin = sender.origin ?? (sender.url ? new URL(sender.url).origin : null);
   const origins = await allowedOrigins();
   if (!senderOrigin || !origins.includes(senderOrigin)) {
-    return { ok: false, error: `Requests are only accepted from ${origins.join(" or ")}. Add your AgentSDR address in the extension's Options.` };
+    return { ok: false, error: `Requests are only accepted from ${origins.join(" or ")}. Add this site's address on the extension's Settings page.` };
   }
   if (request.type === "call:end") return endCall(request.callId);
   if (request.type === "recorder:update") {
@@ -263,7 +263,7 @@ async function handleBrowserBridge(
   const senderOrigin = sender.origin ?? (sender.url ? new URL(sender.url).origin : null);
   const origins = await allowedOrigins();
   if (!senderOrigin || !origins.includes(senderOrigin)) {
-    return { ok: false, error: `Requests are only accepted from ${origins.join(" or ")}. Add your AgentSDR address in the extension's Options.` };
+    return { ok: false, error: `Requests are only accepted from ${origins.join(" or ")}. Add this site's address on the extension's Settings page.` };
   }
   if (request.type === "browser:disconnect") return disconnectFrom(senderOrigin);
   if (request.apiBase !== senderOrigin) return { ok: false, error: "The browser can only connect to the page that asked." };

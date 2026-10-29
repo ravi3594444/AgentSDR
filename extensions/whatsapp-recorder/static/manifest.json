@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "AgentSDR Call Recorder",
+  "name": "22nd x ai Browser Assistant",
   "version": "0.18.0",
-  "description": "Places WhatsApp Web calls from AgentSDR and records them; when you connect it, lets AgentSDR's assistant research the sites you enable and carry out the browser tasks you ask for there.",
+  "description": "Lets the 22nd x ai assistant work on the websites you allow in Chrome, and places and records WhatsApp calls you start in 22nd x ai.",
   "icons": {
     "16": "icon-16.png",
     "32": "icon-32.png",
@@ -29,7 +29,7 @@
     "type": "module"
   },
   "action": {
-    "default_title": "AgentSDR Call Recorder",
+    "default_title": "22nd x ai Browser Assistant",
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icon-16.png",
