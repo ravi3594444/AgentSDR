@@ -84,7 +84,7 @@ function onMessage(event: MessageEvent): void {
       // this request type. Say so rather than failing on the missing result.
       .then((result) => reply(request, result ?? {
         ok: false,
-        error: "The call recorder did not understand this request. Reload it in chrome://extensions.",
+        error: "The extension did not understand this request. Reload it in chrome://extensions.",
       }))
       .catch((error: unknown) =>
         reply(request, { ok: false, error: error instanceof Error ? error.message : String(error) }),
@@ -127,7 +127,7 @@ function relayBrowser(request: BrowserBridgeRequest): void {
   try {
     chrome.runtime
       .sendMessage<BackgroundMessage, BridgeResult>(message)
-      .then((result) => answer(result ?? { ok: false, error: "This extension is too old for browser research. Update it from AgentSDR's Settings." }))
+      .then((result) => answer(result ?? { ok: false, error: "This extension is too old for the browser assistant. Update it from Settings → WhatsApp → Integrations in 22nd x ai." }))
       .catch((error: unknown) => answer({ ok: false, error: error instanceof Error ? error.message : String(error) }));
   } catch {
     window.removeEventListener("message", onMessage);

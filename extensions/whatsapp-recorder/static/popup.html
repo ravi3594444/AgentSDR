@@ -2,33 +2,104 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>AgentSDR</title>
+<title>22nd x ai Browser Assistant</title>
 <style>
-  :root { color-scheme: light dark; --bg: #fff; --ink: #12151c; --muted: #5d6472; --line: #e3e6ec; --accent: #335cff; --error: #c0392b; --ok: #16794a; --warn: #8a5a00; }
-  @media (prefers-color-scheme: dark) { :root { --bg: #151922; --ink: #eef0f5; --muted: #a3aab8; --line: #262c38; --accent: #7d95ff; --error: #f08a7d; --ok: #4cc98a; --warn: #f0c26b; } }
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff; --surface: #f4f5f8; --ink: #12151c; --muted: #545b69; --line: #dfe2e8;
+    --accent: #2f54eb; --accent-ink: #ffffff; --error: #b42318;
+    --ok: #0f6b3c; --ok-bg: #e5f5ec; --warn: #7a4a00; --warn-bg: #fdf1dc; --off: #4b5261; --off-bg: #eceef2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #151922; --surface: #1d2230; --ink: #eef0f5; --muted: #a9b0be; --line: #2c3343;
+      --accent: #8aa0ff; --accent-ink: #0d1016; --error: #f6a093;
+      --ok: #6fdba5; --ok-bg: #173326; --warn: #f3c776; --warn-bg: #3a2c12; --off: #c3c8d3; --off-bg: #272d3a;
+    }
+  }
   * { box-sizing: border-box; }
-  body { margin: 0; width: 320px; background: var(--bg); color: var(--ink); font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; padding: 14px; display: grid; gap: 10px; }
-  h1 { font-size: 15px; margin: 0; }
-  p { margin: 0; color: var(--muted); }
-  #state { font-weight: 600; color: var(--ink); }
-  #state.ok { color: var(--ok); }
-  #state.warn { color: var(--warn); }
-  .row { display: flex; flex-wrap: wrap; gap: 8px; }
-  button { flex: 1; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: var(--ink); font: inherit; font-weight: 600; cursor: pointer; min-height: 36px; }
-  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  ul { margin: 0; padding-left: 18px; color: var(--muted); }
-  #error { color: var(--error); min-height: 0; }
+  body { margin: 0; width: 340px; background: var(--bg); color: var(--ink); font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; padding: 14px; display: grid; gap: 12px; }
+  header { display: flex; align-items: center; gap: 8px; }
+  header img { width: 20px; height: 20px; flex: none; }
+  h1 { font-size: 14px; margin: 0; font-weight: 650; }
+  p { margin: 0; }
+  .muted { color: var(--muted); }
+  .state { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; font-weight: 650; background: var(--off-bg); color: var(--off); }
+  .pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .pill.ok { background: var(--ok-bg); color: var(--ok); }
+  .pill.warn { background: var(--warn-bg); color: var(--warn); }
+  dl { display: grid; grid-template-columns: 74px 1fr; gap: 6px 10px; margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--surface); }
+  dt { color: var(--muted); }
+  dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+  dd .sub { display: block; color: var(--muted); }
+  .attention { display: grid; gap: 8px; padding: 10px 12px; border-radius: 10px; background: var(--warn-bg); color: var(--ink); }
+  .attention strong { color: var(--warn); }
+  .shared { display: grid; gap: 6px; }
+  .shared ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+  .shared li { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+  .shared li span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .actions .wide { grid-column: 1 / -1; }
+  button { padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: var(--ink); font: inherit; font-weight: 600; cursor: pointer; min-height: 34px; }
+  button:hover { background: var(--surface); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  button.primary:hover { filter: brightness(1.07); }
+  button.danger { color: var(--error); }
+  button.small { min-height: 28px; padding: 3px 8px; font-size: 12px; flex: none; }
+  button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  [hidden] { display: none !important; }
+  #error { color: var(--error); }
+  #error:empty { display: none; }
+  footer { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 12px; }
 </style>
 </head>
 <body>
-  <h1>AgentSDR research</h1>
-  <p id="state">…</p>
-  <p id="detail"></p>
-  <ul id="shared"></ul>
-  <div class="row" id="actions"></div>
+  <header>
+    <img src="icon-32.png" alt="">
+    <h1>22nd x ai Browser Assistant</h1>
+  </header>
+
+  <div class="state" role="status" aria-live="polite" aria-atomic="true">
+    <span id="state" class="pill">Checking…</span>
+    <span id="state-detail" class="muted"></span>
+  </div>
+
+  <dl id="facts" hidden>
+    <dt>Workspace</dt>
+    <dd><span id="workspace"></span><span id="account" class="sub"></span></dd>
+    <dt>Websites</dt>
+    <dd id="access"></dd>
+    <dt>Now</dt>
+    <dd id="now"></dd>
+    <dt>Last</dt>
+    <dd id="last"></dd>
+  </dl>
+
+  <div id="attention" class="attention" role="alert" hidden>
+    <p><strong>A page needs you.</strong> <span id="attention-detail"></span></p>
+    <button type="button" id="show-page" class="small">Show the page</button>
+  </div>
+
+  <div id="shared" class="shared" hidden>
+    <p class="muted">Tabs you shared (read only):</p>
+    <ul id="shared-list"></ul>
+  </div>
+
+  <div class="actions">
+    <button type="button" id="pause" class="primary" hidden>Stop</button>
+    <button type="button" id="share" hidden>Share this tab</button>
+    <button type="button" id="access-button" class="wide" hidden>Change website access</button>
+    <button type="button" id="settings">Settings</button>
+    <button type="button" id="disconnect" class="danger" hidden>Disconnect</button>
+  </div>
+
   <p id="error" role="status" aria-live="polite"></p>
-  <p><a href="options.html" target="_blank" rel="noopener">Call recorder options</a></p>
+
+  <footer>
+    <span id="version"></span>
+    <span>Calls and recording: in Settings</span>
+  </footer>
 <script src="popup.js"></script>
 </body>
 </html>

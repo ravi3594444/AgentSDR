@@ -119,7 +119,7 @@ async function download(origin: string): Promise<Map<string, Uint8Array>> {
   if (!response.ok || !response.headers.get("content-type")?.includes("zip")) {
     throw new Error(
       response.redirected || response.headers.get("content-type")?.includes("html")
-        ? `Sign in to AgentSDR at ${origin} in this browser, then try again.`
+        ? `Sign in to 22nd x ai at ${origin} in this browser, then try again.`
         : `${origin} answered ${response.status} — it may not serve the extension yet.`,
     );
   }
@@ -131,7 +131,7 @@ async function download(origin: string): Promise<Map<string, Uint8Array>> {
     if (inner.split("/").some((part) => part === ".." || part === "")) continue;
     files.set(inner, bytes);
   }
-  if (!files.has("manifest.json")) throw new Error("The download is not the Call Recorder (no manifest.json).");
+  if (!files.has("manifest.json")) throw new Error("The download is not this extension (no manifest.json).");
   return files;
 }
 
@@ -158,7 +158,7 @@ async function update(): Promise<void> {
     if (problem) return setStatus(`${problem} Choose the folder again.`, "error");
 
     const origin = await sourceOrigin();
-    if (!origin) return setStatus("No AgentSDR address is allowed — add one in Options.", "error");
+    if (!origin) return setStatus("No 22nd x ai address is allowed — add one in Settings.", "error");
     setStatus(`Downloading from ${origin}…`);
     const files = await download(origin);
     const next = (JSON.parse(new TextDecoder().decode(files.get("manifest.json"))) as { version?: string }).version;

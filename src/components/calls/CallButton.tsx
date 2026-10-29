@@ -9,7 +9,7 @@ import * as Modal from "@/components/alignui/modal";
 import { DocsLink } from "@/components/page/DocsLink";
 import { MIN_RECORDER_VERSION } from "@/lib/calls/contract";
 import type { DocsPage } from "@/lib/support";
-import { RECORDER_SETUP_PATH } from "@/lib/calls/recorderRelease";
+import { extensionNotDetected, RECORDER_EXTENSION_NAME, RECORDER_SETUP_PATH } from "@/lib/calls/recorderRelease";
 import { abandonCall, isRecorderInstalled, isRecorderOutdated, recorderVersion, sendToRecorder, startCall } from "@/lib/calls/client";
 import { cn } from "@/utils/cn";
 import { isReleased } from "@/lib/release";
@@ -31,8 +31,12 @@ function CallButtonInner({ personId, crmRecordId, campaignContactId, phone, onCa
   // Anything that is not about the number itself — no extension, an
   // outdated one, the extension refusing — is a notice, not the number modal:
   // opening "Change number" for those sends the rep fixing the wrong thing.
-  /** `download`: the fix is getting the extension, so the notice links to it (and `guide`, our docs on it). */
-  const [notice, setNotice] = useState<{ title: string; description: string; download?: boolean; guide?: { page: DocsPage; label: string } } | null>(null);
+  /**
+   * `download`: the fix may be getting the extension, so the notice links to it
+   * (and `guide`, our docs on it). `steps`: what to do first when it may be
+   * installed already (a self-hosted address it was not given).
+   */
+  const [notice, setNotice] = useState<{ title: string; description: string; steps?: string[]; download?: boolean; guide?: { page: DocsPage; label: string } } | null>(null);
   const [numberOpen, setNumberOpen] = useState(false);
   const [numberValue, setNumberValue] = useState("");
   const [modalError, setModalError] = useState("");
@@ -88,11 +92,11 @@ function CallButtonInner({ personId, crmRecordId, campaignContactId, phone, onCa
           // now-wider reply type.
           const error = reply.type === "call:rejected" ? reply.error : "Something went wrong. Please try again.";
           void abandonCall(response.call.id, response.recorderToken, error);
-          failed("The call recorder couldn't start the call", new Error(error));
+          failed("The extension couldn't start the call", new Error(error));
         }
       } catch (cause) {
         void abandonCall(response.call.id, response.recorderToken, errorMessage(cause));
-        failed("The call recorder didn't answer", cause);
+        failed("The extension didn't answer", cause);
       }
     } catch (cause) {
       // A number the rep just typed was rejected: keep them in the modal to
@@ -110,19 +114,24 @@ function CallButtonInner({ personId, crmRecordId, campaignContactId, phone, onCa
   /** Installed and new enough to speak this page's bridge protocol. */
   const recorderReady = (): boolean => {
     if (!isRecorderInstalled()) {
+      // Installed but not given this address looks the same as not installed: never say it is missing.
+      const help = extensionNotDetected(window.location.origin);
       setNotice({
-        title: "Call recorder not found",
-        description: "Install the AgentSDR Call Recorder extension to call from here.",
+        title: help.title,
+        description: `${help.intro} Calls are placed through it.`,
+        steps: help.steps,
         download: true,
-        guide: { page: "whatsapp/calling#install-the-extension", label: "How to install" },
+        guide: help.builtIn
+          ? { page: "whatsapp/calling#install-the-extension", label: "How to install" }
+          : { page: "whatsapp/calling#self-hosted-agentsdr", label: "Self-hosted setup" },
       });
       return false;
     }
     const version = recorderVersion();
     if (isRecorderOutdated(version)) {
       setNotice({
-        title: "Reload the call recorder",
-        description: `Chrome is running version ${version ?? "unknown"} of the extension; this page needs ${MIN_RECORDER_VERSION} or newer. Download the latest, replace the extension's folder with it, then click the reload arrow on AgentSDR Call Recorder in chrome://extensions and reload this page.`,
+        title: "Update the extension",
+        description: `Chrome is running version ${version ?? "unknown"} of the extension; this page needs ${MIN_RECORDER_VERSION} or newer. Download the latest, replace the extension's folder with it, then click the reload arrow on ${RECORDER_EXTENSION_NAME} in chrome://extensions and reload this page.`,
         download: true,
         guide: { page: "whatsapp/calling#update-the-extension", label: "How to update" },
       });
@@ -191,6 +200,14 @@ function CallButtonInner({ personId, crmRecordId, campaignContactId, phone, onCa
             <Modal.Title>{notice?.title}</Modal.Title>
             <Modal.Description>{notice?.description}</Modal.Description>
           </Modal.Header>
+          {notice?.steps && (
+            <Modal.Body className="space-y-2 text-paragraph-sm text-text-sub-600">
+              <ol className="list-decimal space-y-1 pl-5">
+                {notice.steps.map((step) => <li key={step}>{step}</li>)}
+              </ol>
+              <p>Not installed yet? Get the extension and load it unpacked.</p>
+            </Modal.Body>
+          )}
           <Modal.Footer>
             {notice?.guide && <DocsLink page={notice.guide.page}>{notice.guide.label}</DocsLink>}
             {notice?.download && (

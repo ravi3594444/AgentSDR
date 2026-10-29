@@ -1,6 +1,7 @@
 import { ConnectionSettingsPage } from "@/components/settings/ChannelSettingsPages";
 import { RecorderExtensionCard } from "@/components/settings/RecorderExtensionCard";
 import { BRAND } from "@/lib/brand";
+import { RECORDER_EXTENSION_NAME } from "@/lib/calls/recorderRelease";
 import { isReleased } from "@/lib/release";
 
 export const metadata = { title: "WhatsApp integrations" };
@@ -24,7 +25,7 @@ export default function Page() {
         { platform: "r2" },
       ]}
       title="WhatsApp integrations"
-      description={`Unipile connects your WhatsApp numbers for messaging and calling. Calls placed from ${BRAND.shortName} are recorded by the Call Recorder extension and stored in your Cloudflare R2 bucket, along with contact photos. Transcription uses the model chosen in AI provider.`}
+      description={`Unipile connects your WhatsApp numbers for messaging and calling. Calls placed from ${BRAND.shortName} are recorded by the ${RECORDER_EXTENSION_NAME} extension and stored in your Cloudflare R2 bucket, along with contact photos. Transcription uses the model chosen in AI provider.`}
     >
       <RecorderExtensionCard />
     </ConnectionSettingsPage>

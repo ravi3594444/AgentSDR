@@ -29,6 +29,7 @@ export const DOCS_PAGES = [
   "whatsapp/calling#what-you-need",
   "whatsapp/calling#install-the-extension",
   "whatsapp/calling#update-the-extension",
+  "whatsapp/calling#self-hosted-agentsdr",
   "integrations/openrouter#set-it-up",
   "integrations/enrichment-providers#connect-a-provider-account",
 ] as const;
