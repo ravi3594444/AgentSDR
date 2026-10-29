@@ -81,6 +81,7 @@ import { diagnoseDelivery } from "./deliveryDiagnostics.server";
 import { instagramContactUsername, parseInstagramContacts } from "./instagramContacts";
 import { createInstagramContactsAudience } from "./instagramContacts.server";
 import { withoutContactAfter } from "./agentV2";
+import { coerceToolArguments, TOOL_SCHEMAS, V2_TOOL_SCHEMAS, withoutProperties, type ToolInputSchema } from "./toolSchemas";
 import { activeRequest, matchingLeadsAudience, objectiveBrief, ownerMessagesSince, reviewLeadsText, setLeadFit, type LeadPick, type ReviewFilter } from "./agentV2.server";
 import { briefLine, checkBrief } from "./brief";
 import { researchOptionsText } from "./researchContext";
@@ -193,6 +194,8 @@ type Tool = {
   arguments: string;
   /** Offered to the model only while this holds for the organization's optional features (always, without it). */
   available?: (features: FeatureState) => boolean;
+  /** This tool's input contract, when it is not toolSchemas.ts's entry for its name. */
+  schema?: ToolInputSchema;
   run: (args: Record<string, unknown>, context: ToolContext) => Promise<ToolResult>;
 };
 
@@ -2174,7 +2177,10 @@ export async function runTool(name: string, args: Record<string, unknown>, conte
     delete args.channels;
   }
   try {
-    return await tool.run(args, context);
+    // Read by the tool's schema (toolSchemas.ts): what still does not fit is the model's to correct.
+    const typed = coerceToolArguments(toolSchema(name, context.v2 === true), args);
+    if (typed.problems.length) throw new ToolArgumentError(typed.problems.join("; "));
+    return await tool.run(typed.args, context);
   } catch (error) {
     if (error instanceof ToolArgumentError) return { ok: false, refused: true, summary: `Not run: ${error.message.replace(/\.$/, "")}.` };
     console.error(`[assistant/tools] ${name} failed:`, error);
@@ -2193,17 +2199,25 @@ const V2_TOOL_TEXT: Record<string, { description: string; arguments: string }> =
   },
 };
 
+/** A tool's input schema as the model is offered it: v2 leaves out the older agent's follow-up arguments. */
+export function toolSchema(name: string, v2: boolean): ToolInputSchema | null {
+  const tool = TOOLS[name];
+  if (!tool) return null;
+  const schema = tool.schema ?? (v2 ? V2_TOOL_SCHEMAS[name] : undefined) ?? TOOL_SCHEMAS[name] ?? null;
+  return schema && v2 && FOLLOW_UP_TOOLS.has(name) ? withoutProperties(schema, ["contactAfter", "channels", "sameRequest"]) : schema;
+}
+
 /** The tools as the model reads them, only those `features` allow. */
 export function toolCatalog(features: FeatureState): string {
   return toolDescriptionsFor(features).map(({ name, description, arguments: args }) => `- ${name}: ${description} Arguments: ${args}.`).join("\n");
 }
 
 /** Shared reference for the JSON harness and native MCP; no separate provider/tool priority list. */
-export function toolDescriptionsFor(features: FeatureState): Array<{ name: string; description: string; arguments: string }> {
+export function toolDescriptionsFor(features: FeatureState): Array<{ name: string; description: string; arguments: string; inputSchema: ToolInputSchema | null }> {
   return toolNamesFor(features).map((name) => {
     const v2 = features.research_agent_v2 ? V2_TOOL_TEXT[name] : undefined;
     const args = v2?.arguments ?? (features.research_agent_v2 && FOLLOW_UP_TOOLS.has(name) ? withoutContactAfter(TOOLS[name]!.arguments) : TOOLS[name]!.arguments);
-    return { name, description: v2?.description ?? TOOLS[name]!.description, arguments: args };
+    return { name, description: v2?.description ?? TOOLS[name]!.description, arguments: args, inputSchema: toolSchema(name, features.research_agent_v2) };
   });
 }
 

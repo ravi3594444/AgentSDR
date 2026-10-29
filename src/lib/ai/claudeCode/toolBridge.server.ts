@@ -5,7 +5,8 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
-export type NativeTool = { name: string; description: string; inputSchema: { type: "object"; properties: Record<string, unknown>; additionalProperties: boolean } };
+/** One app tool as MCP lists it: its JSON Schema (src/lib/assistant/toolSchemas.ts) types every argument. */
+export type NativeTool = { name: string; description: string; inputSchema: { type: "object"; properties: Readonly<Record<string, unknown>>; required?: readonly string[]; additionalProperties?: boolean } };
 
 /**
  * One authenticated loopback MCP endpoint per running Claude turn. No route is
