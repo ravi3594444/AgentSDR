@@ -569,7 +569,13 @@ export type ObjectiveView = {
   stopDetail: string | null;
   stoppedAt: string | null;
   leadTarget: number;
+  /** Whether the owner named the target (else it is the organization's default and is not shown as wanted). */
+  targetNamed: boolean;
+  /** Qualified leads: contactable and matching the request. */
   leads: number;
+  /** Everyone its lists hold, and those with a contact route (the funnel's first two steps), each person once. */
+  found: number;
+  contactable: number;
   remaining: number;
   routes: ContactRoutes;
   spendCapUsd: number | null;
@@ -602,7 +608,10 @@ function viewOf(facts: ObjectiveFacts, now = new Date()): ObjectiveView {
     stopDetail: objective.stopDetail ?? null,
     stoppedAt: objective.stoppedAt?.toISOString() ?? null,
     leadTarget: objective.leadTarget,
+    targetNamed: requestLimits(objective).targetNamed !== false,
     leads: facts.leads,
+    found: facts.funnel.found,
+    contactable: facts.funnel.contactable,
     remaining: Math.max(0, objective.leadTarget - facts.leads),
     routes: facts.routes,
     spendCapUsd: objective.spendCapUsd,

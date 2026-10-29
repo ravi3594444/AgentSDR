@@ -68,7 +68,7 @@ export type RequestSummary = {
   open: boolean;
   stateLabel: string;
   numbers: RequestNumbers;
-  /** The objective's lead target, when one was set. */
+  /** The lead target the owner named; null when they named none (the default target is not shown as wanted). */
   target: number | null;
   blocker: string | null;
   nextAction: NextStep;
@@ -326,12 +326,15 @@ export async function requestSummary(keyText: string, now = new Date()): Promise
 
   const failed = campaignCounts ? campaignCounts.failed : runReports.reduce((sum, report) => sum + (report?.channels.reduce((n, channel) => n + channel.failed, 0) ?? 0), 0);
   const searched = searches.filter((item) => item.kind !== "objective");
-  const matching = objective ? objective.leads
-    : searched.length ? searched.reduce((sum, item) => sum + (item.eligible ?? item.found ?? 0), 0)
-    : plans.length ? plans.reduce((sum, plan) => sum + (plan.counts?.leads ?? 0), 0)
-    : null;
+  const total = (pick: (item: WorkItem) => number | null) => {
+    const values = searched.map(pick).filter((value): value is number => value !== null);
+    return values.length ? values.reduce((sum, value) => sum + value, 0) : null;
+  };
+  // A request with an objective counts each person once across its lists (its funnel); older searches add up their own results.
   const numbers: RequestNumbers = {
-    matching,
+    found: objective ? objective.found : total((item) => item.found),
+    contactable: objective ? objective.contactable : total((item) => item.eligible),
+    matching: objective ? objective.leads : total((item) => item.matching),
     contacted: metrics.peopleContacted.total,
     replied: metrics.contactedWhoReplied.total,
     interested: Number(interested?.n ?? 0),
@@ -371,9 +374,9 @@ export async function requestSummary(keyText: string, now = new Date()): Promise
     open: state.open || campaignOpen,
     outcome,
   });
-  // The objective's waiting reason is read only while it runs (objective.server.ts viewOf): a paused one is held by the pause.
-  const blocker = objective?.waiting
-    ?? openPlans.find((plan) => ["waiting_send", "partial", "failed"].includes(plan.state))?.reason
+  // Only what keeps it from going on is a blocker: the objective's waiting reason ("searches still running") is
+  // its ordinary progress, and is in its state label instead.
+  const blocker = openPlans.find((plan) => ["waiting_send", "partial", "failed"].includes(plan.state))?.reason
     ?? searches.find((item) => item.state === "failed")?.reason
     ?? null;
 
@@ -394,7 +397,8 @@ export async function requestSummary(keyText: string, now = new Date()): Promise
     open: state.open || campaignOpen,
     stateLabel: campaign && !state.open ? (campaign.status === "active" ? "Sending" : campaign.status) : state.stateLabel,
     numbers,
-    target: objective?.leadTarget ?? null,
+    // Only a number the owner named is a target; the organization's default is not something they asked for.
+    target: objective?.targetNamed ? objective.leadTarget : null,
     blocker,
     nextAction,
     children: { searches, plans, campaigns },

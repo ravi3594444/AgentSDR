@@ -27,12 +27,17 @@ export function searchListOf(item: Pick<WorkItem, "type" | "kind" | "state" | "a
   return { audienceId: item.audienceId, count: item.eligible };
 }
 
-/** A request row's counts: a search's found and contactable leads, a plan's leads, contacted, replied and failed. */
-export function workCounts(item: Pick<WorkItem, "found" | "eligible" | "counts">): string {
+/**
+ * A request row's counts under the names used everywhere (requests.ts
+ * RequestNumbers): a search's Found, Contactable and Matching (once judged),
+ * a plan's leads, Contacted, Replied and failed sends.
+ */
+export function workCounts(item: Pick<WorkItem, "found" | "eligible" | "counts"> & { matching?: number | null }): string {
   return [
-    item.found !== null ? `${item.found} found` : null,
-    item.eligible !== null ? `${item.eligible} contactable` : null,
-    item.counts ? `${item.counts.leads} ${item.counts.leads === 1 ? "lead" : "leads"} · ${item.counts.contacted} contacted · ${item.counts.replied} replied${item.counts.failed ? ` · ${item.counts.failed} failed` : ""}` : null,
+    item.found !== null ? `${item.found} Found` : null,
+    item.eligible !== null ? `${item.eligible} Contactable` : null,
+    item.matching !== null && item.matching !== undefined ? `${item.matching} Matching` : null,
+    item.counts ? `${item.counts.leads} ${item.counts.leads === 1 ? "lead" : "leads"} · ${item.counts.contacted} Contacted · ${item.counts.replied} Replied${item.counts.failed ? ` · ${item.counts.failed} failed` : ""}` : null,
   ].filter(Boolean).join(" · ");
 }
 

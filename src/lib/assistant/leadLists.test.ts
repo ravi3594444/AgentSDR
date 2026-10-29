@@ -53,13 +53,14 @@ describe("searchListOf: which request rows offer their own list", () => {
 
 describe("workCounts", () => {
   test("a search's contactable leads are called contactable, as on its card and in the report, never new", () => {
-    expect(workCounts(search)).toBe("7 found · 5 contactable");
+    expect(workCounts(search)).toBe("7 Found · 5 Contactable");
     expect(workCounts(search)).not.toContain("new");
+    expect(workCounts({ ...search, matching: 3 })).toBe("7 Found · 5 Contactable · 3 Matching");
   });
 
   test("a plan's counts stay as they were", () => {
-    expect(workCounts({ found: null, eligible: null, counts: { leads: 1, contacted: 1, replied: 0, failed: 0 } })).toBe("1 lead · 1 contacted · 0 replied");
-    expect(workCounts({ found: null, eligible: null, counts: { leads: 3, contacted: 2, replied: 1, failed: 1 } })).toBe("3 leads · 2 contacted · 1 replied · 1 failed");
+    expect(workCounts({ found: null, eligible: null, counts: { leads: 1, contacted: 1, replied: 0, failed: 0 } })).toBe("1 lead · 1 Contacted · 0 Replied");
+    expect(workCounts({ found: null, eligible: null, counts: { leads: 3, contacted: 2, replied: 1, failed: 1 } })).toBe("3 leads · 2 Contacted · 1 Replied · 1 failed");
     expect(workCounts({ found: null, eligible: null, counts: null })).toBe("");
   });
 });

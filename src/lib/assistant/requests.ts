@@ -48,8 +48,20 @@ export function formatRequestKey(key: RequestKey): string {
   }
 }
 
-/** The figures beside a request. `matching` is null where nothing was searched for it (a list, a manual campaign). */
-export type RequestNumbers = { matching: number | null; contacted: number; replied: number; interested: number; failed: number };
+/**
+ * The figures beside a request, named the same everywhere: Found (everyone
+ * its searches saved), Contactable (with a contact route), Matching
+ * (contactable and judged to fit the request), then Contacted, Replied,
+ * Interested once outreach is relevant (outreachShown). Found, Contactable
+ * and Matching are null where nothing was searched or judged for it (a
+ * list, a manual campaign, searches whose leads were never judged).
+ */
+export type RequestNumbers = { found: number | null; contactable: number | null; matching: number | null; contacted: number; replied: number; interested: number; failed: number };
+
+/** Outreach figures mean something once a plan exists or something was sent; before that they are hidden, not zero. */
+export function outreachShown(input: { plans: number; campaigns: number; numbers: Pick<RequestNumbers, "contacted" | "replied" | "interested"> }): boolean {
+  return input.plans > 0 || input.campaigns > 0 || input.numbers.contacted > 0 || input.numbers.replied > 0 || input.numbers.interested > 0;
+}
 
 export type NextStepKind = "inbox" | "start" | "fix_sender" | "wait" | "paused" | "research" | "done" | "nothing";
 
