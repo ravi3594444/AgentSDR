@@ -31,11 +31,18 @@ type Scenario = {
   /** auth login never prints its link. */
   noLink?: boolean;
   slowMs?: number;
-  nativeSteps?: Array<{ name: string; args?: Record<string, unknown>; copyPrevious?: boolean }>;
+  nativeSteps?: NativeStep[];
   nativeInitTools?: string[];
   /** Sends the first native tool call before printing init, as a host under load may read them in that order. */
   nativeCallBeforeInit?: boolean;
+  /**
+   * Per native run of a turn, by order (the last one repeats): its steps, a
+   * hold after them before answering (the model still thinking), and
+   * whether it ends at its --max-turns (`error_max_turns`) instead of answering.
+   */
+  nativeRuns?: Array<{ steps?: NativeStep[]; holdMs?: number; maxTurns?: boolean; answer?: Record<string, unknown> }>;
 };
+type NativeStep = { name: string; args?: Record<string, unknown>; copyPrevious?: boolean };
 
 const config = process.env.CLAUDE_CONFIG_DIR ?? "";
 const args = process.argv.slice(2);
@@ -131,7 +138,16 @@ async function generate() {
     await nativeRpc("initialize", { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "fake-claude", version: "1.0.0" } });
     const list = await nativeRpc("tools/list");
     nativeTools = (list.tools as Array<{ name: string }>).map((tool) => `mcp__agentsdr__${tool.name}`);
+    // What the model would be shown: each tool's description and input schema.
+    writeFileSync(join(config, "fake-tools.json"), JSON.stringify(list.tools));
   }
+  // This run's place among this account's native runs, counted at start (a run the host stops is killed before it records).
+  const counter = join(config, "fake-native-runs");
+  const nativeRun = mcpIndex >= 0 ? (existsSync(counter) ? Number(readFileSync(counter, "utf8")) : 0) : 0;
+  if (mcpIndex >= 0) writeFileSync(counter, String(nativeRun + 1));
+  const runScenario = current.nativeRuns?.length ? current.nativeRuns[Math.min(nativeRun, current.nativeRuns.length - 1)] : null;
+  if (runScenario?.steps) current.nativeSteps = runScenario.steps;
+  if (runScenario?.answer) current.answer = runScenario.answer;
   const first = current.nativeSteps?.[0];
   const early = current.nativeCallBeforeInit && nativeRpc && first ? nativeRpc("tools/call", { name: first.name, arguments: first.args ?? {} }) : null;
   emit({ type: "system", subtype: "init", model, apiKeySource: keySource, tools: current.nativeInitTools ?? ["StructuredOutput", ...nativeTools] });
@@ -172,13 +188,30 @@ async function generate() {
     emit({ type: "result", subtype: "success", is_error: false, result: "I think the answer is fine.", usage: { input_tokens: 40, output_tokens: 8 } });
   } else {
     let previous: Record<string, unknown> = {};
+    const results: string[] = [];
     for (const [index, step] of (nativeRpc ? current.nativeSteps ?? [] : []).entries()) {
       if (!nativeRpc) throw new Error("Native tools were requested without an MCP connection");
       const result = index === 0 && early ? await early : await nativeRpc("tools/call", { name: step.name, arguments: { ...(step.copyPrevious ? previous : {}), ...step.args } });
       previous = ((result.structuredContent as { data?: Record<string, unknown> } | undefined)?.data) ?? {};
+      results.push((result.content as Array<{ type: string; text?: string }> | undefined)?.map((part) => part.text ?? `[${part.type}]`).join(" ") ?? "");
     }
-    const answer = current.answer ?? example(schema);
-    emit({ type: "result", subtype: "success", is_error: false, result: JSON.stringify(answer), structured_output: answer, usage: { input_tokens: 120, output_tokens: 30 }, total_cost_usd: 0.0004 });
+    // Recorded before any hold, so a run the host stops still shows what it saw (unless stopped first).
+    const seen = { promptHead: prompt.slice(0, 240), toolResults: results };
+    if (runScenario?.holdMs) {
+      record({ ...seen, held: true, nativeRun });
+      await sleep(runScenario.holdMs);
+    }
+    if (runScenario?.maxTurns) {
+      emit({ type: "result", subtype: "error_max_turns", is_error: true, num_turns: (current.nativeSteps?.length ?? 0) + 1, usage: { input_tokens: 100, output_tokens: 20 } });
+    } else {
+      const answer = current.answer ?? example(schema);
+      emit({ type: "result", subtype: "success", is_error: false, result: JSON.stringify(answer), structured_output: answer, usage: { input_tokens: 120, output_tokens: 30 }, total_cost_usd: 0.0004 });
+    }
+    // One record per run (a held run already wrote its own).
+    if (runScenario) {
+      if (!runScenario.holdMs) done({ ...seen, nativeRun });
+      return;
+    }
   }
   done();
 }

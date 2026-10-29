@@ -11,6 +11,8 @@ import { nativeSession } from "./nativeSession.server";
 import { runNativeAssistant } from "./nativeAssistant.server";
 import { accountUsage, resetRunnerForTests, runGeneration, runningOn } from "./runner.server";
 import { startToolBridge, type NativeTool } from "./toolBridge.server";
+import { nativeToolSignal } from "./nativeToolScope.server";
+import { coerceToolArguments, TOOL_SCHEMAS } from "@/lib/assistant/toolSchemas";
 
 setDefaultTimeout(20_000);
 let directory = "";
@@ -194,6 +196,145 @@ test("a cancelled native invocation releases its slot and never falls back", asy
   setTimeout(() => controller.abort(new Error("Owner cancelled")), 100);
   await expect(pending).rejects.toThrow("Owner cancelled");
   expect(runningOn(owner)).toBe(0);
+});
+
+// ── Typed contracts, checkpoints and continuation ───────────────────────────
+
+const typedTools: NativeTool[] = ["set_brief", "web_search", "report"].map((name) => ({ name, description: name, inputSchema: TOOL_SCHEMAS[name]! }));
+function runs(owner: ClaudeAccount): Array<{ args: string[]; promptHead?: string; toolResults?: string[]; held?: boolean }> {
+  return calls(owner).filter((call) => call.args.includes("--mcp-config")) as never;
+}
+const sessionArg = (args: string[]) => args[args.indexOf(args.includes("--resume") ? "--resume" : "--session-id") + 1];
+
+test("each tool's typed input schema reaches the CLI's MCP list, and arguments sent as text arrive typed", async () => {
+  const owner = account();
+  scenario(owner, { nativeSteps: [{ name: "set_brief", args: { goal: "clinics", newRequest: "true", leadTarget: "25", channels: "[\"email\"]" } }] });
+  const seen: unknown[] = [];
+  await turn(owner, { tools: typedTools, execute: async (name, args) => {
+    // As runAgentTurn's execute does before its checks (and runTool again before the tool).
+    seen.push(coerceToolArguments(TOOL_SCHEMAS[name], args));
+    return { content: [{ type: "text", text: "ok" }] };
+  } });
+  const listed = JSON.parse(readFileSync(join(accountPaths(owner).config, "fake-tools.json"), "utf8")) as NativeTool[];
+  const brief = listed.find((tool) => tool.name === "set_brief")!.inputSchema as unknown as { properties: Record<string, { type: unknown }>; required: string[] };
+  expect(brief.properties.newRequest!.type).toBe("boolean");
+  expect(brief.properties.leadTarget!.type).toEqual(["integer", "null"]);
+  expect(brief.required).toEqual(["goal"]);
+  expect(listed.find((tool) => tool.name === "web_search")!.inputSchema.required).toEqual(["query"]);
+  expect(seen).toEqual([{ args: { goal: "clinics", newRequest: true, leadTarget: 25, channels: ["email"] }, problems: [] }]);
+});
+
+test("a run that reaches its --max-turns continues in the same session, from a resume message, and the turn finishes", async () => {
+  const owner = account();
+  scenario(owner, { nativeRuns: [{ steps: [{ name: "set_brief" }], maxTurns: true }, { steps: [{ name: "web_search" }] }] });
+  const seen: string[] = [];
+  const checkpoints: unknown[] = [];
+  const result = await turn(owner, {
+    execute: async (name) => { seen.push(name); return { content: [{ type: "text", text: "ok" }] }; },
+    resumePrompt: async (checkpoint) => { checkpoints.push(checkpoint); return "CONTINUE from the record."; },
+  });
+  expect(result.answer).toEqual(answer);
+  expect(result.paused).toBeNull();
+  expect(result.runs).toBe(2);
+  expect(seen).toEqual(["set_brief", "web_search"]);
+  expect(checkpoints).toEqual([{ reason: "turns", forced: false, run: 1 }]);
+  const [first, second] = runs(owner);
+  expect(first!.args).toContain("--session-id");
+  expect(second!.args).toContain("--resume");
+  expect(sessionArg(second!.args)).toBe(sessionArg(first!.args));
+  expect(second!.promptHead).toStartWith("CONTINUE from the record.");
+  // Both runs' usage is counted.
+  expect(result.usage).toEqual({ inputTokens: 220, outputTokens: 50 });
+  expect(runningOn(owner)).toBe(0);
+});
+
+test("a run past its time checkpoints between calls: the call in flight finishes, the next is not run, and nothing runs twice on resume", async () => {
+  const owner = account();
+  scenario(owner, { nativeRuns: [
+    { steps: [{ name: "set_brief", args: { goal: "clinics" } }, { name: "web_search", args: { query: "clinics" } }], holdMs: 8_000 },
+    { steps: [{ name: "set_brief", args: { goal: "clinics" } }, { name: "web_search", args: { query: "clinics" } }] },
+  ] });
+  const seen: string[] = [];
+  const result = await turn(owner, {
+    timeoutMs: 1_500,
+    turnTimeoutMs: 15_000,
+    drainGraceMs: 200,
+    execute: async (name) => {
+      seen.push(name);
+      // The first effect is still running when the run's time is up.
+      if (seen.length === 1) await new Promise((resolve) => setTimeout(resolve, 2_500));
+      return { content: [{ type: "text", text: `${name} done` }] };
+    },
+  });
+  expect(result.answer).toEqual(answer);
+  expect(result.runs).toBe(2);
+  // set_brief ran once (in the first run); web_search, refused there as "not run", ran once in the resumed run.
+  expect(seen).toEqual(["set_brief", "web_search"]);
+  // The first run was stopped between calls (before it could record); the resumed one saw the record.
+  const resumed = runs(owner).find((run) => (run as { nativeRun?: number }).nativeRun === 1)!;
+  expect(resumed.args).toContain("--resume");
+  expect(resumed.toolResults![0]).toContain("already ran just before the pause; it was not run again");
+  expect(resumed.toolResults![1]).toBe("web_search done");
+  expect(runningOn(owner)).toBe(0);
+});
+
+test("past the whole turn's bound the turn pauses, saved, and the next turn resumes its session", async () => {
+  const owner = account();
+  scenario(owner, { nativeRuns: [{ steps: [{ name: "set_brief" }], holdMs: 5_000 }] });
+  const ids = { threadId: randomUUID(), requestId: randomUUID() };
+  const result = await turn(owner, { ...ids, timeoutMs: 10_000, turnTimeoutMs: 1_500, drainGraceMs: 200 });
+  expect(result.answer).toBeNull();
+  expect(result.paused).toEqual({ reason: "time", forced: true, run: 1 });
+  const session = nativeSession(owner, { ...ids, model: "sonnet" });
+  expect(session.resume).toBe(true);
+  expect(session.sessionId).toBe(result.sessionId);
+  expect(session.savedAt).toBeInstanceOf(Date);
+  expect(runningOn(owner)).toBe(0);
+});
+
+test("cancelling during a resumed run stops its tool at once and never falls back", async () => {
+  const owner = account();
+  scenario(owner, { nativeRuns: [{ steps: [{ name: "set_brief" }], maxTurns: true }, { steps: [{ name: "web_search" }] }] });
+  const controller = new AbortController();
+  let toolSawCancel = false;
+  await expect(turn(owner, { signal: controller.signal, execute: async (name) => {
+    if (name !== "web_search") return { content: [] };
+    const signal = nativeToolSignal()!;
+    controller.abort(new Error("Owner cancelled"));
+    toolSawCancel = signal.aborted;
+    return { content: [] };
+  } })).rejects.toThrow("Owner cancelled");
+  expect(toolSawCancel).toBe(true);
+  expect(runningOn(owner)).toBe(0);
+});
+
+test("a final answer the record does not back goes back to Claude in the same session, and only a backed one is returned", async () => {
+  const owner = account();
+  const claimed = { message: "I found 20 salons.", suggestions: [] };
+  scenario(owner, { nativeRuns: [{ answer: claimed }, { answer }] });
+  const result = await turn(owner, { checkAnswer: async (given) => (given.message === claimed.message ? "These searches only start now." : null) });
+  expect(result.answer).toEqual(answer);
+  const [, second] = runs(owner);
+  expect(second!.args).toContain("--resume");
+  expect(second!.promptHead).toContain("was not shown to the owner: These searches only start now.");
+});
+
+test("the bridge's allowance and drain answer \"not run\" and never execute", async () => {
+  const controller = new AbortController(); let effects = 0; const checkpoints: string[] = [];
+  const bridge = await startToolBridge({ tools, signal: controller.signal, maxCalls: 1, onCheckpoint: (why) => checkpoints.push(why), execute: async () => { effects++; return { content: [{ type: "text", text: "ok" }] }; } });
+  const connection = bridge.config.mcpServers.agentsdr;
+  const client = new Client({ name: "drain", version: "1.0.0" });
+  try {
+    await client.connect(new StreamableHTTPClientTransport(new URL(connection.url), { requestInit: { headers: connection.headers } }));
+    await client.callTool({ name: "set_brief", arguments: {} });
+    const over = await client.callTool({ name: "web_search", arguments: {} });
+    const drained = await client.callTool({ name: "report", arguments: {} });
+    expect(effects).toBe(1);
+    expect(over.isError && JSON.stringify(over.content)).toContain("Not run: this run used its tool-call allowance");
+    expect(drained.isError).toBe(true);
+    expect(checkpoints).toEqual(["allowance", "drained"]);
+    await bridge.idle();
+  } finally { await client.close(); await bridge.close(); }
 });
 
 test("the real MCP client can discover and call only this bridge's tools", async () => {

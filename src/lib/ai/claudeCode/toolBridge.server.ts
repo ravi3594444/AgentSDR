@@ -5,7 +5,8 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
-export type NativeTool = { name: string; description: string; inputSchema: { type: "object"; properties: Record<string, unknown>; additionalProperties: boolean } };
+/** One app tool as MCP lists it: its JSON Schema (src/lib/assistant/toolSchemas.ts) types every argument. */
+export type NativeTool = { name: string; description: string; inputSchema: { type: "object"; properties: Readonly<Record<string, unknown>>; required?: readonly string[]; additionalProperties?: boolean } };
 
 /**
  * One authenticated loopback MCP endpoint per running Claude turn. No route is
@@ -15,8 +16,11 @@ export type NativeTool = { name: string; description: string; inputSchema: { typ
 export async function startToolBridge(input: {
   tools: NativeTool[];
   signal: AbortSignal;
+  /** Calls this process may run; past it the run pauses at a checkpoint (the turn resumes in a new process). */
   maxCalls: number;
   execute: (name: string, args: Record<string, unknown>) => Promise<CallToolResult>;
+  /** A call met the allowance or a drain: nothing more runs in this process, and every earlier result was delivered. */
+  onCheckpoint?: (why: "allowance" | "drained") => void;
 }) {
   const token = randomBytes(32).toString("hex");
   const authorization = Buffer.from(`Bearer ${token}`);
@@ -24,7 +28,9 @@ export async function startToolBridge(input: {
   const transports = new Set<Server>();
   let closed = false;
   let calls = 0;
+  let draining: string | null = null;
   let tail: Promise<unknown> = Promise.resolve();
+  const notRun = (why: string): CallToolResult => ({ isError: true, content: [{ type: "text", text: `Not run: ${why}. Nothing was done for this call. The turn continues in a moment from the record of what ran; call it again then if it is still needed.` }] });
   const executions = new Map<string, { fingerprint: string; result: Promise<CallToolResult> }>();
   let host = "";
   const http = createServer((request, response) => {
@@ -53,7 +59,12 @@ export async function startToolBridge(input: {
         // Serialize effects even if Claude batches calls. Each sees the last call's committed evidence and request.
         const work: Promise<CallToolResult> = tail.then(async () => {
           if (closed || input.signal.aborted) throw input.signal.reason ?? new Error("This Claude turn has ended.");
-          if (++calls > input.maxCalls) return { isError: true, content: [{ type: "text" as const, text: "This turn has reached its tool-call allowance. Return a final status; saved work is kept." }] };
+          if (draining) { input.onCheckpoint?.("drained"); return notRun(draining); }
+          if (++calls > input.maxCalls) {
+            draining = "this run used its tool-call allowance and pauses at a checkpoint";
+            input.onCheckpoint?.("allowance");
+            return notRun(draining);
+          }
           return input.execute(name, args);
         });
         executions.set(id, { fingerprint, result: work });
@@ -80,6 +91,13 @@ export async function startToolBridge(input: {
   host = `127.0.0.1:${address.port}`;
   return {
     config: { mcpServers: { agentsdr: { type: "http", url: `http://${host}/mcp`, headers: { Authorization: `Bearer ${token}` }, alwaysLoad: true } } },
+    /** From now on no call runs here: each is answered "not run", so the process can stop between calls. */
+    drain: (why: string) => { draining ??= why; },
+    /** Settles once no call is running or queued (an effect already started always finishes). */
+    idle: async () => {
+      let seen: Promise<unknown>;
+      do { seen = tail; await seen; } while (seen !== tail);
+    },
     close: async () => {
       closed = true;
       // Finish an already-started app operation before releasing the chat. Never retry it here.
@@ -96,7 +114,8 @@ async function readBody(request: IncomingMessage): Promise<unknown> {
   let size = 0;
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > 64 * 1024) throw new Error("MCP request too large");
+    // A full add_contacts (200 contacts, each with its source and quote) must fit; still bounded.
+    if (size > 1024 * 1024) throw new Error("MCP request too large");
     chunks.push(Buffer.from(chunk));
   }
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
