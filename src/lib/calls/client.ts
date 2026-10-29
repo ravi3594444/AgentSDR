@@ -33,7 +33,7 @@ import type {
   UpdateCampaignRequest,
 } from "./contract";
 import { MIN_RECORDER_VERSION, RECORDER_INSTALLED_ATTRIBUTE } from "./contract";
-import { isOlderVersion } from "./recorderRelease";
+import { isOlderVersion, RECORDER_EXTENSION_NAME } from "./recorderRelease";
 
 /** How long the extension has to answer a bridge request before we give up. */
 const RECORDER_REPLY_TIMEOUT_MS = 5000;
@@ -308,7 +308,7 @@ export function sendToRecorder(message: RecorderBridgeMessage): Promise<Recorder
       if (settled) return;
       settled = true;
       cleanup();
-      reject(new Error("The call recorder extension didn't respond. If it was just reloaded or updated, reload this page."));
+      reject(new Error(`The ${RECORDER_EXTENSION_NAME} extension didn't respond. If it was just reloaded or updated, reload this page.`));
     }, RECORDER_REPLY_TIMEOUT_MS);
 
     window.postMessage(request, window.location.origin);

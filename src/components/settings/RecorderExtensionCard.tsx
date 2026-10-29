@@ -6,12 +6,14 @@ import * as Badge from "@/components/alignui/badge";
 import * as Button from "@/components/alignui/button";
 import { Frame, FramePanel } from "@/components/analytics/kit/Frame";
 import { DocsLink } from "@/components/page/DocsLink";
+import { ExtensionNotDetected } from "@/components/calls/ExtensionNotDetected";
 import { isRecorderInstalled, recorderVersion, sendToRecorder } from "@/lib/calls/client";
 import { RECORDER_INSTALLED_ATTRIBUTE } from "@/lib/calls/contract";
 import {
   isOlderVersion,
   LATEST_RECORDER_VERSION,
   RECORDER_DOWNLOAD_PATH,
+  RECORDER_EXTENSION_NAME,
   RECORDER_SELF_UPDATE_VERSION,
 } from "@/lib/calls/recorderRelease";
 import { errorMessage } from "@/components/crm/crm-utils";
@@ -30,9 +32,12 @@ const readVersion = () => (isRecorderInstalled() ? (recorderVersion() ?? "") : n
 const readOnServer = () => undefined;
 
 /**
- * The Call Recorder extension: which version this browser runs against the
- * one this deployment serves, the download, and how to install or update it.
- * It is loaded unpacked, so Chrome never updates it on its own.
+ * The browser extension (22nd x ai Browser Assistant, which also places and
+ * records calls): which version this browser runs against the one this
+ * deployment serves, the download, and how to install or update it. It is
+ * loaded unpacked, so Chrome never updates it on its own. Without its mark on
+ * this page it is "not detected on this site", never "not installed": on a
+ * self-hosted address the two look the same.
  */
 export function RecorderExtensionCard() {
   const version = useSyncExternalStore(subscribe, readVersion, readOnServer);
@@ -66,9 +71,9 @@ export function RecorderExtensionCard() {
             </span>
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
-                <h3 className="text-label-md text-text-strong-950">Call Recorder extension</h3>
+                <h3 className="text-label-md text-text-strong-950">{RECORDER_EXTENSION_NAME} extension</h3>
                 {installed.state === "missing" && (
-                  <Badge.Root size="medium" variant="lighter" color="gray">Not installed in this browser</Badge.Root>
+                  <Badge.Root size="medium" variant="lighter" color="orange">Not detected on this site</Badge.Root>
                 )}
                 {installed.state === "installed" && outdated && (
                   <Badge.Root size="medium" variant="lighter" color="orange">
@@ -80,7 +85,8 @@ export function RecorderExtensionCard() {
                 )}
               </div>
               <p className="mt-1 text-paragraph-sm text-text-sub-600">
-                Places WhatsApp calls from {BRAND.shortName} and records them. Chrome only, loaded unpacked.
+                Places WhatsApp calls from {BRAND.shortName} and records them, and lets the assistant work in this Chrome on the
+                websites you allow once you connect it from the chat. Chrome only, loaded unpacked.
               </p>
               <p className="mt-1 text-paragraph-xs text-text-soft-400">Latest version: {LATEST_RECORDER_VERSION}</p>
             </div>
@@ -112,6 +118,12 @@ export function RecorderExtensionCard() {
           </div>
         </div>
         {updateError && <p className="text-paragraph-sm text-error-base">{updateError}</p>}
+        {installed.state === "missing" && (
+          <ExtensionNotDetected
+            className="rounded-lg bg-bg-weak-50 p-3"
+            install="Not installed yet? Download it and follow First time below."
+          />
+        )}
 
         <div className="grid gap-4 border-t border-stroke-soft-200 pt-4 text-paragraph-sm text-text-sub-600 sm:grid-cols-2">
           <div>

@@ -4,18 +4,22 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { RiChromeLine, RiLoader4Line } from "@remixicon/react";
 import * as Popover from "@/components/alignui/popover";
-import { RESEARCH_SITES, type BrowserConnectionView } from "@/lib/browser/connected/contract";
+import { accessSentence, type BrowserConnectionView } from "@/lib/browser/connected/contract";
 import { browserConnection, connectThisBrowser, disconnectThisBrowser, extensionCanResearch } from "@/lib/browser/connected/client";
 import { isRecorderInstalled, recorderVersion } from "@/lib/calls/client";
 import { RECORDER_INSTALLED_ATTRIBUTE } from "@/lib/calls/contract";
-import { RECORDER_SETUP_PATH } from "@/lib/calls/recorderRelease";
+import { RECORDER_EXTENSION_NAME, RECORDER_SETUP_PATH } from "@/lib/calls/recorderRelease";
+import { SCREENSHOT_NOTE } from "@/lib/browser/screenshotNote";
+import { ExtensionNotDetected } from "@/components/calls/ExtensionNotDetected";
 import { cn } from "@/utils/cn";
 
 /**
  * The person's own Chrome for research (src/lib/browser/connected/), in one
  * short state beside the chat's other switches: Connect browser, connected,
  * offline, stopped or needs you, with Disconnect. The extension's toolbar
- * button has Stop and Share this tab.
+ * button has Stop, Share this tab, website access and Settings. Without the
+ * extension's mark on this page it is "not detected on this site", never "not
+ * installed": a self-hosted address it was not given looks the same.
  */
 
 function subscribe(onChange: () => void): () => void {
@@ -88,7 +92,7 @@ export function BrowserConnection() {
   const installed = version !== undefined && version !== null;
   const capable = installed && extensionCanResearch(version || null);
   const dot = state === "connected" ? "bg-success-base" : state === "needs_attention" || state === "paused" ? "bg-warning-base" : "bg-stroke-sub-300";
-  const sites = (view?.sites ?? []).map((key) => RESEARCH_SITES[key].label).join(", ");
+  const access = accessSentence(view?.sites ?? [], view?.domains ?? []);
 
   return (
     <Popover.Root>
@@ -102,11 +106,13 @@ export function BrowserConnection() {
         <p className="text-label-sm text-text-strong-950">Research in your browser</p>
         {state === "none" ? (
           <>
-            <p className="text-paragraph-xs text-text-sub-600">The assistant opens background tabs in your Chrome and reads the sites you enable — LinkedIn, X, Reddit, Instagram, Facebook or other websites — signed in as you. It reads only; sending stays in your approved outreach.</p>
+            <p className="text-paragraph-xs text-text-sub-600">The assistant opens background tabs in your Chrome, signed in as you, on the websites you allow: all websites, or the ones you choose. It reads them, and changes something there only when you ask for that task in the chat. Contacting people stays in your approved outreach.</p>
             {!installed ? (
-              <p className="text-paragraph-xs text-text-sub-600">Install the AgentSDR extension first: <Link href={RECORDER_SETUP_PATH} className="text-primary-base hover:underline">Settings → WhatsApp → Integrations</Link>, then reload this page.</p>
+              <ExtensionNotDetected
+                install={<>Not installed yet? Get it from <Link href={RECORDER_SETUP_PATH} className="text-primary-base hover:underline">Settings → WhatsApp → Integrations</Link>, then reload this page.</>}
+              />
             ) : !capable ? (
-              <p className="text-paragraph-xs text-text-sub-600">Your AgentSDR extension is too old for this. <Link href={RECORDER_SETUP_PATH} className="text-primary-base hover:underline">Update it</Link>, then reload this page.</p>
+              <p className="text-paragraph-xs text-text-sub-600">Your {RECORDER_EXTENSION_NAME} extension is too old for this. <Link href={RECORDER_SETUP_PATH} className="text-primary-base hover:underline">Update it</Link>, then reload this page.</p>
             ) : (
               <button type="button" onClick={() => void connect()} disabled={busy} className="inline-flex h-8 items-center rounded-lg bg-primary-base px-3 text-label-xs text-primary-contrast disabled:opacity-60">Connect this browser</button>
             )}
@@ -115,15 +121,16 @@ export function BrowserConnection() {
         ) : (
           <>
             <p className="text-paragraph-xs text-text-sub-600">
-              {state === "connected" && `Connected${view?.deviceLabel ? ` (${view.deviceLabel})` : ""}. Sites: ${sites || "none"}.`}
+              {state === "connected" && `Connected${view?.deviceLabel ? ` (${view.deviceLabel})` : ""}. Website access: ${access}.`}
               {state === "offline" && `Offline: Chrome is closed or asleep${view?.deviceLabel ? ` (${view.deviceLabel})` : ""}. Research there resumes when it is back.`}
               {state === "paused" && "You pressed Stop in the extension. Resume it from the extension's toolbar button."}
-              {state === "needs_attention" && `${view?.attention?.detail ?? "A page needs you"}${view?.attention?.host ? ` on ${view.attention.host}` : ""}. Open the “AgentSDR research” tab group in Chrome to deal with it.`}
+              {state === "needs_attention" && `${view?.attention?.detail ?? "A page needs you"}${view?.attention?.host ? ` on ${view.attention.host}` : ""}. Open the “${RECORDER_EXTENSION_NAME}” tab group in Chrome to deal with it.`}
             </p>
-            <p className="text-paragraph-xs text-text-soft-400">Stop, Share this tab and the sites are on the extension&apos;s toolbar button.</p>
+            <p className="text-paragraph-xs text-text-soft-400">Stop, website access and Settings are on the extension&apos;s toolbar button ({RECORDER_EXTENSION_NAME}).</p>
             <button type="button" onClick={() => void disconnect()} disabled={busy} className="inline-flex h-8 items-center rounded-lg px-3 text-label-xs text-text-sub-600 ring-1 ring-inset ring-stroke-soft-200 hover:bg-bg-weak-50 disabled:opacity-60">Disconnect</button>
           </>
         )}
+        <p className="text-paragraph-xs text-text-soft-400">{SCREENSHOT_NOTE}</p>
         {error && <p role="alert" className="text-paragraph-xs text-error-base">{error}</p>}
       </Popover.Content>
     </Popover.Root>

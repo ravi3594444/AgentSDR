@@ -34,7 +34,7 @@ The extension is loaded unpacked, so Chrome will not update it by itself.
   </Step>
 </Steps>
 
-The card shows whether the extension is **Not installed in this browser**, **Up to date**, or has an **Update available** with the version you have.
+The card shows whether the extension is **Not detected on this site**, **Up to date**, or has an **Update available** with the version you have. Chrome lists the extension as **22nd x ai Browser Assistant**; besides calls, it is also the browser the chat's assistant works in once you connect it.
 
 ## Update the extension
 
@@ -45,7 +45,7 @@ From version 0.14.0 the card's **Update** button opens the extension's own Updat
     On **Settings → WhatsApp → Integrations**, click **Update**. The Update page opens and shows the version you run.
   </Step>
   <Step title="Choose the folder, once">
-    Click **Choose folder**. Pick the folder Chrome loaded the extension from. To find it, open `chrome://extensions`, click **Details** on AgentSDR Call Recorder and look under **Source**. Allow Chrome to edit it. After that, updates are written there.
+    Click **Choose folder**. Pick the folder Chrome loaded the extension from. To find it, open `chrome://extensions`, click **Details** on 22nd x ai Browser Assistant (called AgentSDR Call Recorder before version 0.18.0) and look under **Source**. Allow Chrome to edit it. After that, updates are written there.
   </Step>
   <Step title="Update now">
     Click **Update now**. The extension installs the version this AgentSDR serves and reloads itself.
@@ -63,10 +63,10 @@ AgentSDR refuses to start a call if the extension is too old for the page. It te
 
 ## Self-hosted AgentSDR
 
-The extension only works with AgentSDR addresses it has been told about. `https://app.agentsdr.ai` and `http://localhost:3000` are built in. If you run your own AgentSDR, add its address:
+The extension only works with AgentSDR addresses it has been told about. `https://app.agentsdr.ai` and `http://localhost:3000` are built in. On any other address the app says **Extension not detected on this site**, even when the extension is installed, until you add the address:
 
-1. Open the extension's Options page. In `chrome://extensions`, click **Details** on the extension, then **Extension options**.
-2. Under **Your AgentSDR addresses**, enter the address, for example `https://sdr.yourcompany.com`, and click **Add**.
+1. Open the extension's **Settings**: click its toolbar button (or Chrome's puzzle-piece menu), then **Settings**. From `chrome://extensions`, **Details** → **Extension options** opens the same page.
+2. Under **22nd x ai addresses**, enter the address, for example `https://sdr.yourcompany.com`, and click **Add**.
 3. Allow access when Chrome asks. Reload any open AgentSDR tab.
 
 Addresses must use https. Plain http is accepted only for localhost. **Remove** takes an address and its permission back. No rebuild is needed.

@@ -26,7 +26,7 @@ export async function GET(request: NextRequest) {
   try {
     zip = await readFile(ZIP_PATH);
   } catch {
-    return new NextResponse("The Call Recorder download isn't built on this server. Run `bun run package:recorder`.", {
+    return new NextResponse("The browser extension download isn't built on this server. Run `bun run package:recorder`.", {
       status: 404,
       headers: { "Content-Type": "text/plain; charset=utf-8" },
     });
