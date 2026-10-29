@@ -221,9 +221,27 @@ export type GenerationInput = {
   };
 };
 
-export type GenerationResult = { text: string; modelId: string | null; usage: { inputTokens?: number; outputTokens?: number } };
+export type GenerationResult = {
+  text: string;
+  modelId: string | null;
+  usage: { inputTokens?: number; outputTokens?: number };
+  /** Native only: the CLI stopped itself at --max-turns, between turns; its session resumes where it stopped. */
+  stopped?: "max_turns";
+};
 
 const MAX_STDOUT = 4 * 1024 * 1024;
+/**
+ * A native turn's stream echoes every tool result (page text, screenshots),
+ * so its size grows with the work done: only the frames readGeneration reads
+ * are kept, and the bound is on one frame, not on the whole turn.
+ */
+const MAX_NATIVE_FRAME = 32 * 1024 * 1024;
+
+/** The frames readGeneration reads; a native turn keeps only these. */
+function outcomeFrame(frame: Record<string, unknown>): boolean {
+  return (frame.type === "system" && frame.subtype === "init") || frame.type === "rate_limit_event" || frame.type === "result"
+    || (frame.type === "assistant" && (frame.is_api_error_message === true || typeof frame.error === "string"));
+}
 
 function hold(state: AccountState, limit: ClaudeCodeLimit, model: ClaudeCodeModel): ClaudeCodeError {
   const reported = limit.resetsAt ? Date.parse(limit.resetsAt) : Date.now() + UNKNOWN_RESET_HOLD_MS;
@@ -285,47 +303,54 @@ export async function runGeneration(input: GenerationInput): Promise<GenerationR
       running.stdin?.on("error", () => {});
       let sawInit = false;
       let stdout = "";
+      const kept: string[] = [];
       let overflow = false;
       let timedOut = false;
       let frameError: Error | null = null;
       const decoder = new StringDecoder("utf8");
       let pending = "";
       running.stdout?.on("data", (chunk: Buffer) => {
-        if (stdout.length + chunk.length > MAX_STDOUT) {
-          overflow = true;
-          if (input.native) { input.native.onFailure(new Error("Claude returned too much output; saved work is kept.")); void stopCli(running); }
+        if (overflow) return;
+        if (!input.native) {
+          if (stdout.length + chunk.length > MAX_STDOUT) { overflow = true; return; }
+          stdout += decoder.write(chunk);
+          sawInit ||= stdout.includes('"subtype":"init"');
           return;
         }
-        const text = decoder.write(chunk);
-        stdout += text;
-        sawInit ||= stdout.includes('"subtype":"init"');
-        if (input.native && !frameError) {
-          pending += text;
-          const lines = pending.split("\n");
-          pending = lines.pop() ?? "";
-          for (const line of lines) {
-            if (!line.trim()) continue;
-            try {
-              const frame = JSON.parse(line) as Record<string, unknown>;
-              if (frame.type === "rate_limit_event") {
-                const update = readGeneration([line], input.timeZone);
-                if (update.windows.length) { state.windows = update.windows; state.windowsAt = new Date().toISOString(); }
-                const limited = limitRefusal(frame.rate_limit_info, input.timeZone);
-                if (limited) throw hold(state, limited, input.model);
-                if (update.overage) {
-                  const message = "Claude reported extra usage. This native turn stopped immediately; the account stays held until the reported window resets.";
-                  const until = setHold(state, ALL, { window: "overage", resetsAt: update.overage.resetsAt, modelSpecific: false, message }, update.overage.resetsAt ? Date.parse(update.overage.resetsAt) : Date.now() + UNKNOWN_RESET_HOLD_MS);
-                  throw new ClaudeCodeError("overage", message, new Date(until));
-                }
+        if (frameError) return;
+        pending += decoder.write(chunk);
+        if (pending.length > MAX_NATIVE_FRAME) {
+          overflow = true;
+          input.native.onFailure(new Error("Claude returned a single answer too large to read; saved work is kept."));
+          void stopCli(running);
+          return;
+        }
+        const lines = pending.split("\n");
+        pending = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const frame = JSON.parse(line) as Record<string, unknown>;
+            if (outcomeFrame(frame)) kept.push(line);
+            if (frame.type === "system" && frame.subtype === "init") sawInit = true;
+            if (frame.type === "rate_limit_event") {
+              const update = readGeneration([line], input.timeZone);
+              if (update.windows.length) { state.windows = update.windows; state.windowsAt = new Date().toISOString(); }
+              const limited = limitRefusal(frame.rate_limit_info, input.timeZone);
+              if (limited) throw hold(state, limited, input.model);
+              if (update.overage) {
+                const message = "Claude reported extra usage. This native turn stopped immediately; the account stays held until the reported window resets.";
+                const until = setHold(state, ALL, { window: "overage", resetsAt: update.overage.resetsAt, modelSpecific: false, message }, update.overage.resetsAt ? Date.parse(update.overage.resetsAt) : Date.now() + UNKNOWN_RESET_HOLD_MS);
+                throw new ClaudeCodeError("overage", message, new Date(until));
               }
-              input.native.onFrame(frame);
             }
-            catch (error) {
-              frameError = error instanceof SyntaxError ? new Error("Claude returned an invalid stream frame.") : error instanceof Error ? error : new Error("Claude returned an invalid frame.");
-              input.native.onFailure(frameError);
-              void stopCli(running);
-              break;
-            }
+            input.native.onFrame(frame);
+          }
+          catch (error) {
+            frameError = error instanceof SyntaxError ? new Error("Claude returned an invalid stream frame.") : error instanceof Error ? error : new Error("Claude returned an invalid frame.");
+            input.native.onFailure(frameError);
+            void stopCli(running);
+            break;
           }
         }
       });
@@ -352,9 +377,17 @@ export async function runGeneration(input: GenerationInput): Promise<GenerationR
         if (input.signal?.aborted) return rejectRun(input.signal.reason);
         if (timedOut) return rejectRun(new ClaudeCodeError("timeout", `Claude Code did not answer within ${Math.round(input.timeoutMs / 1000)} s.`));
         if (overflow) return rejectRun(new ClaudeCodeError("error", "Claude Code returned more output than an answer can be."));
+        if (input.native) {
+          // A last frame without its newline (the result, usually) is read like the others.
+          const last = (pending + decoder.end()).trim();
+          if (last) {
+            try { if (outcomeFrame(JSON.parse(last) as Record<string, unknown>)) kept.push(last); } catch { /* not a frame */ }
+          }
+          sawInit ||= kept.some((line) => line.includes('"subtype":"init"'));
+        }
         // Exited before it even started a session: the installed CLI refused how it was run; another attempt fails the same way.
         if (!sawInit && code !== 0) return rejectRun(new ClaudeCodeError("error", `Claude Code on this server exited (code ${code ?? "unknown"}) before answering. Check that the installed version supports the flags this app uses (docs/plans/CLAUDE_CODE_LOGIN.md).`));
-        resolveRun(stdout.split("\n"));
+        resolveRun(input.native ? kept : stdout.split("\n"));
       });
       running.stdin?.end(input.userPrompt);
     });
@@ -377,6 +410,10 @@ export async function runGeneration(input: GenerationInput): Promise<GenerationR
         modelSpecific: false,
         message: `Your Claude plan's ${windowName(outcome.overage.window)} is used up, and Anthropic billed the last AI step as extra usage. AI steps on Claude Code stay held until it resets so nothing more is billed that way; nothing moves to another provider.`,
       }, until);
+    }
+    if (outcome.failure?.kind === "max_turns" && input.native) {
+      state.signedOutAt = null;
+      return { text: "", modelId: outcome.modelId, usage: outcome.usage, stopped: "max_turns" };
     }
     if (outcome.failure) {
       if (outcome.failure.kind === "limit") throw hold(state, outcome.failure.limit, input.model);

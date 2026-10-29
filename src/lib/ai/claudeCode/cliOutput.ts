@@ -127,6 +127,8 @@ export type ClaudeFailure =
   | { kind: "model_unavailable"; message: string }
   /** Overloaded, a server fault or a dropped process: worth another attempt. */
   | { kind: "transient"; message: string }
+  /** A native turn used its `--max-turns` (`error_max_turns`): a clean checkpoint, its session resumable. */
+  | { kind: "max_turns"; message: string }
   /** Anything else the CLI refused; not retried. */
   | { kind: "error"; message: string };
 
@@ -295,6 +297,11 @@ export function readGeneration(lines: readonly string[], timeZone = "UTC"): Gene
           ...(input.length ? { inputTokens: input.reduce((sum, value) => sum + value, 0) } : {}),
           ...(typeof usage.output_tokens === "number" ? { outputTokens: usage.output_tokens } : {}),
         };
+      }
+      // The CLI stopped itself between turns at --max-turns; every tool result before it is in its session.
+      if (frame.subtype === "error_max_turns") {
+        outcome.failure = { kind: "max_turns", message: "Claude used this run's turns; its session can be resumed." };
+        continue;
       }
       if (frame.is_error === true) {
         const text = apiError?.text || resultError(frame);

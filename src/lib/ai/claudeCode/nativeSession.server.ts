@@ -14,6 +14,8 @@ export function nativeSession(account: ClaudeAccount, input: { threadId: string;
   const file = join(cwd, "session.json");
   let sessionId = randomUUID();
   let resume = false;
+  /** When the resumed session was last saved: what the app recorded before it is already in the session. */
+  let savedAt: Date | null = null;
   try {
     const previous: unknown = JSON.parse(readFileSync(file, "utf8"));
     if (!previous || typeof previous !== "object" || Array.isArray(previous)) throw new Error("Invalid session manifest");
@@ -22,16 +24,18 @@ export function nativeSession(account: ClaudeAccount, input: { threadId: string;
     if (record.model === input.model) {
       sessionId = record.sessionId as typeof sessionId;
       resume = true;
+      const at = typeof record.savedAt === "string" ? new Date(record.savedAt) : null;
+      savedAt = at && Number.isFinite(at.getTime()) ? at : null;
     }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new Error("Could not read this request's Claude session. No new session was started.");
   }
   return {
-    cwd, sessionId, resume,
+    cwd, sessionId, resume, savedAt,
     // A failed first turn starts a fresh session from the saved app transcript; no blind CLI replay.
     save: () => {
       const temporary = join(cwd, `${randomUUID()}.tmp`);
-      writeFileSync(temporary, JSON.stringify({ sessionId, model: input.model }), { mode: 0o600, flag: "wx" });
+      writeFileSync(temporary, JSON.stringify({ sessionId, model: input.model, savedAt: new Date().toISOString() }), { mode: 0o600, flag: "wx" });
       renameSync(temporary, file);
     },
   };
