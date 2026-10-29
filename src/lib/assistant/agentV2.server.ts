@@ -55,6 +55,12 @@ export function objectiveBrief(objective: Pick<Objective, "controls"> | null): B
 
 /** What the model reads first every step: the request and its brief, what was counted, and this chat's plans. */
 export async function v2ContextText(input: { threadId: string; requestMessageId: string | null }): Promise<string> {
+  const { request, progress } = await v2ContextParts(input);
+  return progress ? `${request}\n${progress}` : request;
+}
+
+/** The request block (the owner's words and the brief) and the progress the server counted, apart. */
+export async function v2ContextParts(input: { threadId: string; requestMessageId: string | null }): Promise<{ request: string; progress: string }> {
   // The request the turn serves (the one its tools read), else the chat's active one.
   const served = input.requestMessageId ? (await threadObjectives(input.threadId, 5)).find((row) => row.requestMessageId === input.requestMessageId) ?? null : null;
   const objective = served ?? await activeRequest(input.threadId);
@@ -91,7 +97,7 @@ export async function v2ContextText(input: { threadId: string; requestMessageId:
       plans: runs.map((run) => ({ name: run.name, status: run.status, leads: ((run.plan ?? {}) as { assignments?: unknown[] }).assignments?.length ?? 0 })),
     }));
   }
-  return parts.join("\n");
+  return { request: parts[0]!, progress: parts.slice(1).join("\n") };
 }
 
 type RequestMember = typeof leadAudienceMembers.$inferSelect;
