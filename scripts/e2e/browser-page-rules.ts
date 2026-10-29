@@ -116,11 +116,12 @@ try {
   check("a type=button disclosure in a message form is clicked and submits nothing", !plainDisclosure.element.write && plainDisclosure.page.ok && plainDisclosure.effects === 1, plainDisclosure);
 
   // --- Tasks (the owner asked; the extension checked the grant): changes, and what stays refused ---
-  const act = async (label: string, action: Extract<PageOp, { op: "act" }>["action"], extra: { value?: string; key?: { key: string; modifiers: string[] }; social?: boolean } = {}) => {
+  const FORMS = ["interact"];
+  const act = async (label: string, action: Extract<PageOp, { op: "act" }>["action"], extra: { value?: string; key?: { key: string; modifiers: string[] }; social?: boolean; kinds?: string[] } = {}) => {
     const elements = await page.evaluate(`(${pageScript.toString()})(${JSON.stringify(pageScriptConfig)}, {"op":"snapshot"})`) as PageScriptResult;
     const element = ("snapshot" in elements ? elements.snapshot.elements : []).find((item) => item.label === label);
     if (!element) throw new Error(`no element “${label}”`);
-    return { element, page: await run(page, { op: "act", n: element.n, label, action, value: extra.value ?? null, key: extra.key ?? null, social: extra.social ?? false }), effects: await effects(page) };
+    return { element, page: await run(page, { op: "act", n: element.n, label, action, value: extra.value ?? null, key: extra.key ?? null, social: extra.social ?? false, kinds: extra.kinds ?? FORMS }), effects: await effects(page) };
   };
   const value = (selector: string) => page.evaluate(`(() => { const el = document.querySelector(${JSON.stringify(selector)}); return el.value ?? el.innerText; })()`) as Promise<string>;
 
@@ -156,19 +157,25 @@ try {
   const save = await act("Save contact", "click");
   check("with the owner's request, a form's Save button is clicked and the form submits", save.page.ok && save.effects >= 1, save);
 
-  for (const [name, html, label, social] of [
-    ["Send, in a mail composer", `<div><textarea>Hi Priya</textarea><button data-effect>Send</button></div>`, "Send", false],
-    ["Spanish Enviar beside a written message", `<div contenteditable="true">Hola Priya</div><button data-effect>Enviar</button>`, "Enviar", false],
-    ["Senden on a social site", `<button data-effect>Senden</button>`, "Senden", true],
-    ["Reply all", `<button data-effect>Reply all</button>`, "Reply all", false],
-    ["Buy now", `<button data-effect>Buy now</button>`, "Buy now", false],
-    ["Post on a social site", `<button data-effect>Post</button>`, "Post", true],
-    ["Seguir on a social site", `<button data-effect>Seguir</button>`, "Seguir", true],
-    ["an unlabelled icon button beside a written message on a social site", `<form><div contenteditable="true">Hello there</div><button data-effect aria-label="✈"></button></form>`, "✈", true],
+  // Each control needs its own kind in the grant: a form task never sends, posts or pays; a grant that names the kind does.
+  for (const [name, html, label, social, kind] of [
+    ["Send, in a mail composer", `<div><textarea>Hi Priya</textarea><button data-effect>Send</button></div>`, "Send", false, "message"],
+    ["Spanish Enviar beside a written message", `<div contenteditable="true">Hola Priya</div><button data-effect>Enviar</button>`, "Enviar", false, "message"],
+    ["Senden on a social site", `<button data-effect>Senden</button>`, "Senden", true, "message"],
+    ["Reply all", `<button data-effect>Reply all</button>`, "Reply all", false, "message"],
+    ["Buy now", `<button data-effect>Buy now</button>`, "Buy now", false, "purchase"],
+    ["Post on a social site", `<button data-effect>Post</button>`, "Post", true, "publish"],
+    ["Seguir on a social site", `<button data-effect>Seguir</button>`, "Seguir", true, "publish"],
+    ["an unlabelled icon button beside a written message on a social site", `<form><div contenteditable="true">Hello there</div><button type="button" data-effect aria-label="✈"></button></form>`, "✈", true, "message"],
   ] as const) {
     await load(page, html);
-    const result = await act(label, "click", { social });
-    check(`a task still never clicks ${name}`, !result.page.ok && result.effects === 0, result);
+    const refused = await act(label, "click", { social });
+    check(`a form task never clicks ${name}`, !refused.page.ok && refused.effects === 0, refused);
+    const others = await act(label, "click", { social, kinds: ["interact", "message", "publish", "purchase"].filter((item) => item !== kind) });
+    check(`a grant of every other kind still never clicks ${name} (it is ${kind})`, !others.page.ok && others.effects === 0, others);
+    await load(page, html);
+    const granted = await act(label, "click", { social, kinds: ["interact", kind] });
+    check(`a grant of ${kind} clicks ${name}`, granted.page.ok && granted.effects === 1, granted);
   }
   await load(page, `<form method="post" action="/registro"><input aria-label="Nombre"><input type="email" aria-label="Correo electrónico"><button>Enviar inscripción</button></form>`);
   const registration = await act("Enviar inscripción", "click");
@@ -186,7 +193,9 @@ try {
   check("Enter in a form's text field fires the page's key handler and submits the form", enterSearch.page.ok && enterSearch.effects === 2, enterSearch);
   await load(page, `<textarea aria-label="Message" onkeydown="window.effects++">Hi</textarea>`);
   const enterTextarea = await act("Message", "press", { key: enter });
-  check("Enter is never pressed in a message box (chats send on Enter)", !enterTextarea.page.ok && enterTextarea.effects === 0, enterTextarea);
+  check("without message or publish, Enter is never pressed in a message box (chats send on Enter)", !enterTextarea.page.ok && enterTextarea.effects === 0, enterTextarea);
+  const enterGranted = await act("Message", "press", { key: enter, kinds: ["interact", "message"] });
+  check("with message granted (the server checked the recipient), Enter in a message box reaches the page", enterGranted.page.ok && enterGranted.effects === 1, enterGranted);
   await load(page, `<form method="post"><input aria-label="Subject"><textarea aria-label="Body">Hi Priya</textarea><button>Send</button></form>`);
   const enterSend = await act("Subject", "press", { key: enter });
   check("Enter is refused where it would submit a written message through a Send button", !enterSend.page.ok && enterSend.effects === 0, enterSend);
@@ -195,8 +204,8 @@ try {
   check("other keys reach the page's handlers with their modifiers", arrow.page.ok && arrow.effects === 1, arrow);
 
   // --- The probe a screen step runs first, at a CSS point or on the keyboard focus ---
-  const probe = (target: "point" | "focus", x: number, y: number, extra: { readOnly?: boolean; social?: boolean; key?: { key: string; modifiers: string[] } } = {}) =>
-    run(page, { op: "probe", x, y, target, key: extra.key ?? null, social: extra.social ?? false, readOnly: extra.readOnly ?? false });
+  const probe = (target: "point" | "focus", x: number, y: number, extra: { readOnly?: boolean; social?: boolean; key?: { key: string; modifiers: string[] }; kinds?: string[] } = {}) =>
+    run(page, { op: "probe", x, y, target, key: extra.key ?? null, social: extra.social ?? false, readOnly: extra.readOnly ?? false, kinds: extra.kinds ?? FORMS });
   await load(page, `<div style="margin:0;padding:0"><canvas width="300" height="100" style="display:block;position:absolute;left:0;top:0;width:300px;height:100px"></canvas>
     <button style="position:absolute;left:0;top:120px;width:120px;height:40px">Send</button>
     <a href="https://example.org/next" style="position:absolute;left:0;top:180px;display:block;width:120px;height:30px">Next page</a>
@@ -204,7 +213,7 @@ try {
     <textarea aria-label="Message" style="position:absolute;left:200px;top:240px">Hi</textarea>
     <iframe src="data:text/html,<button>Inside</button>" style="position:absolute;left:0;top:300px;width:200px;height:80px;border:0"></iframe></div>`);
   check("a task's point on a canvas is allowed; without a task it is not clicked", (await probe("point", 50, 50)).ok && !(await probe("point", 50, 50, { readOnly: true })).ok);
-  check("a point on Send is refused even in a task", !(await probe("point", 40, 140)).ok);
+  check("a point on Send beside a written message is refused in a form task, allowed with message granted", !(await probe("point", 40, 140)).ok && (await probe("point", 40, 140, { kinds: ["interact", "message"] })).ok);
   check("without a task a point on a link is allowed (a research click)", (await probe("point", 40, 190, { readOnly: true })).ok);
   check("a point inside another site's embedded frame is refused", !(await probe("point", 40, 320)).ok);
   await page.focus("input[type=password]");

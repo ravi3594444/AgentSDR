@@ -24,8 +24,13 @@
 
 /** The first extension version with connected-browser research. */
 export const BROWSER_RESEARCH_MIN_VERSION = "0.16.0";
-/** The first extension version that carries out owner-requested tasks: fields, forms, screenshots and screen coordinates. */
-export const BROWSER_TASK_MIN_VERSION = "0.17.0";
+/**
+ * The first extension version that carries out owner-requested tasks as the
+ * server now grants them (fields, forms, screenshots, screen coordinates,
+ * by kind of action, in tabs the owner has open). 0.17.0 checked grants by
+ * site and cannot read a grant by kind, so it is told to update.
+ */
+export const BROWSER_TASK_MIN_VERSION = "0.18.0";
 
 // --- Sites ---------------------------------------------------------------
 
@@ -256,50 +261,80 @@ export const READ_CONTROL_PATTERN = "^(?:(?:show|see|view|load|read|display)\\s+
 export const SEARCH_FIELD_PATTERN = "\\b(?:search|query|find|keywords?|lookup)\\b";
 
 /**
- * Controls a task never uses, whatever the owner asked: they contact people
- * for the owner (contacting people goes through AgentSDR's tracked
- * outreach, never through a second, untracked sender), in a few languages.
- * "Send" words are refused where a message is written on the page or on a
- * social site (SEND_CONTROL_PATTERN); elsewhere "Enviar" or "Senden" is
- * most often a form's submit button, which an owner's form task needs.
- * On social sites SOCIAL_CONTACT_PATTERN refuses more, and so does
- * structure (pageScript taskRefusal): a control beside a written message.
+ * What a control does for the owner, so a task's grant (tasks.ts) can be
+ * checked against it: it messages people (CONTACT_CONTROL_PATTERN, or a
+ * "Send" word beside a written message or on a social site), publishes in
+ * their name on a social site (SOCIAL_CONTACT_PATTERN), pays
+ * (PAYMENT_CONTROL_PATTERN), or is any other change. In a few languages;
+ * elsewhere "Enviar" or "Senden" is most often a form's submit button. On
+ * social sites structure counts too (pageScript): a control beside a
+ * written message may send it. A control the patterns miss is "interact",
+ * still bounded by the owner's request.
  */
 export const CONTACT_CONTROL_PATTERN = "(?<![\\p{L}\\p{N}])(?:reply|reply all|forward|message|invite|dm|tweet|repost|retweet"
   + "|responder|reenviar|mensaje|invitar|mensagem|convidar|r[ée]pondre|transf[ée]rer|inviter"
   + "|antworten|weiterleiten|nachricht|einladen|rispondi|inoltra|messaggio|invita"
   + "|जवाब दें|आमंत्रित करें)(?![\\p{L}\\p{N}])";
 
-/** "Send", refused beside a written message (or on a social site). */
+/** "Send": a message beside a written message (or on a social site). */
 export const SEND_CONTROL_PATTERN = "(?<![\\p{L}\\p{N}])(?:send|send now|enviar|envoyer|senden|absenden|invia|inviare|भेजें|भेजो)(?![\\p{L}\\p{N}])";
 
-/** On social sites, also what publishes or connects in the owner's name (a CRM's "Add comment" or "Follow-up" stays usable elsewhere). */
-export const SOCIAL_CONTACT_PATTERN = "(?<![\\p{L}\\p{N}])(?:post|publish|comment|share|connect|follow(?![\\s-]?up)|subscribe|join"
+/** On social sites, what publishes or connects in the owner's name (a CRM's "Add comment" or "Follow-up" is an ordinary change elsewhere). */
+export const SOCIAL_CONTACT_PATTERN = "(?<![\\p{L}\\p{N}])(?:post|publish|comment|share|connect|follow(?![\\s-]?up)|subscribe|join|like"
   + "|publicar|comentar|compartir|conectar|seguir|compartilhar|partilhar|publier|commenter|partager|se connecter|suivre"
   + "|ver[öo]ffentlichen|posten|kommentieren|teilen|vernetzen|folgen|pubblica|commenta|condividi|collegati|segui"
   + "|पोस्ट करें|टिप्पणी करें|साझा करें|कनेक्ट करें|फ़ॉलो करें|फॉलो करें)(?![\\p{L}\\p{N}])";
 
-/** Controls that pay or order: payments stay with the owner, like sign-ins. */
-export const PAYMENT_CONTROL_PATTERN = "(?<![\\p{L}\\p{N}])(?:buy|pay|purchase|checkout|check out|place (?:my |your )?order|order now|donate"
-  + "|comprar|pagar|finalizar compra|acheter|payer|commander|kaufen|bezahlen|zur kasse|acquista|paga|खरीदें|भुगतान करें)(?![\\p{L}\\p{N}])";
+/** Controls that pay or order. */
+export const PAYMENT_CONTROL_PATTERN = "(?<![\\p{L}\\p{N}])(?:buy|buy now|pay|pay now|purchase|checkout|check out|place (?:my |your )?order|order now|complete (?:my |your )?(?:order|purchase)|donate"
+  + "|comprar|pagar|finalizar compra|acheter|payer|commander|kaufen|bezahlen|zur kasse|kostenpflichtig bestellen|acquista|paga|खरीदें|भुगतान करें)(?![\\p{L}\\p{N}])";
 
-/** Why a task may not do `op` with `element` of a reading, or null; the page checks again on the live element. */
-export function taskActProblem(element: ResearchElement | undefined, op: TaskOp, value: string | null, page: { social: boolean; elements: readonly ResearchElement[] }): string | null {
+/**
+ * The kinds of action a task may be granted (tasks.ts explains each):
+ * every grant includes interact; message, publish and purchase are granted
+ * only when the owner's own words ask for them.
+ */
+export const ACTION_KINDS = ["interact", "message", "publish", "purchase", "open_tabs"] as const;
+export type ActionKind = (typeof ACTION_KINDS)[number];
+/** The kind a control's use needs. */
+export type ControlKind = "interact" | "message" | "publish" | "purchase";
+
+/** What `label` does for the owner, on a social site or beside a written message. */
+export function controlKind(label: string, page: { social: boolean; draft: boolean }): ControlKind {
+  if (new RegExp(PAYMENT_CONTROL_PATTERN, "iu").test(label)) return "purchase";
+  if (new RegExp(CONTACT_CONTROL_PATTERN, "iu").test(label) || ((page.social || page.draft) && new RegExp(SEND_CONTROL_PATTERN, "iu").test(label))) return "message";
+  if (page.social && new RegExp(SOCIAL_CONTACT_PATTERN, "iu").test(label)) return "publish";
+  return "interact";
+}
+
+/** Why a control of `kind` is outside a grant of `kinds`, said for the model; null when it is inside. */
+export function kindRefusal(kind: ControlKind, label: string, kinds: readonly string[]): string | null {
+  if (kinds.includes(kind)) return null;
+  switch (kind) {
+    case "message": return `“${label}” would message people, and the owner's request does not ask the assistant to send messages (a grant from browser_task includes it only when it does; a first message to leads found in research goes through prepare_outreach)`;
+    case "publish": return `“${label}” would publish in the owner's name, and the owner's request does not ask for that`;
+    case "purchase": return `“${label}” would pay or order, and the owner has not asked for a purchase with a price they agreed`;
+    case "interact": return `“${label}” would change something, and the owner's request is research only`;
+  }
+}
+
+/** A message written on the page (a message box or editor with text): its "Send" would send it. */
+export function draftInReading(elements: readonly ResearchElement[]): boolean {
+  return elements.some((item) => (item.field?.type === "textarea" || item.field?.type === "editor") && item.field.value.trim() !== "");
+}
+
+/** Why a task may not do `op` with `element` of a reading under a grant of `kinds`, or null; the page checks again on the live element. */
+export function taskActProblem(element: ResearchElement | undefined, op: TaskOp, value: string | null, page: { social: boolean; elements: readonly ResearchElement[]; kinds: readonly string[] }): string | null {
   if (!element) return "there is no such element in the latest reading of that tab; read it again for the current numbers";
   const label = element.label || element.kind;
-  const { social } = page;
-  // A message written on the page (a message box or editor with text): its "Send" would send it.
-  const draft = page.elements.some((item) => (item.field?.type === "textarea" || item.field?.type === "editor") && item.field.value.trim() !== "");
-  if (op === "click" || op === "press") {
-    if (new RegExp(CONTACT_CONTROL_PATTERN, "iu").test(element.label) || ((social || draft) && new RegExp(SEND_CONTROL_PATTERN, "iu").test(element.label))
-      || (social && new RegExp(SOCIAL_CONTACT_PATTERN, "iu").test(element.label))) {
-      return `“${label}” sends, publishes or connects for the owner: contacting people goes through AgentSDR's outreach (prepare_outreach), never the browser`;
-    }
-    if (new RegExp(PAYMENT_CONTROL_PATTERN, "iu").test(element.label)) return `“${label}” pays or orders: payments stay with the owner`;
+  if (!page.kinds.length) return kindRefusal("interact", label, []);
+  if (op === "click" || (op === "press" && element.field?.type !== "editor" && element.field?.type !== "textarea")) {
+    const refusal = kindRefusal(controlKind(element.label, { social: page.social, draft: draftInReading(page.elements) }), label, page.kinds);
+    if (refusal) return refusal;
   }
   if (op === "fill" || op === "select" || op === "check" || op === "uncheck") {
     if (!element.field) return `“${label}” is not a field; click it instead`;
-    if (element.field.sensitive) return `“${label}” is a password, card or code field: sign-ins and payments stay with the owner`;
+    if (element.field.sensitive) return `“${label}” is a password, card or code field: the owner types it in their browser (browser_tab_show brings the tab up for them); its value never reaches the assistant`;
     if (element.field.disabled) return `“${label}” is disabled on the page`;
   }
   if (op === "fill") {
@@ -346,6 +381,16 @@ export type BrowserResearchAction =
   | { kind: "release" }
   /** A change the owner asked for, on element `n` of the tab's latest reading; refused off the grant's sites. */
   | { kind: "act"; tabId: number; n: number; label: string; op: TaskOp; value: string | null; key: string | null; grant: BrowserTaskGrantRef }
+  /**
+   * A tab the owner already has open, for this request: the one with
+   * `tabId`, or the one whose address or title holds `match` (several match:
+   * the candidates come back, none adopted). Needs a grant with open_tabs,
+   * or the owner's having shared that tab. Adopted tabs stay the owner's:
+   * never closed, and put back where they were at the end.
+   */
+  | { kind: "use_tab"; tabId: number | null; match: string | null; grant: BrowserTaskGrantRef | null }
+  /** Brings one of the request's tabs up in front of the owner (to sign in, type a password or a code, or watch). */
+  | { kind: "show"; tabId: number }
   /** The tab's visible part as an image, the tab made visible in the AgentSDR task window first. */
   | { kind: "screenshot"; tabId: number }
   /**
@@ -364,11 +409,12 @@ export type VisualOp = (typeof VISUAL_OPS)[number];
 export const READ_VISUAL_OPS: readonly VisualOp[] = ["move", "scroll"];
 
 /**
- * The owner's request to change things on some sites, as the server checked
- * it (tasks.ts) and carries it with every change: the extension acts only on
- * pages of `hosts` (and their subdomains), before `expiresAt`.
+ * The owner's request, as the server judged it (tasks.ts) and carries it
+ * with every change: the kinds of action it grants, the purchase limit the
+ * owner agreed, and until when. The extension and the page check each
+ * control against `kinds`; website access bounds where.
  */
-export type BrowserTaskGrantRef = { id: string; hosts: string[]; expiresAt: string };
+export type BrowserTaskGrantRef = { id: string; kinds: ActionKind[]; purchase: { maxTotal: number; currency: string } | null; expiresAt: string };
 
 /** What a screenshot is, beside its image: everything a later visual step is checked against. */
 export type BrowserScreenshotFacts = {
@@ -415,11 +461,9 @@ export function parseTaskKey(value: string): { key: string; modifiers: (typeof K
   return [...last].length === 1 ? { key: last, modifiers } : null;
 }
 
-/** Whether `host` is one of the grant's sites (or a subdomain of one) and the grant still holds. */
-export function grantCovers(grant: Pick<BrowserTaskGrantRef, "hosts" | "expiresAt"> | null | undefined, host: string, now: number): boolean {
-  if (!grant || !(Date.parse(grant.expiresAt) > now)) return false;
-  const name = host.toLowerCase().replace(/\.$/, "").replace(/^www\./, "");
-  return grant.hosts.some((granted) => name === granted || name.endsWith(`.${granted}`));
+/** Whether the grant still holds (website access, checked separately, bounds where). */
+export function grantActive(grant: Pick<BrowserTaskGrantRef, "kinds" | "expiresAt"> | null | undefined, now: number): boolean {
+  return Boolean(grant) && grant!.kinds.length > 0 && Date.parse(grant!.expiresAt) > now;
 }
 
 export type BrowserResearchCommand = {
@@ -443,7 +487,7 @@ export type BrowserResearchTab = {
 };
 
 export type BrowserResearchResult =
-  | { ok: true; tabId?: number; snapshot?: ResearchSnapshot; tabs?: BrowserResearchTab[]; closed?: number; screenshot?: BrowserScreenshot; note?: string }
+  | { ok: true; tabId?: number; snapshot?: ResearchSnapshot; tabs?: BrowserResearchTab[]; closed?: number; screenshot?: BrowserScreenshot; note?: string; candidates?: SharedTab[] }
   | { ok: false; error: string; tabId?: number; attention?: ResearchAttention | null };
 
 /** Why the extension must not run `command`, or null: an old, replayed, expired or malformed command. */
@@ -473,7 +517,11 @@ export function commandProblem(command: unknown, state: { lastSeq: number; now: 
       return tab(action.tabId) && Number.isSafeInteger(action.n) && typeof action.label === "string" && (TASK_OPS as readonly string[]).includes(action.op as string)
         && (action.value === null || typeof action.value === "string") && (action.key === null || (typeof action.key === "string" && parseTaskKey(action.key) !== null))
         && grantRef(action.grant) ? null : "bad act";
-    case "screenshot": return tab(action.tabId) ? null : "bad screenshot";
+    case "screenshot":
+    case "show": return tab(action.tabId) ? null : `bad ${action.kind}`;
+    case "use_tab":
+      return tab(action.tabId, true) && (action.match === null || (typeof action.match === "string" && action.match.trim().length >= 2 && action.match.length <= 200))
+        && (action.tabId !== null || action.match !== null) && (action.grant === null || grantRef(action.grant)) ? null : "bad use_tab";
     case "visual": {
       const point = (value: unknown, optional: boolean) => (optional && value === null) || (typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 20_000);
       return tab(action.tabId) && typeof action.shotId === "string" && /^[0-9a-f-]{36}$/i.test(action.shotId) && (VISUAL_OPS as readonly string[]).includes(action.op as string)
@@ -488,8 +536,11 @@ export function commandProblem(command: unknown, state: { lastSeq: number; now: 
 
 function grantRef(value: unknown): value is BrowserTaskGrantRef {
   const grant = value as Partial<BrowserTaskGrantRef> | null;
-  return Boolean(grant) && typeof grant!.id === "string" && Array.isArray(grant!.hosts) && grant!.hosts.length > 0
-    && grant!.hosts.every((host) => typeof host === "string" && /^[a-z0-9.-]+$/i.test(host)) && typeof grant!.expiresAt === "string" && Number.isFinite(Date.parse(grant!.expiresAt));
+  const purchase = grant?.purchase;
+  return Boolean(grant) && typeof grant!.id === "string" && Array.isArray(grant!.kinds) && grant!.kinds.length > 0
+    && grant!.kinds.every((kind) => (ACTION_KINDS as readonly string[]).includes(kind))
+    && (purchase === null || (typeof purchase === "object" && typeof purchase!.maxTotal === "number" && typeof purchase!.currency === "string"))
+    && typeof grant!.expiresAt === "string" && Number.isFinite(Date.parse(grant!.expiresAt));
 }
 
 // --- Bridge API (device token, called by the extension's service worker) ----
@@ -547,14 +598,14 @@ export type PageOp =
   | { op: "click"; n: number; label: string }
   | { op: "scroll"; direction: "down" | "up" }
   | { op: "search"; n: number; label: string; text: string }
-  /** A task's change (the extension checked the grant): `social` when the page is on one of the social sites. */
-  | { op: "act"; n: number; label: string; action: TaskOp; value: string | null; key: PageKey | null; social: boolean }
+  /** A task's change (the extension checked the grant is live): `kinds` it grants, `social` when the page is on one of the social sites. */
+  | { op: "act"; n: number; label: string; action: TaskOp; value: string | null; key: PageKey | null; social: boolean; kinds: string[] }
   /**
    * Before a visual step: what is at CSS point (x, y), or has the keyboard
    * focus, and whether the step may use it: with `readOnly` (no grant) only
    * what a research click may use, otherwise what a task may.
    */
-  | { op: "probe"; x: number; y: number; target: "point" | "focus"; key: PageKey | null; social: boolean; readOnly: boolean };
+  | { op: "probe"; x: number; y: number; target: "point" | "focus"; key: PageKey | null; social: boolean; readOnly: boolean; kinds: string[] };
 
 /** A key as the page script takes it (parseTaskKey's answer). */
 export type PageKey = { key: string; modifiers: string[] };
@@ -702,7 +753,7 @@ export async function pageScript(config: PageScriptConfig, op: PageOp): Promise<
   const find = (n: number) => document.querySelector(`[${config.attr}="${n}"]`);
   const wait = (ms: number) => new Promise((done) => setTimeout(done, ms));
 
-  // --- Tasks: what the owner asked for, never contacting people or paying ---
+  // --- Tasks: what the owner asked for, each control checked against the grant's kinds ---
   const contact = new RegExp(config.contactPattern, "iu");
   const sends = new RegExp(config.sendPattern, "iu");
   const socialContact = new RegExp(config.socialContactPattern, "iu");
@@ -719,24 +770,35 @@ export async function pageScript(config: PageScriptConfig, op: PageOp): Promise<
     return false;
   };
   const draftOnPage = () => Array.from(document.querySelectorAll(composers)).some(hasText);
-  const taskRefusal = (el: Element, label: string, social: boolean): string | null => {
-    const name = label || el.tagName.toLowerCase();
-    if (contact.test(label) || (social && socialContact.test(label)) || (sends.test(label) && (social || draftOnPage()))) return `“${name}” sends, publishes or connects for the owner: contacting people goes through AgentSDR's outreach, never the browser`;
-    if (payment.test(label)) return `“${name}” pays or orders: payments stay with the owner`;
-    if (social && !isComposer(el) && isWrite(el, label) && nearDraft(el)) return `on a social site “${name}” sits beside a written message and may send it: contacting people goes through AgentSDR's outreach, never the browser`;
-    return null;
+  // What a control does for the owner, on the live page (contract.ts controlKind has the same rules, from a reading).
+  const controlKindOf = (el: Element, label: string, social: boolean): string => {
+    if (payment.test(label)) return "purchase";
+    if (contact.test(label) || (sends.test(label) && (social || draftOnPage()))) return "message";
+    if (social && socialContact.test(label)) return "publish";
+    if (social && !isComposer(el) && isWrite(el, label) && nearDraft(el)) return "message";
+    return "interact";
+  };
+  const OUTSIDE: Record<string, string> = {
+    message: "would message people: that needs the owner's request to ask for messages, and the step to name its recipient (who is checked first)",
+    publish: "would publish in the owner's name, and the owner's request does not ask for that",
+    purchase: "would pay or order, and the owner has not asked for a purchase with a price they agreed",
+    interact: "would change something, and the owner's request is research only",
+  };
+  const taskRefusal = (el: Element, label: string, social: boolean, kinds: string[]): string | null => {
+    const kind = controlKindOf(el, label, social);
+    return kinds.includes(kind) ? null : `“${label || el.tagName.toLowerCase()}” ${OUTSIDE[kind]}`;
   };
   const KEY_CODES: Record<string, number> = { Enter: 13, Tab: 9, Escape: 27, Backspace: 8, Delete: 46, ArrowUp: 38, ArrowDown: 40, ArrowLeft: 37, ArrowRight: 39, Home: 36, End: 35, PageUp: 33, PageDown: 34, Space: 32 };
-  // Enter where it would send or submit: refused in a message box (chats send on Enter), and as a refused form submission.
-  const enterRefusal = (el: Element, social: boolean): string | null => {
-    if (isComposer(el)) return "Enter sends in many message boxes, so it is not pressed in one; put line breaks in the text instead";
+  // Enter where it would send or submit: in a message box it sends (chats send on Enter); in a form it submits through the form's button.
+  const enterRefusal = (el: Element, social: boolean, kinds: string[]): string | null => {
+    if (isComposer(el)) return kinds.includes("message") || kinds.includes("publish") ? null : "Enter would send what is written in this box, and the owner's request does not ask to send or publish; put line breaks in the text instead";
     const form = (el as HTMLInputElement).form ?? null;
     if (!form) return null;
     const submitter = Array.from(form.elements).find((item) => (item.tagName === "BUTTON" && !["button", "reset"].includes((item.getAttribute("type") || "").toLowerCase()))
       || (item.tagName === "INPUT" && ["submit", "image"].includes((item.getAttribute("type") || "").toLowerCase())));
-    const refusal = submitter ? taskRefusal(submitter, labelOf(submitter), social) : null;
-    if (refusal) return `Enter would submit the form through ${refusal}`;
-    if (social && Array.from(form.elements).some((item) => isComposer(item) && hasText(item))) return "Enter would submit a written message on a social site: contacting people goes through AgentSDR's outreach, never the browser";
+    const refusal = submitter ? taskRefusal(submitter, labelOf(submitter), social, kinds) : null;
+    if (refusal) return `Enter would submit the form: ${refusal}`;
+    if (social && !kinds.includes("message") && Array.from(form.elements).some((item) => isComposer(item) && hasText(item))) return "Enter would submit a written message on a social site, and the owner's request does not ask to send messages";
     return null;
   };
   const setValue = (input: HTMLInputElement | HTMLTextAreaElement, value: string) => {
@@ -752,14 +814,14 @@ export async function pageScript(config: PageScriptConfig, op: PageOp): Promise<
     const name = label || el.tagName.toLowerCase();
     if (op.action === "click") {
       if (navigates(el)) return { ok: true, navigate: (el as HTMLAnchorElement).href };
-      const refusal = taskRefusal(el, label, op.social);
+      const refusal = taskRefusal(el, label, op.social, op.kinds);
       if (refusal) return { ok: false, error: refusal };
       (el as HTMLElement).scrollIntoView({ block: "center" });
       (el as HTMLElement).click();
       return { ok: true, acted: true };
     }
     if (op.action === "fill") {
-      if (sensitive(el)) return { ok: false, error: `“${name}” is a password, card or code field: sign-ins and payments stay with the owner` };
+      if (sensitive(el)) return { ok: false, error: `“${name}” is a password, card or code field: the owner types it in their browser; its value never reaches the assistant` };
       const value = op.value ?? "";
       (el as HTMLElement).focus();
       if (el.tagName === "TEXTAREA" || (el.tagName === "INPUT" && !["checkbox", "radio", "file", "submit", "button", "reset", "image", "range", "color"].includes(type || "text"))) {
@@ -812,7 +874,7 @@ export async function pageScript(config: PageScriptConfig, op: PageOp): Promise<
     const key = op.key;
     if (!key) return { ok: false, error: "press needs a key" };
     if (key.key === "Enter") {
-      const refusal = enterRefusal(el, op.social);
+      const refusal = enterRefusal(el, op.social, op.kinds);
       if (refusal) return { ok: false, error: refusal };
     }
     (el as HTMLElement).focus();
@@ -841,9 +903,9 @@ export async function pageScript(config: PageScriptConfig, op: PageOp): Promise<
         if (!inner) return { ok: false, error: "the keyboard focus is inside an embedded frame from another site; open that frame's page in its own tab to work there" };
         el = inner.activeElement;
       }
-      if (el && sensitive(el)) return { ok: false, error: "the keyboard focus is in a password, card or code field: sign-ins and payments stay with the owner" };
+      if (el && sensitive(el)) return { ok: false, error: "the keyboard focus is in a password, card or code field: the owner types it in their browser; its value never reaches the assistant" };
       if (el && op.key?.key === "Enter") {
-        const refusal = enterRefusal(el, op.social);
+        const refusal = enterRefusal(el, op.social, op.kinds);
         if (refusal) return { ok: false, error: refusal };
       }
       return { ok: true, probe: el && el !== document.body ? `${el.tagName.toLowerCase()}${labelOf(el) ? ` “${labelOf(el)}”` : ""}` : "the page" };
@@ -872,7 +934,7 @@ export async function pageScript(config: PageScriptConfig, op: PageOp): Promise<
       if (navigates(control) || (!isField(control) && control.tagName !== "SELECT" && !isWrite(control, label) && control !== el.ownerDocument.body)) return { ok: true, probe: what };
       return { ok: false, error: `${what} is not a link, tab, expand, next or "more" control, and the owner has not asked for changes on this site (browser_task), so it is not clicked` };
     }
-    const refusal = taskRefusal(control, label, op.social);
+    const refusal = taskRefusal(control, label, op.social, op.kinds);
     return refusal ? { ok: false, error: refusal } : { ok: true, probe: what };
   };
 

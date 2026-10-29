@@ -569,6 +569,27 @@ export async function latestTabScreenshot(userId: string, requestId: string, tab
   return latest && (latest.action.kind === "screenshot" || latest.action.kind === "visual") ? latest.shot ?? null : null;
 }
 
+/**
+ * A change on `tabId` the browser took but never answered (it may have
+ * happened) that no later reading or screenshot of the tab has checked:
+ * its label, or null. Another change waits for that look, so a lost
+ * acknowledgment is never answered by doing it again blind.
+ */
+export async function uncheckedChange(userId: string, requestId: string, tabId: number): Promise<string | null> {
+  const connection = await activeConnection(userId);
+  if (!connection) return null;
+  const rows = await db.select({ action: browserCommands.action, status: browserCommands.status, deliveredAt: browserCommands.deliveredAt }).from(browserCommands)
+    .where(and(inOrg(browserCommands), eq(browserCommands.connectionId, connection.id), eq(browserCommands.requestId, requestId), sql`${browserCommands.action}->>'tabId' = ${String(tabId)}`))
+    .orderBy(desc(browserCommands.seq)).limit(20);
+  for (const row of rows) {
+    if (row.status === "done" && ["read", "screenshot", "scroll"].includes(row.action.kind)) return null;
+    if (row.status === "expired" && row.deliveredAt && (row.action.kind === "act" || (row.action.kind === "visual" && row.action.grant))) {
+      return row.action.kind === "act" ? `${row.action.op} on “${row.action.label}”` : `${row.action.op} at (${row.action.x}, ${row.action.y})`;
+    }
+  }
+  return null;
+}
+
 /** A screenshot's image is passed to the model once; the row keeps what it was, not the picture of the owner's page. */
 export async function dropScreenshotImage(userId: string, requestId: string, shotId: string): Promise<void> {
   const connection = await activeConnection(userId);

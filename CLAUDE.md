@@ -434,7 +434,7 @@ The page reaches the extension through a content script and
 `window.postMessage`, not `chrome.runtime` by id: an unpacked extension's id
 differs on every machine. The origins it accepts are the built-in ones in
 `extensions/whatsapp-recorder/src/origins.ts` (keep them in sync with the
-manifest) plus any a person adds on the extension's Options page: those are
+manifest) plus any a person adds on the extension's Settings page: those are
 granted through `optional_host_permissions`, kept in chrome.storage.sync,
 and get the bridge via `chrome.scripting.registerContentScripts`. A
 self-hosted deployment needs no rebuild.
@@ -472,13 +472,17 @@ the queue is `connections.server.ts`; the worker side is
 `extensions/whatsapp-recorder/src/research.ts`. Report and test evidence:
 `docs/plans/BROWSER_RESEARCH_REPORT_2026-10-27.md`.
 
-- **Pairing.** The chat's Connect browser mints a one-time code for the
-  signed-in person and workspace (`POST /api/browser-connections`), hands it
-  to the extension over the bridge, and the extension's Connect page asks
-  Chrome for the chosen sites once, then pairs (`/api/browser-bridge/pair`).
-  The device token is stored hashed, accepted only beside its device id and
-  only while the person is still a member. One active connection per person
-  and workspace; a new pairing replaces it.
+- **Pairing and website access.** The chat's Connect browser mints a
+  one-time code for the signed-in person and workspace
+  (`POST /api/browser-connections`), hands it to the extension over the
+  bridge, and the extension's Connect page offers "Allow all websites" or
+  "Choose specific websites" (social sites ticked, other websites listed by
+  domain, `browser_connections.domains`), asks Chrome for exactly that once,
+  then pairs (`/api/browser-bridge/pair`). Website access is only where the
+  assistant may go (`accessSentence`); what it may do there is the task
+  grant below. The device token is stored hashed, accepted only beside its
+  device id and only while the person is still a member. One active
+  connection per person and workspace; a new pairing replaces it.
 - **Commands.** The `browser_connection` / `browser_tab_*` tools (one
   registry, so the JSON harness and native Claude over MCP both get them)
   queue a command on the acting person's connection for the turn's request
@@ -489,7 +493,7 @@ the queue is `connections.server.ts`; the worker side is
   tabs belong to the request that opened them. `/api/browser-bridge/` is
   public in `proxy.ts`; every route but pairing starts with
   `withBrowserDevice()`.
-- **It reads; sending stays in approved outreach.** Clicks are allowed by
+- **Research reads.** Without a task grant, clicks are allowed by
   what a control is, never by its label alone: links (followed by address),
   tabs, disclosures, pagination, a GET search form's button, and controls
   labelled "more"/"next" (`READ_CONTROL_PATTERN`); everything else, toggles
@@ -500,30 +504,45 @@ the queue is `connections.server.ts`; the worker side is
   holds no message, password or file field. Only https public hosts,
   on enabled sites (a social site needs its own switch); private and local
   names are refused, and "web" hosts are resolved server-side
-  (`BROWSER_RESEARCH_ALLOW_PRIVATE=true` only for local fixtures). Page text
+  (`BROWSER_RESEARCH_ALLOW_PRIVATE=true` only for local fixtures; a
+  selected-sites connection also only its listed domains). Page text
   is untrusted content; a sign-in, CAPTCHA or blank page is reported as
   needing the owner and grounds nothing. Never add an evaluate (arbitrary
   JavaScript) or raw debugger command, never a change outside an owner's
   task grant (below), and never send a cookie, password or the site's
   session to the server.
-- **Tasks the owner asked for** (extension 0.17.0,
+- **Tasks the owner asked for** (extension 0.18.0,
   `docs/plans/INTERACTIVE_BROWSER_REPORT_2026-10-28.md`). `browser_task`
   starts one only from the owner's own words in this request, copied
-  exactly, asking for a change and naming each site (`tasks.ts`); the grant
-  is the chat's own `browser_task` tool record and travels with every
-  change (`grantCovers` in the extension too). Then `browser_tab_act`
-  (fill, select, check, press, click by element number) and
+  exactly; what they allow is judged by one structured call that is shown
+  the owner's messages and nothing else (`authority.server.ts`, earlier
+  messages marked as context), by kind of action (`tasks.ts`): `interact`
+  (forms, records, settings), `message`, `publish`, `purchase` (with the
+  total the owner agreed) and `open_tabs`. A research request grants
+  nothing. The grant is the chat's own `browser_task` tool record and
+  travels with every change; each control is classified (`controlKind`,
+  and again on the live element in the page) and refused unless its kind
+  is granted. Code checks what protects people and money before the
+  browser is asked: a step that may send names its `recipient` (Do Not
+  Contact; a first message to a lead the owner did not name goes through
+  `prepare_outreach`), a purchase names the page's `total` (within the
+  agreed limit, and shown in the latest reading), and only that step's
+  command carries `message` or `purchase` (a screen step never carries
+  `purchase`). A change whose answer was lost blocks further changes in
+  that tab until it is read or pictured (`uncheckedChange`). Then
+  `browser_tab_act` (fill, select, check, press, click by element number),
+  `browser_tab_use` (a tab the owner has open: adopted, never closed, put
+  back), `browser_tab_show` (brings a tab up for the owner) and
   `browser_tab_screenshot` / `browser_tab_visual`: the tab is moved into an
-  unfocused AgentSDR task window and worked through `chrome.debugger`
+  unfocused task window and worked through `chrome.debugger`
   (`extensions/whatsapp-recorder/src/screen.ts`); points are image pixels of
   the tab's latest screenshot, refused once it navigated, scrolled, resized
-  or zoomed. A grant never contacts people (reply, message, invite;
-  "Send" beside a written message or on a social site), never publishes
-  or connects on a social site, never pays, never presses Enter in a
-  message box, never reads or types a password, card or code. A screenshot
-  reaches the model as an image (MCP image block; API image parts only when
-  `structuredVision()` says the model takes images, otherwise the tool says
-  so), is never stored, and grounds nothing.
+  or zoomed. Passwords, card numbers and codes are never read or typed: the
+  owner types them. A screenshot reaches the model as an image (MCP image
+  block; API image parts only when `structuredVision()` says the model
+  takes images, otherwise the tool says so); the app blanks its stored copy
+  once the model has it, but a native Claude session's own history may keep
+  it. What only an image shows grounds nothing.
 - **Evidence.** `add_contacts` (`sourceUrl`, `quote` per contact) and
   `add_instagram_contacts` (`sources`) keep the page, read time and quote,
   checked against what this chat actually read (`pageEvidence.server.ts`);

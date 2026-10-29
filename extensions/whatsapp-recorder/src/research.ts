@@ -21,9 +21,10 @@
  *   only search fields take text.
  * - A task the owner asked for (the server checked their words, tasks.ts)
  *   comes with its grant: fields, selects, checkboxes, keys and clicks
- *   ("act"), and screen steps ("visual", screen.ts), only on pages of the
- *   grant's sites before it expires. Even then nothing sends, publishes,
- *   connects or pays, and no password, card or code is read or typed.
+ *   ("act"), and screen steps ("visual", screen.ts), within the website
+ *   access. Each control is checked against the kinds the owner's request
+ *   grants (a message, a public post, a purchase need their own); no
+ *   password, card or code is ever read or typed.
  *   A visual step points into the tab's latest screenshot and is refused
  *   once the tab navigated, scrolled or resized since; a fresh screenshot
  *   comes back after it.
@@ -33,7 +34,7 @@ import {
   accessDomains,
   accessModeOf,
   commandProblem,
-  grantCovers,
+  grantActive,
   RESEARCH_SITE_KEYS,
   pageScript,
   pageScriptConfig,
@@ -75,8 +76,12 @@ type Connection = {
   paused: boolean;
 };
 
-/** A tab the extension opened for a request. */
-type ResearchTab = { requestId: string; createdAt: number; lastUsedAt: number; attention: ResearchAttention | null };
+/**
+ * A tab the extension opened for a request, or one of the owner's own tabs
+ * the request adopted (`home`: where it was, to put it back): those are
+ * never closed.
+ */
+type ResearchTab = { requestId: string; createdAt: number; lastUsedAt: number; attention: ResearchAttention | null; home?: { windowId: number; index: number; groupId: number } };
 type SharedTabEntry = { tabId: number; url: string; title: string; sharedAt: number };
 
 const CONNECTION_KEY = "researchConnection";
@@ -463,13 +468,80 @@ async function openTab(command: BrowserResearchCommand, url: string): Promise<nu
 
 async function closeTabs(tabIds: number[]): Promise<number> {
   let closed = 0;
+  const registry = await tabsRegistry();
   for (const tabId of tabIds) {
+    const home = registry[String(tabId)]?.home;
     await changeTabs((tabs) => {
       delete tabs[String(tabId)];
     });
+    if (home) {
+      await giveBack(tabId, home);
+      continue;
+    }
     if (await chrome.tabs.remove(tabId).then(() => true, () => false)) closed += 1;
   }
   return closed;
+}
+
+/** An adopted tab goes back to the owner as it was: its window, its place, its group; never closed. */
+async function giveBack(tabId: number, home: NonNullable<ResearchTab["home"]>): Promise<void> {
+  await screen.release(tabId).catch(() => undefined);
+  await forgetShot(tabId);
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!tab) return;
+  if (tab.windowId !== home.windowId && (await chrome.windows.get(home.windowId).catch(() => null))) {
+    await chrome.tabs.move(tabId, { windowId: home.windowId, index: home.index }).catch(() => undefined);
+  }
+  if (home.groupId >= 0 && tab.groupId !== home.groupId) await chrome.tabs.group({ tabIds: [tabId], groupId: home.groupId }).catch(() => undefined);
+  else if (home.groupId < 0 && tab.groupId >= 0) await chrome.tabs.ungroup(tabId).catch(() => undefined);
+}
+
+/**
+ * One of the owner's open tabs, for this request: the one named, or the one
+ * whose address or title holds `match`. Matching needs the owner's request
+ * to ask for their open tabs (open_tabs); a tab they shared needs nothing
+ * more. Only https pages on websites the connection may use.
+ */
+async function adoptTab(conn: Connection, command: BrowserResearchCommand, action: Extract<BrowserResearchAction, { kind: "use_tab" }>): Promise<BrowserResearchResult> {
+  const granted = Boolean(action.grant && grantActive(action.grant, Date.now() + clockOffset) && action.grant.kinds.includes("open_tabs"));
+  const ours = new Set(Object.entries(await tabsRegistry()).filter(([, tab]) => !tab.home).map(([id]) => Number(id)));
+  const candidates: chrome.tabs.Tab[] = [];
+  if (action.tabId !== null) {
+    const tab = await chrome.tabs.get(action.tabId).catch(() => null);
+    if (!tab?.id || ours.has(tab.id)) return { ok: false, error: `tab ${action.tabId} is not one of the owner's open tabs` };
+    if (!granted && !(await shared(tab.id))) return { ok: false, error: "the owner has not asked to use their open tabs in this request, and has not shared that tab" };
+    candidates.push(tab);
+  } else {
+    if (!granted) return { ok: false, error: "the owner has not asked to use their open tabs in this request" };
+    const words = action.match!.toLowerCase();
+    for (const tab of await chrome.tabs.query({ windowType: "normal" })) {
+      if (tab.id === undefined || ours.has(tab.id) || !tab.url?.startsWith("https://")) continue;
+      if (tab.url.toLowerCase().includes(words) || (tab.title ?? "").toLowerCase().includes(words)) candidates.push(tab);
+    }
+  }
+  const usable: chrome.tabs.Tab[] = [];
+  for (const tab of candidates) if (tab.url && !(await urlRefusal(conn, tab.url))) usable.push(tab);
+  if (!usable.length) return { ok: false, error: candidates.length ? "the matching tab is on a website this connection may not use" : `no open tab's address or title holds “${action.match}”` };
+  if (usable.length > 1) {
+    const listed = usable.slice(0, 5).map((tab) => ({ tabId: tab.id!, url: tab.url!, title: tab.title ?? "" }));
+    return { ok: false, error: `${usable.length} open tabs match: ${listed.map((tab) => `tab ${tab.tabId} “${tab.title.slice(0, 60)}” (${new URL(tab.url).hostname})`).join("; ")}. Call again with the tab's id`, candidates: listed } as BrowserResearchResult;
+  }
+  const tab = usable[0]!;
+  const id = tab.id!;
+  await changeTabs((tabs) => {
+    const before = tabs[String(id)];
+    tabs[String(id)] = { requestId: command.requestId, createdAt: Date.now(), lastUsedAt: Date.now(), attention: null, home: before?.home ?? { windowId: tab.windowId, index: tab.index, groupId: tab.groupId ?? -1 } };
+  });
+  const read = await readTab(conn, id);
+  return read.ok ? { ...read, note: "the owner's own tab: it stays open and goes back where it was when this request ends" } : read;
+}
+
+/** Brings the tab and its window in front of the owner. */
+async function showTab(tabId: number): Promise<BrowserResearchResult> {
+  const tab = await chrome.tabs.update(tabId, { active: true }).catch(() => null);
+  if (!tab) return { ok: false, error: "that tab is closed", tabId };
+  await chrome.windows.update(tab.windowId, { focused: true, state: "normal", drawAttention: true }).catch(() => undefined);
+  return { ok: true, tabId, note: "the tab is in front of the owner now" };
 }
 
 /** Reads the tab as it is now, after checking where it ended up. */
@@ -522,7 +594,7 @@ async function execute(conn: Connection, command: BrowserResearchCommand): Promi
     case "search":
     case "act": {
       if (!(await ownTab(command, action.tabId))) {
-        return { ok: false, error: (await shared(action.tabId)) ? "a tab the owner shared is read only: open its address in a new tab to work it" : `tab ${action.tabId} is not one of this request's tabs` };
+        return { ok: false, error: (await shared(action.tabId)) ? "a tab the owner shared is read only until it is used for this request (browser_tab_use)" : `tab ${action.tabId} is not one of this request's tabs` };
       }
       const before = (await chrome.tabs.get(action.tabId).catch(() => null))?.url;
       if (!before) return { ok: false, error: "that tab is closed", tabId: action.tabId };
@@ -531,10 +603,10 @@ async function execute(conn: Connection, command: BrowserResearchCommand): Promi
       let op: PageOp;
       if (action.kind === "act") {
         const host = new URL(before).hostname;
-        // The grant travels with the change: a page off the owner's named sites is never changed, whatever the model asked.
-        if (!grantCovers(action.grant, host, Date.now() + clockOffset)) return { ok: false, error: `the owner's request covers ${action.grant.hosts.join(", ")}, not ${host} (or it expired); nothing was changed`, tabId: action.tabId };
+        // The grant travels with the change: what the owner's request allows is checked on each control, in the page.
+        if (!grantActive(action.grant, Date.now() + clockOffset)) return { ok: false, error: "the owner's request for this task has ended; nothing was changed", tabId: action.tabId };
         const key = action.key === null ? null : parseTaskKey(action.key);
-        op = { op: "act", n: action.n, label: action.label, action: action.op, value: action.value, key, social: siteOfHost(host) !== "web" };
+        op = { op: "act", n: action.n, label: action.label, action: action.op, value: action.value, key, social: siteOfHost(host) !== "web", kinds: action.grant.kinds };
       } else {
         op = action.kind === "click" ? { op: "click", n: action.n, label: action.label } : { op: "search", n: action.n, label: action.label, text: action.text };
       }
@@ -555,11 +627,16 @@ async function execute(conn: Connection, command: BrowserResearchCommand): Promi
       return note && read.ok ? { ...read, note } : read;
     }
     case "screenshot": {
-      if (!(await ownTab(command, action.tabId))) return { ok: false, error: (await shared(action.tabId)) ? "a tab the owner shared is not pictured: open its address in a new tab" : `tab ${action.tabId} is not one of this request's tabs` };
+      if (!(await ownTab(command, action.tabId))) return { ok: false, error: (await shared(action.tabId)) ? "a tab the owner shared is not pictured until it is used for this request (browser_tab_use)" : `tab ${action.tabId} is not one of this request's tabs` };
       return screenshot(conn, action.tabId);
     }
+    case "use_tab":
+      return adoptTab(conn, command, action);
+    case "show":
+      if (!(await ownTab(command, action.tabId))) return { ok: false, error: `tab ${action.tabId} is not one of this request's tabs` };
+      return showTab(action.tabId);
     case "visual":
-      if (!(await ownTab(command, action.tabId))) return { ok: false, error: (await shared(action.tabId)) ? "a tab the owner shared is read only: open its address in a new tab to work it" : `tab ${action.tabId} is not one of this request's tabs` };
+      if (!(await ownTab(command, action.tabId))) return { ok: false, error: (await shared(action.tabId)) ? "a tab the owner shared is read only until it is used for this request (browser_tab_use)" : `tab ${action.tabId} is not one of this request's tabs` };
       return visual(conn, action);
     case "tabs": {
       const list: BrowserResearchTab[] = [];
@@ -594,7 +671,8 @@ async function screenshot(conn: Connection, tabId: number): Promise<BrowserResea
   if (refusal) return { ok: false, error: `the tab is on ${new URL(tab.url).hostname}: ${refusal.error}; nothing was captured`, tabId, attention: refusal.attention ?? null };
   try {
     const windowId = await screen.showInTaskWindow(tabId);
-    await addToGroup(tabId, windowId).catch(() => undefined);
+    // The owner's own tab keeps its own grouping; it goes back to its window at the end.
+    if (!(await tabsRegistry())[String(tabId)]?.home) await addToGroup(tabId, windowId).catch(() => undefined);
     // A tab just made visible draws its next frame first.
     await sleep(300);
     const image = await screen.capture(tabId);
@@ -627,7 +705,7 @@ async function visual(conn: Connection, action: Extract<BrowserResearchAction, {
   if (refusal) return { ok: false, error: refusal.error, tabId, attention: refusal.attention ?? null };
   const host = new URL(tab.url).hostname;
   const acting = !READ_VISUAL_OPS.includes(action.op);
-  if (action.grant && !grantCovers(action.grant, host, Date.now() + clockOffset)) return { ok: false, error: `the owner's request covers ${action.grant.hosts.join(", ")}, not ${host} (or it expired); nothing was done`, tabId };
+  if (action.grant && !grantActive(action.grant, Date.now() + clockOffset)) return { ok: false, error: "the owner's request for this task has ended; nothing was done", tabId };
   if (acting && !action.grant && action.op !== "click") return { ok: false, error: `${action.op} may change things, and the owner has not asked for changes on ${host}; nothing was done`, tabId };
   const shot = (await shots())[String(tabId)];
   const stale = (why: string): BrowserResearchResult => ({ ok: false, error: `that screenshot is no longer a valid target (${why}); take a new one with browser_tab_screenshot. Nothing was done`, tabId });
@@ -642,10 +720,12 @@ async function visual(conn: Connection, action: Extract<BrowserResearchAction, {
     const css = (value: number) => value / shot.scale;
     const key = action.key === null ? null : parseTaskKey(action.key);
     const social = siteOfHost(host) !== "web";
+    // A purchase is checked against the page's total, which a point on a picture does not give: never by screen steps.
+    const kinds = (action.grant?.kinds ?? []).filter((kind) => kind !== "purchase");
     if (action.op !== "scroll") {
       const probe = await inPage(tabId, action.op === "type" || action.op === "key"
-        ? { op: "probe", x: 0, y: 0, target: "focus", key, social, readOnly: !action.grant }
-        : { op: "probe", x: css(action.x), y: css(action.y), target: "point", key: null, social, readOnly: !action.grant });
+        ? { op: "probe", x: 0, y: 0, target: "focus", key, social, readOnly: !action.grant, kinds }
+        : { op: "probe", x: css(action.x), y: css(action.y), target: "point", key: null, social, readOnly: !action.grant, kinds });
       if (!probe.ok) return { ok: false, error: `${probe.error}; nothing was done`, tabId, attention: probe.attention ?? null };
     }
     await forgetShot(tabId);

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { actionsProblem, groundingCorpus, nextAgentBatch } from "@/lib/assistant/agent";
-import { accessDomains, accessModeOf, accessOrigins, clickProblem, commandProblem, grantCovers, parseTaskKey, privateHostProblem, researchSites, researchUrlProblem, searchProblem, siteOfHost, taskActProblem, type BrowserResearchCommand, type ResearchElement, type ResearchSnapshot } from "./contract";
+import { accessDomains, accessModeOf, accessOrigins, clickProblem, commandProblem, controlKind, grantActive, parseTaskKey, privateHostProblem, researchSites, researchUrlProblem, searchProblem, siteOfHost, taskActProblem, type BrowserResearchCommand, type ResearchElement, type ResearchSnapshot } from "./contract";
 import { attentionSummary, connectionSentence, formatResearchSnapshot, screenshotSummary } from "./format";
 
 const command = (patch: Partial<BrowserResearchCommand> = {}): BrowserResearchCommand => ({
@@ -146,7 +146,7 @@ describe("a reading as the model and grounding see it", () => {
 });
 
 describe("browser tasks: what a grant allows and never allows", () => {
-  const grant = { id: "g1", hosts: ["hubspot.com"], expiresAt: new Date(10_000).toISOString() };
+  const grant = { id: "g1", kinds: ["interact" as const], purchase: null, expiresAt: new Date(10_000).toISOString() };
   const field = (patch: Partial<ResearchElement> = {}, type = "text") => element({ kind: "input", label: "Email", field: { type, value: "" }, ...patch });
 
   test("keys a task may press, with modifiers", () => {
@@ -159,19 +159,21 @@ describe("browser tasks: what a grant allows and never allows", () => {
     expect(parseTaskKey("")).toBeNull();
   });
 
-  test("a grant covers its sites and their subdomains, until it expires", () => {
-    expect(grantCovers(grant, "app.hubspot.com", 5_000)).toBe(true);
-    expect(grantCovers(grant, "www.hubspot.com", 5_000)).toBe(true);
-    expect(grantCovers(grant, "hubspot.com.evil.io", 5_000)).toBe(false);
-    expect(grantCovers(grant, "nothubspot.com", 5_000)).toBe(false);
-    expect(grantCovers(grant, "app.hubspot.com", 10_001)).toBe(false);
-    expect(grantCovers(null, "app.hubspot.com", 5_000)).toBe(false);
+  test("a grant holds until it expires, and only with a kind of action in it", () => {
+    expect(grantActive(grant, 5_000)).toBe(true);
+    expect(grantActive(grant, 10_001)).toBe(false);
+    expect(grantActive({ ...grant, kinds: [] }, 5_000)).toBe(false);
+    expect(grantActive(null, 5_000)).toBe(false);
   });
 
   test("task commands are validated before they run: a grant, an op, a key, a screenshot id, points", () => {
     const now = { lastSeq: 4, now: 2_000 };
     expect(commandProblem(command({ action: { kind: "act", tabId: 3, n: 2, label: "Email", op: "fill", value: "a@b.co", key: null, grant } }), now)).toBeNull();
-    expect(commandProblem(command({ action: { kind: "act", tabId: 3, n: 2, label: "Email", op: "fill", value: "a@b.co", key: null, grant: { ...grant, hosts: [] } } }), now)).toBe("bad act");
+    expect(commandProblem(command({ action: { kind: "act", tabId: 3, n: 2, label: "Email", op: "fill", value: "a@b.co", key: null, grant: { ...grant, kinds: [] } } }), now)).toBe("bad act");
+    expect(commandProblem(command({ action: { kind: "act", tabId: 3, n: 2, label: "Email", op: "fill", value: "a@b.co", key: null, grant: { ...grant, kinds: ["evaluate" as never] } } }), now)).toBe("bad act");
+    expect(commandProblem(command({ action: { kind: "use_tab", tabId: null, match: "hubspot", grant: { ...grant, kinds: ["open_tabs"] } } }), now)).toBeNull();
+    expect(commandProblem(command({ action: { kind: "use_tab", tabId: null, match: null, grant: null } }), now)).toBe("bad use_tab");
+    expect(commandProblem(command({ action: { kind: "show", tabId: 3 } }), now)).toBeNull();
     expect(commandProblem(command({ action: { kind: "act", tabId: 3, n: 2, label: "Email", op: "type" as never, value: null, key: null, grant } }), now)).toBe("bad act");
     expect(commandProblem(command({ action: { kind: "act", tabId: 3, n: 2, label: "x", op: "press", value: null, key: "F12", grant } }), now)).toBe("bad act");
     expect(commandProblem(command({ action: { kind: "screenshot", tabId: 3 } }), now)).toBeNull();
@@ -182,30 +184,43 @@ describe("browser tasks: what a grant allows and never allows", () => {
     expect(commandProblem(command({ action: { ...visual, op: "scroll", deltaY: -400, grant: null } }), now)).toBeNull();
   });
 
-  const web = { social: false, elements: [] };
-  const social = { social: true, elements: [] };
-  const drafted = { social: false, elements: [element({ n: 9, kind: "input", label: "Body", field: { type: "editor", value: "Hi Priya, …" } })] };
+  const all = ["interact", "message", "publish", "purchase"];
+  const web = { social: false, elements: [], kinds: ["interact"] };
+  const social = { social: true, elements: [], kinds: ["interact"] };
+  const drafted = { social: false, elements: [element({ n: 9, kind: "input", label: "Body", field: { type: "editor", value: "Hi Priya, …" } })], kinds: ["interact"] };
 
-  test("never contacts people, publishes, connects or pays, in several languages; social sites refuse more", () => {
+  test("what each control does, in several languages; social sites and written messages make more of it contact", () => {
     for (const label of ["Reply all", "Forward", "Message", "Invite teammates", "Responder", "Nachricht", "Invita"]) {
-      expect(taskActProblem(element({ label }), "click", null, web)).toContain("outreach");
+      expect(controlKind(label, { social: false, draft: false })).toBe("message");
     }
     for (const label of ["Send", "Enviar", "Senden", "Invia", "भेजें"]) {
-      expect(taskActProblem(element({ label }), "click", null, drafted)).toContain("outreach");
-      expect(taskActProblem(element({ label }), "click", null, social)).toContain("outreach");
+      expect(controlKind(label, { social: false, draft: true })).toBe("message");
+      expect(controlKind(label, { social: true, draft: false })).toBe("message");
       // With no message written, it is a form's submit button (a registration's "Enviar").
-      expect(taskActProblem(element({ label }), "click", null, web)).toBeNull();
+      expect(controlKind(label, { social: false, draft: false })).toBe("interact");
     }
-    for (const label of ["Post", "Comment", "Seguir", "Connect", "Follow"]) {
-      expect(taskActProblem(element({ label }), "click", null, social)).toContain("outreach");
-      expect(taskActProblem(element({ label }), "click", null, web)).toBeNull();
+    for (const label of ["Post", "Comment", "Seguir", "Connect", "Follow", "Like"]) {
+      expect(controlKind(label, { social: true, draft: false })).toBe("publish");
+      expect(controlKind(label, { social: false, draft: false })).toBe("interact");
     }
-    expect(taskActProblem(element({ label: "Create follow-up task" }), "click", null, social)).toBeNull();
-    expect(taskActProblem(element({ label: "Add comment" }), "click", null, web)).toBeNull();
-    for (const label of ["Buy now", "Pay", "Place order", "Comprar", "Bezahlen"]) {
-      expect(taskActProblem(element({ label }), "click", null, web)).toContain("payments");
-    }
+    expect(controlKind("Create follow-up task", { social: true, draft: false })).toBe("interact");
+    for (const label of ["Buy now", "Pay", "Place order", "Comprar", "Bezahlen"]) expect(controlKind(label, { social: false, draft: false })).toBe("purchase");
+  });
+
+  test("each control needs its kind in the grant: a form task does not message, post or pay", () => {
+    expect(taskActProblem(element({ label: "Reply all" }), "click", null, web)).toContain("message people");
+    expect(taskActProblem(element({ label: "Send" }), "click", null, drafted)).toContain("message people");
+    expect(taskActProblem(element({ label: "Post" }), "click", null, social)).toContain("publish");
+    expect(taskActProblem(element({ label: "Buy now" }), "click", null, web)).toContain("pay");
+    expect(taskActProblem(element({ label: "Send" }), "click", null, web)).toBeNull();
     expect(taskActProblem(element({ label: "Save contact" }), "click", null, drafted)).toBeNull();
+    expect(taskActProblem(element({ label: "Add comment" }), "click", null, web)).toBeNull();
+    // Granted, the same controls are allowed (the server checks the recipient or the total before it asks the browser).
+    expect(taskActProblem(element({ label: "Reply all" }), "click", null, { ...web, kinds: all })).toBeNull();
+    expect(taskActProblem(element({ label: "Post" }), "click", null, { ...social, kinds: all })).toBeNull();
+    expect(taskActProblem(element({ label: "Buy now" }), "click", null, { ...web, kinds: all })).toBeNull();
+    // Research only: nothing changes.
+    expect(taskActProblem(element({ label: "Save contact" }), "click", null, { ...web, kinds: [] })).toContain("research only");
   });
 
   test("fields: never a password, card or code; the right action for each kind", () => {

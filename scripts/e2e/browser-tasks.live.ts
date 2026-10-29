@@ -1,5 +1,5 @@
 /**
- * Owner-requested browser tasks through the REAL extension (0.17.0) in a
+ * Owner-requested browser tasks through the REAL extension (0.18.0) in a
  * VISIBLE Chromium (run it under xvfb-run) and a REAL running AgentSDR:
  * pairing from the chat, a CRM form filled, chosen, ticked and saved, a
  * Spanish registration form, what a task still refuses (in the page too,
@@ -42,10 +42,24 @@ const base = "http://localhost:3000";
 const root = resolve(import.meta.dir, "../..");
 const chromeExecutable = process.env.BROWSER_EXECUTABLE_PATH ?? "/opt/pw-browsers/chromium-1243/chrome-linux64/chrome";
 
-// The JSON harness's model, scripted; the vision check says it sees images.
+// The JSON harness's model, scripted; the vision check says it sees images. The authority judge is
+// scripted too, except with LIVE_REAL_CLAUDE=1, where the organization's real engine (Claude) judges.
 let apiReplies: string[] = [];
 const apiImages: number[] = [];
-mock.module(join(root, "src/lib/ai/server/structuredCompletion.ts"), () => ({ completeStructured: async (input: { schemaName: string; images?: unknown[]; accept: (text: string) => void }) => {
+const realStructured = (await import(join(root, "src/lib/ai/server/structuredCompletion.ts"))).completeStructured as (input: unknown) => Promise<unknown>;
+let realJudge = false;
+const scriptedJudge = (prompt: string) => {
+  const said = prompt.split("THE OWNER'S MESSAGES IN THIS REQUEST").at(-1)!.toLowerCase();
+  const change = /\b(?:add|rellena|draw|save)\b/.test(said) && !said.includes("research only");
+  return { kinds: change ? ["interact"] : [], purchase: null, recipients: "none", missing: "", reason: "scripted" };
+};
+mock.module(join(root, "src/lib/ai/server/structuredCompletion.ts"), () => ({ completeStructured: async (input: { schemaName: string; userPrompt: string; images?: unknown[]; accept: (text: string) => void }) => {
+  if (input.schemaName === "browser_authority") {
+    if (realJudge) return realStructured(input);
+    const text = JSON.stringify(scriptedJudge(input.userPrompt));
+    input.accept(text);
+    return { text, model: "scripted-judge", response: {}, usage: {} };
+  }
   if (input.schemaName !== "assistant_reply") throw new Error(`Unexpected AI stage ${input.schemaName}`);
   apiImages.push(input.images?.length ?? 0);
   // The script adds a step's reply once it knows what the step before it opened.
@@ -221,7 +235,7 @@ try {
   const app = ctx.pages()[0] ?? await ctx.newPage();
   await app.goto(`${base}/assistant?thread=${thread.id}`, { waitUntil: "domcontentloaded", timeout: 180_000 });
   await app.waitForSelector("html[data-agentsdr-recorder]", { timeout: 60_000 });
-  check("the 0.17.0 extension marks the app page", (await app.getAttribute("html", "data-agentsdr-recorder")) === "0.17.0" && manifest.version === "0.17.0");
+  check("the 0.18.0 extension marks the app page", (await app.getAttribute("html", "data-agentsdr-recorder")) === "0.18.0" && manifest.version === "0.18.0");
 
   const connectButton = app.getByRole("button", { name: "Connect this browser" });
   for (let attempt = 0; !(await connectButton.isVisible()); attempt++) {
@@ -232,11 +246,12 @@ try {
   const opened = ctx.waitForEvent("page", { predicate: (page) => page.url().includes("/connect.html?pairing="), timeout: 30_000 });
   await connectButton.click();
   const connect = await opened;
-  await connect.waitForSelector("#site-web");
+  await connect.waitForSelector("#access-all");
+  await connect.check("#access-all");
   await connect.click("#connect");
   await connect.waitForSelector("#status.ok", { timeout: 30_000 });
   const [row] = await db.select().from(browserConnections).where(and(eq(browserConnections.organizationId, org!.id), eq(browserConnections.status, "active")));
-  check("the extension pairs from the chat, reporting 0.17.0", row?.userId === user!.id && row.extensionVersion === "0.17.0");
+  check("the extension pairs from the chat with all-websites access, reporting 0.18.0", row?.userId === user!.id && row.extensionVersion === "0.18.0" && row.sites.length === 6);
   await connect.close();
   await app.bringToFront();
 
@@ -257,8 +272,8 @@ try {
     && /"Subscribed to newsletter" \{checkbox, unchecked\}/.test(page.summary) && /"Card number for invoices" \{text, password\/card\/code: never typed\}/.test(page.summary), page.summary);
   const early = await crm.tool("browser_tab_act", { tab, n: n(page.summary, "Email"), action: "fill", value: "priya@acme-dental.in" });
   check("before browser_task nothing is changed", !early.ok && /has not asked for changes/.test(early.summary), early.summary);
-  const task = await crm.tool("browser_task", { ownerWords: "Add Priya Mehta (priya@acme-dental.in) as a new contact in my Northwind CRM", sites: [CRM], goal: "Add Priya Mehta as a contact" });
-  check("the owner's words start the task on the site they named", task.ok && /northwind-crm.com/.test(task.summary), task.summary);
+  const task = await crm.tool("browser_task", { ownerWords: "Add Priya Mehta (priya@acme-dental.in) as a new contact in my Northwind CRM", goal: "Add Priya Mehta as a contact" });
+  check("the owner's words start a task that changes things (forms, records) and nothing more", task.ok && (task.data as { grant: { kinds: string[] } }).grant.kinds.join() === "interact", task.summary);
   const steps = [
     await crm.tool("browser_tab_act", { tab, n: n(page.summary, "Email"), action: "fill", value: "priya@acme-dental.in" }),
     await crm.tool("browser_tab_act", { tab, n: n(page.summary, "First name"), action: "fill", value: "Priya" }),
@@ -271,19 +286,19 @@ try {
   check("the card number field is refused", !card.ok && /card/.test(card.summary), card.summary);
   const body = await crm.tool("browser_tab_act", { tab, n: n(page.summary, "Email body"), action: "fill", value: "Hi Priya, great to meet you." });
   const send = await crm.tool("browser_tab_act", { tab, n: n(body.summary, "Send"), action: "click" });
-  check("a draft may be written, but its Send is refused on the server", body.ok && !send.ok && /outreach/.test(send.summary), [body.summary.split("\n")[0], send.summary]);
-  const grant = { id: "bypass", hosts: ["northwind-crm.com"], expiresAt: new Date(Date.now() + 600_000).toISOString() };
+  check("a draft may be written, but its Send is refused on the server (the owner asked for a record, not a message)", body.ok && !send.ok && /message people/.test(send.summary), [body.summary.split("\n")[0], send.summary]);
+  const grant = { id: "bypass", kinds: ["interact" as const], purchase: null, expiresAt: new Date(Date.now() + 600_000).toISOString() };
   const forced = await inOrg(() => connections.runBrowserAction({ userId: user!.id, threadId: thread.id, requestId: crm.at.searchRequestId!, action: { kind: "act", tabId: tab, n: n(body.summary, "Send"), label: "Send", op: "click", value: null, key: null, grant }, timeoutMs: 30_000 }));
-  check("with the server bypassed, the page itself still refuses Send beside a written message, and nothing is sent", !forced.ok && /outreach/.test(forced.error) && sends === 0, forced);
-  const offSite = await inOrg(() => connections.runBrowserAction({ userId: user!.id, threadId: thread.id, requestId: crm.at.searchRequestId!, action: { kind: "act", tabId: tab, n: 1, label: "Email", op: "fill", value: "x", key: null, grant: { ...grant, hosts: ["hubspot.com"] } }, timeoutMs: 30_000 }));
-  check("the extension refuses a change on a page outside the grant it carries", !offSite.ok && /covers hubspot.com, not crm.northwind-crm.com/.test(offSite.error), offSite);
+  check("with the server bypassed, the page itself still refuses Send beside a written message under a form grant, and nothing is sent", !forced.ok && /message people/.test(forced.error) && sends === 0, forced);
+  const expired = await inOrg(() => connections.runBrowserAction({ userId: user!.id, threadId: thread.id, requestId: crm.at.searchRequestId!, action: { kind: "act", tabId: tab, n: 1, label: "Email", op: "fill", value: "x", key: null, grant: { ...grant, expiresAt: new Date(Date.now() - 1_000).toISOString() } }, timeoutMs: 30_000 }));
+  check("the extension refuses a change whose grant has ended", !expired.ok && /has ended/.test(expired.error), expired);
   const save = await crm.tool("browser_tab_act", { tab, n: n(body.summary, "Save contact"), action: "click" });
   check("Save submits the form and the page afterwards shows it saved", save.ok && /Contact saved/.test(save.summary), save.summary);
   check("the CRM received exactly the requested record", saved.length === 1 && saved[0]!.email === "priya@acme-dental.in" && saved[0]!.first === "Priya" && saved[0]!.stage === "Customer" && saved[0]!.subscribed === "yes" && saved[0]!.notes === "Met at Pune dental expo" && !saved[0]!.card, saved);
 
   // --- 2. A Spanish form: labels in another language, its submit is "Enviar" ------------------------------
   const es = await ask(`Rellena el formulario de inscripción en ${EVENTS}/registro con mi nombre Ravi Kumar y el correo ravi@smile-software.in, y acepta los términos.`);
-  const esTask = await es.tool("browser_task", { ownerWords: "Rellena el formulario de inscripción", sites: [EVENTS], goal: "Inscribir a Ravi" });
+  const esTask = await es.tool("browser_task", { ownerWords: "Rellena el formulario de inscripción", goal: "Inscribir a Ravi" });
   const esPage = await es.tool("browser_tab_open", { url: `https://${EVENTS}/registro` });
   const esTab = Number(esPage.data?.tabId);
   const esSteps = [
@@ -321,7 +336,7 @@ try {
   check("before browser_task, a drag is refused", !noTask.ok && drags.length === 0, noTask.summary);
   const readOnlyClick = await board.tool("browser_tab_visual", { tab: boardTab, screenshot: shotFacts!.id, action: "click", x: 300 * scale, y: 300 * scale });
   check("before browser_task, a click on the canvas is refused in the page (not a link, tab or \"more\" control)", !readOnlyClick.ok && /not clicked/.test(readOnlyClick.summary) && drags.length === 0, readOnlyClick.summary);
-  const boardTask = await board.tool("browser_task", { ownerWords: "draw a line from the left dot to the right dot", sites: [BOARD], goal: "Join the two dots" });
+  const boardTask = await board.tool("browser_task", { ownerWords: "draw a line from the left dot to the right dot", goal: "Join the two dots" });
   const shot2 = await board.tool("browser_tab_screenshot", { tab: boardTab });
   const drag = await board.tool("browser_tab_visual", { tab: boardTab, screenshot: String(shot2.data?.screenshotId), action: "drag", x: Math.round(120 * scale), y: Math.round(340 * scale), toX: Math.round(560 * scale), toY: Math.round(340 * scale) });
   await until("the board to report the drag", async () => drags.length, (count) => count >= 1, 10_000);
@@ -344,7 +359,7 @@ try {
 
   // --- 5. A lost answer: the change happened once, is reported uncertain, and is never repeated ----------------
   const slow = await ask(`In my Northwind CRM at ${CRM}, save priya@acme-dental.in on the slow form.`);
-  await slow.tool("browser_task", { ownerWords: "save priya@acme-dental.in on the slow form", sites: [CRM], goal: "Save the email" });
+  await slow.tool("browser_task", { ownerWords: "save priya@acme-dental.in on the slow form", goal: "Save the email" });
   const slowPage = await slow.tool("browser_tab_open", { url: `https://${CRM}/slow/new` });
   const slowTab = Number(slowPage.data?.tabId);
   await slow.tool("browser_tab_act", { tab: slowTab, n: n(slowPage.summary, "Email"), action: "fill", value: "priya@acme-dental.in" });
@@ -354,7 +369,7 @@ try {
 
   // --- 6. Research stays read-only; Stop stops tasks too ---------------------------------------------------
   const research = await ask(`Research only: look at my team board at ${BOARD} and tell me what it shows. Change nothing.`);
-  const researchTask = await research.tool("browser_task", { ownerWords: "look at my team board", sites: [BOARD], goal: "draw" });
+  const researchTask = await research.tool("browser_task", { ownerWords: "look at my team board", goal: "draw" });
   check("a research request cannot start a task", !researchTask.ok && /read-only/.test(researchTask.summary), researchTask.summary);
   const popup = await ctx.newPage();
   await popup.goto(`chrome-extension://${extensionId}/popup.html`);
@@ -372,7 +387,7 @@ try {
   const apiThread = await inOrg(() => createThread(user!.id));
   const apiText = `Add Rahul Shah (rahul@shah-dental.in) to my Northwind CRM at ${CRM} as a Lead.`;
   apiReplies = [
-    JSON.stringify({ message: "", actions: [{ tool: "browser_task", args: { ownerWords: "Add Rahul Shah (rahul@shah-dental.in) to my Northwind CRM", sites: [CRM], goal: "Add Rahul as a lead" } }, { tool: "browser_tab_open", args: { url: `https://${CRM}/contacts/new` } }], suggestions: [] }),
+    JSON.stringify({ message: "", actions: [{ tool: "browser_task", args: { ownerWords: "Add Rahul Shah (rahul@shah-dental.in) to my Northwind CRM", goal: "Add Rahul as a lead" } }, { tool: "browser_tab_open", args: { url: `https://${CRM}/contacts/new` } }], suggestions: [] }),
   ];
   const fill = (summary: string) => [
     { tool: "browser_tab_act", args: { tab: "TAB", n: n(summary, "Email"), action: "fill", value: "rahul@shah-dental.in" } },
@@ -398,6 +413,7 @@ try {
     const paths = cli.accountPaths({ organizationId: org!.id, userId: user!.id });
     writeFileSync(join(paths.config, ".credentials.json"), "fake", { mode: 0o600 });
     await inOrg(() => engine.saveClaudeEngine({ selected: true, ownerUserId: user!.id, model: "sonnet", checks: {} }));
+    realJudge = true;
     const real = async (text: string) => {
       const realThread = await inOrg(() => createThread(user!.id));
       const end = await inOrg(() => runAgentTurn({ threadId: realThread.id, userId: user!.id, text }));
