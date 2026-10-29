@@ -66,9 +66,19 @@ to use the same account, still within the physical process cap. Native
 parents leave one writer slot available so two waiting agents cannot fill
 every slot. Default cap: two processes. With a cap of one, nested writing
 fails clearly rather than deadlocking. Other callers retain account
-serialization. A native turn uses the existing 24/40 model-turn limit and
-has a 15-minute process deadline; long searches remain durable background
-jobs and wake another turn when they finish.
+serialization. Long searches remain durable background jobs and wake another
+turn when they finish.
+
+Update 29 October 2026 (typed tool contracts, checkpoints): every MCP tool
+carries a typed JSON Schema (`src/lib/assistant/toolSchemas.ts`), and both
+harnesses read arguments by it before their checks (`coerceToolArguments`).
+A native turn is one or more CLI runs on one session. A run's 24/40 model
+turns, 15 minutes or tool-call allowance is a checkpoint, not a failure: new
+calls are answered "Not run", a call in flight finishes, the process stops
+between calls, the session is saved, and the turn continues in a resumed run
+from the app's record (the last call of a stopped run is not run twice).
+After one hour the turn pauses, saved, and the next turn resumes it. A final
+answer the record does not back goes back to Claude in the same session.
 
 ## Private pilot admission
 
