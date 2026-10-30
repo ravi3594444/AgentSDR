@@ -149,7 +149,7 @@ export type AudienceChannel = "email" | "whatsapp" | "linkedin" | "instagram" | 
 
 /** Where a contact detail came from: the page or listing a person can open to check it. */
 export type ContactEvidence = {
-  kind: "email" | "phone" | "linkedin" | "website" | "instagram";
+  kind: "email" | "phone" | "linkedin" | "website" | "instagram" | "profile";
   value: string;
   sourceUrl: string | null;
   source: string;

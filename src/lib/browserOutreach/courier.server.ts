@@ -18,10 +18,10 @@ import { people } from "@/lib/leads/schema";
 import { isMigrationControlPaused } from "@/lib/migration/controls";
 import { currentOrganizationId, inOrg, runInOrganization } from "@/lib/tenancy/scope";
 import {
-  accountOnPage, COURIER_MAX_STEPS, COURIER_PROMPT, COURIER_SCHEMA, courierStepPrompt, courierStepVerdict, messageOnPage,
+  accountOnPage, COURIER_MAX_STEPS, COURIER_PROMPT, COURIER_SCHEMA, courierStepPrompt, courierStepVerdict, messageOnPage, newReplies, REPLIES_PROMPT, REPLIES_SCHEMA, sameText,
   type CourierOutcome, type CourierStep,
 } from "./courier";
-import { recordBrowserOutboundInCrm } from "./crm.server";
+import { browserReplyKey, forwardBrowserReplyToCrm, recordBrowserOutboundInCrm } from "./crm.server";
 import { MESSAGING_SITE_NAMES, type MessagingSite } from "./routes";
 import { browserOutreachReady, setRouteState } from "./routes.server";
 import { browserContactRoutes, browserOutreachSends, browserSenderAccounts, type CourierLogEntry } from "./schema";
@@ -400,13 +400,98 @@ export async function courierForOrganization(): Promise<{ delivered: number }> {
     await releaseBrowserTabs(send.userId, null, send.id).catch(() => undefined);
     if (delivery.outcome === "sent") delivered += 1;
   }
+  await syncReplies(busy).catch((error) => console.error("[browser/courier] reading replies failed", error));
   return { delivered };
+}
+
+/**
+ * Sites without webhooks: each conversation a browser message started is
+ * read in the sender's browser at most every `replyCheckMinutes`, while that
+ * browser is connected and idle, and the other person's new messages (on
+ * the page as written) reach the CRM like any reply: the record, the
+ * follow-ups stopped, the classification and the reply agent.
+ */
+export async function syncReplies(busy: ReadonlySet<string> = new Set()): Promise<number> {
+  const rules = await channelRules("browser");
+  const due = await db.execute<{ route_id: string; user_id: string; sender_handle: string }>(sql`
+    select distinct on (r.id) r.id as route_id, s.user_id, s.sender_handle
+      from browser_contact_routes r
+      join browser_outreach_sends s on s.route_id = r.id and s.organization_id = r.organization_id and s.status = 'sent' and s.sender_handle is not null
+     where r.organization_id = ${currentOrganizationId()} and r.thread_url is not null
+       and (r.synced_at is null or r.synced_at < now() - make_interval(mins => ${Number(rules.replyCheckMinutes)}))
+     order by r.id, s.sent_at desc
+     limit 20`);
+  let recorded = 0;
+  for (const item of due.slice(0, 3)) {
+    if (busy.has(item.user_id)) continue;
+    const [route] = await db.select().from(browserContactRoutes).where(and(inOrg(browserContactRoutes), eq(browserContactRoutes.id, item.route_id)));
+    if (!route?.threadUrl) continue;
+    if (await browserWait(item.user_id, route.site)) continue;
+    const requestId = randomUUID();
+    try {
+      const opened = await runBrowserAction({ userId: item.user_id, threadId: null, requestId, action: { kind: "open", url: route.threadUrl, tabId: null }, timeoutMs: OPEN_MS });
+      await db.update(browserContactRoutes).set({ syncedAt: new Date() }).where(and(inOrg(browserContactRoutes), eq(browserContactRoutes.id, route.id)));
+      if (!opened.ok || !opened.snapshot || opened.snapshot.attention) continue;
+      const known = await knownMessages(route);
+      const completion = await completeStructured({
+        timeoutMs: 60_000,
+        maxOutputTokens: 1_500,
+        schemaName: "browser_conversation_replies",
+        schemaDescription: "The other person's new messages in this conversation.",
+        jsonSchema: REPLIES_SCHEMA as unknown as Record<string, unknown>,
+        systemPrompt: REPLIES_PROMPT,
+        userPrompt: [
+          `THE OWNER (signed in): ${item.sender_handle}`,
+          `THE OTHER PERSON: @${route.handle} on ${MESSAGING_SITE_NAMES[route.site]}`,
+          `KNOWN MESSAGES (oldest first):\n${known.map((message) => `${message.direction === "outbound" ? "OWNER" : "THEM"}: ${message.text}`).join("\n") || "none"}`,
+          `THE PAGE:\n${formatResearchSnapshot(opened.snapshot, opened.tabId ?? -1)}`,
+        ].join("\n\n"),
+        accept: (text) => {
+          JSON.parse(text);
+        },
+      });
+      await recordUsage("browser_courier", completion, null);
+      const answer = JSON.parse(completion.text) as { conversationWith: string | null; replies: { text: string }[] };
+      // The conversation must be with this person: their handle or name on the page's header, as the reader saw it.
+      if (!answer.conversationWith || !accountOnPage(opened.snapshot.text, answer.conversationWith)) continue;
+      const fresh = newReplies(opened.snapshot.text, answer.replies.map((reply) => reply.text), known);
+      for (const [index, text] of fresh.entries()) {
+        const seen = known.filter((message) => message.direction === "inbound" && sameText(message.text, text)).length + fresh.slice(0, index).filter((other) => sameText(other, text)).length;
+        const result = await forwardBrowserReplyToCrm({
+          personId: route.personId, routeId: route.id, site: route.site, recipientHandle: route.handle, account: item.sender_handle,
+          text, key: browserReplyKey(route.id, text, seen), readAt: new Date(), threadUrl: opened.snapshot.url,
+        });
+        if (!result.duplicate) recorded += 1;
+      }
+    } catch (error) {
+      if (!(error instanceof BrowserConnectionError)) console.error("[browser/courier] reading a conversation failed", route.id, error);
+    } finally {
+      await releaseBrowserTabs(item.user_id, null, requestId).catch(() => undefined);
+    }
+  }
+  return recorded;
+}
+
+/** What the CRM and the queue already hold for this conversation, oldest first. */
+async function knownMessages(route: RouteRow): Promise<{ direction: "inbound" | "outbound"; text: string }[]> {
+  const crm = await db.execute<{ direction: "inbound" | "outbound"; body_text: string }>(sql`
+    select m.direction, m.body_text from crm_conversation_messages m
+      join crm_conversations c on c.id = m.conversation_id
+     where c.organization_id = ${currentOrganizationId()} and c.channel = 'browser' and c.provider_thread_id = ${route.id}
+     order by m.sent_at asc limit 40`);
+  const sent = await db.select({ body: browserOutreachSends.body }).from(browserOutreachSends)
+    .where(and(inOrg(browserOutreachSends), eq(browserOutreachSends.routeId, route.id), eq(browserOutreachSends.status, "sent")))
+    .orderBy(asc(browserOutreachSends.sentAt));
+  const messages = crm.map((row) => ({ direction: row.direction, text: row.body_text }));
+  for (const row of sent) if (!messages.some((message) => message.direction === "outbound" && sameText(message.text, row.body))) messages.push({ direction: "outbound", text: row.body });
+  return messages;
 }
 
 export async function runBrowserCourierTick(): Promise<void> {
   if (!(await browserOutreachReady())) return;
+  // Organizations with messages to deliver, or conversations a browser message started (read for replies).
   const rows = await db.selectDistinct({ organizationId: browserOutreachSends.organizationId }).from(browserOutreachSends)
-    .where(inArray(browserOutreachSends.status, ["queued", "waiting", "sending"]));
+    .where(or(inArray(browserOutreachSends.status, ["queued", "waiting", "sending"]), and(eq(browserOutreachSends.status, "sent"), sql`${browserOutreachSends.sentAt} > now() - interval '30 days'`)));
   for (const row of rows) {
     try {
       await runInOrganization(row.organizationId, courierForOrganization);

@@ -1,4 +1,5 @@
 import { ungroundedInstagramContacts } from "./instagramContacts";
+import { profileRoute } from "@/lib/browserOutreach/routes";
 import { ungroundedProfileValues } from "./profile";
 import type { AssistantRole, BusinessProfile } from "./schema";
 
@@ -702,6 +703,9 @@ export function ungroundedContacts(contacts: unknown, corpus: string): string[] 
     if (email && !lower.includes(email)) out.push(email);
     const profile = typeof contact.linkedinUrl === "string" ? contact.linkedinUrl.toLowerCase().match(/linkedin\.com\/(?:in|company)\/([^/?#\s]+)/)?.[1] : null;
     if (typeof contact.linkedinUrl === "string" && contact.linkedinUrl.trim() && (!profile || !lower.includes(profile))) out.push(contact.linkedinUrl);
+    // A profile on X, Instagram, Facebook or LinkedIn: its handle must be on the page.
+    const social = typeof contact.profileUrl === "string" && contact.profileUrl.trim() ? profileRoute(contact.profileUrl) : null;
+    if (typeof contact.profileUrl === "string" && contact.profileUrl.trim() && (!social || !lower.includes(social.handle))) out.push(contact.profileUrl);
   }
   return out;
 }

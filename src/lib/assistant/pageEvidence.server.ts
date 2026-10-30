@@ -36,7 +36,7 @@ function samePage(a: string, b: string): boolean {
 }
 
 /** Who a lead is, as the model gives it: checked against the page it names, never against the whole chat. */
-export type EvidenceIdentity = { contacts?: { email?: string | null; phone?: string | null; linkedinUrl?: string | null }[]; instagram?: string[] };
+export type EvidenceIdentity = { contacts?: { email?: string | null; phone?: string | null; linkedinUrl?: string | null; profileUrl?: string | null }[]; instagram?: string[] };
 
 /** One page a successful read returned: where, when and how, its own text (for quotes) and what grounds a contact on it. */
 type PageRead = { url: string; readAt: string; via: string; text: string; corpus: string };

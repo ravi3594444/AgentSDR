@@ -100,3 +100,28 @@ export async function personOfRoute(site: MessagingSite, handle: string): Promis
     .where(and(inOrg(browserContactRoutes), eq(browserContactRoutes.site, site), eq(browserContactRoutes.handle, handle))).limit(1);
   return row?.personId ?? null;
 }
+
+/**
+ * A lead known only by their profile on X, Instagram, Facebook or LinkedIn
+ * (add_contacts with profileUrl): the person the profile is already
+ * recorded for, or a new person with it as their browser route. An
+ * Instagram profile also becomes the lead's Instagram username, and a
+ * LinkedIn one their LinkedIn profile, so every channel can use them.
+ */
+export async function saveProfileContact(input: { route: ProfileRoute; name: string | null; company: string | null; sourceUrl: string | null }): Promise<{ personId: string; created: boolean } | null> {
+  const existing = await personOfRoute(input.route.site, input.route.handle);
+  if (existing) return { personId: existing, created: false };
+  const raw: Record<string, unknown> = { addedVia: "assistant chat", profiles: { [input.route.site]: input.route.profileUrl } };
+  if (input.company) raw.businessName = input.company;
+  if (input.route.site === "instagram") raw.instagram = { username: input.route.handle };
+  const [person] = await db.insert(people).values({
+    organizationId: currentOrganizationId(),
+    fullName: input.name?.slice(0, 200) ?? null,
+    linkedinUrl: input.route.site === "linkedin" ? input.route.handle : null,
+    source: "assistant-chat",
+    raw,
+  }).onConflictDoNothing().returning({ id: people.id });
+  if (!person) return null;
+  const route = await recordRoute(person.id, input.route, input.sourceUrl);
+  return route ? { personId: person.id, created: true } : null;
+}

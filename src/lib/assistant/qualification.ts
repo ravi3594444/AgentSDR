@@ -99,6 +99,7 @@ const ROUTE_NOTE: Record<ContactEvidence["kind"], string> = {
   linkedin: "LinkedIn page",
   website: "website",
   instagram: "Instagram",
+  profile: "social profile (messaged through your browser)",
 };
 
 function iso(value: Date | string): string {

@@ -30,7 +30,7 @@ export type Brief = {
   done: string;
 };
 
-export const BRIEF_CHANNELS: readonly AudienceChannel[] = ["email", "whatsapp", "linkedin", "instagram"];
+export const BRIEF_CHANNELS: readonly AudienceChannel[] = ["email", "whatsapp", "linkedin", "instagram", "browser"];
 /** As many as one plan can hold (outreach.server.ts HARD_MAX_LEADS). */
 const MAX_TARGET = 1_000;
 const MAX_MINUTES = 7 * 24 * 60;
@@ -122,7 +122,7 @@ export function checkBrief(raw: Record<string, unknown>, ownerWords: string, def
   let channels: AudienceChannel[] | null = null;
   if (raw.channels !== undefined && raw.channels !== null) {
     if (!Array.isArray(raw.channels) || raw.channels.some((channel) => !BRIEF_CHANNELS.includes(channel as AudienceChannel))) {
-      return { ok: false, error: "channels must list email, whatsapp, linkedin or instagram, or be null when the owner named none" };
+      return { ok: false, error: "channels must list email, whatsapp, linkedin, instagram or browser, or be null when the owner named none" };
     }
     channels = [...new Set(raw.channels as AudienceChannel[])];
     if (!channels.length) channels = null;

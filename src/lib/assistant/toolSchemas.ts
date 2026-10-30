@@ -36,6 +36,8 @@ export type ToolInputSchema = JsonSchema & { type: "object"; properties: Readonl
 // ── Sets the tools accept (tests keep them equal to their sources) ──────────
 
 export const SCHEMA_CHANNELS = ["email", "whatsapp", "linkedin", "instagram"] as const;
+/** What a plan may contact on: the profile's channels and the owner's own browser. */
+export const SCHEMA_OUTREACH_CHANNELS = [...SCHEMA_CHANNELS, "browser"] as const;
 export const SCHEMA_PERIODS = ["today", "yesterday", "last_7_days", "last_30_days", "all_time"] as const;
 export const SCHEMA_REPORT_SCOPES = ["request", "thread", "run", "organization"] as const;
 export const SCHEMA_EXISTING_FROM = ["all", "latest_import", "inquiries"] as const;
@@ -60,13 +62,14 @@ const tool = (properties: Record<string, JsonSchema>, required: readonly string[
 const NONE = tool({});
 const id = (what: string) => text(`${what} (an id from an earlier result)`);
 const channelList = (description: string) => list({ type: "string", enum: SCHEMA_CHANNELS }, description);
+const outreachChannelList = (description: string) => list({ type: "string", enum: SCHEMA_OUTREACH_CHANNELS }, description);
 const tab = (description = "Tab id from browser_tab_open or browser_connection (required)") => int(description, { minimum: 0 });
 const element = int("Element number from the latest reading of the page", { minimum: 1 });
 
 /** The older agent's follow-up arguments of a search; research agent v2 drops them (it prepares the plan itself). */
 const followUp = (contact = "true only when the owner asked to contact, email or message the leads found: the outreach plan is then prepared automatically when the search finishes") => ({
   contactAfter: flag(contact),
-  channels: channelList("Optional, with contactAfter: only when the owner's own words named how to contact them; otherwise leave it out and each lead gets its best ready route"),
+  channels: outreachChannelList("Optional, with contactAfter: only when the owner's own words named how to contact them (browser: through the owner's own signed-in browser); otherwise leave it out and each lead gets its best ready route"),
 });
 /** The older agent's way to add a search to a request still running in its chat. */
 const sameRequest = { sameRequest: flag("Optional true: only when the owner's new message adds to a request whose research is still running in this chat; the search then counts toward that request's target, time and spend cap") };
@@ -168,12 +171,13 @@ export const TOOL_SCHEMAS: Record<string, ToolInputSchema> = {
   add_contacts: tool({
     contacts: list({
       type: "object",
-      description: "Each needs a phone, email or linkedinUrl",
+      description: "Each needs a phone, email, linkedinUrl or profileUrl",
       properties: {
         name: text("The person's or business's name"),
         phone: text("Phone number, with + and the country code when known"),
         email: text("Email address"),
         linkedinUrl: text("LinkedIn profile or company link"),
+        profileUrl: text("Their own profile on X, Instagram, Facebook or LinkedIn: a route the owner's browser can message them on"),
         company: text("Company"),
         sourceUrl: text("Optional: the page it was read on"),
         quote: text("Optional: exact words from that page"),
@@ -243,6 +247,7 @@ export const TOOL_SCHEMAS: Record<string, ToolInputSchema> = {
     match: text("Words of the tab's address or title, e.g. 'hubspot'"),
   }),
   browser_tab_show: tool({ tab: tab() }),
+  check_browser_routes: tool({ personIds: texts("The leads' person ids, up to 10", { minItems: 1, maxItems: 10 }) }, ["personIds"]),
   browser_tab_screenshot: tool({ tab: tab() }),
   browser_tab_visual: tool({
     tab: tab(),
@@ -270,7 +275,7 @@ export const TOOL_SCHEMAS: Record<string, ToolInputSchema> = {
     approach: text("Optional: your provisional segments, locations, sources and why they fit this request; not extra owner requirements"),
     leadTarget: nullable(int("The number of leads the owner asked for, or null", { minimum: 1, maximum: 1000 })),
     contact: flag("true when the owner asked to contact, email, message or DM them; false for research only"),
-    channels: nullable(channelList("Channels the owner allowed, or null when they named none")),
+    channels: nullable(outreachChannelList("Channels the owner allowed (browser: their own signed-in browser), or null when they named none")),
     spendCapUsd: nullable(num("Dollars the owner allows on paid sources; 0 when they said free tools only; null when they said nothing")),
     timeLimitMinutes: nullable(int("Minutes the owner allows, or null", { minimum: 5 })),
     done: text("What finished means, in a sentence"),
@@ -296,7 +301,7 @@ export const TOOL_SCHEMAS: Record<string, ToolInputSchema> = {
   describe_audience: tool({ audienceId: id("The list") }, ["audienceId"]),
   prepare_outreach: tool({
     audienceId: id("The lead list"),
-    channels: channelList("Optional: only when the owner's own words named how to contact them; otherwise leave it out and each lead gets its best ready route"),
+    channels: outreachChannelList("Optional: only when the owner's own words named how to contact them (browser: through the owner's own signed-in browser); otherwise leave it out and each lead gets its best ready route"),
     maxLeads: int("Optional, default up to 100", { minimum: 1 }),
     autopilot: flag("Optional: propose Automatic replies"),
     instructions: text("Optional: tone or angle for this run"),

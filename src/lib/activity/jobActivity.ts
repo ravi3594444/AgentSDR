@@ -238,7 +238,7 @@ export function toolTransport(tool: string | null, toolResult: { data?: Record<s
     const provider = text(toolResult?.data?.provider);
     return provider ? webSearchProviderName(provider).replace(/^web search$/, "Web search") : "Web search";
   }
-  if (tool.startsWith("browser_tab_") || tool === "browser_task") return "Your Chrome";
+  if (tool.startsWith("browser_tab_") || tool === "browser_task" || tool === "check_browser_routes") return "Your Chrome";
   if (tool.startsWith("browser_") && tool !== "browser_connection") return "TinyFish browser";
   if (tool === "treg_search" || tool === "treg_call") return "Treg";
   // Another search or read tool that records its provider shows it as recorded.

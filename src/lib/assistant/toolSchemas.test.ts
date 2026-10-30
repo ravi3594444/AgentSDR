@@ -72,7 +72,7 @@ describe("arguments are read by the schema, in one place", () => {
   test("whatever still does not fit is refused, never guessed", () => {
     expect(coerceToolArguments(brief, { goal: "g", newRequest: "maybe" }).problems).toEqual(["newRequest must be true or false"]);
     expect(coerceToolArguments(brief, { goal: "g", leadTarget: 12.5 }).problems).toEqual(["leadTarget must be a whole number or null"]);
-    expect(coerceToolArguments(brief, { goal: "g", channels: ["email", "fax"] }).problems).toEqual(["channels[1] must be one of email, whatsapp, linkedin, instagram"]);
+    expect(coerceToolArguments(brief, { goal: "g", channels: ["email", "fax"] }).problems).toEqual(["channels[1] must be one of email, whatsapp, linkedin, instagram, browser"]);
     expect(coerceToolArguments(TOOL_SCHEMAS.report!, { period: "last_week" }).problems[0]).toContain("period must be one of today");
     expect(coerceToolArguments(TOOL_SCHEMAS.treg_call!, { endpointId: "treg.x", query: "domain=acme.example" }).problems).toEqual(["query must be an object"]);
     expect(coerceToolArguments(TOOL_SCHEMAS.add_contacts!, { contacts: ["+91 98765 43210"] }).problems).toEqual(["contacts[0] must be an object"]);

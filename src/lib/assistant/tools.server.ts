@@ -37,7 +37,9 @@ import {
 import { judgeAuthority } from "@/lib/browser/connected/authority.server";
 import { attentionSummary, connectionSentence, formatResearchSnapshot, screenshotSummary, tabsLine } from "@/lib/browser/connected/format";
 import { isActionKind, namedByOwner, ownerWordsProblem, purchaseProblem, type Authority, type RecipientScope } from "@/lib/browser/connected/tasks";
-import { recipientRef } from "@/lib/browserOutreach/routes";
+import { MESSAGING_SITE_NAMES, profileRoute, recipientRef, type ProfileRoute } from "@/lib/browserOutreach/routes";
+import { browserRoutesFor, recordRoute, saveProfileContact, setRouteState } from "@/lib/browserOutreach/routes.server";
+import { profileVerdict } from "@/lib/browserOutreach/courier";
 import { recipientDoNotContact, recipientWroteBefore } from "@/lib/browserOutreach/recipients.server";
 import { isOlderVersion } from "@/lib/calls/recorderRelease";
 import type { ResearchEvidence } from "@/lib/research/sources/catalog";
@@ -275,8 +277,8 @@ function followUpChannels(contactAfter: { channels: AudienceChannel[] | null; ow
 function channels(args: Record<string, unknown>): AudienceChannel[] | undefined {
   const value = args.channels;
   if (value === undefined || value === null) return undefined;
-  if (!Array.isArray(value) || value.some((channel) => !["email", "whatsapp", "linkedin", "instagram"].includes(String(channel)))) {
-    throw new ToolArgumentError("channels must list email, whatsapp, linkedin or instagram");
+  if (!Array.isArray(value) || value.some((channel) => !["email", "whatsapp", "linkedin", "instagram", "browser"].includes(String(channel)))) {
+    throw new ToolArgumentError("channels must list email, whatsapp, linkedin, instagram or browser");
   }
   return value as AudienceChannel[];
 }
@@ -1149,27 +1151,55 @@ export const TOOLS: Record<string, Tool> = {
   },
 
   add_contacts: {
-    description: "Save people or businesses as a new lead list of the current request (phone numbers, emails or LinkedIn profile links, with a name or company when known): ones the owner gave in the chat, or ones a page you read (read_webpage or the browser), a web_search result or a successful treg_call publishes (contactAfter true when the owner asked to contact them: the plan follows automatically). Each contact must appear there as written; those found on pages count toward the request and are judged like any lead. A phone number without + and a country code needs the organization's Default phone country: write it with + and its country code when the page or the owner shows the country (an address, a +code elsewhere on the page); ask the owner only when nothing shows it. For a contact found on a page, give sourceUrl (that page's address as its reading shows it) and quote (the words on it that make them a fit): the lead keeps where, when and how it was read.",
-    arguments: `contacts (array of objects with name, phone, email, linkedinUrl, company, sourceUrl (optional: the page it was read on), quote (optional: exact words from that page); each needs a phone, email or linkedinUrl; up to ${MAX_CHAT_CONTACTS} a call), listName (optional), contactAfter (true when the owner asked to contact, message or pitch these people: the outreach plan is then prepared right after), channels (optional, with contactAfter: array of email|whatsapp|linkedin|instagram, only when the owner's own words named how to contact them; otherwise leave it out and each lead gets its best ready route)`,
+    description: "Save people or businesses as a new lead list of the current request (phone numbers, emails, LinkedIn profile links, or a person's profile on X, Instagram or Facebook, with a name or company when known; a profile is a route the owner's own browser can message them on): ones the owner gave in the chat, or ones a page you read (read_webpage or the browser), a web_search result or a successful treg_call publishes (contactAfter true when the owner asked to contact them: the plan follows automatically). Each contact must appear there as written; those found on pages count toward the request and are judged like any lead. A phone number without + and a country code needs the organization's Default phone country: write it with + and its country code when the page or the owner shows the country (an address, a +code elsewhere on the page); ask the owner only when nothing shows it. For a contact found on a page, give sourceUrl (that page's address as its reading shows it) and quote (the words on it that make them a fit): the lead keeps where, when and how it was read.",
+    arguments: `contacts (array of objects with name, phone, email, linkedinUrl, profileUrl (their own profile on X, Instagram, Facebook or LinkedIn), company, sourceUrl (optional: the page it was read on), quote (optional: exact words from that page); each needs a phone, email, linkedinUrl or profileUrl; up to ${MAX_CHAT_CONTACTS} a call), listName (optional), contactAfter (true when the owner asked to contact, message or pitch these people: the outreach plan is then prepared right after), channels (optional, with contactAfter: array of email|whatsapp|linkedin|instagram|browser, only when the owner's own words named how to contact them; otherwise leave it out and each lead gets its best ready route)`,
     run: async (args, context) => {
       if (!Array.isArray(args.contacts) || !args.contacts.length) throw new ToolArgumentError("contacts must be a non-empty array");
       if (args.contacts.length > MAX_CHAT_CONTACTS) throw new ToolArgumentError(`at most ${MAX_CHAT_CONTACTS} contacts in one call; add the first ${MAX_CHAT_CONTACTS} now and the rest in another add_contacts call`);
       // Where each found contact was read: checked against this chat's readings before anything is saved.
       const found = new Map<number, PageEvidence>();
       const rows: ImportRow[] = [];
+      // A profile on X, Instagram, Facebook or LinkedIn: the route the owner's browser messages them on.
+      const profiles = new Map<number, ProfileRoute>();
+      const profileOnly: { rowNumber: number; name: string | null; company: string | null; route: ProfileRoute; sourceUrl: string | null }[] = [];
       for (const [index, item] of args.contacts.entries()) {
         const contact = (item && typeof item === "object" ? item : {}) as Record<string, unknown>;
         const field = (key: string) => (typeof contact[key] === "string" && contact[key].trim() ? contact[key].trim() : null);
+        const profileUrl = field("profileUrl");
+        const route = profileUrl ? profileRoute(profileUrl) : null;
+        if (profileUrl && !route) throw new ToolArgumentError(`contact ${index + 1}: profileUrl must be a person's own profile on X, Instagram, Facebook or LinkedIn (not a post, a search or a page)`);
         const sourceUrl = field("sourceUrl");
         if (sourceUrl) {
           // The contact itself must be on that page as it was read, not merely somewhere in the chat.
-          const evidence = await pageEvidence(context.threadId, sourceUrl, field("quote"), { contacts: [{ email: field("email"), phone: field("phone"), linkedinUrl: field("linkedinUrl") }] });
+          const evidence = await pageEvidence(context.threadId, sourceUrl, field("quote"), { contacts: [{ email: field("email"), phone: field("phone"), linkedinUrl: field("linkedinUrl"), profileUrl }] });
           if ("problem" in evidence) throw new ToolArgumentError(`contact ${index + 1}: ${evidence.problem}`);
           found.set(index + 1, evidence);
         }
-        rows.push({ rowNumber: index + 1, fullName: field("name"), phone: field("phone"), email: field("email"), linkedinUrl: field("linkedinUrl"), companyName: field("company"), customFields: { addedVia: "assistant chat" } });
+        const linkedinUrl = field("linkedinUrl") ?? (route?.site === "linkedin" ? route.profileUrl : null);
+        if (route) profiles.set(index + 1, route);
+        if (!field("phone") && !field("email") && !linkedinUrl && route) {
+          profileOnly.push({ rowNumber: index + 1, name: field("name"), company: field("company"), route, sourceUrl });
+          continue;
+        }
+        rows.push({ rowNumber: index + 1, fullName: field("name"), phone: field("phone"), email: field("email"), linkedinUrl, companyName: field("company"), customFields: { addedVia: "assistant chat" } });
       }
-      const result = await importPeopleRows(rows);
+      const result = rows.length ? await importPeopleRows(rows) : { created: 0, updated: 0, failed: [], skippedNoIdentity: 0, personIds: [] as string[], rowPersonIds: {} as Record<number, string>, total: 0, phoneOnly: 0, warnings: [] };
+      for (const row of profileOnly) {
+        const saved = await saveProfileContact({ route: row.route, name: row.name, company: row.company, sourceUrl: row.sourceUrl ?? found.get(row.rowNumber)?.sourceUrl ?? null });
+        if (!saved) {
+          result.failed.push({ row: row.rowNumber, identity: row.route.profileUrl, error: "that profile is recorded for someone else in this workspace" });
+          continue;
+        }
+        result.personIds.push(saved.personId);
+        result.rowPersonIds[row.rowNumber] = saved.personId;
+        if (saved.created) result.created += 1;
+        else result.updated += 1;
+      }
+      // Imported people with a profile too: the profile becomes their browser route.
+      for (const [rowNumber, route] of profiles) {
+        const personId = result.rowPersonIds[rowNumber];
+        if (personId && !profileOnly.some((row) => row.rowNumber === rowNumber)) await recordRoute(personId, route, found.get(rowNumber)?.sourceUrl ?? null);
+      }
       const failures = result.failed.map((failure) => `${failure.identity}: ${failure.error}`);
       // Nothing usable (usually a number without its country code): the assistant asks the owner, no card.
       if (!result.personIds.length) throw new ToolArgumentError(`no contact was added. ${failures.join(" ")}`);
@@ -1191,17 +1221,25 @@ export const TOOLS: Record<string, Tool> = {
           ...(row.email ? [{ kind: "email" as const, value: row.email }] : []),
           ...(row.phone ? [{ kind: "phone" as const, value: row.phone }] : []),
           ...(row.linkedinUrl ? [{ kind: "linkedin" as const, value: row.linkedinUrl }] : []),
+          ...(profiles.get(row.rowNumber) && profiles.get(row.rowNumber)!.site !== "linkedin" ? [{ kind: "profile" as const, value: profiles.get(row.rowNumber)!.profileUrl }] : []),
         ];
         members.set(personId, { personId, source: "list", sourceUrl: evidence.sourceUrl, ...evidenceRecords(evidence, contacts) });
+      }
+      for (const row of profileOnly) {
+        const personId = result.rowPersonIds[row.rowNumber];
+        const evidence = found.get(row.rowNumber);
+        if (!personId || !evidence) continue;
+        members.set(personId, { personId, source: "list", sourceUrl: evidence.sourceUrl, ...evidenceRecords(evidence, [{ kind: "profile", value: row.route.profileUrl }]) });
       }
       await addAudienceMembers(audienceId, [...members.values()]);
       // The ones the owner typed themselves count as a match; those found on a page are judged against the request.
       const typed = rows.flatMap((row) => (result.rowPersonIds[row.rowNumber] && typedByOwner(row, context.ownerText ?? "") ? [result.rowPersonIds[row.rowNumber]!] : []));
       await markGivenByOwner(audienceId, typed, searchRequestId(context));
       // Read back what was stored (phones normalized with their country code) so the owner can check it.
-      const stored = await db.select({ name: people.fullName, phone: people.phone, email: people.email, linkedinUrl: people.linkedinUrl })
+      const stored = await db.select({ id: people.id, name: people.fullName, phone: people.phone, email: people.email, linkedinUrl: people.linkedinUrl })
         .from(people).where(and(inOrg(people), inArray(people.id, result.personIds)));
-      const saved = stored.map((person) => [person.name, person.phone, person.email, person.linkedinUrl].filter(Boolean).join(" · ")).join("; ");
+      const routeOf = new Map([...profiles].flatMap(([rowNumber, route]) => (result.rowPersonIds[rowNumber] && route.site !== "linkedin" ? [[result.rowPersonIds[rowNumber]!, route.profileUrl] as const] : [])));
+      const saved = stored.map((person) => [person.name, person.phone, person.email, person.linkedinUrl, routeOf.get(person.id)].filter(Boolean).join(" · ")).join("; ");
       return {
         ok: true,
         summary: `Added ${result.personIds.length} contact${result.personIds.length === 1 ? "" : "s"} as lead list ${audienceId} “${name}”: ${saved}.${failures.length ? ` Not added: ${failures.join(" ")}` : ""}`,
@@ -1768,6 +1806,49 @@ export const TOOLS: Record<string, Tool> = {
     run: async (args, context) => {
       const tab = tabNumber(args, true)!;
       return connectedStep(context, `Brought tab ${tab} up for the owner`, { kind: "show", tabId: tab }, CONNECTED_TABS_MS);
+    },
+  },
+
+  check_browser_routes: {
+    description: "Check, in the owner's own connected browser, whether leads can be messaged there before planning browser outreach: opens each lead's profile on X, Instagram, Facebook or LinkedIn (read only, nothing is clicked or sent) and records what the page shows: a Message button (messageable), a page saying they cannot be messaged or do not exist, or nothing clear (left to the send, which checks again). A lead found unable to take a message gets no browser channel in a plan. Free; up to 10 leads a call.",
+    arguments: "personIds (array of the leads' person ids, up to 10)",
+    run: async (args, context) => {
+      const personIds = (Array.isArray(args.personIds) ? args.personIds : []).map(String).filter((id) => /^[0-9a-f-]{36}$/i.test(id)).slice(0, 10);
+      if (!personIds.length) throw new ToolArgumentError("personIds must list 1 to 10 lead ids");
+      const userId = await browserActor(context);
+      if (!userId) return { ok: false, summary: "Not checked: no person is attached to this chat." };
+      const routes = await browserRoutesFor(personIds);
+      const lines: string[] = [];
+      let tab: number | null = null;
+      for (const personId of personIds) {
+        const route = (routes.get(personId) ?? []).find((item) => item.state !== "messageable") ?? routes.get(personId)?.[0];
+        if (!route) {
+          lines.push(`${personId}: no profile on X, Instagram, Facebook or LinkedIn is recorded`);
+          continue;
+        }
+        const recorded = route.id ? { id: route.id } : await recordRoute(personId, route, null);
+        if (!recorded) {
+          lines.push(`${personId}: ${route.profileUrl} is recorded for someone else in this workspace`);
+          continue;
+        }
+        const problem = await connectedUrlProblem(route.profileUrl, (await browserConnection(userId)).row ?? { sites: [], domains: [] });
+        if (problem) {
+          lines.push(`${personId}: ${route.profileUrl} not opened (${problem})`);
+          continue;
+        }
+        const step = await connectedStep(context, `Opened ${route.profileUrl}`, { kind: "open", url: route.profileUrl, tabId: tab }, CONNECTED_OPEN_MS, userId);
+        const snapshot = step.ok ? await latestTabSnapshot(userId, browserRequestKey(context), Number(step.data?.tabId)) : null;
+        if (!snapshot) {
+          lines.push(`${personId}: ${route.profileUrl} could not be read (${step.summary.split("\n")[0]})`);
+          if (/needs the owner|offline|Stop/i.test(step.summary)) break;
+          continue;
+        }
+        tab = Number(step.data?.tabId);
+        const verdict = profileVerdict(snapshot);
+        await setRouteState(recorded.id, verdict.state, verdict.detail);
+        lines.push(`${personId}: ${MESSAGING_SITE_NAMES[route.site]} @${route.handle}: ${verdict.state.replace("_", " ")} (${verdict.detail})`);
+      }
+      return { ok: true, summary: `Browser routes checked in the owner's browser (read only):\n${lines.join("\n")}`, display: `Checked ${lines.length} profile${lines.length === 1 ? "" : "s"} for messaging` };
     },
   },
 
