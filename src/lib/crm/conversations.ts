@@ -1,4 +1,6 @@
 import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { browserOutreachReady } from "@/lib/browserOutreach/routes.server";
+import { browserOutreachSends } from "@/lib/browserOutreach/schema";
 import { leads as linkedinLeads } from "@/lib/linkedin/schema";
 import { whatsappAccounts, whatsappChats, whatsappCampaignLeads, whatsappCampaigns } from "@/lib/whatsapp/schema";
 import { sameWhatsappContact } from "@/lib/whatsapp/contactIdentity";
@@ -411,6 +413,11 @@ export async function ingestInboundReplyInTransaction(
       eq(whatsappCampaignLeads.personId, current.personId),
       inArray(whatsappCampaignLeads.status, ["queued", "in_sequence"]),
     ));
+  // Browser follow-ups not yet sent stop too: they replied.
+  if (await browserOutreachReady()) {
+    await tx.update(browserOutreachSends).set({ status: "cancelled", error: "They replied", waitReason: null, nextCheckAt: null, updatedAt: now })
+      .where(and(inOrg(browserOutreachSends), eq(browserOutreachSends.personId, current.personId), eq(browserOutreachSends.kind, "step"), inArray(browserOutreachSends.status, ["queued", "waiting"])));
+  }
 
   await enqueueCrmJobInTransaction(tx, {
     kind: "classification",

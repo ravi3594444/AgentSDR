@@ -1,6 +1,8 @@
 import "server-only";
 
 import { browserChannelStatus } from "@/lib/browserOutreach/availability.server";
+import { browserRunReport, cancelBrowserSends, queueBrowserOutreach } from "@/lib/browserOutreach/queue.server";
+import { browserSitesFor } from "@/lib/browserOutreach/routes.server";
 import type { MessagingSite } from "@/lib/browserOutreach/routes";
 import { randomUUID } from "node:crypto";
 import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
@@ -235,7 +237,7 @@ export async function prepareOutreach(input: PrepareInput): Promise<Proposal> {
 
   const base = input.basedOnRunId ? await getRun(input.basedOnRunId) : null;
   if (input.basedOnRunId && !base) throw new OutreachError("That earlier run does not exist.");
-  const availability = await channelAvailability();
+  const availability = await channelAvailability(input.userId);
   // The owner's words restrict the channels; the model's list, an earlier run and the saved preference only order them.
   const worded = channelPolicy({ requested: input.channels ?? [], ownerText: input.ownerRequest ?? "", preferred: profile.preferredChannels ?? [], base: base?.channels ?? [] });
   const only = input.onlyChannels?.length ? input.onlyChannels : null;
@@ -247,6 +249,17 @@ export async function prepareOutreach(input: PrepareInput): Promise<Proposal> {
 
   const maxLeads = Math.min(HARD_MAX_LEADS, Math.max(1, Math.round(input.maxLeads ?? Math.min(DEFAULT_MAX_LEADS, audience.eligible))));
   const members = await eligibleAudienceMembers(input.audienceId);
+  // The browser reaches a lead through a profile on a site the owner named (or any its website access covers),
+  // read now: a lead saved before its profile was recorded is reachable too.
+  if (usable.includes("browser")) {
+    const allowed = new Set(policy.browserSites ?? availability.browserSites);
+    const sites = await browserSitesFor(members.flatMap((member) => (member.personId ? [member.personId] : [])));
+    for (const member of members) {
+      const reachable = (member.personId ? sites.get(member.personId) ?? [] : []).some((site) => allowed.has(site));
+      const others = member.channels.filter((channel) => channel !== "browser");
+      member.channels = reachable ? [...others, "browser"] : others;
+    }
+  }
   const assignments: OutreachPlan["assignments"] = [];
   const unassigned: string[] = [];
   for (const member of members) {
@@ -483,7 +496,9 @@ export async function prepareOutreach(input: PrepareInput): Promise<Proposal> {
       emailPerMailboxPerDay: availability.email.available ? availability.email.perSenderPerDay : null,
       whatsappNewChatsPerDay: availability.whatsapp.available ? availability.whatsapp.perSenderPerDay : null,
       instagramNewChatsPerDay: channels.includes("instagram") && availability.instagram.available ? availability.instagram.perSenderPerDay : null,
+      browserNewChatsPerDay: channels.includes("browser") && availability.browser.available ? availability.browser.perSenderPerDay : null,
     },
+    ...(channels.includes("browser") ? { browserSites: policy.browserSites ?? null } : {}),
     excluded: [...audience.excluded, ...countReasons(unassigned)].sort((a, b) => b.count - a.count),
     channelNote: policy.note,
     droppedSteps,
@@ -935,7 +950,15 @@ export async function runOutreachStartStep(job: AssistantJob, heartbeat: () => P
         if (channel === "email") launches.push(await launchEmail(run.name, steps, personIds, existing, record));
         else if (channel === "whatsapp") launches.push(await launchWhatsapp(run.name, steps, personIds, availability.whatsappAccountIds, existing, record));
         else if (channel === "linkedin") launches.push(await launchLinkedin(run.name, steps, personIds, availability.linkedinAccountIds, existing, record));
-        else {
+        else if (channel === "browser") {
+          const rows = await loadPeople(personIds);
+          const leads = personIds.flatMap((personId) => {
+            const row = rows.get(personId);
+            return row ? [{ personId, bodies: steps.map((step) => render(step, leadVariables(row, plan.personalizationKey, "")).body), waits: steps.map((step) => step.waitDays) }] : [];
+          });
+          const queued = await queueBrowserOutreach(run, leads);
+          launches.push({ channel, campaignId: run.id, added: queued.added, skipped: personIds.length - queued.added, problem: queued.problem });
+        } else {
           const rows = await loadPeople(personIds);
           const leads = personIds.flatMap((personId) => {
             const row = rows.get(personId);
@@ -1089,6 +1112,9 @@ async function stopCampaigns(runId: string, campaigns: Partial<Record<AudienceCh
       } else if (channel === "instagram") {
         await db.update(instagramOutreachQueue).set({ status: "cancelled", error: "The owner stopped this run", lockedBy: null, lockedUntil: null, updatedAt: now })
           .where(and(inOrg(instagramOutreachQueue), eq(instagramOutreachQueue.runId, runId), inArray(instagramOutreachQueue.status, ["queued", "resolving"])));
+      } else if (channel === "browser") {
+        // A message the browser is sending right now finishes (or is recorded uncertain); nothing queued goes out.
+        await cancelBrowserSends({ runId, reason: "The owner stopped this run" });
       } else {
         await db.update(linkedinCampaigns).set({ status: "PAUSED", updatedAt: now }).where(and(inOrg(linkedinCampaigns), eq(linkedinCampaigns.id, campaignId)));
         await db.update(linkedinLeads).set({ status: "CANCELLED", updatedAt: now })
@@ -1158,6 +1184,8 @@ export async function reportRun(runId: string): Promise<RunReport | null> {
         join instagram_messages m on m.chat_id=c.id and m.direction='inbound' and m.sent_at>=q.created_at
         where q.organization_id=${currentOrganizationId()} and q.run_id=${run.id}`);
       channels.push({ channel, campaignId, contacted: by(["sent"]), messagesSent: by(["sent"]), replied: Number(replies[0]?.n ?? 0), finished: by(["sent"]), stopped: by(["failed", "uncertain", "cancelled"]), failed: by(["failed", "uncertain"]) });
+    } else if (channel === "browser") {
+      channels.push({ channel, campaignId, ...(await browserRunReport(run.id)) });
     } else {
       const reached = ["REQUEST_SENT", "CONNECTED", "ACCEPT_MESSAGE_SENT", "FOLLOW_UP_1_SENT", "FOLLOW_UP_2_SENT", "FOLLOW_UP_3_SENT", "REPLIED", "COMPLETED"];
       // Reached: an invitation time (kept when a stop cancels the lead) or a status past the invitation.

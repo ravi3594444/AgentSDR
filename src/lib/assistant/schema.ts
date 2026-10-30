@@ -420,7 +420,9 @@ export type OutreachPlan = {
     why?: string | null;
     observed?: { text: string; sourceUrl: string | null; relevance: string | null; need: boolean }[];
   }[];
-  limits: { maxLeads: number; emailPerMailboxPerDay: number | null; whatsappNewChatsPerDay: number | null; instagramNewChatsPerDay?: number | null };
+  limits: { maxLeads: number; emailPerMailboxPerDay: number | null; whatsappNewChatsPerDay: number | null; instagramNewChatsPerDay?: number | null; browserNewChatsPerDay?: number | null };
+  /** The sites the browser channel messages on, as the owner named them; absent or null: any messaging site its leads have (browserOutreach/). */
+  browserSites?: ("x" | "instagram" | "facebook" | "linkedin")[] | null;
   /** Leads left out and why, counted by reason. */
   excluded: { reason: string; count: number }[];
   /** Why channels a lead has are not used, in the owner's terms ("you asked for WhatsApp"); null or absent when the owner named none (channelPolicy.ts). */
@@ -640,7 +642,7 @@ export const autopilotTakeovers = pgTable(
   ],
 );
 
-export type UsageKind = "assistant" | "outreach_writing" | "personal_lines" | "lead_sorting" | "reply_check" | "handoff_brief" | "linkedin_search" | "reply_agent";
+export type UsageKind = "assistant" | "outreach_writing" | "personal_lines" | "lead_sorting" | "reply_check" | "handoff_brief" | "linkedin_search" | "reply_agent" | "browser_courier";
 
 export type ReplyAgentStatus = "running" | "replied" | "drafted" | "no_reply" | "stopped" | "told_owner" | "failed";
 

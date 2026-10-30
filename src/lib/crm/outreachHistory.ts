@@ -13,7 +13,8 @@
  * upsert the inbound and CRM-send paths already use, so re-running this is
  * always safe.
  */
-import { and, eq, inArray, isNull, ne, or } from "drizzle-orm";
+import { browserContactRoutes, browserOutreachSends } from "@/lib/browserOutreach/schema";
+import { and, asc, eq, inArray, isNull, ne, or } from "drizzle-orm";
 import {
   connections as linkedinConnections,
   leads as linkedinLeads,
@@ -327,9 +328,47 @@ async function loadPendingOutreach(
     case "instagram":
       return (await loadInstagramOutreachRows(tx, input.personId, input.accountRef)).map(instagramOutreachRowToMessageInput);
     case "browser":
-      // Browser messages are recorded in the conversation when the courier confirms them; there is no earlier history to copy.
-      return [];
+      return (await loadBrowserOutreachRows(tx, input.personId, input.accountRef)).map(browserOutreachRowToMessageInput);
   }
+}
+
+export type BrowserOutreachRow = { id: string; body: string; sentAt: Date | null; threadUrl: string | null; step: number; kind: "step" | "reply" };
+
+/** Converts one confirmed browser send into an outbound message, or null to skip it. */
+export function browserOutreachRowToMessageInput(row: BrowserOutreachRow): PendingOutboundMessage | null {
+  if (!row.sentAt || !row.body.trim()) return null;
+  return {
+    direction: "outbound",
+    idempotencyKey: `browser:${row.id}`,
+    providerMessageId: null,
+    subject: null,
+    bodyText: row.body.trim(),
+    raw: { source: "browser_outreach_sends", id: row.id, step: row.step, kind: row.kind, threadUrl: row.threadUrl },
+    sentAt: row.sentAt,
+  };
+}
+
+/** The confirmed browser messages to this person from the account `accountRef` ("<site>:<handle>") names. */
+async function loadBrowserOutreachRows(tx: CrmTransaction, personId: string, accountRef: string): Promise<BrowserOutreachRow[]> {
+  const [site, handle] = accountRef.split(":", 2);
+  if (!site || !handle) return [];
+  return tx.select({
+    id: browserOutreachSends.id,
+    body: browserOutreachSends.body,
+    sentAt: browserOutreachSends.sentAt,
+    threadUrl: browserOutreachSends.threadUrl,
+    step: browserOutreachSends.step,
+    kind: browserOutreachSends.kind,
+  }).from(browserOutreachSends)
+    .innerJoin(browserContactRoutes, eq(browserContactRoutes.id, browserOutreachSends.routeId))
+    .where(and(
+      inOrg(browserOutreachSends),
+      eq(browserOutreachSends.personId, personId),
+      eq(browserOutreachSends.status, "sent"),
+      eq(browserContactRoutes.site, site as "x"),
+      eq(browserOutreachSends.senderHandle, handle),
+    ))
+    .orderBy(asc(browserOutreachSends.sentAt));
 }
 
 /**

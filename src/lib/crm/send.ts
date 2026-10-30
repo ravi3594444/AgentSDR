@@ -58,7 +58,7 @@ import { claimRouteForSendInTransaction, conversationRoutes, setAsideAcknowledge
 import { adoptCurrentSequenceStepInTransaction, interruptActiveSequenceRunInTransaction } from "./sequences";
 
 export type NormalizedCrmSendResult = {
-  provider: "gmail" | "unipile";
+  provider: "gmail" | "unipile" | "browser";
   providerMessageId: string | null;
   providerThreadId: string | null;
   rfcMessageId: string | null;
@@ -73,8 +73,10 @@ export type CrmSendAdapterInput = {
   recipientEmail: string | null;
   /** The Person's phone (people.phone, E.164) — WhatsApp's recipient when the conversation has no chat yet. */
   recipientPhone?: string | null;
-  /** The Person the draft is for (Instagram re-checks Do Not Contact against it). */
+  /** The Person the draft is for (Instagram re-checks Do Not Contact against it; the browser sends to their recorded profile). */
   personId?: string | null;
+  /** Browser only: the draft, which the browser's send queue keys its one attempt by. */
+  draftId?: string | null;
   subject: string | null;
   bodyText: string;
   bodyHtml: string | null;
@@ -232,6 +234,7 @@ export const sendThroughCrmProvider: CrmSendAdapter = async (input) => {
   }
   if (input.channel === "whatsapp") return sendWhatsappThroughCrm(input);
   if (input.channel === "instagram") return sendInstagramThroughCrm(input);
+  if (input.channel === "browser") return sendBrowserThroughCrm(input);
   if (input.channel !== "linkedin") throw new DefiniteCrmSendError(`No sender for the ${String(input.channel)} channel`);
   if (!input.providerThreadId) throw new DefiniteCrmSendError("LinkedIn conversation has no chat ID");
   const messageId = await sendLinkedInMessage(input.providerThreadId, input.bodyText);
@@ -336,6 +339,28 @@ export async function sendInstagramThroughCrm(
       instagramMessageId: result.instagramMessageId,
     },
   };
+}
+
+/**
+ * The browser branch: the reply is delivered through the owner's own
+ * signed-in browser (browserOutreach/courier.server.ts) and verified on the
+ * page. Chrome offline or busy defers it with the reason; a send whose
+ * answer was lost is uncertain, never repeated.
+ */
+export async function sendBrowserThroughCrm(input: CrmSendAdapterInput): Promise<NormalizedCrmSendResult> {
+  if (input.channel !== "browser") throw new Error(`Not a browser send: ${input.channel}`);
+  if (!input.providerThreadId || !input.personId || !input.draftId) throw new DefiniteCrmSendError("This browser conversation has no recorded profile to reply to");
+  const { sendBrowserReply, BrowserReplyError } = await import("@/lib/browserOutreach/courier.server");
+  try {
+    const sent = await sendBrowserReply({ draftId: input.draftId, personId: input.personId, routeId: input.providerThreadId, accountRef: input.accountRef, body: input.bodyText });
+    return { provider: "browser", providerMessageId: null, providerThreadId: input.providerThreadId, rfcMessageId: null, response: { sendId: sent.sendId, threadUrl: sent.threadUrl } };
+  } catch (error) {
+    if (error instanceof BrowserReplyError) {
+      if (error.outcome === "deferred") throw new DeferredCrmSendError(error.message, error.retryAt ?? new Date(Date.now() + 5 * 60_000));
+      if (error.outcome === "definite") throw new DefiniteCrmSendError(error.message);
+    }
+    throw error;
+  }
 }
 
 type PreparedSend = {
@@ -461,7 +486,8 @@ async function prepareSend(tx: CrmTransaction, input: {
     providerContactId: conversation.providerContactId,
     recipientEmail: person.email,
     recipientPhone: draft.channel === "whatsapp" ? person.phone : null,
-    personId: draft.channel === "instagram" ? person.id : null,
+    personId: draft.channel === "instagram" || draft.channel === "browser" ? person.id : null,
+    ...(draft.channel === "browser" ? { draftId: draft.id } : {}),
     ...(ackRouteId ? { wrongRouteAckId: ackRouteId } : {}),
     subject: draft.subject,
     bodyText,
