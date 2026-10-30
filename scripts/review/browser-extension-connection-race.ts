@@ -27,7 +27,6 @@ const screenModule = `data:text/javascript;base64,${Buffer.from(transpiler.trans
 const source = readFileSync(`${repo}/extensions/whatsapp-recorder/src/research.ts`, "utf8")
   .replace('"../../../src/lib/browser/connected/contract"', `"${repo}/src/lib/browser/connected/contract.ts"`)
   .replace('"../../../src/lib/browser/connected/readiness"', `"${repo}/src/lib/browser/connected/readiness.ts"`)
-  .replace('"../../../src/lib/browser/connected/readiness"', `"${repo}/src/lib/browser/connected/readiness.ts"`)
   .replace('"./screen"', `"${screenModule}"`);
 const moduleText = transpiler.transformSync(`${source}\nexport { pollLoop };\n`);
 const extensionRuntime = await import(`data:text/javascript;base64,${Buffer.from(moduleText).toString("base64")}`) as { pollLoop(): Promise<void> };
