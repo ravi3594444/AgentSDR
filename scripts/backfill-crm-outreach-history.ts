@@ -44,6 +44,7 @@ async function main() {
     linkedin: { conversations: 0, inserted: 0 },
     whatsapp: { conversations: 0, inserted: 0 },
     instagram: { conversations: 0, inserted: 0 },
+    browser: { conversations: 0, inserted: 0 },
   };
 
   for (const conversation of conversations) {

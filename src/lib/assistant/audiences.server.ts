@@ -1,6 +1,7 @@
 import "server-only";
 
 import { and, asc, count, eq, inArray, or, sql } from "drizzle-orm";
+import { browserSitesFor } from "@/lib/browserOutreach/routes.server";
 import { db } from "@/lib/db";
 import { crmPersonContactPolicies, crmWrongRoutes } from "@/lib/crm/schema";
 import { normalizeRoute } from "@/lib/crm/wrongNumber";
@@ -63,6 +64,7 @@ type PersonFacts = {
   doNotContact: boolean;
   emailSuppressed: boolean;
   wrongChannels: AudienceChannel[];
+  browserSites: string[];
 };
 
 /** Per person, the channels whose route (this person's, or the same number or address on another record) was recorded as a wrong number. */
@@ -117,6 +119,7 @@ export async function loadPersonFacts(personIds: readonly string[]): Promise<Map
       .where(and(inOrg(suppressionList), inArray(suppressionList.email, emails)))).map((row) => row.email)
     : []);
   const wrong = await wrongChannelsOf(rows);
+  const browserSites = await browserSitesFor(rows.map((row) => row.id));
   for (const row of rows) {
     // Their own name, else the business they were saved under (ahead of their email or phone), never an invented person.
     const name = memberName(row, { name: row.companyName }, instagramUsername((row.raw.instagram as { username?: unknown } | undefined)?.username));
@@ -131,6 +134,7 @@ export async function loadPersonFacts(personIds: readonly string[]): Promise<Map
       doNotContact: dnc.has(row.id),
       emailSuppressed: row.email ? suppressed.has(row.email.toLowerCase()) : false,
       wrongChannels: wrong.get(row.id) ?? [],
+      browserSites: browserSites.get(row.id) ?? [],
     });
   }
   return facts;
@@ -293,7 +297,7 @@ export async function summarizeAudience(audienceId: string): Promise<AudienceSum
   }).from(leadAudienceMembers)
     .where(and(inOrg(leadAudienceMembers), eq(leadAudienceMembers.audienceId, audienceId)))
     .orderBy(asc(leadAudienceMembers.createdAt));
-  const byChannel: Record<AudienceChannel, number> = { email: 0, whatsapp: 0, linkedin: 0, instagram: 0 };
+  const byChannel: Record<AudienceChannel, number> = { email: 0, whatsapp: 0, linkedin: 0, instagram: 0, browser: 0 };
   for (const member of members) for (const channel of member.channels) byChannel[channel] += 1;
   const eligibleMembers = members.filter((member) => member.status === "eligible");
   return {

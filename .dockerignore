@@ -59,6 +59,7 @@ scripts
 !scripts/create-browser-research-tables.ts
 !scripts/add-exa.ts
 !scripts/add-browser-access.ts
+!scripts/add-browser-outreach.ts
 !scripts/grant-platform-operator.ts
 !scripts/recover-whatsapp-reply.ts
 

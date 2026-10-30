@@ -1154,6 +1154,76 @@ CREATE TABLE public.brightdata_settings (
 );
 
 --
+-- Name: browser_contact_routes; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.browser_contact_routes (
+    organization_id uuid NOT NULL,
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    person_id uuid NOT NULL,
+    site text NOT NULL,
+    handle text NOT NULL,
+    profile_url text NOT NULL,
+    state text DEFAULT 'unverified'::text NOT NULL,
+    detail text,
+    source_url text,
+    checked_at timestamp with time zone,
+    thread_url text,
+    synced_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT browser_contact_routes_site_chk CHECK ((site = ANY (ARRAY['x'::text, 'instagram'::text, 'facebook'::text, 'linkedin'::text]))),
+    CONSTRAINT browser_contact_routes_state_chk CHECK ((state = ANY (ARRAY['unverified'::text, 'messageable'::text, 'not_messageable'::text, 'not_found'::text])))
+);
+
+--
+-- Name: browser_outreach_sends; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.browser_outreach_sends (
+    organization_id uuid NOT NULL,
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    run_id uuid,
+    person_id uuid NOT NULL,
+    route_id uuid NOT NULL,
+    user_id uuid NOT NULL,
+    kind text DEFAULT 'step'::text NOT NULL,
+    step integer DEFAULT 0 NOT NULL,
+    body text NOT NULL,
+    draft_id uuid,
+    status text DEFAULT 'queued'::text NOT NULL,
+    wait_reason text,
+    next_check_at timestamp with time zone,
+    due_at timestamp with time zone DEFAULT now() NOT NULL,
+    locked_by text,
+    locked_until timestamp with time zone,
+    attempted_at timestamp with time zone,
+    sent_at timestamp with time zone,
+    sender_handle text,
+    thread_url text,
+    log jsonb DEFAULT '[]'::jsonb NOT NULL,
+    error text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT browser_outreach_sends_kind_chk CHECK ((kind = ANY (ARRAY['step'::text, 'reply'::text]))),
+    CONSTRAINT browser_outreach_sends_status_chk CHECK ((status = ANY (ARRAY['queued'::text, 'waiting'::text, 'sending'::text, 'sent'::text, 'failed'::text, 'uncertain'::text, 'blocked'::text, 'cancelled'::text]))),
+    CONSTRAINT browser_outreach_sends_step_chk CHECK ((((kind = 'step'::text) AND (run_id IS NOT NULL)) OR ((kind = 'reply'::text) AND (draft_id IS NOT NULL))))
+);
+
+--
+-- Name: browser_sender_accounts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.browser_sender_accounts (
+    organization_id uuid NOT NULL,
+    user_id uuid NOT NULL,
+    site text NOT NULL,
+    handle text NOT NULL,
+    confirmed_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT browser_sender_accounts_site_chk CHECK ((site = ANY (ARRAY['x'::text, 'instagram'::text, 'facebook'::text, 'linkedin'::text])))
+);
+
+--
 -- Name: browser_commands; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1458,7 +1528,7 @@ CREATE TABLE public.crm_conversation_messages (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT crm_conversation_messages_body_chk CHECK ((length(btrim(body_text)) > 0)),
-    CONSTRAINT crm_conversation_messages_channel_chk CHECK ((channel = ANY (ARRAY['email'::text, 'linkedin'::text, 'whatsapp'::text, 'instagram'::text]))),
+    CONSTRAINT crm_conversation_messages_channel_chk CHECK ((channel = ANY (ARRAY['email'::text, 'linkedin'::text, 'whatsapp'::text, 'instagram'::text, 'browser'::text]))),
     CONSTRAINT crm_conversation_messages_direction_chk CHECK ((direction = ANY (ARRAY['inbound'::text, 'outbound'::text]))),
     CONSTRAINT crm_conversation_messages_idempotency_chk CHECK ((length(btrim(idempotency_key)) > 0))
 );
@@ -1480,7 +1550,7 @@ CREATE TABLE public.crm_conversations (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     organization_id uuid NOT NULL,
     CONSTRAINT crm_conversations_account_ref_chk CHECK ((length(btrim(account_ref)) > 0)),
-    CONSTRAINT crm_conversations_channel_chk CHECK ((channel = ANY (ARRAY['email'::text, 'linkedin'::text, 'whatsapp'::text, 'instagram'::text]))),
+    CONSTRAINT crm_conversations_channel_chk CHECK ((channel = ANY (ARRAY['email'::text, 'linkedin'::text, 'whatsapp'::text, 'instagram'::text, 'browser'::text]))),
     CONSTRAINT crm_conversations_status_chk CHECK ((status = ANY (ARRAY['active'::text, 'closed'::text])))
 );
 
@@ -1525,8 +1595,9 @@ CREATE TABLE public.crm_drafts (
     error text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT crm_drafts_channel_chk CHECK ((channel = ANY (ARRAY['email'::text, 'linkedin'::text, 'whatsapp'::text, 'instagram'::text]))),
+    CONSTRAINT crm_drafts_channel_chk CHECK ((channel = ANY (ARRAY['email'::text, 'linkedin'::text, 'whatsapp'::text, 'instagram'::text, 'browser'::text]))),
     CONSTRAINT crm_drafts_context_chk CHECK ((expected_context_version >= 0)),
+    CONSTRAINT crm_drafts_browser_subject_chk CHECK (((channel <> 'browser'::text) OR (subject IS NULL))),
     CONSTRAINT crm_drafts_instagram_subject_chk CHECK (((channel <> 'instagram'::text) OR (subject IS NULL))),
     CONSTRAINT crm_drafts_linkedin_subject_chk CHECK (((channel <> 'linkedin'::text) OR (subject IS NULL))),
     CONSTRAINT crm_drafts_revision_chk CHECK ((revision > 0)),
@@ -1589,7 +1660,7 @@ CREATE TABLE public.crm_identity_exceptions (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     organization_id uuid NOT NULL,
-    CONSTRAINT crm_identity_exceptions_channel_chk CHECK ((channel = ANY (ARRAY['email'::text, 'linkedin'::text, 'whatsapp'::text, 'instagram'::text]))),
+    CONSTRAINT crm_identity_exceptions_channel_chk CHECK ((channel = ANY (ARRAY['email'::text, 'linkedin'::text, 'whatsapp'::text, 'instagram'::text, 'browser'::text]))),
     CONSTRAINT crm_identity_exceptions_reason_chk CHECK ((length(btrim(reason)) > 0)),
     CONSTRAINT crm_identity_exceptions_resolution_chk CHECK ((((status = 'open'::text) AND (resolved_person_id IS NULL) AND (resolved_at IS NULL)) OR ((status = 'resolved'::text) AND (resolved_person_id IS NOT NULL) AND (resolved_at IS NOT NULL)) OR ((status = 'ignored'::text) AND (resolved_person_id IS NULL) AND (resolved_at IS NOT NULL)))),
     CONSTRAINT crm_identity_exceptions_status_chk CHECK ((status = ANY (ARRAY['open'::text, 'resolved'::text, 'ignored'::text])))
@@ -1817,7 +1888,7 @@ CREATE TABLE public.crm_records (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     organization_id uuid NOT NULL,
-    CONSTRAINT crm_records_active_channel_chk CHECK (((active_channel IS NULL) OR (active_channel = ANY (ARRAY['email'::text, 'linkedin'::text, 'whatsapp'::text, 'instagram'::text])))),
+    CONSTRAINT crm_records_active_channel_chk CHECK (((active_channel IS NULL) OR (active_channel = ANY (ARRAY['email'::text, 'linkedin'::text, 'whatsapp'::text, 'instagram'::text, 'browser'::text])))),
     CONSTRAINT crm_records_category_lock_chk CHECK (((category_locked IS FALSE) OR (NOT (category_key IS DISTINCT FROM 'customer'::text)))),
     CONSTRAINT crm_records_category_source_chk CHECK (((category_source IS NULL) OR (category_source = ANY (ARRAY['ai'::text, 'human'::text, 'integration'::text])))),
     CONSTRAINT crm_records_category_source_presence_chk CHECK (((category_key IS NULL) = (category_source IS NULL))),
@@ -2101,7 +2172,7 @@ CREATE TABLE public.crm_wrong_routes (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT crm_wrong_routes_ack_status_chk CHECK ((ack_status = ANY (ARRAY['none'::text, 'drafted'::text, 'reserved'::text, 'sending'::text, 'sent'::text, 'failed'::text, 'uncertain'::text, 'blocked'::text]))),
-    CONSTRAINT crm_wrong_routes_channel_chk CHECK ((channel = ANY (ARRAY['email'::text, 'whatsapp'::text, 'linkedin'::text, 'instagram'::text]))),
+    CONSTRAINT crm_wrong_routes_channel_chk CHECK ((channel = ANY (ARRAY['email'::text, 'whatsapp'::text, 'linkedin'::text, 'instagram'::text, 'browser'::text]))),
     CONSTRAINT crm_wrong_routes_route_chk CHECK ((length(btrim(route)) > 0)),
     CONSTRAINT crm_wrong_routes_source_chk CHECK ((source = ANY (ARRAY['reply_agent'::text, 'classifier'::text, 'human'::text])))
 );
@@ -2710,7 +2781,7 @@ CREATE TABLE public.lead_first_contacts (
     person_id uuid NOT NULL,
     first_at timestamp with time zone NOT NULL,
     channel text NOT NULL,
-    CONSTRAINT lead_first_contacts_channel_chk CHECK ((channel = ANY (ARRAY['email'::text, 'linkedin'::text, 'whatsapp'::text, 'instagram'::text])))
+    CONSTRAINT lead_first_contacts_channel_chk CHECK ((channel = ANY (ARRAY['email'::text, 'linkedin'::text, 'whatsapp'::text, 'instagram'::text, 'browser'::text])))
 );
 
 --
@@ -2883,7 +2954,7 @@ CREATE TABLE public.outreach_run_leads (
     stop_reason text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT outreach_run_leads_channel_chk CHECK ((channel = ANY (ARRAY['email'::text, 'whatsapp'::text, 'linkedin'::text, 'instagram'::text]))),
+    CONSTRAINT outreach_run_leads_channel_chk CHECK ((channel = ANY (ARRAY['email'::text, 'whatsapp'::text, 'linkedin'::text, 'instagram'::text, 'browser'::text]))),
     CONSTRAINT outreach_run_leads_status_chk CHECK ((status = ANY (ARRAY['active'::text, 'stopped'::text, 'opted_out'::text])))
 );
 
@@ -3674,6 +3745,34 @@ ALTER TABLE ONLY public.autopilot_takeovers
 
 ALTER TABLE ONLY public.brightdata_settings
     ADD CONSTRAINT brightdata_settings_pkey PRIMARY KEY (organization_id);
+
+--
+-- Name: browser_contact_routes browser_contact_routes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.browser_contact_routes
+    ADD CONSTRAINT browser_contact_routes_pkey PRIMARY KEY (id);
+
+--
+-- Name: browser_contact_routes browser_contact_routes_org_site_handle_uq; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.browser_contact_routes
+    ADD CONSTRAINT browser_contact_routes_org_site_handle_uq UNIQUE (organization_id, site, handle);
+
+--
+-- Name: browser_outreach_sends browser_outreach_sends_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.browser_outreach_sends
+    ADD CONSTRAINT browser_outreach_sends_pkey PRIMARY KEY (id);
+
+--
+-- Name: browser_sender_accounts browser_sender_accounts_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.browser_sender_accounts
+    ADD CONSTRAINT browser_sender_accounts_pkey PRIMARY KEY (organization_id, user_id, site);
 
 --
 -- Name: browser_commands browser_commands_pkey; Type: CONSTRAINT; Schema: public; Owner: -
@@ -4991,6 +5090,42 @@ CREATE UNIQUE INDEX autopilot_takeovers_conversation_uq ON public.autopilot_take
 --
 
 CREATE INDEX autopilot_takeovers_organization_idx ON public.autopilot_takeovers USING btree (organization_id);
+
+--
+-- Name: browser_contact_routes_org_person_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX browser_contact_routes_org_person_idx ON public.browser_contact_routes USING btree (organization_id, person_id);
+
+--
+-- Name: browser_contact_routes_sync_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX browser_contact_routes_sync_idx ON public.browser_contact_routes USING btree (organization_id, synced_at) WHERE (thread_url IS NOT NULL);
+
+--
+-- Name: browser_outreach_sends_attempted_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX browser_outreach_sends_attempted_idx ON public.browser_outreach_sends USING btree (organization_id, user_id, attempted_at);
+
+--
+-- Name: browser_outreach_sends_draft_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX browser_outreach_sends_draft_uq ON public.browser_outreach_sends USING btree (draft_id) WHERE (kind = 'reply'::text);
+
+--
+-- Name: browser_outreach_sends_due_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX browser_outreach_sends_due_idx ON public.browser_outreach_sends USING btree (organization_id, status, due_at);
+
+--
+-- Name: browser_outreach_sends_run_person_step_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX browser_outreach_sends_run_person_step_uq ON public.browser_outreach_sends USING btree (run_id, person_id, step) WHERE (kind = 'step'::text);
 
 --
 -- Name: browser_commands_connection_seq_uq; Type: INDEX; Schema: public; Owner: -
@@ -6562,6 +6697,69 @@ ALTER TABLE ONLY public.autopilot_takeovers
 
 ALTER TABLE ONLY public.brightdata_settings
     ADD CONSTRAINT brightdata_settings_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
+
+--
+-- Name: browser_contact_routes browser_contact_routes_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.browser_contact_routes
+    ADD CONSTRAINT browser_contact_routes_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
+
+--
+-- Name: browser_contact_routes browser_contact_routes_person_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.browser_contact_routes
+    ADD CONSTRAINT browser_contact_routes_person_id_fkey FOREIGN KEY (person_id) REFERENCES public.people(id) ON DELETE CASCADE;
+
+--
+-- Name: browser_outreach_sends browser_outreach_sends_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.browser_outreach_sends
+    ADD CONSTRAINT browser_outreach_sends_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
+
+--
+-- Name: browser_outreach_sends browser_outreach_sends_person_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.browser_outreach_sends
+    ADD CONSTRAINT browser_outreach_sends_person_id_fkey FOREIGN KEY (person_id) REFERENCES public.people(id) ON DELETE CASCADE;
+
+--
+-- Name: browser_outreach_sends browser_outreach_sends_route_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.browser_outreach_sends
+    ADD CONSTRAINT browser_outreach_sends_route_id_fkey FOREIGN KEY (route_id) REFERENCES public.browser_contact_routes(id) ON DELETE CASCADE;
+
+--
+-- Name: browser_outreach_sends browser_outreach_sends_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.browser_outreach_sends
+    ADD CONSTRAINT browser_outreach_sends_run_id_fkey FOREIGN KEY (run_id) REFERENCES public.outreach_runs(id) ON DELETE CASCADE;
+
+--
+-- Name: browser_outreach_sends browser_outreach_sends_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.browser_outreach_sends
+    ADD CONSTRAINT browser_outreach_sends_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id);
+
+--
+-- Name: browser_sender_accounts browser_sender_accounts_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.browser_sender_accounts
+    ADD CONSTRAINT browser_sender_accounts_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id);
+
+--
+-- Name: browser_sender_accounts browser_sender_accounts_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.browser_sender_accounts
+    ADD CONSTRAINT browser_sender_accounts_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
 
 --
 -- Name: browser_commands browser_commands_connection_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -

@@ -1,4 +1,4 @@
-import { RiInstagramFill, RiLinkedinBoxFill, RiMailFill, RiWhatsappFill } from "@remixicon/react";
+import { RiGlobalLine, RiInstagramFill, RiLinkedinBoxFill, RiMailFill, RiWhatsappFill } from "@remixicon/react";
 import type { ComponentType } from "react";
 import type { AnalyticsChannel } from "@/lib/analytics/contract";
 
@@ -46,11 +46,13 @@ export const CHANNEL_META: Record<
  * which has conversations but no campaigns or analytics view of its own.
  */
 export const CONVERSATION_CHANNEL_META: Record<
-  AnalyticsChannel | "instagram",
+  AnalyticsChannel | "instagram" | "browser",
   { label: string; color: string; icon: ComponentType<{ className?: string }> }
 > = {
   ...CHANNEL_META,
   instagram: { label: "Instagram", color: HUE.pink, icon: RiInstagramFill },
+  // Messages sent through the owner's own signed-in Chrome (X, Instagram, Facebook, LinkedIn).
+  browser: { label: "Browser", color: HUE.purple, icon: RiGlobalLine },
 };
 
 /** Categorical slots after the three channel slots, in this order only. */

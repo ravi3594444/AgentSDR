@@ -45,7 +45,7 @@ describe("sending is always on: no channel has sending hours", () => {
         expect(result.ok ? "" : result.error).toContain("always on");
       }
     }
-    expect(RETIRED_RULE_KEYS).toEqual({ email: ["sendingHours", "sendGapMinutes"], linkedin: ["workingHours"], whatsapp: ["sendingHours"], instagram: ["sendingHours", "sendGapMinutes"], general: [] });
+    expect(RETIRED_RULE_KEYS).toEqual({ email: ["sendingHours", "sendGapMinutes"], linkedin: ["workingHours"], whatsapp: ["sendingHours"], instagram: ["sendingHours", "sendGapMinutes"], browser: [], general: [] });
   });
 
   test("stored hours are ignored when read and dropped by the next save", () => {

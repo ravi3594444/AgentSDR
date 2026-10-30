@@ -56,6 +56,14 @@ export const CHANNEL_RULES: Record<AudienceChannel, { steps: number; maxBody: nu
     defaultWaits: [0],
     describe: "Instagram: one initial direct message under 400 characters, conversational, no subject or formatting, one clear question. Do not write unsolicited follow-ups; replies use the run's Automatic or Review mode.",
   },
+  browser: {
+    steps: 2,
+    maxBody: 600,
+    subject: false,
+    waitUnit: "days",
+    defaultWaits: [0, 4],
+    describe: "Direct message on X, Instagram, Facebook or LinkedIn, sent through the owner's own account in their browser: a first message under 400 characters, conversational, no subject or formatting, one clear question, and one short follow-up if they have not replied.",
+  },
 };
 
 /** Tokens written as {{name}} in a template. */

@@ -7,11 +7,12 @@ import { crmConversationMessages, crmConversations } from "@/lib/crm/schema";
 import { people } from "@/lib/leads/schema";
 import { inOrg } from "@/lib/tenancy/scope";
 import type { RecipientRef } from "./routes";
+import { personOfRoute } from "./routes.server";
 
 /**
  * The saved person a recipient names, if any: by email, by a LinkedIn
  * profile, or by a social handle the leads database holds (people.raw
- * instagram.username). Unknown people are not refused:
+ * instagram.username, the recorded browser routes). Unknown people are not refused:
  * a message the owner asked for to someone not saved is still theirs to send.
  */
 export async function recipientPersonId(recipient: RecipientRef): Promise<string | null> {
@@ -31,7 +32,7 @@ export async function recipientPersonId(recipient: RecipientRef): Promise<string
       .where(and(inOrg(people), sql`lower(${people.raw}->'instagram'->>'username') = ${route.handle}`)).limit(1);
     if (row) return row.id;
   }
-  return null;
+  return personOfRoute(route.site, route.handle);
 }
 
 /** Whether the recipient is someone the workspace must not contact (Do Not Contact, on every channel). */

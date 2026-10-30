@@ -38,6 +38,8 @@ export * from "./quota/schema";
 export * from "./browser/schema";
 // Connected-browser research: a person's own Chrome and the commands queued for it.
 export * from "./browser/connected/schema";
+// Browser outreach: contact routes, sender accounts and the send queue (src/lib/browserOutreach/).
+export * from "./browserOutreach/schema";
 export * from "./activity/schema";
 
 // Web research about imported companies (src/lib/research/).

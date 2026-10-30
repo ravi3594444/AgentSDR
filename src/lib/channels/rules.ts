@@ -35,7 +35,7 @@
 
 import { resolveTimeZone } from "@/lib/timeZone";
 
-export const CHANNELS = ["email", "linkedin", "whatsapp", "instagram", "general"] as const;
+export const CHANNELS = ["email", "linkedin", "whatsapp", "instagram", "browser", "general"] as const;
 export type Channel = (typeof CHANNELS)[number];
 
 /**
@@ -49,6 +49,7 @@ export const RETIRED_RULE_KEYS: Record<Channel, readonly string[]> = {
   linkedin: ["workingHours"],
   whatsapp: ["sendingHours"],
   instagram: ["sendingHours", "sendGapMinutes"],
+  browser: [],
   general: [],
 };
 
@@ -259,6 +260,12 @@ export const CHANNEL_RULES = {
   instagram: [
     { key: "newChatsPerDay", kind: "number", label: "New conversations per account", help: "Initial outreach DMs one connected Instagram account may attempt in a rolling 24 hours. Replies use the run's reply limits.", unit: "new chats / 24 hours", default: 10, min: 1, max: 100 },
     { key: "secondsBetweenSends", kind: "number", label: "Time between initial DMs", help: "The minimum time between initial outreach messages from the same account. Daily limits still apply.", unit: "seconds", default: 30, min: 3, max: 86400 },
+  ],
+  // Direct messages through the owner's own signed-in Chrome (src/lib/browserOutreach/courier.server.ts).
+  browser: [
+    { key: "newChatsPerDay", kind: "number", label: "New conversations per site account", help: "First messages one person's browser may start on one site (X, Instagram, Facebook or LinkedIn) in a rolling 24 hours. Follow-ups and replies do not count.", unit: "new chats / 24 hours", default: 15, min: 1, max: 100, safe: { above: 25 }, warning: "Social sites restrict accounts that start many new conversations a day." },
+    { key: "secondsBetweenSends", kind: "number", label: "Time between browser messages", help: "The shortest gap between two messages sent from the same browser.", unit: "seconds", default: 120, min: 30, max: 86400 },
+    { key: "replyCheckMinutes", kind: "number", label: "How often conversations are read for replies", help: "Sites without webhooks are read in the owner's browser for replies, at most this often per conversation, while the browser is connected.", unit: "minutes", default: 30, min: 10, max: 1440 },
   ],
   general: [
     {

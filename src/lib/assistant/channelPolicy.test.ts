@@ -3,9 +3,9 @@ import { channelPolicy, ownerChannels, planChannelsLine, unreachableReason } fro
 
 describe("the channels the owner's own words name", () => {
   test("a general request names none, even when it names where to search", () => {
-    expect(ownerChannels("start outreach find B2B business owners, real estate founders, etc., and people who do not have a website; outreach them")).toEqual({ only: [], excluded: [] });
-    expect(ownerChannels("find real estate founders on LinkedIn and contact them")).toEqual({ only: [], excluded: [] });
-    expect(ownerChannels("find dentists in Pune on Google Maps and Instagram, reach out to them")).toEqual({ only: [], excluded: [] });
+    expect(ownerChannels("start outreach find B2B business owners, real estate founders, etc., and people who do not have a website; outreach them")).toEqual({ only: [], excluded: [], sites: [] });
+    expect(ownerChannels("find real estate founders on LinkedIn and contact them")).toEqual({ only: [], excluded: [], sites: [] });
+    expect(ownerChannels("find dentists in Pune on Google Maps and Instagram, reach out to them")).toEqual({ only: [], excluded: [], sites: [] });
   });
 
   test("how to contact them, in the owner's words", () => {
@@ -28,13 +28,13 @@ describe("the channels the owner's own words name", () => {
 describe("the channel order a plan uses", () => {
   test("a general request keeps every route: the model's choice only goes first", () => {
     const policy = channelPolicy({ requested: ["whatsapp"], ownerText: "find B2B business owners and outreach them" });
-    expect(policy.order).toEqual(["whatsapp", "email", "linkedin", "instagram"]);
+    expect(policy.order).toEqual(["whatsapp", "email", "linkedin", "instagram", "browser"]);
     expect(policy.restricted).toBe(false);
   });
 
   test("with nothing chosen, the saved preference then the default order", () => {
-    expect(channelPolicy({ requested: [], ownerText: "contact them" }).order).toEqual(["email", "whatsapp", "linkedin", "instagram"]);
-    expect(channelPolicy({ requested: [], ownerText: "contact them", preferred: ["linkedin"] }).order).toEqual(["linkedin", "email", "whatsapp", "instagram"]);
+    expect(channelPolicy({ requested: [], ownerText: "contact them" }).order).toEqual(["email", "whatsapp", "linkedin", "instagram", "browser"]);
+    expect(channelPolicy({ requested: [], ownerText: "contact them", preferred: ["linkedin"] }).order).toEqual(["linkedin", "email", "whatsapp", "instagram", "browser"]);
     expect(channelPolicy({ requested: [], ownerText: "contact them", preferred: ["whatsapp"] }).restricted).toBe(false);
   });
 
@@ -48,24 +48,24 @@ describe("the channel order a plan uses", () => {
 
   test("a channel the owner ruled out is never used", () => {
     const policy = channelPolicy({ requested: ["email"], ownerText: "contact them, but don't email them" });
-    expect(policy.order).toEqual(["whatsapp", "linkedin", "instagram"]);
+    expect(policy.order).toEqual(["whatsapp", "linkedin", "instagram", "browser"]);
     expect(policy.restricted).toBe(true);
     expect(policy.note).toBe("you asked not to use email");
   });
 
   test("an earlier run's channels lead a follow-on plan without restricting it", () => {
-    expect(channelPolicy({ requested: [], ownerText: "contact more of them", base: ["whatsapp"] }).order).toEqual(["whatsapp", "email", "linkedin", "instagram"]);
+    expect(channelPolicy({ requested: [], ownerText: "contact more of them", base: ["whatsapp"] }).order).toEqual(["whatsapp", "email", "linkedin", "instagram", "browser"]);
   });
 });
 
 test("a word that only contains a channel's name is not one", () => {
-  expect(ownerChannels("leave them a voicemail, reach out to them")).toEqual({ only: [], excluded: [] });
-  expect(ownerChannels("for instance, contact them")).toEqual({ only: [], excluded: [] });
+  expect(ownerChannels("leave them a voicemail, reach out to them")).toEqual({ only: [], excluded: [], sites: [] });
+  expect(ownerChannels("for instance, contact them")).toEqual({ only: [], excluded: [], sites: [] });
 });
 
 describe("why a lead gets no channel", () => {
   const ready = { available: true, reason: null };
-  const availability = { email: { available: false, reason: "no connected mailbox" }, whatsapp: ready, linkedin: ready, instagram: { available: false, reason: "no Instagram account linked" } };
+  const availability = { email: { available: false, reason: "no connected mailbox" }, whatsapp: ready, linkedin: ready, instagram: { available: false, reason: "no Instagram account linked" }, browser: { available: false, reason: "no browser is connected" } };
 
   test("the owner left its only route out", () => {
     const policy = channelPolicy({ requested: [], ownerText: "message them on WhatsApp" });
@@ -79,7 +79,7 @@ describe("why a lead gets no channel", () => {
 
   test("both at once, named separately", () => {
     const policy = channelPolicy({ requested: [], ownerText: "contact them, but don't use WhatsApp or LinkedIn" });
-    expect(policy.order).toEqual(["email", "instagram"]);
+    expect(policy.order).toEqual(["email", "instagram", "browser"]);
     expect(unreachableReason(["whatsapp", "email"], policy, availability)).toBe("reachable only by WhatsApp or email: WhatsApp is not used in this run (you asked not to use WhatsApp or LinkedIn); email cannot send yet (no connected mailbox)");
   });
 });
@@ -93,4 +93,30 @@ test("the plan line names the channels used and the main reasons people were lef
   expect(planChannelsLine(plan)).toBe("3 leads (WhatsApp 2, email 1), each on its best ready channel; left out: 4 reachable only by LinkedIn, which cannot send yet (no LinkedIn account connected); 1 on Do Not Contact");
   expect(planChannelsLine({ assignments: plan.assignments.slice(0, 1), excluded: [{ reason: "reachable only by email, which is not used in this run (you asked for WhatsApp)", count: 22 }], channelNote: "you asked for WhatsApp" }))
     .toBe("1 lead (WhatsApp 1), only the channels you named (you asked for WhatsApp); left out: 22 reachable only by email, which is not used in this run (you asked for WhatsApp)");
+});
+
+describe("the owner's browser as the channel", () => {
+  test("“using my browser” makes the browser the only channel; sites named beside it are where it goes", () => {
+    expect(ownerChannels("find SaaS founders and outreach them using my browser")).toEqual({ only: ["browser"], excluded: [], sites: [] });
+    expect(ownerChannels("message them on Instagram from my own Chrome")).toEqual({ only: ["browser"], excluded: [], sites: ["instagram"] });
+    expect(ownerChannels("DM them on LinkedIn through the browser extension")).toEqual({ only: ["browser"], excluded: [], sites: ["linkedin"] });
+    const policy = channelPolicy({ requested: ["email"], ownerText: "find founders and message them using my browser" });
+    expect(policy.order).toEqual(["browser"]);
+    expect(policy.note).toBe("you asked for your browser");
+  });
+
+  test("X or Facebook named: only the browser reaches them", () => {
+    expect(ownerChannels("find indie hackers on X and message them")).toEqual({ only: ["browser"], excluded: [], sites: ["x"] });
+    expect(ownerChannels("send them a Facebook message")).toMatchObject({ only: ["browser"], sites: ["facebook"] });
+    expect(channelPolicy({ requested: [], ownerText: "reach out to them on Twitter" })).toMatchObject({ order: ["browser"], browserSites: ["x"] });
+    // "X" as a letter or a word is not the site.
+    expect(ownerChannels("find X-ray clinics and email them").sites).toEqual([]);
+    expect(ownerChannels("find 10 leads, X marks the spot").only).toEqual([]);
+  });
+
+  test("ruled out, the browser is not used; unnamed, it comes last", () => {
+    expect(ownerChannels("contact them but don't use my browser")).toMatchObject({ excluded: ["browser"] });
+    expect(channelPolicy({ requested: [], ownerText: "contact them but don't use my browser" }).order).not.toContain("browser");
+    expect(channelPolicy({ requested: [], ownerText: "reach out to them" }).order.at(-1)).toBe("browser");
+  });
 });

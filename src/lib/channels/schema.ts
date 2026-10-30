@@ -41,11 +41,11 @@ export const leadFirstContacts = pgTable(
       .notNull()
       .references(() => people.id, { onDelete: "cascade" }),
     firstAt: timestamp("first_at", { withTimezone: true }).notNull(),
-    channel: text("channel").notNull().$type<"email" | "linkedin" | "whatsapp" | "instagram">(),
+    channel: text("channel").notNull().$type<"email" | "linkedin" | "whatsapp" | "instagram" | "browser">(),
   },
   (table) => [
     primaryKey({ name: "lead_first_contacts_pkey", columns: [table.organizationId, table.personId] }),
     index("lead_first_contacts_day_idx").on(table.organizationId, table.firstAt),
-    check("lead_first_contacts_channel_chk", sql`${table.channel} IN ('email', 'linkedin', 'whatsapp', 'instagram')`),
+    check("lead_first_contacts_channel_chk", sql`${table.channel} IN ('email', 'linkedin', 'whatsapp', 'instagram', 'browser')`),
   ],
 );

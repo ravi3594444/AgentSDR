@@ -80,9 +80,9 @@ export function visibleLength(text: string): number {
  * PERSONAL_LINE_LIMITS, a first WhatsApp stays around 400 characters: what
  * one phone screen shows before "read more".
  */
-export const FIRST_MESSAGE_LIMITS: Record<AudienceChannel, number> = { whatsapp: 260, linkedin: 400, instagram: 260, email: 900 };
+export const FIRST_MESSAGE_LIMITS: Record<AudienceChannel, number> = { whatsapp: 260, linkedin: 400, instagram: 260, email: 900, browser: 260 };
 /** How long the per-lead opening line may be on each channel. */
-export const PERSONAL_LINE_LIMITS: Record<AudienceChannel, number> = { whatsapp: 120, linkedin: 120, instagram: 120, email: 200 };
+export const PERSONAL_LINE_LIMITS: Record<AudienceChannel, number> = { whatsapp: 120, linkedin: 120, instagram: 120, email: 200, browser: 120 };
 /** More items than this in one sentence is a list of everything. */
 export const MAX_LIST_ITEMS = 3;
 

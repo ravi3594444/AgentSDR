@@ -101,6 +101,9 @@ export const SCOPED_TABLES: readonly ScopedTable[] = [
   snake("browser_sessions"),
   snake("browser_connections"),
   snake("browser_commands"),
+  snake("browser_contact_routes"),
+  snake("browser_sender_accounts"),
+  snake("browser_outreach_sends"),
   snake("activity_seen"),
   snake("research_settings"),
   // Included service or My own provider, per service (src/lib/managed/)

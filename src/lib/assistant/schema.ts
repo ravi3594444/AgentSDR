@@ -145,7 +145,7 @@ export const leadAudiences = pgTable(
   ],
 );
 
-export type AudienceChannel = "email" | "whatsapp" | "linkedin" | "instagram";
+export type AudienceChannel = "email" | "whatsapp" | "linkedin" | "instagram" | "browser";
 
 /** Where a contact detail came from: the page or listing a person can open to check it. */
 export type ContactEvidence = {
@@ -527,7 +527,7 @@ export const outreachRunLeads = pgTable(
   (t) => [
     uniqueIndex("outreach_run_leads_run_person_uq").on(t.runId, t.personId),
     index("outreach_run_leads_person_idx").on(t.organizationId, t.personId),
-    check("outreach_run_leads_channel_chk", sql`${t.channel} IN ('email', 'whatsapp', 'linkedin', 'instagram')`),
+    check("outreach_run_leads_channel_chk", sql`${t.channel} IN ('email', 'whatsapp', 'linkedin', 'instagram', 'browser')`),
     check("outreach_run_leads_status_chk", sql`${t.status} IN ('active', 'stopped', 'opted_out')`),
   ],
 );

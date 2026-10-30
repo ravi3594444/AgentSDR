@@ -240,7 +240,7 @@ export const crmIdentityExceptions = pgTable(
     }).onDelete("restrict"),
     unique("crm_identity_exceptions_event_uq").on(table.channel, table.accountRef, table.sourceEventKey),
     index("crm_identity_exceptions_status_created_idx").on(table.status, table.createdAt),
-    check("crm_identity_exceptions_channel_chk", sql`${table.channel} IN ('email', 'linkedin', 'whatsapp', 'instagram')`),
+    check("crm_identity_exceptions_channel_chk", sql`${table.channel} IN ('email', 'linkedin', 'whatsapp', 'instagram', 'browser')`),
     check("crm_identity_exceptions_status_chk", sql`${table.status} IN ('open', 'resolved', 'ignored')`),
     check("crm_identity_exceptions_reason_chk", sql`length(btrim(${table.reason})) > 0`),
     check("crm_identity_exceptions_resolution_chk", sql`
@@ -328,7 +328,7 @@ export const crmRecords = pgTable(
     ),
     check(
       "crm_records_active_channel_chk",
-      sql`${table.activeChannel} IS NULL OR ${table.activeChannel} IN ('email', 'linkedin', 'whatsapp', 'instagram')`,
+      sql`${table.activeChannel} IS NULL OR ${table.activeChannel} IN ('email', 'linkedin', 'whatsapp', 'instagram', 'browser')`,
     ),
     check("crm_records_context_version_chk", sql`${table.contextVersion} >= 0`),
     check(
@@ -391,7 +391,7 @@ export const crmConversations = pgTable(
       .on(table.channel, table.accountRef, table.providerThreadId)
       .where(sql`${table.providerThreadId} IS NOT NULL`),
     index("crm_conversations_record_idx").on(table.crmRecordId),
-    check("crm_conversations_channel_chk", sql`${table.channel} IN ('email', 'linkedin', 'whatsapp', 'instagram')`),
+    check("crm_conversations_channel_chk", sql`${table.channel} IN ('email', 'linkedin', 'whatsapp', 'instagram', 'browser')`),
     check("crm_conversations_status_chk", sql`${table.status} IN ('active', 'closed')`),
     check("crm_conversations_account_ref_chk", sql`length(btrim(${table.accountRef})) > 0`),
   ],
@@ -436,7 +436,7 @@ export const crmConversationMessages = pgTable(
       .on(table.channel, table.accountRef, table.providerMessageId)
       .where(sql`${table.providerMessageId} IS NOT NULL`),
     index("crm_conversation_messages_conversation_idx").on(table.conversationId, table.sentAt),
-    check("crm_conversation_messages_channel_chk", sql`${table.channel} IN ('email', 'linkedin', 'whatsapp', 'instagram')`),
+    check("crm_conversation_messages_channel_chk", sql`${table.channel} IN ('email', 'linkedin', 'whatsapp', 'instagram', 'browser')`),
     check("crm_conversation_messages_direction_chk", sql`${table.direction} IN ('inbound', 'outbound')`),
     check("crm_conversation_messages_idempotency_chk", sql`length(btrim(${table.idempotencyKey})) > 0`),
     check("crm_conversation_messages_body_chk", sql`length(btrim(${table.bodyText})) > 0`),
@@ -763,7 +763,7 @@ export const crmWrongRoutes = pgTable(
     uniqueIndex("crm_wrong_routes_org_route_uq").on(table.organizationId, table.channel, table.route),
     index("crm_wrong_routes_person_idx").on(table.organizationId, table.personId),
     uniqueIndex("crm_wrong_routes_ack_draft_uq").on(table.ackDraftId).where(sql`${table.ackDraftId} IS NOT NULL`),
-    check("crm_wrong_routes_channel_chk", sql`${table.channel} IN ('email', 'whatsapp', 'linkedin', 'instagram')`),
+    check("crm_wrong_routes_channel_chk", sql`${table.channel} IN ('email', 'whatsapp', 'linkedin', 'instagram', 'browser')`),
     check("crm_wrong_routes_route_chk", sql`length(btrim(${table.route})) > 0`),
     check("crm_wrong_routes_source_chk", sql`${table.source} IN ('reply_agent', 'classifier', 'human')`),
     check("crm_wrong_routes_ack_status_chk", sql`${table.ackStatus} IN ('none', 'drafted', 'reserved', 'sending', 'sent', 'failed', 'uncertain', 'blocked')`),
@@ -946,10 +946,11 @@ export const crmDrafts = pgTable(
     index("crm_drafts_record_status_idx").on(table.crmRecordId, table.status),
     check("crm_drafts_context_chk", sql`${table.expectedContextVersion} >= 0`),
     check("crm_drafts_revision_chk", sql`${table.revision} > 0`),
-    check("crm_drafts_channel_chk", sql`${table.channel} IN ('email', 'linkedin', 'whatsapp', 'instagram')`),
+    check("crm_drafts_channel_chk", sql`${table.channel} IN ('email', 'linkedin', 'whatsapp', 'instagram', 'browser')`),
     check("crm_drafts_linkedin_subject_chk", sql`${table.channel} <> 'linkedin' OR ${table.subject} IS NULL`),
     check("crm_drafts_whatsapp_subject_chk", sql`${table.channel} <> 'whatsapp' OR ${table.subject} IS NULL`),
     check("crm_drafts_instagram_subject_chk", sql`${table.channel} <> 'instagram' OR ${table.subject} IS NULL`),
+    check("crm_drafts_browser_subject_chk", sql`${table.channel} <> 'browser' OR ${table.subject} IS NULL`),
     check("crm_drafts_status_chk", sql`${table.status} IN ('generating', 'awaiting_review', 'sending', 'sent', 'discarded', 'stale', 'failed', 'delivery_uncertain')`),
   ],
 );

@@ -86,7 +86,7 @@ function languageName(code: string): string {
 
 function toForm(profile: BusinessProfile): FormValues {
   const text = Object.fromEntries(PROFILE_TEXT_FIELDS.map((key) => [key, profile[key] ?? ""])) as Record<TextField, string>;
-  return { ...text, preferredChannels: [...(profile.preferredChannels ?? [])] };
+  return { ...text, preferredChannels: (profile.preferredChannels ?? []).filter((channel): channel is Channel => (PROFILE_CHANNELS as readonly string[]).includes(channel)) };
 }
 
 /** The fields that differ from what is saved, as the PATCH body ("" clears a field). */

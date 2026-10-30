@@ -1,3 +1,4 @@
+import { MESSAGING_SITE_NAMES as SITE_NAMES, type MessagingSite } from "@/lib/browserOutreach/routes";
 import type { AudienceChannel, OutreachPlan } from "./schema";
 
 /**
@@ -11,10 +12,16 @@ import type { AudienceChannel, OutreachPlan } from "./schema";
  * channel in the order that it can be reached on.
  */
 
-/** Every channel a plan can use, in the default order. */
-export const CHANNEL_ORDER: readonly AudienceChannel[] = ["email", "whatsapp", "linkedin", "instagram"];
+/**
+ * Every channel a plan can use, in the default order. "browser" (a direct
+ * message through the owner's own signed-in Chrome) comes last: a lead
+ * another channel reaches gets that one, unless the owner asks for their
+ * browser; a lead only the browser reaches (an X or Facebook profile, or no
+ * Unipile) gets the browser.
+ */
+export const CHANNEL_ORDER: readonly AudienceChannel[] = ["email", "whatsapp", "linkedin", "instagram", "browser"];
 
-export const CHANNEL_NAMES: Record<AudienceChannel, string> = { email: "email", whatsapp: "WhatsApp", linkedin: "LinkedIn", instagram: "Instagram" };
+export const CHANNEL_NAMES: Record<AudienceChannel, string> = { email: "email", whatsapp: "WhatsApp", linkedin: "LinkedIn", instagram: "Instagram", browser: "your browser" };
 
 const CHANNEL = String.raw`\b(e-?mails?|whats\s?app|linked\s?in|instagram|insta)\b`;
 const CONTACT_VERB = String.raw`\b(?:contact|message|reach(?:\s+out)?|pitch|outreach|write|send|dm|text|connect|invite|approach|follow\s+up|ping)\b`;
@@ -29,8 +36,44 @@ function channelOf(word: string): AudienceChannel {
   return "instagram";
 }
 
+// "using my browser", "from my Chrome", "with my own browser", "through the browser extension".
+const BROWSER_TRANSPORT = /\b(?:my|our)\s+(?:own\s+)?(?:signed[- ]in\s+)?(?:browser|chrome)\b|\b(?:the\s+)?(?:browser|chrome)\s+(?:extension|assistant)\b|\bthrough\s+(?:the\s+)?browser\b/i;
+const BROWSER_NEGATION = /\b(?:don'?t|do\s+not|never|not|no|without)\s+(?:use\s+|using\s+|send(?:ing)?\s+(?:from|through|with)\s+)?$/i;
+/** Sites the browser messages on, as the owner names them; X only as "on X", "X DMs" or its old name. */
+const SITE_WORDS: { site: MessagingSite; pattern: RegExp }[] = [
+  { site: "x", pattern: /\b(?:[Tt]witter|TWITTER|[xX]\.com)\b|\b(?:on|via|through|over)\s+X\b|\bX\s+(?:DMs?|messages?|profiles?|accounts?)\b/ },
+  { site: "facebook", pattern: /\b(?:facebook|fb|messenger)\b/i },
+  { site: "instagram", pattern: /\b(?:instagram|insta)\b/i },
+  { site: "linkedin", pattern: /\blinked\s?in\b/i },
+];
+
+/**
+ * The browser in the owner's words: `named` when they asked for their
+ * browser (or for X or Facebook, which only the browser reaches), `refused`
+ * when they ruled it out, and the sites they named for it.
+ */
+export function ownerBrowser(text: string): { named: boolean; refused: boolean; sites: MessagingSite[] } {
+  const words = ` ${text.replace(/\s+/g, " ")} `;
+  const transport = BROWSER_TRANSPORT.exec(words);
+  const refused = Boolean(transport && BROWSER_NEGATION.test(words.slice(Math.max(0, transport.index - 30), transport.index)));
+  const sites = SITE_WORDS.filter((entry) => entry.pattern.test(words)).map((entry) => entry.site);
+  const browserOnly = sites.some((site) => site === "x" || site === "facebook") && new RegExp(CONTACT_VERB, "i").test(words);
+  return { named: !refused && (Boolean(transport) || browserOnly), refused, sites: refused ? [] : sites };
+}
+
 /** The channels the owner's words ask for (`only`) and rule out (`excluded`), in the order they are named. */
-export function ownerChannels(text: string): { only: AudienceChannel[]; excluded: AudienceChannel[] } {
+export function ownerChannels(text: string): { only: AudienceChannel[]; excluded: AudienceChannel[]; sites: MessagingSite[] } {
+  const browser = ownerBrowser(text);
+  const named = ownerUnipileChannels(text);
+  if (browser.refused) return { only: named.only, excluded: [...named.excluded, "browser"], sites: [] };
+  // Asked for the browser: LinkedIn or Instagram named beside it are where the browser goes, not Unipile channels.
+  if (browser.named && BROWSER_TRANSPORT.test(text)) return { only: ["browser", ...named.only.filter((channel) => channel !== "linkedin" && channel !== "instagram")], excluded: named.excluded, sites: browser.sites };
+  // X or Facebook named: only the browser reaches them, beside whatever else was asked for.
+  if (browser.named) return { only: [...named.only, "browser"], excluded: named.excluded, sites: browser.sites.filter((site) => site === "x" || site === "facebook" || !named.only.includes(site)) };
+  return { ...named, sites: [] };
+}
+
+function ownerUnipileChannels(text: string): { only: AudienceChannel[]; excluded: AudienceChannel[] } {
   const words = ` ${text.replace(/\s+/g, " ")} `;
   const only: AudienceChannel[] = [];
   const excluded: AudienceChannel[] = [];
@@ -76,6 +119,8 @@ function unique(channels: readonly AudienceChannel[]): AudienceChannel[] {
 export type ChannelPolicy = {
   /** The channels the plan may use, first choice first. */
   order: AudienceChannel[];
+  /** The sites the browser may message on, as the owner named them; null: any messaging site. */
+  browserSites?: MessagingSite[] | null;
   /** True when the owner's words limited the channels (named some, or ruled some out). */
   restricted: boolean;
   /** Why channels are left out, in the owner's terms ("you asked for WhatsApp"), for the plan's summary and its excluded reasons; null for a general request. */
@@ -84,14 +129,16 @@ export type ChannelPolicy = {
 
 export function channelPolicy(input: { requested: readonly AudienceChannel[]; ownerText: string; preferred?: readonly AudienceChannel[]; base?: readonly AudienceChannel[] }): ChannelPolicy {
   const named = ownerChannels(input.ownerText);
-  const order = unique([...input.requested, ...(input.base ?? []), ...(input.preferred ?? []), ...CHANNEL_ORDER]);
+  const browserSites = named.sites.length ? named.sites : null;
+  // Named, the browser comes first among what was asked for: "using my browser" means it sends.
+  const order = unique([...(named.only.includes("browser") ? ["browser" as const] : []), ...input.requested, ...(input.base ?? []), ...(input.preferred ?? []), ...CHANNEL_ORDER]);
   if (named.only.length) {
-    return { order: order.filter((channel) => named.only.includes(channel)), restricted: true, note: `you asked for ${channelList(named.only)}` };
+    return { order: order.filter((channel) => named.only.includes(channel)), restricted: true, note: `you asked for ${channelList(named.only)}${named.only.includes("browser") && browserSites ? ` on ${browserSites.map((site) => SITE_NAMES[site]).join(" or ")}` : ""}`, browserSites };
   }
   if (named.excluded.length) {
-    return { order: order.filter((channel) => !named.excluded.includes(channel)), restricted: true, note: `you asked not to use ${channelList(named.excluded)}` };
+    return { order: order.filter((channel) => !named.excluded.includes(channel)), restricted: true, note: `you asked not to use ${channelList(named.excluded)}`, browserSites: null };
   }
-  return { order, restricted: false, note: null };
+  return { order, restricted: false, note: null, browserSites: null };
 }
 
 export function channelList(channels: readonly AudienceChannel[]): string {

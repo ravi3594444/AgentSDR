@@ -6,7 +6,9 @@ import type { AudienceChannel } from "./schema";
  * Which channels can reach a lead, or why none can. Pure, shared by the
  * contact-list import and lead discovery, so both enter outreach on the same
  * rules: an email needs a valid address that is not unsubscribed or
- * bounced; WhatsApp a normalized (E.164) phone; LinkedIn a profile URL.
+ * bounced; WhatsApp a normalized (E.164) phone; LinkedIn a profile URL;
+ * the browser a profile on X, Instagram, Facebook or LinkedIn the owner's
+ * browser has not found unable to take a message.
  * Do Not Contact excludes the lead from every channel; a route recorded as
  * a wrong number (crm_wrong_routes) excludes that channel only.
  */
@@ -20,6 +22,8 @@ export type ContactFacts = {
   emailSuppressed: boolean;
   /** Channels whose route for this lead was recorded as a wrong number. */
   wrongChannels?: readonly AudienceChannel[];
+  /** Sites where the owner's browser can message them (browserOutreach/routes.server.ts). */
+  browserSites?: readonly string[];
 };
 
 export function contactChannels(facts: ContactFacts): { channels: AudienceChannel[]; reason: string | null } {
@@ -33,11 +37,12 @@ export function contactChannels(facts: ContactFacts): { channels: AudienceChanne
   if (facts.phone && /^\+\d{7,15}$/.test(facts.phone)) channels.push("whatsapp");
   if (facts.linkedinUrl) channels.push("linkedin");
   if (instagramUsername(facts.instagramUsername)) channels.push("instagram");
+  if (facts.browserSites?.length) channels.push("browser");
   const wrong = new Set(facts.wrongChannels ?? []);
   const open = channels.filter((channel) => !wrong.has(channel));
   if (open.length < channels.length) notes.push("wrong number");
   if (open.length) return { channels: open, reason: null };
-  return { channels: open, reason: notes[0] ?? "no email, phone, LinkedIn or Instagram profile" };
+  return { channels: open, reason: notes[0] ?? "no email, phone, LinkedIn, Instagram or other social profile" };
 }
 
 /** Exclusion reasons counted, largest first: "12 × no public email or phone". */

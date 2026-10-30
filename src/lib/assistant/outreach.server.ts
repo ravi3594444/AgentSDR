@@ -1,5 +1,7 @@
 import "server-only";
 
+import { browserChannelStatus } from "@/lib/browserOutreach/availability.server";
+import type { MessagingSite } from "@/lib/browserOutreach/routes";
 import { randomUUID } from "node:crypto";
 import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
@@ -81,8 +83,12 @@ export class OutreachCoveredError extends OutreachError {
 
 export type ChannelStatus = { available: boolean; reason: string | null; senders: number; perSenderPerDay: number | null };
 
-/** Which channels can send right now, how many senders each has, and their daily allowance. */
-export async function channelAvailability(): Promise<Record<AudienceChannel, ChannelStatus> & { signatureAppended: boolean; whatsappAccountIds: string[]; linkedinAccountIds: string[]; instagramAccountIds: string[] }> {
+/**
+ * Which channels can send right now, how many senders each has, and their
+ * daily allowance. `browserUserId`: whose connected browser would send
+ * (the chat's person); without it, the workspace's most recently paired one.
+ */
+export async function channelAvailability(browserUserId: string | null = null): Promise<Record<AudienceChannel, ChannelStatus> & { signatureAppended: boolean; whatsappAccountIds: string[]; linkedinAccountIds: string[]; instagramAccountIds: string[]; browserUserId: string | null; browserSites: MessagingSite[] }> {
   const connectedMailboxes = await db.select({ provider: mailboxes.provider, limit: mailboxes.dailySendLimit, signature: mailboxes.signatureHtml })
     .from(mailboxes).where(and(inOrg(mailboxes), eq(mailboxes.status, "connected")));
   const sendable = [];
@@ -98,7 +104,7 @@ export async function channelAvailability(): Promise<Record<AudienceChannel, Cha
   const instagramReady = instagramEnabled && await instagramOutreachReady();
   const instagram = unipile && instagramReady
     ? await db.select({ id: instagramAccounts.id }).from(instagramAccounts).where(and(inOrg(instagramAccounts), eq(instagramAccounts.status, "connected"))) : [];
-  const [whatsappRules, linkedinRules, instagramRules] = await Promise.all([channelRules("whatsapp"), channelRules("linkedin"), channelRules("instagram")]);
+  const [whatsappRules, linkedinRules, instagramRules, browser] = await Promise.all([channelRules("whatsapp"), channelRules("linkedin"), channelRules("instagram"), browserChannelStatus(browserUserId)]);
   return {
     email: {
       available: sendable.length > 0,
@@ -121,9 +127,12 @@ export async function channelAvailability(): Promise<Record<AudienceChannel, Cha
     signatureAppended: sendable.some((mailbox) => Boolean(mailbox.signature?.trim())),
     instagram: { available: instagram.length > 0, senders: instagram.length, perSenderPerDay: instagram.length ? Number(instagramRules.newChatsPerDay) : null,
       reason: !instagramEnabled ? "Instagram is off in Settings → Providers & features" : !instagramReady ? "Apply the Instagram outbound migration" : !unipile ? "Unipile is not connected" : instagram.length ? null : "no Instagram account is connected (Settings → Instagram accounts)" },
+    browser: { available: browser.available, reason: browser.reason, senders: browser.senders, perSenderPerDay: browser.perSenderPerDay },
     whatsappAccountIds: whatsapp.map((row) => row.id),
     linkedinAccountIds: linkedin.map((row) => row.id),
     instagramAccountIds: instagram.map((row) => row.id),
+    browserUserId: browser.userId,
+    browserSites: browser.sites,
   };
 }
 

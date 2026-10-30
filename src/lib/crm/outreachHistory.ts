@@ -326,6 +326,9 @@ async function loadPendingOutreach(
       return (await loadWhatsappOutreachRows(tx, input.personId, input.accountRef)).map(whatsappOutreachRowToMessageInput);
     case "instagram":
       return (await loadInstagramOutreachRows(tx, input.personId, input.accountRef)).map(instagramOutreachRowToMessageInput);
+    case "browser":
+      // Browser messages are recorded in the conversation when the courier confirms them; there is no earlier history to copy.
+      return [];
   }
 }
 

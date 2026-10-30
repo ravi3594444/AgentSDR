@@ -78,6 +78,15 @@ async function instagramQueueExists(): Promise<boolean> {
   return instagramQueue.exists;
 }
 
+/** The same for the browser outreach queue (scripts/add-browser-outreach.ts). */
+let browserQueue: { exists: boolean; checkedAt: number } | null = null;
+async function browserQueueExists(): Promise<boolean> {
+  if (browserQueue && (browserQueue.exists || Date.now() - browserQueue.checkedAt < 60_000)) return browserQueue.exists;
+  const [row] = await db.execute<{ ready: boolean }>(sql`select to_regclass('public.browser_outreach_sends') is not null as ready`);
+  browserQueue = { exists: Boolean(row?.ready), checkedAt: Date.now() };
+  return browserQueue.exists;
+}
+
 /**
  * Every counted automated outreach claim of the organization, (person_id,
  * at): the instant the claim was written. LinkedIn stores UTC in `timestamp
@@ -85,7 +94,7 @@ async function instagramQueueExists(): Promise<boolean> {
  * instant. The ledger was filled from these once (the always-on-sending
  * migration); releaseNewLead reads them to keep a place another claim holds.
  */
-function touches(org: string, instagram: boolean): SQL {
+function touches(org: string, instagram: boolean, browser: boolean): SQL {
   return sql`
     SELECT l.person_id, coalesce(e.created_at, e.sent_at) AS at
       FROM outreach_emails e
@@ -108,7 +117,11 @@ function touches(org: string, instagram: boolean): SQL {
     UNION ALL
     SELECT ig.person_id, ig.attempted_at
       FROM instagram_outreach_queue ig
-     WHERE ig.organization_id = ${org} AND ig.status IN ('sending', 'sent', 'uncertain') AND ig.attempted_at IS NOT NULL` : sql``}`;
+     WHERE ig.organization_id = ${org} AND ig.status IN ('sending', 'sent', 'uncertain') AND ig.attempted_at IS NOT NULL` : sql``}${browser ? sql`
+    UNION ALL
+    SELECT bs.person_id, bs.attempted_at
+      FROM browser_outreach_sends bs
+     WHERE bs.organization_id = ${org} AND bs.kind = 'step' AND bs.status IN ('sending', 'sent', 'uncertain') AND bs.attempted_at IS NOT NULL` : sql``}`;
 }
 
 /**
@@ -154,7 +167,7 @@ export async function newLeadAllowance(tx: Tx, input: { personId: string; now?: 
  * right after the engine's claim row is written, when newLeadAllowance said
  * `counted`. `at` is the claim's time (releaseNewLead matches it).
  */
-export async function recordNewLead(tx: Tx, input: { personId: string; channel: "email" | "linkedin" | "whatsapp" | "instagram"; at: Date }): Promise<void> {
+export async function recordNewLead(tx: Tx, input: { personId: string; channel: "email" | "linkedin" | "whatsapp" | "instagram" | "browser"; at: Date }): Promise<void> {
   await tx.insert(leadFirstContacts).values({ organizationId: currentOrganizationId(), personId: input.personId, firstAt: input.at, channel: input.channel }).onConflictDoNothing();
 }
 
@@ -169,7 +182,7 @@ export async function releaseNewLead(executor: Executor, input: { personId: stri
   await executor.execute(sql`
     DELETE FROM lead_first_contacts
      WHERE organization_id = ${org} AND person_id = ${input.personId}::uuid AND first_at >= ${input.since.toISOString()}::timestamptz
-       AND NOT EXISTS (SELECT 1 FROM (${touches(org, await instagramQueueExists())}) t WHERE t.person_id = ${input.personId}::uuid)`);
+       AND NOT EXISTS (SELECT 1 FROM (${touches(org, await instagramQueueExists(), await browserQueueExists())}) t WHERE t.person_id = ${input.personId}::uuid)`);
 }
 
 /** Today's count against the limit, without the lock: the settings page and the status screens. */

@@ -1,4 +1,5 @@
 import { and, asc, count, desc, eq, getTableColumns, inArray, isNull, sql, type SQL } from "drizzle-orm";
+import { MESSAGING_SITE_NAMES } from "@/lib/browserOutreach/routes";
 import { db } from "@/lib/db";
 import { inboxContacts, inboxMessages } from "@/lib/inbox/schema";
 import { companies, people } from "@/lib/leads/schema";
@@ -575,6 +576,12 @@ export async function getCrmRecordWorkspace(recordId: string) {
           name: account?.name ?? account?.username ?? null,
           avatarUrl: null,
         };
+      }
+      case "browser": {
+        // "<site>:<the owner's handle there>", as the owner's browser showed it.
+        const [site, handle] = conversation.accountRef.split(":", 2);
+        const siteName = site ? ((MESSAGING_SITE_NAMES as Record<string, string>)[site] ?? site) : "Browser";
+        return { label: `${siteName}${handle ? ` · ${handle}` : ""} · through your browser`, name: handle ?? siteName, avatarUrl: null };
       }
     }
   };

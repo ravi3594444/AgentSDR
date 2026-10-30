@@ -10,13 +10,13 @@ import { WHATSAPP_NO_TEXT_BODY, whatsappCrmBodyText, whatsappCrmIdempotencyKey }
 
 describe("CRM channels", () => {
   test("whatsapp is a CRM channel with its own label, no subject, delivered by Unipile", () => {
-    expect([...CRM_CHANNELS]).toEqual(["email", "linkedin", "whatsapp", "instagram"]);
+    expect([...CRM_CHANNELS]).toEqual(["email", "linkedin", "whatsapp", "instagram", "browser"]);
     expect(isCrmChannel("whatsapp")).toBe(true);
     expect(isCrmChannel("sms")).toBe(false);
     expect(isCrmChannel(null)).toBe(false);
-    expect(CRM_CHANNELS.map(crmChannelLabel)).toEqual(["Email", "LinkedIn", "WhatsApp", "Instagram"]);
-    expect(CRM_CHANNELS.map(crmChannelSendProvider)).toEqual(["gmail", "unipile", "unipile", "unipile"]);
-    expect(CRM_CHANNELS.map(crmChannelHasSubject)).toEqual([true, false, false, false]);
+    expect(CRM_CHANNELS.map(crmChannelLabel)).toEqual(["Email", "LinkedIn", "WhatsApp", "Instagram", "Browser"]);
+    expect(CRM_CHANNELS.map(crmChannelSendProvider)).toEqual(["gmail", "unipile", "unipile", "unipile", "browser"]);
+    expect(CRM_CHANNELS.map(crmChannelHasSubject)).toEqual([true, false, false, false, false]);
   });
 });
 

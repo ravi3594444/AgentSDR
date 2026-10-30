@@ -12,8 +12,14 @@
  * "instagram" is Instagram direct messages through Unipile
  * (src/lib/instagram/crmBridge.ts), only for organizations that turned the
  * Instagram feature on; a reply goes into the chat the lead wrote in.
+ *
+ * "browser" is a direct message sent through the owner's own signed-in
+ * Chrome on X, Instagram, Facebook or LinkedIn (src/lib/browserOutreach/):
+ * the account ref is "<site>:<the owner's handle there>", and replies are
+ * read from the conversation in that browser, since those sites send no
+ * webhook.
  */
-export const CRM_CHANNELS = ["email", "linkedin", "whatsapp", "instagram"] as const;
+export const CRM_CHANNELS = ["email", "linkedin", "whatsapp", "instagram", "browser"] as const;
 export type CrmChannel = (typeof CRM_CHANNELS)[number];
 
 export function isCrmChannel(value: unknown): value is CrmChannel {
@@ -30,11 +36,13 @@ export function crmChannelLabel(channel: CrmChannel): string {
       return "WhatsApp";
     case "instagram":
       return "Instagram";
+    case "browser":
+      return "Browser";
   }
 }
 
 /** Who delivers a CRM draft on this channel (crm_send_attempts.provider). */
-export function crmChannelSendProvider(channel: CrmChannel): "gmail" | "unipile" {
+export function crmChannelSendProvider(channel: CrmChannel): "gmail" | "unipile" | "browser" {
   switch (channel) {
     case "email":
       return "gmail";
@@ -42,6 +50,8 @@ export function crmChannelSendProvider(channel: CrmChannel): "gmail" | "unipile"
     case "whatsapp":
     case "instagram":
       return "unipile";
+    case "browser":
+      return "browser";
   }
 }
 
@@ -53,6 +63,7 @@ export function crmChannelHasSubject(channel: CrmChannel): boolean {
     case "linkedin":
     case "whatsapp":
     case "instagram":
+    case "browser":
       return false;
   }
 }

@@ -296,6 +296,7 @@ export function draftJsonSchema(channel: CrmChannel): Record<string, unknown> {
     case "linkedin":
     case "whatsapp":
     case "instagram":
+    case "browser":
       return {
         type: "object",
         additionalProperties: false,
@@ -341,6 +342,13 @@ export function draftChannelConstraints(channel: CrmChannel): string[] {
       return [
         "This is an Instagram direct message in a chat the person started or answered, not an email.",
         "Return subject as null and bodyHtml as null. Instagram messages never have a subject.",
+        "Write a short, friendly plain-text message: one to four brief sentences. No greeting line on its own, no sign-off, no signature block, no bullet lists, markdown or hashtags.",
+        "Do not ask them to move to another app unless they asked for it, and do not claim the message was sent or schedule it.",
+      ];
+    case "browser":
+      return [
+        "This is a direct message on a social site (X, Instagram, Facebook or LinkedIn), sent through the owner's own account, in the conversation the person is in.",
+        "Return subject as null and bodyHtml as null. Direct messages never have a subject.",
         "Write a short, friendly plain-text message: one to four brief sentences. No greeting line on its own, no sign-off, no signature block, no bullet lists, markdown or hashtags.",
         "Do not ask them to move to another app unless they asked for it, and do not claim the message was sent or schedule it.",
       ];
@@ -478,7 +486,7 @@ export function validateDraftOutput(raw: unknown, channel: CrmChannel): CrmDraft
     };
   }
 
-  if (channel !== "linkedin" && channel !== "whatsapp" && channel !== "instagram") {
+  if (channel !== "linkedin" && channel !== "whatsapp" && channel !== "instagram" && channel !== "browser") {
     throw new Error(`Unsupported CRM draft channel: ${String(channel satisfies never)}`);
   }
   const label = crmChannelLabel(channel);
