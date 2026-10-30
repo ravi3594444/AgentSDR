@@ -74,7 +74,7 @@ Measured 28 Oct 2026 in Chromium 153. Chrome was launched plainly, without Playw
 - **Native Claude (MCP).** A tool result carries `{type: "image"}` blocks beside its text. With the installed CLI (2.1.312) the model read a code that existed only in an image's pixels, both with and without `structuredContent`. The adapter keeps `structuredContent` (its text) and adds the image blocks.
 - **API models.** The next `completeStructured` call carries the screenshot as an image part (OpenAI `image_url` data URL; the Anthropic adapter converts it to an image block instead of dropping it), with a note naming it, and only once. `structuredVision()` decides from the provider's own catalog: OpenRouter's `input_modalities`, AI/ML API's `vision` tag; every Claude model on the Anthropic API takes images.
 - **Models that cannot take images.** A text-only model, or Claude Code's structured (CLI) runtime here, gets an honest refusal ("the selected AI model … does not take images; work from the page's elements"). Nothing is captured, and nothing switches to another or paid model. The CLI structured runtime throws on an image rather than drop it.
-- **Not stored.** Screenshots are not stored: the command row's image is blanked after the model gets it, and the chat keeps text only. What only an image shows cannot ground a saved contact.
+- **Not kept by the app.** The command row's image is blanked once the model has it, and the chat keeps text only. A native Claude session's own history (on this server, per account and chat) may still hold the image it was given. What only an image shows cannot ground a saved contact.
 
 ## Lost answers, Stop, restarts
 
@@ -105,7 +105,7 @@ The real-Claude run was this container's CLI login, not a customer's personal Cl
 
 - **Extension 0.17.0 adds the `debugger` permission.** Unpacked installs (how the extension is distributed) take it without a prompt. A packed or Web Store install would be disabled until the owner accepts the new permission. `BROWSER_TASK_MIN_VERSION` makes tasks tell the owner to update.
 - **Readings show field state** for every reading, research included (additive; what research may click or type is unchanged).
-- **No migration.** Grants live in the chat's tool records; screenshots are not stored.
+- **No migration.** Grants live in the chat's tool records; the app keeps no screenshot (a native Claude session's history may).
 
 ## Not verified, and what blocks it
 
