@@ -86,6 +86,8 @@ export type NextStepFacts = {
   researchPaused: { threadId: string | null } | null;
   /** A search or the request's objective still running. */
   researching: boolean;
+  /** The recorded research phase or wait, rather than an inferred blocker. */
+  researchDetail?: string | null;
   /** Anything still open (a search, a plan with something to send, an objective). */
   open: boolean;
   /** How it ended, when it did (the objective's stop reason, a plan's outcome). */
@@ -116,7 +118,7 @@ export function nextActionFor(facts: NextStepFacts, chatHref: (threadId: string)
   if (facts.researchPaused) {
     return { kind: "paused", label: "Resume the research when ready", href: facts.researchPaused.threadId ? chatHref(facts.researchPaused.threadId) : null, detail: "It is paused: searches already running finish, and nothing new is searched until you resume it in the chat." };
   }
-  if (facts.researching) return { kind: "research", label: "Research is running", href: null, detail: "Searches are still finding and checking leads." };
+  if (facts.researching) return { kind: "research", label: "Research is running", href: null, detail: facts.researchDetail ?? "Searches are still finding and checking leads." };
   if (facts.open && facts.followUpAt) return { kind: "wait", label: "Waiting for a reply", href: null, detail: `Next follow-up ${facts.followUpAt.label}.` };
   if (facts.open) return { kind: "wait", label: "Sending", href: null, detail: "Messages go out within each channel's daily limits." };
   if (facts.outcome) return { kind: "done", label: "Done", href: null, detail: facts.outcome };

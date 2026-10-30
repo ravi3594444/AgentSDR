@@ -25,6 +25,7 @@
  * Refuses a non-local DATABASE_URL.
  */
 import { eq } from "drizzle-orm";
+import { spawnSync } from "node:child_process";
 
 if (!/@(localhost|127\.0\.0\.1)[:/]/.test(process.env.DATABASE_URL ?? "")) {
   console.error("Refusing to run: DATABASE_URL must point at a local, disposable database.");
@@ -77,7 +78,7 @@ const seeded = await runInOrganization(a!.id, async () => {
   // 1. A chat request: objective, one search, one WhatsApp plan.
   const [thread] = await db.insert(assistantThreads).values({ organizationId: org, title: "Chicago dentists", createdBy: owner!.id }).returning();
   const [request] = await db.insert(assistantMessages).values({ organizationId: org, threadId: thread!.id, role: "user", content: "Find 20 dentists in Chicago and message them on WhatsApp" }).returning();
-  const [objective] = await db.insert(assistantObjectives).values({ organizationId: org, threadId: thread!.id, requestMessageId: request!.id, leadTarget: 20, timeLimitMinutes: 240, deadlineAt: new Date(Date.now() + 4 * 3_600_000), spendCapUsd: 5, progress: { waiting: "the assistant is choosing the next source" } }).returning();
+  const [objective] = await db.insert(assistantObjectives).values({ organizationId: org, threadId: thread!.id, requestMessageId: request!.id, leadTarget: 20, controls: { named: { target: true, time: false, spend: false } }, timeLimitMinutes: 240, deadlineAt: new Date(Date.now() + 4 * 3_600_000), spendCapUsd: 5, progress: { waiting: "the assistant is choosing the next source" } }).returning();
   const searchAudience = await createAudience({ name: `Chicago dentists ${stamp}`, source: "discovery" });
   const [search] = await db.insert(assistantJobs).values({ organizationId: org, threadId: thread!.id, kind: "discovery", status: "succeeded", stage: "done", audienceId: searchAudience, payload: { requestMessageId: request!.id, phrase: "dentists in Chicago" }, result: { found: 3, eligible: 3 }, finishedAt: minutesAgo(50) }).returning();
   // The objective's driver job, as ensureObjective creates it: no request id of its own, the objective's id in its payload.
@@ -240,7 +241,7 @@ const lists = await runInOrganization(a!.id, async () => {
   const summary = await requestSummary(requestKey);
   const searchItem = summary?.children.searches.find((item) => item.id === seeded.search.id);
   check("a finished search under the request offers its own list, counted by its contactable leads",
-    Boolean(searchItem) && JSON.stringify(searchListOf(searchItem!)) === JSON.stringify({ audienceId: seeded.search.audienceId, count: 3 }) && workCounts(searchItem!) === "3 found · 3 contactable",
+    Boolean(searchItem) && JSON.stringify(searchListOf(searchItem!)) === JSON.stringify({ audienceId: seeded.search.audienceId, count: 3 }) && workCounts(searchItem!) === "3 Found · 3 Contactable",
     JSON.stringify(searchItem && { list: searchListOf(searchItem), counts: workCounts(searchItem) }));
 
   // A long chat: the search its card names and the one only the final report names are both older than its 20 newest jobs.
@@ -284,7 +285,43 @@ const lists = await runInOrganization(a!.id, async () => {
   return { legacy };
 });
 
+// The reported screenshot: raw results exist, none match yet, and a social
+// provider is between polls. Read the real request, then render both views
+// in a separate, normal React process (not the react-server condition).
+const statusFixture = await runInOrganization(a!.id, async () => {
+  const org = a!.id;
+  const [thread] = await db.insert(assistantThreads).values({ organizationId: org, title: "Browser research status", createdBy: owner!.id }).returning();
+  const [request] = await db.insert(assistantMessages).values({ organizationId: org, threadId: thread!.id, role: "user", content: "Find business owners. Research only, do not contact anyone." }).returning();
+  await db.insert(assistantObjectives).values({ organizationId: org, threadId: thread!.id, requestMessageId: request!.id, leadTarget: 25, controls: { named: { target: false, time: false, spend: false } }, timeLimitMinutes: 240, deadlineAt: new Date(Date.now() + 4 * 3_600_000), progress: { waiting: "1 search is still collecting results" } });
+  const audience = await createAudience({ name: `Status leads ${stamp}`, source: "discovery" });
+  const duplicate = await createAudience({ name: `Same people, another source ${stamp}`, source: "discovery" });
+  const saved = await db.insert(people).values(Array.from({ length: 14 }, (_, i) => ({ organizationId: org, source: "request-status-check", fullName: `Business owner ${i + 1}`, email: i < 6 ? `status-${i}-${stamp}@request-check.test` : null }))).returning();
+  const members = saved.map((person, i) => ({ organizationId: org, audienceId: audience, personId: person.id, name: person.fullName!, status: i < 6 ? "eligible" as const : "excluded" as const, channels: i < 6 ? ["email" as const] : [], source: "web_search", fit: i < 6 ? "no_match" as const : null, fitAt: i < 6 ? new Date() : null, fitReason: i < 6 ? "Not a business owner" : null }));
+  await db.insert(leadAudienceMembers).values(members);
+  await db.insert(leadAudienceMembers).values(members.slice(0, 6).map((member) => ({ ...member, audienceId: duplicate })));
+  await db.insert(assistantJobs).values([
+    { organizationId: org, threadId: thread!.id, kind: "web_discovery", status: "succeeded", stage: "done", audienceId: audience, payload: { requestMessageId: request!.id, phrase: "Business owners", searchProvider: "tinyfish" }, result: { found: 14, eligible: 6 }, finishedAt: new Date() },
+    { organizationId: org, threadId: thread!.id, kind: "web_discovery", status: "succeeded", stage: "done", audienceId: duplicate, payload: { requestMessageId: request!.id, phrase: "Owner profiles", searchProvider: "tavily" }, result: { found: 6, eligible: 6 }, finishedAt: new Date() },
+  ]);
+  const nextCheck = new Date(Date.now() + 60_000);
+  const [poll] = await db.insert(assistantJobs).values({ organizationId: org, threadId: thread!.id, kind: "social_research", status: "queued", stage: "collecting", runAfter: nextCheck, payload: { requestMessageId: request!.id, criteria: { platforms: ["x", "facebook"] } }, progress: { source: "X, Facebook via Bright Data", stage: "collecting", collecting: 1 } }).returning();
+  const summary = (await requestSummary(`r:${request!.id}`))!;
+  const waiting = summary.children.searches.find((item) => item.id === poll!.id);
+  check("research counts are 14 distinct found, 6 contactable, 0 matching, even across overlapping sources", summary.numbers.found === 14 && summary.numbers.contactable === 6 && summary.numbers.matching === 0, JSON.stringify(summary.numbers));
+  check("a saved default of 25 is not presented as the owner's requested target", summary.target === null && summary.objective?.leadTarget === 25);
+  check("a normal search wait is informational, never a request blocker", summary.blocker === null && summary.nextAction.kind === "research" && summary.nextAction.detail === "1 search is still collecting results");
+  check("a provider poll says Waiting for results and keeps the exact next check time", waiting?.state !== "scheduled" && waiting?.stateLabel === "Waiting for provider results" && waiting.nextAt === nextCheck.toISOString(), JSON.stringify(waiting));
+  check("reading the summary creates no outreach plans or sends", summary.children.plans.length === 0 && summary.numbers.contacted === 0);
+  await db.update(assistantJobs).set({ status: "failed", error: "Bright Data returned an unreadable snapshot", finishedAt: new Date() }).where(eq(assistantJobs.id, poll!.id));
+  const failed = (await requestSummary(`r:${request!.id}`))!;
+  check("a real search failure remains visible as a blocker", failed.blocker === "Bright Data returned an unreadable snapshot");
+  const render = spawnSync(process.execPath, ["scripts/review/request-summary-markup.tsx"], { input: JSON.stringify({ research: summary, failed, outreach: await requestSummary(requestKey) }), encoding: "utf8", timeout: 30_000 });
+  check("database request payloads render truthfully in both the chat panel and Requests page", render.status === 0, [render.stdout.trim(), render.stderr.trim()].filter(Boolean).join("\n"));
+  return { key: summary.key };
+});
+
 await runInOrganization(b!.id, async () => {
+  check("another workspace cannot read the new counts or research phase", await requestSummary(statusFixture.key) === null);
   check("another organization gets no lead list of the first one's", (await audienceProspects(lists.legacy)) === null);
   const none = await Promise.all([requestKey, runKey, campaignKey, `job:${seeded.search.id}`].map((key) => requestSummary(key)));
   check("another organization gets nothing for any of the first one's keys", none.every((summary) => summary === null));

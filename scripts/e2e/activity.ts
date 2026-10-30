@@ -398,7 +398,7 @@ await runOneAssistantStep();
 const [started] = await db.select().from(assistantJobs).where(eq(assistantJobs.id, resumed!.id));
 await runInOrganization(a.org.id, async () => {
   const item = (await listWork()).find((entry) => entry.id === resumed!.id);
-  check("a search that waited for a slot and then started is no longer shown as waiting", started?.stage === "apify" && !("waiting" in (started?.progress ?? {})) && item?.state === "queued" && item.reason === null, `${item?.state}: ${JSON.stringify(started?.progress)}`);
+  check("a search that waited for a slot and then started is Searching, with the old wait removed", started?.stage === "apify" && !("waiting" in (started?.progress ?? {})) && item?.state === "executing" && item.stateLabel === "Searching" && !(item.reason ?? "").includes("both Apify runs"), `${item?.state}/${item?.stateLabel}: ${JSON.stringify(started?.progress)}`);
 });
 
 // A step that failed is retried and says so; once a later step completes without an error, the error is gone.

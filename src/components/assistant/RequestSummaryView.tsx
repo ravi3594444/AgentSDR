@@ -5,7 +5,7 @@ import { useState } from "react";
 import { RiAlertLine, RiArrowRightLine, RiCheckLine, RiCloseCircleLine, RiCloseLine, RiExternalLinkLine, RiLoader4Line, RiSubtractLine, RiTimeLine, RiUserLine } from "@remixicon/react";
 import type { WorkItem } from "@/lib/activity/activity.server";
 import { nextAtPhrase, OPEN_STATES } from "@/lib/activity/status";
-import { formatChatTime } from "@/lib/assistant/chatTime";
+import { displayTime } from "@/lib/assistant/displayTime";
 import { searchListOf, workCounts } from "@/lib/assistant/leadLists";
 import { ProspectsList } from "@/components/assistant/ProspectsList";
 import type { RequestSummary } from "@/lib/assistant/requests.server";
@@ -81,14 +81,13 @@ function CompactSearch({ item, label, busy, timeZone, onCancel }: { item: WorkIt
   const [open, setOpen] = useState(false);
   const list = searchListOf(item);
   const counts = workCounts(item);
-  const source = item.source?.replace(/\s+through\s+.*$/i, "") ?? null;
-  const next = item.open && item.nextAt ? `${nextAtPhrase(item.state)} ${formatChatTime(item.nextAt, timeZone)}` : null;
-  const detail = [source, item.open ? item.stateLabel : null, counts || (item.open ? null : item.stateLabel), next].filter(Boolean).join(" · ");
+  const source = item.source;
+  const detail = [source, item.open ? item.stateLabel : null, counts || (item.open ? null : item.stateLabel)].filter(Boolean).join(" · ");
   const body = (
     <>
       <SearchStateIcon item={item} />
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-label-xs text-text-strong-950">{label ?? item.title}</span>
+        <span className="block line-clamp-2 text-label-xs text-text-strong-950 [overflow-wrap:anywhere]" title={label ?? item.title}>{label ?? item.title}</span>
         <span className="block text-paragraph-xs text-text-soft-400 [overflow-wrap:anywhere]">{detail}</span>
       </span>
     </>
@@ -106,6 +105,7 @@ function CompactSearch({ item, label, busy, timeZone, onCancel }: { item: WorkIt
         )}
       </div>
       {item.reason && <p className="mt-1 pl-[26px] text-paragraph-xs text-text-sub-600 [overflow-wrap:anywhere]">{item.reason}</p>}
+      {item.open && item.nextAt && <p className="mt-1 pl-[26px] text-paragraph-xs text-text-sub-600">{nextAtPhrase(item.state)} <time dateTime={item.nextAt}>{displayTime(new Date(item.nextAt), new Date(), timeZone, { seconds: true })}</time></p>}
       {open && list && <div className="research-in mt-2 pl-[26px]"><ProspectsList audienceId={list.audienceId} count={list.count} timeZone={timeZone} /></div>}
     </li>
   );
@@ -208,13 +208,13 @@ export function RequestSummaryView({ summary, compact = false, onChanged, labels
           </p>
         )}
 
-        <div className="rounded-xl p-3 ring-1 ring-inset ring-stroke-soft-200" data-testid="request-next">
+        {next.kind === "research" ? <p className="text-paragraph-xs text-text-sub-600 [overflow-wrap:anywhere]" data-testid="request-next">{next.detail}</p> : <div className="rounded-xl p-3 ring-1 ring-inset ring-stroke-soft-200" data-testid="request-next">
           <p className="text-paragraph-xs text-text-soft-400">Next step</p>
           {next.href
             ? <Link href={next.href} className={cn(primaryButtonClass, "mt-1.5 inline-flex h-9 max-w-full items-center gap-1.5")}><span className="truncate">{next.label}</span><RiArrowRightLine className="size-4 shrink-0" aria-hidden="true" /></Link>
             : <p className="mt-0.5 text-label-sm text-text-strong-950">{next.label}</p>}
           {next.detail && <p className="mt-1 text-paragraph-xs text-text-sub-600 [overflow-wrap:anywhere]">{next.detail}</p>}
-        </div>
+        </div>}
 
         {actionError && <ErrorState message={actionError} />}
 

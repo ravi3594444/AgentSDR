@@ -54,7 +54,7 @@ export function chatHref(threadId: string): string {
 export function WorkRow({ item, busy, timeZone, onCancel, onRun, compact = false }: { item: WorkItem; busy: boolean; timeZone: string; onCancel: (item: WorkItem) => void; onRun: (item: WorkItem, action: "pause" | "resume" | "stop") => void; compact?: boolean }) {
   const counts = workCounts(item);
   const list = searchListOf(item);
-  const nextAt = item.nextAt ? displayTime(new Date(item.nextAt), new Date(), timeZone) : null;
+  const nextAt = item.nextAt ? displayTime(new Date(item.nextAt), new Date(), timeZone, { seconds: item.type === "job" }) : null;
   const running = item.runStatus === "running";
   const small = "h-8 px-2.5";
   return (
@@ -64,7 +64,7 @@ export function WorkRow({ item, busy, timeZone, onCancel, onRun, compact = false
           <p className={cn("min-w-0 break-words text-label-sm text-text-strong-950", compact && "line-clamp-2")}>{item.title}</p>
           <Badge tone={WORK_TONE[item.state]}>{item.stateLabel}</Badge>
         </div>
-        {item.reason && <p className={cn("text-text-sub-600", compact ? "text-paragraph-xs" : "text-paragraph-sm")}>{item.reason}{item.nextAt && !reasonGivesTime(item.reason) && <>; {nextAtPhrase(item.state)} <time dateTime={item.nextAt}>{nextAt}</time></>}</p>}
+        {(item.reason || item.nextAt) && <p className={cn("text-text-sub-600", compact ? "text-paragraph-xs" : "text-paragraph-sm")}>{item.reason}{item.nextAt && !reasonGivesTime(item.reason ?? "") && <>{item.reason ? "; " : ""}{nextAtPhrase(item.state)} <time dateTime={item.nextAt}>{nextAt}</time></>}</p>}
         <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-paragraph-xs text-text-soft-400">
           {item.source && <span>{item.source}</span>}
           {counts && <span>{counts}</span>}

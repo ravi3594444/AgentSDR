@@ -371,6 +371,7 @@ export async function requestSummary(keyText: string, now = new Date()): Promise
     // Paused research is open while nothing else of it is, so its next step is to resume it, never "Done".
     researchPaused: objective?.status === "paused" ? { threadId: objective.threadId } : null,
     researching,
+    researchDetail: objective?.waiting,
     open: state.open || campaignOpen,
     outcome,
   });
