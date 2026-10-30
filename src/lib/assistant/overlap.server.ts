@@ -1,5 +1,6 @@
 import "server-only";
 
+import { CHANNEL_ORDER } from "./channelPolicy";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
@@ -85,7 +86,7 @@ export async function blockedPeople(assignments: OutreachPlan["assignments"]): P
 
 /** Sends a day per channel across its senders, as prepareOutreach estimates a plan's days. */
 export function perDayFrom(availability: Awaited<ReturnType<typeof channelAvailability>>): PlanPerDay {
-  const channels: AudienceChannel[] = ["email", "whatsapp", "linkedin", "instagram"];
+  const channels: readonly AudienceChannel[] = CHANNEL_ORDER;
   return Object.fromEntries(channels.map((channel) => [channel, (availability[channel].senders || 1) * (availability[channel].perSenderPerDay ?? 20)]));
 }
 
