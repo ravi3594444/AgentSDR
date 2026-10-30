@@ -551,6 +551,58 @@ the queue is `connections.server.ts`; the worker side is
   binds to the claude.ai account, not this workspace, and exposes write
   tools; it is not used (see the report).
 
+## Browser outreach (messages through the owner's own Chrome)
+
+"browser" is an outreach and CRM channel (`src/lib/browserOutreach/`,
+tables from `scripts/add-browser-outreach.ts`): a direct message sent
+through the owner's own signed-in Chrome on X, Instagram, Facebook or
+LinkedIn, for sites with no provider integration or when the owner asks
+for their browser.
+
+- **Routes.** A lead is reachable through a recorded profile
+  (`browser_contact_routes`, unique per organization and site handle;
+  `add_contacts` `profileUrl`, grounded on the page it was read from) or
+  the LinkedIn profile / Instagram username it already holds, unless the
+  browser found that profile unable to take a message
+  (`check_browser_routes` reads profiles, read only; the courier records
+  what it finds).
+- **Choosing it.** `channelPolicy.ts`: "using my browser" makes it the
+  plan's only channel (sites named beside it are where it goes, stored as
+  `plan.browserSites`); X or Facebook named means the browser; unnamed it
+  comes last, after the providers, so it never needs email or Unipile.
+  Available while a member's browser is paired on 0.18.0+ with access to a
+  messaging site (`availability.server.ts`); Chrome offline is a wait.
+- **Sending.** Start queues `browser_outreach_sends` rows (one per step,
+  the claim against sending twice; follow-ups wait for the step before).
+  The courier (`courier.server.ts`, production tick,
+  `PAUSE_BROWSER_OUTBOUND`) claims one message per browser under
+  `browser-send:<user>`: run running and approved, Do Not Contact, not
+  already answered, the "browser" Sending rules (new chats per site
+  account, time between sends) and `newLeadAllowance`. The organization's
+  AI finds the way on the page step by step; `courier.ts` decides what it
+  may do: type only the approved text, open a message and send once with
+  that text in the box and the signed-in account confirmed on the page
+  (and equal to the account earlier messages on that site came from),
+  never invite, follow, post or pay, only pages on the route's site.
+  "Sent" means the page shows the text; otherwise the row is `uncertain`
+  and is never resent, and its follow-ups stop. What cannot send yet keeps
+  `wait_reason` / `next_check_at` (offline, Stop, a sign-in only the owner
+  can do, pacing, the day's allowance); a profile that cannot take a
+  message is `blocked` with the site's words. Never add a path that sends
+  without the courier's checks.
+- **CRM.** A conversation is a route (provider thread = route id) seen from
+  `"<site>:<handle>"`; the first reply brings the browser history in
+  (`outreachHistory.ts`), a CRM reply on the channel goes out through
+  `sendBrowserReply` (offline defers it with the reason). Sites have no
+  webhooks: `syncReplies` reads each conversation in the sender's idle,
+  connected browser every `replyCheckMinutes`; a reply counts only when
+  the page shows those words more often than the known conversation does.
+- **Tests.** `courier.test.ts` (rules), `scripts/e2e/browser-outreach.ts`
+  (database, stand-in extension, scripted model),
+  `scripts/e2e/browser-outreach.live.ts` (the real extension on an X-like
+  fixture; `LIVE_REAL_CLAUDE=1` for a real model). None of them reaches a
+  real site or person.
+
 ## The reply agent
 
 A message from a lead of a running assistant outreach run is answered by
@@ -690,7 +742,9 @@ with its reserved credits kept counted. Bright Data's API does not report
 the balance, so the monthly limit is AgentSDR's own count and every figure
 says "estimated". Nothing tops up or changes a plan. Findings keep their link, quote, author and read time;
 someone is contactable only through what their own profile, page or
-website publishes — AgentSDR never messages anyone on Reddit, X or Facebook.
+website publishes — AgentSDR never messages anyone on Reddit, and on X or
+Facebook only through the owner's own browser in a started plan (Browser
+outreach, below).
 
 The model chooses what to research (`normalizeSocialCriteria`, the pure
 `socialResearch.ts`): `platforms` left out is every platform (Reddit still
