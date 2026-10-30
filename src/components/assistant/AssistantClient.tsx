@@ -149,7 +149,7 @@ const ACCEPT = ".pdf,.docx,.txt,.md,.csv,.tsv,.xlsx,.xls";
 // The reply limits the server enforces (src/lib/crm/autopilot.ts), shown before Start.
 const AUTOPILOT_PER_CONVERSATION = AUTOPILOT_LIMITS.perConversation;
 const AUTOPILOT_PER_DAY = AUTOPILOT_LIMITS.perDay;
-const CHANNEL_LABEL: Record<string, string> = { email: "Email", whatsapp: "WhatsApp", linkedin: "LinkedIn", instagram: "Instagram" };
+const CHANNEL_LABEL: Record<string, string> = { email: "Email", whatsapp: "WhatsApp", linkedin: "LinkedIn", instagram: "Instagram", browser: "your browser" };
 
 const TOOL_TITLE: Record<string, string> = {
   check_setup: "Checked what is connected",

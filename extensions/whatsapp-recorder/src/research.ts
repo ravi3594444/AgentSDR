@@ -621,7 +621,7 @@ async function execute(conn: Connection, command: BrowserResearchCommand): Promi
       const after = (await chrome.tabs.get(action.tabId).catch(() => null))?.url;
       if (after && after !== before && (await urlRefusal(conn, after))) {
         await chrome.tabs.goBack(action.tabId).catch(() => undefined);
-        return { ok: false, error: `that led to ${new URL(after).hostname}, which is not enabled for research; went back and read nothing`, tabId: action.tabId };
+        return { ok: false, error: `that led to ${new URL(after).hostname}, which is outside this browser's website access; went back and read nothing`, tabId: action.tabId };
       }
       const read = await readTab(conn, action.tabId);
       return note && read.ok ? { ...read, note } : read;
@@ -751,7 +751,7 @@ async function visual(conn: Connection, action: Extract<BrowserResearchAction, {
   const after = (await chrome.tabs.get(tabId).catch(() => null))?.url;
   if (after && after !== tab.url && (await urlRefusal(conn, after))) {
     await chrome.tabs.goBack(tabId).catch(() => undefined);
-    return { ok: false, error: `that led to ${new URL(after).hostname}, which is not enabled; went back`, tabId };
+    return { ok: false, error: `that led to ${new URL(after).hostname}, which is outside this browser's website access; went back`, tabId };
   }
   const next = await screenshot(conn, tabId);
   return next.ok ? { ...next, note: `${action.op.replace("_", " ")} done${after && after !== tab.url ? `; the tab is now on ${after}` : ""}` } : next;

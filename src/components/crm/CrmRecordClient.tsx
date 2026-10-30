@@ -12,6 +12,7 @@ import {
   RiCheckboxCircleLine,
   RiCloseCircleLine,
   RiErrorWarningLine,
+  RiGlobalLine,
   RiHistoryLine,
   RiInstagramLine,
   RiLinkedinLine,
@@ -126,7 +127,7 @@ function initials(name: string): string {
 }
 
 function channelLabel(channel: unknown): string {
-  return channel === "linkedin" ? "LinkedIn" : channel === "whatsapp" ? "WhatsApp" : channel === "instagram" ? "Instagram" : "Email";
+  return channel === "linkedin" ? "LinkedIn" : channel === "whatsapp" ? "WhatsApp" : channel === "instagram" ? "Instagram" : channel === "browser" ? "Browser" : "Email";
 }
 
 function channelColor(channel: unknown): string | undefined {
@@ -135,7 +136,7 @@ function channelColor(channel: unknown): string | undefined {
 
 function channelIcon(channel: unknown, className = "size-4") {
   if (channel === "whatsapp") return <WhatsappLogo className={className} />;
-  const Icon = channel === "linkedin" ? RiLinkedinLine : channel === "instagram" ? RiInstagramLine : RiMailLine;
+  const Icon = channel === "linkedin" ? RiLinkedinLine : channel === "instagram" ? RiInstagramLine : channel === "browser" ? RiGlobalLine : RiMailLine;
   return <Icon className={className} aria-hidden="true" />;
 }
 

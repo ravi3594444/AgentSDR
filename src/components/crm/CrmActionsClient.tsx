@@ -7,6 +7,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
+  RiGlobalLine,
   RiAlarmWarningFill,
   RiArchiveStackFill,
   RiArrowRightLine,
@@ -728,7 +729,7 @@ export function ActionRows({ actions, categories, onActionsChange, pipeline, ref
 export function ChannelAvatar({ src, name, channel, className }: { src: string | null; name: string; channel: string; className?: string }) {
   const avatarText = name === "Unknown contact" ? "?" : name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase();
   const meta = CONVERSATION_CHANNEL_META[channel as keyof typeof CONVERSATION_CHANNEL_META];
-  const Icon = channel === "whatsapp" ? RiWhatsappFill : channel === "linkedin" ? RiLinkedinFill : channel === "instagram" ? RiInstagramFill : RiMailFill;
+  const Icon = channel === "whatsapp" ? RiWhatsappFill : channel === "linkedin" ? RiLinkedinFill : channel === "instagram" ? RiInstagramFill : channel === "browser" ? RiGlobalLine : RiMailFill;
   return <span className="relative shrink-0">
     <ContactAvatar src={src} fallback={avatarText} className={cn("size-9 bg-bg-weak-50 text-label-xs text-text-sub-600 ring-1 ring-inset ring-stroke-soft-200", className)} />
     {meta && <span title={meta.label} className="absolute -bottom-0.5 -right-0.5 flex size-4 items-center justify-center rounded-full text-static-white ring-2 ring-bg-white-0" style={{ backgroundColor: meta.color }}>

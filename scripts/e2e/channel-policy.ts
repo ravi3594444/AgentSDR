@@ -162,7 +162,7 @@ await runInOrganization(org!.id, async () => {
     JSON.stringify({ assignments: named.plan.assignments, note: named.plan.channelNote }));
   check("…the leads it cannot reach are counted with the owner's reason",
     named.plan.excluded.some((item) => item.count === 1 && item.reason === "reachable only by email, which is not used in this run (you asked for WhatsApp)")
-      && named.plan.excluded.some((item) => item.count === 1 && item.reason === "reachable only by LinkedIn, which is not used in this run (you asked for WhatsApp)"),
+      && named.plan.excluded.some((item) => item.count === 1 && item.reason === "reachable only by LinkedIn or your browser, which are not used in this run (you asked for WhatsApp)"),
     JSON.stringify(named.plan.excluded));
 
   // ---------------------------------------------------------- 3. a sender that cannot send yet is the reason, not the owner

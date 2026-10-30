@@ -22,7 +22,7 @@ export type NeedsYouPayload = { items: NeedsYouItem[]; reviewWaiting: number; ac
 
 const POLL_MS = 10_000;
 
-const CHANNEL: Record<string, string> = { email: "Email", whatsapp: "WhatsApp", linkedin: "LinkedIn" };
+const CHANNEL: Record<string, string> = { email: "Email", whatsapp: "WhatsApp", linkedin: "LinkedIn", instagram: "Instagram", browser: "Browser" };
 
 function tone(priority: number): "red" | "orange" | "gray" {
   return priority === 0 ? "red" : priority <= 3 ? "orange" : "gray";

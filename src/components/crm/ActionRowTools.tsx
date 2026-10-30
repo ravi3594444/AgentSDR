@@ -559,7 +559,7 @@ export function InlineDraftEditor({ action, onMutate, onClose, busy }: { action:
           className={cn(fieldClass, "min-h-36 resize-y leading-6")}
           value={body}
           onChange={(event) => setBody(event.target.value)}
-          placeholder={`Write a ${channel === "linkedin" ? "LinkedIn" : channel === "whatsapp" ? "WhatsApp" : channel === "instagram" ? "Instagram" : "email"} reply…`}
+          placeholder={`Write a ${channel === "linkedin" ? "LinkedIn" : channel === "whatsapp" ? "WhatsApp" : channel === "instagram" ? "Instagram" : channel === "browser" ? "browser" : "email"} reply…`}
           disabled={busy}
         />
         <div className="flex flex-wrap items-center gap-2">

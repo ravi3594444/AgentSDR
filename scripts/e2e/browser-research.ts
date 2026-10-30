@@ -189,12 +189,12 @@ try {
     // Refusals before anything is queued.
     const before = (await db.select().from(browserCommands).where(eq(browserCommands.connectionId, paired.body.connectionId))).length;
     const linkedin = await runToolInThread({ ...context }, "browser_tab_open", { url: "https://www.linkedin.com/in/someone" });
-    check("a social site the owner did not enable is refused", !linkedin.ok && linkedin.summary.includes("LinkedIn is not enabled"));
+    check("a social site outside the browser's website access is refused", !linkedin.ok && linkedin.summary.includes("LinkedIn is outside the website access"));
     check("a private address is refused", !(await runToolInThread({ ...context }, "browser_tab_open", { url: "https://192.168.1.1/admin" })).ok);
     const write = await runToolInThread({ ...context }, "browser_tab_click", { tab, n: 2 });
     check("a control that acts for the owner is refused", !write.ok && write.summary.includes("may act for the owner"));
     const off = await runToolInThread({ ...context }, "browser_tab_click", { tab, n: 3 });
-    check("a link to a site that is not enabled is refused", !off.ok && off.summary.includes("LinkedIn is not enabled"));
+    check("a link to a site outside the website access is refused", !off.ok && off.summary.includes("LinkedIn is outside the website access"));
     const message = await runToolInThread({ ...context }, "browser_tab_search", { tab, n: 5, text: "hello there" });
     check("typing into a non-search field is refused", !message.ok && message.summary.includes("not a search field"));
     const unread = await runToolInThread({ ...context }, "browser_tab_click", { tab: 999, n: 1 });
