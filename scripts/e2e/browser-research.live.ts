@@ -181,7 +181,7 @@ try {
   check("the extension pairs with the workspace", (await connect.textContent("#status"))?.includes("Connected to Live browser research"));
   const [row] = await db.select().from(browserConnections).where(and(eq(browserConnections.organizationId, org!.id), eq(browserConnections.status, "active")));
   check("the connection is bound to this person, workspace and device, with the chosen sites", row?.userId === user!.id && JSON.stringify(row.sites) === JSON.stringify(["web", "linkedin"]) && Boolean(row.deviceId) && row.extensionVersion === manifest.version);
-  await until("the chat to show the browser connected", () => app.getByTestId("browser-connection").innerText(), (text) => text.includes("Browser connected"), 60_000);
+  await until("the chat to show the browser connected", () => app.getByTestId("browser-connection").innerText(), (text) => text.includes("Chrome available"), 60_000);
   check("the chat shows the browser connected", true);
   await connect.close();
 

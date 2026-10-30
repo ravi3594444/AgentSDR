@@ -7,27 +7,32 @@ const job = (facts: Partial<JobFacts>): JobFacts => ({ status: "queued", runAfte
 
 describe("a job's state is read from its record, never guessed", () => {
   test("a queued job waiting for an Apify slot or a provider limit says so, with the recorded reason", () => {
-    expect(jobState(job({ progress: { waiting: { kind: "slot", reason: "both Apify runs are busy" } } }), now)).toEqual({ state: "waiting_slot", reason: "both Apify runs are busy" });
-    expect(jobState(job({ progress: { waiting: { kind: "quota", reason: "TinyFish Search allows 30 a minute" } } }), now)).toEqual({ state: "waiting_quota", reason: "TinyFish Search allows 30 a minute" });
+    expect(jobState(job({ progress: { waiting: { kind: "slot", provider: "apify", reason: "both Apify runs are busy" } } }), now)).toMatchObject({ state: "waiting_slot", label: "Queued", reason: "waiting for a free Apify run slot: both Apify runs are busy" });
+    expect(jobState(job({ progress: { waiting: { kind: "quota", provider: "tinyfish", reason: "TinyFish Search allows 30 a minute" } } }), now)).toMatchObject({ state: "waiting_quota", label: "Queued", reason: "waiting for TinyFish's limit: TinyFish Search allows 30 a minute" });
   });
 
   test("running with a fresh heartbeat is working; with a heartbeat over 3 minutes old it is stalled, not working", () => {
-    expect(jobState(job({ status: "running", heartbeatAt: new Date(now.getTime() - 60_000) }), now).state).toBe("executing");
+    expect(jobState(job({ status: "running", stage: "searching", heartbeatAt: new Date(now.getTime() - 60_000) }), now)).toMatchObject({ state: "executing", label: "Searching" });
     const stale = jobState(job({ status: "running", heartbeatAt: new Date(now.getTime() - 4 * 60_000) }), now);
     expect(stale.state).toBe("stale");
-    expect(stale.reason).toContain("picked up again");
+    expect(stale.label).toBe("Retrying");
+    expect(stale.reason).toContain("picks it up on its own");
   });
 
-  test("a retry carries the last error; a later run_after without one is scheduled; otherwise queued", () => {
-    expect(jobState(job({ attempts: 1, progress: { lastError: "timeout" } }), now)).toEqual({ state: "retrying", reason: "timeout" });
-    expect(jobState(job({ runAfter: new Date(now.getTime() + 60_000) }), now).state).toBe("scheduled");
-    expect(jobState(job({ runAfter: new Date(now.getTime() + 1_000) }), now).state).toBe("queued");
+  test("a retry carries the last error and its next try; a job between polls of its provider run waits for its results, never \"Scheduled\"", () => {
+    const later = new Date(now.getTime() + 60_000);
+    expect(jobState(job({ attempts: 1, runAfter: later, progress: { lastError: "timeout" } }), now)).toEqual({ state: "retrying", label: "Retrying", reason: "timeout", nextAt: later.toISOString() });
+    expect(jobState(job({ stage: "apify", runAfter: later, externalId: "run-1" }), now)).toEqual({ state: "executing", label: "Waiting for provider results", reason: null, nextAt: later.toISOString() });
+    expect(jobState(job({ runAfter: later }), now)).toMatchObject({ state: "queued", label: "Queued", nextAt: later.toISOString() });
+    expect(jobState(job({ runAfter: new Date(now.getTime() + 1_000) }), now)).toMatchObject({ state: "queued", label: "Queued", nextAt: null });
+    expect(nextAtPhrase("retrying")).toBe("next try");
+    expect(nextAtPhrase("executing")).toBe("next check");
   });
 
   test("a search that ended without searching (handed on, or the platform not searched) is not reported as done", () => {
-    expect(jobState(job({ status: "succeeded", result: { notSearched: true, note: "Apify is not connected" } }), now)).toEqual({ state: "not_searched", reason: "Apify is not connected" });
+    expect(jobState(job({ status: "succeeded", result: { notSearched: true, note: "Apify is not connected" } }), now)).toMatchObject({ state: "not_searched", reason: "Apify is not connected", label: "Not searched" });
     expect(jobState(job({ status: "succeeded", result: { handedToJobId: "x" } }), now).state).toBe("not_searched");
-    expect(jobState(job({ status: "succeeded", result: { found: 12 } }), now)).toEqual({ state: "completed", reason: null });
+    expect(jobState(job({ status: "succeeded", result: { found: 12 } }), now)).toEqual({ state: "completed", reason: null, label: "Done", nextAt: null });
     expect(jobState(job({ status: "failed" }), now).state).toBe("failed");
     expect(jobState(job({ status: "cancelled" }), now).state).toBe("cancelled");
   });
@@ -113,7 +118,7 @@ describe("partial work and sending hours are told apart from done and working", 
     expect(cut.state).toBe("partial");
     expect(cut.reason).toContain("cut short");
     const someFailed = jobState(job({ status: "succeeded", result: { found: 4, searches: [{ query: "a", error: null }, { query: "b", error: "TinyFish answered 503" }, { query: "c", error: null }] } }), now);
-    expect(someFailed).toEqual({ state: "partial", reason: "1 of 3 searches failed (TinyFish answered 503); what the others found is kept" });
+    expect(someFailed).toMatchObject({ state: "partial", reason: "1 of 3 searches failed (TinyFish answered 503); what the others found is kept" });
     expect(jobState(job({ status: "succeeded", result: { found: 4, searches: [{ query: "a", error: null }] } }), now).state).toBe("completed");
     expect(OPEN_STATES.has("partial")).toBe(false);
   });
@@ -292,14 +297,14 @@ test("the time beside a plan's reason says what it is: the next follow-up, the l
 describe("an owner request's research (its objective job)", () => {
   test("while its searches run or the assistant picks the next source, it is working, with what it waits for", () => {
     expect(jobState(job({ runAfter: new Date(now.getTime() + 60_000), progress: { stage: "watching", leads: 12, leadTarget: 40, waiting: { kind: "objective", reason: "the assistant is choosing the next source" } } }), now))
-      .toEqual({ state: "executing", reason: "the assistant is choosing the next source" });
+      .toMatchObject({ state: "executing", label: "Searching", reason: "the assistant is choosing the next source" });
   });
 
   test("stopped short of its target it is partly done with the real reason; the target reached is done; cancelled and failed say so", () => {
-    expect(jobState(job({ status: "succeeded", result: { stopReason: "budget_spent", leads: 18, leadTarget: 40 } }), now)).toEqual({ state: "partial", reason: "18 of 40 leads; stopped because the spend cap was used" });
-    expect(jobState(job({ status: "succeeded", result: { stopReason: "time_limit", leads: 3, leadTarget: 25 } }), now).reason).toBe("3 of 25 leads; stopped because the time limit passed");
+    expect(jobState(job({ status: "succeeded", result: { stopReason: "budget_spent", leads: 18, leadTarget: 40 } }), now)).toMatchObject({ state: "partial", reason: "18 of 40 matching leads; stopped because the spend cap was used" });
+    expect(jobState(job({ status: "succeeded", result: { stopReason: "time_limit", leads: 3, leadTarget: 25, targetNamed: false } }), now).reason).toBe("3 matching leads; stopped because the time limit passed");
     expect(jobState(job({ status: "succeeded", result: { stopReason: "sources_exhausted", leads: 0, leadTarget: 25 } }), now).state).toBe("partial");
-    expect(jobState(job({ status: "succeeded", result: { stopReason: "target_reached", leads: 41, leadTarget: 40 } }), now)).toEqual({ state: "completed", reason: "41 of 40 leads; the target was reached" });
+    expect(jobState(job({ status: "succeeded", result: { stopReason: "target_reached", leads: 41, leadTarget: 40 } }), now)).toMatchObject({ state: "completed", reason: "41 of 40 matching leads; the target was reached" });
     expect(jobState(job({ status: "succeeded", result: { stopReason: "cancelled", leads: 5, leadTarget: 40 } }), now).state).toBe("cancelled");
     expect(jobState(job({ status: "succeeded", result: { stopReason: "failed", leads: 5, leadTarget: 40 } }), now).state).toBe("failed");
   });

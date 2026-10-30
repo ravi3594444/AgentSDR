@@ -49,7 +49,7 @@ describe("opening a lead list or its evidence is a GET only", () => {
 
 describe("the list is one component, opened from the card, the request rows and the report", () => {
   const client = read("components", "assistant", "AssistantClient.tsx");
-  const research = read("components", "assistant", "ResearchGroup.tsx");
+  const research = read("components", "assistant", "RequestActivity.tsx");
   const row = read("components", "activity", "WorkRow.tsx");
 
   test("the chat and its research card use the extracted ProspectsList and define none of their own", () => {

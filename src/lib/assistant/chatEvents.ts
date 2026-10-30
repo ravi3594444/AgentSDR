@@ -70,11 +70,12 @@ export function compactEvent(message: { toolResult?: unknown }): CompactEvent | 
     const result = isRecord(message.toolResult) ? message.toolResult : null;
     const objective = result && typeof result.reportKey === "string" && isRecord(result.data) && isRecord(result.data.objective) ? result.data.objective : null;
     if (!objective) return null;
-    const namedTarget = isRecord(objective.named) && objective.named.target === true;
+    // The target only when the owner named it: targetNamed in newer reports, named.target in older ones.
+    const namedTarget = typeof objective.targetNamed === "boolean" ? objective.targetNamed : isRecord(objective.named) && objective.named.target === true;
     const finished = objective.stopReason === "target_reached" || objective.stopReason === "finished";
     return {
       title: finished ? "Request finished" : "Research stopped",
-      figures: [{ label: "matching leads", value: namedTarget ? `${num(objective.leads)} of ${num(objective.leadTarget)}` : String(num(objective.leads)) }],
+      figures: [{ label: "Matching", value: namedTarget ? `${num(objective.leads)} of ${num(objective.leadTarget)}` : String(num(objective.leads)) }],
       tone: objective.stopReason === "failed" ? "bad" : finished ? "good" : "warning",
       note: "Saved leads are below. Sending and reply status are on the plan card.",
     };
@@ -84,10 +85,10 @@ export function compactEvent(message: { toolResult?: unknown }): CompactEvent | 
       if (!event.ok) return { title: `Search failed${event.source ? ` · ${event.source}` : ""}`, figures: [], tone: "bad", note: event.error ?? null };
       if (event.notSearched) return { title: `Source not searched${event.source ? ` · ${event.source}` : ""}`, figures: [], tone: "warning", note: null };
       const figures: CompactFigure[] = [
-        { label: "found", value: String(num(event.found)) },
-        { label: "contactable", value: String(num(event.contactable)) },
+        { label: "Found", value: String(num(event.found)) },
+        { label: "Contactable", value: String(num(event.contactable)) },
       ];
-      if (event.matching !== null && event.judged) figures.push({ label: "match", value: `${num(event.matching)} of ${num(event.judged)}` });
+      if (event.matching !== null && event.judged) figures.push({ label: "Matching", value: String(num(event.matching)) });
       return { title: `Search finished${event.source ? ` · ${event.source}` : ""}`, figures, tone: num(event.contactable) > 0 ? "good" : "warning", note: null };
     }
     case "plan_ready": {
@@ -116,7 +117,7 @@ export function compactEvent(message: { toolResult?: unknown }): CompactEvent | 
       return {
         title: `Research continues · round ${num(event.n)}`,
         figures: [
-          { label: "leads", value: event.target === null ? String(num(event.leads)) : `${num(event.leads)} of ${num(event.target)}` },
+          { label: "Matching", value: event.target === null ? String(num(event.leads)) : `${num(event.leads)} of ${num(event.target)}` },
           { label: "spent", value: event.capUsd === null ? usd(num(event.spentUsd)) : `${usd(num(event.spentUsd))} of ${usd(num(event.capUsd))}` },
           { label: "left", value: `${Math.max(0, Math.round(num(event.minutesLeft)))} min` },
         ],
@@ -158,9 +159,9 @@ export function compactToolReport(message: { tool?: string | null; toolResult?: 
   return {
     title: message.tool === "daily_summary" ? `Daily summary${typeof data.day === "string" ? ` · ${data.day}` : ""}` : `Results · ${label}`,
     figures: [
-      { label: "contacted", value: measured(outreach.peopleContacted) },
-      { label: "people replied", value: measured(outreach.peopleReplied) },
-      { label: "interested", value: measured(outreach.interested) },
+      { label: "Contacted", value: measured(outreach.peopleContacted) },
+      { label: "Replied", value: measured(outreach.peopleReplied) },
+      { label: "Interested", value: measured(outreach.interested) },
       { label: "need you", value: attention ? String(num(attention.repliesWaiting) + num(attention.openDecisions)) : "—" },
     ],
     tone: attention && num(attention.repliesWaiting) + num(attention.openDecisions) > 0 ? "warning" : "neutral",

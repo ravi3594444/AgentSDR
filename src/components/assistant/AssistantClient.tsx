@@ -40,17 +40,19 @@ import { planCounts, planOutcome } from "@/lib/activity/status";
 import { displayTime } from "@/lib/assistant/displayTime";
 import { formatChatDateTime, formatChatTime } from "@/lib/assistant/chatTime";
 import * as Button from "@/components/alignui/button";
-import { RequestBar, RequestPanel, useThreadRequest } from "@/components/assistant/RequestPanel";
+import { RequestPanel, RequestPanelToggle, useRequestPanelOpen, useThreadRequest } from "@/components/assistant/RequestPanel";
 import { EventRow } from "@/components/assistant/EventRow";
 import { compactToolReport, reportAsOf } from "@/lib/assistant/chatEvents";
 import { hostOf, ProspectsList } from "@/components/assistant/ProspectsList";
 import { reportAudiences, reportLinks } from "@/lib/assistant/leadLists";
+import { outreachShown } from "@/lib/assistant/requests";
 import { useChatScroll } from "./useChatScroll";
 import { Mascot, type MascotMood } from "./Mascot";
-import { ResearchGroup } from "./ResearchGroup";
+import { RequestActivity } from "./RequestActivity";
 import { BrowserConnection } from "./BrowserConnection";
 import { RESEARCH_TOOLS, researchTitle } from "./researchView";
-import { activityPresentation, COMPACT_TOOLS, groupChatActivity, visibleChatMessages, type ChatActivityItem } from "./chatActivity";
+import { activityPresentation, COMPACT_TOOLS, splitTurn, visibleChatMessages } from "./chatActivity";
+import { useRequestSummary } from "./useRequestSummary";
 import { createResponseGate } from "@/components/crm/responseGate";
 import { cn } from "@/utils/cn";
 
@@ -93,6 +95,14 @@ type Job = {
   error: string | null;
   audienceId: string | null;
   runId: string | null;
+  /** Timing and transport facts the search rows read their state from (jobActivity.ts). */
+  runAfter?: string | null;
+  heartbeatAt?: string | null;
+  attempts?: number;
+  providerRun?: boolean;
+  provider?: string | null;
+  target?: string | null;
+  searchProvider?: string | null;
 };
 
 type RunReply = { id: string; conversationId: string; who: string; channel: string; receivedAt: string; preview: string; state: { tone: "done" | "waiting" | "you" | "failed"; text: string; at?: string; release?: boolean } };
@@ -730,6 +740,8 @@ function SortingSummary({ plan }: { plan: ProposalData["plan"] }) {
 
 /** The card's lead list is cut at this many (runLeads.server.ts); a cut list cannot say that nothing is left to send. */
 const CARD_LEADS = 200;
+/** Leads listed before "Show all", so the card never holds a scroll box of its own. */
+const LEADS_SHOWN = 20;
 
 /** Every lead of a started run and where it stands: waiting, sent, replied (and how), stopped or failed. */
 function LeadsList({ leads, running }: { leads: RunLead[]; running: boolean }) {
@@ -740,20 +752,24 @@ function LeadsList({ leads, running }: { leads: RunLead[]; running: boolean }) {
   // Running with nothing left to send to anyone: say how it ended rather than implying it is still sending.
   const outcome = running && leads.length < CARD_LEADS ? planOutcome(leads) : null;
   const tone = { good: "text-success-base", replied: "text-text-strong-950", sent: "text-text-sub-600", waiting: "text-text-soft-400", stopped: "text-text-soft-400", failed: "text-error-base" } as const;
+  // No scroll box inside the chat: the first ones, then all on request.
+  const [all, setAll] = useState(false);
+  const shown = all ? leads : leads.slice(0, LEADS_SHOWN);
   return (
     <details className="mt-3 border-t border-stroke-soft-200 pt-3 text-paragraph-xs">
       <summary className="cursor-pointer text-label-xs text-text-strong-950">
-        Leads · {leads.length} · {contacted} contacted · {replied} replied · {interested} interested{failed > 0 && <span className="text-error-base"> · {failed} failed</span>}
+        Leads · {leads.length} · {contacted} Contacted · {replied} Replied · {interested} Interested{failed > 0 && <span className="text-error-base"> · {failed} failed</span>}
         {outcome && <span className={cn("block font-normal", outcome.state === "failed" ? "text-error-base" : "text-text-sub-600")}>{outcome.state === "completed" ? "Done" : outcome.state === "failed" ? "Failed" : "Partly done"}: {outcome.reason}. Replies are still handled.</span>}
       </summary>
-      <ul className="mt-1.5 max-h-72 space-y-1 overflow-y-auto">
-        {leads.map((lead) => (
+      <ul className="mt-1.5 space-y-1">
+        {shown.map((lead) => (
           <li key={`${lead.personId}-${lead.channel}`} className="flex flex-wrap items-baseline justify-between gap-x-3">
             <span className="min-w-0 truncate text-text-strong-950">{lead.who} <span className="text-text-soft-400">· {CHANNEL_LABEL[lead.channel] ?? lead.channel}</span></span>
             <span className={tone[lead.progress.tone]}>{lead.progress.text}{lead.nextAt && <span className="text-text-soft-400"> · next follow-up <time dateTime={lead.nextAt}>{formatChatDateTime(lead.nextAt, timeZone)}</time></span>}</span>
           </li>
         ))}
       </ul>
+      {leads.length > LEADS_SHOWN && <button type="button" onClick={() => setAll((value) => !value)} className="mt-1.5 min-h-9 rounded-md text-label-xs text-primary-base outline-none hover:underline focus-visible:ring-2 focus-visible:ring-primary-base">{all ? "Show fewer" : `Show all ${leads.length}`}</button>}
     </details>
   );
 }
@@ -871,6 +887,18 @@ const DECISION_LABEL: Record<string, string> = {
   limit: "Chat limit reached",
 };
 
+/** A lead's message, a few lines and then all of it on request: no scroll box inside the chat. */
+function LeadQuote({ text }: { text: string }) {
+  const [all, setAll] = useState(false);
+  const long = text.length > 320 || text.split("\n").length > 5;
+  return (
+    <div className="mt-2">
+      <blockquote className={cn("whitespace-pre-wrap border-l-2 border-stroke-sub-300 pl-2 text-paragraph-xs text-text-sub-600 [overflow-wrap:anywhere]", long && !all && "line-clamp-5")}>{text}</blockquote>
+      {long && <button type="button" aria-expanded={all} onClick={() => setAll((value) => !value)} className="mt-1 min-h-8 rounded-md text-label-xs text-primary-base outline-none hover:underline focus-visible:ring-2 focus-visible:ring-primary-base">{all ? "Show less" : "Show all"}</button>}
+    </div>
+  );
+}
+
 function DecisionCard({ message, state, onChanged }: { message: Message; state: DecisionState | undefined; onChanged: () => void }) {
   const data = message.toolResult?.data as { decisionId: string; kind: string; reason: string; decision: string; leadMessage: string | null; crmRecordId: string | null } | undefined;
   const [answer, setAnswer] = useState("");
@@ -908,7 +936,7 @@ function DecisionCard({ message, state, onChanged }: { message: Message; state: 
         {!report && <Badge.Root variant="lighter" size="small" color={status === "open" ? "orange" : "gray"}>{status === "open" ? "Waiting for you" : status === "answered" ? "Answered" : "Done"}</Badge.Root>}
       </div>
       <p className="mt-1 text-text-strong-950">{data.reason}</p>
-      {data.leadMessage && <blockquote className="mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap border-l-2 border-stroke-sub-300 pl-2 text-paragraph-xs text-text-sub-600">{data.leadMessage}</blockquote>}
+      {data.leadMessage && <LeadQuote text={data.leadMessage} />}
       <p className="mt-2 text-paragraph-xs text-text-sub-600">{data.decision}</p>
       {state?.answer && <p className="mt-1 text-paragraph-xs text-text-sub-600">Your answer: {state.answer}</p>}
       {!report && status === "open" && (
@@ -949,7 +977,7 @@ function ActivityRow({ message }: { message: Message }) {
   );
 }
 
-function ToolMessage({ message, jobs, runs, decisions, canManageAutopilot, lastReplyMode, onChanged }: { message: Message; jobs: Job[]; runs: Record<string, Run>; decisions: Record<string, DecisionState>; canManageAutopilot: boolean; lastReplyMode: "automatic" | "review" | null; onChanged: () => void }) {
+function ToolMessage({ message, runs, decisions, canManageAutopilot, lastReplyMode, onChanged }: { message: Message; runs: Record<string, Run>; decisions: Record<string, DecisionState>; canManageAutopilot: boolean; lastReplyMode: "automatic" | "review" | null; onChanged: () => void }) {
   const timeZone = useContext(DisplayTimeZone);
   const data = message.toolResult?.data as Record<string, unknown> | undefined;
   if (message.tool === "owner_decision") return <DecisionCard message={message} state={decisions[String(data?.decisionId ?? "")]} onChanged={onChanged} />;
@@ -958,7 +986,8 @@ function ToolMessage({ message, jobs, runs, decisions, canManageAutopilot, lastR
     return <Card title={`Daily summary · ${String(data?.day ?? "")}`} status={message.status}><details className="text-paragraph-xs"><summary className="cursor-pointer">Details</summary><p className="mt-2 whitespace-pre-wrap">{message.content.split("\n").slice(1).join("\n")}</p></details><AsOf message={message} /></Card>;
   }
   if (message.tool === "diagnose_delivery") return <CompactReport message={message} onChanged={onChanged} />;
-  if (RESEARCH_TOOLS.has(message.tool ?? "")) return <ResearchGroup messages={[message]} jobs={jobs} timeZone={timeZone} />;
+  // Searches are rows of the turn's request card (RequestActivity); a stray one reads as a step.
+  if (RESEARCH_TOOLS.has(message.tool ?? "")) return <ActivityRow message={message} />;
   if (message.tool === "prepare_outreach") return data?.covered === true ? <ActivityRow message={message} /> : <ProposalCard message={message} run={runs[String(data?.runId ?? "")]} canManageAutopilot={canManageAutopilot} lastReplyMode={lastReplyMode} onChanged={onChanged} />;
   if (message.tool === "prepare_inquiry_replies") return <InquiryRunCard message={message} run={runs[String(data?.runId ?? "")]} canManageAutopilot={canManageAutopilot} onChanged={onChanged} />;
   if (message.tool === "report") return <ReportCard message={message} />;
@@ -1020,17 +1049,45 @@ function AssistantAvatar({ size = "sm", mood = "idle" }: { size?: "sm" | "lg"; m
 }
 
 /** A turn's items with each run of consecutive searches gathered into one research card. */
-function researchRuns(items: Message[]): (Message | Message[] | Extract<ChatActivityItem<Message>, { kind: "activity" }>)[] {
-  const out: (Message | Message[] | Extract<ChatActivityItem<Message>, { kind: "activity" }>)[] = [];
-  for (const item of groupChatActivity(items)) {
-    if (item.kind === "activity") { out.push(item); continue; }
-    const message = item.message;
-    const research = message.role === "tool" && RESEARCH_TOOLS.has(message.tool ?? "");
-    const last = out[out.length - 1];
-    if (research && Array.isArray(last)) last.push(message);
-    else out.push(research ? [message] : message);
-  }
-  return out;
+function TurnActivity({ requestId, refreshKey, research, details, plans, jobs, renderDetail, active, statusKnown }: {
+  /** The owner's message that asked: the request key its searches and plans carry. */
+  requestId: string | null;
+  refreshKey: string;
+  research: Message[];
+  details: Message[];
+  /** Plan cards this turn shows. */
+  plans: number;
+  jobs: Job[];
+  renderDetail: (message: Message) => React.ReactNode;
+  active: boolean;
+  statusKnown: boolean;
+}) {
+  const timeZone = useContext(DisplayTimeZone);
+  // The request's own figures, the same the panel beside the chat shows; only a turn that searched or planned has one.
+  const summary = useRequestSummary(requestId && (research.length > 0 || plans > 0) ? `r:${requestId}` : null, refreshKey);
+  const presentation = activityPresentation(details, active, statusKnown);
+  const activeStep = presentation.status === "running" ? details.findLast((message) => message.role === "tool" && message.status === "running") : null;
+  const workingLabel = activeStep ? WORKING_TITLE[activeStep.tool ?? ""] ?? TOOL_TITLE[activeStep.tool ?? ""] ?? "Working on this request" : null;
+  const outreach = plans > 0 || Boolean(summary && outreachShown({ plans: summary.children.plans.length, campaigns: summary.children.campaigns.length, numbers: summary.numbers }));
+  const rendered = (message: Message) => {
+    if (message.status !== "running" || presentation.status === "running") return renderDetail(message);
+    const note = presentation.label === "Status unavailable" ? "The latest step status could not be loaded. Check the saved results before retrying." : "This step ended before its result was recorded. Saved work may still exist.";
+    return renderDetail({ ...message, status: "error", content: note, toolResult: { ...message.toolResult, summary: note, display: note } });
+  };
+  return (
+    <RequestActivity
+      research={research}
+      jobs={jobs}
+      details={details}
+      renderDetail={(message) => rendered(message as Message)}
+      numbers={summary === undefined ? undefined : summary?.numbers ?? null}
+      target={summary?.target ?? null}
+      outreach={outreach}
+      timeZone={timeZone}
+      working={presentation.status === "running"}
+      workingLabel={workingLabel}
+    />
+  );
 }
 
 function ThinkingIndicator({ label }: { label: string }) {
@@ -1235,6 +1292,9 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
   // The panel beside the chat follows what the chat sees: a new message, a search or plan changing state.
   const activityKey = `${state.messages.length}|${state.jobs.map((job) => `${job.id}:${job.status}`).join(",")}|${Object.entries(state.runs).map(([id, run]) => `${id}:${run.status}`).join(",")}`;
   const request = useThreadRequest(threadId, activityKey);
+  // Closed by default: the conversation takes the width; the header's "This request" opens it.
+  const [panelOpen, setPanelOpen] = useRequestPanelOpen();
+  const closePanel = useCallback(() => setPanelOpen(false), [setPanelOpen]);
   // The panel names each search the way the chat does ("real estate agencies in Houston, TX"), by its job.
   const searchLabels = useMemo(() => Object.fromEntries(state.messages.flatMap((message) => {
     const jobId = message.toolResult?.data?.jobId;
@@ -1402,24 +1462,21 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
         </div>
       );
     }
-    return <ToolMessage key={message.id} message={message} jobs={state.jobs} runs={state.runs} decisions={state.decisions ?? {}} canManageAutopilot={Boolean(setup?.canManageAutopilot)} lastReplyMode={state.lastReplyMode ?? null} onChanged={() => void refresh(true)} />;
+    return <ToolMessage key={message.id} message={message} runs={state.runs} decisions={state.decisions ?? {}} canManageAutopilot={Boolean(setup?.canManageAutopilot)} lastReplyMode={state.lastReplyMode ?? null} onChanged={() => void refresh(true)} />;
   };
-  const assistantItems = (items: Message[], active: boolean, statusKnown: boolean) => researchRuns(items).map((item) => {
-    if (Array.isArray(item)) return <ResearchGroup key={item[0]!.id} messages={item} jobs={state.jobs} timeZone={timeZone} />;
-    if ("kind" in item) {
-      const presentation = activityPresentation(item.messages, active, statusKnown);
-      const activeStep = presentation.status === "running" ? item.messages.findLast(message => message.role === "tool" && message.status === "running") : null;
-      return <details key={`activity-${item.messages[0]!.id}`} className="w-full max-w-2xl rounded-xl border border-stroke-soft-200 bg-bg-weak-50/50 px-3 py-2">
-        <summary className="flex min-h-9 cursor-pointer items-center gap-2 text-label-xs text-text-sub-600"><StatusIcon status={presentation.status} /><span className="shrink-0">{presentation.label}</span>{activeStep && <span className="min-w-0 truncate text-text-strong-950">· {WORKING_TITLE[activeStep.tool ?? ""] ?? TOOL_TITLE[activeStep.tool ?? ""] ?? "Working on this request"}</span>}<span className="ml-auto shrink-0 text-text-soft-400">{item.messages.length} {item.messages.length === 1 ? "step" : "steps"}</span><RiArrowDownSLine className="size-4 shrink-0" aria-hidden="true" /></summary>
-        <div className="mt-3 space-y-3 border-t border-stroke-soft-200 pt-3">{item.messages.map((message) => {
-          if (message.status !== "running" || presentation.status === "running") return renderMessage(message);
-          const note = presentation.label === "Status unavailable" ? "The latest step status could not be loaded. Check the saved results before retrying." : "This step ended before its result was recorded. Saved work may still exist.";
-          return renderMessage({ ...message, status: "error", content: note, toolResult: { ...message.toolResult, summary: note, display: note } });
-        })}</div>
-      </details>;
-    }
-    return renderMessage(item);
-  });
+  // One request card per turn (its searches, figures and Details), then what stays in the conversation.
+  const assistantItems = (owner: Message | null, items: Message[], active: boolean, statusKnown: boolean) => {
+    const turn = splitTurn(items, shown.at(-1)?.id ?? null);
+    const plans = turn.visible.filter((message) => message.tool === "prepare_outreach").length;
+    return (
+      <>
+        {(turn.research.length > 0 || turn.details.length > 0) && (
+          <TurnActivity requestId={owner?.id ?? null} refreshKey={activityKey} research={turn.research} details={turn.details} plans={plans} jobs={state.jobs} renderDetail={renderMessage} active={active} statusKnown={statusKnown} />
+        )}
+        {turn.visible.map(renderMessage)}
+      </>
+    );
+  };
 
   return (
     <DisplayTimeZone.Provider value={timeZone}>
@@ -1435,6 +1492,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
           <div className="min-w-0"><h1 className="text-label-md text-text-strong-950">Outreach</h1><p className="mt-0.5 truncate text-paragraph-xs text-text-sub-600" role={switchingThread ? "status" : undefined}>{switchingThread ? "Opening conversation…" : displayThreadTitle(state.thread.title)}</p></div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5 sm:order-last">
+          <RequestPanelToggle state={request} open={panelOpen} onToggle={() => setPanelOpen(!panelOpen)} />
           <Button.Root variant="neutral" mode="stroke" size="xsmall" onClick={() => void newThread()} disabled={sending || switchingThread} aria-label="New conversation" className="size-11 p-0 sm:h-9 sm:w-auto sm:px-2.5">
             <Button.Icon as={RiAddLine} /><span className="hidden sm:inline">New chat</span>
           </Button.Root>
@@ -1459,7 +1517,6 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
 
       <div className={cn("flex min-h-0 flex-1 transition-opacity", switchingThread && "opacity-60")} aria-busy={switchingThread || undefined} inert={switchingThread}>
       <div className="relative flex min-w-0 flex-1 flex-col">
-      <RequestBar state={request} labels={searchLabels} />
       <div ref={scroller} onScroll={updatePosition} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-4 sm:px-8 sm:py-6" aria-label="Assistant conversation">
         <div ref={content}>
         {empty ? (
@@ -1485,7 +1542,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
                     <div className="hidden shrink-0 sm:block"><AssistantAvatar mood={thinking && index === turns.length - 1 && !showPending ? "thinking" : "idle"} /></div>
                     <div className="flex min-w-0 flex-1 flex-col gap-2.5 pt-1">
                       <span className="text-label-xs text-text-sub-600">Assistant</span>
-                      {assistantItems(turn.items, state.busy && index === turns.length - 1, index !== turns.length - 1 || error === null)}
+                      {assistantItems(turn.owner, turn.items, state.busy && index === turns.length - 1, index !== turns.length - 1 || error === null)}
                       {thinking && index === turns.length - 1 && !showPending && <ThinkingIndicator label={thinkingLabel} />}
                     </div>
                   </div>
@@ -1522,7 +1579,6 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
             <div className="flex items-start gap-2"><RiErrorWarningFill className="mt-0.5 size-4 shrink-0 text-error-base" aria-hidden="true" /><div className="min-w-0 flex-1"><p className="text-label-xs text-text-strong-950">The latest update couldn’t be confirmed</p><p className="mt-1 leading-5 text-text-sub-600">Saved work may still be available. Refresh the status before trying again.</p></div><button type="button" aria-label="Dismiss this notice" onClick={() => setError(null)} className="-mr-1 -mt-1 flex size-9 shrink-0 items-center justify-center rounded-lg text-text-sub-600 hover:bg-bg-weak-50"><RiCloseLine className="size-4" aria-hidden="true" /></button></div>
             <div className="mt-2 flex flex-wrap items-center justify-between gap-2 pl-6"><details className="min-w-0 max-w-full text-text-sub-600"><summary className="cursor-pointer">Error details</summary><p className="mt-2 max-h-28 overflow-y-auto whitespace-pre-wrap leading-5 [overflow-wrap:anywhere]">{error}</p></details><button type="button" onClick={async () => { if (await refresh(true)) setError(null); }} className="min-h-10 rounded-lg px-3 text-label-xs text-text-strong-950 ring-1 ring-inset ring-stroke-soft-200 hover:bg-bg-weak-50">Refresh status</button></div>
           </div>}
-          {state.busy && !sending && <p role="status" className="mb-2 text-paragraph-xs text-text-sub-600">Working on the previous step. You can draft your next message here.</p>}
           <div className="rounded-[20px] bg-bg-white-0 shadow-[0_4px_24px_-10px_rgba(0,0,0,0.15)] ring-1 ring-inset ring-stroke-sub-300 transition focus-within:ring-primary-base">
             {files.length > 0 && (
               <div className="flex flex-wrap gap-1.5 px-3 pt-3">
@@ -1569,16 +1625,23 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
               </Button.Root>
             </div>
           </div>
-          <p className="mt-2 hidden text-center text-paragraph-xs text-text-sub-600 sm:block">
-            {state.thread.autonomous ? "Autonomous on · Plans start automatically" : "Plans start when you press Start"}
-            <span> · Replies in <Link href="/inbox?view=needs_you" className="underline underline-offset-2 hover:text-text-strong-950">Inbox</Link></span>
-          </p>
-          <p className="mt-2 text-center text-[12px] text-text-sub-600 sm:hidden">{state.thread.autonomous ? "Autonomous on" : "Start a plan to send"} · <Link href="/inbox?view=needs_you" className="underline underline-offset-2">Replies in Inbox</Link></p>
+          {/* One line in the same place whatever the state, so the message box never moves. */}
+          {state.busy && !sending ? (
+            <p role="status" className="mt-2 truncate text-center text-paragraph-xs text-text-sub-600">Working on the previous step. You can draft your next message.</p>
+          ) : (
+            <>
+              <p className="mt-2 hidden truncate text-center text-paragraph-xs text-text-sub-600 sm:block">
+                {state.thread.autonomous ? "Autonomous on · Plans start automatically" : "Plans start when you press Start"}
+                <span> · Replies in <Link href="/inbox?view=needs_you" className="underline underline-offset-2 hover:text-text-strong-950">Inbox</Link></span>
+              </p>
+              <p className="mt-2 truncate text-center text-paragraph-xs text-text-sub-600 sm:hidden">{state.thread.autonomous ? "Autonomous on" : "Start a plan to send"} · <Link href="/inbox?view=needs_you" className="underline underline-offset-2">Replies in Inbox</Link></p>
+            </>
+          )}
         </div>
       </div>
 
       </div>
-      <RequestPanel state={request} labels={searchLabels} />
+      <RequestPanel state={request} labels={searchLabels} open={panelOpen} onClose={closePanel} />
       </div>
 
       {dragging && (

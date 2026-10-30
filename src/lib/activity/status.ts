@@ -7,6 +7,7 @@
 
 import { outcomeOf, STOP_REASONS, STOP_WORDS, type StopReason } from "@/lib/assistant/objective";
 import { DAILY_LEAD_LIMIT_GATE } from "@/lib/channels/dailyLeadLimit";
+import { jobActivity, jobStep } from "./jobActivity";
 
 export type WorkState =
   | "queued"
@@ -17,6 +18,7 @@ export type WorkState =
   | "daily_lead_limit"
   | "scheduled"
   | "retrying"
+  | "needs_you"
   | "needs_approval"
   | "paused"
   | "completed"
@@ -26,15 +28,22 @@ export type WorkState =
   | "cancelled"
   | "stale";
 
+/**
+ * Each state's label. A job's open states are labelled by its activity
+ * (jobActivity.ts: Queued, Searching, Reading pages, Waiting for provider
+ * results, Retrying, Needs you); "Working" and "Scheduled" (a follow-up
+ * ahead) belong to outreach plans.
+ */
 export const WORK_STATE_LABELS: Record<WorkState, string> = {
   queued: "Queued",
   executing: "Working",
-  waiting_slot: "Waiting for a run slot",
-  waiting_quota: "Waiting for a provider limit",
+  waiting_slot: "Queued",
+  waiting_quota: "Queued",
   waiting_send: "Waiting to send",
   daily_lead_limit: "Daily lead limit reached",
   scheduled: "Scheduled",
   retrying: "Retrying",
+  needs_you: "Needs you",
   needs_approval: "Needs your Start",
   paused: "Paused",
   completed: "Done",
@@ -42,48 +51,57 @@ export const WORK_STATE_LABELS: Record<WorkState, string> = {
   not_searched: "Not searched",
   failed: "Failed",
   cancelled: "Cancelled",
-  stale: "Stalled",
+  stale: "Retrying",
 };
 
 /** States that may still change by themselves; a finished item will not. */
-export const OPEN_STATES: ReadonlySet<WorkState> = new Set(["queued", "executing", "waiting_slot", "waiting_quota", "waiting_send", "daily_lead_limit", "scheduled", "retrying", "needs_approval", "paused", "stale"]);
-
-const STALE_MS = 3 * 60_000;
+export const OPEN_STATES: ReadonlySet<WorkState> = new Set(["queued", "executing", "waiting_slot", "waiting_quota", "waiting_send", "daily_lead_limit", "scheduled", "retrying", "needs_you", "needs_approval", "paused", "stale"]);
 
 export type JobFacts = {
+  kind?: string;
   status: string;
+  stage?: string | null;
   runAfter: Date | null;
   heartbeatAt: Date | null;
   attempts: number;
   progress: Record<string, unknown> | null;
   result: Record<string, unknown> | null;
+  /** The provider run the job waits on (an Apify run, a scraper job), when it started one. */
+  externalId?: string | null;
 };
 
-/** A background job's state and the reason to show beside it. */
-export function jobState(job: JobFacts, now: Date): { state: WorkState; reason: string | null } {
-  const waiting = job.progress?.waiting as { kind?: unknown; reason?: unknown; until?: unknown } | undefined;
-  const reason = typeof waiting?.reason === "string" ? waiting.reason : null;
+/**
+ * A background job's state, the label and reason to show beside it, and
+ * when it is next looked at. An open job is labelled by what it is doing
+ * (jobActivity.ts), with its recorded reason or else its live step; never
+ * "Scheduled", which is a plan's follow-up.
+ */
+export function jobState(job: JobFacts, now: Date): { state: WorkState; reason: string | null; label: string; nextAt: string | null } {
+  const done = (state: WorkState, reason: string | null) => ({ state, reason, label: WORK_STATE_LABELS[state], nextAt: null });
   switch (job.status) {
-    case "succeeded":
-      if (job.result?.notSearched === true || job.result?.handedToJobId) return { state: "not_searched", reason: typeof job.result?.note === "string" ? job.result.note : null };
-      if (typeof job.result?.stopReason === "string") return requestOutcome(job.result);
-      return partialSearch(job) ?? { state: "completed", reason: null };
+    case "succeeded": {
+      if (job.result?.notSearched === true || job.result?.handedToJobId) return done("not_searched", typeof job.result?.note === "string" ? job.result.note : null);
+      if (typeof job.result?.stopReason === "string") {
+        const outcome = requestOutcome(job.result);
+        return done(outcome.state, outcome.reason);
+      }
+      const partial = partialSearch(job);
+      return partial ? done(partial.state, partial.reason) : done("completed", null);
+    }
     case "failed":
-      return { state: "failed", reason: null };
+      return done("failed", null);
     case "cancelled":
-      return { state: "cancelled", reason: null };
-    case "running":
-      return job.heartbeatAt && now.getTime() - job.heartbeatAt.getTime() > STALE_MS
-        ? { state: "stale", reason: "no worker has reported on it for a few minutes; it is picked up again automatically" }
-        : { state: "executing", reason: null };
+      return done("cancelled", null);
     default: {
-      // A request's driver: its searches run, or the assistant picks the next one; the request is being worked on.
-      if (waiting?.kind === "objective") return { state: "executing", reason };
-      if (waiting?.kind === "slot") return { state: "waiting_slot", reason };
-      if (waiting?.kind === "quota") return { state: "waiting_quota", reason };
-      if (typeof job.progress?.lastError === "string" && job.attempts > 0) return { state: "retrying", reason: job.progress.lastError };
-      if (job.runAfter && job.runAfter.getTime() > now.getTime() + 5_000) return { state: "scheduled", reason: null };
-      return { state: "queued", reason: null };
+      const live = jobActivity({ kind: job.kind ?? "", status: job.status === "running" ? "running" : "queued", stage: job.stage ?? null, runAfter: job.runAfter, heartbeatAt: job.heartbeatAt, attempts: job.attempts, progress: job.progress, providerRun: Boolean(job.externalId) }, now)!;
+      const waiting = (job.progress?.waiting as { kind?: unknown } | undefined)?.kind;
+      const state: WorkState = live.phase === "needs_you" ? "needs_you"
+        : live.phase === "retrying" ? (job.status === "running" ? "stale" : "retrying")
+        : live.phase === "queued" ? (waiting === "slot" ? "waiting_slot" : waiting === "quota" ? "waiting_quota" : "queued")
+        : "executing";
+      const step = live.phase === "searching" || live.phase === "reading" ? jobStep({ kind: job.kind ?? "", stage: job.stage ?? null, progress: job.progress }) : null;
+      const stepText = step && (step.progress || (step.step !== "Working" && step.step !== live.label)) ? `${step.step}${step.progress ? ` · ${step.progress.done} of ${step.progress.total}` : ""}` : null;
+      return { state, reason: live.reason ?? stepText, label: live.label, nextAt: live.nextCheckAt };
     }
   }
 }
@@ -92,7 +110,9 @@ export function jobState(job: JobFacts, now: Date): { state: WorkState; reason: 
 function requestOutcome(result: Record<string, unknown>): { state: WorkState; reason: string | null } {
   const reason = result.stopReason as StopReason;
   if (!STOP_REASONS.includes(reason)) return { state: "completed", reason: null };
-  const found = typeof result.leads === "number" && typeof result.leadTarget === "number" ? `${result.leads} of ${result.leadTarget} leads; ` : "";
+  // Its target only when the owner named it (results written before that was recorded named it).
+  const named = result.targetNamed !== false && typeof result.leadTarget === "number";
+  const found = typeof result.leads === "number" ? `${result.leads}${named ? ` of ${result.leadTarget}` : ""} matching leads; ` : "";
   const outcome = outcomeOf(reason);
   if (outcome === "completed") return { state: "completed", reason: found ? `${found}${STOP_WORDS[reason]}` : null };
   return { state: outcome, reason: `${found}stopped because ${STOP_WORDS[reason]}` };
@@ -292,6 +312,9 @@ export function reasonGivesTime(reason: string | null): boolean {
 export function nextAtPhrase(state: WorkState): string {
   if (state === "scheduled") return "next follow-up";
   if (state === "daily_lead_limit") return "resets";
+  // A job's recorded run_after: when it runs again after a failure, or is next looked at.
+  if (state === "retrying" || state === "stale") return "next try";
+  if (state === "queued" || state === "waiting_slot" || state === "waiting_quota" || state === "executing") return "next check";
   return "the next send is allowed";
 }
 

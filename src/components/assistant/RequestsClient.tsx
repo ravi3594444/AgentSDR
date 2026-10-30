@@ -60,7 +60,7 @@ function Chips<T extends string>({ label, value, options, onChange }: { label: s
 function RequestItem({ row, timeZone, expanded, onToggle }: { row: RequestRow; timeZone: string; expanded: boolean; onToggle: () => void }) {
   const { data: summary, error, pending, reload } = useRequestRead(expanded ? `/api/assistant/requests/${encodeURIComponent(row.key)}` : null, parseRequestSummary);
   useVisiblePolling(() => void reload(true), POLL_MS, expanded);
-  const counts = row.counts ? `${row.counts.leads} ${row.counts.leads === 1 ? "lead" : "leads"} · ${row.counts.contacted} contacted · ${row.counts.replied} replied${row.counts.failed ? ` · ${row.counts.failed} failed` : ""}` : null;
+  const counts = row.counts ? `${row.counts.leads} ${row.counts.leads === 1 ? "lead" : "leads"} · ${row.counts.contacted} Contacted · ${row.counts.replied} Replied${row.counts.failed ? ` · ${row.counts.failed} failed` : ""}` : null;
   const parts = [row.searches ? `${row.searches} ${row.searches === 1 ? "search" : "searches"}` : null, row.plans ? `${row.plans} ${row.plans === 1 ? "plan" : "plans"}` : null].filter(Boolean).join(" · ");
   return (
     <li data-testid="request-row">

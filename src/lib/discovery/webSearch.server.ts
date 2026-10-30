@@ -1,6 +1,7 @@
 import "server-only";
 
 import { AIML_PROVIDER_KEY, AIML_PROVIDER_NAME } from "@/lib/ai/aimlapi-types";
+import { webSearchProviderName as providerName } from "@/lib/activity/jobActivity";
 import { getByokSettings, isManagedAiConnectionId } from "@/lib/ai/byok";
 import { getAiConnection, type AiConnection } from "@/lib/ai/connections";
 import { openRouterTokenLimit, type ByokSettings } from "@/lib/ai/openrouter-types";
@@ -59,13 +60,7 @@ export const TINYFISH_SEARCH_MODEL = "tinyfish-search";
 
 /** The provider's name for the owner: never "AI/ML API" for a Tavily or TinyFish search. */
 export function webSearchProviderName(provider: string | null | undefined): string {
-  switch (provider) {
-    case "tinyfish": return "TinyFish Search";
-    case "tavily": return "Tavily";
-    case "openrouter": return "OpenRouter web search";
-    case AIML_PROVIDER_KEY: return `${AIML_PROVIDER_NAME} web research`;
-    default: return "web search";
-  }
+  return providerName(provider);
 }
 
 export type WebSearchAvailability = {

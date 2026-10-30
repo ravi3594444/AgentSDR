@@ -42,13 +42,16 @@ describe("older chats render as they always did", () => {
 describe("the compact line for each report", () => {
   test("a request's existing structured final report is compact without claiming messages were delivered", () => {
     const line = compactEvent({ toolResult: { reportKey: "objective:o:finished", data: { objective: { leads: 1, leadTarget: 1, named: { target: true }, stopReason: "finished" } } } });
-    expect(line).toMatchObject({ title: "Request finished", figures: [{ label: "matching leads", value: "1 of 1" }] });
+    expect(line).toMatchObject({ title: "Request finished", figures: [{ label: "Matching", value: "1 of 1" }] });
     expect(line?.note).toContain("Sending and reply status are on the plan card");
+    // A default target the owner never named is not shown as wanted.
+    const unnamed = compactEvent({ toolResult: { reportKey: "objective:o:finished", data: { objective: { leads: 24, leadTarget: 25, targetNamed: false, named: { target: true }, stopReason: "finished" } } } });
+    expect(unnamed?.figures).toEqual([{ label: "Matching", value: "24" }]);
   });
 
   test("results show distinct people, not all historical messages as current replies", () => {
     const line = compactToolReport({ tool: "report", toolResult: { data: { results: { period: { label: "all time" }, scope: { label: "this plan" }, outreach: { peopleContacted: 1, peopleReplied: 1, repliesReceived: 14, interested: 1 }, attention: { repliesWaiting: 0, openDecisions: 0 } } } } });
-    expect(line?.figures).toEqual([{ label: "contacted", value: "1" }, { label: "people replied", value: "1" }, { label: "interested", value: "1" }, { label: "need you", value: "0" }]);
+    expect(line?.figures).toEqual([{ label: "Contacted", value: "1" }, { label: "Replied", value: "1" }, { label: "Interested", value: "1" }, { label: "need you", value: "0" }]);
     expect(line?.note).toBe("this plan");
   });
 
@@ -66,7 +69,7 @@ describe("the compact line for each report", () => {
   });
   test("a search: found, contactable, and the match when it was judged", () => {
     const line = compactEvent({ toolResult: { data: { event: { kind: "search_report", jobId: "j", ok: true, source: "Google Maps", found: 24, contactable: 18, matching: 9, judged: 18 } } } });
-    expect(line).toEqual({ title: "Search finished · Google Maps", figures: [{ label: "found", value: "24" }, { label: "contactable", value: "18" }, { label: "match", value: "9 of 18" }], tone: "good", note: null });
+    expect(line).toEqual({ title: "Search finished · Google Maps", figures: [{ label: "Found", value: "24" }, { label: "Contactable", value: "18" }, { label: "Matching", value: "9" }], tone: "good", note: null });
     const empty = compactEvent({ toolResult: { data: { event: { kind: "search_report", jobId: "j", ok: true, source: null, found: 3, contactable: 0, matching: null, judged: null } } } });
     expect(empty?.figures).toHaveLength(2);
     expect(empty?.tone).toBe("warning");
@@ -99,7 +102,7 @@ describe("the compact line for each report", () => {
 
   test("the research continuing: leads of target, spend of cap, time left", () => {
     expect(compactEvent({ toolResult: { data: { event: { kind: "continuation", n: 2, leads: 7, target: 20, spentUsd: 1.234, capUsd: 5, minutesLeft: 95.4 } } } })?.figures).toEqual([
-      { label: "leads", value: "7 of 20" },
+      { label: "Matching", value: "7 of 20" },
       { label: "spent", value: "$1.23 of $5.00" },
       { label: "left", value: "95 min" },
     ]);
@@ -108,7 +111,7 @@ describe("the compact line for each report", () => {
   test("research without a budget shows recorded spend, never a fictitious $0 cap", () => {
     const line = compactEvent({ toolResult: { data: { event: { kind: "continuation", n: 2, leads: 7, target: null, spentUsd: 1.234, capUsd: null, minutesLeft: 95.4 } } } });
     expect(line?.figures.find(figure => figure.label === "spent")?.value).toBe("$1.23");
-    expect(line?.figures.find(figure => figure.label === "leads")?.value).toBe("7");
+    expect(line?.figures.find(figure => figure.label === "Matching")?.value).toBe("7");
   });
 });
 

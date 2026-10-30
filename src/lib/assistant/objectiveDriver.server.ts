@@ -242,7 +242,7 @@ async function report(objective: Objective): Promise<StepOutcome> {
   return {
     next: "done",
     progress: { ...progressOf(facts, null), stage: "done" },
-    result: { objectiveId: objective.id, stopReason: objective.stopReason, leads: facts.leads, leadTarget: objective.leadTarget, spentUsd: facts.spend.totalUsd, spendCapUsd: objective.spendCapUsd },
+    result: { objectiveId: objective.id, stopReason: objective.stopReason, leads: facts.leads, leadTarget: objective.leadTarget, targetNamed: requestLimits(objective).targetNamed, spentUsd: facts.spend.totalUsd, spendCapUsd: objective.spendCapUsd },
   };
 }
 

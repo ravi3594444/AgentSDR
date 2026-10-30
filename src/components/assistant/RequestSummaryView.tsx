@@ -2,13 +2,15 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { RiAlertLine, RiArrowRightLine, RiCheckLine, RiCloseCircleLine, RiCloseLine, RiExternalLinkLine, RiLoader4Line, RiSubtractLine, RiTimeLine } from "@remixicon/react";
+import { RiAlertLine, RiArrowRightLine, RiCheckLine, RiCloseCircleLine, RiCloseLine, RiExternalLinkLine, RiLoader4Line, RiSubtractLine, RiTimeLine, RiUserLine } from "@remixicon/react";
 import type { WorkItem } from "@/lib/activity/activity.server";
-import { OPEN_STATES } from "@/lib/activity/status";
+import { nextAtPhrase, OPEN_STATES } from "@/lib/activity/status";
+import { formatChatTime } from "@/lib/assistant/chatTime";
 import { searchListOf, workCounts } from "@/lib/assistant/leadLists";
 import { ProspectsList } from "@/components/assistant/ProspectsList";
 import type { RequestSummary } from "@/lib/assistant/requests.server";
 import { requestSpendLine } from "@/lib/assistant/objective";
+import { outreachShown } from "@/lib/assistant/requests";
 import { CONVERSATION_CHANNEL_META } from "@/components/analytics/theme";
 import { ErrorState, primaryButtonClass } from "@/components/crm/CrmLayout";
 import { readRequestJson } from "./requestRead";
@@ -64,11 +66,13 @@ function MatchRing({ value, target }: { value: number | null; target: number | n
   );
 }
 
+/** Ordinary work (queued, searching, waiting for a provider, retrying) is never drawn as a warning; only what waits for the owner is. */
 function SearchStateIcon({ item }: { item: WorkItem }) {
-  if (item.state === "executing" || item.state === "queued" || item.state === "retrying") return <RiLoader4Line className="size-4 shrink-0 animate-spin text-text-soft-400" aria-label={item.stateLabel} />;
+  if (item.state === "needs_you") return <RiUserLine className="size-4 shrink-0 text-warning-base" aria-label={item.stateLabel} />;
+  if (item.state === "executing") return <RiLoader4Line className="size-4 shrink-0 animate-spin text-text-soft-400" aria-label={item.stateLabel} />;
   if (item.state === "completed") return <RiCheckLine className="size-4 shrink-0 text-success-base" aria-label={item.stateLabel} />;
   if (item.state === "failed") return <RiCloseCircleLine className="size-4 shrink-0 text-error-base" aria-label={item.stateLabel} />;
-  if (OPEN_STATES.has(item.state)) return <RiTimeLine className="size-4 shrink-0 text-warning-base" aria-label={item.stateLabel} />;
+  if (OPEN_STATES.has(item.state)) return <RiTimeLine className="size-4 shrink-0 text-text-soft-400" aria-label={item.stateLabel} />;
   return <RiSubtractLine className="size-4 shrink-0 text-text-soft-400" aria-label={item.stateLabel} />;
 }
 
@@ -78,13 +82,14 @@ function CompactSearch({ item, label, busy, timeZone, onCancel }: { item: WorkIt
   const list = searchListOf(item);
   const counts = workCounts(item);
   const source = item.source?.replace(/\s+through\s+.*$/i, "") ?? null;
-  const detail = [source, counts || item.stateLabel].filter(Boolean).join(" · ");
+  const next = item.open && item.nextAt ? `${nextAtPhrase(item.state)} ${formatChatTime(item.nextAt, timeZone)}` : null;
+  const detail = [source, item.open ? item.stateLabel : null, counts || (item.open ? null : item.stateLabel), next].filter(Boolean).join(" · ");
   const body = (
     <>
       <SearchStateIcon item={item} />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-label-xs text-text-strong-950">{label ?? item.title}</span>
-        <span className="block truncate text-paragraph-xs text-text-soft-400">{detail}</span>
+        <span className="block text-paragraph-xs text-text-soft-400 [overflow-wrap:anywhere]">{detail}</span>
       </span>
     </>
   );
@@ -113,7 +118,7 @@ function SourceBar({ source }: { source: NonNullable<RequestSummary["objective"]
     <li className="space-y-1">
       <div className="flex items-baseline justify-between gap-2">
         <span className="min-w-0 truncate text-label-xs text-text-strong-950">{source.label}</span>
-        <span className="shrink-0 text-paragraph-xs tabular-nums text-text-soft-400">{source.found} found · {source.eligible} contactable{source.judged ? ` · ${source.matched} match` : ""}</span>
+        <span className="shrink-0 text-paragraph-xs tabular-nums text-text-soft-400">{source.found} Found · {source.eligible} Contactable{source.judged ? ` · ${source.matched} Matching` : ""}</span>
       </div>
       <div className="relative h-1.5 overflow-hidden rounded-full bg-bg-soft-200" aria-hidden="true">
         <span className="research-bar absolute inset-y-0 left-0 rounded-full bg-text-strong-950/30" style={{ width: `${Math.round((source.eligible / found) * 100)}%` }} />
@@ -122,6 +127,25 @@ function SourceBar({ source }: { source: NonNullable<RequestSummary["objective"]
       {(source.failed > 0 || source.notes.length > 0) && <p className="text-paragraph-xs text-text-soft-400 [overflow-wrap:anywhere]">{source.searches} {source.searches === 1 ? "search" : "searches"}{source.failed ? `, ${source.failed} failed` : ""}{source.notes.length ? ` (${source.notes.join("; ")})` : ""}</p>}
     </li>
   );
+}
+
+/**
+ * The request's figures under the names used everywhere (requests.ts):
+ * Found, Contactable, Matching, then Contacted, Replied, Interested only
+ * once outreach is relevant; "—" for one nothing measured.
+ */
+function figuresOf(summary: RequestSummary): { label: string; value: string }[] {
+  const n = summary.numbers;
+  const format = (value: number | null) => (value === null ? "—" : value.toLocaleString("en-US"));
+  const figures = [
+    { label: "Found", value: format(n.found) },
+    { label: "Contactable", value: format(n.contactable) },
+    { label: "Matching", value: n.matching !== null && summary.target !== null ? `${format(n.matching)} of ${summary.target}` : format(n.matching) },
+  ];
+  if (outreachShown({ plans: summary.children.plans.length, campaigns: summary.children.campaigns.length, numbers: n })) {
+    figures.push({ label: "Contacted", value: format(n.contacted) }, { label: "Replied", value: format(n.replied) }, { label: "Interested", value: format(n.interested) });
+  }
+  return figures;
 }
 
 export function RequestSummaryView({ summary, compact = false, onChanged, labels }: { summary: RequestSummary; compact?: boolean; onChanged?: () => void; labels?: Record<string, string> }) {
@@ -159,18 +183,20 @@ export function RequestSummaryView({ summary, compact = false, onChanged, labels
     const running = searches.filter((item) => item.open).length;
     return (
       <div className="space-y-4" data-testid="request-summary">
-        <div className="flex items-center gap-4 rounded-2xl bg-bg-weak-50 p-3">
-          <MatchRing value={n.matching} target={summary.target} />
-          <div className="min-w-0">
-            <p className="text-label-sm text-text-strong-950">Matching leads</p>
-            <p className="mt-0.5 text-paragraph-xs text-text-sub-600">{summary.target ? `${n.matching ?? 0} of ${summary.target} wanted` : "No number set: as many as fit"}</p>
+        {summary.target !== null && (
+          <div className="flex items-center gap-4 rounded-2xl bg-bg-weak-50 p-3">
+            <MatchRing value={n.matching} target={summary.target} />
+            <div className="min-w-0">
+              <p className="text-label-sm text-text-strong-950">Matching</p>
+              <p className="mt-0.5 text-paragraph-xs text-text-sub-600">{n.matching ?? 0} of the {summary.target} you asked for</p>
+            </div>
           </div>
-        </div>
-        <dl className="grid grid-cols-3 gap-2">
-          {([["Contacted", n.contacted], ["Replied", n.replied], ["Interested", n.interested]] as const).map(([label, value]) => (
-            <div key={label} className="min-w-0 rounded-xl px-3 py-2 ring-1 ring-inset ring-stroke-soft-200">
-              <dd className="text-label-lg tabular-nums text-text-strong-950">{value.toLocaleString()}</dd>
-              <dt className="truncate text-paragraph-xs text-text-sub-600">{label}</dt>
+        )}
+        <dl className="grid grid-cols-3 gap-2" data-testid="request-figures">
+          {figuresOf(summary).map(({ label, value }) => (
+            <div key={label} className="min-w-0 rounded-xl px-2.5 py-2 ring-1 ring-inset ring-stroke-soft-200">
+              <dt className="text-paragraph-xs text-text-sub-600 [overflow-wrap:anywhere]">{label}</dt>
+              <dd className="text-label-lg tabular-nums text-text-strong-950">{value}</dd>
             </div>
           ))}
         </dl>
@@ -241,7 +267,7 @@ export function RequestSummaryView({ summary, compact = false, onChanged, labels
               <span className="text-paragraph-xs text-text-soft-400 group-open:hidden">{objective.sources.length} {objective.sources.length === 1 ? "source" : "sources"}</span>
             </summary>
             <div className="space-y-3 border-t border-stroke-soft-200 px-3 py-3 text-paragraph-xs text-text-sub-600">
-              <p>{objective.leads}{objective.named.target ? ` of ${objective.leadTarget}` : ""} leads found · {requestSpendLine(objective.spentUsd, objective.spendCapUsd)}{objective.status === "active" ? ` · ${Math.max(0, Math.round(objective.msLeft / 60_000))} min left` : ""}</p>
+              <p>{objective.leads}{summary.target !== null ? ` of ${summary.target}` : ""} Matching · {requestSpendLine(objective.spentUsd, objective.spendCapUsd)}{objective.status === "active" ? ` · ${Math.max(0, Math.round(objective.msLeft / 60_000))} min left` : ""}</p>
               {objective.waiting && <p>Waiting: {objective.waiting}</p>}
               {objective.sources.length > 0 && <ul className="space-y-2.5">{objective.sources.map((source) => <SourceBar key={source.label} source={source} />)}</ul>}
               {objective.stopDetail && <p>Ended: {objective.stopDetail}</p>}
@@ -254,13 +280,10 @@ export function RequestSummaryView({ summary, compact = false, onChanged, labels
   }
   return (
     <div className="space-y-4" data-testid="request-summary">
-      <dl className={cn("grid gap-x-4 gap-y-3", compact ? "grid-cols-3" : "grid-cols-2 sm:grid-cols-5")}>
-        <Figure label="Matching" value={n.matching === null ? "—" : n.matching.toLocaleString()} detail={summary.target ? `of ${summary.target} wanted` : null} />
-        <Figure label="Contacted" value={n.contacted.toLocaleString()} />
-        <Figure label="Replied" value={n.replied.toLocaleString()} />
-        <Figure label="Interested" value={n.interested.toLocaleString()} />
-        <Figure label="Failed" value={n.failed.toLocaleString()} />
+      <dl className="grid grid-cols-3 gap-x-4 gap-y-3 sm:grid-cols-6" data-testid="request-figures">
+        {figuresOf(summary).map(({ label, value }) => <Figure key={label} label={label} value={value} />)}
       </dl>
+      {n.failed > 0 && <p className="text-paragraph-xs text-error-base">{n.failed.toLocaleString()} failed to send</p>}
 
       {summary.blocker && (
         <p className="flex gap-2 rounded-lg bg-warning-lighter px-3 py-2 text-paragraph-xs text-warning-dark" data-testid="request-blocker">
@@ -313,13 +336,13 @@ export function RequestSummaryView({ summary, compact = false, onChanged, labels
         <details className="rounded-xl ring-1 ring-inset ring-stroke-soft-200">
           <summary className="cursor-pointer px-3 py-2.5 text-label-xs text-text-strong-950">Research details</summary>
           <div className="space-y-2 border-t border-stroke-soft-200 px-3 py-3 text-paragraph-xs text-text-sub-600">
-            <p>{objective.leads}{objective.named.target ? ` of ${objective.leadTarget}` : ""} leads found · {requestSpendLine(objective.spentUsd, objective.spendCapUsd)}{objective.status === "active" ? ` · ${Math.max(0, Math.round(objective.msLeft / 60_000))} min left` : ""}</p>
+            <p>{objective.leads}{summary.target !== null ? ` of ${summary.target}` : ""} Matching · {requestSpendLine(objective.spentUsd, objective.spendCapUsd)}{objective.status === "active" ? ` · ${Math.max(0, Math.round(objective.msLeft / 60_000))} min left` : ""}</p>
             {objective.waiting && <p>Waiting: {objective.waiting}</p>}
             {objective.sources.length > 0 && (
               <ul className="space-y-1">
                 {objective.sources.map((source) => (
                   <li key={source.label} className="[overflow-wrap:anywhere]">
-                    <span className="text-text-strong-950">{source.label}</span>: {source.searches} {source.searches === 1 ? "search" : "searches"}, {source.found} found, {source.eligible} contactable{source.judged ? `, ${source.matched} of ${source.judged} match` : ""}{source.failed ? `, ${source.failed} failed` : ""}{source.notes.length ? ` (${source.notes.join("; ")})` : ""}
+                    <span className="text-text-strong-950">{source.label}</span>: {source.searches} {source.searches === 1 ? "search" : "searches"}, {source.found} Found, {source.eligible} Contactable{source.judged ? `, ${source.matched} Matching of ${source.judged} judged` : ""}{source.failed ? `, ${source.failed} failed` : ""}{source.notes.length ? ` (${source.notes.join("; ")})` : ""}
                   </li>
                 ))}
               </ul>

@@ -12,6 +12,7 @@ import { activitySeen } from "./schema";
 import { diagnoseDelivery } from "@/lib/assistant/deliveryDiagnostics.server";
 import { runLeads } from "@/lib/assistant/runLeads.server";
 import { CANCELLABLE_JOB_KINDS, canCancelJob, jobState, OPEN_STATES, planCounts, planState, REPLY_STATE_LABELS, replyState, WORK_STATE_LABELS, type ReplyState, type WorkState } from "./status";
+import { jobTransport, transportLine } from "./jobActivity";
 
 /**
  * Activity: the organization's background work and the replies it brought,
@@ -39,10 +40,12 @@ export type WorkItem = {
   updatedAt: string | null;
   found: number | null;
   eligible: number | null;
+  /** Searches whose leads were judged against their request: those that match (null when none were judged). */
+  matching: number | null;
   /** Plans: the existing run controls apply (POST /api/assistant/runs/[id]), by the run's own status. */
   runId: string | null;
   runStatus: string | null;
-  /** Plans: the earliest time a held sender may send again, shown in the viewer's time. */
+  /** Plans: the earliest time a held sender may send again; jobs: when a waiting or retrying job is next looked at. Shown in the viewer's time. */
   nextAt: string | null;
   /** Plans: their people, those contacted (accepted for sending at least), those who replied and those whose send failed. */
   counts: { leads: number; contacted: number; replied: number; failed: number } | null;
@@ -103,10 +106,12 @@ export async function listWork(now = new Date(), filter: WorkFilter = {}): Promi
     .orderBy(desc(outreachRuns.createdAt)).limit(exact ? 100 : 40);
   const items: WorkItem[] = [];
   for (const { job, threadTitle } of jobs) {
-    const { state, reason: stateReason } = jobState(job, now);
-    const payload = (job.payload ?? {}) as { phrase?: unknown; criteria?: { customers?: unknown; where?: unknown } };
+    const { state, reason: stateReason, label, nextAt } = jobState(job, now);
+    const payload = (job.payload ?? {}) as { phrase?: unknown; provider?: unknown; target?: unknown; searchProvider?: unknown; criteria?: { customers?: unknown; where?: unknown } };
+    const word = (value: unknown) => (typeof value === "string" ? value : null);
+    const transport = transportLine(jobTransport({ kind: job.kind, progress: job.progress, result: job.result, provider: word(payload.provider), target: word(payload.target), searchProvider: word(payload.searchProvider) }));
     const progress = (job.progress ?? {}) as { source?: unknown; leads?: unknown; spentUsd?: unknown; spendCapUsd?: unknown };
-    const result = (job.result ?? {}) as { found?: unknown; eligible?: unknown; spentUsd?: unknown; spendCapUsd?: unknown };
+    const result = (job.result ?? {}) as { found?: unknown; eligible?: unknown; spentUsd?: unknown; spendCapUsd?: unknown; fit?: { contactable?: unknown; qualified?: unknown } | null };
     // A lead request says what it spent of its cap.
     const spent = job.kind === "objective" ? spendOf(result) ?? spendOf(progress) : null;
     const reason = spent ? [stateReason, spent].filter(Boolean).join("; ") : stateReason;
@@ -116,9 +121,10 @@ export async function listWork(now = new Date(), filter: WorkFilter = {}): Promi
       type: "job",
       kind: job.kind,
       title: `${JOB_TITLES[job.kind] ?? job.kind}${phrase ? `: ${phrase}` : ""}`,
-      source: typeof progress.source === "string" ? progress.source : null,
+      // What it actually ran through (jobActivity.ts), else what its progress recorded.
+      source: transport ?? (typeof progress.source === "string" ? progress.source : null),
       state,
-      stateLabel: WORK_STATE_LABELS[state],
+      stateLabel: label,
       reason: reason ?? (job.status === "failed" ? job.error : null),
       open: OPEN_STATES.has(state),
       threadId: job.threadId,
@@ -128,9 +134,10 @@ export async function listWork(now = new Date(), filter: WorkFilter = {}): Promi
       // A lead request counts the qualified leads its searches found so far.
       found: typeof result.found === "number" ? result.found : job.kind === "objective" && typeof progress.leads === "number" ? progress.leads : null,
       eligible: typeof result.eligible === "number" ? result.eligible : null,
+      matching: Number(result.fit?.contactable ?? 0) > 0 && typeof result.fit?.qualified === "number" ? result.fit.qualified : null,
       runId: null,
       runStatus: null,
-      nextAt: null,
+      nextAt,
       counts: null,
       canCancel: canCancelJob(job),
       requestId: jobRequestId(job.payload),
@@ -165,6 +172,7 @@ export async function listWork(now = new Date(), filter: WorkFilter = {}): Promi
       updatedAt: null,
       found: null,
       eligible: null,
+      matching: null,
       runId: run.id,
       runStatus: run.status,
       nextAt,

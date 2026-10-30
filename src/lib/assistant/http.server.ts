@@ -52,6 +52,15 @@ const JOB_COLUMNS = {
   audienceId: assistantJobs.audienceId,
   runId: assistantJobs.runId,
   createdAt: assistantJobs.createdAt,
+  // What the chat reads a search's state and transport from (jobActivity.ts): its timing, and the
+  // few payload facts that name its provider, never the payload itself.
+  runAfter: assistantJobs.runAfter,
+  heartbeatAt: assistantJobs.heartbeatAt,
+  attempts: assistantJobs.attempts,
+  providerRun: sql<boolean>`${assistantJobs.externalId} IS NOT NULL`,
+  provider: sql<string | null>`${assistantJobs.payload} ->> 'provider'`,
+  target: sql<string | null>`${assistantJobs.payload} ->> 'target'`,
+  searchProvider: sql<string | null>`${assistantJobs.payload} ->> 'searchProvider'`,
 };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -158,7 +167,7 @@ export async function assistantState(threadId: string | null, ctx: OrgContext, w
       attachments: message.attachments,
       createdAt: message.createdAt.toISOString(),
     })),
-    jobs: jobs.map((job) => ({ ...job, createdAt: job.createdAt.toISOString() })),
+    jobs: jobs.map((job) => ({ ...job, createdAt: job.createdAt.toISOString(), runAfter: job.runAfter.toISOString(), heartbeatAt: job.heartbeatAt?.toISOString() ?? null })),
     runs: Object.fromEntries(runs.map(({ plan, ...run }) => [run.id, { ...run, plan: planCardView(plan), replies: replies[run.id] ?? [], leads: leads[run.id] ?? [], requestPeers: peers(run.id) }])),
     decisions: Object.fromEntries(decisions.map((decision) => [decision.id, { status: decision.status, answer: decision.answer }])),
     setup: withSetup ? { ...(await setupSnapshot()), canManageAutopilot: canManageAutopilot(ctx) } : null,

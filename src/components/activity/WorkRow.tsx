@@ -24,12 +24,14 @@ import { cn } from "@/utils/cn";
 export const WORK_TONE: Record<WorkState, "neutral" | "success" | "info" | "danger" | "warning"> = {
   queued: "neutral",
   executing: "info",
-  waiting_slot: "warning",
-  waiting_quota: "warning",
+  // Ordinary waits and automatic retries are not problems; only what waits for the owner is.
+  waiting_slot: "neutral",
+  waiting_quota: "neutral",
   waiting_send: "warning",
   daily_lead_limit: "neutral",
   scheduled: "neutral",
-  retrying: "warning",
+  retrying: "neutral",
+  needs_you: "warning",
   needs_approval: "info",
   paused: "neutral",
   completed: "success",
@@ -37,7 +39,7 @@ export const WORK_TONE: Record<WorkState, "neutral" | "success" | "info" | "dang
   not_searched: "warning",
   failed: "danger",
   cancelled: "neutral",
-  stale: "warning",
+  stale: "neutral",
 };
 
 export function chatHref(threadId: string): string {

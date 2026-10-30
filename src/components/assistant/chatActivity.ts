@@ -1,4 +1,6 @@
-/** Keep the final answer and useful cards visible; routine steps stay in an expandable activity log. */
+import { RESEARCH_TOOLS } from "./researchView";
+
+/** Routine steps: a one-line row in Details rather than a card. */
 export const COMPACT_TOOLS = new Set([
   "check_setup", "save_business_info", "search_knowledge", "lead_search_status", "list_audiences", "list_runs",
   "list_decisions", "pause_outreach", "resume_outreach", "stop_outreach", "switch_to_review", "answer_decision", "read_webpage", "list_inquiries",
@@ -13,7 +15,7 @@ type ActivityMessage = {
   content?: string;
   tool: string | null;
   status: string | null;
-  toolResult: { data?: Record<string, unknown>; suggestions?: unknown[]; display?: string; summary?: string } | null;
+  toolResult: { data?: Record<string, unknown>; suggestions?: unknown[]; display?: string; summary?: string; reportKey?: unknown; transient?: unknown } | null;
 };
 
 /** One live card per run. Retries remain in server history, not duplicate Start buttons. */
@@ -43,8 +45,6 @@ export function visibleChatMessages<T extends ActivityMessage & {
   });
 }
 
-export type ChatActivityItem<T> = { kind: "message"; message: T } | { kind: "activity"; messages: T[] };
-
 export function activityPresentation(messages: readonly { status: string | null }[], active: boolean, statusKnown = true): { label: string; status: "running" | "ok" | "error" } {
   const running = messages.some(message => message.status === "running");
   if (!running) return { label: "Activity", status: "ok" };
@@ -52,20 +52,60 @@ export function activityPresentation(messages: readonly { status: string | null 
   return active ? { label: "Working", status: "running" } : { label: "Step interrupted", status: "error" };
 }
 
-/** Nothing is deleted or rewritten, and errors, decisions, plans and research cards never disappear into the log. */
-export function groupChatActivity<T extends ActivityMessage>(messages: readonly T[]): ChatActivityItem<T>[] {
+/** Tool cards that are the result the owner asked for, or ask them to act: shown in the conversation, never folded away. */
+export const RESULT_TOOLS = new Set([
+  "prepare_outreach", "prepare_inquiry_replies", "owner_decision", "report", "daily_summary", "diagnose_delivery",
+  "import_contacts", "read_document", "add_contacts", "add_instagram_contacts", "use_existing_leads", "describe_audience",
+]);
+
+/** Report events whose figures the request card shows in place (a search finished, the research continues, a plan is ready, outreach started). */
+const PROGRESS_EVENTS = new Set(["search_report", "plan_ready", "outreach_started", "continuation"]);
+
+function eventKind(toolResult: ActivityMessage["toolResult"]): string | null {
+  const event = toolResult?.data?.event;
+  return event && typeof event === "object" && typeof (event as { kind?: unknown }).kind === "string" ? (event as { kind: string }).kind : null;
+}
+
+/**
+ * One owner turn, laid out once: its searches (`research`, shown as rows of
+ * one request card that updates in place), what stays in the conversation
+ * (`visible`: the last answer, a question, an assistant error, plans,
+ * decisions, asked-for reports, the request's final report, notices, and
+ * the newest Retry), and everything else, in order, behind the card's
+ * Details (`details`: routine tool cards, failed technical steps, the
+ * progress reports the card already shows, retry notices and earlier
+ * narration). Nothing is dropped: every message lands in exactly one list.
+ * `latestId`: the newest message of the whole chat (only it may offer Retry).
+ */
+export function splitTurn<T extends ActivityMessage & { id: string }>(messages: readonly T[], latestId: string | null): { research: T[]; visible: T[]; details: T[] } {
   const lastAnswer = messages.findLastIndex((message) => message.role === "assistant");
-  const out: ChatActivityItem<T>[] = [];
-  let activity: Extract<ChatActivityItem<T>, { kind: "activity" }> | null = null;
+  const research: T[] = [];
+  const visible: T[] = [];
+  const details: T[] = [];
   messages.forEach((message, index) => {
-    const question = message.content?.includes("?") || Boolean(message.toolResult?.suggestions?.length);
-    const routine = (message.role === "assistant" && index !== lastAnswer && message.status !== "error" && !question)
-      || (message.role === "tool" && message.status !== "error" && (COMPACT_TOOLS.has(message.tool ?? "") || (message.tool === "prepare_outreach" && message.toolResult?.data?.covered === true)))
-      || (message.role === "event" && message.toolResult?.data?.retry === true && index < messages.length - 1);
-    if (routine) {
-      if (!activity) { activity = { kind: "activity", messages: [] }; out.push(activity); }
-      activity.messages.push(message);
-    } else out.push({ kind: "message", message });
+    const data = message.toolResult?.data;
+    if (message.role === "tool") {
+      if (RESEARCH_TOOLS.has(message.tool ?? "")) research.push(message);
+      else if (RESULT_TOOLS.has(message.tool ?? "") && !(message.tool === "prepare_outreach" && data?.covered === true)) visible.push(message);
+      else details.push(message);
+      return;
+    }
+    if (message.role === "assistant") {
+      const question = message.content?.includes("?") || Boolean(message.toolResult?.suggestions?.length);
+      (index === lastAnswer || question || message.status === "error" ? visible : details).push(message);
+      return;
+    }
+    if (message.role === "event") {
+      const result = message.toolResult;
+      const finalReport = typeof result?.reportKey === "string" && data && typeof data.objective === "object" && data.objective !== null;
+      const progress = PROGRESS_EVENTS.has(eventKind(message.toolResult) ?? "") || (typeof result?.reportKey === "string" && !finalReport);
+      const retry = data?.retry === true || result?.transient === true;
+      if (finalReport) visible.push(message);
+      else if (retry) (data?.retry === true && message.id === latestId ? visible : details).push(message);
+      else (progress ? details : visible).push(message);
+      return;
+    }
+    visible.push(message);
   });
-  return out;
+  return { research, visible, details };
 }
