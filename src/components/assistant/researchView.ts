@@ -106,7 +106,9 @@ function sourceOf(message: ResearchMessage, job: ResearchJob | undefined): { sou
   if (message.tool === "find_instagram_prospects" || job?.kind === "apify_instagram") return { source: recorded ?? "Instagram · Apify", icon: "instagram" };
   if (message.tool === "find_linkedin_leads" || job?.kind === "linkedin_search") return { source: recorded ?? "LinkedIn · Unipile", icon: "linkedin" };
   if (message.tool === "find_customers_on_web" || job?.kind === "web_discovery") return { source: recorded ?? "Websites and directories", icon: "web" };
-  return { source: recorded ?? "Google Maps", icon: "maps" };
+  if (message.tool === "find_leads" || job?.kind === "discovery") return { source: recorded ?? "Google Maps", icon: "maps" };
+  // A search this card does not know yet: what its job recorded, else the tool's own name.
+  return { source: recorded ?? (message.tool ?? "Search").replace(/_/g, " ").replace(/^./, (first) => first.toUpperCase()), icon: "web" };
 }
 
 /** What a search looked for, as the chat names it; social research leads with who it looked for. */

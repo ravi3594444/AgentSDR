@@ -84,6 +84,13 @@ describe("what a search ran through", () => {
     expect(line({ kind: "outreach_start", progress: null, result: null })).toBeNull();
   });
 
+  test("a source or provider it does not list shows as its job recorded it, with no change needed here", () => {
+    expect(transportLine(jobTransport({ kind: "new_search", progress: { source: "X posts", provider: "browser" }, result: null }))).toBe("X posts · browser");
+    expect(jobActivity(job({ runAfter: later(60), progress: { waiting: { kind: "slot", provider: "newprovider", reason: "busy" } } }), now)?.reason).toBe("waiting for a free newprovider run slot: busy");
+    expect(toolTransport("acme_search", { data: { provider: "Acme" } })).toBe("Acme");
+    expect(toolTransport("browser_tab_use", null)).toBe("Your Chrome");
+  });
+
   test("tools without a job name their own transport; checking the browser connection is not using it", () => {
     expect(toolTransport("exa_search", null)).toBe("Exa");
     expect(toolTransport("web_search", { data: { provider: "tavily" } })).toBe("Tavily");

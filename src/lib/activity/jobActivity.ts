@@ -60,6 +60,11 @@ const DUE_WITHIN_MS = 5_000;
 
 const PROVIDER_NAMES: Record<string, string> = { apify: "Apify", brightdata: "Bright Data", tinyfish: "TinyFish", tavily: "Tavily", unipile: "Unipile", exa: "Exa" };
 
+/** A provider as the owner knows it; one not listed here shows as recorded, so a new one needs no change. */
+export function providerName(key: string): string {
+  return PROVIDER_NAMES[key.toLowerCase()] ?? key;
+}
+
 function instant(value: string | Date | null | undefined): number | null {
   if (!value) return null;
   const at = value instanceof Date ? value.getTime() : Date.parse(value);
@@ -94,7 +99,7 @@ export function jobActivity(job: JobActivityFacts, nowDate: Date): JobActivity |
   const runAfter = instant(job.runAfter);
   const waiting = (progress.waiting ?? null) as { kind?: unknown; reason?: unknown; provider?: unknown; until?: unknown } | null;
   const waitReason = text(waiting?.reason);
-  const provider = PROVIDER_NAMES[String(waiting?.provider ?? "")] ?? null;
+  const provider = text(waiting?.provider) ? providerName(text(waiting?.provider)!) : null;
 
   if (job.status === "running") {
     const beat = instant(job.heartbeatAt);
@@ -214,7 +219,10 @@ export function jobTransport(job: JobTransportFacts): { source: string; via: str
     if (provider === "scraper" || /built-in scraper/i.test(recordedSource)) return { source: "Google Maps", via: "Maps scraper" };
     return { source: "Google Maps", via: null };
   }
-  return null;
+  // Any other kind of search: what its own progress recorded, as recorded, so a new source needs no change here.
+  const recorded = text(progress.source);
+  const via = text(progress.provider) ?? job.provider ?? null;
+  return recorded || via ? { source: recorded ?? job.kind.replace(/_/g, " "), via: via ? providerName(via) : null } : null;
 }
 
 /** "Google Maps · Maps scraper", for one line. */
@@ -233,5 +241,7 @@ export function toolTransport(tool: string | null, toolResult: { data?: Record<s
   if (tool.startsWith("browser_tab_") || tool === "browser_task") return "Your Chrome";
   if (tool.startsWith("browser_") && tool !== "browser_connection") return "TinyFish browser";
   if (tool === "treg_search" || tool === "treg_call") return "Treg";
-  return null;
+  // Another search or read tool that records its provider shows it as recorded.
+  const provider = text(toolResult?.data?.provider);
+  return provider && /_(search|read)$/.test(tool) ? providerName(provider) : null;
 }
