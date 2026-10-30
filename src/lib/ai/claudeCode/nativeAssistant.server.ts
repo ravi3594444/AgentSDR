@@ -1,6 +1,6 @@
 import "server-only";
 import { accountKey, type ClaudeAccount } from "./cli.server";
-import type { ClaudeCodeModel } from "./contract";
+import type { ClaudeCodeEffort, ClaudeCodeModel } from "./contract";
 import { nativeInitProblem, NATIVE_ANSWER_SCHEMA, parseNativeAnswer } from "./nativeProtocol";
 import { nativeSession } from "./nativeSession.server";
 import { accountUsage, ClaudeCodeError, runGeneration, type GenerationResult } from "./runner.server";
@@ -45,7 +45,7 @@ type Answer = { message: string; suggestions: string[] };
  * completeStructured runtime is not changed.
  */
 export async function runNativeAssistant(input: {
-  binding: { account: ClaudeAccount; model: ClaudeCodeModel };
+  binding: { account: ClaudeAccount; model: ClaudeCodeModel; effort?: ClaudeCodeEffort };
   threadId: string;
   requestId: string;
   systemPrompt: string;

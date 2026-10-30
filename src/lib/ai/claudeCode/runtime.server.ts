@@ -3,7 +3,7 @@ import "server-only";
 import type { OpenRouterModelSelection } from "@/lib/ai/openrouter-types";
 import { getAiRuntime } from "@/lib/ai/server/runtime";
 import type { StructuredCompletionRuntime } from "@/lib/ai/server/structuredCompletion";
-import { CLAUDE_CODE_ENGINE_KEY, type ClaudeCodeModel } from "./contract";
+import { CLAUDE_CODE_ENGINE_KEY, type ClaudeCodeEffort, type ClaudeCodeModel } from "./contract";
 import type { ClaudeAccount } from "./cli.server";
 import { claudeCodeBinding } from "./engine.server";
 import { runGeneration, type GenerationInput, type GenerationResult } from "./runner.server";
@@ -48,7 +48,7 @@ function messageText(request: JsonSchemaRequest, role: "system" | "user"): strin
 }
 
 export function claudeCodeRuntime(
-  binding: { account: ClaudeAccount; model: ClaudeCodeModel; shared?: boolean },
+  binding: { account: ClaudeAccount; model: ClaudeCodeModel; effort?: ClaudeCodeEffort; shared?: boolean },
   timeoutMs: number,
   run: (input: GenerationInput) => Promise<GenerationResult> = runGeneration,
 ): Awaited<ReturnType<StructuredCompletionRuntime>> {
@@ -69,6 +69,7 @@ export function claudeCodeRuntime(
             const result = await run({
               account: binding.account,
               model: binding.model,
+              effort: binding.effort,
               systemPrompt: messageText(request, "system"),
               userPrompt: messageText(request, "user"),
               jsonSchema: schema as Record<string, unknown>,

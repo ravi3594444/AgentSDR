@@ -41,6 +41,25 @@ export function isClaudeCodeModel(value: unknown): value is ClaudeCodeModel {
   return CLAUDE_CODE_MODELS.some((model) => model.key === value);
 }
 
+/**
+ * How much the model thinks before it answers (the CLI's `--effort`). "default"
+ * passes no flag, so the model's own default applies; the others are passed
+ * as they are, to every structured and native run of this login.
+ */
+export const CLAUDE_CODE_EFFORTS = [
+  { key: "default", label: "Model default" },
+  { key: "low", label: "Low" },
+  { key: "medium", label: "Medium" },
+  { key: "high", label: "High" },
+  { key: "xhigh", label: "Extra high" },
+  { key: "max", label: "Max" },
+] as const;
+export type ClaudeCodeEffort = typeof CLAUDE_CODE_EFFORTS[number]["key"];
+
+export function isClaudeCodeEffort(value: unknown): value is ClaudeCodeEffort {
+  return CLAUDE_CODE_EFFORTS.some((effort) => effort.key === value);
+}
+
 /** One sign-in in progress, as the page polls it. The code the owner pastes is never part of it. */
 export type ClaudeCodeSignIn = {
   phase: "waiting" | "succeeded" | "failed" | "cancelled" | "expired";
@@ -83,6 +102,8 @@ export type ClaudeCodeStatus = {
     ownerUserId: string | null;
     ownedByYou: boolean;
     model: ClaudeCodeModel;
+    /** The effort every run of this login uses ("default": the model's own). */
+    effort: ClaudeCodeEffort;
     checks: Partial<Record<ClaudeCodeModel, ClaudeCodeModelCheck>>;
     /** Why this organization cannot use Claude Code now (for example other members), or null. */
     blocked: string | null;

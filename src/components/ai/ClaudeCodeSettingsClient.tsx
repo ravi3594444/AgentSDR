@@ -11,8 +11,10 @@ import { FormSkeleton } from "@/components/settings/SettingsSkeletons";
 import { Callout, Field } from "@/components/settings/SettingsKit";
 import {
   CLAUDE_CODE_LOGIN_METHODS,
+  CLAUDE_CODE_EFFORTS,
   CLAUDE_CODE_MODELS,
   type ClaudeCodeLoginMethod,
+  type ClaudeCodeEffort,
   type ClaudeCodeModel,
   type ClaudeCodeSignIn,
   type ClaudeCodeStatus,
@@ -214,6 +216,19 @@ export default function ClaudeCodeSettingsClient({ onChanged }: { onChanged?: ()
             ? <Button.Root type="button" variant="neutral" mode="stroke" size="small" disabled={busy !== null} onClick={() => void act("stop_using", { action: "stop_using" })}>Stop using</Button.Root>
             : <Button.Root type="button" variant="primary" mode="filled" size="small" disabled={busy !== null || !signedIn || !check?.ok || Boolean(engine.blocked)} onClick={() => void act("use", { action: "use", model })}>{switchingModel ? "Use this model" : "Use Claude Code"}</Button.Root>}
         </div>
+        {usingMine && !engine.sharedTest && (
+          <div className="mt-3 flex max-w-xl flex-col gap-1">
+            <Field label="Effort" className="sm:max-w-xs">
+              <Select.Root size="small" value={engine.effort} onValueChange={(value) => void act("set_effort", { action: "set_effort", effort: value as ClaudeCodeEffort })} disabled={busy !== null}>
+                <Select.Trigger aria-label="Effort"><Select.Value /></Select.Trigger>
+                <Select.Content>
+                  {CLAUDE_CODE_EFFORTS.map((entry) => <Select.Item key={entry.key} value={entry.key}>{entry.label}</Select.Item>)}
+                </Select.Content>
+              </Select.Root>
+            </Field>
+            <p className="text-paragraph-xs text-text-sub-600">How much the model thinks before each answer, for every AI step on your login. Higher effort is slower and uses more of your plan.</p>
+          </div>
+        )}
         {check && (check.ok
           ? <p className="mt-2 text-paragraph-xs text-text-sub-600">Checked {when(check.checkedAt)}: answered as {check.modelId}.</p>
           : <Callout tone="warning" className="mt-3 max-w-xl">Checked {when(check.checkedAt)}: {check.error}</Callout>)}

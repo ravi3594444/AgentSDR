@@ -8,7 +8,7 @@ import { members } from "@/lib/auth/schema";
 import type { OrgRole } from "@/lib/auth/permissions";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { accountAuthStatus, cliVersion, type ClaudeAccount } from "./cli.server";
-import { isClaudeCodeModel, type ClaudeCodeModel, type ClaudeCodeModelCheck, type ClaudeCodeStatus } from "./contract";
+import { isClaudeCodeModel, type ClaudeCodeModel, type ClaudeCodeModelCheck, type ClaudeCodeStatus, isClaudeCodeEffort, type ClaudeCodeEffort } from "./contract";
 import { loginController } from "./login.server";
 import { accountUsage, ClaudeCodeError, runGeneration, runningOn } from "./runner.server";
 import { sharedClaudeBinding, sharedClaudeSourceApproved, sharedClaudeAccountPublished } from "./shared.server";
@@ -37,11 +37,13 @@ export type ClaudeEngine = {
   selected: boolean;
   ownerUserId: string | null;
   model: ClaudeCodeModel;
+  /** The effort every run of this login uses ("default": the model's own). */
+  effort?: ClaudeCodeEffort;
   /** Model checks per person: each login's own results, never shared. */
   checks: Record<string, Partial<Record<ClaudeCodeModel, ClaudeCodeModelCheck>>>;
 };
 
-const EMPTY: ClaudeEngine = { selected: false, ownerUserId: null, model: "default", checks: {} };
+const EMPTY: ClaudeEngine = { selected: false, ownerUserId: null, model: "default", effort: "default", checks: {} };
 
 function normalizeCheck(value: unknown): ClaudeCodeModelCheck | null {
   const record = value && typeof value === "object" ? value as Record<string, unknown> : null;
@@ -67,6 +69,7 @@ export function normalizeClaudeEngine(value: unknown): ClaudeEngine {
     selected: raw.selected === true && ownerUserId !== null,
     ownerUserId,
     model: isClaudeCodeModel(raw.model) ? raw.model : "default",
+    effort: isClaudeCodeEffort(raw.effort) ? raw.effort : "default",
     checks,
   };
 }
@@ -157,7 +160,7 @@ async function otherMembers(organizationId: string, userId: string): Promise<num
  * Code is not selected (the API provider answers, as before). Selected but
  * unusable is an error, never a quiet switch to a paid API.
  */
-export async function claudeCodeBinding(): Promise<{ account: ClaudeAccount; model: ClaudeCodeModel; shared?: boolean } | null> {
+export async function claudeCodeBinding(): Promise<{ account: ClaudeAccount; model: ClaudeCodeModel; effort?: ClaudeCodeEffort; shared?: boolean } | null> {
   const shared = await sharedClaudeBinding();
   if (shared) return shared;
   const engine = await getClaudeEngine();
@@ -171,7 +174,7 @@ export async function claudeCodeBinding(): Promise<{ account: ClaudeAccount; mod
   }
   const blocked = await claudeCodeBlocked(organizationId, engine.ownerUserId);
   if (blocked) throw new ClaudeCodeError("error", `Claude Code is selected, but it cannot run here: ${blocked}`);
-  return { account: { organizationId, userId: engine.ownerUserId }, model: engine.model };
+  return { account: { organizationId, userId: engine.ownerUserId }, model: engine.model, effort: engine.effort ?? "default" };
 }
 
 let versionCache: { version: string | null; at: number } | null = null;
@@ -193,7 +196,7 @@ export async function claudeCodeStatus(ctx: { organizationId: string; userId: st
     cli: null,
     account: { signedIn: null, method: null, expired: false },
     signIn: null,
-    engine: { selected: engine.selected, ownerUserId: engine.ownerUserId, ownedByYou: engine.ownerUserId === ctx.userId, model: engine.model, checks: engine.checks[ctx.userId] ?? {}, blocked: null, sharedTest },
+    engine: { selected: engine.selected, ownerUserId: engine.ownerUserId, ownedByYou: engine.ownerUserId === ctx.userId, model: engine.model, effort: engine.effort ?? "default", checks: engine.checks[ctx.userId] ?? {}, blocked: null, sharedTest },
     running: 0,
     limits: [],
     windows: [],

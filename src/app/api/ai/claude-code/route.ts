@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authContextErrorResponse, withOrgContext, type OrgContext } from "@/lib/auth/context";
-import { isClaudeCodeLoginMethod, isClaudeCodeModel } from "@/lib/ai/claudeCode/contract";
+import { isClaudeCodeLoginMethod, isClaudeCodeEffort, isClaudeCodeModel } from "@/lib/ai/claudeCode/contract";
 import { accountAuthStatus, type ClaudeAccount } from "@/lib/ai/claudeCode/cli.server";
 import { checkClaudeModel, claudeCodeAccess, claudeCodeBlocked, claudeCodeStatus, getClaudeEngine, saveClaudeEngine } from "@/lib/ai/claudeCode/engine.server";
 import { loginController } from "@/lib/ai/claudeCode/login.server";
@@ -105,6 +105,13 @@ export async function POST(request: NextRequest) {
             if (busy > 0) return refused(`${busy} AI ${busy === 1 ? "step is" : "steps are"} running on another owner's Claude login. Switch when ${busy === 1 ? "it finishes" : "they finish"}.`, 409);
           }
           await saveClaudeEngine({ ...engine, selected: true, ownerUserId: ctx.userId, model: body.model });
+          return NextResponse.json(await claudeCodeStatus(ctx));
+        }
+        case "set_effort": {
+          if (!isClaudeCodeEffort(body?.effort)) return refused("Choose an effort");
+          const engine = await getClaudeEngine();
+          if (engine.selected && engine.ownerUserId && engine.ownerUserId !== ctx.userId) return refused("Only the owner whose Claude login is in use can change its effort", 403);
+          await saveClaudeEngine({ ...engine, effort: body.effort });
           return NextResponse.json(await claudeCodeStatus(ctx));
         }
         case "stop_using": {

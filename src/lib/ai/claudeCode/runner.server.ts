@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { accountEnvironment, accountKey, accountPaths, hasOwnLogin, scratchDirectory, spawnCli, stopCli, type ClaudeAccount } from "./cli.server";
 import { foreignKeySource, generationArgs, limitRefusal, readGeneration, windowName, type ClaudeFailure } from "./cliOutput";
-import type { ClaudeCodeLimit, ClaudeCodeModel, ClaudeCodeWindow } from "./contract";
+import type { ClaudeCodeEffort, ClaudeCodeLimit, ClaudeCodeModel, ClaudeCodeWindow } from "./contract";
 import { nativeFlags } from "./nativeProtocol";
 import { nativeToolParent } from "./nativeToolScope.server";
 
@@ -201,6 +201,8 @@ async function acquireSlot(account: ClaudeAccount, deadline: number, signal?: Ab
 export type GenerationInput = {
   account: ClaudeAccount;
   model: ClaudeCodeModel;
+  /** The login's chosen effort (`--effort`); absent or "default": none passed. */
+  effort?: ClaudeCodeEffort;
   systemPrompt: string;
   userPrompt: string;
   jsonSchema: Record<string, unknown>;
@@ -284,7 +286,7 @@ export async function runGeneration(input: GenerationInput): Promise<GenerationR
     const systemPromptFile = join(scratch.cwd, "system-prompt.txt");
     writeFileSync(systemPromptFile, input.systemPrompt, { mode: 0o600 });
     const cwd = input.native?.session.cwd ?? scratch.cwd;
-    let args = generationArgs({ model: input.model, systemPromptFile, jsonSchema: input.jsonSchema });
+    let args = generationArgs({ model: input.model, effort: input.effort, systemPromptFile, jsonSchema: input.jsonSchema });
     if (input.native) {
       const mcpConfigFile = join(scratch.cwd, "mcp.json");
       writeFileSync(mcpConfigFile, JSON.stringify(input.native.mcpConfig), { mode: 0o600 });
