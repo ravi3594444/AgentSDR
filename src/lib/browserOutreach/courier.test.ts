@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ResearchElement, ResearchSnapshot } from "@/lib/browser/connected/contract";
 import { accountOnPage, courierStepVerdict, messageOnPage, newReplies, onSite, profileVerdict, type CourierState, type CourierStep } from "./courier";
-import { profileRoute, recipientRef } from "./routes";
+import { looksLikePhoneRecipient, profileRoute, recipientPhone, recipientRef } from "./routes";
 
 const element = (patch: Partial<ResearchElement>): ResearchElement => ({ n: 1, kind: "button", label: "", href: null, write: true, search: false, ...patch });
 const page = (elements: ResearchElement[], text = "Home Explore Notifications Messages @owner_handle Priya Sharma @priya_k"): ResearchSnapshot => ({
@@ -12,6 +12,16 @@ const step = (patch: Partial<CourierStep>): CourierStep => ({ account: null, not
 const state = (snapshot: ResearchSnapshot, patch: Partial<CourierState> = {}): CourierState => ({ message: MESSAGE, site: "x", recipient: { handle: "priya_k", name: "Priya Sharma" }, snapshot, account: "@owner_handle", sent: false, ...patch });
 
 describe("profiles a browser can message", () => {
+  test("direct phone recipients retain the exact international destination, without silently repairing a number", () => {
+    expect(recipientRef("+1 (202) 555-0101").phone).toBe("+12025550101");
+    expect(recipientPhone("0012025550101")).toBe("+12025550101");
+    expect(recipientPhone("+1 202555010199")).toBeNull();
+    expect(recipientPhone("+0012025550101")).toBeNull();
+    expect(recipientPhone("2025550101")).toBeNull();
+    expect(looksLikePhoneRecipient("+1 202555010199")).toBe(true);
+    expect(looksLikePhoneRecipient("Priya Sharma")).toBe(false);
+    expect(recipientRef("priya@acme.net").phone).toBeUndefined();
+  });
   test("a person's own profile on each site; never a post, a search or a site page", () => {
     expect(profileRoute("https://x.com/Priya_K")).toEqual({ site: "x", handle: "priya_k", profileUrl: "https://x.com/Priya_K" });
     expect(profileRoute("twitter.com/priya_k")?.site).toBe("x");

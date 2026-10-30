@@ -171,8 +171,12 @@ export function purchaseProblem(total: string, limit: PurchaseLimit | null, page
 }
 
 /** Whether the owner's own messages point to this recipient: their address, handle or profile link, or their full name. */
-export function namedByOwner(recipient: { email: string | null; handle: string | null; name: string }, ownerTexts: readonly string[]): boolean {
+export function namedByOwner(recipient: { email: string | null; handle: string | null; name: string; phone?: string }, ownerTexts: readonly string[]): boolean {
   const said = ownerTexts.map(plainWords).join("\n");
+  if (recipient.phone) {
+    const digits = recipient.phone.replace(/\D/g, "");
+    return ownerTexts.some((text) => (text.match(/\+?\d[\d\s().-]{5,25}\d/g) ?? []).some((value) => (value.trim().startsWith("+") ? value.replace(/\D/g, "") : value.replace(/\D/g, "").replace(/^00/, "")) === digits));
+  }
   if (recipient.email && said.includes(recipient.email.toLowerCase())) return true;
   if (recipient.handle && recipient.handle.length >= 3 && new RegExp(`(?:^|[^\\p{L}\\p{N}_.])@?${recipient.handle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}_])`, "u").test(said)) return true;
   const name = plainWords(recipient.name);

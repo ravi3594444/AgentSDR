@@ -32,6 +32,8 @@ export const BROWSER_RESEARCH_MIN_VERSION = "0.16.0";
  */
 export const BROWSER_TASK_MIN_VERSION = "0.18.0";
 
+import { waitForProblem, type BrowserReadiness, type BrowserTiming, type BrowserWaitFor } from "./readiness";
+
 // --- Sites ---------------------------------------------------------------
 
 export const RESEARCH_SITE_KEYS = ["web", "linkedin", "x", "reddit", "instagram", "facebook"] as const;
@@ -368,8 +370,8 @@ export function searchProblem(element: ResearchElement | undefined, text: string
 
 export type BrowserResearchAction =
   /** A new background tab, or `tabId` (one of the request's tabs) navigated. */
-  | { kind: "open"; url: string; tabId: number | null }
-  | { kind: "read"; tabId: number }
+  | { kind: "open"; url: string; tabId: number | null; waitFor?: BrowserWaitFor; reuse?: boolean }
+  | { kind: "read"; tabId: number; waitFor?: BrowserWaitFor }
   /** `label` is the element's label in the reading the click was chosen from: a page that renumbered is not clicked. */
   | { kind: "click"; tabId: number; n: number; label: string }
   | { kind: "scroll"; tabId: number; direction: "down" | "up" }
@@ -486,9 +488,10 @@ export type BrowserResearchTab = {
   attention: ResearchAttention | null;
 };
 
-export type BrowserResearchResult =
+export type BrowserResearchResult = (
   | { ok: true; tabId?: number; snapshot?: ResearchSnapshot; tabs?: BrowserResearchTab[]; closed?: number; screenshot?: BrowserScreenshot; note?: string; candidates?: SharedTab[] }
-  | { ok: false; error: string; tabId?: number; attention?: ResearchAttention | null };
+  | { ok: false; error: string; tabId?: number; attention?: ResearchAttention | null }
+) & { timing?: BrowserTiming; readiness?: BrowserReadiness };
 
 /** Why the extension must not run `command`, or null: an old, replayed, expired or malformed command. */
 export function commandProblem(command: unknown, state: { lastSeq: number; now: number }): string | null {
@@ -505,8 +508,9 @@ export function commandProblem(command: unknown, state: { lastSeq: number; now: 
   if (!action || typeof action !== "object") return "no action";
   const tab = (id: unknown, optional = false) => (optional && id === null) || (typeof id === "number" && Number.isSafeInteger(id) && id >= 0);
   switch (action.kind) {
-    case "open": return typeof action.url === "string" && tab(action.tabId, true) ? null : "bad open";
-    case "read": return tab(action.tabId) ? null : "bad read";
+    case "open": return typeof action.url === "string" && tab(action.tabId, true)
+      && (action.reuse === undefined || typeof action.reuse === "boolean") && (action.waitFor === undefined || !waitForProblem(action.waitFor)) ? null : "bad open";
+    case "read": return tab(action.tabId) && (action.waitFor === undefined || !waitForProblem(action.waitFor)) ? null : "bad read";
     case "click": return tab(action.tabId) && Number.isSafeInteger(action.n) && typeof action.label === "string" ? null : "bad click";
     case "scroll": return tab(action.tabId) && (action.direction === "down" || action.direction === "up") ? null : "bad scroll";
     case "search": return tab(action.tabId) && Number.isSafeInteger(action.n) && typeof action.label === "string" && typeof action.text === "string" ? null : "bad search";
@@ -595,6 +599,8 @@ export type BrowserConnectionView = {
 
 export type PageOp =
   | { op: "snapshot" }
+  /** A bounded wait probes visible DOM only; it never clicks, types or submits. */
+  | { op: "ready"; selector: string | null; text: string | null }
   | { op: "click"; n: number; label: string }
   | { op: "scroll"; direction: "down" | "up" }
   | { op: "search"; n: number; label: string; text: string }
@@ -640,6 +646,7 @@ export const pageScriptConfig: PageScriptConfig = {
 
 export type PageScriptResult =
   | { ok: true; snapshot: ResearchSnapshot }
+  | { ok: true; ready: boolean; blocked?: boolean }
   /** A link: the extension checks the address and navigates the tab itself. */
   | { ok: true; navigate: string }
   /** Clicked or searched: the page may be navigating, so the extension waits and reads it afresh. */
@@ -664,20 +671,47 @@ export async function pageScript(config: PageScriptConfig, op: PageOp): Promise<
     const style = getComputedStyle(el);
     return style.visibility !== "hidden" && style.display !== "none" && style.opacity !== "0";
   };
+  if (op.op === "ready") {
+    const blocked = Array.from(document.querySelectorAll("iframe[src*='recaptcha'], iframe[src*='hcaptcha'], iframe[src*='challenges.cloudflare.com'], #challenge-form, #cf-challenge-running")).some(visible)
+      || (/(?:^|\/)(?:login|signin|sign-in|log-in|auth|checkpoint|accounts\/login)(?:\/|$)/i.test(location.pathname) && Array.from(document.querySelectorAll("input[type=password]")).some(visible));
+    if (blocked) return { ok: true, ready: false, blocked: true };
+    let targets: Element[];
+    try {
+      targets = op.selector ? Array.from(document.querySelectorAll(op.selector)).filter(visible) : [document.body ?? document.documentElement];
+    } catch {
+      return { ok: false, error: "waitFor.selector is not a valid CSS selector; no page action was taken" };
+    }
+    const wanted = clean(op.text, 1_000).toLocaleLowerCase();
+    const ready = document.readyState !== "loading" && targets.some((target) => !wanted || clean((target as HTMLElement).innerText, 100_000).toLocaleLowerCase().includes(wanted));
+    return { ok: true, ready };
+  }
   const editorRoot = (el: Element) => (el as HTMLElement).isContentEditable && !(el.parentElement?.isContentEditable ?? false);
   const isField = (el: Element) => ["INPUT", "SELECT", "TEXTAREA"].includes(el.tagName) || editorRoot(el) || (el.getAttribute("role") || "").toLowerCase() === "textbox";
   const labelledBy = (el: Element) => (el.getAttribute("aria-labelledby") || "").split(/\s+/).filter(Boolean)
     .map((id) => (document.getElementById(id) as HTMLElement | null)?.innerText || "").join(" ");
+  const iconLabel = (el: Element) => {
+    for (const child of el.querySelectorAll("[aria-label], svg title, img[alt], [data-icon]")) {
+      const label = clean(child.getAttribute("aria-label"), config.maxLabelChars) || clean(child.getAttribute("alt"), config.maxLabelChars)
+        || (child.tagName.toLowerCase() === "title" ? clean(child.textContent, config.maxLabelChars) : "")
+        || clean(child.getAttribute("data-icon")?.replace(/[_-]+/g, " "), config.maxLabelChars);
+      if (label) return label;
+    }
+    return "";
+  };
   // A field is named by its label, never by what is typed in it (that changes as the task fills it).
-  const labelOf = (el: Element) => clean(
-    isField(el)
-      ? el.getAttribute("aria-label") || labelledBy(el) || ((el as HTMLInputElement).labels?.[0] as HTMLElement | undefined)?.innerText || el.getAttribute("placeholder")
-        || el.getAttribute("data-placeholder") || el.getAttribute("title") || el.getAttribute("name")
-        || (["submit", "button", "reset"].includes((el.getAttribute("type") || "").toLowerCase()) ? el.getAttribute("value") : "") || ""
-      : el.getAttribute("aria-label") || (el as HTMLElement).innerText || el.getAttribute("placeholder") || el.getAttribute("title")
-        || el.getAttribute("name") || el.getAttribute("value") || el.getAttribute("alt") || "",
-    config.maxLabelChars,
-  );
+  const labelOf = (el: Element) => {
+    const candidates = isField(el)
+      ? [el.getAttribute("aria-label"), labelledBy(el), ((el as HTMLInputElement).labels?.[0] as HTMLElement | undefined)?.innerText, el.getAttribute("placeholder"),
+        el.getAttribute("data-placeholder"), el.getAttribute("title"), el.getAttribute("name"),
+        ["submit", "button", "reset"].includes((el.getAttribute("type") || "").toLowerCase()) ? el.getAttribute("value") : ""]
+      : [el.getAttribute("aria-label"), labelledBy(el), (el as HTMLElement).innerText, el.getAttribute("placeholder"), el.getAttribute("title"),
+        el.getAttribute("name"), el.getAttribute("value"), el.getAttribute("alt")];
+    for (const value of candidates) {
+      const label = clean(value, config.maxLabelChars);
+      if (label) return label;
+    }
+    return isField(el) ? "" : iconLabel(el);
+  };
   // A form a search may submit: GET, and nothing in it that sends or signs in (a message box, a password, a file).
   const sending = "textarea, [contenteditable]:not([contenteditable=false]), input[type=password], input[type=file]";
   const safeForm = (form: HTMLFormElement) => (form.getAttribute("method") || "get").toLowerCase() === "get"
@@ -944,7 +978,18 @@ export async function pageScript(config: PageScriptConfig, op: PageOp): Promise<
     const elements: ResearchElement[] = [];
     const selector = "a[href], button, input:not([type=hidden]), select, textarea, summary, [role=button], [role=link], [role=tab], [contenteditable]:not([contenteditable=false]), "
       + "[role=textbox], [role=searchbox], [role=checkbox], [role=radio], [role=switch], [role=combobox], [role=option], [role=menuitem]";
-    for (const el of Array.from(document.querySelectorAll(selector))) {
+    // Navigation lists can fill the entire budget before a composer or form.
+    // Keep fields and their nearby controls available for DOM interaction.
+    const priority = (el: Element) => {
+      if (el === document.activeElement || el.contains(document.activeElement)) return 0;
+      if (isField(el)) return 1;
+      if (el.closest("form, footer, [role=dialog]")?.querySelector("input:not([type=hidden]), textarea, select, [contenteditable=true], [role=textbox]")) return 2;
+      return el.matches("a[href], [role=link]") ? 4 : 3;
+    };
+    const candidates = Array.from(document.querySelectorAll(selector)).filter(visible)
+      .map((el, order) => ({ el, order, priority: priority(el) }))
+      .sort((a, b) => a.priority - b.priority || a.order - b.order);
+    for (const { el } of candidates) {
       if (elements.length >= config.maxElements) break;
       if (!visible(el)) continue;
       if ((el as HTMLElement).isContentEditable && !editorRoot(el) && !el.matches("a[href], button, [role]")) continue;

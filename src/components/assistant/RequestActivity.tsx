@@ -23,6 +23,7 @@ import { toolTransport } from "@/lib/activity/jobActivity";
 import { cn } from "@/utils/cn";
 import { Mascot, type MascotMood } from "./Mascot";
 import { requestFigures, researchHeadline, researchRow, researchSummary, type ResearchJob, type ResearchMessage, type ResearchRow, type SourceIcon } from "./researchView";
+import { browserActivity, isConnectedBrowserTool } from "./browserActivity";
 
 /**
  * One owner request's activity in the chat, as one card that updates in
@@ -115,6 +116,7 @@ function Row({ row, timeZone }: { row: ResearchRow; timeZone: string }) {
 function directSources(details: readonly DetailMessage[]): string | null {
   const counts = new Map<string, number>();
   for (const message of details) {
+    if (isConnectedBrowserTool(message.tool)) continue;
     if (message.status === "error") continue;
     const via = toolTransport(message.tool, message.toolResult);
     if (via) counts.set(via, (counts.get(via) ?? 0) + 1);
@@ -151,6 +153,7 @@ export function RequestActivity({ research, jobs, details, renderDetail, numbers
   const headline = researchHeadline(summary);
   const figures = rows.length || outreach ? requestFigures({ numbers, target, rows: summary, outreach }) : [];
   const sources = useMemo(() => directSources(details), [details]);
+  const browser = useMemo(() => browserActivity(details), [details]);
   const failedSteps = details.filter((message) => message.status === "error").length;
   // The hop plays when research finishes while the owner watches, not on every reload of a finished chat.
   const wasRunning = useRef(summary.open > 0);
@@ -160,12 +163,12 @@ export function RequestActivity({ research, jobs, details, renderDetail, numbers
     wasRunning.current = summary.open > 0;
   }, [summary.open]);
   const mood: MascotMood = summary.open > 0 || working ? "searching" : summary.done === 0 && summary.failed > 0 ? "stuck" : justFinished ? "done" : "idle";
-  const title = rows.length ? headline.title : working ? "Working" : "Activity";
-  const detail = rows.length ? headline.detail : working ? workingLabel : null;
+  const title = rows.length ? headline.title : browser ? browser.waiting ? "Waiting for page" : working ? "Using Chrome" : "Browser activity" : working ? "Working" : "Activity";
+  const detail = rows.length ? headline.detail : browser ? [browser.label, browser.goal].filter(Boolean).join(" · ") : working ? workingLabel : null;
 
   return (
     <section aria-label="Request activity" data-testid="request-activity" className="w-full max-w-2xl rounded-2xl border border-stroke-soft-200 bg-bg-white-0">
-      {(rows.length > 0 || working) && (
+      {(rows.length > 0 || working || browser) && (
         <div className="flex items-center gap-3 px-4 pt-3.5">
           <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-bg-weak-50" aria-hidden="true"><Mascot mood={mood} className="size-7" /></span>
           <div className="min-w-0 flex-1">
@@ -189,9 +192,10 @@ export function RequestActivity({ research, jobs, details, renderDetail, numbers
           {rows.map((row) => <Row key={row.id} row={row} timeZone={timeZone} />)}
         </ul>
       )}
-      {sources && <p className="mx-4 mt-1 text-paragraph-xs text-text-sub-600">Also searched directly: {sources}</p>}
+      {rows.length > 0 && browser && <p className="mx-4 mt-1 text-paragraph-xs text-text-sub-600">Browser activity: {browser.label}</p>}
+      {sources && <p className="mx-4 mt-1 text-paragraph-xs text-text-sub-600">Sources used: {sources}</p>}
       {details.length > 0 && (
-        <details className={cn("group mt-2 border-t border-stroke-soft-200", !(rows.length > 0 || working || figures.length > 0) && "mt-0 border-t-0")}>
+        <details className={cn("group mt-2 border-t border-stroke-soft-200", !(rows.length > 0 || working || browser || figures.length > 0) && "mt-0 border-t-0")}>
           <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-b-2xl px-4 text-label-xs text-text-sub-600 outline-none hover:text-text-strong-950 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-base [&::-webkit-details-marker]:hidden">
             <RiArrowDownSLine className="size-4 shrink-0 transition-transform group-open:rotate-180" aria-hidden="true" />
             <span>Details</span>

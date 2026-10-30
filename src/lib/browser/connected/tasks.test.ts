@@ -70,6 +70,14 @@ describe("purchases stay within the owner's agreed total, as the page shows it",
 });
 
 describe("recipients the owner named", () => {
+  test("international phone matching ignores formatting, never matches only a suffix or a different number", () => {
+    const recipient = { email: null, handle: null, name: "+12025550101", phone: "+12025550101" };
+    expect(namedByOwner(recipient, ["Send hi to +1 (202) 555-0101"])).toBe(true);
+    expect(namedByOwner(recipient, ["Send hi to 0012025550101"])).toBe(true);
+    expect(namedByOwner(recipient, ["Send hi to +1 202 555 0102"])).toBe(false);
+    expect(namedByOwner(recipient, ["Send hi to 2025550101"])).toBe(false);
+    expect(namedByOwner(recipient, ["Send hi to +0012025550101"])).toBe(false);
+  });
   const owner = ["Reply to @priya_k on X and message jane@acme.co about the demo", "also ping Rahul Mehta"];
 
   test("an address, a handle or a full name the owner wrote; never a near miss", () => {

@@ -11,6 +11,8 @@
  * blocker said plainly, never a send.
  */
 
+import { parsePhoneNumberFromString } from "libphonenumber-js";
+
 export const MESSAGING_SITES = ["x", "instagram", "facebook", "linkedin"] as const;
 export type MessagingSite = (typeof MESSAGING_SITES)[number];
 
@@ -64,7 +66,19 @@ export function profileRoute(raw: string): ProfileRoute | null {
 }
 
 /** A recipient as the model names it: an email address, a profile address, "@handle on site", or a name. */
-export type RecipientRef = { email: string | null; route: ProfileRoute | null; name: string };
+export type RecipientRef = { email: string | null; route: ProfileRoute | null; name: string; phone?: string };
+
+export function looksLikePhoneRecipient(raw: string): boolean {
+  return /^\+?[\d\s().-]+$/.test(raw.trim()) && raw.replace(/\D/g, "").length >= 7;
+}
+
+/** No default country, truncation or guessing: the requested international destination must be valid. */
+export function recipientPhone(raw: string): string | null {
+  if (!looksLikePhoneRecipient(raw)) return null;
+  const digits = raw.trim().startsWith("+") ? raw.replace(/\D/g, "") : raw.replace(/\D/g, "").replace(/^00/, "");
+  const phone = parsePhoneNumberFromString(`+${digits}`);
+  return phone?.isValid() ? phone.number : null;
+}
 
 const SITE_WORDS: Record<string, MessagingSite> = { x: "x", twitter: "x", instagram: "instagram", ig: "instagram", facebook: "facebook", fb: "facebook", linkedin: "linkedin" };
 const SITE_PROFILE: Record<MessagingSite, (handle: string) => string> = {
@@ -78,6 +92,8 @@ export function recipientRef(raw: string): RecipientRef {
   const text = raw.trim().slice(0, 300);
   const email = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text) ? text.toLowerCase() : null;
   if (email) return { email, route: null, name: text };
+  const phone = recipientPhone(text);
+  if (phone) return { email: null, route: null, name: text, phone };
   const said = /^@?([A-Za-z0-9_.-]{2,80})\s+(?:on|at)\s+(x|twitter|instagram|ig|facebook|fb|linkedin)\b/i.exec(text);
   const route = profileRoute(text) ?? (said ? profileRoute(SITE_PROFILE[SITE_WORDS[said[2]!.toLowerCase()]!](said[1]!)) : null);
   return { email: null, route, name: text };

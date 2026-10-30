@@ -73,7 +73,7 @@ const { db } = await import("@/lib/db");
 const { organizations, members, users } = await import("@/lib/auth/schema");
 const { people } = await import("@/lib/leads/schema");
 const { crmPersonContactPolicies } = await import("@/lib/crm/schema");
-const { browserCommands } = await import("@/lib/browser/connected/schema");
+const { browserCommands, browserConnections } = await import("@/lib/browser/connected/schema");
 const { runInOrganization } = await import("@/lib/tenancy/scope");
 const { addMessage, createThread, listMessages } = await import("@/lib/assistant/threads.server");
 const { runToolInThread, runAgentTurn } = await import("@/lib/assistant/agent.server");
@@ -112,12 +112,12 @@ async function pair(org: string, userId: string, version: string) {
 }
 
 /** A stand-in extension at `version`: polls the real route and answers each command with `respond` (null: takes it and never answers). */
-function fakeBrowser(token: string, deviceId: string, version: string, respond: (command: Command) => Result | null) {
+function fakeBrowser(token: string, deviceId: string, version: string | (() => string), respond: (command: Command) => Result | null) {
   let stopped = false;
   const delivered: Command[] = [];
   const loop = (async () => {
     while (!stopped) {
-      const response = await pollRoute.POST(request("/api/browser-bridge/poll", { extensionVersion: version, sites: ["web", "linkedin"], sharedTabs: [], lastSeq: 0, paused: false }, device(token, deviceId)));
+      const response = await pollRoute.POST(request("/api/browser-bridge/poll", { extensionVersion: typeof version === "function" ? version() : version, sites: ["web", "linkedin"], sharedTabs: [], lastSeq: 0, paused: false }, device(token, deviceId)));
       if (response.status !== 200) break;
       const { commands } = (await response.json()) as { commands: Command[] };
       for (const command of commands) {
@@ -160,14 +160,16 @@ const paired = await pair(a.org.id, a.user.id, "0.18.0");
 let lose: string | null = null;
 let currentUrl = "https://app.hubspot.com/contacts/new";
 const OWNER_TAB = 77;
-const browser = fakeBrowser(paired.token, paired.deviceId, "0.18.0", (command) => {
+let browserVersion = "0.18.0";
+let readyState: "ready" | "timeout" = "ready";
+const browser = fakeBrowser(paired.token, paired.deviceId, () => browserVersion, (command) => {
   const action = command.action;
   if (lose === action.kind) return null;
   switch (action.kind) {
     case "open":
       currentUrl = action.url;
       return { ok: true, tabId: TAB, snapshot: reading(action.url) };
-    case "read": return { ok: true, tabId: action.tabId, snapshot: reading(action.tabId === OWNER_TAB ? "https://app.hubspot.com/contacts/list" : currentUrl) };
+    case "read": return { ok: true, tabId: action.tabId, snapshot: reading(action.tabId === OWNER_TAB ? "https://app.hubspot.com/contacts/list" : currentUrl), ...(action.waitFor ? { readiness: { state: readyState, waitedMs: 10, checks: 2 }, timing: { browserMs: 20, readyWaitMs: 10 } } : {}) };
     case "act": return { ok: true, tabId: TAB, snapshot: reading(currentUrl), note: `“Email” now holds “${action.value ?? ""}”` };
     case "use_tab": return action.grant ? { ok: true, tabId: OWNER_TAB, snapshot: crm("https://app.hubspot.com/contacts/list"), note: "the owner's own tab" } : { ok: false, error: "the owner has not asked to use their open tabs in this request" };
     case "show": return { ok: true, tabId: action.tabId, note: "the tab is in front of the owner now" };
@@ -352,6 +354,23 @@ try {
     check("a text-only API model gets the honest refusal, no image and no capture", refusal.status === "error" && /does not take images/.test(refusal.content) && imagesSeen.every((list) => list.length === 0)
       && deliveredKinds().filter((kind) => kind === "screenshot").length === shotsBefore, refusal.content);
     vision = { supported: true, detail: "fake-vision sees images" };
+    // --- Readiness, compatibility, observations and screenshot lifetime --------------------------
+    const deliveredBeforeWait = browser.delivered.length;
+    const unsupportedWait = await tool("browser_tab_read", { tab: TAB, waitFor: { selector: "footer" } });
+    check("0.18.0 keeps ordinary tools but receives no unsupported wait command", !unsupportedWait.ok && /0.19.0/.test(unsupportedWait.summary) && browser.delivered.length === deliveredBeforeWait);
+    browserVersion = "0.19.0";
+    await db.update(browserConnections).set({ extensionVersion: browserVersion }).where(and(eq(browserConnections.organizationId, a.org.id), eq(browserConnections.userId, a.user.id)));
+    const waitingShot = await tool("browser_tab_screenshot", { tab: TAB });
+    check("a screenshot exists before the explicit readiness wait", waitingShot.ok && Boolean(await connections.latestTabScreenshot(a.user.id, ask.id, TAB)));
+    const waited = await tool("browser_tab_read", { tab: TAB, waitFor: { selector: "footer", timeoutMs: 500 } });
+    const waitAction = browser.delivered.at(-1)!.action;
+    check("a typed wait travels through the real tool/bridge and returns its final observation", waited.ok && waitAction.kind === "read" && waitAction.waitFor?.selector === "footer" && (waited.data as { readiness?: { state: string } })?.readiness?.state === "ready");
+    const timing = (waited.data as { timing?: { browserMs: number; queueMs: number; roundTripMs: number } })?.timing;
+    check("browser and server queue/round-trip durations reach the tool details", timing?.browserMs === 20 && typeof timing.queueMs === "number" && typeof timing.roundTripMs === "number");
+    check("an explicit wait invalidates the prior screenshot on the server as well as in Chrome", await connections.latestTabScreenshot(a.user.id, ask.id, TAB) === null);
+    readyState = "timeout";
+    const stillWaiting = await tool("browser_tab_read", { tab: TAB, waitFor: { text: "Still missing", timeoutMs: 10 } });
+    check("a readiness timeout is informative, never a false ready or a claimed send", stillWaiting.ok && /not ready yet/.test(stillWaiting.summary) && (stillWaiting.data as { readiness?: { state: string } })?.readiness?.state === "timeout" && !/Sent with/.test(stillWaiting.summary));
   });
 
   // --- Another workspace sees no grant and no browser ---------------------------------------

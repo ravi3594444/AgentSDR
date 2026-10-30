@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "22nd x ai Browser Assistant",
-  "version": "0.18.0",
+  "version": "0.19.0",
   "description": "Lets the 22nd x ai assistant work on the websites you allow in Chrome, and places and records WhatsApp calls you start in 22nd x ai.",
   "icons": {
     "16": "icon-16.png",
