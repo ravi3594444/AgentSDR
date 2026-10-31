@@ -64,6 +64,7 @@ function reset(owner = requestId) {
   local.researchConnection = { ...conn }; local.researchDeviceId = randomUUID();
   session.researchTabs = { 1: { requestId: owner, createdAt: Date.now(), lastUsedAt: Date.now(), attention: null } };
   session.researchGroups = {};
+  session.researchSharedTabs = [];
   tabs.clear(); tabs.set(1, { id: 1, url, title: "WhatsApp", status: "complete", windowId: 1, index: 0, groupId: -1 });
 }
 const command = (action: BrowserResearchAction): BrowserResearchCommand => ({ id: randomUUID(), seq: 1, requestId, issuedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 5_000).toISOString(), action });
@@ -88,6 +89,15 @@ try {
   check("a different recipient URL is not treated as the same chat", creates === 1);
   reset(); mode = "never"; await runtime.runCommand(conn, command({ kind: "read", tabId: 1, waitFor: { selector: "#absent", timeoutMs: 10 } }));
   check("a missing condition returns timeout plus one current observation, not success for readiness", answer()?.readiness?.state === "timeout" && reads === 1);
+  reset(randomUUID());
+  const sharedConnection = { ...conn, sites: [] };
+  local.researchConnection = sharedConnection;
+  session.researchSharedTabs = [{ tabId: 1, url, title: "Shared chat" }];
+  await runtime.runCommand(sharedConnection, command({ kind: "read", tabId: 1, waitFor: { selector: "#composer" } }));
+  check("a toolbar-shared tab keeps its existing read-only access when waiting", answer()?.ok && answer()?.readiness?.state === "ready" && probes === 1 && reads === 1);
+  reset(randomUUID()); local.researchConnection = sharedConnection;
+  await runtime.runCommand(sharedConnection, command({ kind: "read", tabId: 1, waitFor: { selector: "#composer" } }));
+  check("a tab that is neither owned nor shared is not probed", answer()?.ok === false && probes === 0 && reads === 0);
   reset(); mode = "stop"; await runtime.runCommand(conn, command({ kind: "read", tabId: 1, waitFor: { selector: "#composer" } }));
   check("Stop during the wait prevents the final read and all following page actions", answer()?.ok === false && answer()?.readiness?.state === "cancelled" && reads === 0);
   reset(); mode = "replace"; await runtime.runCommand(conn, command({ kind: "read", tabId: 1, waitFor: { selector: "#composer" } }));

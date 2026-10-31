@@ -594,8 +594,12 @@ async function readyReading(conn: Connection, command: BrowserResearchCommand, t
     probe: async () => {
       const tab = await chrome.tabs.get(tabId).catch(() => null);
       if (!tab?.url) throw new Error("that tab closed while waiting");
-      const refused = await urlRefusal(conn, tab.url);
-      if (refused) throw new Error(refused.error);
+      // A toolbar-shared tab has the same read-only access here as in readTab.
+      // If sharing is withdrawn, each following probe checks the connection's sites again.
+      if (!(await shared(tabId))) {
+        const refused = await urlRefusal(conn, tab.url);
+        if (refused) throw new Error(refused.error);
+      }
       const probe = await inPage(tabId, { op: "ready", selector: condition.selector ?? null, text: condition.text ?? null });
       if (!probe.ok) {
         // A document can disappear during a navigation; retry only this read-only probe.
