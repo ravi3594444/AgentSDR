@@ -316,7 +316,7 @@ await runInOrganization(a.org.id, async () => {
     // The limits are not appended to the search's result: the model reads them in the REQUEST block of every step.
     const afterSearch = prompts.at(-1) ?? "";
     check("after the first search the model reads the request in its prompt: the owner's words (the target) and the time it runs for",
-      afterSearch.includes("REQUEST — the owner's messages since it began:\n  1. find 10 dentists in Pune") && /The request runs for up to 240 min/.test(afterSearch) && /Searches so far \(do not repeat\): discovery “dentists in Pune” running/.test(afterSearch),
+      afterSearch.includes("REQUEST — the owner's messages since it began (authoritative if the brief or approach differs):\n  1. find 10 dentists in Pune") && /The request runs for up to 240 min/.test(afterSearch) && /Searches so far \(do not repeat\): discovery “dentists in Pune” running/.test(afterSearch),
       afterSearch.slice(afterSearch.indexOf("REQUEST"), afterSearch.indexOf("REQUEST") + 400));
     const driver = await driverOf(objective.id);
     check("one driver job per request, queued in the request's chat", driver.status === "queued" && driver.threadId === thread.id);

@@ -137,7 +137,7 @@ test("WhatsApp's contract constants (shown by the recorder and the website, kept
 
 describe("organization day (general.timeZone, general.dayStartsAt)", () => {
   test("defaults to UTC midnight", () => {
-    expect(defaultValues("general")).toEqual({ timeZone: "UTC", dayStartsAt: "00:00", defaultPhoneCountry: "", newLeadsPerDay: 200, autonomousRunsPerDay: 10, autonomousLeadsPerDay: 300, autonomousSearchesPerDay: 20, objectiveLeadTarget: 25, objectiveHours: 4, objectiveSpendUsd: 5 });
+    expect(defaultValues("general")).toEqual({ timeZone: "UTC", dayStartsAt: "00:00", defaultPhoneCountry: "", newLeadsPerDay: 200, autonomousRunsPerDay: 10, autonomousLeadsPerDay: 300, autonomousSearchesPerDay: 200, objectiveLeadTarget: 200, objectiveHours: 4, objectiveSpendUsd: 5 });
   });
 
   test("validates the zone and the time", () => {

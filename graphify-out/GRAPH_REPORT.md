@@ -1,17 +1,17 @@
 # Graph Report - AgentSDR  (2026-10-31)
 
 ## Corpus Check
-- 2107 files · ~1,889,216 words
+- 2107 files · ~1,889,305 words
 - Verdict: corpus is large enough that graph structure adds value.
 - Unclassified: 19 file(s) not represented in the graph (top: (none) 11, .css 3, .example 1)
 
 ## Summary
-- 15652 nodes · 51446 edges · 424 communities (404 shown, 20 thin omitted)
+- 15652 nodes · 51447 edges · 424 communities (404 shown, 20 thin omitted)
 - Extraction: 99% EXTRACTED · 1% INFERRED · 0% AMBIGUOUS · INFERRED: 653 edges (avg confidence: 0.9)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `07a3999d`
+- Built from commit: `ee8ab163`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -2083,7 +2083,7 @@ Nodes (4): typecheck, name, runs-on, steps
 
 ## Knowledge Gaps
 - **23 isolated node(s):** `IMAGE`, `WORKER_READY`, `DEFAULT_MIGRATIONS`, `BETTER_AUTH_URL`, `NEXT_PUBLIC_APP_URL` (+18 more)
-  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 5093 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
+  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 5092 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
 - **20 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions

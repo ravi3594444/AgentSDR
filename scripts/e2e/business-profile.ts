@@ -159,7 +159,7 @@ await runInOrganization(b!.id, async () => {
   check("…nor edit it", Boolean(await refusal(() => updateKnowledgeDocument(ids.documentId, { content: "Taken over" }))));
   const own = await saveBusinessProfileSettings(owner, { businessName: "Other Co" });
   check("…and saving its own profile makes its own copy", Boolean(own.knowledgeDocumentId) && own.knowledgeDocumentId !== ids.documentId);
-  check("…while its general rules stay its own", (await channelRulesForSettings("general")).values.objectiveLeadTarget === 25);
+  check("…while its general rules stay its own", (await channelRulesForSettings("general")).values.objectiveLeadTarget === 200);
 });
 
 await runInOrganization(a!.id, async () => {

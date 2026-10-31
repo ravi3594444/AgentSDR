@@ -430,7 +430,7 @@ export type DriverStep =
 export const MAX_CONTINUATION_ATTEMPTS = 3;
 /** The driver's attempts at judging leads left unjudged; after these they stay uncounted, and the report says so. */
 export const MAX_QUALIFY_ATTEMPTS = 3;
-export const MAX_DRY_CONTINUATIONS = 2;
+export const MAX_DRY_CONTINUATIONS = 4;
 const WATCH_MS = 60_000;
 const TURN_POLL_MS = 15_000;
 const PAUSED_POLL_MS = 60_000;

@@ -6,6 +6,7 @@ import {
   waitsForOwner,
   limitReached,
   MAX_CONTINUATION_ATTEMPTS,
+  MAX_DRY_CONTINUATIONS,
   MAX_QUALIFY_ATTEMPTS,
   nextDriverStep,
   objectiveReportKey,
@@ -295,8 +296,8 @@ describe("the driver: wait, continue or stop", () => {
     const idle = { wakeAtLimit: true, leadTarget: 10, leads: 4, continuation: turn({ n: 2, leadsAtStart: 4 }) };
     expect(nextDriverStep(facts(idle))).toEqual({ kind: "continue", n: 3, attempt: 1, dry: 0, final: "sources_exhausted", finalDetail: "the assistant found no further source or query worth searching" });
     expect(nextDriverStep(facts({ ...idle, refusals: ["Instagram is not connected."] }))).toMatchObject({ final: "sources_exhausted", finalDetail: "no other source could be searched (Instagram is not connected)" });
-    // Two dry continuations in a row: the same last turn first.
-    expect(nextDriverStep(facts({ wakeAtLimit: true, leadTarget: 10, leads: 4, dry: 1, continuation: turn({ n: 2, leadsAtStart: 4, judged: "productive" }) }))).toEqual({ kind: "continue", n: 3, attempt: 1, dry: 2, final: "sources_exhausted", finalDetail: "2 continuations in a row found no new lead" });
+    // MAX_DRY_CONTINUATIONS (4) dry continuations in a row: the same last turn first.
+    expect(nextDriverStep(facts({ wakeAtLimit: true, leadTarget: 10, leads: 4, dry: 3, continuation: turn({ n: 2, leadsAtStart: 4, judged: "productive" }) }))).toEqual({ kind: "continue", n: 3, attempt: 1, dry: 4, final: "sources_exhausted", finalDetail: "4 continuations in a row found no new lead" });
     // That turn running, interrupted, then ended: the request stops with the recorded reason, whatever the turn did not start.
     const last = turn({ n: 3, leadsAtStart: 4, final: "sources_exhausted", finalDetail: "the assistant found no further source or query worth searching" });
     expect(nextDriverStep(facts({ ...idle, threadBusy: true, continuation: { ...last, endedAt: null, end: null } }))).toMatchObject({ kind: "wait", delayMs: 15_000 });
@@ -421,10 +422,14 @@ describe("the driver: wait, continue or stop", () => {
     expect(nextDriverStep(facts({ continuation: { ...waiting, waitUntil: minutes(-1).toISOString() } }))).toEqual({ kind: "continue", n: 2, attempt: 1, dry: 1 });
   });
 
-  test("after a productive continuation: the next one, and two in a row without a new lead end it", () => {
+  test("after a productive continuation: the next one, and four in a row without a new lead end it", () => {
+    expect(MAX_DRY_CONTINUATIONS).toBe(4);
     expect(nextDriverStep(facts({ leads: 14, continuation: turn({ judged: "productive" }) }))).toEqual({ kind: "continue", n: 2, attempt: 1, dry: 0 });
     expect(nextDriverStep(facts({ leads: 10, continuation: turn({ judged: "productive" }) }))).toEqual({ kind: "continue", n: 2, attempt: 1, dry: 1 });
-    expect(nextDriverStep(facts({ leads: 10, dry: 1, continuation: turn({ judged: "productive" }) }))).toMatchObject({ kind: "stop", reason: "sources_exhausted" });
+    // Two and three dry rounds still go on; the fourth ends it.
+    expect(nextDriverStep(facts({ leads: 10, dry: 1, continuation: turn({ judged: "productive" }) }))).toEqual({ kind: "continue", n: 2, attempt: 1, dry: 2 });
+    expect(nextDriverStep(facts({ leads: 10, dry: 2, continuation: turn({ judged: "productive" }) }))).toEqual({ kind: "continue", n: 2, attempt: 1, dry: 3 });
+    expect(nextDriverStep(facts({ leads: 10, dry: 3, continuation: turn({ judged: "productive" }) }))).toMatchObject({ kind: "stop", reason: "sources_exhausted", detail: "4 continuations in a row found no new lead" });
   });
 
   test("a wait never sleeps past the time limit", () => {
