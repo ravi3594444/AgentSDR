@@ -62,7 +62,7 @@ alternative. Any of them can be reversed later.
 
 | # | Default | Why | Alternative |
 | --- | --- | --- | --- |
-| 36 | A request's lead target, time limit and spend cap default to 25 leads (200 since 31 Oct 2026, the owner's decision), 4 hours and $5, as "general" Sending rules (`objectiveLeadTarget`, `objectiveHours`, `objectiveSpendUsd`). Values named in the request are clamped to 1–1000 leads, 5 minutes–72 hours and $0–$500 | Sending rules are where operational numbers live; the bounds keep a typo from running for days | Ask the owner every time |
+| 36 | A request's lead target, time limit and spend cap default to 25 leads (50 since 31 Oct 2026, the owner's decision), 4 hours and $5, as "general" Sending rules (`objectiveLeadTarget`, `objectiveHours`, `objectiveSpendUsd`). Values named in the request are clamped to 1–1000 leads, 5 minutes–72 hours and $0–$500 | Sending rules are where operational numbers live; the bounds keep a typo from running for days | Ask the owner every time |
 | 37 | A $0 cap means free sources only; it never stops a request as "budget spent" | "Spend nothing" is a choice of sources, not a limit reached | Treat $0 as already spent |
 | 38 | A qualified lead is a distinct person with a contact route across the request's lead lists. When several limits hold at once, the stop reason is the target, then spend, then time | One person found twice is one lead; the owner most wants to know the target was met | Count list entries |
 | 39 | "Sources exhausted": a continuation started nothing, or two (four since 31 Oct 2026, the owner's decision) continuations in a row found no new lead | Bounded; stops paying for searches that yield nothing | A fixed number of continuations |

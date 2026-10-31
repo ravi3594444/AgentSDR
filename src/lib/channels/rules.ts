@@ -349,10 +349,10 @@ export const CHANNEL_RULES = {
       label: "Leads a request looks for",
       help: "When you ask the assistant to find leads without saying how many, it keeps searching (more places, other sources) until it has this many qualified leads, its time or spend limit is reached, or nothing else fits.",
       unit: "qualified leads",
-      default: 200,
+      default: 50,
       min: 1,
       max: 1_000,
-      safe: { above: 500 },
+      safe: { above: 200 },
       warning: "A large target keeps the assistant searching, and spending, for longer on each request.",
     },
     {
