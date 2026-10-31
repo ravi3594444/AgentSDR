@@ -40,8 +40,8 @@ import { assistantJobs, assistantMessages, assistantObjectives, leadAudiences, t
 import { addMessage } from "./threads.server";
 import { readBrief, type Brief } from "./brief";
 import type { AssistantJob, StepOutcome } from "./worker";
-import { audienceFunnel } from "./qualify.server";
-import type { LeadFunnel } from "./leadFit";
+import { audienceFunnel, audienceResearchFacts } from "./qualify.server";
+import type { LeadFunnel, RequestCheck } from "./leadFit";
 
 /**
  * Objectives, server side (rules in objective.ts): one row per owner request
@@ -296,22 +296,22 @@ const isOpen = (job: Pick<ObjectiveChild, "status">) => job.status === "queued" 
  * other steps apart (found, contactable, not matching, unconfirmed, not yet
  * judged), and the routes are the qualified people's.
  */
-export async function objectiveLeads(objective: Pick<Objective, "requestMessageId"> & { controls?: Objective["controls"] }, children: readonly ObjectiveChild[]): Promise<{ leads: number; routes: ContactRoutes; audienceIds: string[]; funnel: LeadFunnel }> {
+export async function objectiveLeads(objective: Pick<Objective, "requestMessageId"> & { controls?: Objective["controls"] }, children: readonly ObjectiveChild[]): Promise<{ leads: number; routes: ContactRoutes; audienceIds: string[]; funnel: LeadFunnel; review: RequestCheck }> {
   const earlier = await continuedRequestIds(objective);
   const requestIds = [objective.requestMessageId, ...earlier];
   const listed = await db.select({ id: leadAudiences.id, criteria: leadAudiences.criteria }).from(leadAudiences)
     .where(and(inOrg(leadAudiences), inArray(sql`${leadAudiences.criteria} ->> 'requestId'`, requestIds)));
   const inherited = (await Promise.all(earlier.map((requestMessageId) => objectiveChildren({ requestMessageId })))).flat();
   const audienceIds = [...new Set([...children, ...inherited].flatMap((job) => (job.audienceId ? [job.audienceId] : [])).concat(listed.map((row) => row.id)))];
-  const { routes, ...funnel } = await audienceFunnel(audienceIds);
-  if (!earlier.length) return { leads: funnel.qualified, routes, audienceIds, funnel };
+  const { funnel: { routes, ...funnel }, review } = await audienceResearchFacts(audienceIds);
+  if (!earlier.length) return { leads: funnel.qualified, routes, audienceIds, funnel, review };
   // A request that continues another sees its leads (review, plan, PROGRESS), but only its own count toward its target:
   // "find 10 more" starts at 0. Its plan lists copy inherited leads, so they are not its own either.
   const own = [...new Set(children.flatMap((job) => (job.audienceId ? [job.audienceId] : [])).concat(listed
     .filter((row) => (row.criteria as { requestId?: unknown; fromRequest?: unknown } | null)?.requestId === objective.requestMessageId && (row.criteria as { fromRequest?: unknown }).fromRequest !== true)
     .map((row) => row.id)))];
   const leads = own.length ? (await audienceFunnel(own)).qualified : 0;
-  return { leads, routes, audienceIds, funnel };
+  return { leads, routes, audienceIds, funnel, review };
 }
 
 /**
@@ -521,6 +521,7 @@ export type ObjectiveFacts = {
   routes: ContactRoutes;
   audienceIds: string[];
   funnel: LeadFunnel;
+  review: RequestCheck;
   spend: SpendBreakdown;
   sources: SourceYield[];
   web: WebUse | null;
@@ -530,7 +531,7 @@ export type ObjectiveFacts = {
 
 export async function objectiveFacts(objective: Objective): Promise<ObjectiveFacts> {
   const children = await objectiveChildren(objective);
-  const [{ leads, routes, audienceIds, funnel }, spend, [message]] = await Promise.all([
+  const [{ leads, routes, audienceIds, funnel, review }, spend, [message]] = await Promise.all([
     objectiveLeads(objective, children),
     objectiveSpend(objective, db, children),
     db.select({ id: assistantMessages.id, threadId: assistantMessages.threadId, createdAt: assistantMessages.createdAt, content: assistantMessages.content })
@@ -546,6 +547,7 @@ export async function objectiveFacts(objective: Objective): Promise<ObjectiveFac
     routes,
     audienceIds,
     funnel,
+    review,
     spend,
     sources: objectiveSources(children),
     web,
@@ -576,6 +578,8 @@ export type ObjectiveView = {
   /** Everyone its lists hold, and those with a contact route (the funnel's first two steps), each person once. */
   found: number;
   contactable: number;
+  /** Saved candidates checked once per person; absent on older responses. */
+  review?: RequestCheck;
   remaining: number;
   routes: ContactRoutes;
   spendCapUsd: number | null;
@@ -612,6 +616,7 @@ function viewOf(facts: ObjectiveFacts, now = new Date()): ObjectiveView {
     leads: facts.leads,
     found: facts.funnel.found,
     contactable: facts.funnel.contactable,
+    review: facts.review,
     remaining: Math.max(0, objective.leadTarget - facts.leads),
     routes: facts.routes,
     spendCapUsd: objective.spendCapUsd,

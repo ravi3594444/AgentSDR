@@ -24,6 +24,8 @@ import { cn } from "@/utils/cn";
 import { Mascot, type MascotMood } from "./Mascot";
 import { requestFigures, researchHeadline, researchRow, researchSummary, type ResearchJob, type ResearchMessage, type ResearchRow, type SourceIcon } from "./researchView";
 import { browserActivity, isConnectedBrowserTool } from "./browserActivity";
+import { ResearchProgressCard } from "./ResearchProgressCard";
+import { researchProgress, type ProgressMessage, type ProgressObjective } from "./researchProgress";
 
 /**
  * One owner request's activity in the chat, as one card that updates in
@@ -56,7 +58,10 @@ function StateMark({ row }: { row: ResearchRow }) {
   return <RiLoader4Line className={cn("size-4 shrink-0 text-text-soft-400", (row.phase === "searching" || row.phase === "reading" || row.state === "starting") && "animate-spin")} aria-hidden="true" />;
 }
 
-function Row({ row, timeZone }: { row: ResearchRow; timeZone: string }) {
+function Row({ row: stored, timeZone, statusKnown = true }: { row: ResearchRow; timeZone: string; statusKnown?: boolean }) {
+  const row: ResearchRow = !statusKnown && (stored.state === "open" || stored.state === "starting")
+    ? { ...stored, state: "open", phase: null, label: "Status unavailable", step: null, reason: "The saved source status could not be refreshed.", nextCheckAt: null, progress: null }
+    : stored;
   const [open, setOpen] = useState(false);
   const panel = useId();
   const Icon = ICONS[row.icon];
@@ -124,10 +129,15 @@ function directSources(details: readonly DetailMessage[]): string | null {
   return counts.size ? [...counts].map(([name, n]) => (n > 1 ? `${name} ×${n}` : name)).join(" · ") : null;
 }
 
-export function RequestActivity({ research, jobs, details, renderDetail, numbers, target, outreach, timeZone, working, workingLabel }: {
+export function RequestActivity({ research, jobs, details, activity, objective, renderDetail, numbers, target, outreach, timeZone, working, workingLabel, agentActive = working, statusKnown = true }: {
   research: ResearchMessage[];
   jobs: ResearchJob[];
   details: DetailMessage[];
+  /** All tools in this turn, including visible saved-list and plan results, in recorded order. */
+  activity?: ProgressMessage[];
+  objective?: ProgressObjective | null;
+  agentActive?: boolean;
+  statusKnown?: boolean;
   renderDetail: (message: DetailMessage) => React.ReactNode;
   /** The request's own numbers (useRequestSummary): undefined while loading, null when it has none. */
   numbers: Parameters<typeof requestFigures>[0]["numbers"];
@@ -142,7 +152,7 @@ export function RequestActivity({ research, jobs, details, renderDetail, numbers
 }) {
   // The time states are read against ("next check" ahead or due), ticking while anything is open.
   const [now, setNow] = useState(() => new Date());
-  const anyOpen = research.some((message) => message.status === "running") || jobs.some((job) => job.status === "queued" || job.status === "running");
+  const anyOpen = agentActive || objective?.status === "active" || research.some((message) => message.status === "running") || jobs.some((job) => job.status === "queued" || job.status === "running");
   useEffect(() => {
     if (!anyOpen) return;
     const timer = setInterval(() => setNow(new Date()), 5_000);
@@ -151,7 +161,9 @@ export function RequestActivity({ research, jobs, details, renderDetail, numbers
   const rows = research.map((message) => researchRow(message, jobs.find((job) => job.id === message.toolResult?.data?.jobId), now));
   const summary = researchSummary(rows);
   const headline = researchHeadline(summary);
-  const figures = rows.length || outreach ? requestFigures({ numbers, target, rows: summary, outreach }) : [];
+  const progress = researchProgress({ messages: activity ?? [...research, ...details], objective, rows, agentActive, statusKnown, now });
+  const measured = progress && !rows.length && numbers === null ? undefined : numbers;
+  const figures = rows.length || outreach || progress ? requestFigures({ numbers: measured, target, rows: summary, outreach }) : [];
   const sources = useMemo(() => directSources(details), [details]);
   const browser = useMemo(() => browserActivity(details), [details]);
   const failedSteps = details.filter((message) => message.status === "error").length;
@@ -168,7 +180,7 @@ export function RequestActivity({ research, jobs, details, renderDetail, numbers
 
   return (
     <section aria-label="Request activity" data-testid="request-activity" className="w-full max-w-2xl rounded-2xl border border-stroke-soft-200 bg-bg-white-0">
-      {(rows.length > 0 || working || browser) && (
+      {progress ? <ResearchProgressCard progress={progress} figures={figures} timeZone={timeZone} /> : (rows.length > 0 || working || browser) && (
         <div className="flex items-center gap-3 px-4 pt-3.5">
           <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-bg-weak-50" aria-hidden="true"><Mascot mood={mood} className="size-7" /></span>
           <div className="min-w-0 flex-1">
@@ -177,7 +189,7 @@ export function RequestActivity({ research, jobs, details, renderDetail, numbers
           </div>
         </div>
       )}
-      {figures.length > 0 && (
+      {!progress && figures.length > 0 && (
         <dl className="mx-4 mt-3 grid grid-cols-3 gap-x-3 gap-y-2 rounded-xl bg-bg-weak-50 px-3 py-2.5 sm:flex sm:flex-wrap sm:gap-x-6" data-testid="request-figures">
           {figures.map((figure) => (
             <div key={figure.label} className="min-w-0">
@@ -189,10 +201,10 @@ export function RequestActivity({ research, jobs, details, renderDetail, numbers
       )}
       {rows.length > 0 && (
         <ul className="mx-4 mt-1 divide-y divide-stroke-soft-200" aria-label="Searches">
-          {rows.map((row) => <Row key={row.id} row={row} timeZone={timeZone} />)}
+          {rows.map((row) => <Row key={row.id} row={row} timeZone={timeZone} statusKnown={statusKnown} />)}
         </ul>
       )}
-      {rows.length > 0 && browser && <p className="mx-4 mt-1 text-paragraph-xs text-text-sub-600">Browser activity: {browser.label}</p>}
+      {(rows.length > 0 || progress) && browser && <p className="mx-4 mt-2 text-paragraph-xs text-text-sub-600">Browser activity: {browser.label}</p>}
       {sources && <p className="mx-4 mt-1 text-paragraph-xs text-text-sub-600">Sources used: {sources}</p>}
       {details.length > 0 && (
         <details className={cn("group mt-2 border-t border-stroke-soft-200", !(rows.length > 0 || working || browser || figures.length > 0) && "mt-0 border-t-0")}>

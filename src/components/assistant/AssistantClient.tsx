@@ -52,6 +52,7 @@ import { RequestActivity } from "./RequestActivity";
 import { BrowserConnection } from "./BrowserConnection";
 import { RESEARCH_TOOLS, researchTitle } from "./researchView";
 import { browserTimingDetails } from "./browserActivity";
+import { hasResearchActivity } from "./researchProgress";
 import { activityPresentation, COMPACT_TOOLS, splitTurn, visibleChatMessages } from "./chatActivity";
 import { useRequestSummary } from "./useRequestSummary";
 import { createResponseGate } from "@/components/crm/responseGate";
@@ -1052,12 +1053,13 @@ function AssistantAvatar({ size = "sm", mood = "idle" }: { size?: "sm" | "lg"; m
 }
 
 /** A turn's items with each run of consecutive searches gathered into one research card. */
-function TurnActivity({ requestId, refreshKey, research, details, plans, jobs, renderDetail, active, statusKnown }: {
+function TurnActivity({ requestId, refreshKey, research, details, activity, plans, jobs, renderDetail, active, statusKnown }: {
   /** The owner's message that asked: the request key its searches and plans carry. */
   requestId: string | null;
   refreshKey: string;
   research: Message[];
   details: Message[];
+  activity: Message[];
   /** Plan cards this turn shows. */
   plans: number;
   jobs: Job[];
@@ -1066,8 +1068,8 @@ function TurnActivity({ requestId, refreshKey, research, details, plans, jobs, r
   statusKnown: boolean;
 }) {
   const timeZone = useContext(DisplayTimeZone);
-  // The request's own figures, the same the panel beside the chat shows; only a turn that searched or planned has one.
-  const summary = useRequestSummary(requestId && (research.length > 0 || plans > 0) ? `r:${requestId}` : null, refreshKey);
+  // Browser research has no provider job: its brief, saved candidates and fit checks still belong to the request.
+  const summary = useRequestSummary(requestId && (hasResearchActivity(activity) || research.length > 0 || plans > 0) ? `r:${requestId}` : null, refreshKey);
   const presentation = activityPresentation(details, active, statusKnown);
   const activeStep = presentation.status === "running" ? details.findLast((message) => message.role === "tool" && message.status === "running") : null;
   const workingLabel = activeStep ? WORKING_TITLE[activeStep.tool ?? ""] ?? TOOL_TITLE[activeStep.tool ?? ""] ?? "Working on this request" : null;
@@ -1082,6 +1084,10 @@ function TurnActivity({ requestId, refreshKey, research, details, plans, jobs, r
       research={research}
       jobs={jobs}
       details={details}
+      activity={activity}
+      objective={summary?.objective}
+      agentActive={active}
+      statusKnown={statusKnown}
       renderDetail={(message) => rendered(message as Message)}
       numbers={summary === undefined ? undefined : summary?.numbers ?? null}
       target={summary?.target ?? null}
@@ -1474,7 +1480,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
     return (
       <>
         {(turn.research.length > 0 || turn.details.length > 0) && (
-          <TurnActivity requestId={owner?.id ?? null} refreshKey={activityKey} research={turn.research} details={turn.details} plans={plans} jobs={state.jobs} renderDetail={renderMessage} active={active} statusKnown={statusKnown} />
+          <TurnActivity requestId={owner?.id ?? null} refreshKey={activityKey} research={turn.research} details={turn.details} activity={items} plans={plans} jobs={state.jobs} renderDetail={renderMessage} active={active} statusKnown={statusKnown} />
         )}
         {turn.visible.map(renderMessage)}
       </>
@@ -1542,11 +1548,11 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
                 )}
                 {(turn.items.length > 0 || (thinking && index === turns.length - 1 && !showPending)) && (
                   <div className="flex gap-3">
-                    <div className="hidden shrink-0 sm:block"><AssistantAvatar mood={thinking && index === turns.length - 1 && !showPending ? "thinking" : "idle"} /></div>
+                    <div className="hidden shrink-0 sm:block"><AssistantAvatar mood={thinking && !error && !hasResearchActivity(turn.items) && index === turns.length - 1 && !showPending ? "thinking" : "idle"} /></div>
                     <div className="flex min-w-0 flex-1 flex-col gap-2.5 pt-1">
                       <span className="text-label-xs text-text-sub-600">Assistant</span>
                       {assistantItems(turn.owner, turn.items, state.busy && index === turns.length - 1, index !== turns.length - 1 || error === null)}
-                      {thinking && index === turns.length - 1 && !showPending && <ThinkingIndicator label={thinkingLabel} />}
+                      {thinking && !error && !hasResearchActivity(turn.items) && index === turns.length - 1 && !showPending && <ThinkingIndicator label={thinkingLabel} />}
                     </div>
                   </div>
                 )}
@@ -1558,7 +1564,7 @@ export default function AssistantClient({ initial }: { initial: AssistantStatePa
                   {pending.text && <div className="max-w-[min(36rem,90%)] whitespace-pre-wrap rounded-2xl rounded-br-md bg-bg-weak-50 px-4 py-3 text-paragraph-sm leading-6 text-text-strong-950 [overflow-wrap:anywhere]">{pending.text}</div>}
                   {pending.files.map((name) => <span key={name} className="text-paragraph-xs text-text-sub-600">{name}</span>)}
                 </div>
-                <div className="flex gap-3"><div className="hidden sm:block"><AssistantAvatar mood="thinking" /></div><div className="pt-2"><ThinkingIndicator label={pending.files.length ? "Reading your files…" : "Thinking…"} /></div></div>
+                <div className="flex gap-3"><div className="hidden sm:block"><AssistantAvatar mood={error ? "idle" : "thinking"} /></div><div className="pt-2">{error ? <p className="text-paragraph-xs text-text-soft-400">Waiting for a confirmed status.</p> : <ThinkingIndicator label={pending.files.length ? "Reading your files…" : "Thinking…"} />}</div></div>
               </div>
             )}
             {suggestions.length > 0 && (

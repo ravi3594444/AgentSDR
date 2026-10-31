@@ -88,6 +88,7 @@ jobs:
           bun scripts/review/browser-extension-connection-race.ts
           bun scripts/review/browser-extension-connection-race.ts --same-connection
           bun scripts/review/browser-activity-markup.tsx
+          bun scripts/review/research-progress-markup.tsx
 
   database:
     name: Fresh install (PostgreSQL ${{ matrix.postgres }})
@@ -121,6 +122,14 @@ jobs:
         run: bun run db:check
       - name: Sign-up and organization policies (needs the empty database)
         run: bun --conditions=react-server scripts/e2e/auth-policies.ts
+      - name: Research progress and workspace isolation (disposable database)
+        if: matrix.postgres == '16'
+        env:
+          DATABASE_URL: postgres://agentsdr:agentsdr@localhost:5432/agentsdr_native
+        run: |
+          docker exec "${{ job.services.postgres.id }}" createdb -U agentsdr agentsdr_native
+          bun run db:setup
+          bun --conditions=react-server scripts/e2e/research-progress.ts
       - name: Demo data seeds and stays scoped
         run: |
           bun --conditions=react-server scripts/db/seed-demo.ts

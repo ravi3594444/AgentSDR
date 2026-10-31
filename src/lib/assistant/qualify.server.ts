@@ -5,7 +5,7 @@ import { db } from "@/lib/db";
 import { companies, people } from "@/lib/leads/schema";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { effectiveBusinessProfile } from "./businessContext.server";
-import { applyRequestRules, EMPTY_FUNNEL, requestSubject, websiteStatusFact, type LeadFunnel } from "./leadFit";
+import { applyRequestRules, ASSISTANT_CHECKED, EMPTY_FUNNEL, requestSubject, websiteStatusFact, type LeadFunnel, type RequestCheck } from "./leadFit";
 import type { LeadApproach } from "./messages";
 import { displayBusinessName } from "./pitch";
 import { leadAudienceMembers, type LeadFit } from "./schema";
@@ -191,20 +191,30 @@ export async function assessMembers(input: { audienceIds: readonly string[]; req
  * reasons for a no-match.
  */
 export async function audienceFunnel(audienceIds: readonly string[]): Promise<LeadFunnel & { routes: { email: number; whatsapp: number; linkedin: number; instagram: number } }> {
+  return (await audienceResearchFacts(audienceIds)).funnel;
+}
+
+/** The request card reuses the funnel's scoped, distinct-person read; no extra model or database round trip. */
+export async function audienceResearchFacts(audienceIds: readonly string[]): Promise<{ funnel: LeadFunnel & { routes: { email: number; whatsapp: number; linkedin: number; instagram: number } }; review: RequestCheck }> {
   const none = { email: 0, whatsapp: 0, linkedin: 0, instagram: 0 };
-  if (!audienceIds.length) return { ...EMPTY_FUNNEL, routes: none };
+  if (!audienceIds.length) return { funnel: { ...EMPTY_FUNNEL, routes: none }, review: { leads: 0, match: 0, noMatch: 0, unconfirmed: 0, pending: 0, unchecked: 0 } };
   const ids = sql.join(audienceIds.map((id) => sql`${id}::uuid`), sql`, `);
   const org = currentOrganizationId();
   const [counts] = [...await db.execute<Record<string, number>>(sql`
     with m as (
-      select coalesce(person_id::text, id::text) as who, status, fit, channels
+      select coalesce(person_id::text, id::text) as who, person_id is not null as saved, status, fit, fit_reason, channels
       from lead_audience_members where organization_id = ${org} and audience_id in (${ids})
     ), p as (
       select who,
+        bool_or(saved) as saved,
+        coalesce(bool_or(fit = 'no_match'), false) as verdict_no,
+        coalesce(bool_or(fit = 'match'), false) as verdict_match,
+        coalesce(bool_or(fit = 'unconfirmed'), false) as verdict_unconfirmed,
+        coalesce(bool_or(fit_reason like ${`${ASSISTANT_CHECKED}%`}), false) as assistant_checked,
         bool_or(status = 'eligible') as contactable,
-        bool_or(status = 'eligible' and fit = 'no_match') as no_match,
-        bool_or(status = 'eligible' and fit = 'match') as match,
-        bool_or(status = 'eligible' and fit = 'unconfirmed') as unconfirmed,
+        coalesce(bool_or(status = 'eligible' and fit = 'no_match'), false) as no_match,
+        coalesce(bool_or(status = 'eligible' and fit = 'match'), false) as match,
+        coalesce(bool_or(status = 'eligible' and fit = 'unconfirmed'), false) as unconfirmed,
         bool_or(status = 'eligible' and 'email' = any(channels)) as email,
         bool_or(status = 'eligible' and 'whatsapp' = any(channels)) as whatsapp,
         bool_or(status = 'eligible' and 'linkedin' = any(channels)) as linkedin,
@@ -214,6 +224,12 @@ export async function audienceFunnel(audienceIds: readonly string[]): Promise<Le
       select *, contactable and not no_match and match as qualified from p
     )
     select count(*)::int as found,
+      (count(*) filter (where saved))::int as review_total,
+      (count(*) filter (where saved and verdict_no))::int as review_no,
+      (count(*) filter (where saved and not verdict_no and verdict_match))::int as review_match,
+      (count(*) filter (where saved and not verdict_no and not verdict_match and verdict_unconfirmed))::int as review_unconfirmed,
+      (count(*) filter (where saved and not verdict_no and not verdict_match and not verdict_unconfirmed))::int as review_pending,
+      (count(*) filter (where saved and not verdict_no and not verdict_match and (not verdict_unconfirmed or not assistant_checked)))::int as review_unchecked,
       (count(*) filter (where contactable))::int as contactable,
       (count(*) filter (where qualified))::int as qualified,
       (count(*) filter (where contactable and no_match))::int as not_matching,
@@ -231,7 +247,7 @@ export async function audienceFunnel(audienceIds: readonly string[]): Promise<Le
     where organization_id = ${org} and audience_id in (${ids}) and status = 'eligible' and fit = 'no_match' and fit_reason is not null
     group by fit_reason order by count desc, fit_reason limit 3`)];
   const n = (key: string) => Number(counts?.[key] ?? 0);
-  return {
+  return { funnel: {
     found: n("found"),
     contactable: n("contactable"),
     qualified: n("qualified"),
@@ -241,5 +257,5 @@ export async function audienceFunnel(audienceIds: readonly string[]): Promise<Le
     pendingMembers: n("pending_members"),
     noMatchReasons: reasons.map((row) => ({ reason: row.reason, count: Number(row.count) })),
     routes: { email: n("r_email"), whatsapp: n("r_whatsapp"), linkedin: n("r_linkedin"), instagram: n("r_instagram") },
-  };
+  }, review: { leads: n("review_total"), match: n("review_match"), noMatch: n("review_no"), unconfirmed: n("review_unconfirmed"), pending: n("review_pending"), unchecked: n("review_unchecked") } };
 }

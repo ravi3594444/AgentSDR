@@ -58,6 +58,8 @@ export type ResearchRow = {
   source: string;
   icon: SourceIcon;
   state: RowState;
+  /** The provider job is recording fit judgements, rather than collecting contact details. */
+  checkingFit?: boolean;
   /** While open, its phase (jobActivity.ts). */
   phase: JobPhase | null;
   /** The state as shown: "Searching", "Waiting for provider results", "Done", "Failed". */
@@ -158,7 +160,7 @@ function doneFacts(job: ResearchJob): { stats: ResearchStat[]; details: string[]
 
 export function researchRow(message: ResearchMessage, job: ResearchJob | undefined, now: Date = new Date()): ResearchRow {
   const { source, icon } = sourceOf(message, job);
-  const base = { id: message.id, title: researchTitle(message, job), source, icon, phase: null, step: null, reason: null, nextCheckAt: null, progress: null, stats: [], details: [], error: null, audienceId: null, contactable: null, excluded: null };
+  const base = { id: message.id, title: researchTitle(message, job), source, icon, checkingFit: job?.stage === "qualifying" || job?.progress.stage === "qualifying", phase: null, step: null, reason: null, nextCheckAt: null, progress: null, stats: [], details: [], error: null, audienceId: null, contactable: null, excluded: null };
   const display = str(message.toolResult?.display) ?? str(message.content);
   if (message.status === "running") return { ...base, state: "starting", label: "Starting" };
   if (message.status === "error") return { ...base, state: "failed", label: "Not started", error: display };

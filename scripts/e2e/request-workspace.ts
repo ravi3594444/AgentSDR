@@ -308,6 +308,7 @@ const statusFixture = await runInOrganization(a!.id, async () => {
   const summary = (await requestSummary(`r:${request!.id}`))!;
   const waiting = summary.children.searches.find((item) => item.id === poll!.id);
   check("research counts are 14 distinct found, 6 contactable, 0 matching, even across overlapping sources", summary.numbers.found === 14 && summary.numbers.contactable === 6 && summary.numbers.matching === 0, JSON.stringify(summary.numbers));
+  check("review progress counts each saved person once and keeps unchecked candidates separate", summary.objective?.review?.leads === 14 && summary.objective.review.noMatch === 6 && summary.objective.review.unchecked === 8, JSON.stringify(summary.objective?.review));
   check("a saved default of 25 is not presented as the owner's requested target", summary.target === null && summary.objective?.leadTarget === 25);
   check("a normal search wait is informational, never a request blocker", summary.blocker === null && summary.nextAction.kind === "research" && summary.nextAction.detail === "1 search is still collecting results");
   check("a provider poll says Waiting for results and keeps the exact next check time", waiting?.state !== "scheduled" && waiting?.stateLabel === "Waiting for provider results" && waiting.nextAt === nextCheck.toISOString(), JSON.stringify(waiting));
