@@ -66,7 +66,7 @@ import { inquiryRepliesRequested, outreachRequested, outreachRequestProblem, out
 import { answerDecision, DecisionError, listOpenDecisions } from "./decisions.server";
 import { channelAvailability, listRuns, OutreachCoveredError, OutreachError, prepareOutreach, reportRun, setRunPaused, setRunReplyMode, stopRun } from "./outreach.server";
 import { channelList, channelPolicy, planChannelsLine } from "./channelPolicy";
-import { typedByOwner } from "./leadFit";
+import { requestCheckLine, typedByOwner } from "./leadFit";
 import { markGivenByOwner } from "./qualify.server";
 import { mergeProfile, PROFILE_LABELS, profileChanges } from "./profile";
 import { businessContext } from "./businessContext";
@@ -87,7 +87,7 @@ import { instagramContactUsername, parseInstagramContacts } from "./instagramCon
 import { createInstagramContactsAudience } from "./instagramContacts.server";
 import { withoutContactAfter } from "./agentV2";
 import { coerceToolArguments, TOOL_SCHEMAS, V2_TOOL_SCHEMAS, withoutProperties, type ToolInputSchema } from "./toolSchemas";
-import { activeRequest, matchingLeadsAudience, objectiveBrief, ownerMessagesSince, reviewLeadsText, setLeadFit, type LeadPick, type ReviewFilter } from "./agentV2.server";
+import { activeRequest, matchingLeadsAudience, objectiveBrief, ownerMessagesSince, requestCheckOf, reviewLeadsText, setLeadFit, type LeadPick, type ReviewFilter } from "./agentV2.server";
 import { briefLine, checkBrief } from "./brief";
 import { researchOptionsText } from "./researchContext";
 import { controlsSentence, ensureObjective, objectiveDefaults, objectiveFacts, objectiveForRequest, objectiveJudgeRequest, setObjectiveBrief, stopObjective, objectiveLine, objectiveStartProblem, requestHoldReason, requestSpendCap, requestSpendGuard, setObjectiveState, threadObjectives } from "./objective.server";
@@ -2078,32 +2078,44 @@ export const TOOLS: Record<string, Tool> = {
 
   set_lead_fit: {
     available: (features) => features.research_agent_v2,
-    description: "Record your verdict on one lead of the current request when you judge differently from the judge: match or no_match, with a short reason. Matches are what the request counts and what prepare_outreach takes by default. quote (optional) is evidence the owner sees: the exact words from a page read in this chat or from the lead's own profile; the server checks a quote is really there.",
-    arguments: "personId (from review_leads), fit (match|no_match), reason (a short sentence), quote (optional: the exact words that show it), url (the page the quote is from, when it is a page)",
+    description: "Record your verdict on one lead of the current request after checking its own evidence: match (with the specific reason this business could use what the owner offers), no_match (why not), or unconfirmed (you looked and its pages show nothing either way: say what is missing). Matches are what the request counts and what prepare_outreach takes by default. quote (optional) is evidence the owner sees: the exact words from a page read in this chat or from the lead's own profile; the server checks a quote is really there.",
+    arguments: "personId (from review_leads), fit (match|no_match|unconfirmed), reason (a short sentence), quote (optional: the exact words that show it), url (the page the quote is from, when it is a page)",
     run: async (args, context) => {
       const objective = await objectiveForRequest(searchRequestId(context));
       if (!objective) return { ok: false, summary: "This chat has no lead request yet." };
       const fit = text(args, "fit", true);
-      if (fit !== "match" && fit !== "no_match") throw new ToolArgumentError("fit must be match or no_match");
+      if (fit !== "match" && fit !== "no_match" && fit !== "unconfirmed") throw new ToolArgumentError("fit must be match, no_match or unconfirmed");
       const reason = text(args, "reason", true)!;
       const result = await setLeadFit({ objective, threadId: context.threadId, personId: uuid(args, "personId")!, fit, reason, quote: text(args, "quote") ?? null, url: text(args, "url") ?? null });
       if (!result.ok) throw new ToolArgumentError(result.problem);
-      return { ok: true, summary: `“${result.name}” is now ${fit === "match" ? "a match" : "not a match"} for this request (${reason}).`, display: `Marked “${result.name}” as ${fit === "match" ? "a match" : "not a match"}` };
+      const said = fit === "match" ? "a match" : fit === "no_match" ? "not a match" : "unconfirmed after checking";
+      return { ok: true, summary: `“${result.name}” is now ${said} for this request (${reason}).`, display: `Marked “${result.name}” as ${said}` };
     },
   },
 
   finish_request: {
     available: (features) => features.research_agent_v2,
-    description: "End the current request because what the owner asked is done (its brief's done condition), or nothing more fits within its limits. Searches still running finish and their leads are kept; the owner then gets one final report with the counts. A plan already prepared still waits for the owner's Start.",
-    arguments: "summary (one sentence: what was done, e.g. 'Both tests ran: Google Maps found 5 dentists and the web search 5')",
+    description: "End the current request because what the owner asked is done (its brief's done condition), or nothing more fits within its limits. Its saved leads must be checked first: while some have no verdict, or only the judge's unconfirmed, it does not finish and says how many; check them (review_leads, read their pages, set_lead_fit), or pass unchecked with the reason they cannot be (no page or profile to read, the time limit). Searches still running finish and their leads are kept; the owner then gets one final report with the counts. A plan already prepared still waits for the owner's Start.",
+    arguments: "summary (one sentence: what was done, e.g. 'Both tests ran: Google Maps found 5 dentists and the web search 5'), unchecked (optional: why the leads still unchecked cannot be checked)",
     run: async (args, context) => {
       const served = await objectiveForRequest(searchRequestId(context));
       const objective = served && served.status !== "stopped" ? served : await activeRequest(context.threadId);
       if (!objective) return { ok: false, summary: "This chat has no request in progress to finish." };
       const summary = text(args, "summary", true)!.replace(/\s+/g, " ").trim().slice(0, 400);
-      const stopped = await stopObjective(objective, "finished", summary.replace(/\.$/, ""));
+      const why = text(args, "unchecked")?.replace(/\s+/g, " ").trim().slice(0, 300) ?? null;
+      // Saved contacts are not qualified leads: a request ends once they are checked, or the assistant says why they cannot be.
+      const check = await requestCheckOf(objective);
+      if (check.unchecked && !why) {
+        return {
+          ok: false,
+          summary: `Not finished: ${requestCheckLine(check)}. A lead is a potential client only once you have looked at its own evidence. Check them first (review_leads with filter unconfirmed or unjudged, read their website, listing or profile, then set_lead_fit: match with the specific reason, no_match, or unconfirmed with what is missing), or call finish_request again with unchecked saying why they cannot be checked.`,
+          display: `Not finished: ${check.unchecked} lead${check.unchecked === 1 ? "" : "s"} still to check`,
+        };
+      }
+      const detail = `${summary.replace(/\.$/, "")}${check.leads ? `. ${requestCheckLine(check)}` : ""}${check.unchecked && why ? `; left unchecked: ${why.replace(/\.$/, "")}` : ""}`;
+      const stopped = await stopObjective(objective, "finished", detail.slice(0, 600));
       return stopped
-        ? { ok: true, summary: "Request finished; the final report is posted when any search still running ends.", display: "Finished the request" }
+        ? { ok: true, summary: `Request finished (${check.leads ? requestCheckLine(check) : "no leads saved"}); the final report is posted when any search still running ends. Tell the owner the confirmed matches, the unconfirmed candidates with what is missing, and the exclusions with their reasons.`, display: "Finished the request" }
         : { ok: false, summary: "This request had already ended." };
     },
   },

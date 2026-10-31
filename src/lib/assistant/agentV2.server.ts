@@ -10,7 +10,7 @@ import { CONNECTED_PAGE_TOOLS } from "./agent";
 import { progressBlock, requestBlock, type ProgressSearch } from "./agentV2";
 import { addAudienceMembers, createAudience, memberInsights } from "./audiences.server";
 import { readBrief, type Brief } from "./brief";
-import { personFit } from "./leadFit";
+import { ASSISTANT_CHECKED, personFit, requestCheck, type RequestCheck } from "./leadFit";
 import { continuedRequestIds, objectiveChildren, objectiveFacts, threadObjectives, type Objective } from "./objective.server";
 import { assistantMessages, leadAudiences, leadAudienceMembers, outreachRuns } from "./schema";
 
@@ -134,7 +134,7 @@ export async function reviewLeadsText(input: { objective: Objective; audienceId:
     const why = insights.get(first.id)?.matchReason ?? "";
     lines.push({
       verdict,
-      text: `- person ${personId} “${first.name}” — ${verdict === "pending" ? "not judged yet" : verdict}${reason ? ` (${clippedString(reason, 200)})` : ""}; ${first.status === "eligible" ? `reachable by ${first.channels.join(", ") || "nothing"}` : `not contactable: ${first.reason ?? "no route"}`}; ${facts || "no facts"}${why ? `; found: ${clippedString(why, 200)}` : ""}${first.sourceUrl ? `; source ${first.sourceUrl}` : ""}`,
+      text: `- person ${personId} “${first.name}” — ${verdict === "pending" ? "not judged yet" : verdict}${reason ? ` (${clippedString(reason, 200)})` : ""}; ${first.status === "eligible" ? `reachable by ${first.channels.map((channel) => (channel === "whatsapp" ? "phone (WhatsApp not checked: it may be a landline)" : channel)).join(", ") || "nothing"}` : `not contactable: ${first.reason ?? "no route"}`}; ${facts || "no facts"}${why ? `; found: ${clippedString(why, 200)}` : ""}${first.sourceUrl ? `; source ${first.sourceUrl}` : ""}`,
     });
   }
   for (const member of unsaved) {
@@ -175,8 +175,13 @@ async function quoteFound(threadId: string, rows: readonly RequestMember[], quot
   return reads.some((row) => norm(`${row.content} ${JSON.stringify(row.toolResult ?? {})}`).includes(wanted));
 }
 
+/** Where the request's saved leads stand, and how many nobody has checked yet (leadFit.ts requestCheck). */
+export async function requestCheckOf(objective: Objective): Promise<RequestCheck> {
+  return requestCheck(await requestMembers(objective, null));
+}
+
 /** The assistant's own verdict on a person of the request, on all their lists; a quote it gives must be one the server read. */
-export async function setLeadFit(input: { objective: Objective; threadId: string; personId: string; fit: "match" | "no_match"; reason: string; quote: string | null; url: string | null }): Promise<{ ok: true; name: string; lists: number } | { ok: false; problem: string }> {
+export async function setLeadFit(input: { objective: Objective; threadId: string; personId: string; fit: "match" | "no_match" | "unconfirmed"; reason: string; quote: string | null; url: string | null }): Promise<{ ok: true; name: string; lists: number } | { ok: false; problem: string }> {
   const rows = (await requestMembers(input.objective, null)).filter((row) => row.personId === input.personId);
   if (!rows.length) return { ok: false, problem: "that person is not one of this request's leads; use a person id from review_leads" };
   // The verdict is the assistant's; a quote, when it gives one, must really be in what was read (the owner sees it as evidence).
@@ -184,7 +189,7 @@ export async function setLeadFit(input: { objective: Objective; threadId: string
   const evidence = input.quote ? ` (“${input.quote.trim().slice(0, 200)}”${input.url ? ` — ${input.url.slice(0, 200)}` : ""})` : "";
   await db.update(leadAudienceMembers).set({
     fit: input.fit,
-    fitReason: `Checked by the assistant: ${input.reason.trim().slice(0, 240)}${evidence}`,
+    fitReason: `${ASSISTANT_CHECKED}${input.reason.trim().slice(0, 240)}${evidence}`,
     // A lead turned into a match loses the judge's "skip", or the plan would still leave it out.
     fitApproach: input.fit === "no_match" ? "skip" : rows[0]!.fitApproach && rows[0]!.fitApproach !== "skip" ? rows[0]!.fitApproach : "standard",
     fitRequestId: input.objective.requestMessageId,

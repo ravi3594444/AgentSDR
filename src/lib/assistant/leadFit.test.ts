@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { applyRequestRules, funnelLine, leadSortingSystemPrompt, linkedinProfileFacts, namesLead, personFit, requestSubject, requiresNoWebsite, typedByOwner, verdictOf, websiteState, websiteStatusFact, type SortVerdict } from "./leadFit";
+import { ASSISTANT_CHECKED, applyRequestRules, funnelLine, requestCheck, requestCheckLine, leadSortingSystemPrompt, linkedinProfileFacts, namesLead, personFit, requestSubject, requiresNoWebsite, typedByOwner, verdictOf, websiteState, websiteStatusFact, type SortVerdict } from "./leadFit";
 
 // Pilot finding L02: how the research runs (budget, time, sources, no
 // outreach, where to save) is not a requirement a lead can fail.
@@ -193,4 +193,28 @@ test("a contact the owner typed in the chat is theirs; one found on a page is no
   expect(typedByOwner({ linkedinUrl: "https://www.linkedin.com/in/rohan-k/" }, owner)).toBe(true);
   expect(typedByOwner({ phone: "+919800000001", email: "someone@else.test" }, owner)).toBe(false);
   expect(typedByOwner({ phone: "+91 12" }, owner)).toBe(false);
+});
+
+describe("when a request's leads are checked", () => {
+  const row = (personId: string | null, fit: "match" | "unconfirmed" | "no_match" | null, fitReason: string | null = null) => ({ personId, fit, fitReason });
+
+  test("saved contacts the judge left unconfirmed, or nobody judged, are not checked; the assistant's own verdicts are", () => {
+    const check = requestCheck([
+      row("a", "unconfirmed", "No website to judge from"),
+      row("b", null),
+      row("c", "unconfirmed", `${ASSISTANT_CHECKED}its site shows no booking or contact form; nothing about how they handle enquiries`),
+      row("d", "match", `${ASSISTANT_CHECKED}takes bookings by phone only, which the offer automates`),
+      row("e", "no_match", "a franchise head office"),
+      // One person on two lists counts once.
+      row("a", null),
+      row(null, null),
+    ]);
+    expect(check).toEqual({ leads: 5, match: 1, noMatch: 1, unconfirmed: 2, pending: 1, unchecked: 2 });
+    expect(requestCheckLine(check)).toBe("5 leads: 1 match, 1 not a match, 2 unconfirmed, 1 not judged (2 not checked yet)");
+  });
+
+  test("a request that saved nothing, or whose leads all have a verdict, has nothing left to check", () => {
+    expect(requestCheck([]).unchecked).toBe(0);
+    expect(requestCheck([row("a", "match"), row("b", "no_match")]).unchecked).toBe(0);
+  });
 });

@@ -289,3 +289,37 @@ function reasonShort(reason: string): string {
   const text = reason.replace(/\s+/g, " ").trim().replace(/\.$/, "");
   return text.length > 90 ? `${text.slice(0, 88).replace(/\s+\S*$/, "")}…` : text;
 }
+
+/** The prefix setLeadFit gives a verdict the assistant recorded itself (after reading the lead's own evidence). */
+export const ASSISTANT_CHECKED = "Checked by the assistant: ";
+
+export type RequestCheck = { leads: number; match: number; noMatch: number; unconfirmed: number; pending: number; unchecked: number };
+
+/**
+ * Where a request's saved leads stand, one count per person: the verdicts,
+ * and how many nobody has really checked yet (not judged at all, or left
+ * unconfirmed by the judge without the assistant reading their evidence).
+ * A request that saved leads is finished only once these are checked, or
+ * once the assistant says why they cannot be (finish_request).
+ */
+export function requestCheck(rows: readonly { personId: string | null; fit: LeadFit | null; fitReason: string | null }[]): RequestCheck {
+  const byPerson = new Map<string, { fit: LeadFit | null; fitReason: string | null }[]>();
+  for (const row of rows) if (row.personId) byPerson.set(row.personId, [...(byPerson.get(row.personId) ?? []), row]);
+  const out: RequestCheck = { leads: byPerson.size, match: 0, noMatch: 0, unconfirmed: 0, pending: 0, unchecked: 0 };
+  for (const verdicts of byPerson.values()) {
+    const fit = personFit(verdicts.map((row) => row.fit));
+    const checked = verdicts.some((row) => row.fitReason?.startsWith(ASSISTANT_CHECKED));
+    if (fit === "match") out.match += 1;
+    else if (fit === "no_match") out.noMatch += 1;
+    else if (fit === "unconfirmed") out.unconfirmed += 1;
+    else out.pending += 1;
+    if (fit === "pending" || (fit === "unconfirmed" && !checked)) out.unchecked += 1;
+  }
+  return out;
+}
+
+/** "26 leads: 0 match, 3 not a match, 23 unconfirmed (23 not checked yet)". */
+export function requestCheckLine(check: RequestCheck): string {
+  const parts = [`${check.match} match`, `${check.noMatch} not a match`, `${check.unconfirmed} unconfirmed`, ...(check.pending ? [`${check.pending} not judged`] : [])];
+  return `${check.leads} lead${check.leads === 1 ? "" : "s"}: ${parts.join(", ")}${check.unchecked ? ` (${check.unchecked} not checked yet)` : ""}`;
+}

@@ -258,6 +258,23 @@ await runInOrganization(a.org.id, async () => {
   const researchObjective = await objectiveForRequest(research.id);
   check("finish_request ends the request as finished, with the assistant's words", finished.ok && researchObjective?.stopReason === "finished" && researchObjective.stopDetail === "Found 3 orthodontists in Austin", `${researchObjective?.stopReason}: ${researchObjective?.stopDetail}`);
 
+  // ---------------------------------------------------------- a request whose saved leads nobody checked does not finish
+  const checkThread = await createThread(a.owner.id);
+  const potential = await addMessage({ threadId: checkThread.id, role: "user", content: "Find cleaning companies in Houston that could use our booking automation.", createdBy: a.owner.id });
+  const checkContext: Context = { threadId: checkThread.id, userId: a.owner.id, ownerText: potential.content, requestMessageId: potential.id, searchRequestId: potential.id, v2: true };
+  await runTool("set_brief", { goal: "Cleaning companies in Houston that could use booking automation", leadTarget: null, contact: false, channels: null, spendCapUsd: null, timeLimitMinutes: null, done: "potential clients found and checked", newRequest: true }, checkContext);
+  const savedLead = await runTool("add_contacts", { contacts: [{ name: "Sparkle Clean Houston", phone: "+17135550142" }] }, checkContext);
+  const early = await runTool("finish_request", { summary: "Found a cleaning company in Houston." }, checkContext);
+  check("a request whose saved lead nobody checked does not finish, and says what to check", savedLead.ok && !early.ok && /not checked yet/.test(early.summary) && /set_lead_fit/.test(early.summary)
+    && (await objectiveForRequest(potential.id))?.status !== "stopped", early.summary);
+  const reviewed = await runTool("review_leads", {}, checkContext);
+  const sparkle = /person ([0-9a-f-]{36}) “Sparkle Clean Houston”/.exec(reviewed.summary)?.[1];
+  check("…review_leads says a phone is a phone, not WhatsApp", /phone \(WhatsApp not checked/.test(reviewed.summary), reviewed.summary.slice(0, 400));
+  const looked = await runTool("set_lead_fit", { personId: sparkle, fit: "unconfirmed", reason: "no website or listing shows how they take bookings" }, checkContext);
+  const done = await runTool("finish_request", { summary: "Found a cleaning company in Houston." }, checkContext);
+  const doneObjective = await objectiveForRequest(potential.id);
+  check("…once the assistant has looked (here: unconfirmed, saying what is missing), it finishes and the report keeps the counts", looked.ok && done.ok && doneObjective?.stopReason === "finished" && /1 unconfirmed/.test(doneObjective.stopDetail ?? ""), doneObjective?.stopDetail ?? undefined);
+
   // ---------------------------------------------------------- the driver: an idle turn gets the request's last turn, then it stops
   const thread3 = await createThread(a.owner.id);
   const salons = await addMessage({ threadId: thread3.id, role: "user", content: "Find 3 hair salons and email them", createdBy: a.owner.id });

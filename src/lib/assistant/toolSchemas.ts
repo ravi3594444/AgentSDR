@@ -289,12 +289,12 @@ export const TOOL_SCHEMAS: Record<string, ToolInputSchema> = {
   }),
   set_lead_fit: tool({
     personId: id("The person, from review_leads"),
-    fit: choice(["match", "no_match"], "Your verdict"),
+    fit: choice(["match", "no_match", "unconfirmed"], "Your verdict after checking the lead's own evidence"),
     reason: text("A short sentence"),
     quote: text("Optional: the exact words that show it"),
     url: text("The page the quote is from, when it is a page"),
   }, ["personId", "fit", "reason"]),
-  finish_request: tool({ summary: text("One sentence: what was done") }, ["summary"]),
+  finish_request: tool({ summary: text("One sentence: what was done"), unchecked: text("Optional: why the leads still unchecked cannot be checked") }, ["summary"]),
 
   // ── Lists and outreach ────────────────────────────────────────────────────
   list_audiences: NONE,
