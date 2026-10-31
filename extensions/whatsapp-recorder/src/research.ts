@@ -60,6 +60,7 @@ import {
   type BrowserScreenshotFacts,
 } from "../../../src/lib/browser/connected/contract";
 import type { BridgeResult, ResearchMessage, ResearchPairing, ResearchStatus } from "./messages";
+import { defaultPageWait, reusablePage, waitForReady, type BrowserWaitFor } from "../../../src/lib/browser/connected/readiness";
 import * as screen from "./screen";
 
 type Connection = {
@@ -333,6 +334,7 @@ async function pollLoop(): Promise<void> {
  * and the newer connection's sequence and token are left alone.
  */
 async function runCommand(fetchedWith: Connection, command: BrowserResearchCommand): Promise<boolean> {
+  const startedAt = Date.now();
   const current = await connection();
   if (current?.token !== fetchedWith.token) return false;
   const problem = commandProblem(command, { lastSeq: current.lastSeq, now: Date.now() + clockOffset });
@@ -361,6 +363,7 @@ async function runCommand(fetchedWith: Connection, command: BrowserResearchComma
     }
     if (label) lastActivity = { label, at: Date.now(), ok: result.ok };
   }
+  result.timing = { ...result.timing, browserMs: Math.max(0, Date.now() - startedAt) };
   // Answered with the token of the connection it came to, whatever is stored by now.
   await bridgeFetch(conn, `/api/browser-bridge/commands/${command.id}`, { seq: command.seq, result }).catch((error: unknown) => {
     lastError = error instanceof Error ? error.message : String(error);
@@ -402,17 +405,19 @@ async function touch(tabId: number, attention: ResearchAttention | null): Promis
   });
 }
 
-async function waitForLoad(tabId: number): Promise<void> {
+async function waitForLoad(tabId: number, settleMs = 1_500, check?: () => Promise<void>): Promise<void> {
   const deadline = Date.now() + LOAD_TIMEOUT_MS;
   // A navigation just started can still report the previous page as complete.
   await sleep(400);
   while (Date.now() < deadline) {
+    await check?.();
     const tab = await chrome.tabs.get(tabId);
     if (tab.status === "complete") break;
     await sleep(300);
   }
   // Pages that draw after loading (most social sites) get a moment.
-  await sleep(1_500);
+  if (settleMs) await sleep(settleMs);
+  await check?.();
 }
 
 async function inPage(tabId: number, op: PageOp): Promise<PageScriptResult & { attention?: ResearchAttention }> {
@@ -563,32 +568,97 @@ async function readTab(conn: Connection, tabId: number, op: PageOp = { op: "snap
   return { ok: true, tabId, snapshot: page.snapshot };
 }
 
-async function navigate(conn: Connection, tabId: number, url: string): Promise<BrowserResearchResult> {
+/** A read-only local wait; the model gets a single final observation, never a stream of loading polls. */
+async function waitingProblem(conn: Connection, command: BrowserResearchCommand): Promise<string | null> {
+  const current = await connection();
+  if (!current || current.token !== conn.token) return "the browser was disconnected while waiting; no action was taken";
+  if (current.paused) return "the owner pressed Stop while waiting; no action was taken";
+  if (Date.now() + clockOffset >= Date.parse(command.expiresAt)) return "the command expired while waiting; no action was taken";
+  return null;
+}
+
+async function checkWaiting(conn: Connection, command: BrowserResearchCommand): Promise<void> {
+  const problem = await waitingProblem(conn, command);
+  if (problem) throw new Error(problem);
+}
+
+async function readyReading(conn: Connection, command: BrowserResearchCommand, tabId: number, condition?: BrowserWaitFor): Promise<BrowserResearchResult> {
+  if (!condition) return readTab(conn, tabId);
+  // A wait may outlast the UI shown in the last picture. Do not let an old picture be used afterwards.
+  await forgetShot(tabId);
+  const readiness = await waitForReady(condition, {
+    expiresAt: Date.parse(command.expiresAt),
+    now: () => Date.now() + clockOffset,
+    sleep,
+    stopped: () => waitingProblem(conn, command),
+    probe: async () => {
+      const tab = await chrome.tabs.get(tabId).catch(() => null);
+      if (!tab?.url) throw new Error("that tab closed while waiting");
+      // A toolbar-shared tab has the same read-only access here as in readTab.
+      // If sharing is withdrawn, each following probe checks the connection's sites again.
+      if (!(await shared(tabId))) {
+        const refused = await urlRefusal(conn, tab.url);
+        if (refused) throw new Error(refused.error);
+      }
+      const probe = await inPage(tabId, { op: "ready", selector: condition.selector ?? null, text: condition.text ?? null });
+      if (!probe.ok) {
+        // A document can disappear during a navigation; retry only this read-only probe.
+        if (probe.error === NO_ANSWER || /frame.*removed|frame.*not found|cannot access.*page/i.test(probe.error)) return { ready: false };
+        throw new Error(probe.error);
+      }
+      if (!("ready" in probe)) throw new Error("the page did not answer the readiness probe");
+      return probe;
+    },
+  });
+  if (readiness.state === "cancelled") return { ok: false, tabId, error: readiness.reason ?? "the wait was cancelled", readiness, timing: { readyWaitMs: readiness.waitedMs } };
+  const observed = await readTab(conn, tabId);
+  return { ...observed, readiness, timing: { ...observed.timing, readyWaitMs: readiness.waitedMs } };
+}
+
+async function navigate(conn: Connection, tabId: number, url: string, command?: BrowserResearchCommand, condition?: BrowserWaitFor): Promise<BrowserResearchResult> {
   const refusal = await urlRefusal(conn, url);
   if (refusal) return { ok: false, error: refusal.error, tabId, attention: refusal.attention ?? null };
   await chrome.tabs.update(tabId, { url });
-  await waitForLoad(tabId);
-  return readTab(conn, tabId);
+  await waitForLoad(tabId, condition ? 0 : 1_500, command ? () => checkWaiting(conn, command) : undefined);
+  return command ? readyReading(conn, command, tabId, condition) : readTab(conn, tabId);
 }
 
 async function execute(conn: Connection, command: BrowserResearchCommand): Promise<BrowserResearchResult> {
   const action: BrowserResearchAction = command.action;
   switch (action.kind) {
     case "open": {
+      const condition = action.waitFor ?? defaultPageWait(action.url);
       if (action.tabId !== null) {
         if (!(await ownTab(command, action.tabId))) return { ok: false, error: `tab ${action.tabId} is not one of this request's tabs; open a new one` };
-        return navigate(conn, action.tabId, action.url);
+        const current = await chrome.tabs.get(action.tabId).catch(() => null);
+        if (action.reuse !== false && current?.url === action.url) {
+          const result = await readyReading(conn, command, action.tabId, condition);
+          return { ...result, timing: { ...result.timing, reusedTab: true } };
+        }
+        return navigate(conn, action.tabId, action.url, command, condition);
       }
       const refusal = await urlRefusal(conn, action.url);
       if (refusal) return { ok: false, error: refusal.error, attention: refusal.attention ?? null };
+      if (action.reuse !== false) {
+        const registry = await tabsRegistry();
+        const pages = await Promise.all(Object.entries(registry).filter(([, tab]) => tab.requestId === command.requestId && !tab.home).map(async ([id, saved]) => {
+          const live = await chrome.tabs.get(Number(id)).catch(() => null);
+          return live?.url ? { ...saved, tabId: Number(id), url: live.url } : null;
+        }));
+        const existing = reusablePage(pages.filter((page) => page !== null), command.requestId, action.url);
+        if (existing) {
+          const result = await readyReading(conn, command, existing.tabId, condition);
+          return { ...result, ...(result.ok ? { note: "Reused this request's exact open page without reloading it" } : {}), timing: { ...result.timing, reusedTab: true } };
+        }
+      }
       const tabId = await openTab(command, action.url);
-      await waitForLoad(tabId);
-      return readTab(conn, tabId);
+      await waitForLoad(tabId, condition ? 0 : 1_500, () => checkWaiting(conn, command));
+      return readyReading(conn, command, tabId, condition);
     }
     case "read":
     case "scroll": {
       if (!(await ownTab(command, action.tabId)) && !(await shared(action.tabId))) return { ok: false, error: `tab ${action.tabId} is neither one of this request's tabs nor shared by the owner` };
-      return readTab(conn, action.tabId, action.kind === "read" ? { op: "snapshot" } : { op: "scroll", direction: action.direction });
+      return action.kind === "read" ? readyReading(conn, command, action.tabId, action.waitFor) : readTab(conn, action.tabId, { op: "scroll", direction: action.direction });
     }
     case "click":
     case "search":

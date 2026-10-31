@@ -56,6 +56,7 @@ describe("arguments are read by the schema, in one place", () => {
   });
 
   test("a list or object sent as JSON text is that list or object; one value where a list is expected is a list of one", () => {
+    expect(coerceToolArguments(TOOL_SCHEMAS.browser_tab_open!, { url: "https://fixture.net", waitFor: null, reuse: null }).problems).toEqual([]);
     expect(coerceToolArguments(brief, { goal: "g", channels: "[\"email\",\"WhatsApp\"]" }).args.channels).toEqual(["email", "whatsapp"]);
     expect(coerceToolArguments(brief, { goal: "g", channels: "email" }).args.channels).toEqual(["email"]);
     expect(coerceToolArguments(TOOL_SCHEMAS.browser_task!, { ownerWords: "add them", goal: "add", actions: "[\"Interact\",\"open_tabs\"]" }).args.actions).toEqual(["interact", "open_tabs"]);

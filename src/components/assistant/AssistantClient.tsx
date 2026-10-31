@@ -51,6 +51,7 @@ import { Mascot, type MascotMood } from "./Mascot";
 import { RequestActivity } from "./RequestActivity";
 import { BrowserConnection } from "./BrowserConnection";
 import { RESEARCH_TOOLS, researchTitle } from "./researchView";
+import { browserTimingDetails } from "./browserActivity";
 import { activityPresentation, COMPACT_TOOLS, splitTurn, visibleChatMessages } from "./chatActivity";
 import { useRequestSummary } from "./useRequestSummary";
 import { createResponseGate } from "@/components/crm/responseGate";
@@ -957,6 +958,7 @@ function DecisionCard({ message, state, onChanged }: { message: Message; state: 
 }
 
 function ActivityRow({ message }: { message: Message }) {
+  const timing = browserTimingDetails(message.toolResult?.data?.timing);
   const title = TOOL_TITLE[message.tool ?? ""] ?? message.tool ?? "Action";
   const raw = message.status === "running" ? "" : message.toolResult?.display ?? message.content;
   // "Brief · Brief: …" says it twice: the line already carries the title.
@@ -973,6 +975,7 @@ function ActivityRow({ message }: { message: Message }) {
         {detail && <span className="min-w-0 flex-1 truncate text-text-soft-400 group-open:hidden">· {preview}</span>}
       </summary>
       {detail && <p className={cn("ml-6 mt-0.5 whitespace-pre-wrap", message.status === "error" && "text-error-base")}>{detail}</p>}
+      {timing && <p aria-label="Browser timing" className="ml-6 mt-1 text-text-soft-400">{timing}</p>}
     </details>
   );
 }

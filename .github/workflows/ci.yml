@@ -66,6 +66,29 @@ jobs:
       - name: Call-recorder extension
         run: bun run build:recorder
 
+  browser:
+    name: Connected browser regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - name: Install fixture browser
+        run: |
+          bun node_modules/playwright-core/cli.js install --with-deps chromium
+          bun -e 'console.log("BROWSER_EXECUTABLE_PATH=" + require("playwright-core").chromium.executablePath())' >> "$GITHUB_ENV"
+      - name: Page readiness and existing action rules (fixture pages only)
+        run: |
+          bun scripts/e2e/browser-efficiency-dom.ts
+          bun scripts/e2e/browser-page-rules.ts
+      - name: Extension controller, cancellation and activity rendering
+        run: |
+          bun scripts/review/browser-efficiency-extension.ts
+          bun scripts/review/browser-extension-connection-race.ts
+          bun scripts/review/browser-extension-connection-race.ts --same-connection
+          bun scripts/review/browser-activity-markup.tsx
+
   database:
     name: Fresh install (PostgreSQL ${{ matrix.postgres }})
     runs-on: ubuntu-latest
@@ -139,7 +162,7 @@ jobs:
   required:
     name: required
     if: always()
-    needs: [typecheck, lint, test, build, database, compose, secrets]
+    needs: [typecheck, lint, test, build, browser, database, compose, secrets]
     runs-on: ubuntu-latest
     steps:
       - name: Every job passed

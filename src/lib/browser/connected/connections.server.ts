@@ -2,7 +2,7 @@ import "server-only";
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { and, asc, desc, eq, gt, inArray, lt, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, lt, ne, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { members, organizations, users } from "@/lib/auth/schema";
 import { currentOrganizationId, inOrg, runInOrganization } from "@/lib/tenancy/scope";
@@ -30,6 +30,7 @@ import {
   type SharedTab,
 } from "./contract";
 import { browserCommands, browserConnections } from "./schema";
+import { browserReadiness, browserTiming } from "./readiness";
 
 /**
  * The server half of connected-browser research (contract.ts has the flow).
@@ -376,8 +377,12 @@ export function parseResultRequest(value: unknown): BrowserCommandResultRequest 
   if (typeof body.seq !== "number" || !Number.isSafeInteger(body.seq)) throw new BrowserBridgeError(400, "seq is missing");
   const result = (body.result && typeof body.result === "object" ? body.result : {}) as Record<string, unknown>;
   const tabId = typeof result.tabId === "number" && Number.isSafeInteger(result.tabId) ? result.tabId : undefined;
+  const diagnostics = {
+    ...(browserTiming(result.timing) ? { timing: browserTiming(result.timing) } : {}),
+    ...(browserReadiness(result.readiness) ? { readiness: browserReadiness(result.readiness) } : {}),
+  };
   if (result.ok !== true) {
-    return { seq: body.seq, result: { ok: false, error: clip(result.error, 500) || "the browser could not do it", ...(tabId === undefined ? {} : { tabId }), attention: attentionOf(result.attention) } };
+    return { seq: body.seq, result: { ok: false, error: clip(result.error, 500) || "the browser could not do it", ...(tabId === undefined ? {} : { tabId }), attention: attentionOf(result.attention), ...diagnostics } };
   }
   const tabs = Array.isArray(result.tabs)
     ? result.tabs.slice(0, 40).flatMap((item) => {
@@ -391,6 +396,7 @@ export function parseResultRequest(value: unknown): BrowserCommandResultRequest 
     seq: body.seq,
     result: {
       ok: true,
+      ...diagnostics,
       ...(tabId === undefined ? {} : { tabId }),
       ...(result.snapshot ? { snapshot: snapshotOf(result.snapshot) } : {}),
       ...(tabs ? { tabs } : {}),
@@ -517,10 +523,14 @@ export async function runBrowserAction(input: {
     return row!;
   });
   bus.emit(`queued:${connection.id}`);
+  const answered = (row: { result: BrowserResearchResult | null; error: string | null; deliveredAt: Date | null }): BrowserResearchResult => {
+    const result = row.result ?? { ok: false as const, error: row.error ?? "the browser could not do it" };
+    return { ...result, timing: { ...result.timing, ...(row.deliveredAt ? { queueMs: Math.max(0, row.deliveredAt.getTime() - command.createdAt.getTime()) } : {}), roundTripMs: Math.max(0, Date.now() - now.getTime()) } };
+  };
   while (Date.now() < expiresAt.getTime() + ANSWER_GRACE_MS && !input.signal?.aborted) {
-    const [row] = await db.select({ status: browserCommands.status, result: browserCommands.result, error: browserCommands.error })
+    const [row] = await db.select({ status: browserCommands.status, result: browserCommands.result, error: browserCommands.error, deliveredAt: browserCommands.deliveredAt })
       .from(browserCommands).where(and(inOrg(browserCommands), eq(browserCommands.id, command.id))).limit(1);
-    if (row?.status === "done" || row?.status === "failed") return row.result ?? { ok: false, error: row.error ?? "the browser could not do it" };
+    if (row?.status === "done" || row?.status === "failed") return answered(row);
     if (row?.status === "expired") break;
     await waitFor(`finished:${command.id}`, 500, input.signal);
   }
@@ -531,7 +541,7 @@ export async function runBrowserAction(input: {
     // Answered between the last look and the expiry, or expired by the poll: read what it says.
     const [row] = await db.select({ status: browserCommands.status, result: browserCommands.result, error: browserCommands.error, deliveredAt: browserCommands.deliveredAt })
       .from(browserCommands).where(and(inOrg(browserCommands), eq(browserCommands.id, command.id))).limit(1);
-    if (row?.status === "done" || row?.status === "failed") return row.result ?? { ok: false, error: row.error ?? "the browser could not do it" };
+    if (row?.status === "done" || row?.status === "failed") return answered(row);
     if (input.signal?.aborted) throw new BrowserConnectionError("cancelled", row?.deliveredAt ? "This turn was cancelled after the browser took the step, before it answered." : "This turn was cancelled before the browser took the step; it was not run.");
     throw new BrowserConnectionError("timeout", row?.deliveredAt
       ? "The owner's browser took the step but did not answer in time (the page may be frozen, or Chrome suspended the extension); it was not repeated."
@@ -563,7 +573,7 @@ export async function latestTabScreenshot(userId: string, requestId: string, tab
   const connection = await activeConnection(userId);
   if (!connection) return null;
   const rows = await db.select({ action: browserCommands.action, shot: sql<BrowserScreenshotFacts | null>`(${browserCommands.result}->'screenshot') - 'data'::text` }).from(browserCommands)
-    .where(and(inOrg(browserCommands), eq(browserCommands.connectionId, connection.id), eq(browserCommands.requestId, requestId), sql`${browserCommands.action}->>'tabId' = ${String(tabId)}`, ne(sql`${browserCommands.action}->>'kind'`, "read")))
+    .where(and(inOrg(browserCommands), eq(browserCommands.connectionId, connection.id), eq(browserCommands.requestId, requestId), sql`${browserCommands.action}->>'tabId' = ${String(tabId)}`, or(ne(sql`${browserCommands.action}->>'kind'`, "read"), sql`${browserCommands.action} ? 'waitFor'`)))
     .orderBy(desc(browserCommands.seq)).limit(1);
   const latest = rows[0];
   return latest && (latest.action.kind === "screenshot" || latest.action.kind === "visual") ? latest.shot ?? null : null;

@@ -24,6 +24,7 @@ export type JsonSchema = {
   items?: JsonSchema;
   properties?: Readonly<Record<string, JsonSchema>>;
   required?: readonly string[];
+  anyOf?: readonly JsonSchema[];
   additionalProperties?: boolean;
   minimum?: number;
   maximum?: number;
@@ -65,6 +66,13 @@ const channelList = (description: string) => list({ type: "string", enum: SCHEMA
 const outreachChannelList = (description: string) => list({ type: "string", enum: SCHEMA_OUTREACH_CHANNELS }, description);
 const tab = (description = "Tab id from browser_tab_open or browser_connection (required)") => int(description, { minimum: 0 });
 const element = int("Element number from the latest reading of the page", { minimum: 1 });
+const browserWait: JsonSchema = {
+  type: "object",
+  description: "Wait inside Chrome for a visible CSS selector and/or matching page text, then return one final reading (extension 0.19.0+). Both conditions apply when both are given. No page actions.",
+  properties: { selector: text("Visible CSS target; no JavaScript"), text: text("Text the visible target, or page when no selector, must contain"), timeoutMs: int("Local wait, default 20000 ms", { minimum: 0, maximum: 30000 }) },
+  additionalProperties: false,
+  anyOf: [{ required: ["selector"] }, { required: ["text"] }],
+};
 
 /** The older agent's follow-up arguments of a search; research agent v2 drops them (it prepares the plan itself). */
 const followUp = (contact = "true only when the owner asked to contact, email or message the leads found: the outreach plan is then prepared automatically when the search finishes") => ({
@@ -222,8 +230,8 @@ export const TOOL_SCHEMAS: Record<string, ToolInputSchema> = {
 
   // ── The owner's connected browser (tab and screenshot ids are also accepted as tabId / screenshotId) ──
   browser_connection: NONE,
-  browser_tab_open: tool({ url: text("The page's address"), tab: tab("Optional: one of this request's tab ids to navigate instead of opening a new tab") }, ["url"]),
-  browser_tab_read: tool({ tab: tab() }),
+  browser_tab_open: tool({ url: text("The final page's address; WhatsApp chat: https://web.whatsapp.com/send?phone=<international digits>"), tab: tab("Optional: one of this request's tab ids to navigate instead of opening a new tab"), reuse: nullable(flag("Reuse this request's exact open page without reloading, default true; false opens/reloads explicitly")), waitFor: nullable(browserWait) }, ["url"]),
+  browser_tab_read: tool({ tab: tab(), waitFor: nullable(browserWait) }),
   browser_tab_click: tool({ tab: tab(), n: element }, ["n"]),
   browser_tab_scroll: tool({ tab: tab(), direction: choice(["down", "up"], "down or up, default down") }),
   browser_tab_search: tool({ tab: tab(), n: element, text: text("The search, up to 200 characters") }, ["n", "text"]),
@@ -239,7 +247,7 @@ export const TOOL_SCHEMAS: Record<string, ToolInputSchema> = {
     action: choice(SCHEMA_TASK_OPS, "What to do to the element"),
     value: { type: ["string", "number"], description: "fill: the text; select: the option" },
     key: text("press: e.g. Enter, Tab, Escape, Control+a"),
-    recipient: text("A step that sends a message: who receives it (profile address, @handle on site, or email)"),
+    recipient: text("A step that sends a message: who receives it (international phone number, profile address, @handle on site, or email)"),
     total: text("A step that pays: the order's total exactly as the page shows it, with its currency"),
   }, ["n", "action"]),
   browser_tab_use: tool({
@@ -261,7 +269,7 @@ export const TOOL_SCHEMAS: Record<string, ToolInputSchema> = {
     deltaY: num("scroll: image pixels, positive is down"),
     text: text("type: the text"),
     key: text("key: e.g. Enter, Tab, Escape, Control+a"),
-    recipient: text("A step that sends a message: who receives it (profile address, @handle on site, or email)"),
+    recipient: text("A step that sends a message: who receives it (international phone number, profile address, @handle on site, or email)"),
   }, ["action", "x", "y"]),
 
   // ── The request ───────────────────────────────────────────────────────────

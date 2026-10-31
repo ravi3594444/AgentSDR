@@ -1,5 +1,5 @@
 /**
- * Owner-requested browser tasks through the REAL extension (0.18.0) in a
+ * Owner-requested browser tasks through the REAL packaged extension in a
  * VISIBLE Chromium (run it under xvfb-run) and a REAL running AgentSDR:
  * pairing from the chat, a CRM form filled, chosen, ticked and saved, a
  * Spanish registration form, what a task still refuses (in the page too,
@@ -235,7 +235,7 @@ try {
   const app = ctx.pages()[0] ?? await ctx.newPage();
   await app.goto(`${base}/assistant?thread=${thread.id}`, { waitUntil: "domcontentloaded", timeout: 180_000 });
   await app.waitForSelector("html[data-agentsdr-recorder]", { timeout: 60_000 });
-  check("the 0.18.0 extension marks the app page", (await app.getAttribute("html", "data-agentsdr-recorder")) === "0.18.0" && manifest.version === "0.18.0");
+  check("the matching packaged extension marks the app page", (await app.getAttribute("html", "data-agentsdr-recorder")) === manifest.version);
 
   const connectButton = app.getByRole("button", { name: "Connect this browser" });
   for (let attempt = 0; !(await connectButton.isVisible()); attempt++) {
