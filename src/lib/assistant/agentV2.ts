@@ -25,7 +25,12 @@ import { DELIVERY_STATUS_GUIDANCE } from "./deliveryStatus";
 
 /** Steps per turn; a turn ends early when the model waits for a search or the owner. */
 export const V2_MAX_STEPS = 24;
-export const V2_AUTONOMOUS_MAX_STEPS = 40;
+/**
+ * Autonomous mode: room to check every saved lead (a page read and a verdict
+ * each) in one turn. On a personal Claude login this is one CLI run's
+ * checkpoint, and the turn's 60 minutes still bound it.
+ */
+export const V2_AUTONOMOUS_MAX_STEPS = 100;
 /** The conversation's share of the prompt, in characters. */
 export const V2_TRANSCRIPT_CHARS = 160_000;
 /** Page reads kept whole; older ones are cut to their first lines. */

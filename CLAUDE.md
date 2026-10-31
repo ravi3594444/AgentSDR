@@ -701,7 +701,7 @@ searches (its own hashtags too) and for `find_customers_on_web` (which takes
 its own `queries`); `find_leads` with provider `apify` takes a region or a
 country; the web tools and the browser find leads, not only check them
 (`add_contacts` takes up to 200 a page published); one browser per chat,
-within the owner's daily minutes. A turn has 24 steps (40 in Autonomous
+within the owner's daily minutes. A turn has 24 steps (100 in Autonomous
 mode) of up to 12 actions. What bounds the tools is money (the owner's
 budgets and results per run, the request's spend guard), real provider
 limits (an Apify account full is a wait; TinyFish's allowance), people
