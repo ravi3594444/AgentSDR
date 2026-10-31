@@ -290,11 +290,24 @@ function note(state: SourceState, text: string): void {
   if (state.notes.length < 4 && !state.notes.includes(text)) state.notes.push(text);
 }
 
+/**
+ * One of a platform's searches could not run or collect. The platform fails
+ * only when nothing of it worked: while another of its searches is open or
+ * delivered findings, the problem is a note and what it found goes on to
+ * its authors' profiles and the leads.
+ */
+function sourceProblem(payload: Payload, state: SourceState, reason: string): void {
+  const working = state.found > 0 || (payload.collections ?? []).some((item) => item.platform === state.platform && !item.hop && (item.state === "open" || item.state === "done"));
+  if (working) return;
+  state.state = "failed";
+  state.reason = reason;
+}
+
 function progressOf(payload: Payload, stage: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     stage,
     found: (payload.findings ?? []).length,
-    sources: payload.sources.map((item) => ({ platform: item.platform, state: item.state, found: item.found, credits: item.credits })),
+    sources: payload.sources.map((item) => ({ platform: item.platform, state: item.state, found: item.found, credits: item.credits, ...(item.state === "failed" && item.reason ? { reason: item.reason } : {}) })),
     credits: payload.sources.reduce((sum, item) => sum + item.credits, 0),
     ...extra,
   };
@@ -481,14 +494,12 @@ async function startPlannedCollection(job: AssistantJob, payload: Payload, task:
       if (hold) return { ...hold, progress: progressOf(payload, "searching", { waiting }) };
       // Waited as long as a collection may take: this collection is given up, the source goes on with what it has.
       const reason = `Bright Data kept asking to wait for ${BRIGHTDATA_LIMITS.collectionTimeoutMinutes} minutes (${started.reason})`;
-      state.state = task.hop ? state.state : "failed";
       note(state, `${task.label}: not collected — ${reason}`);
-      if (!task.hop) state.reason = reason;
+      if (!task.hop) sourceProblem(payload, state, reason);
       return null;
     }
-    state.state = task.hop ? state.state : "failed";
     note(state, `${task.label}: not collected — ${started.reason}`);
-    if (!task.hop) state.reason = started.reason;
+    if (!task.hop) sourceProblem(payload, state, started.reason);
     return null;
   }
   const collections = payload.collections ?? (payload.collections = []);
@@ -536,7 +547,7 @@ async function stageSearching(job: AssistantJob, heartbeat: () => Promise<void>)
   if (waitingSince && brightdataTaskWaitMs(waitingSince, Date.now(), null) === null) {
     const state = source(payload, task.platform);
     const reason = `Bright Data kept asking to wait for ${BRIGHTDATA_LIMITS.collectionTimeoutMinutes} minutes`;
-    if (task.kind !== "collect" || !task.hop) { state.state = "failed"; state.reason = reason; }
+    if (task.kind !== "collect" || !task.hop) sourceProblem(payload, state, reason);
     note(state, `${task.kind === "collect" ? task.label : task.query}: not collected — ${reason}`);
     return finish();
   }
@@ -674,16 +685,18 @@ async function stageCollecting(job: AssistantJob, heartbeat: () => Promise<void>
       findings.push(...kept);
       open.findings = kept.length;
       state.found += kept.length;
+      // It works after all: its findings go on to their authors' profiles; the earlier problem stays in its notes.
+      if (!open.hop && state.state === "failed") {
+        state.state = "collecting";
+        state.reason = null;
+      }
       for (const failure of read.failures) {
         if (failures.length < MAX_FAILURES_KEPT) failures.push({ platform: open.platform, input: failure.input, reason: failure.reason });
       }
       if (read.failures.length) note(state, `${read.failures.length} input${read.failures.length === 1 ? "" : "s"} could not be read (${read.failures[0]!.reason})`);
     } else if (!open.hop) {
       // A failed collection fails the source only when nothing else of it worked; what other collections found stays.
-      if (!collections.some((item) => item.platform === open.platform && item.state === "done")) {
-        state.state = "failed";
-        state.reason = polled.note ?? "Bright Data could not collect it";
-      }
+      sourceProblem(payload, state, polled.note ?? "Bright Data could not collect it");
     }
     await savePayload(job, { collections, findings, failures, sources: payload.sources });
     await heartbeat().catch(() => undefined);
@@ -1067,6 +1080,9 @@ async function stageSaving(job: AssistantJob, heartbeat: () => Promise<void>): P
   else if (!leads.length) notes.push(`The ${searched.map((item) => PLATFORM_NAMES[item.platform]).join(", ")} research for “${payload.phrase}” found no discussions, profiles or pages. Try other words.`);
   for (const item of payload.sources) {
     if (item.state === "failed" || item.state === "not_searched") notes.push(`${PLATFORM_NAMES[item.platform]} ${item.state === "failed" ? "failed" : "was not searched"}: ${item.reason ?? "no reason recorded"}.`);
+    // Searched, but one of its searches did not run or collect: what the others found is kept.
+    const missed = item.state === "searched" ? item.notes.find((text) => /not collected|Bright Data reported the collection/.test(text)) : undefined;
+    if (missed) notes.push(`${PLATFORM_NAMES[item.platform]} was partly searched (${item.found} found): ${missed.replace(/\.$/, "")}.`);
   }
   const unreadable = payload.criteria.unreadableUrls ?? [];
   if (unreadable.length) notes.push(`${unreadable.length} link${unreadable.length === 1 ? " was" : "s were"} not read: not a post, profile or page Bright Data reads (${unreadable.slice(0, 5).join(", ")}${unreadable.length > 5 ? ", …" : ""}).`);

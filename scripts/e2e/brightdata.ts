@@ -84,6 +84,8 @@ const bd = {
   progressMode: "ok" as "ok" | "drop" | { status: number; body: unknown; retryAfter?: string },
   pollsUntilReady: 1,
   failNext: false,
+  /** Triggers discovering by this (e.g. "subreddit_url") are refused with a 400, before anything runs. */
+  refuseDiscoverBy: null as string | null,
 };
 const triggerCalls = () => bd.calls.filter((call) => call === "POST /datasets/v3/trigger").length;
 const json = (status: number, body: unknown, headers: Record<string, string> = {}) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
@@ -148,6 +150,7 @@ function brightdataAnswer(method: string, url: URL, init?: RequestInit): Respons
     }
     if (mode === "drop") throw new TypeError("fetch failed: connection reset");
     if (mode !== "ok") return json(mode.status, mode.body, mode.retryAfter ? { "retry-after": mode.retryAfter } : {});
+    if (bd.refuseDiscoverBy && url.searchParams.get("discover_by") === bd.refuseDiscoverBy) return json(400, { error: "Invalid input: subreddit not found" });
     const id = `sd_check${bd.triggers.length + 1}${tag}`;
     bd.triggers.push({ id, dataset: url.searchParams.get("dataset_id") ?? "", type: url.searchParams.get("type"), discoverBy: url.searchParams.get("discover_by"), body: JSON.parse(String(init?.body ?? "{}")), auth, polls: 0, pollsUntilReady: bd.pollsUntilReady, fail: bd.failNext });
     bd.failNext = false;
@@ -609,6 +612,19 @@ try {
     const stuckResult = (stuckRun.job.result ?? {}) as Record<string, unknown> & { sources?: { platform: string; state: string; reason: string | null; credits: number }[] };
     const stuckLedger = stuckPayload.collections?.[0] ? (await ledger()).find((row) => row.id === stuckPayload.collections![0]!.usageId) : null;
     check("B03 job: past the deadline with the progress read failing, the job ends (not stuck), the source failed with the reason, the credits counted as uncertain, a cancel attempted", toCollecting.job.stage === "collecting" && stuckRun.job.status === "succeeded" && stuckResult.sources?.[0]?.state === "failed" && /could not be read/.test(stuckResult.sources[0].reason ?? "") && stuckLedger?.status === "uncertain" && stuckLedger.usedUnits === stuckLedger.units && stuckLedger.units > 0 && stuckResult.creditsUsed === stuckLedger.units && bd.cancels.includes(stuckPayload.collections![0]!.snapshotId), JSON.stringify({ stage: toCollecting.job.stage, status: stuckRun.job.status, error: stuckRun.job.error, sources: stuckResult.sources, credits: stuckResult.creditsUsed, row: stuckLedger && [stuckLedger.status, stuckLedger.usedUnits] }));
+
+    // ---------------------------------------------------------- one of a platform's searches refused, another collected
+    // Reddit's keyword search collects; its subreddit search is refused before it runs. What the keyword search found
+    // stays Reddit's: the platform is searched (partly, said so), not failed, and its authors' profiles are read.
+    bd.refuseDiscoverBy = "subreddit_url";
+    const partJob = await runTool("research_social_sources", { ...ARGS, platforms: ["reddit"], subreddits: ["Dentists"], need: "patients who never get a callback" }, ctx(thread.id));
+    const partData = partJob.data as { jobId: string };
+    const partRun = await runJob(partData.jobId);
+    bd.refuseDiscoverBy = null;
+    const partResult = (partRun.job.result ?? {}) as Record<string, unknown> & { note?: string | null; sources?: { platform: string; state: string; reason: string | null; found: number; notes: string[] }[] };
+    const partCollections = ((partRun.job.payload as { collections?: { platform: string; hop: boolean; dataset: string }[] }).collections ?? []);
+    check("a platform whose subreddit search is refused but whose keyword search collects is searched, not failed, and says it was partly searched", partRun.job.status === "succeeded" && partResult.sources?.[0]?.state === "searched" && (partResult.sources[0].found ?? 0) > 0 && /Reddit was partly searched .*not collected/.test(partResult.note ?? ""), JSON.stringify({ status: partRun.job.status, error: partRun.job.error, sources: partResult.sources, note: partResult.note }));
+    check("…and its posters' profiles are still read for a website or contact", partCollections.some((item) => item.platform === "reddit" && item.hop && item.dataset === "reddit_profiles"), JSON.stringify(partCollections));
 
     // ---------------------------------------------------------- the request's controls: paused holds, stopped ends unsearched
     const chat = await createThread(null);

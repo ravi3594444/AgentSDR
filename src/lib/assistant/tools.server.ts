@@ -344,9 +344,9 @@ function webDiscoveryProgress(job: typeof assistantJobs.$inferSelect): string {
 
 /** What a social research job (Bright Data) is doing, for lead_search_status. */
 function socialResearchProgress(job: typeof assistantJobs.$inferSelect): string {
-  const progress = job.progress as { found?: number; credits?: number; sources?: { platform: string; state: string; found?: number }[]; waiting?: { reason?: string } };
+  const progress = job.progress as { found?: number; credits?: number; sources?: { platform: string; state: string; found?: number; reason?: string }[]; waiting?: { reason?: string } };
   const result = (job.result ?? {}) as { found?: number; eligible?: number; note?: string | null };
-  const sources = (progress.sources ?? []).map((source) => `${PLATFORM_NAMES[source.platform as keyof typeof PLATFORM_NAMES] ?? source.platform} ${source.state.replace(/_/g, " ")}${source.found ? ` (${source.found})` : ""}`).join(", ");
+  const sources = (progress.sources ?? []).map((source) => `${PLATFORM_NAMES[source.platform as keyof typeof PLATFORM_NAMES] ?? source.platform} ${source.state.replace(/_/g, " ")}${source.found ? ` (${source.found})` : ""}${source.state === "failed" && source.reason ? `: ${source.reason.slice(0, 160)}` : ""}`).join(", ");
   if (job.status === "failed") return `The social research failed: ${job.error ?? "unknown error"}`;
   if (job.status === "succeeded") return `Finished: ${result.found ?? 0} found, ${result.eligible ?? 0} can be contacted.${result.note ? ` ${result.note}` : ""}`;
   const waiting = progress.waiting?.reason ? ` Waiting: ${progress.waiting.reason}.` : "";
