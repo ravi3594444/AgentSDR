@@ -88,7 +88,7 @@ export function ResearchProgressCard({ progress, figures, timeZone }: {
           </div>
         </div>
       )}
-      {progress.target && <p className="mt-2 text-paragraph-xs text-text-sub-600"><span className="font-medium tabular-nums text-text-strong-950">{progress.target.matched} / {progress.target.total}</span> contactable matches · {progress.target.named ? "requested" : "default"} target</p>}
+      {progress.target && <p className="mt-2 text-paragraph-xs text-text-sub-600"><span className="font-medium tabular-nums text-text-strong-950">{progress.target.matched} / {progress.target.total}</span> {progress.target.newOnly ? "new contactable matches" : "contactable matches"} · {progress.target.named ? "requested" : "default"} target</p>}
       <p className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-text-soft-400">
         {progress.latestAt && <span>Latest step <time dateTime={progress.latestAt}>{formatChatTime(progress.latestAt, timeZone)}</time></span>}
         {progress.elapsedMs !== null && <span className="tabular-nums">{elapsed(progress.elapsedMs)} elapsed</span>}

@@ -18,6 +18,8 @@ export async function startToolBridge(input: {
   signal: AbortSignal;
   /** Calls this process may run; past it the run pauses at a checkpoint (the turn resumes in a new process). */
   maxCalls: number;
+  /** Align the CLI's HTTP response/idle limits with the host's bounded turn, including a finishing effect. */
+  toolTimeoutMs?: number;
   execute: (name: string, args: Record<string, unknown>) => Promise<CallToolResult>;
   /** A call met the allowance or a drain: nothing more runs in this process, and every earlier result was delivered. */
   onCheckpoint?: (why: "allowance" | "drained") => void;
@@ -90,7 +92,7 @@ export async function startToolBridge(input: {
   if (!address || typeof address === "string") throw new Error("Could not open the local tool bridge");
   host = `127.0.0.1:${address.port}`;
   return {
-    config: { mcpServers: { agentsdr: { type: "http", url: `http://${host}/mcp`, headers: { Authorization: `Bearer ${token}` }, alwaysLoad: true } } },
+    config: { mcpServers: { agentsdr: { type: "http", url: `http://${host}/mcp`, headers: { Authorization: `Bearer ${token}` }, alwaysLoad: true, timeout: Math.max(1_000, Math.ceil(input.toolTimeoutMs ?? 600_000)) } } },
     /** From now on no call runs here: each is answered "not run", so the process can stop between calls. */
     drain: (why: string) => { draining ??= why; },
     /** Settles once no call is running or queued (an effect already started always finishes). */

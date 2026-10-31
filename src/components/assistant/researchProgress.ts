@@ -20,7 +20,7 @@ export const RESEARCH_STAGES = [
 ] as const;
 export type ResearchStage = typeof RESEARCH_STAGES[number]["id"];
 type Phase = "working" | "waiting" | "paused" | "finished" | "unknown";
-export type ProgressObjective = Pick<ObjectiveView, "status" | "request" | "review" | "leadTarget" | "targetNamed" | "leads" | "waiting" | "nextEligibleAt" | "stopDetail" | "createdAt" | "stoppedAt">;
+export type ProgressObjective = Pick<ObjectiveView, "status" | "request" | "review" | "leadTarget" | "targetNamed" | "leads" | "matching" | "waiting" | "nextEligibleAt" | "stopDetail" | "createdAt" | "stoppedAt">;
 export type ResearchProgressModel = {
   stage: ResearchStage;
   phase: Phase;
@@ -30,7 +30,7 @@ export type ResearchProgressModel = {
   approach: string | null;
   visited: ResearchStage[];
   review: { total: number; reviewed: number; uncertain: number; excluded: number; remaining: number } | null;
-  target: { matched: number; total: number; named: boolean } | null;
+  target: { matched: number; total: number; named: boolean; newOnly?: boolean } | null;
   latestAt: string | null;
   elapsedMs: number | null;
   nextAt: string | null;
@@ -166,7 +166,7 @@ export function researchProgress(input: {
   return {
     stage, phase, title, action, approach, visited: [...visited], goal: text(objective?.request, 600),
     review,
-    target: total && Number.isSafeInteger(total) && total > 0 && Number.isSafeInteger(objective?.leads) && objective!.leads >= 0 ? { matched: objective!.leads, total, named: objective!.targetNamed } : null,
+    target: total && Number.isSafeInteger(total) && total > 0 && Number.isSafeInteger(objective?.leads) && objective!.leads >= 0 ? { matched: objective!.leads, total, named: objective!.targetNamed, ...((objective!.matching ?? objective!.leads) > objective!.leads ? { newOnly: true } : {}) } : null,
     latestAt, elapsedMs, nextAt: objective?.nextEligibleAt ?? openRow?.nextCheckAt ?? null,
   };
 }

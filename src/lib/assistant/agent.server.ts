@@ -31,7 +31,8 @@ import { continuedRequestIds, objectiveForRequest } from "./objective.server";
 import { assistantJobs, assistantMessages, type AssistantAttachment, type BusinessProfile } from "./schema";
 import { addMessage, claimThread, getThread, listMessages, releaseThread, touchThread, updateMessage } from "./threads.server";
 import { recordUsage } from "./usage.server";
-import { DELIVERY_STATUS_GUIDANCE } from "./deliveryStatus";
+import { DELIVERY_STATUS_GUIDANCE, needsOutreachReconciliation, savedOutreachProblem } from "./deliveryStatus";
+import { requestSummary } from "./requests.server";
 import { connectedBrowserFact, releaseConnectedBrowser, runTool, searchRequestId as toolRequestId, setupSnapshot, toolCatalog, toolDescriptionsFor, toolNamesFor, toolSchema, type ToolContext, type ToolImage, type ToolResult } from "./tools.server";
 import { observationKey } from "./observation";
 import { coerceToolArguments } from "./toolSchemas";
@@ -101,6 +102,22 @@ const GROUNDING_MESSAGES = 200;
  */
 const NATIVE_RUN_MS = 15 * 60_000;
 const NATIVE_TURN_MS = 60 * 60_000;
+
+/** Both harnesses reconcile an ambiguous outcome against the same scoped counts the owner sees. */
+async function reconcileOutreachAnswer(message: string, context: ToolContext): Promise<string | null> {
+  const requestId = toolRequestId(context);
+  if (!requestId || !needsOutreachReconciliation(message)) return null;
+  try {
+    const now = new Date();
+    const saved = await requestSummary(`r:${requestId}`, now);
+    if (!saved || saved.threadId !== context.threadId) return null;
+    return savedOutreachProblem(message, { plans: saved.children.plans, contacted: saved.numbers.contacted, checkedAt: now.toISOString() });
+  } catch {
+    // A second failed read establishes nothing. The model may honestly report an unconfirmed outcome.
+    console.warn("[assistant/status] Could not reconcile the saved outreach outcome.");
+    return null;
+  }
+}
 
 /** The setup the model reads first. `threadId` (research agent v2): lists, runs and jobs of this chat only, not the whole organization's. */
 async function contextBlock(threadId: string | null = null, userId: string | null = null): Promise<{ text: string; outreachStarted: boolean; profile: BusinessProfile }> {
@@ -394,7 +411,8 @@ export async function runAgentTurn(input: {
               const { outreachStarted } = await contextBlock(input.threadId);
               const allMessages = await listMessages(input.threadId, GROUNDING_MESSAGES);
               const searched = allMessages.some((row) => row.role === "tool" && row.status === "ok" && SEARCH_TOOLS.has(row.tool ?? ""));
-              return unbackedClaim(answer.message, succeeded, outreachStarted, searched)
+              return await reconcileOutreachAnswer(answer.message, context)
+                ?? unbackedClaim(answer.message, succeeded, outreachStarted, searched)
                 ?? startedNotFinishedClaim(answer.message, invoked.map((tool) => ({ tool })), (tool) => SEARCH_TOOLS.has(tool));
             },
           });
@@ -512,6 +530,11 @@ export async function runAgentTurn(input: {
       pendingReply = staged.pending;
       const { message, actions, suggestions } = staged.batch;
       if (!actions.length) {
+        const statusProblem = await reconcileOutreachAnswer(message, context);
+        if (statusProblem) {
+          replanReason = statusProblem;
+          continue;
+        }
         // The suggested replies ride on the turn's last message (shown as buttons).
         if (message && !said.some((earlier) => sameMessage(earlier, message))) {
           await addMessage({ threadId: input.threadId, role: "assistant", content: message, toolResult: suggestions.length ? { suggestions } : null });

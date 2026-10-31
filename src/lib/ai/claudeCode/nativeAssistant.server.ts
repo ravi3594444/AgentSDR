@@ -121,6 +121,7 @@ export async function runNativeAssistant(input: {
       tools: input.tools,
       signal: controller.signal,
       maxCalls: input.maxCalls,
+      toolTimeoutMs: Math.max(1_000, turnDeadline + HARD_STOP_MS - Date.now()),
       onCheckpoint: (why) => {
         if (why === "allowance") checkpoint("calls");
         calledWhileDraining();

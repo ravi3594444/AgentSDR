@@ -51,6 +51,7 @@ const { addAudienceMembers } = await import("@/lib/assistant/audiences.server");
 const { audienceProspects } = await import("@/lib/assistant/qualification.server");
 const { assistantState } = await import("@/lib/assistant/http.server");
 const { leadAudienceMembers } = await import("@/lib/assistant/schema");
+const { savedOutreachProblem } = await import("@/lib/assistant/deliveryStatus");
 const { reportAudiences, searchListOf, workCounts } = await import("@/lib/assistant/leadLists");
 type OrgContext = import("@/lib/auth/context").OrgContext;
 
@@ -165,6 +166,7 @@ await runInOrganization(a!.id, async () => {
     return { contacted: report.outreach.peopleContacted, replied: report.outreach.contactedWhoReplied, interested: report.outreach.interested, failed: reports.reduce((sum, r) => sum + (r?.channels.reduce((n, c) => n + c.failed, 0) ?? 0), 0) };
   };
   const chat = await requestSummary(requestKey);
+  check("saved plan and contact evidence can correct an uncertain timeout answer", Boolean(chat && savedOutreachProblem("I don't know if the plan was created. Nothing has been sent.", { plans: chat.children.plans, contacted: chat.numbers.contacted, checkedAt: new Date().toISOString() })));
   const chatExpected = await expected(await requestScope(seeded.request.id), [seeded.plan.id]);
   check("the chat request's figures equal the reports for the same scope", JSON.stringify(numbersOf(chat)) === JSON.stringify(chatExpected), `${JSON.stringify(numbersOf(chat))} vs ${JSON.stringify(chatExpected)}`);
   check("…which are 2 contacted, 1 replied, 1 interested, 1 failed", JSON.stringify(numbersOf(chat)) === JSON.stringify({ contacted: 2, replied: 1, interested: 1, failed: 1 }));

@@ -578,6 +578,8 @@ export type ObjectiveView = {
   /** Everyone its lists hold, and those with a contact route (the funnel's first two steps), each person once. */
   found: number;
   contactable: number;
+  /** Contactable matches across this request and its continued requests, like found/contactable. */
+  matching?: number;
   /** Saved candidates checked once per person; absent on older responses. */
   review?: RequestCheck;
   remaining: number;
@@ -616,6 +618,7 @@ function viewOf(facts: ObjectiveFacts, now = new Date()): ObjectiveView {
     leads: facts.leads,
     found: facts.funnel.found,
     contactable: facts.funnel.contactable,
+    matching: facts.funnel.qualified,
     review: facts.review,
     remaining: Math.max(0, objective.leadTarget - facts.leads),
     routes: facts.routes,

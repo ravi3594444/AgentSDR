@@ -334,7 +334,7 @@ export async function requestSummary(keyText: string, now = new Date()): Promise
   const numbers: RequestNumbers = {
     found: objective ? objective.found : total((item) => item.found),
     contactable: objective ? objective.contactable : total((item) => item.eligible),
-    matching: objective ? objective.leads : total((item) => item.matching),
+    matching: objective ? objective.matching ?? objective.leads : total((item) => item.matching),
     contacted: metrics.peopleContacted.total,
     replied: metrics.contactedWhoReplied.total,
     interested: Number(interested?.n ?? 0),

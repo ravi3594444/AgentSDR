@@ -322,6 +322,30 @@ test("a final answer the record does not back goes back to Claude in the same se
   expect(second!.promptHead).toContain("was not shown to the owner: These searches only start now.");
 });
 
+test("a lost tool answer can be recovered by reading saved status without repeating its effect", async () => {
+  let committed = 0;
+  const lostResponse = new AbortController();
+  const bridge = await startToolBridge({ tools, signal: new AbortController().signal, maxCalls: 3, toolTimeoutMs: 180_000, execute: async (name) => {
+    if (name === "set_brief") {
+      // Lose the response only after the operation started, independent of CI scheduling speed.
+      lostResponse.abort(new Error("Simulated lost tool response"));
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      committed++;
+    }
+    return { content: [{ type: "text", text: `Saved operations: ${committed}` }] };
+  } });
+  const connection = bridge.config.mcpServers.agentsdr;
+  const client = new Client({ name: "lost-answer-fixture", version: "1" });
+  try {
+    expect(connection.timeout).toBe(180_000);
+    await client.connect(new StreamableHTTPClientTransport(new URL(connection.url), { requestInit: { headers: connection.headers } }));
+    await expect(client.callTool({ name: "set_brief", arguments: {} }, undefined, { signal: lostResponse.signal })).rejects.toThrow();
+    const status = await client.callTool({ name: "report", arguments: {} });
+    expect(status.content).toEqual([{ type: "text", text: "Saved operations: 1" }]);
+    expect(committed).toBe(1);
+  } finally { await client.close(); await bridge.close(); }
+});
+
 test("the bridge's allowance and drain answer \"not run\" and never execute", async () => {
   const controller = new AbortController(); let effects = 0; const checkpoints: string[] = [];
   const bridge = await startToolBridge({ tools, signal: controller.signal, maxCalls: 1, onCheckpoint: (why) => checkpoints.push(why), execute: async () => { effects++; return { content: [{ type: "text", text: "ok" }] }; } });

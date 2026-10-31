@@ -68,6 +68,9 @@ describe("recorded research stages", () => {
     expect(model([message("set_brief")], { objective: objective({ leadTarget: 80, leads: 7 }) })?.target).toEqual({ total: 80, matched: 7, named: false });
     expect(model([message("set_brief")], { objective: objective({ leads: Number.NaN }) })?.target).toBeNull();
   });
+  test("a continued request labels target progress as new matches when its totals include earlier matches", () => {
+    expect(model([message("set_brief")], { objective: objective({ leads: 1, matching: 5, leadTarget: 10 }) })?.target).toEqual({ total: 10, matched: 1, named: false, newOnly: true });
+  });
   test("ordinary provider waits remain informational, and one failed source does not fail the request", () => {
     const source: ResearchMessage = { ...message("find_leads"), status: "ok", content: "", toolInput: null, toolResult: { data: { jobId: "job" } } };
     const job: ResearchJob = { id: "job", kind: "discovery", status: "queued", stage: "queued", progress: {}, result: null, error: null, audienceId: null, runAfter: "2026-10-31T12:01:00Z" };

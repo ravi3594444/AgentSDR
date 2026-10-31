@@ -8,7 +8,9 @@ import { inOrg, runInOrganization } from "@/lib/tenancy/scope";
 import { createAudience } from "@/lib/assistant/audiences.server";
 import { assistantThreads, assistantMessages, assistantObjectives, leadAudiences, leadAudienceMembers } from "@/lib/assistant/schema";
 import { audienceFunnel, audienceResearchFacts } from "@/lib/assistant/qualify.server";
-import { objectiveView } from "@/lib/assistant/objective.server";
+import { objectiveForRequest, objectiveView } from "@/lib/assistant/objective.server";
+import { reviewLeadsText } from "@/lib/assistant/agentV2.server";
+import { requestSummary } from "@/lib/assistant/requests.server";
 import { ASSISTANT_CHECKED, requestCheck } from "@/lib/assistant/leadFit";
 
 if (!/^postgres(?:ql)?:\/\/[^/]+@(localhost|127\.0\.0\.1):\d+\/agentsdr_native$/.test(process.env.DATABASE_URL ?? "")) throw new Error("Requires the disposable local agentsdr_native database");
@@ -27,7 +29,7 @@ try {
     lists = await Promise.all(["First source", "Second source"].map((name) => createAudience({ name, source: "discovery", criteria: { requestId } })));
     const saved = await db.insert(people).values(Array.from({ length: 6 }, (_, i) => ({ organizationId: ids[0]!, source: "progress-fixture", fullName: `Business ${i}`, email: `business-${i}-${ids[0]}@fixture.test` }))).returning();
     const fits = [null, "unconfirmed", "unconfirmed", "match", "no_match", "match"] as const;
-    const rows = saved.map((person, i) => ({ organizationId: ids[0]!, audienceId: lists[0]!, personId: person.id, name: person.fullName!, status: "eligible" as const, channels: ["email" as const], source: "web_search", fit: fits[i]!, fitReason: i === 2 || i === 3 ? `${ASSISTANT_CHECKED}Source evidence checked` : null, fitAt: i === 0 ? null : new Date() }));
+    const rows = saved.map((person, i) => ({ organizationId: ids[0]!, audienceId: lists[0]!, personId: person.id, name: person.fullName!, status: "eligible" as const, channels: ["email" as const], source: "web_search", facts: { postedAt: new Date(Date.now() - 48 * 86_400_000).toISOString(), retrievedAt: new Date().toISOString() }, fit: fits[i]!, fitReason: i === 2 || i === 3 ? `${ASSISTANT_CHECKED}Source evidence checked` : null, fitAt: i === 0 ? null : new Date() }));
     const duplicate = { ...rows[5]!, audienceId: lists[1]!, fit: "no_match" as const, fitReason: "Another source shows this is outside the request" };
     await db.insert(leadAudienceMembers).values([...rows, duplicate, { organizationId: ids[0]!, audienceId: lists[0]!, name: "Unsaved candidate", status: "excluded", channels: [], source: "web_search" }]);
     const facts = await audienceResearchFacts(lists);
@@ -39,6 +41,19 @@ try {
     check("the old funnel API retains the same shape and counts", JSON.stringify(await audienceFunnel(lists)) === JSON.stringify(facts.funnel));
     const view = await objectiveView(requestId);
     check("the browser request exposes the same review facts to the chat", JSON.stringify(view?.review) === JSON.stringify(facts.review) && view?.leadTarget === 50);
+    const objective = await objectiveForRequest(requestId);
+    const review = await reviewLeadsText({ objective: objective!, audienceId: null, filter: "all", limit: 20 });
+    check("the assistant sees old publication age even when the page was read today", review.text.includes("postAgeDays: 48"));
+    const [follow] = await db.insert(assistantMessages).values({ organizationId: ids[0]!, threadId: thread!.id, role: "user", content: "Contact those leads" }).returning();
+    await db.insert(assistantObjectives).values({ organizationId: ids[0]!, threadId: thread!.id, requestMessageId: follow!.id, controls: { continues: requestId }, leadTarget: 10, timeLimitMinutes: 60, deadlineAt: new Date(Date.now() + 3_600_000) });
+    const inherited = await requestSummary(`r:${follow!.id}`);
+    check("a contact follow-up keeps matching on the same scope as found and contactable", inherited?.numbers.found === 7 && inherited.numbers.contactable === 6 && inherited.numbers.matching === 1);
+    check("inherited matches do not count as newly found leads toward a follow-up target", inherited?.objective?.leads === 0 && inherited.objective.remaining === 10);
+    const ownList = await createAudience({ name: "A new source", source: "discovery", criteria: { requestId: follow!.id } });
+    const [extra] = await db.insert(people).values({ organizationId: ids[0]!, source: "progress-fixture", fullName: "New business", email: `new-${ids[0]}@fixture.test` }).returning();
+    await db.insert(leadAudienceMembers).values({ organizationId: ids[0]!, audienceId: ownList, personId: extra!.id, name: extra!.fullName!, status: "eligible", channels: ["email"], source: "web_search", fit: "match", fitReason: `${ASSISTANT_CHECKED}Checked against the request`, fitAt: new Date() });
+    const more = await requestSummary(`r:${follow!.id}`);
+    check("new and inherited matches display together while target progress stays separate", more?.numbers.matching === 2 && more.objective?.leads === 1 && more.objective.remaining === 9);
   });
   await runInOrganization(ids[1]!, async () => {
     const foreign = await audienceResearchFacts(lists);

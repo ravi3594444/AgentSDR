@@ -10,6 +10,8 @@ import { lineClash, PERSONAL_LINE_LIMITS, pitchProblems } from "./pitch";
 import { profileKnowledgeText } from "./profile";
 import type { AudienceChannel, BusinessProfile, PlannedStep } from "./schema";
 import { leadSortingSystemPrompt, type RequestFit } from "./leadFit";
+import { localDate } from "@/lib/reporting/metrics";
+import { organizationTimeZone } from "@/lib/reporting/metrics.server";
 
 /**
  * The AI that writes outreach: one sequence per channel from the owner's
@@ -341,6 +343,7 @@ export async function sortLeads(input: {
   const sorted = new Map<number, SortedLead>();
   if (!input.leads.length) return sorted;
   const wanted = new Set(input.leads.map((lead) => lead.index));
+  const timeZone = await organizationTimeZone();
   const result = await completeStructured({
     timeoutMs: TIMEOUT_MS,
     maxOutputTokens: 3_000,
@@ -350,6 +353,7 @@ export async function sortLeads(input: {
     systemPrompt: leadSortingSystemPrompt(input.knownGroups),
     userPrompt: [
       writerReplyInstructions("lead_sorting"),
+      `TODAY: ${localDate(timeZone)} (${timeZone}); use this business date for relative publication-date criteria.`,
       `THE OWNER'S BUSINESS:\n${input.context.slice(0, 2_500)}`,
       `THE OWNER'S REQUEST: ${input.request?.trim().slice(0, 4_000) || "(none given: judge against the business and offer)"}`,
       "LEADS:",

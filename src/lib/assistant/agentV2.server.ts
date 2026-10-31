@@ -10,7 +10,7 @@ import { CONNECTED_PAGE_TOOLS } from "./agent";
 import { progressBlock, requestBlock, type ProgressSearch } from "./agentV2";
 import { addAudienceMembers, createAudience, memberInsights } from "./audiences.server";
 import { readBrief, type Brief } from "./brief";
-import { ASSISTANT_CHECKED, personFit, requestCheck, type RequestCheck } from "./leadFit";
+import { ASSISTANT_CHECKED, datedLeadFacts, personFit, requestCheck, type RequestCheck } from "./leadFit";
 import { continuedRequestIds, objectiveChildren, objectiveFacts, threadObjectives, type Objective } from "./objective.server";
 import { assistantMessages, leadAudiences, leadAudienceMembers, outreachRuns } from "./schema";
 
@@ -130,7 +130,7 @@ export async function reviewLeadsText(input: { objective: Objective; audienceId:
     const verdict = personFit(rows.map((row) => row.fit));
     const first = rows[0]!;
     const reason = rows.find((row) => row.fitReason)?.fitReason ?? "";
-    const facts = Object.entries(first.facts ?? {}).filter(([, value]) => value).map(([key, value]) => `${key}: ${clippedString(String(value).replace(/\s+/g, " "), 160)}`).join("; ");
+    const facts = Object.entries(datedLeadFacts(first.facts ?? {})).filter(([, value]) => value).map(([key, value]) => `${key}: ${clippedString(String(value).replace(/\s+/g, " "), 160)}`).join("; ");
     const why = insights.get(first.id)?.matchReason ?? "";
     lines.push({
       verdict,

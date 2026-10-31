@@ -5,7 +5,7 @@ import { db } from "@/lib/db";
 import { companies, people } from "@/lib/leads/schema";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { effectiveBusinessProfile } from "./businessContext.server";
-import { applyRequestRules, ASSISTANT_CHECKED, EMPTY_FUNNEL, requestSubject, websiteStatusFact, type LeadFunnel, type RequestCheck } from "./leadFit";
+import { applyRequestRules, ASSISTANT_CHECKED, datedLeadFacts, EMPTY_FUNNEL, requestSubject, websiteStatusFact, type LeadFunnel, type RequestCheck } from "./leadFit";
 import type { LeadApproach } from "./messages";
 import { displayBusinessName } from "./pitch";
 import { leadAudienceMembers, type LeadFit } from "./schema";
@@ -40,7 +40,7 @@ export async function loadPeople(personIds: string[]): Promise<Map<string, Perso
 /** What the sorting and writing models may know of a lead: its public facts, title, company and short own fields. */
 export function leadFacts(memberFacts: Record<string, string>, row: PersonRow | undefined): Record<string, string> {
   const out: Record<string, string> = { ...memberFacts };
-  if (!row) return out;
+  if (!row) return datedLeadFacts(out);
   if (row.person.fullName && !out.name) out.name = row.person.fullName;
   if (row.person.title) out.title ??= row.person.title;
   if (row.company?.name) out.company ??= row.company.name;
@@ -55,7 +55,7 @@ export function leadFacts(memberFacts: Record<string, string>, row: PersonRow | 
     if (/^p_[0-9a-f]{8}/.test(field) || ["addedVia", "discoveredVia"].includes(field)) continue;
     out[field] ??= value;
   }
-  return out;
+  return datedLeadFacts(out);
 }
 
 export type JudgedLead = { fit: LeadFit; reason: string; group: string; approach: LeadApproach };
