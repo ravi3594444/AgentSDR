@@ -20,9 +20,12 @@ export function parseNativeAnswer(text: string): { message: string; suggestions:
 
 export type NativeSessionArgs = { sessionId: string; resume: boolean; maxTurns: number; mcpConfigFile: string };
 
+/** Model turns one CLI run may take (its --max-turns). Reaching them is a checkpoint: a longer turn continues in the resumed session. */
+export const NATIVE_MAX_TURNS_PER_RUN = 40;
+
 /** Additional flags for the native loop. --tools "" still removes built-ins, not MCP tools. */
 export function nativeFlags(input: NativeSessionArgs): string[] {
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.sessionId) || !Number.isInteger(input.maxTurns) || input.maxTurns < 1 || input.maxTurns > 40) {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.sessionId) || !Number.isInteger(input.maxTurns) || input.maxTurns < 1 || input.maxTurns > NATIVE_MAX_TURNS_PER_RUN) {
     throw new Error("Invalid native Claude session options");
   }
   return [

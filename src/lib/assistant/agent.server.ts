@@ -8,6 +8,7 @@ import { structuredVision } from "@/lib/ai/server/vision.server";
 import { claudeCodeBinding, getClaudeEngine } from "@/lib/ai/claudeCode/engine.server";
 import { accountKey } from "@/lib/ai/claudeCode/cli.server";
 import { runNativeAssistant } from "@/lib/ai/claudeCode/nativeAssistant.server";
+import { NATIVE_MAX_TURNS_PER_RUN } from "@/lib/ai/claudeCode/nativeProtocol";
 import { ClaudeCodeError } from "@/lib/ai/claudeCode/runner.server";
 import { crmKnowledgeDocuments, crmKnowledgeDocumentVersions } from "@/lib/crm/schema";
 import { BRAND } from "@/lib/brand";
@@ -326,6 +327,7 @@ export async function runAgentTurn(input: {
             requestShown = request;
             return [fresh ? request : null, progress || null].filter(Boolean).join("\n");
           };
+          const nativeRunTurns = Math.min(maxSteps, NATIVE_MAX_TURNS_PER_RUN);
           const native = await runNativeAssistant({
             binding,
             threadId: input.threadId,
@@ -343,9 +345,9 @@ export async function runAgentTurn(input: {
             tools: toolDescriptionsFor(features).map((tool) => tool.inputSchema
               ? { name: tool.name, description: tool.description, inputSchema: tool.inputSchema }
               : { name: tool.name, description: `${tool.description} Arguments: ${tool.arguments}.`, inputSchema: { type: "object" as const, properties: {}, additionalProperties: true } }),
-            // Per CLI run: reaching them is a checkpoint, and the turn continues in the resumed session.
-            maxTurns: maxSteps,
-            maxCalls: maxSteps * MAX_ACTIONS_PER_STEP,
+            // Per CLI run: reaching them is a checkpoint, and the turn continues in the resumed session (bounded by NATIVE_TURN_MS, not by maxSteps).
+            maxTurns: nativeRunTurns,
+            maxCalls: nativeRunTurns * MAX_ACTIONS_PER_STEP,
             timeoutMs: NATIVE_RUN_MS,
             // The whole turn keeps the chat; past this it pauses, saved, and the next turn resumes it.
             turnTimeoutMs: NATIVE_TURN_MS,
@@ -379,7 +381,7 @@ export async function runAgentTurn(input: {
               const ran = checkpoint.forced
                 ? (await listMessages(input.threadId, GROUNDING_MESSAGES)).filter((row) => row.role === "tool" && row.createdAt.getTime() >= turnStartedAt).slice(-12)
                 : [];
-              const why = checkpoint.reason === "turns" ? `${maxSteps} model turns` : checkpoint.reason === "time" ? `${Math.round(NATIVE_RUN_MS / 60_000)} minutes` : "its tool-call allowance";
+              const why = checkpoint.reason === "turns" ? `${nativeRunTurns} model turns` : checkpoint.reason === "time" ? `${Math.round(NATIVE_RUN_MS / 60_000)} minutes` : "its tool-call allowance";
               return [
                 `This turn continues here, in the same session: the previous run paused at a checkpoint after ${why}. This is not a new request from the owner.`,
                 await requestContext(true),
@@ -408,7 +410,8 @@ export async function runAgentTurn(input: {
         }
       } catch (error) {
         console.warn("[assistant/claude-native] turn stopped:", error instanceof Error ? error.message : "Unknown native engine failure");
-        const reason = error instanceof ClaudeCodeError ? ` ${error.message}` : "";
+        // A Claude refusal says what it was; anything else is AgentSDR's own error, named as such (its details stay in the server log).
+        const reason = error instanceof ClaudeCodeError ? ` ${error.message}` : " An error in AgentSDR stopped it, not your Claude account; the server log has it under [assistant/claude-native].";
         await addMessage({ threadId: input.threadId, role: "event", content: `Claude could not finish this turn.${reason} Saved results are kept. Press Retry to continue the request; no API fallback was used.`, toolResult: { data: { retry: true }, engine: "claude-native" } });
         end = "failed";
         return end;

@@ -43,6 +43,7 @@ const { encryptIntegrationCredential } = await import("@/lib/integrations/creden
 const { assistantMessages, outreachRuns } = await import("@/lib/assistant/schema");
 const { runInOrganization } = await import("@/lib/tenancy/scope");
 const { createThread, getThread, listMessages } = await import("@/lib/assistant/threads.server");
+const { setThreadAutonomous } = await import("@/lib/assistant/autonomy.server");
 const { updateBusinessProfile } = await import("@/lib/assistant/profile.server");
 const { getObjective, objectiveForRequest } = await import("@/lib/assistant/objective.server");
 const { runAgentTurn } = await import("@/lib/assistant/agent.server");
@@ -111,6 +112,14 @@ try {
     check("background continuation can use the owner's request session", await runAgentTurn({ threadId: thread.id, userId: null, text: null, eventRequestId: owner.id }) === "done");
     check("continuation explicitly resumes, not the machine's most recent session", calls()[1].args.includes("--resume") && !calls()[1].args.includes("--continue"));
     nativeThreadId = thread.id;
+    // Autonomous mode gives the turn more steps than one CLI run takes: the run still starts, checkpointing within the CLI's own bound.
+    const autonomousThread = await createThread(a.user.id);
+    check("Autonomous mode can be turned on by the owner", await setThreadAutonomous(autonomousThread.id, true, a.user.id));
+    scenario([{ name: "check_setup" }], "Setup checked.");
+    check("an Autonomous native turn finishes", await runAgentTurn({ threadId: autonomousThread.id, userId: a.user.id, text: "Find leads for our AI automation work" }) === "done");
+    const autonomousRun = calls().at(-1)!.args;
+    const turnsPerRun = Number(autonomousRun[autonomousRun.indexOf("--max-turns") + 1]);
+    check("its CLI run takes at most 40 model turns before a checkpoint", turnsPerRun >= 1 && turnsPerRun <= 40);
   });
   const threadId = nativeThreadId;
   await runInOrganization(b.org.id, async () => {
@@ -119,12 +128,12 @@ try {
     const thread = await createThread(b.user.id);
     check("a standard API workspace still completes through the existing harness", await runAgentTurn({ threadId: thread.id, userId: b.user.id, text: "hello" }) === "done");
     check("API default calls the existing completion path", apiAssistantCalls === 1);
-    check("API workspace starts no Claude process", calls().length === 2);
+    check("API workspace starts no Claude process", calls().length === 3);
   });
   await runInOrganization(a.org.id, async () => {
     await engine.saveClaudeEngine({ selected: false, ownerUserId: null, model: "sonnet", checks: {} });
     const thread = await createThread(a.user.id);
-    check("explicitly switching back to API keeps the old engine", await runAgentTurn({ threadId: thread.id, userId: a.user.id, text: "hello" }) === "done" && apiAssistantCalls === 2 && calls().length === 2);
+    check("explicitly switching back to API keeps the old engine", await runAgentTurn({ threadId: thread.id, userId: a.user.id, text: "hello" }) === "done" && apiAssistantCalls === 2 && calls().length === 3);
   });
   await db.insert(platformSettings).values({ key: CLAUDE_PRIVATE_PILOTS, value: { grants: [{ organizationId: b.org.id, userId: b.user.id }] } });
   await runInOrganization(b.org.id, async () => {
@@ -137,7 +146,7 @@ try {
     await engine.saveClaudeEngine({ selected: true, ownerUserId: b.user.id, model: "sonnet", checks: {} });
     const thread = await createThread(b.user.id);
     check("the approved private workspace runs native Claude on its own login", await runAgentTurn({ threadId: thread.id, userId: b.user.id, text: "Show setup" }) === "done" && (await listMessages(thread.id)).some((row) => row.toolResult?.engine === "claude-native"));
-    check("the private workspace does not start a process on the original owner's login", calls().length === 2);
+    check("the private workspace does not start a process on the original owner's login", calls().length === 3);
     await db.delete(platformSettings).where(eq(platformSettings.key, CLAUDE_PRIVATE_PILOTS));
     check("revoking a private grant makes the binding fail closed", await engine.claudeCodeBinding().then(() => false, () => true));
   });

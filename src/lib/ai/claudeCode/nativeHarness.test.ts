@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { accountPaths, setClaudeCliForTests, setClaudeDataDirForTests, type ClaudeAccount } from "./cli.server";
-import { nativeFlags, nativeInitProblem, parseNativeAnswer } from "./nativeProtocol";
+import { NATIVE_MAX_TURNS_PER_RUN, nativeFlags, nativeInitProblem, parseNativeAnswer } from "./nativeProtocol";
 import { nativeSession } from "./nativeSession.server";
 import { runNativeAssistant } from "./nativeAssistant.server";
 import { accountUsage, resetRunnerForTests, runGeneration, runningOn } from "./runner.server";
@@ -48,6 +48,9 @@ test("native flags allow only app MCP, use explicit session IDs and no permissio
   expect(args).not.toContain("--dangerously-skip-permissions");
   expect(args).not.toContain("--continue");
   expect(() => nativeFlags({ sessionId: "../other", resume: false, maxTurns: 24, mcpConfigFile: "x" })).toThrow();
+  // One run's bound: a longer turn checkpoints and resumes, so callers pass at most this (agent.server.ts clamps its step budget to it).
+  expect(nativeFlags({ sessionId: randomUUID(), resume: false, maxTurns: NATIVE_MAX_TURNS_PER_RUN, mcpConfigFile: "x" })).toContain(String(NATIVE_MAX_TURNS_PER_RUN));
+  expect(() => nativeFlags({ sessionId: randomUUID(), resume: false, maxTurns: NATIVE_MAX_TURNS_PER_RUN + 1, mcpConfigFile: "x" })).toThrow();
 });
 
 test("native final answers cannot smuggle action batches or invalid suggestions", () => {
