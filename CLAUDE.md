@@ -675,10 +675,13 @@ with tools: it writes the request's **brief** (`brief.ts`, stored in the
 objective's controls) when it takes the request on (a search does not wait
 for it), researches an open niche or place itself, chooses sources, reviews
 leads with their evidence (`review_leads`; the judge's verdict is advice),
-records its own verdicts (`set_lead_fit`), prepares one plan
+records its own verdicts (`set_lead_fit`: match, no_match, or unconfirmed
+after looking), prepares one plan
 (`prepare_outreach`: the matching leads, `leads: "all"`, or the `personIds`
 it picked) and ends the request with `finish_request` (stop reason
-`finished`). Every v2 tool in a turn serves one request (the turn's, which
+`finished`), which refuses while saved leads are unchecked (not judged, or
+only the judge's unconfirmed) unless the assistant says why they cannot be
+checked: saved contacts are not qualified leads. Every v2 tool in a turn serves one request (the turn's, which
 follows `set_brief`); a follow-up to an ended request continues it and
 inherits its leads (`controls.continues`). The prompt (`agentV2.ts`)
 teaches a method, not scenarios; every step pins the owner's words, the
